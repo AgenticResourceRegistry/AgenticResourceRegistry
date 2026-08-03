@@ -485,6 +485,14 @@ async def _run_pipeline(
         "regressions": [],
         "facets_summary": facets_summary,
         "cross_user_patterns": {},
+        # Analysis previously discarded after being folded into the prompt.
+        # Persisted now so downstream consumers can read them without a rerun.
+        "version_impact": version_impact,
+        # Use an explicit ``is not None`` check: CatalogOffer defines __bool__ as
+        # bool(entries_by_type), so an empty/disabled/failed offer would evaluate
+        # falsy and we'd persist None — losing the enabled / registry_has_components
+        # metadata that matters most in exactly those cases.
+        "registry_offer": registry_offer.to_dict() if registry_offer is not None else None,
     }
 
 
@@ -757,4 +765,6 @@ def _empty_report() -> dict:
         "regressions": [],
         "facets_summary": {},
         "cross_user_patterns": {},
+        "version_impact": None,
+        "registry_offer": None,
     }

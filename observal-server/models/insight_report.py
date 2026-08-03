@@ -72,6 +72,16 @@ class InsightReport(Base):
     aggregated_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     report_version: Mapped[int] = mapped_column(Integer, default=1)
 
+    # Analysis previously computed and discarded each run. Persisted now so
+    # downstream consumers (duplicate detection, pull-time recommendations,
+    # governance drift signals) can read them without re-running the pipeline.
+    # ``version_impact`` is the cross-user layer/config correlation analysis;
+    # ``registry_offer`` is the deterministic component shortlist the model was
+    # shown. Both are nullable: old reports predate the columns, and a run may
+    # legitimately produce no version impact or an empty offer.
+    version_impact: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    registry_offer: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Self-learn fields
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     applied_items: Mapped[dict | None] = mapped_column(JSON, nullable=True)

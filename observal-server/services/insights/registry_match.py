@@ -88,6 +88,22 @@ class CatalogOffer:
             "registry_has_components": self.registry_has_components,
         }
 
+    def to_dict(self) -> dict:
+        """Serialize the full offer for persistence as analysis payload.
+
+        Unlike :meth:`to_summary` (which records *that* a search happened),
+        this captures *what* was offered so downstream consumers can read the
+        shortlist without re-running the recommender. ``offered_ids`` is a
+        set of UUIDs and is serialized as sorted strings for stable storage.
+        """
+        return {
+            "enabled": self.enabled,
+            "registry_has_components": self.registry_has_components,
+            "item_count": self.item_count,
+            "offered_ids": sorted(str(cid) for cid in self.offered_ids),
+            "entries_by_type": self.entries_by_type,
+        }
+
 
 def build_signals(
     agg: dict | None = None,

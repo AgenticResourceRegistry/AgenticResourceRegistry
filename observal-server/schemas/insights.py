@@ -75,6 +75,10 @@ class InsightReportResponse(BaseModel):
     previous_report_id: uuid.UUID | None = None
     aggregated_data: dict | None = None
     report_version: int = 3
+    # Persisted analysis (previously discarded each run). Nullable: old
+    # reports predate the columns, and a run may produce neither.
+    version_impact: dict | None = None
+    registry_offer: dict | None = None
     # Self-learn fields
     applied_at: datetime | None = None
     applied_items: dict | None = None

@@ -19,6 +19,7 @@ from sqlalchemy import select
 from database import async_session
 from models.agent import Agent, AgentStatus, AgentVersion
 from models.insight_report import InsightReport, InsightReportStatus
+from schemas.insight_analysis import validate_payload
 from services.clickhouse import _query
 from services.inbox import sources as inbox
 from services.insight_version_filters import agent_version_filter
@@ -246,7 +247,10 @@ async def run_single_report(report_id: str) -> None:
 
             await _update_report_progress(db, report, "saving", 9, 9, "Saving report")
 
-            # Persist results
+            # Persist results. The pipeline now returns the analysis it
+            # previously discarded (version_impact, registry_offer); persist
+            # those alongside the existing fields so downstream consumers can
+            # read them without a rerun.
             report.metrics = content.get("metrics")
             report.narrative = content.get("narrative")
             report.sessions_analyzed = content.get("sessions_analyzed", 0)
@@ -256,7 +260,20 @@ async def run_single_report(report_id: str) -> None:
                 "regressions": content.get("regressions"),
                 "cross_user_patterns": content.get("cross_user_patterns"),
             }
+            report.version_impact = content.get("version_impact")
+            report.registry_offer = content.get("registry_offer")
             report.report_version = 3
+
+            # Structural validation of the payload. Non-destructive: a
+            # mismatch is logged but never blocks the write, so a schema drift
+            # cannot break report generation.
+            validated = validate_payload(content)
+            if validated is not None:
+                logger.info(
+                    "insight_payload_validated",
+                    has_version_impact=validated.get("version_impact") is not None,
+                    has_registry_offer=validated.get("registry_offer") is not None,
+                )
 
             models_used = content.get("models_used", [])
             report.llm_model_used = ", ".join(models_used) if models_used else None
