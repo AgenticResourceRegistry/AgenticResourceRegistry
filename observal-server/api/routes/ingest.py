@@ -248,6 +248,18 @@ async def ingest_session(
                 req.total_offset,
             )
 
+    # Only an integrity-verified final push has a complete canonical source.
+    # A missing/late layer snapshot is retried by the job, not treated as no use.
+    if req.final and integrity_ok is True:
+        try:
+            from jobs.activity import enqueue_activity_projection
+
+            await enqueue_activity_projection(
+                project_id, user_id, req.harness, req.session_id, source_digest=integrity.server_hash or ""
+            )
+        except Exception as error:
+            optic.warning("session activity enqueue failed: {}", type(error).__name__)
+
     # Notify WebSocket subscribers so the frontend gets instant turn updates.
     # Publish to both a session-specific channel (for detail viewers, O(1) fan-out)
     # and the global channel (for list viewers with debounced refresh).

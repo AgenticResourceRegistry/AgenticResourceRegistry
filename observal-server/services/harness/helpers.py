@@ -395,6 +395,7 @@ def _build_mcp_configs(
     mcp_listings: dict | None = None,
     env_values: dict | None = None,
     header_values: dict | None = None,
+    component_aliases: dict[str, str] | None = None,
 ) -> dict:
     """Build MCP server configs from registry components + external MCPs.
 
@@ -441,7 +442,11 @@ def _build_mcp_configs(
         )
         entry = adapter.agent_mcp_entry(ctx)
         if entry is not None:
+            if ctx.name in mcp_configs:
+                raise ValueError("MCP aliases collide after final sanitization")
             mcp_configs[ctx.name] = entry
+            if component_aliases is not None:
+                component_aliases[str(comp.component_id)] = ctx.name
 
     for ext in agent.external_mcps or []:
         name = _sanitize_name(ext.get("name", ""))
@@ -452,6 +457,8 @@ def _build_mcp_configs(
         if isinstance(args, str):
             args = args.split()
         env = ext.get("env", {})
+        if name in mcp_configs:
+            raise ValueError("External MCP alias collides with registry component")
         mcp_configs[name] = {"command": cmd, "args": args, "env": env}
 
     _inject_agent_id(mcp_configs, str(agent.id))

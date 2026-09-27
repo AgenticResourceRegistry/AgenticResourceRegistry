@@ -381,6 +381,8 @@ async def install_mcp(
         header_values=req.header_values,
         local_name=req.local_name,
     )
+    from services.shared.utils import sanitize_name
+
     return McpInstallResponse(
         listing_id=listing.id,
         harness=req.harness,
@@ -389,6 +391,8 @@ async def install_mcp(
         version=source.version,
         version_id=getattr(installed, "id", None),
         digest=content_digest("mcp", installed) if installed is not None else None,
+        selected_version=source.version,
+        local_name=sanitize_name(req.local_name or listing.slug),
     )
 
 

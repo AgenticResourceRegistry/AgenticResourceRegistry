@@ -88,6 +88,7 @@ const OBSERVAL_DIR = path.join(os.homedir(), ".observal");
 const CONFIG_PATH = path.join(OBSERVAL_DIR, "config.json");
 const SYNC_STATE_PATH = path.join(OBSERVAL_DIR, "sync_state.json");
 const LAYER_SNAPSHOT_PATH = path.join(OBSERVAL_DIR, "layer_snapshot.json");
+const LAYER_UPLOADED_PATH = path.join(OBSERVAL_DIR, "pi_layer_uploaded.json");
 const LOCKFILE_PATH = path.join(OBSERVAL_DIR, "lockfile.json");
 const OUTBOX_DIR = path.join(OBSERVAL_DIR, "pi_session_outbox");
 // Written by `observal discover use` and the install commands; read here so the
@@ -249,7 +250,7 @@ export default function (pi: ExtensionAPI) {
             // ignore
           }
 
-          state.layerSnapshot = buildPiLayerSnapshot(true);
+          state.layerSnapshot = buildPiLayerSnapshot(true, ctx.cwd);
           state.layerHash = state.layerSnapshot.hash;
           if (!(await uploadLayerSnapshot(state.config, state.layerSnapshot))) {
             ctx.ui.notify("Layer snapshot upload failed", "warning");
@@ -306,7 +307,7 @@ export default function (pi: ExtensionAPI) {
       lineCount = cursor.line_count;
     }
 
-    const layerSnapshot = buildPiLayerSnapshot(true);
+    const layerSnapshot = buildPiLayerSnapshot(true, ctx.cwd);
     const layerHash = layerSnapshot.hash;
 
     // Tools Pi runs (the bash tool included) inherit this process's environment,
@@ -477,44 +478,41 @@ export default function (pi: ExtensionAPI) {
     return name.replace(/[^a-zA-Z0-9_-]/g, "-");
   }
 
-  function buildPiLayerSnapshot(includeContent: boolean): LayerSnapshot {
+  function buildPiLayerSnapshot(includeContent: boolean, cwd: string): LayerSnapshot {
     const piHome = path.join(os.homedir(), ".pi", "agent");
-    const files = discoverPiLayerFiles(piHome);
+    const registry = currentRegistryLockfile();
     const manifest: LayerFileEntry[] = [];
-
-    for (const file of files) {
-      try {
-        const rel = path.relative(piHome, file).split(path.sep).join("/");
-        const content = fs.readFileSync(file);
-        const entry: LayerFileEntry = {
-          path: `user:${rel}`,
-          hash: `sha256-${sha256(content)}`,
-          size: content.length,
-          source: "user",
-        };
-        if (includeContent) {
-          entry.content = content.toString("utf-8");
+    for (const [scope, root] of [["user", piHome], ["project", cwd]] as const) {
+      for (const file of discoverPiLayerFiles(root, scope)) {
+        try {
+          const rel = path.relative(root, file).split(path.sep).join("/");
+          const content = fs.readFileSync(file);
+          const entry: LayerFileEntry = {
+            path: `${scope}:${rel}`,
+            hash: `sha256-${sha256(content)}`,
+            size: content.length,
+            source: "user",
+          };
+          if (includeContent) entry.content = content.toString("utf-8");
+          manifest.push(entry);
+        } catch {
+          continue;
         }
-        manifest.push(entry);
-      } catch {
-        continue;
       }
     }
-
-    manifest.sort((a, b) => a.path.localeCompare(b.path));
-    const hashEntries = manifest.map((entry) => [`pi/${entry.path}`, entry.hash] as [string, string]);
-    const layerHash = hashEntries.length === 0 ? "0".repeat(16) : sha256(Buffer.from(pyJsonPairs(hashEntries))).slice(0, 16);
-
+    manifest.sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)));
+    const pins = readPinnedVersions(registry, cwd);
     return {
-      hash: layerHash,
+      hash: layerHashV2({ pi: manifest }, pins),
       harnesses: { pi: manifest },
-      lockfile_hash: computeLockfileHash(),
-      pinned_versions: readPinnedVersions(),
-      drift: { is_canonical: true, drifted_files: [] },
+      lockfile_hash: computeLockfileHash(registry),
+      pinned_versions: pins,
+      // Pi does not yet verify individual MCP entries against effective config.
+      drift: { is_canonical: null, drifted_files: [], mcp_verification: "unverified" },
     };
   }
 
-  function discoverPiLayerFiles(root: string): string[] {
+  function discoverPiLayerFiles(root: string, scope: "user" | "project"): string[] {
     if (!fs.existsSync(root)) return [];
     let rootReal: string;
     try {
@@ -536,7 +534,7 @@ export default function (pi: ExtensionAPI) {
         if (!entry.isFile()) continue;
 
         const rel = path.relative(root, abs).split(path.sep).join("/");
-        if (!isPiLayerFile(rel)) continue;
+        if (!isPiLayerFile(rel, scope)) continue;
 
         try {
           const stat = fs.statSync(abs);
@@ -559,53 +557,112 @@ export default function (pi: ExtensionAPI) {
     return found.sort().slice(0, 200);
   }
 
-  function isPiLayerFile(rel: string): boolean {
-    return ["AGENTS.md", "SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "settings.json"].includes(rel)
-      || /^skills\/[^/]+\/SKILL\.md$/.test(rel)
-      || rel.startsWith("sandboxes/")
-      || /^agents\/[^/]+\/(AGENTS\.md|SYSTEM\.md|APPEND_SYSTEM\.md|mcp\.json)$/.test(rel)
-      || /^agents\/[^/]+\/skills\/[^/]+\/SKILL\.md$/.test(rel)
-      || /^agents\/[^/]+\/sandboxes\//.test(rel);
+  function isPiLayerFile(rel: string, scope: "user" | "project"): boolean {
+    const prefix = scope === "user" ? "" : ".pi/";
+    if (scope === "user" && rel === "settings.json") return true;
+    if (["AGENTS.md", `${prefix}SYSTEM.md`, `${prefix}APPEND_SYSTEM.md`, `${prefix}mcp.json`].includes(rel)) return true;
+    return new RegExp(`^${prefix.replace(".", "\\.")}skills/[^/]+/SKILL\\.md$`).test(rel)
+      || rel.startsWith(`${prefix}sandboxes/`)
+      || new RegExp(`^${prefix.replace(".", "\\.")}agents/[^/]+/(AGENTS\\.md|SYSTEM\\.md|APPEND_SYSTEM\\.md|mcp\\.json)$`).test(rel)
+      || new RegExp(`^${prefix.replace(".", "\\.")}agents/[^/]+/skills/[^/]+/SKILL\\.md$`).test(rel)
+      || new RegExp(`^${prefix.replace(".", "\\.")}agents/[^/]+/sandboxes/`).test(rel);
   }
 
   function sha256(content: Buffer): string {
     return crypto.createHash("sha256").update(content).digest("hex");
   }
 
-  function pyJsonPairs(entries: [string, string][]): string {
-    return `[${entries.map(([left, right]) => `[${JSON.stringify(left)}, ${JSON.stringify(right)}]`).join(", ")}]`;
+  function text(value: unknown): string {
+    return typeof value === "string" ? value.normalize("NFC") : "";
   }
 
-  function computeLockfileHash(): string {
-    const registry = currentRegistryLockfile();
+  function uuid(value: unknown): string {
+    const raw = text(value).replace(/^urn:uuid:/i, "").replace(/^\{(.*)\}$/, "$1").replace(/-/g, "");
+    if (!/^[0-9a-f]{32}$/i.test(raw)) return "";
+    const hex = raw.toLowerCase();
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  function layerHashV2(harnesses: Record<string, LayerFileEntry[]>, pins: Record<string, any>): string {
+    const files = new Map<string, string>();
+    for (const [harness, manifest] of Object.entries(harnesses)) {
+      for (const entry of manifest) {
+        const filePath = `${harness}/${entry.path}`.normalize("NFC").replace(/\\/g, "/");
+        if (!/^sha256-[0-9a-f]{64}$/.test(entry.hash)) throw new Error("Invalid layer manifest hash");
+        if (files.has(filePath) && files.get(filePath) !== entry.hash) throw new Error("Conflicting layer manifest path");
+        files.set(filePath, entry.hash);
+      }
+    }
+    const byteCompare = (left: string, right: string) => Buffer.compare(Buffer.from(left), Buffer.from(right));
+    const pairs = [...files].sort((left, right) => byteCompare(left[0], right[0]));
+    const tuples: string[][] = [];
+    for (const agent of pins.agents) {
+      tuples.push(["agent", "agent", agent.id, agent.version, agent.harness, agent.scope,
+        agent.local_name ?? "", "", "", agent.qualified_name ?? "", agent.name]);
+      for (const component of agent.components) {
+        tuples.push(["agent_component", component.type, component.id, component.version, agent.harness,
+          component.scope, component.local_name, agent.id, agent.version, component.qualified_name ?? "", component.name]);
+      }
+    }
+    for (const item of pins.standalone) {
+      tuples.push(["standalone", item.type, item.id, item.version, item.harness, item.scope,
+        item.local_name, "", "", item.qualified_name ?? "", item.name]);
+    }
+    tuples.sort((left, right) => {
+      for (let index = 0; index < left.length; index++) {
+        const difference = byteCompare(left[index], right[index]);
+        if (difference) return difference;
+      }
+      return 0;
+    });
+    return `v2_${sha256(Buffer.from(JSON.stringify(["observal-layer-v2", pairs, tuples]), "utf-8")).slice(0, 60)}`;
+  }
+
+  function computeLockfileHash(registry: Record<string, any> | null): string {
     return registry ? sha256(Buffer.from(JSON.stringify(registry))).slice(0, 16) : "0".repeat(16);
   }
 
-  function readPinnedVersions(): Record<string, unknown> {
-    try {
-      const registry = currentRegistryLockfile();
-      if (!registry) return { agents: [], standalone: [] };
-      const agents: Record<string, unknown>[] = [];
-      const standalone: Record<string, unknown>[] = [];
-      for (const [harness, section] of Object.entries((registry.harnesses ?? {}) as Record<string, any>)) {
-        for (const agent of section.agents ?? []) {
-          agents.push({ ...agent, harness });
-        }
-        for (const item of section.standalone ?? []) {
-          standalone.push({ ...item, harness });
-        }
-      }
-      return { agents, standalone };
-    } catch {
-      return { agents: [], standalone: [] };
+  function readPinnedVersions(registry: Record<string, any> | null, cwd: string): Record<string, any> {
+    const pins: Record<string, any> = { schema_version: 2, agents: [], standalone: [] };
+    const section = registry?.harnesses?.pi;
+    if (!section || typeof section !== "object" || Array.isArray(section)) return pins;
+    const directory = path.resolve(cwd);
+    const included = (item: Record<string, any>): boolean =>
+      item.scope === "user" || (typeof item.directory === "string" && path.resolve(item.directory) === directory);
+    const common = (item: Record<string, any>, scope: string): Record<string, any> => {
+      const projected: Record<string, any> = {
+        type: text(item.type), id: uuid(item.id), name: text(item.name), version: text(item.version),
+        scope: text(item.scope) || scope, local_name: text(item.local_name),
+      };
+      if (text(item.qualified_name)) projected.qualified_name = text(item.qualified_name);
+      return projected;
+    };
+    const agents = Array.isArray(section.agents) ? section.agents : [];
+    const standalone = Array.isArray(section.standalone) ? section.standalone : [];
+    for (const agent of agents) {
+      if (!agent || typeof agent !== "object" || Array.isArray(agent) || !included(agent)) continue;
+      const raw = Array.isArray(agent.components) ? agent.components : [];
+      if (raw.length > 128) throw new Error("Too many component pins");
+      const components = raw.filter((item: any) => item && typeof item === "object" && !Array.isArray(item))
+        .map((item: any) => common(item, text(agent.scope) || "project"));
+      const { type: _type, ...projected } = common(agent, text(agent.scope) || "project");
+      pins.agents.push({ ...projected, harness: "pi", components });
     }
+    for (const item of standalone) {
+      if (item && typeof item === "object" && !Array.isArray(item) && included(item)) {
+        pins.standalone.push({ ...common(item, "project"), harness: "pi" });
+      }
+    }
+    if (pins.agents.length > 128 || pins.standalone.length > 512) throw new Error("Too many layer pins");
+    return pins;
   }
 
-  function needsLayerUpload(hash: string): boolean {
+  function needsLayerUpload(config: ObservalConfig, hash: string): boolean {
     try {
-      if (!fs.existsSync(LAYER_SNAPSHOT_PATH)) return true;
-      const data = JSON.parse(fs.readFileSync(LAYER_SNAPSHOT_PATH, "utf-8"));
-      return data.hash !== hash;
+      if (!/^v2_[0-9a-f]{60}$/.test(hash)) return true;
+      const marker = JSON.parse(fs.readFileSync(LAYER_UPLOADED_PATH, "utf-8"));
+      return marker.hash !== hash || marker.server_url !== config.server_url.replace(/\/$/, "")
+        || marker.user_id !== (config.user_id ?? "");
     } catch {
       return true;
     }
@@ -623,10 +680,17 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function uploadLayerSnapshot(config: ObservalConfig, snapshot: LayerSnapshot): Promise<boolean> {
-    if (!needsLayerUpload(snapshot.hash)) return true;
+    if (!needsLayerUpload(config, snapshot.hash)) return true;
     const result = await postJsonWithTimeout(config, "/api/v1/layer-snapshots", JSON.stringify(snapshot));
     if (result?.hash !== snapshot.hash) return false;
     saveLayerSnapshot(snapshot);
+    try {
+      fs.writeFileSync(LAYER_UPLOADED_PATH, JSON.stringify({
+        hash: snapshot.hash, server_url: config.server_url.replace(/\/$/, ""), user_id: config.user_id ?? "",
+      }));
+    } catch {
+      // Retry on next session if the acknowledgement cannot be cached.
+    }
     return true;
   }
 

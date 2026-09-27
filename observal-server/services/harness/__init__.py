@@ -182,6 +182,7 @@ def generate_agent_config(
     prompt_listings: dict | None = None,
     sandbox_listings: dict | None = None,
     skill_folder_names: dict | None = None,
+    component_aliases: dict[str, str] | None = None,
 ) -> dict:
     """Generate harness-specific config for an agent.
 
@@ -208,7 +209,13 @@ def generate_agent_config(
     options = options or {}
     safe_name = _sanitize_name(options.get("local_name") or registry_item_slug(agent))
     mcp_configs = _build_mcp_configs(
-        agent, harness, observal_url, mcp_listings=mcp_listings, env_values=env_values, header_values=header_values
+        agent,
+        harness,
+        observal_url,
+        mcp_listings=mcp_listings,
+        env_values=env_values,
+        header_values=header_values,
+        component_aliases=component_aliases,
     )
 
     if sandbox_listings:

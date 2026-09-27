@@ -19,13 +19,14 @@ from api.deps import (
     check_listing_visibility_async,
     get_db,
     get_effective_agent_permission,
+    get_effective_component_permission,
     get_registry_user,
     require_role,
 )
 from api.routes._component_archive import archived_install_warning
 from models.agent import AgentStatus
 from models.hook import HookListing
-from models.mcp import ListingStatus, McpListing
+from models.mcp import ListingStatus, McpListing, McpVersion
 from models.prompt import PromptListing
 from models.sandbox import SandboxListing
 from models.skill import SkillListing
@@ -142,6 +143,28 @@ async def install_agent(
         )
         mcp_rows = (await db.execute(mcp_stmt)).scalars().all()
         mcp_listings_map = {row.id: row for row in mcp_rows}
+        from services.config_generator import versioned_mcp_listing
+
+        for component in install_components:
+            if component.component_type != "mcp" or component.component_id not in mcp_listings_map:
+                continue
+            listing = mcp_listings_map[component.component_id]
+            pinned = component.resolved_version
+            if pinned and pinned != "latest" and pinned != listing.version:
+                selected = (
+                    await db.execute(
+                        select(McpVersion).where(
+                            McpVersion.listing_id == listing.id,
+                            McpVersion.version == pinned,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if selected is None or (
+                    selected.status != ListingStatus.approved
+                    and (current_user is None or get_effective_component_permission(listing, current_user) != "owner")
+                ):
+                    raise HTTPException(status_code=404, detail="Pinned MCP version is unavailable")
+                mcp_listings_map[component.component_id] = versioned_mcp_listing(listing, selected)
 
     # Pre-load skill listings for skill file generation
     skill_comp_ids = [c.component_id for c in install_components if c.component_type == "skill"]
@@ -257,6 +280,18 @@ async def install_agent(
     )
     if any(set(ids) - set(listings) for ids, listings in component_maps):
         raise HTTPException(status_code=404, detail="Agent contains a component unavailable to this agent target")
+    listing_by_type = {
+        "mcp": mcp_listings_map,
+        "skill": skill_listings_map,
+        "hook": hook_listings_map,
+        "prompt": prompt_listings_map,
+        "sandbox": sandbox_listings_map,
+    }
+    for component in install_components:
+        listing = listing_by_type[component.component_type][component.component_id]
+        pinned = component.resolved_version
+        if component.component_type not in {"mcp", "sandbox"} and pinned not in {"latest", listing.version}:
+            raise HTTPException(status_code=409, detail="Selected component version is not supported for this install")
 
     # Generate every component from the exact version this agent release pinned,
     # never from the listing's latest release.
@@ -352,22 +387,49 @@ async def install_agent(
     install_options["_model_warnings"] = model_warnings
     install_options["_delegation"] = _ds.get_sync_bool("discovery.delegation_enabled", True)
 
-    snippet = generate_agent_config(
-        install_agent_obj,
-        req.harness,
-        observal_url=endpoints["api"],
-        mcp_listings=mcp_listings_map,
-        component_names=name_map,
-        env_values=req.env_values,
-        header_values=req.header_values,
-        options=install_options,
-        platform=req.platform,
-        skill_listings=skill_listings_map,
-        hook_listings=hook_listings_map,
-        prompt_listings=prompt_listings_map,
-        sandbox_listings=sandbox_listings_map,
-        skill_folder_names=skill_folder_names,
-    )
+    component_aliases: dict[str, str] = {}
+    try:
+        snippet = generate_agent_config(
+            install_agent_obj,
+            req.harness,
+            observal_url=endpoints["api"],
+            mcp_listings=mcp_listings_map,
+            component_names=name_map,
+            env_values=req.env_values,
+            header_values=req.header_values,
+            options=install_options,
+            platform=req.platform,
+            skill_listings=skill_listings_map,
+            hook_listings=hook_listings_map,
+            prompt_listings=prompt_listings_map,
+            sandbox_listings=sandbox_listings_map,
+            skill_folder_names=skill_folder_names,
+            component_aliases=component_aliases,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail="Generated component aliases collide") from error
+
+    from services.harness.helpers import _local_registry_names, _sanitize_name
+
+    for kind, listings in (("skill", skill_listings_map), ("hook", hook_listings_map), ("prompt", prompt_listings_map)):
+        names = _local_registry_names(listings)
+        mapped = {str(key): _sanitize_name(value) if kind != "hook" else value for key, value in names.items()}
+        if len(set(mapped.values())) != len(mapped):
+            raise HTTPException(status_code=409, detail="Generated component aliases collide")
+        component_aliases.update(mapped)
+    component_pin_entries = []
+    for component in install_components:
+        listing = listing_by_type.get(component.component_type, {}).get(component.component_id)
+        component_pin_entries.append(
+            {
+                "id": str(component.component_id),
+                "type": component.component_type,
+                "name": getattr(listing, "name", component.component_name),
+                "version": listing.version if listing else "",
+                "local_name": component_aliases.get(str(component.component_id), ""),
+                "qualified_name": getattr(listing, "qualified_name", "") if listing else "",
+            }
+        )
 
     try:
         skill_bundles = (
@@ -429,6 +491,8 @@ async def install_agent(
         harness=req.harness,
         version=install_version.version,
         config_snippet=snippet,
+        selected_version=install_version.version,
+        component_pins=component_pin_entries,
         warnings=warnings,
         lock=lock,
         skill_bundles=skill_bundles,

@@ -145,6 +145,32 @@ def _build_mcp_context(
     )
 
 
+def versioned_mcp_listing(listing: McpListing, version: object):
+    """Expose a selected MCP version to the existing harness config generator."""
+
+    class SelectedListing:
+        def __getattr__(self, field: str):
+            if field == "latest_version":
+                return version
+            if field in {
+                "version",
+                "command",
+                "args",
+                "url",
+                "transport",
+                "framework",
+                "docker_image",
+                "environment_variables",
+                "headers",
+                "auto_approve",
+                "setup_instructions",
+            }:
+                return getattr(version, field)
+            return getattr(listing, field)
+
+    return SelectedListing()
+
+
 def generate_config(
     listing: McpListing,
     harness: str,

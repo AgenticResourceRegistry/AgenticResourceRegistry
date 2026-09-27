@@ -1047,6 +1047,8 @@ class TestInstallMcp:
             "listing_id": LISTING_ID,
             "harness": "cursor",
             "config_snippet": {"mcpServers": {"local": {}}},
+            "selected_version": "1.2.3",
+            "local_name": "local",
             "warnings": [
                 "Archived MCP 'Review MCP' is deprecated and may be removed from future agent pulls.",
                 "MCP 'Review MCP' requires local setup before use:\nCreate a local token",
@@ -1075,6 +1077,34 @@ class TestInstallMcp:
             header_values={"Authorization": "Bearer token"},
             local_name="local",
         )
+
+    @pytest.mark.asyncio
+    async def test_selected_standalone_version_generates_selected_content(self, monkeypatch):
+        db = _db()
+        listing = _listing(command="latest-program", args=["latest"], version="2.0.0")
+        previous = SimpleNamespace(
+            version="1.0.0", command="older-program", args=["previous"], status=ListingStatus.approved, download_count=0
+        )
+        db.execute.return_value = _result(previous)
+        monkeypatch.setattr(mcp, "resolve_visible_listing", AsyncMock(return_value=listing))
+        monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock())
+        monkeypatch.setattr("api.routes.config.derive_endpoints", AsyncMock(return_value={"api": "https://api.test"}))
+        generator = Mock(
+            side_effect=lambda source, *_args, **_kwargs: {
+                "selected_command": source.command,
+                "selected_version": source.version,
+            }
+        )
+        monkeypatch.setattr(mcp, "generate_config", generator)
+
+        response = await mcp.install_mcp(
+            str(LISTING_ID), McpInstallRequest(harness="claude-code", version="1.0.0"), MagicMock(), db, _user()
+        )
+        assert response.selected_version == "1.0.0"
+        assert response.config_snippet == {"selected_command": "older-program", "selected_version": "1.0.0"}
+        assert listing.command == "latest-program"
+        assert previous.download_count == 1
+        assert listing.latest_version.download_count == 7
 
     @pytest.mark.asyncio
     async def test_pending_owner_fallback_can_install(self, monkeypatch):

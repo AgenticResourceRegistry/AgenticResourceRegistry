@@ -1,0 +1,46 @@
+{
+  "provenance": "Real tracked Observal CLI --apply installation against isolated current-source registry API and Claude Code 2.1.283 in a temporary project; sanitized identity projection, not the original upload",
+  "listing": {
+    "id": "77777777-7777-4777-8777-777777777777",
+    "qualified_name": "sanitized-phase1/live-probe",
+    "name": "live-probe",
+    "version": "1.0.0"
+  },
+  "installation": {
+    "harness": "claude-code",
+    "scope": "project",
+    "local_name": "live-probe",
+    "registry_identity_tracked": true,
+    "effective_alias_verified": true,
+    "v2_hash_built": true
+  },
+  "pinned_versions": {
+    "schema_version": 2,
+    "agents": [],
+    "standalone": [
+      {
+        "type": "mcp",
+        "id": "77777777-7777-4777-8777-777777777777",
+        "name": "live-probe",
+        "version": "1.0.0",
+        "harness": "claude-code",
+        "scope": "project",
+        "local_name": "live-probe",
+        "qualified_name": "sanitized-phase1/live-probe"
+      }
+    ]
+  },
+  "drift": {
+    "is_canonical": true,
+    "mcp_verifications": [
+      {
+        "harness": "claude-code",
+        "component_id": "77777777-7777-4777-8777-777777777777",
+        "alias": "live-probe",
+        "scope": "project",
+        "parent_agent_id": "",
+        "status": "verified"
+      }
+    ]
+  }
+}

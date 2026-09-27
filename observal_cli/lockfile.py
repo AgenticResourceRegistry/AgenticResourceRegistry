@@ -17,14 +17,16 @@ The lock file is:
 
 from __future__ import annotations
 
-import contextlib
+import functools
 import hashlib
 import json
 import os
 import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger as optic
@@ -39,6 +41,9 @@ except ImportError:  # Windows has no fcntl; the lock uses msvcrt there
 else:
     msvcrt = None
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
 LOCKFILE_PATH = CONFIG_DIR / "lockfile.json"
 _LOCKFILE_LOCK = CONFIG_DIR / "lockfile.lock"
 
@@ -49,6 +54,58 @@ LOCK_VERSION = 2
 # ---------------------------------------------------------------------------
 # Read / Write primitives
 # ---------------------------------------------------------------------------
+
+
+_lock_state = threading.local()
+
+
+@contextmanager
+def _exclusive_lock(path: Path | None = None) -> Iterator[None]:
+    """Hold a cross-process lock, re-entrant for the same path in one thread.
+
+    Different managed-folder locks must still be acquired independently; skipping
+    them just because the lockfile lock is held would bypass folder ownership.
+    """
+    path = (path or _LOCKFILE_LOCK).absolute()
+    held = getattr(_lock_state, "held", None)
+    if held is None:
+        held = {}
+        _lock_state.held = held
+    if held.get(path):
+        held[path] += 1
+        try:
+            yield
+        finally:
+            held[path] -= 1
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as lock_fd:
+        if fcntl is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        else:
+            lock_fd.seek(0)
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_LOCK, 1)
+        held[path] = 1
+        try:
+            yield
+        finally:
+            del held[path]
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            else:
+                lock_fd.seek(0)
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _locked_mutation(func: Callable) -> Callable:
+    """Reread, mutate and write the lockfile under one exclusive lock."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _exclusive_lock():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def normalize_server_url(server_url: str) -> str:
@@ -114,25 +171,6 @@ def read_lockfile() -> dict:
         raise RuntimeError(f"Unsupported lockfile version in {LOCKFILE_PATH}")
     return data
 
-
-@contextlib.contextmanager
-def _exclusive_lock(path: Path):
-    """Hold an exclusive cross-process lock on ``path``: flock on POSIX, msvcrt on Windows."""
-    with open(path, "w") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-        else:
-            # Lock the first byte; LK_LOCK retries for about ten seconds, then raises OSError.
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        try:
-            yield
-        finally:
-            if fcntl is not None:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-            else:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _write_locked(data: dict) -> None:
@@ -301,6 +339,7 @@ def _record_capability_use(
         optic.debug("capability lock not updated for {} {}: {}", kind, component_id, exc)
 
 
+@_locked_mutation
 def upsert_agent(
     harness: str,
     *,
@@ -373,6 +412,7 @@ def upsert_agent(
     )
 
 
+@_locked_mutation
 def remove_agent(harness: str, agent_id: str, directory: str | None = None) -> bool:
     """Remove an agent entry. Returns True if found and removed."""
     data, registry = read_registry_lockfile(create=True)
@@ -408,6 +448,7 @@ def _find_agent_idx(agents: list[dict], agent_id: str, scope: str, directory: st
 # ---------------------------------------------------------------------------
 
 
+@_locked_mutation
 def upsert_standalone(
     harness: str,
     *,
@@ -424,6 +465,7 @@ def upsert_standalone(
     version_id: str | None = None,
     digest: str | None = None,
     requested_version: str | None = None,
+    mcp_integrity: str | None = None,
 ) -> None:
     """Add or update a standalone component (MCP, skill, hook, etc.) in the lock file.
 
@@ -443,6 +485,8 @@ def upsert_standalone(
         entry["directory"] = directory
     if integrity:
         entry["integrity"] = integrity
+    if mcp_integrity:
+        entry["mcp_integrity"] = mcp_integrity
     if namespace:
         entry["namespace"] = namespace
     if slug:
@@ -485,6 +529,7 @@ def upsert_standalone(
     )
 
 
+@_locked_mutation
 def remove_standalone(harness: str, component_type: str, component_id: str, directory: str | None = None) -> bool:
     """Remove a standalone component entry. Returns True if found and removed."""
     data, registry = read_registry_lockfile(create=True)
