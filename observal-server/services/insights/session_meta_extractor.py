@@ -25,6 +25,7 @@ from services.insight_version_filters import agent_version_filter
 from services.session_parsers import meta_records
 
 from ._deps import get_query
+from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
 
@@ -451,23 +452,9 @@ async def fetch_session_stats(
     period_end: str,
     agent_name: str = "",
     agent_version: str | None = None,
-) -> dict[str, dict]:
-    """Fetch per-session stats (credits, harness) from session_stats_agg.
-
-    Returns {session_id: {"credits": float, "harness": str}} for enriching metas.
-    """
+) -> dict[SessionKey, dict]:
+    """Read agent-eligible aggregate rows; never collapse users sharing an ID."""
     query = get_query()
-
-    sql = """
-        SELECT session_id, total_credits, harness, layer_hash
-        FROM session_stats_agg FINAL
-        WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
-          AND last_event_time >= {t_start:String}
-          AND last_event_time <= {t_end:String}
-          AND __AGENT_VERSION_FILTER__
-        GROUP BY session_id, total_credits, harness, layer_hash
-        FORMAT JSON
-    """.replace("__AGENT_VERSION_FILTER__", agent_version_filter())
     params = {
         "param_agent_id": agent_id,
         "param_agent_name": agent_name,
@@ -475,51 +462,45 @@ async def fetch_session_stats(
         "param_t_end": period_end,
         "param_agent_version": agent_version or "",
     }
-
+    sql = """
+        SELECT project_id, user_id, harness, session_id, total_credits, layer_hash
+        FROM session_stats_agg FINAL
+        WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
+          AND last_event_time >= {t_start:String} AND last_event_time <= {t_end:String}
+          AND __AGENT_VERSION_FILTER__
+        FORMAT JSON
+    """.replace("__AGENT_VERSION_FILTER__", agent_version_filter())
     try:
         r = await query(sql, params)
         r.raise_for_status()
         rows = r.json().get("data", [])
-        return {
-            row["session_id"]: {
-                "credits": float(row.get("total_credits") or 0),
-                "harness": row.get("harness", ""),
-                "layer_hash": row.get("layer_hash", ""),
-            }
-            for row in rows
-        }
     except Exception as e:
         logger.warning("fetch_session_stats_agg_failed", error=str(e))
-
-    fallback_sql = """
-        SELECT
-            session_id,
-            max(credits) AS total_credits,
-            anyIf(harness, harness != '') AS harness,
-            anyIf(layer_hash, layer_hash IS NOT NULL AND layer_hash != '') AS layer_hash
-        FROM session_events FINAL
-        WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
-          AND timestamp >= {t_start:String}
-          AND timestamp <= {t_end:String}
-          AND __AGENT_VERSION_FILTER__
-        GROUP BY session_id
-        FORMAT JSON
-    """.replace("__AGENT_VERSION_FILTER__", agent_version_filter(nullable=True))
-    try:
-        r = await query(fallback_sql, params)
-        r.raise_for_status()
-        rows = r.json().get("data", [])
-        return {
-            row["session_id"]: {
-                "credits": float(row.get("total_credits") or 0),
-                "harness": row.get("harness", ""),
-                "layer_hash": row.get("layer_hash", ""),
-            }
-            for row in rows
+        sql = """
+            SELECT project_id, user_id, harness, session_id,
+                   max(credits) AS total_credits,
+                   anyIf(layer_hash, layer_hash IS NOT NULL AND layer_hash != '') AS layer_hash
+            FROM session_events FINAL
+            WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
+              AND timestamp >= {t_start:String} AND timestamp <= {t_end:String}
+              AND __AGENT_VERSION_FILTER__
+            GROUP BY project_id, user_id, harness, session_id
+            FORMAT JSON
+        """.replace("__AGENT_VERSION_FILTER__", agent_version_filter(nullable=True))
+        try:
+            r = await query(sql, params)
+            r.raise_for_status()
+            rows = r.json().get("data", [])
+        except Exception as fallback_error:
+            logger.warning("fetch_session_stats_fallback_failed", error=str(fallback_error))
+            return {}
+    return {
+        SessionKey.from_row(row): {
+            "credits": float(row.get("total_credits") or 0),
+            "layer_hash": row.get("layer_hash", ""),
         }
-    except Exception as e:
-        logger.warning("fetch_session_stats_fallback_failed", error=str(e))
-        return {}
+        for row in rows
+    }
 
 
 async def fetch_all_session_transcripts(
@@ -529,25 +510,16 @@ async def fetch_all_session_transcripts(
     agent_name: str = "",
     agent_version: str | None = None,
     batch_size: int = 50,
-) -> dict[str, tuple[str, list[str]]]:
-    """Fetch raw JSONL lines for all sessions of an agent from ClickHouse.
-
-    Batches by session_id to avoid loading 200MB+ into memory at once.
-    For 20 users x 100 sessions, fetches ~50 sessions at a time.
-
-    Returns {session_id: (harness, [raw_line, ...])} for all sessions in the period.
-    """
+) -> dict[SessionKey, list[str]]:
+    """Fetch raw lines only for the agent-eligible, fully scoped session keys."""
     query = get_query()
-
-    # First, get the list of session_ids from the lightweight session_stats_agg
-    id_sql = """
-        SELECT session_id
+    sql = """
+        SELECT project_id, user_id, harness, session_id
         FROM session_stats_agg FINAL
         WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
-          AND last_event_time >= {t_start:String}
-          AND last_event_time <= {t_end:String}
+          AND last_event_time >= {t_start:String} AND last_event_time <= {t_end:String}
           AND __AGENT_VERSION_FILTER__
-        GROUP BY session_id
+        GROUP BY project_id, user_id, harness, session_id
         ORDER BY min(last_event_time)
         FORMAT JSON
     """.replace("__AGENT_VERSION_FILTER__", agent_version_filter())
@@ -558,70 +530,67 @@ async def fetch_all_session_transcripts(
         "param_t_end": period_end,
         "param_agent_version": agent_version or "",
     }
-
     try:
-        r = await query(id_sql, params)
+        r = await query(sql, params)
         r.raise_for_status()
-        session_ids = [row["session_id"] for row in r.json().get("data", [])]
+        session_keys = [SessionKey.from_row(row) for row in r.json().get("data", [])]
     except Exception as e:
         logger.warning("fetch_session_ids_agg_failed", error=str(e))
-        fallback_id_sql = """
-            SELECT DISTINCT session_id
+        sql = """
+            SELECT project_id, user_id, harness, session_id
             FROM session_events FINAL
             WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
-              AND timestamp >= {t_start:String}
-              AND timestamp <= {t_end:String}
+              AND timestamp >= {t_start:String} AND timestamp <= {t_end:String}
               AND __AGENT_VERSION_FILTER__
+            GROUP BY project_id, user_id, harness, session_id
             ORDER BY session_id
             FORMAT JSON
         """.replace("__AGENT_VERSION_FILTER__", agent_version_filter(nullable=True))
         try:
-            r = await query(fallback_id_sql, params)
+            r = await query(sql, params)
             r.raise_for_status()
-            session_ids = [row["session_id"] for row in r.json().get("data", [])]
+            session_keys = [SessionKey.from_row(row) for row in r.json().get("data", [])]
         except Exception as fallback_error:
             logger.error("fetch_session_ids_failed", error=str(fallback_error))
             return {}
 
-    if not session_ids:
-        return {}
-
-    logger.info("fetching_transcripts", total_sessions=len(session_ids), batch_size=batch_size)
-
-    # Fetch raw lines in batches
-    all_sessions: dict[str, tuple[str, list[str]]] = {}
-
-    for i in range(0, len(session_ids), batch_size):
-        batch_ids = session_ids[i : i + batch_size]
-
-        batch_sql = """
-            SELECT session_id, harness, raw_line
+    all_sessions: dict[SessionKey, list[str]] = {key: [] for key in session_keys}
+    for i in range(0, len(session_keys), batch_size):
+        batch = session_keys[i : i + batch_size]
+        # Generate only placeholder names; values remain typed parameters.
+        params = {}
+        placeholders = []
+        for index, key in enumerate(batch):
+            fields = []
+            for label, value in zip(("project", "user", "harness", "session"), key.as_tuple(), strict=True):
+                name = f"{label}_{index}"
+                fields.append(f"{{{name}:String}}")
+                params[f"param_{name}"] = value
+            placeholders.append("(" + ",".join(fields) + ")")
+        batch_sql = (
+            """
+            SELECT project_id, user_id, harness, session_id, raw_line
             FROM session_events FINAL
-            WHERE session_id IN ({ids:Array(String)})
+            WHERE (project_id, user_id, harness, session_id) IN ("""
+            + ",".join(placeholders)
+            + """)
               AND raw_line != ''
-            ORDER BY session_id, line_offset
+            ORDER BY project_id, user_id, harness, session_id, line_offset
             FORMAT JSON
         """
-        params = {"param_ids": "[" + ",".join(f"'{sid.replace(chr(39), '')}" + "'" for sid in batch_ids) + "]"}
-
+        )
         try:
             r = await query(batch_sql, params)
             r.raise_for_status()
-            rows = r.json().get("data", [])
-            for row in rows:
-                sid = row["session_id"]
-                all_sessions.setdefault(sid, (row.get("harness") or "", []))[1].append(row["raw_line"])
+            for row in r.json().get("data", []):
+                key = SessionKey.from_row(row)
+                if key in all_sessions:
+                    all_sessions[key].append(row["raw_line"])
         except Exception as e:
             logger.warning("fetch_batch_failed", batch_start=i, error=str(e))
-            continue
-
-    logger.info(
-        "fetched_session_transcripts",
-        agent_id=agent_id,
-        sessions=len(all_sessions),
-        total_lines=sum(len(lines) for _, lines in all_sessions.values()),
-    )
-    return all_sessions
+            # Never present a partially loaded cohort as a complete report.
+            raise
+    return {key: lines for key, lines in all_sessions.items() if lines}
 
 
 async def extract_all_session_metas(
@@ -631,12 +600,6 @@ async def extract_all_session_metas(
     agent_name: str = "",
     agent_version: str | None = None,
 ) -> list[dict]:
-    """Fetch transcripts and extract deterministic metadata for all sessions.
-
-    This is the main entry point: fetches raw lines from ClickHouse,
-    then runs extract_session_meta on each session.
-    Also enriches each meta with credits and harness info from session_stats_agg.
-    """
     transcripts = await fetch_all_session_transcripts(
         agent_id,
         period_start,
@@ -644,33 +607,32 @@ async def extract_all_session_metas(
         agent_name=agent_name,
         agent_version=agent_version,
     )
-
-    # Fetch per-session stats (credits, harness, layer hash) for enrichment
-    session_stats = await fetch_session_stats(
+    stats = await fetch_session_stats(
         agent_id,
         period_start,
         period_end,
         agent_name=agent_name,
         agent_version=agent_version,
     )
-
     metas = []
     failed_runs = 0
-    for session_id, (harness, lines) in transcripts.items():
-        # Enrich with credits, harness, layer hash, and report version scope from session_stats_agg
-        stats = session_stats.get(session_id, {})
-        harness = harness or stats.get("harness", "")
-        meta = extract_session_meta(session_id, lines, harness)
+    for key, lines in transcripts.items():
+        meta = extract_session_meta(key.session_id, lines, key.harness)
         if meta["user_message_count"] and not meta["assistant_message_count"]:
             # Prompts that never got a response: the run failed before reaching the
             # model (missing credentials, a crash), so it says nothing about the agent.
             # Formats the extractor cannot read count neither and are kept.
             failed_runs += 1
             continue
-        meta["credits"] = stats.get("credits", 0.0)
-        meta["harness"] = harness
-        meta["layer_hash"] = stats.get("layer_hash", "")
-        meta["agent_version"] = agent_version or ""
+        meta.update(
+            session_key=key,
+            project_id=key.project_id,
+            user_id=key.user_id,
+            harness=key.harness,
+            credits=stats.get(key, {}).get("credits", 0.0),
+            layer_hash=stats.get(key, {}).get("layer_hash", ""),
+            agent_version=agent_version or "",
+        )
         metas.append(meta)
 
     logger.info(

@@ -27,6 +27,7 @@ owner: observal
 | --- | --- |
 | Sessions, traces, rankings, ratings, telemetry, or logs | [Operational workflows](references/operational-workflows.md) |
 | Agent health, friction, costs, versions, regressions, or suggestions | [Insight reports](references/insight-reports.md) |
+| MCP component presence, observed calls, and attribution coverage | [Insight reports](references/insight-reports.md) |
 
 Read the selected reference completely before executing.
 
@@ -34,7 +35,7 @@ Read the selected reference completely before executing.
 
 - A zero exit status from telemetry diagnosis can still contain issues or warnings. Read the JSON health fields.
 - No events is not automatically a hook problem. Check authentication, server reachability, local outbox, and hook state in that order.
-- Quote report evidence accurately and say when session count is thin.
+- Quote report evidence accurately and say when session count is thin. For MCP reports use `--component mcp NAMESPACE/SLUG` with `insights list|show|generate`; coverage gaps are unknown, never proof of non-use.
 - Only `component_ref` proves an insight suggestion maps to a Registry component. Never reconstruct a component identity from prose.
 - Lead with reuse suggestions before create-new suggestions.
 - For logs and traces, summarize the minimum sensitive content needed to answer the question.

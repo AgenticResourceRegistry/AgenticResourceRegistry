@@ -122,6 +122,40 @@ async def presence_cohort(
     return await _rows(sql, params)
 
 
+async def presence_version_distribution(
+    project_id: str,
+    component_type: str,
+    component_id: str,
+    component_version_id: str | None,
+    period: tuple[datetime, datetime],
+) -> dict[str, int]:
+    """Count present sessions by the resolved listing version in their published layer.
+
+    A session may have more than one verified version installed. Deduplicate
+    occurrences by the full session key and version, not by listing alias.
+    """
+    params = presence_params(project_id, component_type, component_id, component_version_id, period)
+    sql = (
+        "SELECT version, count() AS sessions FROM ("
+        "SELECT DISTINCT p.user_id, p.harness, p.session_id, "
+        "if(c.component_version_id = '' OR c.raw_version = '', 'unknown', c.raw_version) AS version FROM ("
+        + PRESENCE_COHORT_SQL
+        + ") AS p INNER JOIN layer_components AS c FINAL "
+        "ON c.project_id = {project_id:String} AND c.user_id = p.user_id AND c.layer_hash = p.layer_hash "
+        "INNER JOIN ("
+        + _LATEST
+        + ") AS published ON c.project_id = published.project_id AND c.user_id = published.user_id "
+        "AND c.layer_hash = published.layer_hash AND c.extraction_generation = published.generation "
+        "WHERE c.extractor_version = {extractor_version:UInt16} AND published.conflict = 0 "
+        "AND c.component_type = {component_type:String} AND c.component_id = {component_id:String} "
+        "AND ({component_version_id:String} = '' OR c.component_version_id = {component_version_id:String}) "
+        "AND c.identity_status = 'resolved' AND c.verification_status = 'verified'"
+        ") GROUP BY version ORDER BY version FORMAT JSON"
+    )
+    rows = await _rows(sql, params)
+    return {row["version"]: int(row["sessions"]) for row in rows}
+
+
 async def presence_coverage(
     project_id: str,
     component_type: str,

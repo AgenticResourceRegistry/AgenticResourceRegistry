@@ -312,8 +312,32 @@ async def test_agent_install_returns_pinned_mcp_version_and_generator_alias(monk
     historical_result = Mock()
     historical_result.scalar_one_or_none.return_value = historical
     db = SimpleNamespace(execute=AsyncMock(side_effect=[listing_result, historical_result]), commit=AsyncMock())
+    # Current main resolves pinned releases through the agent lock service.
+    pinned_listing = SimpleNamespace(
+        id=mcp_id,
+        version=historical.version,
+        status=listing.status,
+        name=listing.name,
+        namespace=listing.namespace,
+        slug=listing.slug,
+        setup_instructions=None,
+        qualified_name=listing.qualified_name,
+    )
+    monkeypatch.setattr(
+        "services.agent_lock.load_pinned_listings",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                listings={"mcp": {mcp_id: pinned_listing}, "skill": {}, "hook": {}, "prompt": {}, "sandbox": {}},
+                entries=[{"id": str(mcp_id), "type": "mcp", "version": historical.version}],
+                warnings=[],
+                problems=[],
+                status="locked",
+            )
+        ),
+    )
     monkeypatch.setattr(agent_install, "_load_agent", AsyncMock(return_value=agent))
     monkeypatch.setattr(agent_install, "get_effective_agent_permission", lambda *_args: "owner")
+    monkeypatch.setattr(agent_install, "get_effective_component_permission", lambda *_args: "owner")
     monkeypatch.setattr(agent_install, "apply_publish_scope", lambda query, *_args: query)
     monkeypatch.setattr(agent_install, "apply_visibility_filter", lambda query, *_args: query)
     monkeypatch.setattr(agent_install, "_resolve_component_names", AsyncMock(return_value={}))

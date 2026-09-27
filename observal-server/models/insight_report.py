@@ -8,7 +8,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,11 +24,34 @@ class InsightReportStatus(str, enum.Enum):
 
 class InsightReport(Base):
     __tablename__ = "insight_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "(subject_type = 'agent' AND agent_id IS NOT NULL AND component_id IS NULL AND component_type IS NULL) OR "
+            "(subject_type = 'component' AND agent_id IS NULL AND component_id IS NOT NULL AND "
+            "component_type = 'mcp' AND project_id IS NOT NULL)",
+            name="ck_insight_report_subject",
+        ),
+        Index(
+            "ix_insight_reports_component_subject",
+            "project_id",
+            "component_type",
+            "component_id",
+            "component_version_id",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    agent_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    subject_type: Mapped[str] = mapped_column(String(20), nullable=False, default="agent")
+    project_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    component_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    component_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    component_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    component_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    component_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     triggered_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )

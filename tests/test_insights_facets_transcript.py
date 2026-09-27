@@ -11,8 +11,11 @@ import pytest
 
 
 def _meta(session_id: str, duration: int, tool_count: int) -> dict:
+    from services.insights.scope import SessionKey
+
     return {
         "session_id": session_id,
+        "session_key": SessionKey("default", "user-1", "pi", session_id),
         "total_messages": 3,
         "duration_seconds": duration,
         "input_tokens": 0,
@@ -102,7 +105,7 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
     top_metas = [_meta(f"top-{i}", duration=1000 - i, tool_count=2) for i in range(50)]
     metas = [*top_metas, _meta("cached-low", duration=1, tool_count=0)]
 
-    load_cached = AsyncMock(return_value={"cached-low": cached_facet})
+    load_cached = AsyncMock(return_value={metas[-1]["session_key"]: cached_facet})
     monkeypatch.setattr(generator, "extract_all_session_metas", AsyncMock(return_value=metas))
     monkeypatch.setattr(generator, "load_cached_facets_batch", load_cached)
     monkeypatch.setattr(generator, "build_session_transcript", AsyncMock(return_value=""))
@@ -117,7 +120,7 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
         db=SimpleNamespace(),
     )
 
-    assert "cached-low" in load_cached.await_args.args[0]
+    assert metas[-1]["session_key"] in load_cached.await_args.args[0]
     assert report["facets_summary"]["sessions_with_facets"] == 1
     assert report["facets_summary"]["goal_categories"] == [("fix_bug", 1)]
 
@@ -187,7 +190,9 @@ async def test_build_session_transcript_summarizes_long_sessions(monkeypatch):
     monkeypatch.setattr(transcript, "get_call_model", lambda: call_model)
     monkeypatch.setattr(ds, "get", AsyncMock(return_value=None))
 
-    result = await transcript.build_session_transcript("session-123456")
+    from services.insights.scope import SessionKey
+
+    result = await transcript.build_session_transcript(SessionKey("default", "user-1", "pi", "session-123456"))
 
     assert summaries
     assert "[Long session summarized]" in result

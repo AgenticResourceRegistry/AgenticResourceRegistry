@@ -16,6 +16,11 @@ class GenerateInsightRequest(BaseModel):
     version_scope: str | None = "canonical_and_dirty"
 
 
+class GenerateComponentInsightRequest(BaseModel):
+    period_days: int = 14
+    component_version_id: uuid.UUID | None = None
+
+
 class ApplySuggestionsRequest(BaseModel):
     """Select which suggestions to apply. Omit a field or pass None to skip that category."""
 
@@ -26,7 +31,14 @@ class ApplySuggestionsRequest(BaseModel):
 
 class InsightReportListItem(BaseModel):
     id: uuid.UUID
-    agent_id: uuid.UUID
+    agent_id: uuid.UUID | None
+    subject_type: str = "agent"
+    component_type: str | None = None
+    component_id: uuid.UUID | None = None
+    component_name: str | None = None
+    component_version_id: uuid.UUID | None = None
+    component_version: str | None = None
+    coverage: dict | None = None
     agent_version_id: uuid.UUID | None = None
     agent_version: str | None = None
     version_scope: str | None = None
@@ -47,7 +59,14 @@ class InsightReportListItem(BaseModel):
 
 class InsightReportResponse(BaseModel):
     id: uuid.UUID
-    agent_id: uuid.UUID
+    agent_id: uuid.UUID | None
+    subject_type: str = "agent"
+    component_type: str | None = None
+    component_id: uuid.UUID | None = None
+    component_name: str | None = None
+    component_version_id: uuid.UUID | None = None
+    component_version: str | None = None
+    coverage: dict | None = None
     agent_version_id: uuid.UUID | None = None
     agent_version: str | None = None
     version_scope: str | None = None

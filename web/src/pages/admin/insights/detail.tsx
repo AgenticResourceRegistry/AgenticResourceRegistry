@@ -774,7 +774,7 @@ function SuggestionsSection({
 	};
 
 	const handleApply = () => {
-		if (!report) return;
+		if (!report || !report.agent_id) return;
 		const selection: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } = {};
 		if (selectedConfigs.size < (configAdditions?.length ?? 0)) {
 			selection.config_indices = [...selectedConfigs];

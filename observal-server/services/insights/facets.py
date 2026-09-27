@@ -14,8 +14,11 @@ from datetime import UTC, datetime
 import structlog
 
 from ._deps import get_call_model, get_facets_model
+from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
+
+FACET_VERSION = 1
 
 FACET_PROMPT = """\
 Analyze this session and extract structured facets.
@@ -102,51 +105,58 @@ async def extract_facets(
         return {}
 
 
-async def store_facets(
-    session_id: str,
-    agent_id: str,
-    facets: dict,
-    db,
-) -> None:
-    """Persist extracted facets to the database."""
+async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> None:
+    """Persist only to the row for this exact scoped session."""
     import uuid as _uuid
 
     from sqlalchemy import select
 
-    facets_model = get_facets_model()
-
-    stmt = select(facets_model).where(facets_model.session_id == session_id)
-    result = await db.execute(stmt)
-    existing = result.scalar_one_or_none()
-
+    model = get_facets_model()
+    stmt = select(model).where(
+        model.project_id == session.project_id,
+        model.user_id == session.user_id,
+        model.harness == session.harness,
+        model.session_id == session.session_id,
+        model.facet_version == FACET_VERSION,
+    )
+    existing = (await db.execute(stmt)).scalar_one_or_none()
     if existing:
         existing.facets = facets
         existing.extracted_at = datetime.now(UTC)
     else:
-        record = facets_model(
-            session_id=session_id,
-            agent_id=_uuid.UUID(agent_id) if agent_id else None,
-            facets=facets,
+        db.add(
+            model(
+                project_id=session.project_id,
+                user_id=session.user_id,
+                harness=session.harness,
+                session_id=session.session_id,
+                agent_id=_uuid.UUID(agent_id) if agent_id else None,
+                facet_version=FACET_VERSION,
+                facets=facets,
+            )
         )
-        db.add(record)
-
     await db.flush()
 
 
-async def load_cached_facets_batch(session_ids: list[str], db) -> dict[str, dict]:
-    """Load cached facets for many sessions in one DB query."""
-    if not session_ids:
+async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[SessionKey, dict]:
+    """Legacy unscoped cache entries are intentionally never eligible for reuse."""
+    if not sessions:
         return {}
 
-    from sqlalchemy import select
+    from sqlalchemy import select, tuple_
 
-    facets_model = get_facets_model()
-    stmt = select(facets_model).where(facets_model.session_id.in_(session_ids))
+    model = get_facets_model()
+    stmt = select(model).where(
+        tuple_(model.project_id, model.user_id, model.harness, model.session_id).in_(
+            [session.as_tuple() for session in sessions]
+        ),
+        model.facet_version == FACET_VERSION,
+    )
     result = await db.execute(stmt)
     return {
-        row.session_id: row.facets
+        SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
         for row in result.scalars().all()
-        if getattr(row, "session_id", None) and getattr(row, "facets", None)
+        if row.facets
     }
 
 

@@ -140,6 +140,7 @@ class ActivitySummaryResponse(BaseModel):
     observed_calls: int
     result_states: ResultStateCounts
     harness_distribution: dict[str, int]
+    version_distribution: dict[str, int] = Field(default_factory=dict)
     activation_actions: ActivationActions
     coverage: ActivityCoverage
 

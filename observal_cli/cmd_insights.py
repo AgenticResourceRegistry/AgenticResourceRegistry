@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI commands for Agent Insights reports."""
+"""CLI commands for Agent and evidence-backed component Insights reports."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from observal_cli.render import (
 
 insights_app = typer.Typer(
     help=(
-        "Agent insight reports\n\n"
+        "Agent and MCP component insight reports\n\n"
         "Examples:\n"
         "  observal ops insights list alice/my-agent\n"
         "  observal ops insights show alice/my-agent latest\n"
@@ -129,7 +129,24 @@ def _select_report_id(reports: list[dict], report_ref: str | None) -> str:
     )
 
 
-def _resolve_report_for_show(target: str, report_ref: str | None) -> dict:
+def _component_path(component: tuple[str, str]) -> str:
+    kind, ref = component
+    if kind != "mcp":
+        fail(
+            ErrorCategory.VALIDATION,
+            "Only MCP component reports are supported.",
+            operation="Component insight report",
+            resource="component type",
+        )
+    resolved = client.resolve_registry_reference(kind, ref)
+    return f"/api/v1/insights/components/{kind}/{resolved}"
+
+
+def _resolve_report_for_show(target: str, report_ref: str | None, component: tuple[str, str] | None = None) -> dict:
+    if component:
+        reports = client.get(f"{_component_path(component)}/reports")
+        report_id = _select_report_id(reports, report_ref)
+        return client.get(f"/api/v1/insights/reports/{report_id}")
     agent_id = _resolve_agent_id(target)
     reports = client.get(f"/api/v1/agents/{agent_id}/insights/reports")
     report_id = _select_report_id(reports, report_ref)
@@ -138,8 +155,11 @@ def _resolve_report_for_show(target: str, report_ref: str | None) -> dict:
 
 @insights_app.command(name="list")
 def insights_list(
-    agent_id: str = typer.Argument(..., help="Agent ID, name, or @alias"),
+    agent_id: str = typer.Argument("", help="Agent ID, name, or @alias (omit with --component)"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
+    component: tuple[str, str] | None = typer.Option(
+        None, "--component", help="Component type and ref, e.g. mcp org/tool"
+    ),
 ):
     """List insight reports for an agent.
 
@@ -149,9 +169,19 @@ def insights_list(
 
         observal ops insights list my-agent --output json
     """
+    component = component if isinstance(component, tuple) else None
+    if not component and not agent_id:
+        raise typer.BadParameter("Provide an agent or --component")
     with _progress(output, "Fetching insight reports..."):
-        resolved = _resolve_agent_id(agent_id)
-        data = client.get(f"/api/v1/agents/{resolved}/insights/reports")
+        if component and agent_id:
+            fail(ErrorCategory.VALIDATION, "Use an agent or --component, not both.", operation="List insight reports")
+        if not component and not agent_id:
+            fail(ErrorCategory.VALIDATION, "Provide an agent or --component.", operation="List insight reports")
+        data = client.get(
+            f"{_component_path(component)}/reports"
+            if component
+            else f"/api/v1/agents/{_resolve_agent_id(agent_id)}/insights/reports"
+        )
     if output == "json":
         output_json(data)
         return
@@ -171,23 +201,25 @@ def insights_list(
         table.add_row(
             str(i),
             status_badge(r.get("status", "")),
-            esc(r.get("agent_version") or "-"),
+            esc(r.get("component_version") or "all" if component else r.get("agent_version") or "-"),
             f"{esc(start)} → {esc(end)}",
             str(r.get("sessions_analyzed", 0)),
             relative_time(r.get("completed_at")),
         )
     console.print(table)
     rprint()
-    rprint(f"[dim]Open latest completed: [cyan]observal ops insights show {esc(agent_id)}[/cyan][/dim]")
-    rprint(f"[dim]Open row 1: [cyan]observal ops insights show {esc(agent_id)} 1[/cyan][/dim]")
+    target_hint = f"--component {esc(component[0])} {esc(component[1])}" if component else esc(agent_id)
+    rprint(f"[dim]Open latest completed: [cyan]observal ops insights show {target_hint}[/cyan][/dim]")
+    rprint(f"[dim]Open row 1: [cyan]observal ops insights show {target_hint} 1[/cyan][/dim]")
 
 
 @insights_app.command(name="show")
 def insights_show(
-    target: str = typer.Argument(..., help="Agent name, agent ID, or @alias"),
+    target: str = typer.Argument("", help="Agent name, agent ID, or @alias (omit with --component)"),
     report_ref: str | None = typer.Argument(None, help="Report row number, report ID prefix, or 'latest'"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
     section: str | None = typer.Option(None, "--section", "-s", help="Show only a specific section"),
+    component: tuple[str, str] | None = typer.Option(None, "--component", help="Component type and ref"),
 ):
     """Show an insight report with pretty-printed narrative.
 
@@ -199,8 +231,25 @@ def insights_show(
 
         observal ops insights show my-agent --section suggestions
     """
+    component = component if isinstance(component, tuple) else None
+    if not component and not target:
+        raise typer.BadParameter("Provide an agent or --component")
     with _progress(output, "Fetching report..."):
-        data = _resolve_report_for_show(target, report_ref)
+        if component:
+            if target and report_ref:
+                fail(
+                    ErrorCategory.VALIDATION,
+                    "Provide one report reference with --component.",
+                    operation="Show insight report",
+                )
+            report_ref = report_ref or target or None
+        elif not target:
+            fail(ErrorCategory.VALIDATION, "Provide an agent or --component.", operation="Show insight report")
+        data = (
+            _resolve_report_for_show(target, report_ref, component)
+            if component
+            else _resolve_report_for_show(target, report_ref)
+        )
     if output == "json":
         if section:
             narrative = data.get("narrative") or {}
@@ -235,6 +284,59 @@ def insights_show(
             rprint(f"  [dim]{esc(data['progress_message'])}[/dim]")
         if data.get("error_message"):
             rprint(f"  [red]Error:[/red] {esc(data['error_message'])}")
+        return
+
+    if data.get("subject_type") == "component":
+        metrics = data.get("metrics") or {}
+        coverage = data.get("coverage") or {}
+        rprint(f"[bold]{esc(data.get('component_name') or 'Component')} Insights[/bold]")
+        rprint(
+            f"  Present sessions: {metrics.get('present_sessions', 0)}  Observed calls: {metrics.get('observed_calls', 0)}"
+        )
+        narrative = data.get("narrative") or {}
+        rprint(f"  {esc(narrative.get('summary') or 'No summary available')}")
+        analysis = narrative.get("component_analysis") or {}
+        if not analysis:
+            rprint(
+                "  [dim]This report predates evidence-backed analysis; generate a new report to assess sessions.[/dim]"
+            )
+        elif analysis.get("state") != "assessed" or not analysis.get("findings"):
+            rprint("  [dim]No grounded interpretive findings in this sample; this does not mean unused.[/dim]")
+        else:
+            rprint("\n[bold]What the sessions suggest[/bold]")
+            for finding in analysis["findings"]:
+                label = "Possible use (not observed)" if finding["kind"] == "inferred_use" else finding["kind"]
+                rprint(
+                    f"  [bold]{esc(label)}[/bold] · {esc(finding['confidence'])} confidence: {esc(finding['insight'])}"
+                )
+                for ref in finding["evidence_refs"]:
+                    excerpt = (analysis.get("evidence") or {}).get(ref)
+                    if excerpt:
+                        rprint(f"    [dim]{esc(ref)} · {esc(excerpt)}[/dim]")
+        if analysis:
+            rprint(
+                f"  [dim]Sample: {analysis.get('sampled_sessions', 0)} sessions"
+                f"{' (truncated)' if analysis.get('truncated') else ''}; not cohort-wide.[/dim]"
+            )
+        rprint(
+            f"  Cohort attribution gaps: {metrics.get('cohort_collision_calls', 0)} collisions, "
+            f"{metrics.get('cohort_unmatched_calls', 0)} unmatched calls (not assigned to this MCP)"
+        )
+        for label, values in (
+            ("Versions", metrics.get("version_distribution") or {}),
+            ("Harnesses", metrics.get("harness_distribution") or {}),
+        ):
+            if values:
+                rprint(f"  {label}: " + ", ".join(f"{esc(name)} ({count})" for name, count in sorted(values.items())))
+        projection = coverage.get("projection") or {}
+        rprint(
+            f"  Coverage: {projection.get('projection_complete_sessions', 0)} processed; "
+            f"state: {esc(coverage.get('attribution_state', 'unknown'))}"
+        )
+        if coverage.get("reasons"):
+            rprint(f"  Gaps: {esc(', '.join(coverage['reasons']))}")
+        for limitation in coverage.get("limitations") or []:
+            rprint(f"  [dim]{esc(limitation)}[/dim]")
         return
 
     narrative = data.get("narrative") or {}
@@ -663,12 +765,13 @@ _RENDERERS = {
 
 @insights_app.command(name="generate")
 def insights_generate(
-    agent_id: str = typer.Argument(..., help="Agent ID, name, or @alias"),
+    agent_id: str = typer.Argument("", help="Agent ID, name, or @alias (omit with --component)"),
     period_days: int = typer.Option(14, "--period", "-p", min=1, max=365, help="Analysis period in days"),
     agent_version: str | None = typer.Option(None, "--version", "-v", help="Agent version to analyze"),
     compare_version: str | None = typer.Option(None, "--compare", help="Baseline agent version for A/B comparison"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
     wait: bool = typer.Option(False, "--wait", help="Poll until the report completes"),
+    component: tuple[str, str] | None = typer.Option(None, "--component", help="Component type and ref"),
 ):
     """Trigger generation of a new insight report.
 
@@ -678,30 +781,51 @@ def insights_generate(
 
         observal ops insights generate my-agent --period 30
     """
+    component = component if isinstance(component, tuple) else None
+    if not component and not agent_id:
+        raise typer.BadParameter("Provide an agent or --component")
+    if (component and agent_id) or (not component and not agent_id):
+        fail(ErrorCategory.VALIDATION, "Provide either an agent or --component.", operation="Generate insight report")
+    if component and (agent_version or compare_version):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Agent version flags do not apply to component reports.",
+            operation="Generate component insight report",
+        )
+    if component and period_days > 90:
+        fail(
+            ErrorCategory.VALIDATION,
+            "Component reports support at most 90 days.",
+            operation="Generate component insight report",
+        )
     agent_version = _version(agent_version, "agent version")
     compare_version = _version(compare_version, "comparison version")
 
-    # Pre-check: verify insights is configured before queuing
-    with _progress(output, "Checking insights configuration..."):
-        status = client.get("/api/v1/insights/status")
-    if not status.get("available"):
-        reason = status.get("reason", "Insights is not configured.")
-        fail(
-            ErrorCategory.UNAVAILABLE,
-            f"Insights is unavailable: {reason}",
-            operation="Generate agent insight report",
-            resource="insights service",
-            remediation="Configure insights.model_sections and insights.api_key, then retry.",
-        )
+    # Evidence-backed component reports degrade to deterministic facts without a configured LLM.
+    if not component:
+        with _progress(output, "Checking insights configuration..."):
+            status = client.get("/api/v1/insights/status")
+        if not status.get("available"):
+            reason = status.get("reason", "Insights is not configured.")
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                f"Insights is unavailable: {reason}",
+                operation="Generate agent insight report",
+                resource="insights service",
+                remediation="Configure insights.model_sections and insights.api_key, then retry.",
+            )
 
     with _progress(output, "Generating insight report..."):
-        resolved = _resolve_agent_id(agent_id)
+        resolved = _resolve_agent_id(agent_id) if not component else ""
+        component_path = _component_path(component) if component else ""
         body = {"period_days": period_days}
         if agent_version:
             body["agent_version"] = agent_version
         if compare_version:
             body["comparison_agent_version"] = compare_version
-        data = client.post(f"/api/v1/agents/{resolved}/insights/reports", body)
+        data = client.post(
+            f"{component_path}/generate" if component else f"/api/v1/agents/{resolved}/insights/reports", body
+        )
 
     if wait:
         import time
@@ -710,7 +834,11 @@ def insights_generate(
         if output == "json":
             output_json_line({"event": "queued", "report": data})
         for _ in range(120):
-            current = client.get(f"/api/v1/agents/{resolved}/insights/reports/{report_id}")
+            current = client.get(
+                f"/api/v1/insights/reports/{report_id}"
+                if component
+                else f"/api/v1/agents/{resolved}/insights/reports/{report_id}"
+            )
             phase = str(current.get("progress_phase") or current.get("status") or "queued").replace("_", " ")
             percent = current.get("progress_percent", 0)
             if output == "json":
@@ -758,4 +886,5 @@ def insights_generate(
         rprint(
             f"  Phase: {esc(str(data.get('progress_phase')).replace('_', ' '))} ({data.get('progress_percent', 0)}%)"
         )
-    rprint("[dim]  Run `observal ops insights show <agent>` when complete.[/dim]")
+    hint = f"--component {esc(component[0])} {esc(component[1])}" if component else "<agent>"
+    rprint(f"[dim]  Run `observal ops insights show {hint}` when complete.[/dim]")
