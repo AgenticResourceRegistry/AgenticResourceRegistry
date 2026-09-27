@@ -24,7 +24,12 @@ from config import settings
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.component_activity.coverage import build_coverage
 from services.component_activity.projector import MAX_SOURCE_BYTES, MAX_SOURCE_RECORDS, publication_version
-from services.layer_components.queries import PRESENCE_COHORT_SQL, presence_coverage, presence_params
+from services.layer_components.queries import (
+    PRESENCE_COHORT_SQL,
+    presence_coverage,
+    presence_params,
+    presence_version_distribution,
+)
 
 MAX_REFERENCES_PER_SESSION = 20
 
@@ -56,7 +61,7 @@ _COMPONENT_ACTIVITY = (
     """SELECT a.user_id AS user_id, a.harness AS harness, a.session_id AS session_id,
            count() AS calls, countIf(a.result_state = 'success') AS successes,
            countIf(a.result_state = 'error') AS errors, countIf(a.result_state = 'unknown') AS unknowns,
-           arraySlice(arraySort(groupArray((a.source_line_offset, a.source_block_key, a.result_state))),
+           arraySlice(arraySort(groupArray((a.source_line_offset, a.source_block_key, a.result_state, a.source_line_hash))),
                       1, {max_refs:UInt16}) AS refs
     FROM component_activity AS a FINAL
     INNER JOIN ("""
@@ -221,11 +226,12 @@ async def activity_summary(
     if component_version_id and not component_version:
         raise ValueError("A version-scoped summary requires a verified version label")
     params = _activity_params(project_id, component_type, component_id, component_version_id, period, component_version)
-    presence, aggregate_rows, harnesses, activation_rows = await asyncio.gather(
+    presence, aggregate_rows, harnesses, activation_rows, versions = await asyncio.gather(
         presence_coverage(project_id, component_type, component_id, component_version_id, period),
         _rows(_SUMMARY, params),
         _rows(_HARNESSES, params),
         _rows(_ACTIVATIONS, params),
+        presence_version_distribution(project_id, component_type, component_id, component_version_id, period),
     )
     aggregate = (aggregate_rows or [{}])[0]
     activations = (activation_rows or [{}])[0]
@@ -241,6 +247,7 @@ async def activity_summary(
             "unknown": int(aggregate.get("unknowns") or 0),
         },
         "harness_distribution": {row["harness"]: int(row["sessions"]) for row in harnesses},
+        "version_distribution": versions,
         "activation_actions": {
             "context_sessions": int(activations.get("context_sessions") or 0),
             "next_session_sessions": int(activations.get("next_session_sessions") or 0),
@@ -289,6 +296,71 @@ def decode_cursor(cursor: str, *, scope: CursorScope) -> tuple[datetime, list[st
         raise ValueError("malformed cursor") from error
 
 
+async def activity_evidence_sample(
+    project_id: str,
+    component_type: str,
+    component_id: str,
+    component_version_id: str | None,
+    period: tuple[datetime, datetime],
+    *,
+    limit: int,
+) -> tuple[list[dict], bool]:
+    """Bounded published-presence sample, with attributed sessions first.
+
+    Uses precisely the same _SESSIONS projection and version predicates as the
+    owner-facing activity API; this is selection only, never a second matcher.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("limit out of bounds")
+    params = _activity_params(project_id, component_type, component_id, component_version_id, period)
+    params["param_limit"] = limit + 1
+    rows = await _rows(
+        "SELECT * FROM ("
+        + _SESSIONS
+        + ") ORDER BY (source_state = 'available' AND projection_state = 'complete' AND calls > 0) DESC, "
+        + "(source_state = 'available' AND projection_state = 'complete') DESC, "
+        + "user_id, harness, session_id "
+        + "LIMIT {limit:UInt16} FORMAT JSON",
+        params,
+    )
+    return _normalize_sessions(rows[:limit]), len(rows) > limit
+
+
+def _normalize_sessions(page: list[dict]) -> list[dict]:
+    sessions = []
+    for row in page:
+        complete = row["projection_state"] == "complete"
+        refs = row.get("refs") or [] if complete else []
+        calls = int(row.get("calls") or 0) if complete else 0
+        sessions.append(
+            {
+                "user_id": row["user_id"],
+                "harness": row["harness"],
+                "session_id": row["session_id"],
+                "last_event_time": str(row["last_event_time"]),
+                "projection_state": row["projection_state"],
+                "source_state": row["source_state"],
+                "observed_calls": calls,
+                "result_states": {
+                    "success": int(row.get("successes") or 0) if complete else 0,
+                    "error": int(row.get("errors") or 0) if complete else 0,
+                    "unknown": int(row.get("unknowns") or 0) if complete else 0,
+                },
+                "source_references": [
+                    {
+                        "source_line_offset": int(ref[0]),
+                        "source_block_key": ref[1],
+                        "result_state": ref[2],
+                        "_source_line_hash": ref[3],
+                    }
+                    for ref in refs
+                ],
+                "source_references_truncated": calls > len(refs),
+            }
+        )
+    return sessions
+
+
 async def activity_sessions(
     project_id: str,
     component_type: str,
@@ -322,30 +394,6 @@ async def activity_sessions(
     )
     rows = await _rows(sql, params)
     page, more = rows[:limit], len(rows) > limit
-    sessions = []
-    for row in page:
-        complete = row["projection_state"] == "complete"
-        refs = row.get("refs") or [] if complete else []
-        calls = int(row.get("calls") or 0) if complete else 0
-        sessions.append(
-            {
-                "user_id": row["user_id"],
-                "harness": row["harness"],
-                "session_id": row["session_id"],
-                "last_event_time": str(row["last_event_time"]),
-                "projection_state": row["projection_state"],
-                "source_state": row["source_state"],
-                "observed_calls": calls,
-                "result_states": {
-                    "success": int(row.get("successes") or 0) if complete else 0,
-                    "error": int(row.get("errors") or 0) if complete else 0,
-                    "unknown": int(row.get("unknowns") or 0) if complete else 0,
-                },
-                "source_references": [
-                    {"source_line_offset": int(ref[0]), "source_block_key": ref[1], "result_state": ref[2]}
-                    for ref in refs
-                ],
-                "source_references_truncated": calls > len(refs),
-            }
-        )
-    return sessions, (encode_cursor(page[-1], period[1], scope=cursor_scope) if more and page else None)
+    return _normalize_sessions(page), (
+        encode_cursor(page[-1], period[1], scope=cursor_scope) if more and page else None
+    )

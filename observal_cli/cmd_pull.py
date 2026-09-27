@@ -2445,19 +2445,29 @@ def register_pull(app: typer.Typer):
         # Old servers have no proof of per-component aliases, so keep their
         # legacy lock entries unverified rather than deriving keys from slugs.
         if isinstance(result.get("component_pins"), list):
-            lock_components = [
-                {
-                    "type": pin.get("type", ""),
-                    "name": pin.get("name", ""),
-                    "id": str(pin.get("id", "")),
-                    "version": pin.get("version"),
-                    "scope": options.get("scope", "project"),
-                    "local_name": pin.get("local_name", ""),
-                    "qualified_name": pin.get("qualified_name", ""),
-                }
-                for pin in result["component_pins"]
-                if isinstance(pin, dict)
-            ]
+            pinned_by_id = {
+                str(pin.get("id")): pin for pin in result["component_pins"] if isinstance(pin, dict) and pin.get("id")
+            }
+            for component in lock_components:
+                pin = pinned_by_id.get(str(component.get("id")))
+                if not pin:
+                    continue
+                # Keep the server's locked version UUID, digest and lock source;
+                # the component pin response supplies the actual installed alias.
+                component["name"] = pin.get("name") or component.get("name", "")
+                component["local_name"] = pin.get("local_name", "")
+                component["scope"] = options.get("scope", "project")
+                component["qualified_name"] = pin.get("qualified_name") or component.get("qualified_name", "")
+                if not isinstance(lock.get("components"), list):
+                    component["version"] = pin.get("version")
+                elif component.get("version") != pin.get("version"):
+                    fail(
+                        ErrorCategory.CONFLICT,
+                        "Server component pin disagrees with the install lock.",
+                        operation="Pull agent",
+                        resource="component installation",
+                        remediation="Update the server before installing this agent.",
+                    )
             aliases = [pin["local_name"] for pin in lock_components if pin["type"] == "mcp" and pin["local_name"]]
             if len(aliases) != len(set(aliases)):
                 fail(

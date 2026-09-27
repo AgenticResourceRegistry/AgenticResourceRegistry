@@ -1148,6 +1148,21 @@ def test_pull_dir_registers_mcp_in_target_and_records_server_selected_alias(
         detail if "/agents/" in path else {"environment_variables": [], "headers": []}
     )
     boundaries.post.return_value = {
+        "version": "1.4.0",
+        "lock": {
+            "status": "locked",
+            "digest": "sha256:" + "a" * 64,
+            "components": [
+                {
+                    "id": component_id,
+                    "type": "mcp",
+                    "version": "2.1.0",
+                    "version_id": "22222222-2222-4222-8222-222222222222",
+                    "digest": "sha256:" + "b" * 64,
+                    "source": "lock",
+                }
+            ],
+        },
         "selected_version": "1.4.0",
         "component_pins": [
             {
@@ -1166,7 +1181,7 @@ def test_pull_dir_registers_mcp_in_target_and_records_server_selected_alias(
     }
     calls = []
 
-    def add_mcp(command, *, cwd, capture_output, text):
+    def add_mcp(command, *, cwd, capture_output, text, timeout):
         calls.append((command, cwd))
         (cwd / ".mcp.json").write_text(json.dumps({"mcpServers": {"installed-mcp": {"command": "inert"}}}))
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -1181,6 +1196,9 @@ def test_pull_dir_registers_mcp_in_target_and_records_server_selected_alias(
     assert components[0]["version"] == "2.1.0"
     assert components[0]["scope"] == "project"
     assert components[0]["mcp_integrity"].startswith("sha256-")
+    assert components[0]["version_id"] == "22222222-2222-4222-8222-222222222222"
+    assert components[0]["digest"] == "sha256:" + "b" * 64
+    assert components[0]["source"] == "lock"
 
 
 def test_pull_full_project_flow_writes_every_shape_and_exact_side_effects(

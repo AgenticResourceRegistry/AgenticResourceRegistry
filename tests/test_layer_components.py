@@ -98,7 +98,7 @@ def test_production_layer_migration_is_exactly_the_pinned_phase0_ddl():
     assert production == fixture
     assert "component_id" not in production[0].split("ORDER BY (")[1]
     assert "user_id" in production[0].split("ORDER BY (")[1]
-    pg = (root / "observal-server/alembic/versions/028_projection_generation.py").read_text()
+    pg = (root / "observal-server/alembic/versions/029_projection_generation.py").read_text()
     assert "projection_generation_seq" in pg and "NO CYCLE CACHE 1" in pg
 
 

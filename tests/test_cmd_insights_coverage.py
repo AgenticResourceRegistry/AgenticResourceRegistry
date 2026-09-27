@@ -766,3 +766,75 @@ def test_typer_validation_rejects_bad_arguments_before_any_side_effect(cli, argu
 
 def test_insights_app_registers_only_current_commands():
     assert sorted(get_command(insights.insights_app).commands) == ["generate", "list", "show"]
+
+
+def test_component_cli_list_show_generate_use_owner_scoped_routes(cli):
+    _returns(cli.resolve, "component-id")
+    _returns(
+        cli.client_get,
+        [
+            {
+                "id": REPORT_ID,
+                "status": "completed",
+                "component_version": None,
+                "period_start": "2026-05-01",
+                "period_end": "2026-05-14",
+            }
+        ],
+    )
+    listed = runner.invoke(insights.insights_app, ["list", "--component", "mcp", "team/tool", "--output", "json"])
+    assert listed.exit_code == 0, listed.output
+    cli.client_get.assert_called_with("/api/v1/insights/components/mcp/component-id/reports")
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        {"id": REPORT_ID, "subject_type": "component", "status": "completed", "coverage": {}},
+    ]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "mcp", "team/tool", "--output", "json"])
+    assert shown.exit_code == 0, shown.output
+    assert cli.client_get.call_args_list[-1] == call(f"/api/v1/insights/reports/{REPORT_ID}")
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        {
+            "id": REPORT_ID,
+            "subject_type": "component",
+            "status": "completed",
+            "coverage": {},
+            "narrative": {
+                "summary": "Observed call",
+                "component_analysis": {
+                    "state": "assessed",
+                    "sampled_sessions": 1,
+                    "truncated": False,
+                    "findings": [
+                        {
+                            "kind": "workflow",
+                            "insight": "Used to find docs",
+                            "confidence": "low",
+                            "evidence_refs": ["s0-goal", "s0-call0"],
+                        }
+                    ],
+                    "evidence": {"s0-goal": "Find docs", "s0-call0": "search (result: unknown)"},
+                },
+            },
+        },
+    ]
+    plain = runner.invoke(insights.insights_app, ["show", "--component", "mcp", "team/tool"])
+    assert plain.exit_code == 0, plain.output
+    assert "What the sessions suggest" in " ".join(cli.messages())
+    assert "Find docs" in " ".join(cli.messages())
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = _blocked("component generate should not check LLM status").side_effect
+    _returns(cli.client_post, {"id": REPORT_ID, "status": "pending"})
+    queued = runner.invoke(
+        insights.insights_app, ["generate", "--component", "mcp", "team/tool", "--period", "14", "--output", "json"]
+    )
+    assert queued.exit_code == 0, queued.output
+    cli.client_get.assert_not_called()
+    cli.client_post.assert_called_once_with(
+        "/api/v1/insights/components/mcp/component-id/generate", {"period_days": 14}
+    )

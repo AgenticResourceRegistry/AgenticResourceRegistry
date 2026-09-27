@@ -34,6 +34,7 @@ import {
   useComponentSubmitDraft,
 } from "@/hooks/use-api";
 import { getUserRole, registry } from "@/lib/api";
+import { useComponentInsightReports, useGenerateComponentInsight } from "@/hooks/use-insights-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -231,6 +232,9 @@ export default function ComponentDetailPage({
     if (search.tab === "edit" && isEditableDraft) setDraftEditOpen(true);
   }, [id, search.tab, isEditableDraft]);
   const isAdmin = isAuthenticated && hasMinRole(getUserRole(), "admin");
+  const showInsights = type === "mcps" && canEdit;
+  const { data: componentReports, isLoading: reportsLoading, isError: reportsError } = useComponentInsightReports("mcp", id, showInsights);
+  const generateComponentInsight = useGenerateComponentInsight();
   const owningTeam = item?.team_id ? teams.find((team) => team.id === String(item.team_id)) : undefined;
   const personalTeam = teams.find((team) => team.is_personal && team.visibility === "private");
   const teamRole = owningTeam?.role;
@@ -595,9 +599,34 @@ export default function ComponentDetailPage({
                   )}
                 </TabsTrigger>
                 <TabsTrigger value="forks">Forks{item.fork_count ? ` (${item.fork_count})` : ""}</TabsTrigger>
+                {showInsights && <TabsTrigger value="insights">Insights</TabsTrigger>}
                 {canEdit && <TabsTrigger value="edit">Edit</TabsTrigger>}
                 {canEdit && singularType === "mcp" && <TabsTrigger value="sync">Sync</TabsTrigger>}
               </TabsList>
+
+              {showInsights && <TabsContent value="insights" className="mt-6 space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-semibold">Component Insights</h2>
+                    <p className="max-w-[65ch] text-sm text-muted-foreground">Observed MCP calls and attribution coverage across verified present sessions. Partial activity never proves no use.</p>
+                  </div>
+                  <Button type="button" disabled={generateComponentInsight.isPending}
+                    onClick={() => generateComponentInsight.mutate({ type: "mcp", id })}>
+                    {generateComponentInsight.isPending ? "Queueing…" : "Generate report"}
+                  </Button>
+                </div>
+                {reportsLoading ? <p role="status" className="text-sm text-muted-foreground">Loading reports…</p> :
+                 reportsError ? <ErrorState message="Could not load component reports" /> :
+                 !componentReports?.length ? <p className="text-sm text-muted-foreground">No reports yet. Generate one to see observed activity and its coverage.</p> :
+                 <ul className="divide-y divide-border border-y border-border">
+                   {componentReports.map((report) => <li key={report.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+                     <Link to="/insights/$reportId" params={{ reportId: report.id }} className="font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+                       {new Date(report.created_at).toLocaleDateString()} report
+                     </Link>
+                     <span className="text-muted-foreground">{report.status}</span>
+                   </li>)}
+                 </ul>}
+              </TabsContent>}
 
               <TabsContent value="overview" forceMount className="mt-6 data-[state=inactive]:hidden">
                 <div className="space-y-6 w-full min-h-[400px]">

@@ -235,6 +235,23 @@ async def _update_report_progress(
     await db.commit()
 
 
+async def _authorize_component_report_job(db, report: InsightReport) -> None:
+    """Repeat the full API visibility, ownership and version gate at execution time."""
+    from api.routes.component_activity import _authorize
+    from models.user import User
+
+    requester = await db.scalar(select(User).where(User.id == report.triggered_by))
+    if requester is None:
+        raise ValueError("Component report requester is no longer available")
+    # _authorize resolves visible listings first (including current private-team
+    # membership), then checks owner permission and the version's listing FK.
+    listing, _, version_label = await _authorize(
+        report.component_type, str(report.component_id), report.component_version_id, db, requester
+    )
+    if listing.id != report.component_id or version_label != report.component_version:
+        raise ValueError("Component report subject has changed")
+
+
 async def run_single_report(report_id: str) -> None:
     """Generate an insight report: load from DB, run pipeline, save results.
 
@@ -242,6 +259,7 @@ async def run_single_report(report_id: str) -> None:
     here in the main repo, computation is delegated to the observal-insights package.
     """
     from .generator import generate_report_content
+    from .scope import InsightScope
 
     # Reap any stale reports before starting (handles crash recovery)
     await _reap_stale_reports()
@@ -260,6 +278,27 @@ async def run_single_report(report_id: str) -> None:
         await _update_report_progress(db, report, "loading_sessions", 0, 9, "Loading report and agent context")
 
         try:
+            if report.subject_type == "component":
+                from .component_report import generate_component_content
+
+                await _authorize_component_report_job(db, report)
+                content = await generate_component_content(report)
+                await _update_report_progress(db, report, "saving", 9, 9, "Saving component report")
+                report.metrics = content["metrics"]
+                report.narrative = content["narrative"]
+                report.coverage = content["coverage"]
+                report.sessions_analyzed = content["sessions_analyzed"]
+                report.aggregated_data = {"metrics": content["metrics"], "coverage": content["coverage"]}
+                report.report_version = 4
+                report.status = InsightReportStatus.completed
+                report.completed_at = datetime.now(UTC)
+                report.progress_phase = "completed"
+                report.progress_percent = 100
+                report.progress_message = "Report completed"
+                report.progress_updated_at = report.completed_at
+                await db.commit()
+                return
+
             # Load agent
             agent_stmt = select(Agent).where(Agent.id == report.agent_id)
             agent_result = await db.execute(agent_stmt)
@@ -301,6 +340,7 @@ async def run_single_report(report_id: str) -> None:
                 registry_scope=registry_scope,
                 db=db,
                 progress_callback=progress_callback,
+                scope=InsightScope(subject_type="agent", agent_id=str(report.agent_id)),
             )
 
             await _update_report_progress(db, report, "saving", 9, 9, "Saving report")
@@ -378,7 +418,7 @@ async def _count_agent_sessions(agent_id: str, agent_name: str, since: str, agen
         logger.warning("insight_batch_count_agg_failed", agent_name=agent_name, version=agent_version, error=str(e))
 
     fallback_sql = """
-        SELECT count(DISTINCT session_id) AS cnt
+        SELECT count(DISTINCT (project_id, user_id, harness, session_id)) AS cnt
         FROM session_events FINAL
         WHERE (agent_id = {agent_id:String} OR agent_id = {aname:String})
           AND timestamp >= {t_start:String}

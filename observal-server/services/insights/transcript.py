@@ -10,10 +10,14 @@ human-readable transcript suitable for LLM facet extraction.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import structlog
 
 from ._deps import get_call_model, get_query
+
+if TYPE_CHECKING:
+    from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
 
@@ -39,25 +43,31 @@ TRANSCRIPT CHUNK:
 """
 
 
-async def build_session_transcript(session_id: str) -> str:
-    """Build a readable transcript for a session from session_events."""
+async def build_session_transcript(session: SessionKey) -> str:
+    """Build a readable transcript for exactly one scoped session."""
     query = get_query()
 
     sql = """
         SELECT line_offset, event_type, tool_name, raw_line, content_preview
         FROM session_events FINAL
-        WHERE session_id = {sid:String}
+        WHERE project_id = {project_id:String} AND user_id = {user_id:String}
+          AND harness = {harness:String} AND session_id = {sid:String}
         ORDER BY line_offset ASC
         FORMAT JSON
     """
-    params = {"param_sid": session_id}
+    params = {
+        "param_project_id": session.project_id,
+        "param_user_id": session.user_id,
+        "param_harness": session.harness,
+        "param_sid": session.session_id,
+    }
 
     try:
         r = await query(sql, params)
         r.raise_for_status()
         rows = r.json().get("data", [])
     except Exception as e:
-        logger.warning("transcript_query_failed", session_id=session_id, error=str(e))
+        logger.warning("transcript_query_failed", session_id=session.session_id, error=str(e))
         return ""
 
     if not rows:
@@ -66,7 +76,7 @@ async def build_session_transcript(session_id: str) -> str:
     transcript = _format_rows(rows)
     if len(transcript) <= MAX_TRANSCRIPT_CHARS:
         return transcript
-    return await _summarize_transcript(session_id, transcript)
+    return await _summarize_transcript(session.session_id, transcript)
 
 
 def _format_rows(rows: list[dict]) -> str:

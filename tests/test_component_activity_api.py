@@ -225,6 +225,7 @@ async def test_activity_sql_binds_scoped_key_current_version_and_component(monke
 
     monkeypatch.setattr(queries.clickhouse, "_query", fake_query)
     monkeypatch.setattr(queries, "presence_coverage", AsyncMock(return_value={}))
+    monkeypatch.setattr(queries, "presence_version_distribution", AsyncMock(return_value={}))
     period = (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC))
     await queries.activity_summary("proj", "mcp", str(LISTING_ID), None, period)
     scope = ("proj", "u", "mcp", str(LISTING_ID), "", "14")
@@ -270,6 +271,7 @@ async def test_version_scoped_activation_filters_verified_version_label(monkeypa
 
     monkeypatch.setattr(queries, "_rows", fake_rows)
     monkeypatch.setattr(queries, "presence_coverage", AsyncMock(return_value={}))
+    monkeypatch.setattr(queries, "presence_version_distribution", AsyncMock(return_value={}))
     period = (datetime.now(UTC) - timedelta(days=1), datetime.now(UTC))
     with pytest.raises(ValueError, match="verified version label"):
         await queries.activity_summary("p", "mcp", str(LISTING_ID), str(VERSION_ID), period)
@@ -280,6 +282,39 @@ async def test_version_scoped_activation_filters_verified_version_label(monkeypa
     activation_sql, params = next((sql, params) for sql, params in captured if "session_capabilities" in sql)
     assert "version = {component_version:String}" in activation_sql
     assert params["param_component_version"] == "1.2.3"
+
+
+@pytest.mark.asyncio
+async def test_evidence_sample_prioritizes_published_calls_and_is_bounded(monkeypatch):
+    captured = []
+
+    async def fake_rows(sql, params):
+        captured.append((sql, params))
+        return [
+            {
+                "user_id": "alice",
+                "harness": "claude-code",
+                "session_id": f"s{i}",
+                "last_event_time": "2026-01-01 00:00:00",
+                "projection_state": "complete",
+                "source_state": "available",
+                "calls": 1,
+                "refs": [[1, "id:call", "unknown", "source-hash"]],
+            }
+            for i in range(3)
+        ]
+
+    monkeypatch.setattr(queries, "_rows", fake_rows)
+    now = datetime.now(UTC)
+    sessions, more = await queries.activity_evidence_sample(
+        "p", "mcp", str(LISTING_ID), None, (now - timedelta(days=1), now), limit=2
+    )
+    sql, params = captured[0]
+    assert "_SESSIONS" not in sql and "a.projection_generation = latest.generation" in sql
+    assert "ORDER BY (source_state = 'available' AND projection_state = 'complete' AND calls > 0) DESC" in sql
+    assert params["param_project_id"] == "p" and params["param_limit"] == 3
+    assert more and len(sessions) == 2
+    assert sessions[0]["source_references"][0]["_source_line_hash"] == "source-hash"
 
 
 @pytest.mark.asyncio
@@ -296,7 +331,7 @@ async def test_session_page_hides_non_complete_counts_and_emits_cursor_only_when
             "successes": 1,
             "errors": 1,
             "unknowns": 0,
-            "refs": [[4, "id:a", "success"], [5, "id:b", "error"]],
+            "refs": [[4, "id:a", "success", "hash-a"], [5, "id:b", "error", "hash-b"]],
         }
         for i, state in enumerate(["complete", "pending", "complete"])
     ]
@@ -309,6 +344,10 @@ async def test_session_page_hides_non_complete_counts_and_emits_cursor_only_when
     )
     assert [s["session_id"] for s in sessions] == ["s0", "s1"]
     assert sessions[0]["observed_calls"] == 2 and sessions[0]["source_references"][0]["source_block_key"] == "id:a"
+    from schemas.component_activity import ActivitySession
+
+    public = ActivitySession.model_validate(sessions[0]).model_dump()
+    assert "_source_line_hash" not in public["source_references"][0]
     assert sessions[1]["observed_calls"] == 0 and sessions[1]["source_references"] == []
     assert queries.decode_cursor(cursor, scope=scope)[1] == ["u", "claude-code", "s1"]
 
@@ -390,3 +429,30 @@ def test_source_availability_reasons_are_distinct_and_never_no_observed_calls():
         "source_too_large_sessions",
     ):
         assert reason in coverage.reasons
+
+
+@pytest.mark.asyncio
+async def test_version_distribution_reads_only_published_present_scoped_sessions(monkeypatch):
+    from services.layer_components import queries as presence_queries
+
+    calls = []
+
+    async def rows(sql, params):
+        calls.append((sql, params))
+        return [{"version": "1.0.0", "sessions": 2}]
+
+    monkeypatch.setattr(presence_queries, "_rows", rows)
+    period = (datetime.now(UTC) - timedelta(days=1), datetime.now(UTC))
+    distribution = await presence_queries.presence_version_distribution(
+        "scoped-project", "mcp", str(LISTING_ID), str(VERSION_ID), period
+    )
+    assert distribution == {"1.0.0": 2}
+    sql, params = calls[0]
+    assert "SELECT DISTINCT p.user_id, p.harness, p.session_id" in sql
+    assert "c.user_id = p.user_id AND c.layer_hash = p.layer_hash" in sql
+    assert "c.extraction_generation = published.generation" in sql
+    assert "published.conflict = 0" in sql
+    assert "verification_status = 'verified'" in sql
+    assert "{component_version_id:String}" in sql
+    assert params["param_project_id"] == "scoped-project"
+    assert params["param_component_version_id"] == str(VERSION_ID)

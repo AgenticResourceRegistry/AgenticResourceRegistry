@@ -134,9 +134,59 @@ export interface UsagePingAdminResponse {
 
 // ── Insights ───────────────────────────────────────────────────────
 
+export interface ComponentInsightMetrics {
+	present_sessions: number;
+	present_users: number;
+	observed_sessions: number;
+	observed_calls: number;
+	result_states: { success: number; error: number; unknown: number };
+	harness_distribution: Record<string, number>;
+	version_distribution: Record<string, number>;
+	cohort_collision_calls: number;
+	cohort_unmatched_calls: number;
+}
+
+export interface ComponentInsightFinding {
+	kind: "workflow" | "friction" | "opportunity" | "inferred_use";
+	insight: string;
+	confidence: "low" | "medium";
+	evidence_refs: string[];
+}
+
+export interface ComponentInsightNarrative {
+	summary?: string;
+	component_analysis?: {
+		version: number;
+		state: "assessed" | "unknown";
+		findings: ComponentInsightFinding[];
+		evidence?: Record<string, string>;
+		sampled_sessions: number;
+		truncated: boolean;
+	};
+}
+
+export interface ComponentInsightCoverage {
+	attribution_state: "observed" | "no_observed_calls" | "attribution_not_possible";
+	presence: { present_sessions: number; present_users: number; eligible_sessions: number };
+	projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
+	calls: { collision_calls: number; unmatched_calls: number; unknown_result_calls: number };
+	usage_rate_denominator_sessions: number;
+	observed_sessions: number;
+	usage_rate: number | null;
+	reasons: string[];
+	limitations: string[];
+}
+
 export interface InsightReportListItem {
 	id: string;
-	agent_id: string;
+	agent_id: string | null;
+	subject_type?: "agent" | "component";
+	component_type?: string | null;
+	component_id?: string | null;
+	component_name?: string | null;
+	component_version_id?: string | null;
+	component_version?: string | null;
+	coverage?: ComponentInsightCoverage | null;
 	agent_version_id?: string | null;
 	agent_version?: string | null;
 	version_scope?: string | null;
@@ -308,7 +358,14 @@ export interface InsightRegression {
 
 export interface InsightReport {
 	id: string;
-	agent_id: string;
+	agent_id: string | null;
+	subject_type?: "agent" | "component";
+	component_type?: string | null;
+	component_id?: string | null;
+	component_name?: string | null;
+	component_version_id?: string | null;
+	component_version?: string | null;
+	coverage?: ComponentInsightCoverage | null;
 	agent_version_id?: string | null;
 	agent_version?: string | null;
 	version_scope?: string | null;

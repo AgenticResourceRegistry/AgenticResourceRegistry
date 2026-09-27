@@ -814,7 +814,10 @@ def _extract_pinned_versions(lockfile_data: dict, project_dir: str | None = None
     def included(item: dict) -> bool:
         if item.get("scope") == "user":
             return True
-        return directory is not None and item.get("directory") == directory
+        raw_directory = item.get("directory")
+        return (
+            directory is not None and isinstance(raw_directory, str) and str(Path(raw_directory).resolve()) == directory
+        )
 
     def common(item: dict, scope: str) -> dict:
         projected = {

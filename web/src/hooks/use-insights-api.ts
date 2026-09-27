@@ -109,6 +109,28 @@ export function useDeleteFeedback() {
 
 // ── Insights ───────────────────────────────────────────────────────
 
+export function useComponentInsightReports(type: string, id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["insights", "component-reports", type, id],
+    queryFn: () => insights.componentReports(type, id),
+    enabled: enabled && !!id,
+    refetchInterval: (query) => query.state.data?.some((report) => report.status === "pending" || report.status === "running") ? 3000 : false,
+  });
+}
+
+export function useGenerateComponentInsight() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { type: string; id: string; periodDays?: number }) =>
+      insights.generateComponent(vars.type, vars.id, vars.periodDays),
+    onSuccess: (_report, vars) => {
+      void qc.invalidateQueries({ queryKey: ["insights", "component-reports", vars.type, vars.id] });
+      toast.success("Component report queued");
+    },
+    onError: (error: Error) => toast.error(error.message || "Could not queue component report"),
+  });
+}
+
 export function useInsightsStatus(enabled = true) {
   return useQuery({
     queryKey: ["insights", "status"],
@@ -158,6 +180,7 @@ export function useLegacyInsightReport(reportId: string) {
   return useQuery({
     queryKey: ["insights", "legacy-report", reportId],
     queryFn: () => insights.getReportById(reportId),
+    refetchInterval: (query) => ["pending", "running"].includes(query.state.data?.status ?? "") ? 3000 : false,
   });
 }
 

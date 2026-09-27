@@ -412,7 +412,13 @@ def test_no_route_bypasses_the_permission_gate():
 
     source = inspect.getsource(insights)
     tree = ast.parse(source)
-    gates = {"_resolve_insights_agent", "_authorize_report_agent", "_require_agent_edit_access"}
+    gates = {
+        "_resolve_insights_agent",
+        "_authorize_report_agent",
+        "_require_agent_edit_access",
+        "_authorize_report",
+        "_authorize_component",
+    }
     exempt = {"insights_status"} | gates
 
     unguarded = []
