@@ -82,4 +82,7 @@ echo "Backfilling pending version reviews before serving traffic..."
 echo "Running ClickHouse migrations..."
 /app/.venv/bin/python -m services.clickhouse.migrations
 
+echo "Backfilling layer components (idempotent, after both migrations)..."
+/app/.venv/bin/python -m jobs.maintenance
+
 echo "Initialization complete."

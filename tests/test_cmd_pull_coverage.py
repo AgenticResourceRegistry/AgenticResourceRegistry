@@ -86,6 +86,9 @@ def boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespa
     adapter.rewrite_agent_profile.side_effect = lambda content, agent_id: content
     adapter.allow_home_agent_profile.return_value = False
     adapter.reports_sessions_outside_pull.return_value = False
+    adapter.prepare_mcp_setup_command.side_effect = lambda command, scope: (
+        [*command[:3], "--scope", scope, *command[3:]] if command[:3] == ["claude", "mcp", "add"] else command
+    )
 
     def apply_install_options(options: dict, tools: str | None) -> None:
         if tools:
@@ -1122,6 +1125,62 @@ def test_collect_install_options_no_prompt_uses_registry_default_scope(monkeypat
         no_prompt=True,
     ) == {"scope": "user"}
     picker.assert_not_called()
+
+
+def test_pull_dir_registers_mcp_in_target_and_records_server_selected_alias(
+    pull_app: typer.Typer,
+    boundaries: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "elsewhere"
+    project.mkdir()
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    component_id = "11111111-1111-4111-8111-111111111111"
+    detail = _agent_detail(
+        component_links=[
+            {"component_type": "mcp", "component_id": component_id, "component_name": "display", "version_ref": "old"}
+        ]
+    )
+    boundaries.get.side_effect = lambda path: (
+        detail if "/agents/" in path else {"environment_variables": [], "headers": []}
+    )
+    boundaries.post.return_value = {
+        "selected_version": "1.4.0",
+        "component_pins": [
+            {
+                "id": component_id,
+                "name": "display",
+                "type": "mcp",
+                "version": "2.1.0",
+                "local_name": "installed-mcp",
+                "qualified_name": "first/display",
+            }
+        ],
+        "config_snippet": {
+            "agent_profile": {"path": ".claude/agents/reviewer.md", "content": "agent\n"},
+            "mcp_setup_commands": [["claude", "mcp", "add", "installed-mcp", "--", "inert"]],
+        },
+    }
+    calls = []
+
+    def add_mcp(command, *, cwd, capture_output, text):
+        calls.append((command, cwd))
+        (cwd / ".mcp.json").write_text(json.dumps({"mcpServers": {"installed-mcp": {"command": "inert"}}}))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cmd_pull.subprocess, "run", add_mcp)
+    result = _invoke(pull_app, project, "--scope", "project")
+    assert result.exit_code == 0, result.output
+    assert calls == [(["claude", "mcp", "add", "--scope", "project", "installed-mcp", "--", "inert"], project)]
+    assert not (caller / ".mcp.json").exists()
+    components = boundaries.upsert.call_args.kwargs["components"]
+    assert components[0]["local_name"] == "installed-mcp"
+    assert components[0]["version"] == "2.1.0"
+    assert components[0]["scope"] == "project"
+    assert components[0]["mcp_integrity"].startswith("sha256-")
 
 
 def test_pull_full_project_flow_writes_every_shape_and_exact_side_effects(

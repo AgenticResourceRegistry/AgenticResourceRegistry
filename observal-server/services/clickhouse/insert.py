@@ -234,10 +234,10 @@ async def insert_session_capabilities(
 async def insert_layer_snapshot(row: dict):
     """Insert a single layer snapshot row into ClickHouse."""
     optic.trace("inserting layer snapshot: hash={}", row.get("hash", "?"))
-    sql = (
-        "INSERT INTO layer_snapshots (hash, project_id, user_id, harness, content, "
-        "file_count, total_size, lockfile_hash) FORMAT JSONEachRow"
-    )
+    columns = "hash, project_id, user_id, harness, content, file_count, total_size, lockfile_hash"
+    if "uploaded_at" in row:
+        columns += ", uploaded_at"
+    sql = f"INSERT INTO layer_snapshots ({columns}) FORMAT JSONEachRow"
     try:
         r = await _client._query(sql, data=_dumps(row))
         r.raise_for_status()

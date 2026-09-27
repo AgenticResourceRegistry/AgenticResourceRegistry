@@ -691,13 +691,17 @@ def drain_session_source(
             )
             payload["harness"] = source.harness
             if extra_fields:
-                payload.update(extra_fields)
+                payload.update({key: value for key, value in extra_fields.items() if key != "layer_hash"})
             if final:
                 payload["final"] = True
                 payload["total_line_count"] = line_count
                 payload["total_offset"] = byte_offset
                 payload["session_hash"] = session_hash
                 payload["hashed_line_count"] = hashed_line_count
+            if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
+                _maybe_upload_layer_snapshot(
+                    destination, str(config["access_token"]), payload["layer_hash"], source.harness, source.cwd, config
+                )
             telemetry_buffer.enqueue(
                 payload,
                 destination=destination,
@@ -774,7 +778,11 @@ def drain_session_source(
             payload.pop("total_line_count", None)
             payload.pop("total_offset", None)
         if extra_fields:
-            payload.update(extra_fields)
+            payload.update({key: value for key, value in extra_fields.items() if key != "layer_hash"})
+        if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
+            _maybe_upload_layer_snapshot(
+                destination, str(config["access_token"]), payload["layer_hash"], source.harness, source.cwd, config
+            )
         telemetry_buffer.enqueue(
             payload,
             destination=destination,
@@ -951,14 +959,17 @@ def _capabilities_for_session(session_id: str, cwd: str, harness: str, session_j
         return []
 
 
-# Per-session layer_hash cache: avoids re-scanning harness dirs on every chunk
+# A detected mid-session transition makes later unattributable intervals unknown.
 _layer_hash_cache: dict[str, str | None] = {}
 
 
 def _get_cached_layer_hash(session_id: str, cwd: str) -> str | None:
-    """Return cached layer_hash for this session, computing once on first call."""
+    """Recheck each push boundary; never apply a later snapshot to earlier calls."""
+    current = _compute_layer_hash_safe(cwd, "claude-code")
     if session_id not in _layer_hash_cache:
-        _layer_hash_cache[session_id] = _compute_layer_hash_safe(cwd, "claude-code")
+        _layer_hash_cache[session_id] = current
+    elif _layer_hash_cache[session_id] != current:
+        _layer_hash_cache[session_id] = None  # Sticky ambiguous transition.
     return _layer_hash_cache[session_id]
 
 
@@ -974,9 +985,9 @@ def _compute_layer_hash_safe(cwd: str, harness: str) -> str | None:
     Returns None on any failure.
     """
     try:
-        from observal_cli.layer import compute_layer_hash
+        from observal_cli.layer import ensure_local_snapshot
 
-        return compute_layer_hash(harness=None, project_dir=cwd or None)
+        return ensure_local_snapshot(harness=None, project_dir=cwd or None)
     except Exception:
         return None
 
@@ -1020,13 +1031,17 @@ def _maybe_upload_layer_snapshot(
             build_upload_payload,
             needs_upload,
             save_local_snapshot,
+            set_last_uploaded_hash,
+            was_uploaded_for,
         )
 
-        if not needs_upload(layer_hash):
+        # Build first, then compare: a changed pin cannot reuse the old advertised hash.
+        payload = build_upload_payload(project_dir=cwd or None)
+        user_id = str((config or {}).get("user_id") or "")
+        if payload["hash"] != layer_hash or (
+            not needs_upload(layer_hash) and was_uploaded_for(layer_hash, server_url, user_id)
+        ):
             return
-
-        # Build the full manifest with content
-        payload = build_upload_payload(harness, project_dir=cwd or None)
 
         # POST to server
         import httpx
@@ -1042,7 +1057,8 @@ def _maybe_upload_layer_snapshot(
             if resp.status_code < 300:
                 # Save locally: same content as what server now has
                 save_local_snapshot(payload)
-                optic.debug("layer snapshot uploaded and saved locally: hash={}", layer_hash)
+                set_last_uploaded_hash(payload["hash"], server_url, user_id)
+                optic.debug("layer snapshot uploaded and saved locally: hash={}", payload["hash"])
             else:
                 optic.debug("layer snapshot upload failed: status={}", resp.status_code)
     except Exception as e:

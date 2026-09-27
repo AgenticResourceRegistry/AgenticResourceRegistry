@@ -21,6 +21,7 @@ from api.routes.audit_log import router as audit_log_router
 from api.routes.auth import router as auth_router
 from api.routes.bulk import router as bulk_router
 from api.routes.co_authors import router as co_authors_router
+from api.routes.component_activity import router as component_activity_router
 from api.routes.component_source import router as component_source_router
 from api.routes.config import router as config_router
 from api.routes.dashboard import router as dashboard_router
@@ -64,6 +65,7 @@ REST_ROUTERS = (
     mcp_router,
     mcp_webhook_sync_router,
     mcp_webhook_receiver_router,
+    component_activity_router,
     registry_router,
     review_queue_router,
     reviews_router,

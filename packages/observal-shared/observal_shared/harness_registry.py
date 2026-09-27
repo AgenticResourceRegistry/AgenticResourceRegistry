@@ -142,6 +142,7 @@ HARNESS_REGISTRY: dict[str, dict] = {
         "display_name": "Claude Code",
         "capabilities": {"skills", "hooks", "mcp_servers"},
         "session_parser": "claude-code",
+        "invocation_extractor": "claude-code",
         "scopes": ["project", "user"],
         "default_scope": "project",
         "scope_labels": ("project (.claude/agents/)", "user (~/.claude/agents/)"),

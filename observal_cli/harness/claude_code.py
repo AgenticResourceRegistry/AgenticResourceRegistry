@@ -168,6 +168,36 @@ class ClaudeCodeAdapter(BaseAdapter):
             return ScanResult()
         return self._scan_claude_dir(claude_dir)
 
+    def prepare_mcp_setup_command(self, command: list[str], scope: str) -> list[str]:
+        if command[:3] == ["claude", "mcp", "add"]:
+            return [*command[:3], "--scope", scope, *command[3:]]
+        return command
+
+    def mcp_manifest_path(self, scope: str) -> str | None:
+        return {"project": "project:.mcp.json", "user": "user:.claude.json"}.get(scope)
+
+    def redact_layer_content(self, display_path: str) -> bool:
+        return display_path in {"user:.claude.json", "project:.mcp.json"}
+
+    def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
+        """Read the effective MCP key without exporting the shared settings document."""
+        if scope == "project" and directory:
+            path = Path(directory) / ".mcp.json"
+        elif scope == "user":
+            path = Path.home() / ".claude.json"
+        else:
+            return "unverified", None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return "unverified", None
+        if not isinstance(data, dict) or not isinstance(data.get("mcpServers"), dict):
+            return "unverified", None
+        entry = data["mcpServers"].get(alias)
+        if entry is None:
+            return "missing", None
+        return ("verified", entry) if isinstance(entry, dict) else ("unverified", None)
+
     def scan_project(self, project_dir: Path) -> ScanResult:
         # Claude Code uses .mcp.json at project root
         mcp_file = project_dir / ".mcp.json"

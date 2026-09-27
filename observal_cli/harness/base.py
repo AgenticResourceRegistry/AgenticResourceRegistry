@@ -138,6 +138,21 @@ class BaseAdapter:
     def session_worker_environment(self) -> dict[str, str]:
         """Environment overrides needed by detached session delivery workers."""
         return {}
+    def prepare_mcp_setup_command(self, command: list[str], scope: str) -> list[str]:
+        """Return the harness-native setup command with its requested install scope."""
+        return command
+
+    def mcp_manifest_path(self, scope: str) -> str | None:
+        """Return the safe file-manifest location needed to verify this MCP scope."""
+        return None
+
+    def redact_layer_content(self, display_path: str) -> bool:
+        """Whether the manifest may carry hashes but must not upload file bytes."""
+        return False
+
+    def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
+        """Return (verified|missing|unverified, entry); unsupported harnesses are unverified."""
+        return "unverified", None
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         _check_feature(self.harness_name, "scan_home")

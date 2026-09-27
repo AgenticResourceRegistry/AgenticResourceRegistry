@@ -346,6 +346,8 @@ class AgentInstallResponse(BaseModel):
     # The agent version that was actually installed.
     version: str | None = None
     config_snippet: dict
+    selected_version: str | None = None
+    component_pins: list[dict] = []
     warnings: list[str] = []
     # The component versions that were installed and how they matched the lock.
     lock: dict | None = None

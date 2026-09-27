@@ -7,11 +7,18 @@ Stores full harness layer manifests (with file contents) keyed by hash.
 Used for version-aware insights: enables diffing between two layer states.
 """
 
+import json
+import re
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger as optic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import require_role
+from api.deps import get_db, require_role
 from api.ratelimit import limiter
 from models.user import User, UserRole
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
@@ -29,14 +36,75 @@ class LayerFile(BaseModel):
 
 _MAX_FILES_PER_SNAPSHOT = 200
 _MAX_TOTAL_SIZE = 5 * 1024 * 1024  # 5MB
+# One verification per possible MCP pin: 128 agents x 128 components + 512 standalone.
+_MAX_MCP_VERIFICATIONS = 128 * 128 + 512
+
+
+class ComponentPin(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    type: str = Field("", max_length=30)
+    id: str = Field("", max_length=100)
+    name: str = Field("", max_length=200)
+    version: str = Field("", max_length=50)
+    scope: str = Field("", max_length=20)
+    local_name: str = Field("", max_length=200)
+    qualified_name: str = Field("", max_length=300)
+    harness: str = Field("", max_length=50)
+
+
+class AgentPin(ComponentPin):
+    components: list[ComponentPin] = Field(default_factory=list, max_length=128)
+
+
+class PinnedVersions(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: int | None = Field(None, ge=1, le=2)
+    agents: list[AgentPin] = Field(default_factory=list, max_length=128)
+    standalone: list[ComponentPin] = Field(default_factory=list, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_v2(self):
+        if self.schema_version == 2:
+            for pin in [*self.agents, *self.standalone, *(c for a in self.agents for c in a.components)]:
+                if pin.id:
+                    try:
+                        UUID(pin.id)
+                    except ValueError as error:
+                        raise ValueError("v2 pin id must be a UUID or empty") from error
+        return self
 
 
 class LayerSnapshotRequest(BaseModel):
     hash: str = Field(..., min_length=8, max_length=64)
     harnesses: dict[str, list[LayerFile]] = Field(default_factory=dict)  # {harness_name: [files]}
     lockfile_hash: str = Field("", max_length=64)
-    pinned_versions: dict = Field(default_factory=dict)
+    pinned_versions: PinnedVersions = Field(default_factory=PinnedVersions)
     drift: dict = Field(default_factory=dict)
+
+    @field_validator("drift")
+    @classmethod
+    def bound_drift(cls, value: dict) -> dict:
+        """Bound the drift fields the extractor reads; the rest is opaque, stored metadata."""
+        verifications = value.get("mcp_verifications")
+        if verifications is not None:
+            if not isinstance(verifications, list) or len(verifications) > _MAX_MCP_VERIFICATIONS:
+                raise ValueError("drift.mcp_verifications must be a bounded list")
+            for item in verifications:
+                if not isinstance(item, dict) or len(item) > 16:
+                    raise ValueError("drift.mcp_verifications entries must be small objects")
+                for field_value in item.values():
+                    if not (field_value is None or isinstance(field_value, bool)) and (
+                        not isinstance(field_value, str) or len(field_value) > 300
+                    ):
+                        raise ValueError("drift.mcp_verifications values must be short strings")
+        drifted = value.get("drifted_files")
+        if drifted is not None and (
+            not isinstance(drifted, list) or len(drifted) > _MAX_MCP_VERIFICATIONS + 4 * _MAX_FILES_PER_SNAPSHOT
+        ):
+            raise ValueError("drift.drifted_files must be a bounded list")
+        return value
 
 
 class LayerSnapshotResponse(BaseModel):
@@ -73,12 +141,26 @@ class BaselinePinResponse(BaseModel):
     pinned: bool
 
 
+async def _ensure_layer_components(project_id: str, user_id: str, layer_hash: str) -> None:
+    """Index best-effort once Phase 1.5's extractor is installed; never block uploads."""
+    try:
+        from services.layer_components.extractor import ensure_layer_components
+
+        await ensure_layer_components(project_id, user_id, layer_hash)
+    except ImportError as error:
+        optic.debug("layer component extractor unavailable: {}", type(error).__name__)
+    except Exception as error:
+        # HTTP client exceptions may include credential-bearing URLs in str(error).
+        optic.warning("layer component extraction failed for hash={}: {}", layer_hash, type(error).__name__)
+
+
 @router.post("", response_model=LayerSnapshotResponse)
 @limiter.limit("10/minute")
 async def upload_layer_snapshot(
     req: LayerSnapshotRequest,
     request: Request,
     current_user: User = Depends(require_role(UserRole.user)),
+    db: AsyncSession = Depends(get_db),
 ):
     """Upload a layer snapshot (full harness config state).
 
@@ -103,39 +185,30 @@ async def upload_layer_snapshot(
             detail=f"Snapshot exceeds {_MAX_TOTAL_SIZE // (1024 * 1024)}MB total content limit",
         )
 
-    import json
-
-    # Check if this hash already exists for this project
     from services.clickhouse.client import _query as ch_query
     from services.clickhouse.insert import insert_layer_snapshot
+    from services.layer_hash import layer_hash_v2
 
-    check_sql = """
-        SELECT count() as cnt
-        FROM layer_snapshots FINAL
-        WHERE project_id = {project_id:String}
-          AND hash = {hash:String}
-        FORMAT JSON
-    """
-    try:
-        result = await ch_query(
-            check_sql,
-            {
-                "param_project_id": project_id,
-                "param_hash": req.hash,
-            },
-        )
-        result.raise_for_status()
-        data = result.json().get("data", [])
-        if data and int(data[0].get("cnt", 0)) > 0:
-            optic.debug("layer snapshot already exists: hash={}", req.hash)
-            return LayerSnapshotResponse(
-                stored=False,
-                hash=req.hash,
-                file_count=sum(len(v) for v in req.harnesses.values()),
-            )
-    except Exception as e:
-        optic.warning("failed to check existing snapshot: {}", e)
-        # Proceed with insert anyway (ReplacingMergeTree handles duplicates)
+    # Serialize a user's uploads for one hash across API workers. Without this
+    # lock two legacy clients can both see "absent" and overwrite one another
+    # under ReplacingMergeTree before the conflict is recorded.
+    identity_key = json.dumps([project_id, user_id, req.hash], separators=(",", ":"))
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:identity_key, 0))"), {"identity_key": identity_key}
+    )
+
+    pins = req.pinned_versions.model_dump(exclude_unset=True, exclude_none=True)
+    hash_schema_version = 2 if req.hash.startswith("v2_") else 1
+    identity_conflict = False
+    if hash_schema_version == 2:
+        try:
+            if not re.fullmatch(r"v2_[0-9a-f]{60}", req.hash) or req.hash != layer_hash_v2(
+                {harness: [file.model_dump() for file in files] for harness, files in req.harnesses.items()},
+                pins,
+            ):
+                identity_conflict = True
+        except (KeyError, TypeError, ValueError):
+            identity_conflict = True
 
     # Redact secrets from file contents before storage
     from services.secrets_redactor import redact_secrets
@@ -157,14 +230,57 @@ async def upload_layer_snapshot(
     # Serialize the full manifest (with redacted content). Preserve version pins
     # and drift metadata so version-aware insights can distinguish canonical vs
     # dirty installs and compare component/version cohorts.
-    content_json = json.dumps(
-        {
-            "harnesses": redacted_harnesses,
-            "lockfile_hash": req.lockfile_hash,
-            "pinned_versions": req.pinned_versions or {},
-            "drift": req.drift or {},
-        }
-    )
+    content = {
+        "harnesses": redacted_harnesses,
+        "lockfile_hash": req.lockfile_hash,
+        "pinned_versions": pins,
+        "drift": req.drift or {},
+        "hash_schema_version": hash_schema_version,
+    }
+    check_sql = """
+        SELECT content, uploaded_at
+        FROM layer_snapshots
+        WHERE project_id = {project_id:String}
+          AND user_id = {user_id:String}
+          AND hash = {hash:String}
+        ORDER BY uploaded_at DESC
+        LIMIT 1000
+        FORMAT JSON
+    """
+    existing: list[dict] = []
+    try:
+        result = await ch_query(
+            check_sql,
+            {"param_project_id": project_id, "param_user_id": user_id, "param_hash": req.hash},
+        )
+        result.raise_for_status()
+        existing = result.json().get("data", [])
+    except Exception as error:
+        # HTTP client errors can embed credential-bearing ClickHouse URLs.
+        optic.warning("failed to check existing snapshot: {}", type(error).__name__)
+        # An unverified retry could overwrite a persisted conflict marker.
+        # The client can retry after the scoped existence check recovers.
+        raise HTTPException(status_code=503, detail="Layer snapshot identity check unavailable") from error
+
+    if len(existing) >= 1000:
+        identity_conflict = True  # Too many revisions to prove a unique identity.
+    for record in existing:
+        try:
+            prior = json.loads(record["content"])
+            if prior.get("identity_status") == "identity_conflict" or {
+                key: value for key, value in prior.items() if key not in {"identity_status", "hash_schema_version"}
+            } != {key: value for key, value in content.items() if key != "hash_schema_version"}:
+                identity_conflict = True
+        except (KeyError, ValueError, TypeError, AttributeError):
+            identity_conflict = True
+    if existing and not identity_conflict:
+        await _ensure_layer_components(project_id, user_id, req.hash)
+        return LayerSnapshotResponse(stored=False, hash=req.hash, file_count=total_file_count)
+    if existing and identity_conflict:
+        optic.warning("conflicting layer snapshot identity: hash={}", req.hash)
+    if identity_conflict:
+        content["identity_status"] = "identity_conflict"
+    content_json = json.dumps(content)
 
     row = {
         "hash": req.hash,
@@ -176,8 +292,22 @@ async def upload_layer_snapshot(
         "total_size": total_size,
         "lockfile_hash": req.lockfile_hash,
     }
+    if identity_conflict:
+        # ReplacingMergeTree uses uploaded_at as its version. Ensure a detected
+        # conflict survives a same-millisecond retry of an earlier snapshot.
+        marker_time = datetime.now(UTC) + timedelta(milliseconds=1)
+        for record in existing:
+            try:
+                previous = datetime.fromisoformat(str(record["uploaded_at"]).replace(" ", "T"))
+                if previous.tzinfo is None:
+                    previous = previous.replace(tzinfo=UTC)
+                marker_time = max(marker_time, previous + timedelta(milliseconds=1))
+            except (KeyError, TypeError, ValueError):
+                continue
+        row["uploaded_at"] = marker_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     await insert_layer_snapshot(row)
+    await _ensure_layer_components(project_id, user_id, req.hash)
 
     optic.info(
         "layer snapshot stored: hash={}, files={}, size={}",
@@ -208,16 +338,19 @@ async def get_layer_snapshot(
 
     sql = """
         SELECT hash, harness, content, uploaded_at, file_count, total_size, lockfile_hash
-        FROM layer_snapshots FINAL
+        FROM layer_snapshots
         WHERE project_id = {project_id:String}
+          AND user_id = {user_id:String}
           AND hash = {hash:String}
-        LIMIT 1
+        ORDER BY uploaded_at DESC
+        LIMIT 1000
         FORMAT JSON
     """
     result = await ch_query(
         sql,
         {
             "param_project_id": project_id,
+            "param_user_id": str(current_user.id),
             "param_hash": snapshot_hash,
         },
     )
@@ -231,6 +364,12 @@ async def get_layer_snapshot(
 
     row = rows[0]
     content = json.loads(row["content"])
+    if (
+        len(rows) >= 1000
+        or content.get("identity_status") == "identity_conflict"
+        or any(json.loads(other["content"]) != content for other in rows[1:])
+    ):
+        raise HTTPException(status_code=409, detail="Layer snapshot identity conflict")
 
     # Flatten harnesses structure into a flat file list for the response
     flat_files = []
@@ -272,15 +411,19 @@ async def diff_layer_snapshots(
 
     sql = """
         SELECT hash, content
-        FROM layer_snapshots FINAL
+        FROM layer_snapshots
         WHERE project_id = {project_id:String}
+          AND user_id = {user_id:String}
           AND hash IN ({hash_a:String}, {hash_b:String})
+        ORDER BY uploaded_at DESC
+        LIMIT 2000
         FORMAT JSON
     """
     result = await ch_query(
         sql,
         {
             "param_project_id": project_id,
+            "param_user_id": str(current_user.id),
             "param_hash_a": hash_a,
             "param_hash_b": hash_b,
         },
@@ -288,7 +431,16 @@ async def diff_layer_snapshots(
     result.raise_for_status()
     rows = result.json().get("data", [])
 
-    snapshots = {row["hash"]: json.loads(row["content"]) for row in rows}
+    snapshots: dict[str, dict] = {}
+    if len(rows) >= 2000:
+        raise HTTPException(status_code=409, detail="Layer snapshot identity conflict")
+    for row in rows:
+        content = json.loads(row["content"])
+        if content.get("identity_status") == "identity_conflict" or (
+            row["hash"] in snapshots and snapshots[row["hash"]] != content
+        ):
+            raise HTTPException(status_code=409, detail="Layer snapshot identity conflict")
+        snapshots[row["hash"]] = content
 
     if hash_a not in snapshots:
         raise HTTPException(status_code=404, detail=f"Snapshot {hash_a} not found")
@@ -380,7 +532,7 @@ async def pin_baseline(
             },
         )
     except Exception as e:
-        optic.error("failed to pin baseline: {}", e)
+        optic.error("failed to pin baseline: {}", type(e).__name__)
         raise HTTPException(status_code=500, detail="Failed to pin baseline")
 
     return BaselinePinResponse(

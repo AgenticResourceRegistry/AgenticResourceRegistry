@@ -263,6 +263,8 @@ class McpInstallResponse(BaseModel):
     listing_id: uuid.UUID
     harness: str
     config_snippet: dict
+    selected_version: str | None = None
+    local_name: str | None = None
     warnings: list[str] = []
     # The exact component version that was installed and its content digest.
     version: str | None = None

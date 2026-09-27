@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 try:
     from loguru import logger as optic
@@ -31,6 +34,7 @@ from observal_cli.config import CONFIG_DIR
 # Cache for file hashes by mtime (avoids re-reading unchanged files)
 _FILE_HASH_CACHE_PATH = CONFIG_DIR / ".file_hash_cache.json"
 _LOCAL_SNAPSHOT_PATH = CONFIG_DIR / "layer_snapshot.json"
+_LAST_UPLOADED_PATH = CONFIG_DIR / "layer_uploaded.json"
 
 # Maximum file size to include content (skip very large files)
 MAX_FILE_SIZE = 512 * 1024  # 512KB
@@ -54,11 +58,13 @@ HARNESS_LAYER_CONFIGS: dict[str, dict[str, list[tuple[str, list[str]]]]] = {
                     "settings.json",
                 ],
             ),
+            ("~", [".claude.json"]),
         ],
         "project": [
             (
                 ".",
                 [
+                    ".mcp.json",
                     ".claude/CLAUDE.md",
                     ".claude/agents/*.md",
                     ".claude/skills/*/SKILL.md",
@@ -407,6 +413,7 @@ def build_layer_manifest(
     harness: str,
     project_dir: str | None = None,
     include_content: bool = False,
+    registry_data: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Build the layer manifest for a given harness.
 
@@ -432,13 +439,23 @@ def build_layer_manifest(
     # Load lockfile to determine source (observal vs user)
     from observal_cli.lockfile import read_registry_lockfile
 
-    _, registry = read_registry_lockfile()
-    observal_files = _get_observal_managed_files(registry, harness, project_dir)
+    if registry_data is None:
+        _, registry_data = read_registry_lockfile()
+    observal_files = _get_observal_managed_files(registry_data, harness, project_dir)
 
     for abs_path, display_path in files:
-        file_hash, size = _hash_file(abs_path, cache)
-        if not file_hash:
-            continue
+        # Hash the very same bytes that are included in the upload (no second
+        # read after the file can change). Hash-only scans retain the mtime cache.
+        if include_content:
+            try:
+                data = abs_path.read_bytes()
+            except OSError:
+                continue
+            file_hash, size = hashlib.sha256(data).hexdigest(), len(data)
+        else:
+            file_hash, size = _hash_file(abs_path, cache)
+            if not file_hash:
+                continue
 
         entry: dict[str, Any] = {
             "path": display_path,
@@ -448,11 +465,21 @@ def build_layer_manifest(
         }
 
         if include_content:
+            # The harness adapter owns its sensitive shared settings paths.
+            from observal_cli.harness import ensure_loaded, get_adapter
+
+            ensure_loaded()
             try:
-                content = abs_path.read_text(errors="replace")
-                entry["content"] = content
-            except OSError:
+                redact_content = get_adapter(harness).redact_layer_content(display_path)
+            except KeyError:
+                redact_content = False
+            if redact_content:
                 entry["content"] = ""
+            else:
+                try:
+                    entry["content"] = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
 
         manifest.append(entry)
 
@@ -501,30 +528,127 @@ def _detect_active_harnesses() -> list[str]:
     return active
 
 
-def compute_layer_hash(harness: str | None = None, project_dir: str | None = None) -> str:
-    """Compute the layer_hash for one or all harnesses.
+def _nfc(value: Any) -> str:
+    """Canonicalize a lockfile identity field without inventing missing values."""
+    if not isinstance(value, str):
+        return ""
+    return unicodedata.normalize("NFC", value)
 
-    If harness is None, computes across ALL detected harnesses (combined hash).
-    If harness is specified, computes for that harness only.
 
-    The hash is based on the sorted (harness:path, file_hash) pairs.
-    Returns a 16-char hex string.
-    """
-    harnesses_to_scan = [harness] if harness else _detect_active_harnesses()
+def _uuid_or_original(value: Any) -> str:
+    text = _nfc(value)
+    try:
+        return str(UUID(text))
+    except ValueError:
+        return ""  # Invalid legacy IDs remain unknown; never transmit arbitrary strings.
 
-    all_entries: list[tuple[str, str]] = []
-    for scan_harness in harnesses_to_scan:
-        manifest = build_layer_manifest(scan_harness, project_dir, include_content=False)
+
+def _pin_tuples(pins: dict) -> list[list[str]]:
+    tuples: list[list[str]] = []
+    for agent in pins["agents"]:
+        parent_id, parent_version = agent["id"], agent["version"]
+        harness, scope = agent["harness"], agent["scope"]
+        tuples.append(
+            [
+                "agent",
+                "agent",
+                parent_id,
+                parent_version,
+                harness,
+                scope,
+                agent.get("local_name", ""),
+                "",
+                "",
+                agent.get("qualified_name", ""),
+                agent["name"],
+            ]
+        )
+        for component in agent["components"]:
+            tuples.append(
+                [
+                    "agent_component",
+                    component["type"],
+                    component["id"],
+                    component["version"],
+                    harness,
+                    component["scope"],
+                    component["local_name"],
+                    parent_id,
+                    parent_version,
+                    component.get("qualified_name", ""),
+                    component["name"],
+                ]
+            )
+    for item in pins["standalone"]:
+        tuples.append(
+            [
+                "standalone",
+                item["type"],
+                item["id"],
+                item["version"],
+                item["harness"],
+                item["scope"],
+                item["local_name"],
+                "",
+                "",
+                item.get("qualified_name", ""),
+                item["name"],
+            ]
+        )
+    return sorted(tuples, key=lambda row: [value.encode("utf-8") for value in row])
+
+
+def layer_hash_v2(harnesses: dict[str, list[dict]], pinned_versions: dict) -> str:
+    """Hash the specified manifest and pins by the shared Phase 0.8 byte contract."""
+    file_pairs: dict[str, str] = {}
+    for harness, manifest in harnesses.items():
         for entry in manifest:
-            # Prefix with harness name for uniqueness across harnesses
-            all_entries.append((f"{scan_harness}/{entry['path']}", entry["hash"]))
+            path = _nfc(f"{harness}/{entry['path']}").replace("\\", "/")
+            file_hash = _nfc(entry["hash"])
+            if not re.fullmatch(r"sha256-[0-9a-f]{64}", file_hash):
+                raise ValueError("Invalid layer manifest hash")
+            if path in file_pairs and file_pairs[path] != file_hash:
+                raise ValueError("Conflicting duplicate layer manifest path")
+            file_pairs[path] = file_hash
+    pairs = sorted(([path, value] for path, value in file_pairs.items()), key=lambda pair: pair[0].encode("utf-8"))
+    serialized = json.dumps(
+        ["observal-layer-v2", pairs, _pin_tuples(pinned_versions)], ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return "v2_" + hashlib.sha256(serialized).hexdigest()[:60]
 
-    if not all_entries:
-        return "0" * 16
 
-    all_entries.sort()
-    hash_input = json.dumps(all_entries, sort_keys=True)
-    return hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+def _build_layer_snapshot(harness: str | None, project_dir: str | None, *, include_content: bool) -> dict:
+    """Read registry once, then build matching manifest, pins, hash and payload."""
+    from observal_cli.lockfile import read_registry_lockfile
+
+    _, registry = read_registry_lockfile()
+    pins = _extract_pinned_versions(registry, project_dir=project_dir, harness=harness)
+    scan = (
+        [harness]
+        if harness
+        else sorted(
+            set(_detect_active_harnesses()) | {entry["harness"] for entry in [*pins["agents"], *pins["standalone"]]}
+        )
+    )
+    harnesses: dict[str, list[dict]] = {}
+    for name in scan:
+        harnesses[name] = build_layer_manifest(
+            name, project_dir, include_content=include_content, registry_data=registry
+        )
+    return {
+        "hash": layer_hash_v2(harnesses, pins),
+        "harnesses": harnesses,
+        "lockfile_hash": hashlib.sha256(
+            json.dumps(registry, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16],
+        "pinned_versions": pins,
+        "drift": _compute_drift(registry, harnesses, project_dir=project_dir),
+    }
+
+
+def compute_layer_hash(harness: str | None = None, project_dir: str | None = None) -> str:
+    """Compute the v2 hash from one scoped registry read and matching manifests."""
+    return _build_layer_snapshot(harness, project_dir, include_content=True)["hash"]
 
 
 # ---------------------------------------------------------------------------
@@ -533,18 +657,16 @@ def compute_layer_hash(harness: str | None = None, project_dir: str | None = Non
 
 
 def get_last_uploaded_hash() -> str:
-    """Read the layer_hash from the local snapshot (last synced state)."""
+    """Return only an acknowledged v2 upload, never a merely built local snapshot."""
     try:
-        if _LOCAL_SNAPSHOT_PATH.exists():
-            data = json.loads(_LOCAL_SNAPSHOT_PATH.read_text())
-            return data.get("hash", "")
-    except (OSError, json.JSONDecodeError):
-        pass
-    return ""
+        value = json.loads(_LAST_UPLOADED_PATH.read_text()).get("hash")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return value if isinstance(value, str) and re.fullmatch(r"v2_[0-9a-f]{60}", value) else ""
 
 
 def get_local_snapshot() -> dict | None:
-    """Read the full local snapshot (mirror of what server has)."""
+    """Read the latest locally built snapshot (which may not have uploaded yet)."""
     try:
         if _LOCAL_SNAPSHOT_PATH.exists():
             return json.loads(_LOCAL_SNAPSHOT_PATH.read_text())
@@ -554,7 +676,7 @@ def get_local_snapshot() -> dict | None:
 
 
 def save_local_snapshot(snapshot: dict) -> None:
-    """Save the snapshot locally (mirror of what was uploaded to server).
+    """Save the locally built snapshot, independently of upload acknowledgement.
 
     Writes only to ~/.observal/layer_snapshot.json. Overwrites in place (no history).
     Validates payload size before writing to prevent disk flooding.
@@ -571,10 +693,29 @@ def save_local_snapshot(snapshot: dict) -> None:
         pass
 
 
-def set_last_uploaded_hash(layer_hash: str) -> None:
-    """Backward compat: called after upload. Now handled by save_local_snapshot."""
-    # No-op: save_local_snapshot stores the hash inside the snapshot
-    pass
+def set_last_uploaded_hash(layer_hash: str, server_url: str = "", user_id: str = "") -> None:
+    """Record an acknowledged v2 upload for the current server and user."""
+    if not re.fullmatch(r"v2_[0-9a-f]{60}", layer_hash):
+        return
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _LAST_UPLOADED_PATH.write_text(
+            json.dumps({"hash": layer_hash, "server_url": server_url.rstrip("/"), "user_id": user_id}) + "\n"
+        )
+    except OSError:
+        pass
+
+
+def was_uploaded_for(layer_hash: str, server_url: str, user_id: str) -> bool:
+    try:
+        marker = json.loads(_LAST_UPLOADED_PATH.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(marker, dict) and marker == {
+        "hash": layer_hash,
+        "server_url": server_url.rstrip("/"),
+        "user_id": user_id,
+    }
 
 
 def ensure_local_snapshot(harness: str | None = None, project_dir: str | None = None) -> str:
@@ -583,23 +724,17 @@ def ensure_local_snapshot(harness: str | None = None, project_dir: str | None = 
     Scans ALL detected harnesses (not just one). Called after login, pull, or scan.
     Does NOT upload to server (that happens on session push).
     """
-    current_hash = compute_layer_hash(harness=None, project_dir=project_dir)
-
-    if not _LOCAL_SNAPSHOT_PATH.exists():
-        payload = build_upload_payload(project_dir=project_dir)
+    payload = build_upload_payload(harness=harness, project_dir=project_dir)
+    local = get_local_snapshot()
+    if local != payload:
         save_local_snapshot(payload)
-        optic.debug("local snapshot generated (first time): hash={}", current_hash)
-    elif needs_upload(current_hash):
-        payload = build_upload_payload(project_dir=project_dir)
-        save_local_snapshot(payload)
-        optic.debug("local snapshot updated (state changed): hash={}", current_hash)
-
-    return current_hash
+        optic.debug("local snapshot updated: hash={}", payload["hash"])
+    return payload["hash"]
 
 
 def needs_upload(current_hash: str) -> bool:
-    """Check if the current layer_hash differs from the local snapshot."""
-    return current_hash != get_last_uploaded_hash()
+    """Check if the current hash differs from the last acknowledged upload."""
+    return not re.fullmatch(r"v2_[0-9a-f]{60}", current_hash) or current_hash != get_last_uploaded_hash()
 
 
 def diff_local(harness: str | None = None, project_dir: str | None = None) -> dict | None:
@@ -664,123 +799,220 @@ def build_upload_payload(harness: str | None = None, project_dir: str | None = N
     Scans all detected first-class harnesses. Structured by harness.
     Includes file contents for server-side diffing and insight analysis.
     """
-    harnesses_to_scan = [harness] if harness else _detect_active_harnesses()
-
-    all_hash_entries: list[tuple[str, str]] = []
-    harnesses_section: dict[str, list[dict[str, Any]]] = {}
-
-    for scan_harness in harnesses_to_scan:
-        manifest = build_layer_manifest(scan_harness, project_dir, include_content=True)
-        harnesses_section[scan_harness] = manifest
-        for entry in manifest:
-            all_hash_entries.append((f"{scan_harness}/{entry['path']}", entry["hash"]))
-
-    all_hash_entries.sort()
-    layer_hash = hashlib.sha256(json.dumps(all_hash_entries, sort_keys=True).encode()).hexdigest()[:16]
-
-    from observal_cli.lockfile import compute_lockfile_hash, read_registry_lockfile
-
-    # Embed exact version pins from lockfile
-    _, registry = read_registry_lockfile()
-    pinned_versions = _extract_pinned_versions(registry)
-
-    # Determine canonical vs dirty state
-    drift_info = _compute_drift(registry, harnesses_section)
-
-    return {
-        "hash": layer_hash,
-        "harnesses": harnesses_section,
-        "lockfile_hash": compute_lockfile_hash(),
-        "pinned_versions": pinned_versions,
-        "drift": drift_info,
-    }
+    return _build_layer_snapshot(harness, project_dir, include_content=True)
 
 
-def _extract_pinned_versions(lockfile_data: dict) -> dict:
-    """Extract exact semver pins from the lockfile for embedding in snapshot.
-
-    Returns:
-    {
-        "agents": [{"name": "x", "version": "1.2.0", "harness": "claude-code", "components": [...]}],
-        "standalone": [{"type": "mcp", "name": "y", "version": "2.0.0", "harness": "cursor"}]
-    }
-    """
+def _extract_pinned_versions(lockfile_data: dict, project_dir: str | None = None, harness: str | None = None) -> dict:
+    """Project v1/v2 lockfile records into bounded v2 identity fields."""
     agents: list[dict] = []
     standalone: list[dict] = []
+    sections = lockfile_data.get("harnesses", {}) if isinstance(lockfile_data, dict) else {}
+    if not isinstance(sections, dict):
+        return {"schema_version": 2, "agents": agents, "standalone": standalone}
+    directory = str(Path(project_dir).resolve()) if project_dir else None
 
-    for harness_name, ide_section in lockfile_data.get("harnesses", {}).items():
-        for agent in ide_section.get("agents", []):
-            agents.append(
-                {
-                    "name": agent.get("name", ""),
-                    "id": agent.get("id", ""),
-                    "version": agent.get("version"),
-                    "harness": harness_name,
-                    "components": [
-                        {"type": c.get("type"), "name": c.get("name"), "version": c.get("version")}
-                        for c in agent.get("components", [])
-                    ],
-                }
-            )
-        for item in ide_section.get("standalone", []):
-            standalone.append(
-                {
-                    "type": item.get("type", ""),
-                    "name": item.get("name", ""),
-                    "id": item.get("id", ""),
-                    "version": item.get("version"),
-                    "harness": harness_name,
-                }
-            )
+    def included(item: dict) -> bool:
+        if item.get("scope") == "user":
+            return True
+        return directory is not None and item.get("directory") == directory
 
-    return {"agents": agents, "standalone": standalone}
+    def common(item: dict, scope: str) -> dict:
+        projected = {
+            "type": _nfc(item.get("type")),
+            "id": _uuid_or_original(item.get("id")),
+            "name": _nfc(item.get("name")),
+            "version": _nfc(item.get("version")),
+            "scope": _nfc(item.get("scope")) or scope,
+            "local_name": _nfc(item.get("local_name")),
+        }
+        qualified = _nfc(item.get("qualified_name"))
+        if qualified:
+            projected["qualified_name"] = qualified
+        return projected
+
+    for name, section in sections.items():
+        if harness is not None and name != harness:
+            continue
+        if not isinstance(name, str) or not isinstance(section, dict):
+            continue
+        agent_entries = section.get("agents")
+        if not isinstance(agent_entries, list):
+            agent_entries = []
+        standalone_entries = section.get("standalone")
+        if not isinstance(standalone_entries, list):
+            standalone_entries = []
+        for agent in agent_entries:
+            if not isinstance(agent, dict) or not included(agent):
+                continue
+            scope = _nfc(agent.get("scope")) or "project"
+            components = []
+            raw_components = agent.get("components")
+            if isinstance(raw_components, list) and len(raw_components) > 128:
+                raise ValueError("Too many installed components for one agent snapshot")
+            for comp in raw_components if isinstance(raw_components, list) else []:
+                if isinstance(comp, dict):
+                    components.append(common(comp, scope))
+            projected = common(agent, scope)
+            projected.pop("type")
+            projected["harness"] = _nfc(name)
+            projected["components"] = components
+            agents.append(projected)
+        for item in standalone_entries:
+            if isinstance(item, dict) and included(item):
+                projected = common(item, "project")
+                projected["harness"] = _nfc(name)
+                standalone.append(projected)
+    if len(agents) > 128 or len(standalone) > 512:
+        raise ValueError("Too many installed pins for a layer snapshot")
+    return {"schema_version": 2, "agents": agents, "standalone": standalone}
 
 
-def _compute_drift(lockfile_data: dict, harnesses_section: dict[str, list[dict]]) -> dict:
-    """Compare lockfile integrity hashes against actual file hashes to detect drift.
+def mcp_entry_fingerprint(entry: dict) -> str:
+    """Keep only locally hashed structural MCP settings, never credential fields."""
+    if not isinstance(entry, dict):
+        raise ValueError("Invalid MCP configuration")
+    from urllib.parse import urlsplit, urlunsplit
 
-    Returns:
-    {
-        "is_canonical": True/False,
-        "drifted_files": [{"harness": "...", "path": "...", "expected": "...", "actual": "..."}]
-    }
-    """
+    url = entry.get("url")
+    parsed = urlsplit(url) if isinstance(url, str) else None
+    safe_url = ""
+    if parsed:
+        # Keep the endpoint authority (host *and* port) but drop userinfo, query
+        # and fragment, which can carry credentials. A port-only change is drift.
+        host = parsed.hostname or ""
+        authority = f"[{host}]" if ":" in host else host
+        if parsed.port is not None:  # raises ValueError for an invalid port -> unverified
+            authority = f"{authority}:{parsed.port}"
+        safe_url = urlunsplit((parsed.scheme, authority, parsed.path, "", ""))
+    structure = [entry.get("command", ""), entry.get("args", []), safe_url, entry.get("type", "")]
+    return (
+        "sha256-"
+        + hashlib.sha256(
+            json.dumps(structure, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    )
+
+
+def verify_installed_mcp(
+    harness: str, scope: str, directory: str | None, alias: str, expected: str | None = None
+) -> tuple[str, str | None]:
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    try:
+        status, entry = get_adapter(harness).read_installed_mcp(scope, directory, alias)
+    except (KeyError, OSError, ValueError):
+        return "unverified", None
+    if status != "verified" or entry is None:
+        return status, None
+    try:
+        fingerprint = mcp_entry_fingerprint(entry)
+    except (ValueError, TypeError):
+        return "unverified", None
+    if expected is not None and expected != fingerprint:
+        return "drifted", None
+    return "verified", fingerprint
+
+
+def _compute_drift(
+    lockfile_data: dict, harnesses_section: dict[str, list[dict]], project_dir: str | None = None
+) -> dict:
+    """Verify installed MCP aliases and retained file integrities (fail closed)."""
     drifted: list[dict] = []
+    mcp_verifications: list[dict] = []
+    unverified = False
+    directory = str(Path(project_dir).resolve()) if project_dir else None
+    sections = lockfile_data.get("harnesses", {}) if isinstance(lockfile_data, dict) else {}
+    if not isinstance(sections, dict):
+        return {"is_canonical": None, "drifted_files": [], "mcp_verifications": []}
+    for harness_name, section in sections.items():
+        if not isinstance(section, dict) or harness_name not in harnesses_section:
+            continue
+        actual_hashes = {f["path"]: f["hash"] for f in harnesses_section[harness_name]}
+        agents = section.get("agents")
+        standalone = section.get("standalone")
+        agents = agents if isinstance(agents, list) else []
+        standalone = standalone if isinstance(standalone, list) else []
+        for parent in [*agents, {"components": standalone}]:
+            if not isinstance(parent, dict):
+                continue
+            if (
+                parent.get("components") is not standalone
+                and parent.get("scope") == "project"
+                and (directory is None or parent.get("directory") != directory)
+            ):
+                continue
+            components = parent.get("components")
+            for comp in components if isinstance(components, list) else []:
+                if not isinstance(comp, dict):
+                    continue
+                if comp.get("scope", parent.get("scope")) == "project" and (
+                    directory is None or comp.get("directory", parent.get("directory")) != directory
+                ):
+                    continue
+                alias = comp.get("local_name")
+                safe_alias = alias if isinstance(alias, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", alias) else ""
+                if comp.get("type") == "mcp":
+                    if not safe_alias or not comp.get("mcp_integrity"):
+                        status = "unverified"
+                    else:
+                        status, _ = verify_installed_mcp(
+                            harness_name,
+                            comp.get("scope", parent.get("scope", "")),
+                            comp.get("directory", parent.get("directory")),
+                            safe_alias,
+                            comp["mcp_integrity"],
+                        )
+                        if status == "verified":
+                            from observal_cli.harness import get_adapter
 
-    for harness_name, ide_section in lockfile_data.get("harnesses", {}).items():
-        # Build lookup of actual file hashes for this harness
-        actual_hashes: dict[str, str] = {}
-        for f in harnesses_section.get(harness_name, []):
-            actual_hashes[f["path"]] = f["hash"]
-
-        # Check agent component integrity
-        for agent in ide_section.get("agents", []):
-            for comp in agent.get("components", []):
+                            scope = comp.get("scope", parent.get("scope", ""))
+                            config_path = get_adapter(harness_name).mcp_manifest_path(scope)
+                            if config_path and config_path not in actual_hashes:
+                                # Oversize/inaccessible shared settings are not represented in v2.
+                                status = "unverified"
+                    mcp_verifications.append(
+                        {
+                            "harness": harness_name,
+                            "component_id": _uuid_or_original(comp.get("id")),
+                            "alias": safe_alias,
+                            "scope": comp.get("scope", parent.get("scope", "")),
+                            "parent_agent_id": _uuid_or_original(parent.get("id")),
+                            "status": status,
+                        }
+                    )
+                    if status == "unverified":
+                        unverified = True
+                    elif status != "verified":
+                        drifted.append(
+                            {
+                                "harness": harness_name,
+                                "component": _uuid_or_original(comp.get("id")),
+                                "alias": safe_alias,
+                                "status": status,
+                            }
+                        )
                 integrity = comp.get("integrity")
                 if not integrity:
                     continue
-                # Match by component name to file path
-                # Skills: user:skills/{name}/SKILL.md
-                # Others: matched by name in the rules file
-                comp_name = comp.get("name", "")
-                comp_type = comp.get("type", "")
-                expected_paths = _integrity_check_paths(harness_name, comp_type, comp_name)
-                for path in expected_paths:
+                for path in _integrity_check_paths(harness_name, comp.get("type", ""), alias or comp.get("name", "")):
                     actual = actual_hashes.get(path)
-                    if actual and actual != integrity:
+                    if actual is None:
+                        unverified = True
+                    elif actual != integrity:
                         drifted.append(
                             {
                                 "harness": harness_name,
                                 "path": path,
-                                "component": comp_name,
+                                "component": comp.get("name", ""),
                                 "expected": integrity,
                                 "actual": actual,
                             }
                         )
-
     return {
-        "is_canonical": len(drifted) == 0,
+        "is_canonical": False if drifted else None if unverified else True,
         "drifted_files": drifted,
+        "mcp_verifications": mcp_verifications,
     }
 
 

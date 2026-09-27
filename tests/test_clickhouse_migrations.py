@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -22,6 +23,25 @@ _BASELINE_TABLE_ROWS = "".join(
         "webhook_deliveries",
     ]
 )
+
+
+def test_production_activity_migration_matches_pinned_phase0_ddl():
+    from services.clickhouse.migrations import _split_sql
+
+    root = Path(__file__).resolve().parents[1]
+    production = _split_sql((root / "observal-server/clickhouse/migrations/007_component_activity.sql").read_text())
+    pinned = _split_sql(
+        (root / "tests/fixtures/component_insights/clickhouse/projection_tables.sql")
+        .read_text()
+        .replace("{prefix}", "")
+    )[2:]
+    assert len(production) == 2
+    assert production == pinned
+    activity_key = production[0].split("ORDER BY (")[1]
+    assert "project_id, user_id, harness, session_id, projection_version" in activity_key
+    assert "projection_generation, source_line_offset, source_block_key" in activity_key
+    assert "component_id" not in activity_key
+    assert "source_revision" in production[1] and "unknown_result_count" in production[1]
 
 
 def test_split_sql_strips_spdx_and_keeps_quoted_semicolon():

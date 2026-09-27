@@ -10,11 +10,14 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 import yaml
 
+from services.config_generator import generate_config as generate_mcp_config
+from services.config_generator import versioned_mcp_listing
 from services.harness import generate_agent_config
 from services.harness.helpers import (
     _build_rules_content,
@@ -50,6 +53,77 @@ def _make_agent(
     agent.components = components or []
     agent.external_mcps = external_mcps or []
     return agent
+
+
+def test_selected_mcp_version_supplies_actual_command_to_claude_adapter():
+    latest = SimpleNamespace(
+        name="Probe",
+        namespace="first",
+        slug="probe",
+        version="2.0.0",
+        command="latest-program",
+        args=["latest"],
+        environment_variables=[],
+        headers=[],
+        transport="stdio",
+        url=None,
+        framework=None,
+        docker_image=None,
+        auto_approve=[],
+    )
+    old = SimpleNamespace(
+        version="1.0.0",
+        command="older-program",
+        args=["previous"],
+        environment_variables=[],
+        headers=[],
+        transport="stdio",
+        url=None,
+        framework=None,
+        docker_image=None,
+        auto_approve=[],
+    )
+    snippet = generate_mcp_config(versioned_mcp_listing(latest, old), "claude-code", local_name="probe")
+    assert snippet["command"] == ["claude", "mcp", "add", "probe", "--", "older-program", "previous"]
+    assert latest.command == "latest-program"
+
+
+def test_mcp_generator_returns_final_aliases_and_rejects_sanitized_collisions():
+    ids = [uuid.uuid4(), uuid.uuid4()]
+
+    def listing(index: int, namespace: str):
+        return SimpleNamespace(
+            id=ids[index],
+            slug="probe",
+            namespace=namespace,
+            command="inert",
+            args=[],
+            environment_variables=[],
+            headers=[],
+            transport="stdio",
+            url=None,
+            framework=None,
+            docker_image=None,
+            auto_approve=[],
+        )
+
+    agent = _make_agent(components=[_make_component("mcp", id_) for id_ in ids])
+    aliases: dict[str, str] = {}
+    cfg = generate_agent_config(
+        agent,
+        "claude-code",
+        mcp_listings={ids[0]: listing(0, "first"), ids[1]: listing(1, "second")},
+        component_aliases=aliases,
+    )
+    assert aliases == {str(ids[0]): "first-probe", str(ids[1]): "second-probe"}
+    assert set(cfg["mcp_config"]) == set(aliases.values())
+    with pytest.raises(ValueError, match="aliases collide"):
+        generate_agent_config(
+            agent,
+            "claude-code",
+            mcp_listings={ids[0]: listing(0, "team a"), ids[1]: listing(1, "team-a")},
+            component_aliases={},
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════

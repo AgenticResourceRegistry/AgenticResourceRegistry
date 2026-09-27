@@ -27,25 +27,33 @@ HASH_B = "fedcba9876543210"
 LOCK_HASH = "1122334455667788"
 
 _CHECK_SQL = """
-    SELECT count() as cnt
-    FROM layer_snapshots FINAL
+    SELECT content, uploaded_at
+    FROM layer_snapshots
     WHERE project_id = {project_id:String}
+      AND user_id = {user_id:String}
       AND hash = {hash:String}
+    ORDER BY uploaded_at DESC
+    LIMIT 1000
     FORMAT JSON
 """
 _GET_SQL = """
     SELECT hash, harness, content, uploaded_at, file_count, total_size, lockfile_hash
-    FROM layer_snapshots FINAL
+    FROM layer_snapshots
     WHERE project_id = {project_id:String}
+      AND user_id = {user_id:String}
       AND hash = {hash:String}
-    LIMIT 1
+    ORDER BY uploaded_at DESC
+    LIMIT 1000
     FORMAT JSON
 """
 _DIFF_SQL = """
     SELECT hash, content
-    FROM layer_snapshots FINAL
+    FROM layer_snapshots
     WHERE project_id = {project_id:String}
+      AND user_id = {user_id:String}
       AND hash IN ({hash_a:String}, {hash_b:String})
+    ORDER BY uploaded_at DESC
+    LIMIT 2000
     FORMAT JSON
 """
 _BASELINE_SQL = """
@@ -134,9 +142,12 @@ def _file(
 
 
 @pytest.fixture(autouse=True)
-def _disable_rate_limits():
+def _disable_rate_limits(monkeypatch):
     enabled = limiter.enabled
     limiter.enabled = False
+    # These route tests mock ClickHouse; the separate projection tests exercise
+    # the real indexer rather than re-entering these mocked query boundaries.
+    monkeypatch.setattr(layer_snapshot, "_ensure_layer_components", AsyncMock())
     yield
     limiter.enabled = enabled
 
@@ -156,7 +167,7 @@ def boundaries(monkeypatch):
 @pytest.mark.asyncio
 async def test_upload_serializes_redacted_manifest_and_inserts_exact_row_in_order(monkeypatch):
     events: list[str] = []
-    check_response = ClickHouseResponse([{"cnt": "0"}], events=events)
+    check_response = ClickHouseResponse(events=events)
 
     async def query(sql, params):
         events.append("check duplicate")
@@ -202,14 +213,14 @@ async def test_upload_serializes_redacted_manifest_and_inserts_exact_row_in_orde
         }
     )
 
-    response = await _UPLOAD(payload, SimpleNamespace(), _user())
+    response = await _UPLOAD(payload, SimpleNamespace(), _user(), AsyncMock())
 
     assert response.model_dump() == {"stored": True, "hash": HASH_A, "file_count": 2}
     assert events == [
+        "redact token=secret-value",
         "check duplicate",
         "check status",
         "decode result",
-        "redact token=secret-value",
         "insert snapshot",
     ]
     expected_manifest = {
@@ -234,9 +245,11 @@ async def test_upload_serializes_redacted_manifest_and_inserts_exact_row_in_orde
         "lockfile_hash": LOCK_HASH,
         "pinned_versions": {"agents": [{"id": "agent-1", "version": "1.2.3"}]},
         "drift": {"is_canonical": False, "drifted_files": [{"path": "user:mcp.json"}]},
+        "hash_schema_version": 1,
     }
     assert query_mock.await_args.args[1] == {
         "param_project_id": DEFAULT_PROJECT_ID,
+        "param_user_id": str(USER_ID),
         "param_hash": HASH_A,
     }
     assert _compact(query_mock.await_args.args[0]) == _compact(_CHECK_SQL)
@@ -281,12 +294,25 @@ async def test_upload_http_response_uses_real_json_and_does_not_mutate_request(b
         "lockfile_hash": "",
         "pinned_versions": {},
         "drift": {},
+        "hash_schema_version": 1,
     }
 
 
 @pytest.mark.asyncio
 async def test_duplicate_upload_is_a_no_mutation_success(boundaries):
-    boundaries.response.rows = [{"cnt": "2"}]
+    boundaries.response.rows = [
+        {
+            "content": json.dumps(
+                {
+                    "harnesses": {"cursor": [_file("user:mcp.json", "sha256-a", 3, content="redacted:abc")]},
+                    "lockfile_hash": "",
+                    "pinned_versions": {},
+                    "drift": {},
+                    "hash_schema_version": 1,
+                }
+            )
+        }
+    ]
     payload = {
         "hash": HASH_A,
         "harnesses": {"cursor": [_file("user:mcp.json", "sha256-a", 3, content="abc")]},
@@ -297,26 +323,28 @@ async def test_duplicate_upload_is_a_no_mutation_success(boundaries):
     assert response.status_code == 200
     assert response.json() == {"stored": False, "hash": HASH_A, "file_count": 1}
     assert boundaries.response.raise_calls == 1
-    boundaries.redact.assert_not_called()
+    boundaries.redact.assert_called_once_with("abc")
     boundaries.insert.assert_not_awaited()
     assert boundaries.query.await_args.args[1] == {
         "param_project_id": DEFAULT_PROJECT_ID,
+        "param_user_id": str(USER_ID),
         "param_hash": HASH_A,
     }
 
 
 @pytest.mark.asyncio
-async def test_duplicate_check_failure_falls_through_to_insert(boundaries):
+async def test_duplicate_check_failure_fails_closed_without_insert(boundaries):
     boundaries.query.side_effect = RuntimeError("ClickHouse unavailable")
     payload = layer_snapshot.LayerSnapshotRequest(
         hash=HASH_A,
         harnesses={"cursor": [layer_snapshot.LayerFile(path="user:mcp.json", hash="sha256-a", size=3)]},
     )
 
-    response = await _UPLOAD(payload, SimpleNamespace(), _user())
+    with pytest.raises(HTTPException) as exc:
+        await _UPLOAD(payload, SimpleNamespace(), _user(), AsyncMock())
 
-    assert response.model_dump() == {"stored": True, "hash": HASH_A, "file_count": 1}
-    boundaries.insert.assert_awaited_once()
+    assert exc.value.status_code == 503
+    boundaries.insert.assert_not_awaited()
     boundaries.redact.assert_not_called()
 
 
@@ -339,7 +367,7 @@ async def test_upload_caps_fail_before_any_service_call(boundaries, file_count, 
     request = layer_snapshot.LayerSnapshotRequest(hash=HASH_A, harnesses=harnesses)
 
     with pytest.raises(HTTPException) as exc:
-        await _UPLOAD(request, SimpleNamespace(), _user())
+        await _UPLOAD(request, SimpleNamespace(), _user(), AsyncMock())
 
     assert exc.value.status_code == 422
     assert exc.value.detail == detail
@@ -350,16 +378,31 @@ async def test_upload_caps_fail_before_any_service_call(boundaries, file_count, 
 
 @pytest.mark.asyncio
 async def test_upload_accepts_exact_total_content_cap(boundaries):
-    boundaries.response.rows = [{"cnt": 1}]
     files = [
         layer_snapshot.LayerFile(path=f"file-{index}", hash="h", size=524_288, content="x" * 524_288)
         for index in range(10)
     ]
 
+    boundaries.response.rows = [
+        {
+            "content": json.dumps(
+                {
+                    "harnesses": {
+                        "cursor": [dict(file.model_dump(), content="redacted:" + file.content) for file in files]
+                    },
+                    "lockfile_hash": "",
+                    "pinned_versions": {},
+                    "drift": {},
+                    "hash_schema_version": 1,
+                }
+            )
+        }
+    ]
     response = await _UPLOAD(
         layer_snapshot.LayerSnapshotRequest(hash=HASH_A, harnesses={"cursor": files}),
         SimpleNamespace(),
         _user(),
+        AsyncMock(),
     )
 
     assert response.model_dump() == {"stored": False, "hash": HASH_A, "file_count": 10}
@@ -521,6 +564,7 @@ async def test_get_snapshot_flattens_harnesses_and_prefers_manifest_lock_hash(mo
     assert _compact(query.await_args.args[0]) == _compact(_GET_SQL)
     assert query.await_args.args[1] == {
         "param_project_id": DEFAULT_PROJECT_ID,
+        "param_user_id": str(USER_ID),
         "param_hash": HASH_A,
     }
 
@@ -636,6 +680,7 @@ async def test_diff_snapshots_returns_exact_changes_and_query(monkeypatch):
     assert _compact(query.await_args.args[0]) == _compact(_DIFF_SQL)
     assert query.await_args.args[1] == {
         "param_project_id": DEFAULT_PROJECT_ID,
+        "param_user_id": str(USER_ID),
         "param_hash_a": HASH_A,
         "param_hash_b": HASH_B,
     }
@@ -808,3 +853,36 @@ def test_router_exposes_only_the_current_snapshot_contract():
         (frozenset({"GET"}), "/api/v1/layer-snapshots/{hash_a}/diff/{hash_b}"),
         (frozenset({"POST"}), "/api/v1/layer-snapshots/baseline"),
     }
+
+
+@pytest.mark.asyncio
+async def test_identity_check_failure_never_logs_credential_bearing_error_text(boundaries):
+    from loguru import logger
+
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level="WARNING")
+    boundaries.query.side_effect = RuntimeError("GET http://ch:8123/?password=fixture-secret failed")
+    payload = layer_snapshot.LayerSnapshotRequest(
+        hash=HASH_A,
+        harnesses={"cursor": [layer_snapshot.LayerFile(path="user:mcp.json", hash="sha256-a", size=3)]},
+    )
+    try:
+        with pytest.raises(HTTPException):
+            await _UPLOAD(payload, SimpleNamespace(), _user(), AsyncMock())
+    finally:
+        logger.remove(sink)
+    assert messages and not any("fixture-secret" in message for message in messages)
+
+
+def test_drift_verifications_are_bounded_before_extraction():
+    ok = {"mcp_verifications": [{"harness": "claude-code", "alias": "a", "status": "verified"}], "extra": {"any": 1}}
+    assert layer_snapshot.LayerSnapshotRequest(hash=HASH_A, drift=ok).drift == ok  # stored representation unchanged
+    too_many = {"mcp_verifications": [{}] * (layer_snapshot._MAX_MCP_VERIFICATIONS + 1)}
+    for drift in (
+        too_many,
+        {"mcp_verifications": "verified"},
+        {"mcp_verifications": [{"alias": "x" * 301}]},
+        {"mcp_verifications": [{"alias": ["nested"]}]},
+    ):
+        with pytest.raises(ValueError):
+            layer_snapshot.LayerSnapshotRequest(hash=HASH_A, drift=drift)

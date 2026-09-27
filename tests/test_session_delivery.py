@@ -75,6 +75,27 @@ def test_server_checkpoint_recovers_local_cursor(tmp_path: Path, monkeypatch, lo
     assert base.read_cursor_state("session", home=tmp_path)[2] is False
 
 
+def test_reconcile_spool_cannot_replace_built_layer_hash_with_extra_field(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    built_hash = "v2_" + "a" * 60
+    monkeypatch.setattr(base, "_get_cached_layer_hash", lambda *_args: built_hash)
+    source_path = tmp_path / "session.jsonl"
+    source_path.write_text('{"n":0}\n')
+    source = SessionSource("claude-code", "fixture-reconcile", source_path, cwd=str(tmp_path))
+    db_path = tmp_path / "outbox.db"
+    assert base.drain_session_source(
+        source,
+        config(),
+        hook_event="Reconcile",
+        spool_only=True,
+        extra_fields={"layer_hash": "unpaired-v1"},
+        home=tmp_path,
+        db_path=db_path,
+    )
+    stored = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db_path)
+    assert stored[0].payload["layer_hash"] == built_hash
+
+
 def test_server_checkpoint_without_byte_offset_maps_source_line(tmp_path: Path):
     source_path = tmp_path / "session.jsonl"
     source_path.write_text('{"n":0}\n\n{"n":1}\n')
@@ -985,7 +1006,7 @@ def test_build_payload_caches_layer_metadata_and_evicts_it_on_stop(monkeypatch):
     assert stopped["total_line_count"] == 5
     assert stopped["total_offset"] == 90
     assert stopped["final"] is True
-    assert hashes == [("/repo", "claude-code")]
+    assert hashes == [("/repo", "claude-code")] * 3
     assert "session" not in base._layer_hash_cache
 
 
@@ -995,13 +1016,13 @@ def test_layer_hash_and_canonical_checks_are_fail_soft(monkeypatch):
     hash_calls = []
     monkeypatch.setattr(
         layer,
-        "compute_layer_hash",
+        "ensure_local_snapshot",
         lambda **kwargs: hash_calls.append(kwargs) or "layer-hash",
     )
     assert base._compute_layer_hash_safe("/repo", "cursor") == "layer-hash"
     assert hash_calls == [{"harness": None, "project_dir": "/repo"}]
 
-    monkeypatch.setattr(layer, "compute_layer_hash", lambda **_kwargs: (_ for _ in ()).throw(OSError("broken")))
+    monkeypatch.setattr(layer, "ensure_local_snapshot", lambda **_kwargs: (_ for _ in ()).throw(OSError("broken")))
     assert base._compute_layer_hash_safe("", "cursor") is None
 
     manifests = []
@@ -1042,10 +1063,12 @@ def test_layer_snapshot_upload_skips_unchanged_and_saves_success(tmp_path: Path,
     saved = []
     requests = []
     monkeypatch.setattr(layer, "needs_upload", lambda layer_hash: next(decisions))
+    monkeypatch.setattr(layer, "was_uploaded_for", lambda *_args: True)
+    monkeypatch.setattr(layer, "set_last_uploaded_hash", lambda *_args: None)
     monkeypatch.setattr(
         layer,
         "build_upload_payload",
-        lambda harness, project_dir: builds.append((harness, project_dir)) or {"hash": "layer-hash"},
+        lambda **kwargs: builds.append(kwargs) or {"hash": "layer-hash"},
     )
     monkeypatch.setattr(layer, "save_local_snapshot", saved.append)
 
@@ -1059,11 +1082,20 @@ def test_layer_snapshot_upload_skips_unchanged_and_saves_success(tmp_path: Path,
     assert requests == []
 
     base._maybe_upload_layer_snapshot("https://server.example/", "token", "layer-hash", "cursor", "/repo")
-    assert builds == [("cursor", "/repo")]
+    assert builds == [{"project_dir": "/repo"}, {"project_dir": "/repo"}]
     assert saved == [{"hash": "layer-hash"}]
     assert requests[0].url == httpx.URL("https://server.example/api/v1/layer-snapshots")
     assert requests[0].headers["Authorization"] == "Bearer token"
     assert json.loads(requests[0].content) == {"hash": "layer-hash"}
+
+
+def test_layer_snapshot_upload_declines_hash_payload_mismatch(monkeypatch):
+    from observal_cli import layer
+
+    monkeypatch.setattr(layer, "build_upload_payload", lambda **_kwargs: {"hash": "v2_" + "b" * 60})
+    monkeypatch.setattr(layer, "needs_upload", lambda _hash: True)
+    monkeypatch.setattr(layer, "save_local_snapshot", lambda _payload: pytest.fail("mismatch saved"))
+    base._maybe_upload_layer_snapshot("https://server.example", "token", "v2_" + "a" * 60, "claude-code", "/repo")
 
 
 @pytest.mark.parametrize("failure", ["rejected", "offline"])

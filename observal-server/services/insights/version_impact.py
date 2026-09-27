@@ -17,14 +17,12 @@ from __future__ import annotations
 
 import json
 
-import structlog
+from loguru import logger as optic
 
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 from services.insight_version_filters import LEGACY_UNVERSIONED_AGENT_VERSION, agent_version_filter
 
 from ._deps import get_query
-
-logger = structlog.get_logger(__name__)
 
 
 def _median(values: list[float]) -> float:
@@ -110,6 +108,7 @@ async def detect_layer_groups(
             layer_hash,
             count() AS sessions,
             uniq(user_id) AS users,
+            any(user_id) AS sample_user_id,
             avg(prompt_count) AS avg_prompts,
             avg(tool_call_count) AS avg_tool_calls,
             avg(toFloat64(last_event_time - first_event_time)) AS avg_duration_seconds,
@@ -147,7 +146,7 @@ async def detect_layer_groups(
         r.raise_for_status()
         rows = r.json().get("data", [])
     except Exception as e:
-        logger.warning("layer_groups_query_failed", error=str(e))
+        optic.warning("layer groups query failed: {}", e)
         return []
 
     return [
@@ -156,6 +155,7 @@ async def detect_layer_groups(
             "layer_hash": row["layer_hash"],
             "sessions": int(row.get("sessions", 0)),
             "users": int(row.get("users", 0)),
+            "sample_user_id": str(row.get("sample_user_id") or ""),
             "avg_prompts": round(float(row.get("avg_prompts", 0)), 1),
             "avg_tool_calls": round(float(row.get("avg_tool_calls", 0)), 1),
             "avg_duration_seconds": round(float(row.get("avg_duration_seconds", 0)), 0),
@@ -170,9 +170,10 @@ async def detect_layer_groups(
 
 async def fetch_layer_snapshots_for_groups(
     project_id: str,
+    user_id: str,
     layer_hashes: list[str],
 ) -> dict[str, dict]:
-    """Fetch stored layer snapshots for a list of hashes.
+    """Fetch only the specified user's snapshots for version-impact analysis.
 
     Returns {hash: snapshot_content} for snapshots that exist.
     """
@@ -184,20 +185,23 @@ async def fetch_layer_snapshots_for_groups(
     # Validate hashes are strictly hex (prevent injection into Array literal)
     import re
 
-    hex_re = re.compile(r"^[0-9a-fA-F]+$")
+    hex_re = re.compile(r"^(?:[0-9a-fA-F]+|v2_[0-9a-f]{60})$")
     safe_hashes = [h for h in layer_hashes if hex_re.match(h)]
     if not safe_hashes:
         return {}
 
     sql = """
         SELECT hash, content
-        FROM layer_snapshots FINAL
+        FROM layer_snapshots
         WHERE project_id = {project_id:String}
+          AND user_id = {user_id:String}
           AND hash IN ({hashes:Array(String)})
+        LIMIT 1000
         FORMAT JSON
     """
     params = {
         "param_project_id": project_id,
+        "param_user_id": user_id,
         "param_hashes": "[" + ",".join(f"'{h}'" for h in safe_hashes) + "]",
     }
 
@@ -205,9 +209,21 @@ async def fetch_layer_snapshots_for_groups(
         r = await query(sql, params)
         r.raise_for_status()
         rows = r.json().get("data", [])
-        return {row["hash"]: json.loads(row["content"]) for row in rows}
+        if len(rows) >= 1000:
+            return {}  # Too many revisions to prove unique identity.
+        snapshots: dict[str, dict] = {}
+        conflicting: set[str] = set()
+        for row in rows:
+            layer_hash = row["hash"]
+            content = json.loads(row["content"])
+            if content.get("identity_status") == "identity_conflict" or (
+                layer_hash in snapshots and snapshots[layer_hash] != content
+            ):
+                conflicting.add(layer_hash)
+            snapshots[layer_hash] = content
+        return {key: value for key, value in snapshots.items() if key not in conflicting}
     except Exception as e:
-        logger.warning("layer_snapshots_fetch_failed", error=str(e))
+        optic.warning("layer snapshots fetch failed: {}", e)
         return {}
 
 
@@ -339,8 +355,15 @@ async def build_version_impact_data(
         }
 
     # Significant gap found: fetch snapshots to explain WHY
-    top_hashes = [g["layer_hash"] for g in groups[:5]]
-    snapshots = await fetch_layer_snapshots_for_groups(project_id, top_hashes)
+    # Legacy file-only hashes cannot prove a cross-user registry identity.
+    # For v2, one group user's snapshot is safe only because pins are hashed;
+    # always scope the lookup to that user, never choose a project-wide row.
+    snapshots = {}
+    for group in groups[:5]:
+        layer_hash = group["layer_hash"]
+        user_id = group.get("sample_user_id")
+        if layer_hash.startswith("v2_") and user_id:
+            snapshots.update(await fetch_layer_snapshots_for_groups(project_id, user_id, [layer_hash]))
 
     # Find best and worst performing groups
     groups_with_data = [g for g in groups if g["layer_hash"] in snapshots]
