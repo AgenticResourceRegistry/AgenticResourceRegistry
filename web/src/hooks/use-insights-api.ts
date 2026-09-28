@@ -13,6 +13,7 @@
 
 import {
   useQuery,
+  useInfiniteQuery,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -110,19 +111,23 @@ export function useDeleteFeedback() {
 // ── Insights ───────────────────────────────────────────────────────
 
 export function useComponentInsightReports(type: string, id: string, enabled: boolean) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ["insights", "component-reports", type, id],
-    queryFn: () => insights.componentReports(type, id),
+    initialPageParam: null as { created_at: string; id: string } | null,
+    queryFn: ({ pageParam }) => insights.componentReports(type, id, pageParam ?? undefined),
+    getNextPageParam: (page) => page.length === 20
+      ? { created_at: page[page.length - 1].created_at, id: page[page.length - 1].id }
+      : undefined,
     enabled: enabled && !!id,
-    refetchInterval: (query) => query.state.data?.some((report) => report.status === "pending" || report.status === "running") ? 3000 : false,
+    refetchInterval: (query) => query.state.data?.pages.some((page) => page.some((report) => report.status === "pending" || report.status === "running")) ? 3000 : false,
   });
 }
 
 export function useGenerateComponentInsight() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { type: string; id: string; periodDays?: number }) =>
-      insights.generateComponent(vars.type, vars.id, vars.periodDays),
+    mutationFn: (vars: { type: string; id: string; periodDays?: number; versionId?: string }) =>
+      insights.generateComponent(vars.type, vars.id, vars.periodDays, vars.versionId),
     onSuccess: (_report, vars) => {
       void qc.invalidateQueries({ queryKey: ["insights", "component-reports", vars.type, vars.id] });
       toast.success("Component report queued");

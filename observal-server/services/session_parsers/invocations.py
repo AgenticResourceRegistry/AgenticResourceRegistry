@@ -15,11 +15,15 @@ from observal_shared.harness_registry import HARNESS_REGISTRY
 
 from .claude_code_invocations import ClaudeCodeInvocationExtractor
 from .invocation_types import InvocationExtraction, InvocationExtractor
+from .pi_invocations import PiInvocationExtractor
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-_EXTRACTORS: dict[str, InvocationExtractor] = {"claude-code": ClaudeCodeInvocationExtractor()}
+_EXTRACTORS: dict[str, InvocationExtractor] = {
+    "claude-code": ClaudeCodeInvocationExtractor(),
+    "pi": PiInvocationExtractor(),
+}
 
 
 def extract_invocations(harness: str, rows: Sequence[Mapping[str, object]]) -> InvocationExtraction:

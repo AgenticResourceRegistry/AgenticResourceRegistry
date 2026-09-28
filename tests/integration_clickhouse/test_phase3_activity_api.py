@@ -128,7 +128,8 @@ async def test_fixture_counts_match_projection_and_coverage_isolates_projects_an
             }
         ],
     )
-    # The same session id and hash for another user (no mapping) and another project.
+    # The same session id and hash for another user (no mapping), another
+    # project, and a different harness (whose presence must never leak here).
     await _insert(
         "session_stats_agg",
         [
@@ -137,6 +138,7 @@ async def test_fixture_counts_match_projection_and_coverage_isolates_projects_an
             _stats(project, owner, "failed-session", when),
             _stats(project, stranger, session, when),
             _stats(other_project, owner, session, when),
+            _stats(project, owner, "pi-only-session", when, harness="pi"),
         ],
     )
     projected = await projector.project_session_activity(project, owner, "claude-code", session)
@@ -293,10 +295,12 @@ async def test_latency_on_synthetic_isolated_dataset(capsys):
     await _insert("component_activity", activity)
     period = _period()
     summary = await queries.activity_summary(project, "mcp", component, None, period)
-    assert summary["present_sessions"] == count and summary["observed_sessions"] == count // 2
+    assert summary["present_sessions"] == count and summary["observed_sessions"] == 0
+    assert summary["observed_calls"] == 0
     assert summary["coverage"].projection.source_missing_sessions == count - 1
     assert summary["coverage"].projection.source_unavailable_sessions == 1
-    assert summary["coverage"].projection.projection_complete_sessions == count
+    assert summary["coverage"].projection.projection_complete_sessions == 0
+    assert summary["coverage"].attribution_state == "attribution_not_possible"
 
     def timed(runs: list[float], started: float) -> None:
         runs.append((time.perf_counter() - started) * 1000)

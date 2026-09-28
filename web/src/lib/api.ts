@@ -1290,10 +1290,10 @@ export const inbox = {
 };
 
 export const insights = {
-	componentReports: (type: string, id: string) =>
-		get<InsightReportListItem[]>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/reports`),
-	generateComponent: (type: string, id: string, periodDays = 14) =>
-		post<InsightReportListItem>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/generate`, { period_days: periodDays }),
+	componentReports: (type: string, id: string, before?: { created_at: string; id: string }) =>
+		get<InsightReportListItem[]>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/reports${before ? `?before_created_at=${encodeURIComponent(before.created_at)}&before_id=${encodeURIComponent(before.id)}` : ""}`),
+	generateComponent: (type: string, id: string, periodDays = 14, versionId?: string) =>
+		post<InsightReportListItem>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/generate`, { period_days: periodDays, component_version_id: versionId ?? null }),
 	status: () => get<{ available: boolean; reason: string | null }>("/insights/status"),
 	sessionCount: (agentId: string, agentVersion?: string) =>
 		get<{ session_count: number; agent_version?: string; agent_version_id?: string }>(

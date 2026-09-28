@@ -3,7 +3,7 @@
 
 """Opt-in report cleanup proof on the separately isolated Phase 4 Postgres.
 
-Requires an isolated PostgreSQL with Alembic 030 applied at :15433;
+Requires an isolated PostgreSQL with Alembic 031 applied at :15433;
 never runs against the sample/production databases.
 """
 
@@ -27,7 +27,7 @@ async def test_listing_delete_and_rollback_cleanup_component_reports():
     connection = await asyncpg.connect(_URL.replace("postgresql+asyncpg://", "postgresql://"))
     listing_id, report_id = uuid.uuid4(), uuid.uuid4()
     try:
-        assert await connection.fetchval("SELECT version_num FROM alembic_version") == "030_insight_report_subjects"
+        assert await connection.fetchval("SELECT version_num FROM alembic_version") == "031_component_privacy"
         triggers = await connection.fetch(
             "SELECT tgname FROM pg_trigger WHERE tgname IN "
             "('trg_mcp_insight_report_cleanup','trg_skill_insight_report_cleanup','trg_hook_insight_report_cleanup')"

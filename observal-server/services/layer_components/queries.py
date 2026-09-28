@@ -86,7 +86,7 @@ PRESENCE_COHORT_SQL = (
                        s.layer_hash AS layer_hash, s.last_event_time AS last_event_time
     FROM session_stats_agg AS s FINAL
     INNER JOIN (
-        SELECT DISTINCT c.project_id, c.user_id, c.layer_hash
+        SELECT DISTINCT c.project_id, c.user_id, c.layer_hash, c.harness
         FROM layer_components AS c FINAL
         INNER JOIN ("""
     + _LATEST
@@ -103,6 +103,7 @@ PRESENCE_COHORT_SQL = (
     + """)
     ) AS present
       ON s.project_id = present.project_id AND s.user_id = present.user_id AND s.layer_hash = present.layer_hash
+     AND s.harness = present.harness
     WHERE s.project_id = {project_id:String} AND s.layer_hash != ''
       AND s.last_event_time >= toDateTime64({start:String}, 3, 'UTC')
       AND s.last_event_time < toDateTime64({end:String}, 3, 'UTC')"""
@@ -141,7 +142,7 @@ async def presence_version_distribution(
         "if(c.component_version_id = '' OR c.raw_version = '', 'unknown', c.raw_version) AS version FROM ("
         + PRESENCE_COHORT_SQL
         + ") AS p INNER JOIN layer_components AS c FINAL "
-        "ON c.project_id = {project_id:String} AND c.user_id = p.user_id AND c.layer_hash = p.layer_hash "
+        "ON c.project_id = {project_id:String} AND c.user_id = p.user_id AND c.layer_hash = p.layer_hash AND c.harness = p.harness "
         "INNER JOIN ("
         + _LATEST
         + ") AS published ON c.project_id = published.project_id AND c.user_id = published.user_id "

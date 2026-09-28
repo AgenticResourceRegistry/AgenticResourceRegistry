@@ -295,16 +295,16 @@ async def test_collision_failed_attempt_and_source_rewind_never_leave_stale_publ
     assert (collision["attributed_count"], collision["candidate_count"]) == (0, 1)
     published, _ = await _publication(project, user, session, projector.publication_version())
     assert published["generation"] == collision["generation"] and published["rows"] == []
-    monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
+    monkeypatch.setattr(projector, "MATCHER_VERSION", 3)
     bumped = await projector.project_session_activity(project, user, "claude-code", session)
-    assert bumped["status"] == "complete" and bumped["publication_version"] == 258
-    assert (await _publication(project, user, session, 258))[0]["rows"] == []
+    assert bumped["status"] == "complete" and bumped["publication_version"] == 259
+    assert (await _publication(project, user, session, 259))[0]["rows"] == []
     repaired = _source(project, user, session, 0, _record([{"type": "text"}]), repaired=True)
     await _insert("session_events", [repaired])
     zero = await projector.project_session_activity(project, user, "claude-code", session)
     assert zero["status"] == "complete" and zero["candidate_count"] == 0
     assert zero["source_revision"] != bumped["source_revision"]
-    assert (await _publication(project, user, session, 258))[0]["rows"] == []
+    assert (await _publication(project, user, session, 259))[0]["rows"] == []
 
 
 @pytest.mark.asyncio
@@ -322,12 +322,12 @@ async def test_late_mapping_retry_zero_call_and_version_bump_are_not_unknown_zer
     await _insert("session_events", [_source(project, user, empty, 0, _record([{"type": "text"}]))])
     completed = await projector.project_session_activity(project, user, "claude-code", empty)
     assert completed["status"] == "complete" and completed["candidate_count"] == completed["attributed_count"] == 0
-    assert (await _publication(project, user, empty, 257))[0]["rows"] == []
-    monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
+    assert (await _publication(project, user, empty, 258))[0]["rows"] == []
+    monkeypatch.setattr(projector, "MATCHER_VERSION", 3)
     revised = await projector.project_session_activity(project, user, "claude-code", empty)
     assert revised["status"] == "complete" and revised["generation"] > completed["generation"]
-    assert revised["publication_version"] == 258
-    assert len((await _publication(project, user, empty, 258))[1]) == 1
+    assert revised["publication_version"] == 259
+    assert len((await _publication(project, user, empty, 259))[1]) == 1
     assert (await projector.project_session_activity(project, user, "pi", empty))["status"] == "unsupported"
 
 

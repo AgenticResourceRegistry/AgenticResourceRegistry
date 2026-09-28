@@ -12,13 +12,12 @@ from datetime import timedelta
 from loguru import logger as optic
 
 import services.clickhouse.client as clickhouse
-from services.component_activity import project_session_activity
+from services.component_activity import project_session_activity, publication_version
 
 _MAX_RETRIES = 5
 _RETRY_STATUSES = frozenset({"pending_source", "pending_mapping"})
 # The daily safety net replays recently active sessions (late snapshots, missed
-# enqueues). Matcher/projection version bumps need an explicit full replay:
-# ``backfill_component_activity(ctx, since_days=None)``.
+# enqueues). The revision-triggered job below runs a durable full replay.
 _DEFAULT_REPAIR_DAYS = 7
 
 
@@ -146,11 +145,12 @@ async def backfill_component_activity(
     batch_size: int = 64,
     max_batches: int = 8,
     since_days: int | None = _DEFAULT_REPAIR_DAYS,
+    enqueue_continuation: bool = True,
 ) -> dict:
-    """Bounded project/session-keyset replay; return cursor for resumable manual runs.
+    """Bounded project/session-keyset replay; return cursor for resumable runs.
 
     ``since_days`` limits the scan to recently ingested sessions (the daily
-    safety net); pass ``None`` for a full replay after a version bump.
+    safety net); the revision job passes ``None`` for a full replay after a bump.
 
     Rechecking completed sessions is necessary: a repaired source or mapping
     and an independent matcher/publication version bump can remove old positives.
@@ -210,7 +210,7 @@ async def backfill_component_activity(
         if len(page) < batch_size:
             cursor = None
             break
-    if cursor is not None and ctx.get("redis") is not None:
+    if cursor is not None and enqueue_continuation and ctx.get("redis") is not None:
         try:
             await ctx["redis"].enqueue_job(
                 "backfill_component_activity",
@@ -224,3 +224,43 @@ async def backfill_component_activity(
             optic.warning("activity backfill continuation enqueue failed: {}", type(error).__name__)
     optic.info("activity backfill: counts={} continuing={}", counts, cursor is not None)
     return {**counts, "next_cursor": cursor}
+
+
+async def replay_activity_revision(ctx: dict) -> dict:
+    """Durably replay all historical source sessions once per publication version.
+
+    The Redis checkpoint advances only after a bounded page completes. A crash
+    or enqueue failure can repeat a page but cannot skip it; the scheduled job
+    resumes the checkpoint even when the immediate continuation was lost.
+    """
+    redis = ctx["redis"]
+    version = publication_version()
+    key = f"observal:activity:full-replay:{version}"
+    failed_key = f"{key}:failures"
+    saved = await redis.get(key)
+    if saved in ("complete", b"complete"):
+        return {"status": "complete", "publication_version": version}
+    after = json.loads(saved) if saved else None
+    result = await backfill_component_activity(
+        ctx, after=after, since_days=None, batch_size=64, max_batches=1, enqueue_continuation=False
+    )
+    if result["failed"]:
+        await redis.incrby(failed_key, result["failed"])
+    cursor = result["next_cursor"]
+    if cursor is None:
+        failures = int(await redis.get(failed_key) or 0)
+        if failures:
+            # Retry transient projection errors in another scheduled pass.
+            await redis.set(key, "")
+            await redis.delete(failed_key)
+            optic.warning("activity full replay will retry: version={} failures={}", version, failures)
+            return {"status": "retry", "publication_version": version, **result}
+        await redis.set(key, "complete")
+        return {"status": "complete", "publication_version": version, **result}
+    await redis.set(key, json.dumps(cursor))
+    try:
+        digest = hashlib.sha256(json.dumps(cursor, separators=(",", ":")).encode()).hexdigest()[:24]
+        await redis.enqueue_job("replay_activity_revision", _job_id=f"activity:full:{version}:{digest}")
+    except Exception as error:
+        optic.warning("activity full replay continuation enqueue failed: {}", type(error).__name__)
+    return {"status": "continuing", "publication_version": version, **result}

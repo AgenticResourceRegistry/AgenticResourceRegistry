@@ -97,6 +97,18 @@ def test_constructed_result_link_requires_unique_id_single_result_and_explicit_b
     assert extract_invocations("claude-code", rows).invocations[0].result_state == "unknown"
 
 
+def test_result_before_call_cannot_establish_outcome():
+    call = _source(2, {"type": "assistant", "message": {"content": [_call("mcp__fixture__search", "call")]}})
+    result = _source(
+        1, {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "call", "is_error": False}]}}
+    )
+    assert extract_invocations("claude-code", [result, call]).invocations[0].result_state == "unknown"
+    result["line_offset"] = 2
+    assert extract_invocations("claude-code", [call, result]).invocations[0].result_state == "unknown"
+    result["line_offset"] = 3
+    assert extract_invocations("claude-code", [call, result]).invocations[0].result_state == "success"
+
+
 def test_constructed_missing_or_duplicated_ids_use_block_indices_and_unknown_results():
     rows = [
         _source(
@@ -161,7 +173,7 @@ def test_malformed_source_and_missing_time_are_explicit_not_derived_from_rendere
     assert [call.event_time for call in extracted.invocations] == [datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC), None]
 
 
-@pytest.mark.parametrize("harness", sorted(set(HARNESS_REGISTRY) - {"claude-code"}))
+@pytest.mark.parametrize("harness", sorted(set(HARNESS_REGISTRY) - {"claude-code", "pi"}))
 def test_unverified_harness_extractor_is_unsupported_not_zero_use(harness):
     assert extract_invocations(harness, []).status == "unsupported"
     assert extract_invocations(harness, []).invocations == ()

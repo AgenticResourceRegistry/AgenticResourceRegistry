@@ -21,6 +21,14 @@ class SourceInvocation:
     tool_use_id: str
     event_time: datetime | None
     result_state: Literal["unknown", "success", "error"]
+    # Harness-reported configured MCP server name. ``None`` means the harness
+    # encodes MCP identity in ``tool_name`` (Claude Code's ``mcp__<alias>__``);
+    # an empty string is an MCP call whose server could not be established.
+    mcp_server: str | None = None
+
+    @property
+    def is_mcp_candidate(self) -> bool:
+        return self.mcp_server is not None or self.tool_name.startswith("mcp__")
 
 
 @dataclass(frozen=True)

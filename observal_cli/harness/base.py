@@ -154,6 +154,12 @@ class BaseAdapter:
         """Return (verified|missing|unverified, entry); unsupported harnesses are unverified."""
         return "unverified", None
 
+    def read_pulled_mcp(
+        self, scope: str, directory: str | None, alias: str, written_config: Path
+    ) -> tuple[str, dict | None]:
+        """Read the entry a pull wrote; by default the pull output is the installed config."""
+        return self.read_installed_mcp(scope, directory, alias)
+
     def scan_home(self, home: Path | None = None) -> ScanResult:
         _check_feature(self.harness_name, "scan_home")
         return ScanResult()

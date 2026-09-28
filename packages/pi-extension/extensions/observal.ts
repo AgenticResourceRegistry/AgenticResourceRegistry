@@ -103,6 +103,99 @@ const RECOVERY_MAX_SESSIONS = 5;
 const RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_LAYER_FILE_SIZE = 512 * 1024;
 const MAX_OUTBOX_BYTES = 256 * 1024 * 1024;
+// pi-mcp-adapter config sources (2.x reads mcp.json; 3.x reads mcp-adapter.json).
+// All are hash-only layer files so the verification inputs are part of identity.
+const PI_HOME_MCP_SOURCES = [".config/mcp/mcp.json", ".agents/mcp.json", ".agents/mcp/mcp.json"];
+const PI_MCP_SOURCES = [
+  ...PI_HOME_MCP_SOURCES.map((rel) => `user:${rel}`),
+  "user:mcp.json",
+  "user:mcp-adapter.json",
+  "project:.mcp.json",
+  "project:.pi/mcp.json",
+  "project:.pi/mcp-adapter.json",
+];
+const PI_MCP_VERIFICATION_PATH = "observal:mcp-verification";
+// Bump when verification semantics change: the layer hash then changes too.
+const PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1";
+// The alias alphabet the CLI installs and verifies.
+const SAFE_MCP_ALIAS = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Port of ``observal_cli.layer.mcp_entry_fingerprint`` for the inputs whose
+ * Python encoding is unambiguous. Anything else returns null (unverified),
+ * so a representation difference can never be reported as drift.
+ */
+export function mcpEntryFingerprint(entry: Record<string, unknown>): string | null {
+  const own = (key: string) => Object.prototype.hasOwnProperty.call(entry, key);
+  let safeUrl = "";
+  if (own("url") && typeof entry.url === "string") {
+    const parsed = safeMcpUrl(entry.url);
+    if (parsed === null) return null;
+    safeUrl = parsed;
+  }
+  const structure = [own("command") ? entry.command : "", own("args") ? entry.args : [], safeUrl,
+    own("type") ? entry.type : ""];
+  const encoded = pythonJson(structure);
+  if (encoded === null) return null;
+  return `sha256-${crypto.createHash("sha256").update(Buffer.from(encoded, "utf-8")).digest("hex")}`;
+}
+
+/** ``json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))``, or null. */
+function pythonJson(value: unknown): string | null {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return Number.isSafeInteger(value) ? String(value) : null;
+  if (typeof value === "string") return value.isWellFormed() ? JSON.stringify(value) : null;
+  if (Array.isArray(value)) {
+    const items: string[] = [];
+    for (const item of value) {
+      const encoded = pythonJson(item);
+      if (encoded === null) return null;
+      items.push(encoded);
+    }
+    return `[${items.join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value as object);
+    // UTF-16 order equals Python's code point order only inside the BMP.
+    if (keys.some((key) => !key.isWellFormed() || /[\ud800-\udfff]/.test(key))) return null;
+    const parts: string[] = [];
+    for (const key of keys.sort()) {
+      const encoded = pythonJson((value as Record<string, unknown>)[key]);
+      if (encoded === null) return null;
+      parts.push(`${JSON.stringify(key)}:${encoded}`);
+    }
+    return `{${parts.join(",")}}`;
+  }
+  return null;
+}
+
+/**
+ * ``urlunsplit((scheme, host[:port], path, "", ""))`` for a plain
+ * ``scheme://[userinfo@]host[:port][/path][?query][#fragment]`` URL.
+ * Irregular URLs (IPv6 brackets, zone ids, invalid ports) return null.
+ */
+function safeMcpUrl(raw: string): string | null {
+  // urlsplit strips *leading* C0 controls and spaces, and removes tab/CR/LF anywhere.
+  const url = raw.replace(/^[\x00-\x20]+/, "").replace(/[\t\r\n]/g, "");
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)([^?#]*)/.exec(url);
+  if (!match) return url === "" ? "" : null;
+  const [, scheme, netloc, urlPath] = match;
+  const hostinfo = netloc.slice(netloc.lastIndexOf("@") + 1);
+  if (/[[\]%]/.test(netloc) || !/^[\x21-\x7e]*$/.test(netloc)) return null;
+  const colon = hostinfo.indexOf(":");
+  const host = (colon < 0 ? hostinfo : hostinfo.slice(0, colon)).toLowerCase();
+  const portText = colon < 0 ? "" : hostinfo.slice(colon + 1);
+  if (!host) return null;
+  let authority = host;
+  if (portText) {
+    if (!/^[0-9]+$/.test(portText)) return null;
+    const port = Number(portText);
+    if (port > 65535) return null;
+    authority = `${host}:${port}`;
+  }
+  return `${scheme.toLowerCase()}://${authority}${urlPath}`;
+}
 
 export function acknowledgementCovers(acknowledgement: unknown, pending: PendingBatch): boolean {
   if (!acknowledgement || typeof acknowledgement !== "object") return false;
@@ -482,23 +575,38 @@ export default function (pi: ExtensionAPI) {
     const piHome = path.join(os.homedir(), ".pi", "agent");
     const registry = currentRegistryLockfile();
     const manifest: LayerFileEntry[] = [];
+    // The exact bytes hashed for each MCP config source, reused for verification.
+    const mcpSourceBytes = new Map<string, Buffer>();
+    const files: Array<[string, string, string]> = [];
     for (const [scope, root] of [["user", piHome], ["project", cwd]] as const) {
-      for (const file of discoverPiLayerFiles(root, scope)) {
-        try {
-          const rel = path.relative(root, file).split(path.sep).join("/");
-          const content = fs.readFileSync(file);
-          const entry: LayerFileEntry = {
-            path: `${scope}:${rel}`,
-            hash: `sha256-${sha256(content)}`,
-            size: content.length,
-            source: "user",
-          };
-          if (includeContent) entry.content = content.toString("utf-8");
-          manifest.push(entry);
-        } catch {
-          continue;
-        }
+      for (const file of discoverPiLayerFiles(root, scope)) files.push([scope, root, file]);
+    }
+    for (const file of discoverHomeMcpSources()) files.push(["user", os.homedir(), file]);
+    for (const [scope, root, file] of files) {
+      try {
+        const rel = path.relative(root, file).split(path.sep).join("/");
+        const display = `${scope}:${rel}`;
+        if (manifest.some((entry) => entry.path === display)) continue;
+        const content = fs.readFileSync(file);
+        const entry: LayerFileEntry = {
+          path: display,
+          hash: `sha256-${sha256(content)}`,
+          size: content.length,
+          source: "user",
+        };
+        // MCP/settings JSON may contain inline credentials. Keep the hash of
+        // the original bytes for v2 identity but never upload their contents.
+        if (includeContent) entry.content = isSensitivePiConfig(display) ? "" : content.toString("utf-8");
+        if (PI_MCP_SOURCES.includes(display)) mcpSourceBytes.set(display, content);
+        manifest.push(entry);
+      } catch {
+        continue;
       }
+    }
+    const verification = piMcpVerificationEntry(registry, cwd);
+    if (verification) {
+      if (includeContent) verification.content = "";
+      manifest.push(verification);
     }
     manifest.sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)));
     const pins = readPinnedVersions(registry, cwd);
@@ -507,9 +615,207 @@ export default function (pi: ExtensionAPI) {
       harnesses: { pi: manifest },
       lockfile_hash: computeLockfileHash(registry),
       pinned_versions: pins,
-      // Pi does not yet verify individual MCP entries against effective config.
-      drift: { is_canonical: null, drifted_files: [], mcp_verification: "unverified" },
+      drift: computePiMcpDrift(registry, cwd, mcpSourceBytes, piHome),
     };
+  }
+
+  /**
+   * Hash-only entry binding MCP verification inputs outside the hashed files
+   * (install fingerprints, verifier revision) to the layer identity, so one
+   * hash implies one ``drift`` result. Mirrors
+   * ``observal_cli.layer.pi_mcp_verification_entry`` byte for byte.
+   */
+  function piMcpVerificationEntry(registry: Record<string, any> | null, cwd: string): LayerFileEntry | null {
+    const section = registry?.harnesses?.pi;
+    if (!section || typeof section !== "object" || Array.isArray(section)) return null;
+    const directory = path.resolve(cwd);
+    const included = (item: Record<string, any>): boolean =>
+      item.scope === "user" || (typeof item.directory === "string" && path.resolve(item.directory) === directory);
+    const rows: string[][] = [];
+    const parents: Array<[Record<string, any> | null, unknown]> = [];
+    for (const agent of Array.isArray(section.agents) ? section.agents : []) {
+      if (isPlainObject(agent) && included(agent)) parents.push([agent, agent.components]);
+    }
+    parents.push([null, (Array.isArray(section.standalone) ? section.standalone : [])
+      .filter((item: unknown) => isPlainObject(item) && included(item))]);
+    for (const [parent, components] of parents) {
+      for (const component of Array.isArray(components) ? components : []) {
+        if (!isPlainObject(component) || component.type !== "mcp") continue;
+        const scope = text(component.scope) || (parent ? text(parent.scope) : "") || "project";
+        rows.push([parent ? uuid(parent.id) : "", uuid(component.id), text(component.local_name), scope,
+          text(component.mcp_integrity)]);
+      }
+    }
+    if (!rows.length) return null;
+    rows.sort((left, right) => {
+      for (let index = 0; index < left.length; index++) {
+        const difference = Buffer.compare(Buffer.from(left[index]), Buffer.from(right[index]));
+        if (difference) return difference;
+      }
+      return 0;
+    });
+    const data = Buffer.from(JSON.stringify([PI_MCP_VERIFIER, rows]), "utf-8");
+    return { path: PI_MCP_VERIFICATION_PATH, hash: `sha256-${sha256(data)}`, size: data.length, source: "observal" };
+  }
+
+  function isSensitivePiConfig(display: string): boolean {
+    return display === "user:settings.json" || display.endsWith("mcp.json") || display.endsWith("mcp-adapter.json");
+  }
+
+  /** User-global MCP files outside ~/.pi/agent that pi-mcp-adapter also loads. */
+  function discoverHomeMcpSources(): string[] {
+    const home = os.homedir();
+    let homeReal: string;
+    try {
+      homeReal = fs.realpathSync(home);
+    } catch {
+      return [];
+    }
+    const found: string[] = [];
+    for (const rel of PI_HOME_MCP_SOURCES) {
+      const abs = path.join(home, ...rel.split("/"));
+      try {
+        const stat = fs.statSync(abs);
+        if (!stat.isFile() || stat.size > MAX_LAYER_FILE_SIZE) continue;
+        const real = fs.realpathSync(abs);
+        if (!real.startsWith(`${homeReal}${path.sep}`)) continue;
+        found.push(abs);
+      } catch {
+        continue;
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Verify each pinned MCP against the config Pi actually loads, fail closed.
+   *
+   * ``verified`` requires the lockfile's install fingerprint to equal the
+   * entry in the scope's active Pi MCP file, that file to be part of this
+   * snapshot's identity, and no other pi-mcp-adapter config source to define
+   * the same server name differently. An alias absent from the active file
+   * (an inactive ``/agent`` profile, or a removed server) is ``unverified``,
+   * never evidence of use. A changed definition is ``drifted``.
+   */
+  function computePiMcpDrift(
+    registry: Record<string, any> | null,
+    cwd: string,
+    sourceBytes: Map<string, Buffer>,
+    piHome: string,
+  ): Record<string, unknown> {
+    const verifications: Array<Record<string, string>> = [];
+    const drifted: Array<Record<string, string>> = [];
+    const section = registry?.harnesses?.pi;
+    if (!section || typeof section !== "object" || Array.isArray(section)) {
+      return { is_canonical: null, drifted_files: [], mcp_verifications: [] };
+    }
+    const sources = new Map<string, Record<string, unknown> | null>();
+    let unverifiable = false;
+    for (const display of PI_MCP_SOURCES) {
+      const bytes = sourceBytes.get(display);
+      if (!bytes) {
+        // A source that exists but is not in the manifest (oversize, symlink
+        // escape) cannot be proven not to shadow a server.
+        if (fs.existsSync(piMcpSourcePath(display, cwd, piHome))) unverifiable = true;
+        continue;
+      }
+      const parsed = parsePiMcpSource(bytes);
+      if (parsed === "unsupported") unverifiable = true;
+      sources.set(display, parsed === "unsupported" ? null : parsed);
+    }
+    const directory = path.resolve(cwd);
+    const included = (item: Record<string, any>): boolean =>
+      item.scope === "user" || (typeof item.directory === "string" && path.resolve(item.directory) === directory);
+    const parents: Array<[Record<string, any> | null, unknown[]]> = [];
+    for (const agent of Array.isArray(section.agents) ? section.agents : []) {
+      if (agent && typeof agent === "object" && !Array.isArray(agent) && included(agent)) {
+        parents.push([agent, Array.isArray(agent.components) ? agent.components : []]);
+      }
+    }
+    parents.push([null, (Array.isArray(section.standalone) ? section.standalone : []).filter(
+      (item: any) => item && typeof item === "object" && !Array.isArray(item) && included(item))]);
+    for (const [parent, components] of parents) {
+      for (const component of components as Array<Record<string, any>>) {
+        if (!component || typeof component !== "object" || Array.isArray(component) || component.type !== "mcp") continue;
+        const alias = typeof component.local_name === "string" && SAFE_MCP_ALIAS.test(component.local_name)
+          ? component.local_name : "";
+        const scope = text(component.scope) || (parent ? text(parent.scope) : "") || "project";
+        let status = "unverified";
+        const active = scope === "user" ? "user:mcp.json" : scope === "project" ? "project:.pi/mcp.json" : "";
+        const integrity = typeof component.mcp_integrity === "string" ? component.mcp_integrity : "";
+        const servers = active ? sources.get(active) : undefined;
+        const entry = alias && servers ? servers[alias] : undefined;
+        if (!unverifiable && alias && integrity && isPlainObject(entry)) {
+          const fingerprint = mcpEntryFingerprint(entry);
+          if (fingerprint !== null && fingerprint !== integrity) {
+            status = "drifted";
+          } else if (fingerprint !== null) {
+            status = "verified";
+            for (const [display, other] of sources) {
+              if (display === active) continue;
+              if (other === null) {
+                status = "unverified";
+                break;
+              }
+              if (Object.prototype.hasOwnProperty.call(other, alias)) {
+                const shadow = other[alias];
+                if (!isPlainObject(shadow) || mcpEntryFingerprint(shadow) !== fingerprint) {
+                  status = "unverified";
+                  break;
+                }
+              }
+            }
+          }
+        }
+        const record = {
+          harness: "pi",
+          component_id: uuid(component.id),
+          alias,
+          scope,
+          parent_agent_id: parent ? uuid(parent.id) : "",
+          status,
+        };
+        verifications.push(record);
+        if (status === "drifted") {
+          drifted.push({ harness: "pi", component: record.component_id, alias, status });
+        }
+      }
+    }
+    return { is_canonical: drifted.length ? false : null, drifted_files: drifted, mcp_verifications: verifications };
+  }
+
+  function piMcpSourcePath(display: string, cwd: string, piHome: string): string {
+    const [scope, rel] = [display.slice(0, display.indexOf(":")), display.slice(display.indexOf(":") + 1)];
+    if (scope === "project") return path.join(cwd, ...rel.split("/"));
+    return PI_HOME_MCP_SOURCES.includes(rel) ? path.join(os.homedir(), ...rel.split("/")) : path.join(piHome, rel);
+  }
+
+  /** The server map of one MCP config, or "unsupported" when it may load servers indirectly. */
+  function parsePiMcpSource(bytes: Buffer): Record<string, unknown> | "unsupported" {
+    let data: unknown;
+    try {
+      data = JSON.parse(bytes.toString("utf-8"));
+    } catch {
+      return "unsupported";
+    }
+    if (!isPlainObject(data)) return "unsupported";
+    // Imports, plugins, and ancestor discovery can add servers from files this
+    // snapshot does not identify; a server name then cannot be proven unique.
+    const settings = isPlainObject(data.settings) ? data.settings : {};
+    for (const key of ["imports", "claudePlugins"]) {
+      const value = data[key];
+      if (value !== undefined && !(Array.isArray(value) && value.length === 0)) return "unsupported";
+    }
+    for (const key of ["ancestorConfigRoots", "agentPluginPaths"]) {
+      const value = settings[key];
+      if (value !== undefined && !(Array.isArray(value) && value.length === 0)) return "unsupported";
+    }
+    if (data.mcpServers === undefined) return {};
+    return isPlainObject(data.mcpServers) ? data.mcpServers : "unsupported";
+  }
+
+  function isPlainObject(value: unknown): value is Record<string, any> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   function discoverPiLayerFiles(root: string, scope: "user" | "project"): string[] {
@@ -560,7 +866,9 @@ export default function (pi: ExtensionAPI) {
   function isPiLayerFile(rel: string, scope: "user" | "project"): boolean {
     const prefix = scope === "user" ? "" : ".pi/";
     if (scope === "user" && rel === "settings.json") return true;
-    if (["AGENTS.md", `${prefix}SYSTEM.md`, `${prefix}APPEND_SYSTEM.md`, `${prefix}mcp.json`].includes(rel)) return true;
+    if (scope === "project" && rel === ".mcp.json") return true;
+    if (["AGENTS.md", `${prefix}SYSTEM.md`, `${prefix}APPEND_SYSTEM.md`, `${prefix}mcp.json`,
+      `${prefix}mcp-adapter.json`].includes(rel)) return true;
     return new RegExp(`^${prefix.replace(".", "\\.")}skills/[^/]+/SKILL\\.md$`).test(rel)
       || rel.startsWith(`${prefix}sandboxes/`)
       || new RegExp(`^${prefix.replace(".", "\\.")}agents/[^/]+/(AGENTS\\.md|SYSTEM\\.md|APPEND_SYSTEM\\.md|mcp\\.json)$`).test(rel)

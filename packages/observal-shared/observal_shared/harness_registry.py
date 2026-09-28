@@ -454,6 +454,9 @@ HARNESS_REGISTRY: dict[str, dict] = {
         "display_name": "Pi",
         "capabilities": {"skills", "hooks", "mcp_servers"},
         "session_parser": "pi",
+        # MCP call identity comes from pi-mcp-adapter's tool-result details
+        # (fixture-verified against pi-mcp-adapter 2.38.0 and 3.2.0 sources).
+        "invocation_extractor": "pi",
         "scopes": ["project", "user"],
         "default_scope": "user",
         "scope_labels": ("project (.pi/)", "user (~/.pi/agent/)"),

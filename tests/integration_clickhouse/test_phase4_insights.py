@@ -103,7 +103,7 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
     configure_insights()
 
     async def interpret(prompt, **_kwargs):
-        assert "ALICE ONLY" in prompt and "BOB ONLY" not in prompt
+        assert "ALICE ONLY" not in prompt and "BOB ONLY" not in prompt
         assert f"mcp__{_ALIAS_A}__ping" in prompt
         return {
             "subject_id": listing_id,
@@ -111,9 +111,9 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
             "findings": [
                 {
                     "kind": "workflow",
-                    "insight": "The published call accompanied the user's prompt.",
+                    "insight": "The published call invoked the probe ping tool.",
                     "confidence": "low",
-                    "evidence_refs": ["s0-goal", "s0-call0"],
+                    "evidence_refs": ["s0-call0"],
                 }
             ],
         }
@@ -130,10 +130,10 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
     )
     assert from_source, (call_ref, sample_rows)
     sampled, excerpt_map, _, _ = await component_evidence._sample(report)
-    assert sampled and "s0-goal" in excerpt_map and "s0-call0" in excerpt_map, (sample_rows, excerpt_map)
+    assert sampled and "s0-goal" not in excerpt_map and "s0-call0" in excerpt_map, (sample_rows, excerpt_map)
     content = await generate_component_content(report)
     assert content["narrative"]["component_analysis"]["state"] == "assessed"
-    assert "ALICE ONLY" in content["narrative"]["component_analysis"]["evidence"]["s0-goal"]
+    assert "ALICE ONLY" not in str(content["narrative"]["component_analysis"])
     assert (
         (content["metrics"]["present_sessions"], content["metrics"]["observed_calls"])
         == (

@@ -41,7 +41,8 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 | Agent prompt | Registry rules are written into the generated `AGENTS.md` |
 | Guidance files | Scanned from `AGENTS.md`, `~/.pi/agent/AGENTS.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` |
 | Skills | `.pi/skills/{name}/SKILL.md` and `~/.pi/agent/skills/{name}/SKILL.md` |
-| Session parsing | Pi JSONL parser |
+| Session parsing | Pi JSONL parser, including result-linked MCP invocation extraction |
+| MCP component insights | Observed calls for verified, uniquely matched MCP servers with `pi-mcp-adapter`; otherwise coverage reports unavailable attribution, not zero use |
 | Telemetry | Pi session transcripts delivered through the extension; `observal reconcile --harness pi` re-pushes recent sessions found under the Pi agent directory's `sessions/` folder |
 | Model selection | Registry-backed Pi model catalog (`observal registry models list --harness pi`) |
 
@@ -152,6 +153,42 @@ observal doctor
 | Pending batches | `~/.observal/pi_session_outbox/` | `~/.observal/pi_session_outbox/` |
 
 Pi MCP configs use the `mcpServers` key.
+
+### MCP component insights
+
+Pi itself has no built-in MCP. Install and configure `pi-mcp-adapter` so Pi
+actually dispatches calls to servers listed in the active `mcp.json` (adapter
+2.x) or `mcp-adapter.json` (adapter 3.x). Pulling an agent records an MCP-entry
+fingerprint from the generated profile, but **does not activate that profile**:
+use `/agent` or activate the project config before starting the session. Refresh
+the Observal extension with `observal doctor patch --harness pi` and restart Pi.
+
+The extension fingerprints the active MCP entries, checks for conflicting
+definitions and unresolved imports, and sends verification status per pinned
+server. MCP config contents and credentials are never uploaded: these files are
+hash-only snapshot inputs. A verifier-versioned synthetic hash-only manifest
+entry binds pinned fingerprints to the layer identity, so a changed install
+fingerprint cannot reuse an older snapshot's verification result. Legacy pulls
+without fingerprints remain unverified until pulled again.
+
+The server links Pi assistant tool calls to their results by unique tool-call
+ID. For supported adapter result shapes, it reads only the reported server,
+call mode, tool name and success/error state; it does not retain prompts, tool
+arguments, result bodies, or credentials in activity rows. A call contributes
+to a component only when the reported server exactly matches **one verified
+installed alias** in that session's layer. Calls without a trustworthy link or
+verified mapping remain unattributed. Agent-level attribution and MCP component
+attribution are separate; the latter is visible in the MCP's activity summary
+and session list for authorized owners. Other component types do not gain
+observed-call reports from this integration.
+
+This is fixture-verified for `pi-mcp-adapter` 2.38.0, with relevant result
+shapes checked against 3.2.0. An adapter that changes its result details or
+config resolution needs new sanitized fixtures and extractor verification
+before its calls can be treated as measured use. Existing session hashes are
+sender-cached; changes **during** a session cannot be proven stable, and
+historical sessions without verified layer snapshots cannot be retroactively
+attributed.
 
 ---
 

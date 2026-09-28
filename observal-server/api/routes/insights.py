@@ -7,11 +7,12 @@
 
 from datetime import UTC, datetime, timedelta
 from html import escape
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from loguru import logger as optic
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import check_listing_visibility_async, get_db, get_effective_agent_permission, require_role
@@ -460,6 +461,17 @@ async def list_reports(
     return [InsightReportListItem.model_validate(r) for r in reports]
 
 
+def _safe_component_narrative(report: InsightReport) -> dict | None:
+    """Never return v2 evidence containing another user's prompt, even before migration."""
+    narrative = report.narrative
+    if not isinstance(narrative, dict):
+        return None
+    analysis = narrative.get("component_analysis")
+    if isinstance(analysis, dict) and analysis.get("version") == 3:
+        return narrative
+    return {key: value for key, value in narrative.items() if key != "component_analysis"}
+
+
 async def _authorize_report(report: InsightReport, db: AsyncSession, user: User) -> None:
     if getattr(report, "subject_type", "agent") == "component":
         # Resolve current visibility and ownership again, never trust a saved name.
@@ -534,19 +546,29 @@ async def list_component_reports(
     identifier: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
+    before_created_at: datetime | None = Query(None),
+    before_id: UUID | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
 ):
     listing, _, _ = await _authorize_component(component_type, identifier, None, db, current_user)
-    rows = await db.execute(
-        select(InsightReport)
-        .where(
-            InsightReport.subject_type == "component",
-            InsightReport.project_id == DEFAULT_PROJECT_ID,
-            InsightReport.component_type == component_type,
-            InsightReport.component_id == listing.id,
-        )
-        .order_by(InsightReport.created_at.desc())
-        .limit(20)
+    if (before_created_at is None) != (before_id is None) or (
+        before_created_at is not None and before_created_at.tzinfo is None
+    ):
+        raise HTTPException(status_code=422, detail="A report cursor needs a timezone-aware date and report ID")
+    stmt = select(InsightReport).where(
+        InsightReport.subject_type == "component",
+        InsightReport.project_id == DEFAULT_PROJECT_ID,
+        InsightReport.component_type == component_type,
+        InsightReport.component_id == listing.id,
     )
+    if before_created_at is not None:
+        stmt = stmt.where(
+            or_(
+                InsightReport.created_at < before_created_at,
+                and_(InsightReport.created_at == before_created_at, InsightReport.id < before_id),
+            )
+        )
+    rows = await db.execute(stmt.order_by(InsightReport.created_at.desc(), InsightReport.id.desc()).limit(limit))
     return [InsightReportListItem.model_validate(row) for row in rows.scalars().all()]
 
 
@@ -587,7 +609,10 @@ async def get_report(
 
     await _authorize_report(report, db, current_user)
 
-    return InsightReportResponse.model_validate(report)
+    response = InsightReportResponse.model_validate(report)
+    if response.subject_type == "component":
+        response.narrative = _safe_component_narrative(report)
+    return response
 
 
 @router.get("/reports/{report_id}/export/html", response_class=HTMLResponse)
@@ -618,8 +643,8 @@ async def export_report_html(
                 {
                     "metrics": report.metrics,
                     "coverage": report.coverage,
-                    "summary": (report.narrative or {}).get("summary"),
-                    "component_analysis": (report.narrative or {}).get("component_analysis"),
+                    "summary": (_safe_component_narrative(report) or {}).get("summary"),
+                    "component_analysis": (_safe_component_narrative(report) or {}).get("component_analysis"),
                 },
                 indent=2,
             )

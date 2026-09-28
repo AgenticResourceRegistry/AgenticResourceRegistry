@@ -20,7 +20,10 @@ from services.session_parsers.invocations import extract_invocations
 from .matcher import MatchResult, match_invocations
 
 PROJECTION_VERSION = 1
-MATCHER_VERSION = 1
+# 2: result-link ordering changed. 3: harness-reported server identity (Pi).
+# Every bump makes old publications invisible until the durable full replay
+# (``jobs.activity.replay_activity_revision``) republishes them.
+MATCHER_VERSION = 3
 MAX_SOURCE_RECORDS = 50_000
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 
@@ -287,6 +290,23 @@ async def _publish_unattributable(
     }
 
 
+async def _index_layer(project_id: str, user_id: str, layer_hash: str) -> bool:
+    """Index a snapshot the upload request could not see yet; True if a mapping may now exist.
+
+    ClickHouse async inserts make a snapshot invisible to the upload request's
+    own extraction attempt, which then finds no snapshot and publishes nothing.
+    Without this, a session's mapping would wait for the nightly layer backfill.
+    """
+    try:
+        from services.layer_components.extractor import ensure_layer_components
+
+        result = await ensure_layer_components(project_id, user_id, layer_hash)
+    except Exception as error:
+        optic.warning("activity layer indexing failed: {}", type(error).__name__)
+        return False
+    return result.get("status") == "complete"
+
+
 async def project_session_activity(
     project_id: str, user_id: str, harness: str, session_id: str, *, force: bool = False
 ) -> dict:
@@ -320,11 +340,11 @@ async def project_session_activity(
         return {"status": "unsupported", "publication_version": version}
     unattributed = {
         "candidate_count": extracted.malformed_source_records
-        + sum(call.tool_name.startswith("mcp__") for call in extracted.invocations),
+        + sum(call.is_mcp_candidate for call in extracted.invocations),
     }
     unattributed["unmatched_count"] = unattributed["candidate_count"]
     unattributed["unknown_result_count"] = sum(
-        call.tool_name.startswith("mcp__") and call.result_state == "unknown" for call in extracted.invocations
+        call.is_mcp_candidate and call.result_state == "unknown" for call in extracted.invocations
     )
     hashes = [row.get("layer_hash") or "" for row in source]
     if not all(isinstance(value, str) and value.startswith("v2_") for value in hashes):
@@ -337,6 +357,8 @@ async def project_session_activity(
     generations: dict[str, int] = {}
     for layer_hash in sorted(set(hashes)):
         status, generation, candidates = await _mapping(project_id, user_id, layer_hash, harness)
+        if status == "pending_mapping" and await _index_layer(project_id, user_id, layer_hash):
+            status, generation, candidates = await _mapping(project_id, user_id, layer_hash, harness)
         if status == "identity_conflict":
             # Supersede any earlier positive publication: a conflicted identity
             # cannot keep showing attributed calls. Every candidate stays an
