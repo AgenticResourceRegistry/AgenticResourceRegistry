@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact, present-candidate-only matching for the fixture-verified MCP tool format."""
+"""Exact, present-candidate-only matching for fixture-verified MCP call identities.
+
+Two identity forms exist. Claude Code encodes the installed alias in the tool
+name (``mcp__<alias>__<tool>``). Pi's MCP adapter reports the configured server
+name it dispatched to, carried as ``SourceInvocation.mcp_server``; that name is
+compared for exact equality with the installed alias, never by prefix.
+"""
 
 from __future__ import annotations
 
@@ -44,24 +50,33 @@ def match_invocations(
     unknown = 0
     candidate_count = malformed_source_records
     for call in invocations:
-        if not call.tool_name.startswith("mcp__"):
+        if not call.is_mcp_candidate:
             continue
         candidate_count += 1
         unknown += int(call.result_state == "unknown")
         layer_hash = hashes_by_offset.get(call.source_line_offset, "")
-        matches = [
-            candidate
-            for candidate in candidates_by_hash.get(layer_hash, ())
-            if candidate.get("local_name")
-            and call.tool_name.startswith(f"mcp__{candidate['local_name']}__")
-            and len(call.tool_name) > len(f"mcp__{candidate['local_name']}__")
-        ]
-        # ``mcp__<server>__<tool>`` cannot be split uniquely when the remainder
-        # itself contains ``__``: an unregistered server ``a__b`` would look
-        # like registry alias ``a`` with tool ``b__x``. Decline, never guess.
-        if len(matches) > 1 or any("__" in call.tool_name[len(f"mcp__{c['local_name']}__") :] for c in matches):
-            collisions += 1
-            continue
+        candidates = candidates_by_hash.get(layer_hash, ())
+        if call.mcp_server is not None:
+            # Harness-reported server identity: exact alias equality only. An
+            # empty server is an MCP call whose identity could not be established.
+            matches = [c for c in candidates if call.mcp_server and c.get("local_name") == call.mcp_server]
+            if len(matches) > 1:
+                collisions += 1
+                continue
+        else:
+            matches = [
+                candidate
+                for candidate in candidates
+                if candidate.get("local_name")
+                and call.tool_name.startswith(f"mcp__{candidate['local_name']}__")
+                and len(call.tool_name) > len(f"mcp__{candidate['local_name']}__")
+            ]
+            # ``mcp__<server>__<tool>`` cannot be split uniquely when the remainder
+            # itself contains ``__``: an unregistered server ``a__b`` would look
+            # like registry alias ``a`` with tool ``b__x``. Decline, never guess.
+            if len(matches) > 1 or any("__" in call.tool_name[len(f"mcp__{c['local_name']}__") :] for c in matches):
+                collisions += 1
+                continue
         if (
             len(matches) != 1
             or call.event_time is None
@@ -90,7 +105,7 @@ def match_invocations(
                 "tool_use_id": call.tool_use_id,
                 "event_time": call.event_time,
                 "result_state": call.result_state,
-                "attribution_method": "verified_alias",
+                "attribution_method": "verified_alias" if call.mcp_server is None else "verified_server",
             }
         )
     # Malformed source records cannot be enumerated as calls, but must not be

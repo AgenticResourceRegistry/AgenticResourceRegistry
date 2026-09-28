@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from uuid import UUID
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -144,6 +145,23 @@ def _component_path(component: tuple[str, str]) -> str:
 
 def _resolve_report_for_show(target: str, report_ref: str | None, component: tuple[str, str] | None = None) -> dict:
     if component:
+        # An exact historical ID is accessible even when it is no longer in the
+        # first report page. The server still rechecks component ownership.
+        if report_ref:
+            try:
+                exact_id = str(UUID(report_ref))
+            except ValueError:
+                pass
+            else:
+                resolved_path = _component_path(component)
+                report = client.get(f"/api/v1/insights/reports/{exact_id}")
+                if report.get("component_id") != resolved_path.rsplit("/", 1)[-1]:
+                    fail(
+                        ErrorCategory.VALIDATION,
+                        "Report does not belong to this component.",
+                        operation="Show component insight report",
+                    )
+                return report
         reports = client.get(f"{_component_path(component)}/reports")
         report_id = _select_report_id(reports, report_ref)
         return client.get(f"/api/v1/insights/reports/{report_id}")
@@ -160,6 +178,7 @@ def insights_list(
     component: tuple[str, str] | None = typer.Option(
         None, "--component", help="Component type and ref, e.g. mcp org/tool"
     ),
+    all_reports: bool = typer.Option(False, "--all", help="List all component report pages"),
 ):
     """List insight reports for an agent.
 
@@ -170,6 +189,7 @@ def insights_list(
         observal ops insights list my-agent --output json
     """
     component = component if isinstance(component, tuple) else None
+    all_reports = all_reports if isinstance(all_reports, bool) else False
     if not component and not agent_id:
         raise typer.BadParameter("Provide an agent or --component")
     with _progress(output, "Fetching insight reports..."):
@@ -177,11 +197,32 @@ def insights_list(
             fail(ErrorCategory.VALIDATION, "Use an agent or --component, not both.", operation="List insight reports")
         if not component and not agent_id:
             fail(ErrorCategory.VALIDATION, "Provide an agent or --component.", operation="List insight reports")
-        data = client.get(
+        if all_reports and not component:
+            fail(ErrorCategory.VALIDATION, "--all applies to component reports only.", operation="List insight reports")
+        path = (
             f"{_component_path(component)}/reports"
             if component
             else f"/api/v1/agents/{_resolve_agent_id(agent_id)}/insights/reports"
         )
+        data = client.get(f"{path}?limit=100" if all_reports else path)
+        if all_reports:
+            from urllib.parse import urlencode
+
+            while len(data) and len(data) % 100 == 0:
+                last = data[-1]
+                page = client.get(
+                    f"{path}?"
+                    + urlencode(
+                        {
+                            "limit": 100,
+                            "before_created_at": last["created_at"],
+                            "before_id": last["id"],
+                        }
+                    )
+                )
+                data.extend(page)
+                if len(page) < 100:
+                    break
     if output == "json":
         output_json(data)
         return
@@ -190,6 +231,8 @@ def insights_list(
         return
     table = Table(title=f"Insight Reports ({len(data)})", show_lines=False, padding=(0, 1))
     table.add_column("#", style="dim", width=3)
+    if all_reports:
+        table.add_column("Report ID")
     table.add_column("Status")
     table.add_column("Version")
     table.add_column("Period")
@@ -200,6 +243,7 @@ def insights_list(
         end = str(r.get("period_end") or "")[:10]
         table.add_row(
             str(i),
+            *([esc(r.get("id", ""))] if all_reports else []),
             status_badge(r.get("status", "")),
             esc(r.get("component_version") or "all" if component else r.get("agent_version") or "-"),
             f"{esc(start)} → {esc(end)}",
@@ -211,6 +255,8 @@ def insights_list(
     target_hint = f"--component {esc(component[0])} {esc(component[1])}" if component else esc(agent_id)
     rprint(f"[dim]Open latest completed: [cyan]observal ops insights show {target_hint}[/cyan][/dim]")
     rprint(f"[dim]Open row 1: [cyan]observal ops insights show {target_hint} 1[/cyan][/dim]")
+    if all_reports:
+        rprint(f"[dim]Open an older report: [cyan]observal ops insights show {target_hint} REPORT_ID[/cyan][/dim]")
 
 
 @insights_app.command(name="show")
@@ -290,9 +336,10 @@ def insights_show(
         metrics = data.get("metrics") or {}
         coverage = data.get("coverage") or {}
         rprint(f"[bold]{esc(data.get('component_name') or 'Component')} Insights[/bold]")
-        rprint(
-            f"  Present sessions: {metrics.get('present_sessions', 0)}  Observed calls: {metrics.get('observed_calls', 0)}"
+        observed = (
+            metrics.get("observed_calls", 0) if coverage.get("usage_rate_denominator_sessions", 0) else "not measured"
         )
+        rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}  Observed calls: {observed}")
         narrative = data.get("narrative") or {}
         rprint(f"  {esc(narrative.get('summary') or 'No summary available')}")
         analysis = narrative.get("component_analysis") or {}
@@ -303,9 +350,9 @@ def insights_show(
         elif analysis.get("state") != "assessed" or not analysis.get("findings"):
             rprint("  [dim]No grounded interpretive findings in this sample; this does not mean unused.[/dim]")
         else:
-            rprint("\n[bold]What the sessions suggest[/bold]")
+            rprint("\n[bold]What the published calls suggest[/bold]")
             for finding in analysis["findings"]:
-                label = "Possible use (not observed)" if finding["kind"] == "inferred_use" else finding["kind"]
+                label = finding["kind"]
                 rprint(
                     f"  [bold]{esc(label)}[/bold] · {esc(finding['confidence'])} confidence: {esc(finding['insight'])}"
                 )

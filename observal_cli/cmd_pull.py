@@ -2841,11 +2841,22 @@ def register_pull(app: typer.Typer):
             agent_version = installed_version
             from observal_cli.layer import verify_installed_mcp
 
+            # The MCP file this pull wrote (a Pi profile's mcp.json, for example).
+            mcp_cfg = snippet.get("mcp_config")
+            written_mcp_config = (
+                _resolve_path(mcp_cfg["path"], target_dir, allow_home=is_user_scope)
+                if isinstance(mcp_cfg, dict) and isinstance(mcp_cfg.get("path"), str)
+                else None
+            )
             for component in lock_components:
                 if component.get("type") != "mcp" or not component.get("local_name"):
                     continue
                 status, fingerprint = verify_installed_mcp(
-                    harness, options.get("scope", "project"), str(target_dir), component["local_name"]
+                    harness,
+                    options.get("scope", "project"),
+                    str(target_dir),
+                    component["local_name"],
+                    written_config=written_mcp_config,
                 )
                 if status == "verified" and fingerprint:
                     component["mcp_integrity"] = fingerprint

@@ -140,14 +140,20 @@ HARNESS_LAYER_CONFIGS: dict[str, dict[str, list[tuple[str, list[str]]]]] = {
                     "agents/*/mcp.json",
                     "agents/*/skills/*/SKILL.md",
                     "agents/*/sandboxes/**/*",
+                    # pi-mcp-adapter 3.x config; hash-only, for MCP verification.
+                    "mcp-adapter.json",
                 ],
             ),
+            # User-global MCP sources pi-mcp-adapter also loads (hash-only).
+            ("~", [".config/mcp/mcp.json", ".agents/mcp.json", ".agents/mcp/mcp.json"]),
         ],
         "project": [
             (
                 ".",
                 [
                     "AGENTS.md",
+                    ".mcp.json",
+                    ".pi/mcp-adapter.json",
                     ".pi/SYSTEM.md",
                     ".pi/APPEND_SYSTEM.md",
                     ".pi/mcp.json",
@@ -486,9 +492,73 @@ def build_layer_manifest(
     # Save updated cache
     _save_hash_cache(cache)
 
+    if harness == "pi":
+        verification = pi_mcp_verification_entry(registry_data, project_dir)
+        if verification is not None:
+            if include_content:
+                verification["content"] = ""
+            manifest.append(verification)
+
     # Sort deterministically for consistent hashing
     manifest.sort(key=lambda e: e["path"])
     return manifest
+
+
+PI_MCP_VERIFICATION_PATH = "observal:mcp-verification"
+PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1"
+
+
+def pi_mcp_verification_entry(registry_data: dict | None, project_dir: str | None) -> dict | None:
+    """A synthetic, hash-only manifest entry binding Pi's MCP verification inputs to identity.
+
+    The Pi extension reports MCP verification in ``drift``, which is not part
+    of the v2 hash. Its inputs outside the hashed files are the pinned install
+    fingerprints and the verifier revision. Hashing them here makes one layer
+    hash imply one verification result, so re-pulling (new fingerprints) or a
+    verifier change yields a new snapshot instead of a stale or conflicting one.
+    Must match ``piMcpVerificationEntry`` in the Pi extension byte for byte.
+    """
+    sections = registry_data.get("harnesses", {}) if isinstance(registry_data, dict) else {}
+    section = sections.get("pi") if isinstance(sections, dict) else None
+    if not isinstance(section, dict):
+        return None
+    directory = str(Path(project_dir).resolve()) if project_dir else None
+
+    def included(item: dict) -> bool:
+        if item.get("scope") == "user":
+            return True
+        raw = item.get("directory")
+        return directory is not None and isinstance(raw, str) and str(Path(raw).resolve()) == directory
+
+    rows: list[list[str]] = []
+    agents = section.get("agents") if isinstance(section.get("agents"), list) else []
+    standalone = section.get("standalone") if isinstance(section.get("standalone"), list) else []
+    parents = [(agent, agent.get("components")) for agent in agents if isinstance(agent, dict) and included(agent)]
+    parents.append((None, [item for item in standalone if isinstance(item, dict) and included(item)]))
+    for parent, components in parents:
+        for component in components if isinstance(components, list) else []:
+            if not isinstance(component, dict) or component.get("type") != "mcp":
+                continue
+            scope = _nfc(component.get("scope")) or (_nfc(parent.get("scope")) if parent else "") or "project"
+            rows.append(
+                [
+                    _uuid_or_original(parent.get("id")) if parent else "",
+                    _uuid_or_original(component.get("id")),
+                    _nfc(component.get("local_name")),
+                    scope,
+                    _nfc(component.get("mcp_integrity")),
+                ]
+            )
+    if not rows:
+        return None
+    rows.sort(key=lambda row: [value.encode("utf-8") for value in row])
+    data = json.dumps([PI_MCP_VERIFIER, rows], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return {
+        "path": PI_MCP_VERIFICATION_PATH,
+        "hash": f"sha256-{hashlib.sha256(data).hexdigest()}",
+        "size": len(data),
+        "source": "observal",
+    }
 
 
 def _get_observal_managed_files(lockfile_data: dict, harness: str, project_dir: str | None) -> set[str]:
@@ -897,13 +967,28 @@ def mcp_entry_fingerprint(entry: dict) -> str:
 
 
 def verify_installed_mcp(
-    harness: str, scope: str, directory: str | None, alias: str, expected: str | None = None
+    harness: str,
+    scope: str,
+    directory: str | None,
+    alias: str,
+    expected: str | None = None,
+    *,
+    written_config: Path | None = None,
 ) -> tuple[str, str | None]:
+    """Fingerprint one installed MCP entry.
+
+    *written_config* is the MCP file a pull just wrote. Adapters whose pull
+    output is not the active config (Pi profiles) read the entry from there.
+    """
     from observal_cli.harness import ensure_loaded, get_adapter
 
     ensure_loaded()
     try:
-        status, entry = get_adapter(harness).read_installed_mcp(scope, directory, alias)
+        adapter = get_adapter(harness)
+        if written_config is not None:
+            status, entry = adapter.read_pulled_mcp(scope, directory, alias, written_config)
+        else:
+            status, entry = adapter.read_installed_mcp(scope, directory, alias)
     except (KeyError, OSError, ValueError):
         return "unverified", None
     if status != "verified" or entry is None:

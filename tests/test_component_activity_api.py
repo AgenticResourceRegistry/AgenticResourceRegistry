@@ -245,13 +245,23 @@ async def test_activity_sql_binds_scoped_key_current_version_and_component(monke
     assert "a.component_id = {component_id:String}" in summary_sql
     assert "countIf(status = 'failed') = 0" in summary_sql
     assert captured[0][1]["param_projection_version"] == queries.publication_version()
-    assert captured[0][1]["param_supported"] == "['claude-code']"
+    assert captured[0][1]["param_supported"] == "['claude-code','pi']"
     page_sql, page_params = captured[-1]
     # Source availability reads only sizes/flags server-side; raw text is never selected.
     assert "empty(raw_line)" in page_sql
     assert "raw_line," not in page_sql and "raw_line AS" not in page_sql and page_params["param_limit"] == 6
     assert "s.user_id" in page_sql and "'source_too_large'" in page_sql
     assert "countIf(source_state = 'source_unavailable')" in summary_sql
+    assert "s.revision != p.source_revision, 'stale'" in summary_sql
+    assert "arraySort(groupArray(50001)((line_offset, line_hash)))" in summary_sql
+    # Keep nested source-revision expressions balanced: malformed SQL used to
+    # make both summary and sessions endpoints return HTTP 500 on ClickHouse.
+    assert queries._SOURCE_STATES.count("(") == queries._SOURCE_STATES.count(")")
+    assert summary_sql.count("(") == summary_sql.count(")")
+    assert page_sql.count("(") == page_sql.count(")")
+    assert summary_sql.index("s.unavailable_records > 0, 'source_unavailable'") < summary_sql.index(
+        "p.generation > 0, 'complete'"
+    )
     assert "ORDER BY user_id, harness, session_id" in page_sql
     assert "toDateTime64({after_time" not in page_sql
     assert any("session_capabilities FINAL" in sql for sql, _ in captured)
@@ -449,7 +459,8 @@ async def test_version_distribution_reads_only_published_present_scoped_sessions
     assert distribution == {"1.0.0": 2}
     sql, params = calls[0]
     assert "SELECT DISTINCT p.user_id, p.harness, p.session_id" in sql
-    assert "c.user_id = p.user_id AND c.layer_hash = p.layer_hash" in sql
+    assert "c.user_id = p.user_id AND c.layer_hash = p.layer_hash AND c.harness = p.harness" in sql
+    assert "s.harness = present.harness" in sql
     assert "c.extraction_generation = published.generation" in sql
     assert "published.conflict = 0" in sql
     assert "verification_status = 'verified'" in sql

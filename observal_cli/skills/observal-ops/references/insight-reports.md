@@ -27,11 +27,12 @@ For an owned MCP, list and inspect component reports separately:
 
 ```bash
 observal ops insights list --component mcp NAMESPACE/SLUG --output json
+observal ops insights list --component mcp NAMESPACE/SLUG --all --output json  # all pages
 observal ops insights show --component mcp NAMESPACE/SLUG --output json
 observal ops insights show latest --component mcp NAMESPACE/SLUG
 ```
 
-Component reports contain verified presence, published observed calls and attribution coverage. New reports may also contain `narrative.component_analysis`: bounded, redacted interpretations with opaque evidence references and a sample limit. `inferred_use` is only a possible use, not an observed call; installation or activation alone never proves use. An `unknown` analysis means insufficient or invalid evidence, not no use.
+Component reports contain verified presence, published observed calls and attribution coverage. New reports may also contain `narrative.component_analysis`: bounded interpretations citing published call names and result states, never user prompts or tool arguments. Older prompt-backed analysis is removed. Installation or activation alone never proves use. An `unknown` analysis means insufficient or invalid evidence, not no use. For reports beyond the recent list, use `--all` and open a report by its full ID.
 
 ## Generate only when needed
 
@@ -63,7 +64,7 @@ observal ops insights show NAMESPACE/AGENT_SLUG latest --section version_compari
 observal ops insights show NAMESPACE/AGENT_SLUG latest --section regression_detection --output json
 ```
 
-Other sections include `what_they_work_on`, `interaction_style`, `usage_patterns`, `what_works`, `on_the_horizon`, and `fun_ending`. For MCPs, `--section component_analysis --output json` exposes sampled interpretations and cited, redacted excerpts.
+Other sections include `what_they_work_on`, `interaction_style`, `usage_patterns`, `what_works`, `on_the_horizon`, and `fun_ending`. For MCPs, `--section component_analysis --output json` exposes sampled interpretations and cited call names, without user prompts.
 
 ## Analyze evidence
 

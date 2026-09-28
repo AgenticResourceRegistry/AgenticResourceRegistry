@@ -814,18 +814,18 @@ def test_component_cli_list_show_generate_use_owner_scoped_routes(cli):
                             "kind": "workflow",
                             "insight": "Used to find docs",
                             "confidence": "low",
-                            "evidence_refs": ["s0-goal", "s0-call0"],
+                            "evidence_refs": ["s0-call0"],
                         }
                     ],
-                    "evidence": {"s0-goal": "Find docs", "s0-call0": "search (result: unknown)"},
+                    "evidence": {"s0-call0": "search (result: unknown)"},
                 },
             },
         },
     ]
     plain = runner.invoke(insights.insights_app, ["show", "--component", "mcp", "team/tool"])
     assert plain.exit_code == 0, plain.output
-    assert "What the sessions suggest" in " ".join(cli.messages())
-    assert "Find docs" in " ".join(cli.messages())
+    assert "What the published calls suggest" in " ".join(cli.messages())
+    assert "search (result: unknown)" in " ".join(cli.messages())
 
     cli.client_get.reset_mock()
     cli.client_get.side_effect = _blocked("component generate should not check LLM status").side_effect
@@ -838,3 +838,40 @@ def test_component_cli_list_show_generate_use_owner_scoped_routes(cli):
     cli.client_post.assert_called_once_with(
         "/api/v1/insights/components/mcp/component-id/generate", {"period_days": 14}
     )
+
+
+def test_component_cli_all_pages_and_exact_historical_id(cli):
+    _returns(cli.resolve, "component-id")
+    page = [{"id": REPORT_ID, "created_at": "2026-05-17T00:00:00Z", "status": "completed"}] * 100
+    cli.client_get.side_effect = [page, [{"id": "older", "created_at": "2026-05-16T00:00:00Z"}]]
+    listed = runner.invoke(
+        insights.insights_app,
+        [
+            "list",
+            "--component",
+            "mcp",
+            "team/tool",
+            "--all",
+            "--output",
+            "json",
+        ],
+    )
+    assert listed.exit_code == 0, listed.output
+    assert len(cli.json[-1]) == 101
+    assert "before_created_at=2026-05-17T00%3A00%3A00Z" in cli.client_get.call_args_list[-1].args[0]
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [{"id": REPORT_ID, "component_id": "component-id", "status": "completed"}]
+    shown = runner.invoke(
+        insights.insights_app,
+        [
+            "show",
+            REPORT_ID,
+            "--component",
+            "mcp",
+            "team/tool",
+            "--output",
+            "json",
+        ],
+    )
+    assert shown.exit_code == 0, shown.output
+    cli.client_get.assert_called_once_with(f"/api/v1/insights/reports/{REPORT_ID}")

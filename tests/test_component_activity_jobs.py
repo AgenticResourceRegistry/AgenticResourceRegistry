@@ -155,6 +155,90 @@ async def test_backfill_pages_project_and_session_keys_rechecks_completed_and_re
 
 
 @pytest.mark.asyncio
+async def test_revision_replay_uses_persisted_cursor_and_recovers_after_enqueue_failure(monkeypatch):
+    values = {}
+
+    async def get(key):
+        return values.get(key)
+
+    async def set_value(key, value):
+        values[key] = value
+
+    async def incrby(key, value):
+        values[key] = int(values.get(key, 0)) + value
+
+    async def delete(key):
+        values.pop(key, None)
+
+    redis = SimpleNamespace(
+        get=AsyncMock(side_effect=get),
+        set=AsyncMock(side_effect=set_value),
+        incrby=AsyncMock(side_effect=incrby),
+        delete=AsyncMock(side_effect=delete),
+        enqueue_job=AsyncMock(side_effect=ConnectionError("temporary queue failure")),
+    )
+    cursor = ["project", "owner", "claude-code", "old-session"]
+    backfill = AsyncMock(
+        side_effect=[
+            {"next_cursor": cursor, "failed": 0},
+            {"next_cursor": None, "failed": 0},
+        ]
+    )
+    monkeypatch.setattr(activity, "backfill_component_activity", backfill)
+    first = await activity.replay_activity_revision({"redis": redis})
+    assert first["status"] == "continuing"
+    assert backfill.await_args.kwargs == {
+        "after": None,
+        "since_days": None,
+        "batch_size": 64,
+        "max_batches": 1,
+        "enqueue_continuation": False,
+    }
+    second = await activity.replay_activity_revision({"redis": redis})
+    assert second["status"] == "complete"
+    assert backfill.await_args.kwargs["after"] == cursor
+    assert await redis.get(f"observal:activity:full-replay:{activity.publication_version()}") == "complete"
+    assert (await activity.replay_activity_revision({"redis": redis}))["status"] == "complete"
+    assert backfill.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_revision_replay_retries_failed_sessions_in_following_pass(monkeypatch):
+    values = {}
+
+    async def get(key):
+        return values.get(key)
+
+    async def set_value(key, value):
+        values[key] = value
+
+    async def incrby(key, value):
+        values[key] = int(values.get(key, 0)) + value
+
+    async def delete(key):
+        values.pop(key, None)
+
+    redis = SimpleNamespace(get=get, set=set_value, incrby=incrby, delete=delete)
+    backfill = AsyncMock(
+        side_effect=[
+            {"next_cursor": None, "failed": 1},
+            {"next_cursor": None, "failed": 0},
+        ]
+    )
+    monkeypatch.setattr(activity, "backfill_component_activity", backfill)
+    assert (await activity.replay_activity_revision({"redis": redis}))["status"] == "retry"
+    assert (await activity.replay_activity_revision({"redis": redis}))["status"] == "complete"
+    assert backfill.await_count == 2
+
+
+def test_worker_registers_revision_replay_cron():
+    from worker import WorkerSettings
+
+    assert activity.replay_activity_revision in WorkerSettings.functions
+    assert any(job.coroutine is activity.replay_activity_revision for job in WorkerSettings.cron_jobs)
+
+
+@pytest.mark.asyncio
 async def test_backfill_catches_failed_session_without_losing_checkpoint(monkeypatch):
     page = AsyncMock(return_value=[_session("p", "u", "claude-code", "s")])
     monkeypatch.setattr(activity, "_source_session_page", page)

@@ -18,7 +18,7 @@ fs.mkdirSync(piDir, { recursive: true });
 fs.writeFileSync(path.join(piDir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: "fixture" } } }));
 fs.writeFileSync(path.join(home, "AGENTS.md"), "Project agent instructions");
 fs.mkdirSync(path.join(home, ".pi"), { recursive: true });
-fs.writeFileSync(path.join(home, ".pi", "mcp.json"), "{}");
+fs.writeFileSync(path.join(home, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { fixture: { env: { API_KEY: "fixture-private-value" } } } }));
 const snapshots: any[] = [];
 const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "application/json");
@@ -75,11 +75,20 @@ const versionOnly = await nextSnapshot(3);
 agent.components[0].version = "1.0.0";
 agent.components[0].local_name = "second";
 const aliasOnly = await nextSnapshot(4);
+// Pin identity changes the hash through pins; files are unchanged. The
+// synthetic verification-input entry tracks the MCP id and alias, not version.
+const files = (value: any) => value.harnesses.pi.filter((item: any) => item.path !== "observal:mcp-verification");
+const verificationInputs = (value: any) =>
+  value.harnesses.pi.find((item: any) => item.path === "observal:mcp-verification")?.hash;
 for (const changed of [idOnly, versionOnly, aliasOnly]) {
   assert.notEqual(first.hash, changed.hash);
-  assert.deepEqual(first.harnesses, changed.harnesses);
+  assert.deepEqual(files(first), files(changed));
   assert.notDeepEqual(first.pinned_versions, changed.pinned_versions);
 }
+assert.match(verificationInputs(first), /^sha256-[0-9a-f]{64}$/);
+assert.notEqual(verificationInputs(first), verificationInputs(idOnly));
+assert.equal(verificationInputs(first), verificationInputs(versionOnly));
+assert.notEqual(verificationInputs(first), verificationInputs(aliasOnly));
 assert.match(first.hash, /^v2_[0-9a-f]{60}$/);
 assert.equal(first.pinned_versions.agents[0].components[0].id, "11111111-1111-4111-8111-111111111111");
 assert.equal(idOnly.pinned_versions.agents[0].components[0].id, "22222222-2222-4222-8222-222222222222");
@@ -90,6 +99,9 @@ assert.equal(first.pinned_versions.agents[0].fixture_extra, undefined);
 assert.deepEqual(first.pinned_versions.agents[0].components.map((item: any) => item.local_name), ["first", "bob-probe"]);
 assert.equal(first.pinned_versions.standalone[0].qualified_name, "carol/probe");
 assert(first.harnesses.pi.some((item: any) => item.path === "project:.pi/mcp.json"));
+assert.equal(first.harnesses.pi.find((item: any) => item.path === "project:.pi/mcp.json").content, "");
+assert.equal(first.harnesses.pi.find((item: any) => item.path === "user:mcp.json").content, "");
+assert(!JSON.stringify(snapshots).includes("fixture-private-value"));
 // Golden: a real Python snapshot built from the same files and lockfile must
 // match Pi's hash and pin projection, not just a second TypeScript rehash.
 agent.components[0].local_name = "first";

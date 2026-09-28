@@ -269,7 +269,90 @@ async def test_component_export_escapes_saved_name_and_never_fetches_transcripts
     assert "<script>" not in response.body.decode()
     assert "<img" not in response.body.decode()
     assert "&lt;script&gt;" in response.body.decode()
-    assert "component_analysis" in response.body.decode()
+    assert "s0-goal" not in response.body.decode()  # legacy prompt evidence is suppressed
+    assert "bad" not in response.body.decode()
+
+
+def test_legacy_component_analysis_is_removed_before_delivery():
+    from api.routes.insights import _safe_component_narrative
+
+    old = SimpleNamespace(
+        narrative={
+            "summary": "safe counts",
+            "component_analysis": {
+                "version": 2,
+                "evidence": {"s0-goal": "private user text"},
+            },
+        }
+    )
+    assert _safe_component_narrative(old) == {"summary": "safe counts"}
+    current = SimpleNamespace(
+        narrative={
+            "component_analysis": {
+                "version": 3,
+                "evidence": {
+                    "s0-call0": "search (result: unknown)",
+                },
+            }
+        }
+    )
+    assert _safe_component_narrative(current) == current.narrative
+
+
+@pytest.mark.asyncio
+async def test_component_report_history_uses_stable_scoped_keyset(monkeypatch):
+    from datetime import UTC, datetime
+
+    from api.routes import insights
+
+    listing_id = uuid.uuid4()
+    first_id = uuid.uuid4()
+    when = datetime.now(UTC)
+    monkeypatch.setattr(
+        insights,
+        "_authorize_component",
+        AsyncMock(
+            return_value=(
+                SimpleNamespace(id=listing_id),
+                object(),
+                None,
+            )
+        ),
+    )
+    row = SimpleNamespace(id=first_id, created_at=when)
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: [row]),
+            )
+        )
+    )
+    monkeypatch.setattr(insights.InsightReportListItem, "model_validate", lambda r: r)
+    await insights.list_component_reports(
+        "mcp",
+        "listing",
+        db,
+        SimpleNamespace(),
+        before_created_at=when,
+        before_id=first_id,
+        limit=20,
+    )
+    sql = str(db.execute.await_args.args[0].compile(compile_kwargs={"literal_binds": True}))
+    assert listing_id.hex in sql and "created_at <" in sql and "insight_reports.id <" in sql
+    assert "ORDER BY insight_reports.created_at DESC, insight_reports.id DESC" in sql
+    assert "LIMIT 20" in sql
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException, match="report cursor"):
+        await insights.list_component_reports(
+            "mcp",
+            "listing",
+            db,
+            SimpleNamespace(),
+            before_created_at=when,
+            before_id=None,
+            limit=20,
+        )
 
 
 @pytest.mark.asyncio

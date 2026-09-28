@@ -49,6 +49,30 @@ class PiAdapter(BaseAdapter):
     def harness_name(self) -> str:
         return "pi"
 
+    def redact_layer_content(self, display_path: str) -> bool:
+        """MCP and settings JSON can hold inline credentials; retain only their hashes."""
+        return display_path == "user:settings.json" or display_path.endswith(("mcp.json", "mcp-adapter.json"))
+
+    def read_pulled_mcp(
+        self, scope: str, directory: str | None, alias: str, written_config: Path
+    ) -> tuple[str, dict | None]:
+        """Read the profile file a pull wrote; `/agent` copies it to the active config.
+
+        Session-time verification against the *active* file is the Pi
+        extension's job, because only it knows which profile Pi loaded.
+        """
+        try:
+            data = json.loads(written_config.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return "unverified", None
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        if not isinstance(servers, dict):
+            return "unverified", None
+        entry = servers.get(alias)
+        if entry is None:
+            return "missing", None
+        return ("verified", entry) if isinstance(entry, dict) else ("unverified", None)
+
     def plan_bundled_skill_install(
         self,
         skill_name: str,

@@ -15,6 +15,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
   const narrative = report.narrative as unknown as ComponentInsightNarrative | null;
   const summary = narrative?.summary;
   const analysis = narrative?.component_analysis;
+  const canMeasureCalls = !!coverage && coverage.usage_rate_denominator_sessions > 0;
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-4 py-8 sm:px-6">
       <Link to="/components/$componentId" params={{ componentId: report.component_id ?? "" }} search={{ type: "mcps" }}
@@ -32,7 +33,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
        report.status !== "completed" ? <p role="status" className="text-muted-foreground">Report {report.status}. This page updates automatically.</p> : (
         <>
           <section aria-label="Interpretive insights" className="space-y-4 border-b border-border pb-7">
-            <h2 className="text-lg font-semibold">What the sessions suggest</h2>
+            <h2 className="text-lg font-semibold">What the published calls suggest</h2>
             {!analysis ? (
               <p className="max-w-[70ch] text-sm text-muted-foreground">This report predates evidence-backed analysis. Generate a new report to assess sampled sessions.</p>
             ) : analysis.state !== "assessed" || analysis.findings.length === 0 ? (
@@ -43,7 +44,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
                   <li key={`${finding.kind}-${index}`} className="space-y-2">
                     <p className="max-w-[70ch] text-sm leading-relaxed text-foreground">{finding.insight}</p>
                     <p className="text-xs text-muted-foreground">
-                      {finding.kind === "inferred_use" ? "Possible use · not an observed call" : `Interpretation of published calls · ${finding.kind.replaceAll("_", " ")}`}
+                      {`Interpretation of published calls · ${finding.kind.replaceAll("_", " ")}`}
                       {` · ${finding.confidence} confidence`}
                     </p>
                     <ul className="space-y-1 pl-4 text-xs text-muted-foreground">
@@ -65,9 +66,10 @@ function ComponentReport({ report }: { report: InsightReport }) {
             <p className="max-w-[70ch] text-sm leading-relaxed">{summary}</p>
             <dl className="grid gap-4 sm:grid-cols-3">
               <div><dt className="text-sm text-muted-foreground">Present sessions</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.present_sessions ?? "—"}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Observed calls</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.observed_calls ?? "—"}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Known errors</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.result_states.error ?? "—"}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">Observed calls</dt><dd className="text-xl font-semibold tabular-nums">{canMeasureCalls ? (metrics?.observed_calls ?? "—") : "Not measured"}</dd></div>
+              <div><dt className="text-sm text-muted-foreground">Known errors</dt><dd className="text-xl font-semibold tabular-nums">{canMeasureCalls ? (metrics?.result_states.error ?? "—") : "Not measured"}</dd></div>
             </dl>
+            {!canMeasureCalls && <p className="text-sm text-muted-foreground">Attribution is unavailable for this period; missing measurements do not imply no use.</p>}
           </section>
           <section aria-label="Present-session distribution" className="space-y-3 border-b border-border pb-6">
             <h2 className="text-lg font-semibold">Present-session distribution</h2>

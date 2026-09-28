@@ -35,6 +35,7 @@ MAX_REFERENCES_PER_SESSION = 20
 
 # Latest complete, non-failed generation per scoped session at the current version.
 _LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_generation) AS generation,
+           argMax(source_revision, projection_generation) AS source_revision,
            argMax(candidate_count, projection_generation) AS candidate_count,
            argMax(attributed_count, projection_generation) AS attributed_count,
            argMax(collision_count, projection_generation) AS collision_count,
@@ -42,7 +43,7 @@ _LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_gen
            argMax(unknown_result_count, projection_generation) AS unknown_result_count
     FROM (
         SELECT user_id, harness, session_id, projection_generation,
-               max(candidate_count) AS candidate_count, max(attributed_count) AS attributed_count,
+               any(source_revision) AS source_revision, max(candidate_count) AS candidate_count, max(attributed_count) AS attributed_count,
                max(collision_count) AS collision_count, max(unmatched_count) AS unmatched_count,
                max(unknown_result_count) AS unknown_result_count
         FROM component_activity_publications
@@ -82,7 +83,8 @@ _SOURCE_STATES = (
     """SELECT user_id, harness, session_id, count() AS records,
            countIf(empty(raw_line) OR raw_line_truncated = 1) AS unavailable_records,
            countIf(empty(line_hash)) AS invalid_hash_records,
-           max(line_offset) AS max_offset, sum(content_length) AS bytes
+           max(line_offset) AS max_offset, sum(content_length) AS bytes,
+           lower(hex(SHA256(toJSONString(arraySort(groupArray(50001)((line_offset, line_hash))))))) AS revision
     FROM session_events FINAL
     WHERE project_id = {project_id:String} AND is_source_record = 1
       AND (user_id, harness, session_id) IN (SELECT user_id, harness, session_id FROM ("""
@@ -103,13 +105,14 @@ _SESSIONS = (
                    s.max_offset + 1 != s.records OR s.invalid_hash_records > 0, 'source_incomplete',
                    'available') AS source_state,
            multiIf(NOT has({supported:Array(String)}, c.harness), 'unsupported',
-                   p.generation > 0, 'complete',
-                   m.failed_markers > 0, 'failed',
-                   m.other_complete > 0, 'stale',
                    s.records = 0, 'source_missing',
                    s.records > {max_source_records:UInt32} OR s.bytes > {max_source_bytes:UInt64}, 'source_too_large',
                    s.unavailable_records > 0, 'source_unavailable',
-                   s.max_offset + 1 != s.records, 'source_incomplete',
+                   s.max_offset + 1 != s.records OR s.invalid_hash_records > 0, 'source_incomplete',
+                   p.generation > 0 AND s.revision != p.source_revision, 'stale',
+                   p.generation > 0, 'complete',
+                   m.failed_markers > 0, 'failed',
+                   m.other_complete > 0, 'stale',
                    'pending') AS projection_state,
            p.candidate_count AS candidate_count, p.attributed_count AS attributed_count,
            p.collision_count AS collision_count, p.unmatched_count AS unmatched_count,

@@ -49,7 +49,7 @@ def _event_time(record: dict, row: Mapping[str, object]) -> datetime | None:
 class ClaudeCodeInvocationExtractor:
     def extract(self, rows: Sequence[Mapping[str, object]]) -> InvocationExtraction:
         calls: list[tuple[int, int, str, str, datetime | None]] = []
-        results: dict[str, list[Literal["unknown", "success", "error"]]] = {}
+        results: dict[str, list[tuple[int, Literal["unknown", "success", "error"]]]] = {}
         malformed = 0
         for row in rows:
             if row.get("is_source_record") != 1:
@@ -93,7 +93,7 @@ class ClaudeCodeInvocationExtractor:
                     state: Literal["unknown", "success", "error"] = "unknown"
                     if type(error) is bool:
                         state = "error" if error else "success"
-                    results.setdefault(linked_id, []).append(state)
+                    results.setdefault(linked_id, []).append((offset, state))
 
         # Call IDs reused across records cannot establish a unique result link.
         call_counts = Counter(call_id for _, _, _, call_id, _ in calls if call_id)
@@ -103,7 +103,9 @@ class ClaudeCodeInvocationExtractor:
             unique_in_line = bool(call_id and line_counts[offset, call_id] == 1)
             block_key = f"id:{call_id}" if unique_in_line else f"index:{index}"
             linked = results.get(call_id, ()) if call_id and call_counts[call_id] == 1 else ()
-            state: Literal["unknown", "success", "error"] = linked[0] if len(linked) == 1 else "unknown"
+            state: Literal["unknown", "success", "error"] = (
+                linked[0][1] if len(linked) == 1 and linked[0][0] > offset else "unknown"
+            )
             invocations.append(SourceInvocation(offset, block_key, name, call_id, time, state))
         return InvocationExtraction(
             status="supported", invocations=tuple(invocations), malformed_source_records=malformed

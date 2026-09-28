@@ -112,6 +112,13 @@ path = "test-agent.json"
 SPDX-FileCopyrightText = "2026 Naraen Rammoorthi <naraen13@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
+# Pi JSONL fixtures must remain valid canonical session records; license them
+# without adding comment lines that would break parsing.
+[[annotations]]
+path = ["tests/fixtures/component_insights/pi/direct_session.jsonl", "tests/fixtures/component_insights/pi/proxy_session.jsonl"]
+SPDX-FileCopyrightText = "2026 Naraen Rammoorthi"
+SPDX-License-Identifier = "Apache-2.0"
+
 [[annotations]]
 path = "tests/fixtures/model_display_cases.json"
 SPDX-FileCopyrightText = "2026 Aryan Iyappan <aryaniyappan2006@gmail.com>"

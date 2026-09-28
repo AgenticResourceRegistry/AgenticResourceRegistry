@@ -92,14 +92,14 @@ def test_published_row_comparison_normalizes_clickhouse_uint64_and_ignores_publi
         "event_time": "2026-01-01 00:00:00.000",
         "result_state": "unknown",
         "attribution_method": "verified_alias",
-        "matcher_version": 1,
+        "matcher_version": 2,
         "extractor_version": 2,
     }
     newly_built = stored | {
         "source_line_offset": 0,
         "project_id": "p",
         "session_id": "s",
-        "projection_version": 257,
+        "projection_version": 258,
         "event_time": "2026-01-01 00:00:00.000000",
     }
     assert projector._canonical_row(stored) == projector._canonical_row(newly_built)
@@ -142,7 +142,7 @@ async def test_rows_acknowledged_before_complete_marker_and_never_store_content(
     assert activity["source_line_offset"] == 0 and activity["source_block_key"] == "id:toolu_safe"
     assert activity["component_id"] == _CANDIDATE["component_id"]
     assert activity["source_line_hash"] == sources[0]["source_sha256"]
-    assert activity["projection_version"] == marker["projection_version"] == 257
+    assert activity["projection_version"] == marker["projection_version"] == projector.publication_version()
     assert marker["status"] == "complete" and marker["projection_generation"] == 21
     assert "never_store" not in writes[0][1] + writes[1][1]
     assert "raw_line" not in activity and "input" not in activity and "content" not in activity
@@ -153,7 +153,8 @@ async def test_rows_acknowledged_before_complete_marker_and_never_store_content(
 async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without_rows(monkeypatch):
     sources = [_source(0, [{"type": "text"}])]
     writes = []
-    previous = {257: None, 258: None}
+    previous = {258: None, 259: None}
+    monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
 
     async def fake_query(sql, params=None, *, data=None):
         writes.append(json.loads(data))
@@ -169,7 +170,7 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
     monkeypatch.setattr(projector, "_published_rows", AsyncMock(return_value=[]))
     monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(side_effect=[21, 22]))
     first = await projector.project_session_activity("p", "u", "claude-code", "s")
-    previous[257] = {
+    previous[258] = {
         "projection_generation": 21,
         "source_revision": first["source_revision"],
         **{
@@ -184,9 +185,9 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
         },
     }
     assert (await projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "already_complete"
-    monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
+    monkeypatch.setattr(projector, "MATCHER_VERSION", 3)
     bumped = await projector.project_session_activity("p", "u", "claude-code", "s")
-    assert first["publication_version"] == 257 and bumped["publication_version"] == 258
+    assert first["publication_version"] == 258 and bumped["publication_version"] == 259
     assert [marker["status"] for marker in writes] == ["complete", "complete"]
     assert [marker["attributed_count"] for marker in writes] == [0, 0]
     monkeypatch.setattr(projector, "MATCHER_VERSION", 256)
@@ -201,11 +202,14 @@ async def test_missing_mapping_and_unstable_or_legacy_hashes_do_not_publish(monk
     monkeypatch.setattr(projector, "_query", writes)
     monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=source))
     monkeypatch.setattr(projector, "_mapping", AsyncMock(return_value=("pending_mapping", 0, [])))
+    index = AsyncMock(return_value=False)
+    monkeypatch.setattr(projector, "_index_layer", index)
     pending = await projector.project_session_activity("p", "u", "claude-code", "s")
     assert pending["status"] == "pending_mapping"
+    index.assert_awaited_once_with("p", "u", _HASH_A)
     assert pending["candidate_count"] == pending["unmatched_count"] == 1
     assert writes.await_count == 0
-    assert (await projector.project_session_activity("p", "u", "pi", "s"))["status"] == "unsupported"
+    assert (await projector.project_session_activity("p", "u", "cursor", "s"))["status"] == "unsupported"
     assert writes.await_count == 0
     source[0]["layer_hash"] = "legacy"
     assert (await projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "legacy_layer"
@@ -327,3 +331,29 @@ async def test_current_snapshot_conflict_invalidates_an_earlier_complete_mapping
     assert await projector._mapping("p", "u", _HASH_A, "claude-code") == ("identity_conflict", 8, [])
     responses["layer_snapshots"] = []
     assert (await projector._mapping("p", "u", _HASH_A, "claude-code"))[0] == "pending_mapping"
+
+
+@pytest.mark.asyncio
+async def test_pending_mapping_indexes_a_snapshot_the_upload_could_not_see(monkeypatch):
+    """Async inserts hide a fresh snapshot from its upload's extraction; the projector indexes it."""
+    source = [_source(0, [_call("super-probe", "safe")])]
+    monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=source))
+    mapping = AsyncMock(side_effect=[("pending_mapping", 0, []), ("identity_conflict", 4, [])])
+    monkeypatch.setattr(projector, "_mapping", mapping)
+    monkeypatch.setattr(projector, "_index_layer", AsyncMock(return_value=True))
+    published = AsyncMock(return_value={"status": "complete"})
+    monkeypatch.setattr(projector, "_publish_unattributable", published)
+    assert (await projector.project_session_activity("p", "u", "claude-code", "s")) == {"status": "complete"}
+    assert mapping.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_index_layer_fails_closed(monkeypatch):
+    import services.layer_components.extractor as extractor
+
+    monkeypatch.setattr(extractor, "ensure_layer_components", AsyncMock(return_value={"status": "missing"}))
+    assert await projector._index_layer("p", "u", _HASH_A) is False
+    monkeypatch.setattr(extractor, "ensure_layer_components", AsyncMock(return_value={"status": "complete"}))
+    assert await projector._index_layer("p", "u", _HASH_A) is True
+    monkeypatch.setattr(extractor, "ensure_layer_components", AsyncMock(side_effect=RuntimeError("boom")))
+    assert await projector._index_layer("p", "u", _HASH_A) is False

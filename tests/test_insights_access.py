@@ -343,6 +343,9 @@ async def test_report_routes_allow_owners_and_admins(route, actor):
     response = await _call_report_route(route, str(report.id), _report_db(report, agent), users[actor])
 
     assert response is not None
+    if route == "get_report":
+        # Pre-component agent reports need the response schema's agent default.
+        assert response.subject_type == "agent"
 
 
 @pytest.mark.asyncio
