@@ -46,7 +46,7 @@ def _get_client() -> httpx.AsyncClient:
     retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
     reraise=True,
 )
-async def _query(sql: str, params: dict | None = None, *, data: str | None = None):
+async def _query(sql: str, params: dict | None = None, *, data: str | None = None, timeout: float | None = None):
     """Execute a ClickHouse query via HTTP.
 
     Args:
@@ -57,6 +57,9 @@ async def _query(sql: str, params: dict | None = None, *, data: str | None = Non
         data: Optional body content appended after the SQL, separated by a
             newline.  Used for ``INSERT ... FORMAT JSONEachRow`` where each
             line in *data* is a JSON object.
+        timeout: Optional per-request timeout for maintenance operations that
+            wait for acknowledged ClickHouse mutations; defaults to the pool's
+            configured timeout.
     """
     _t0 = time.perf_counter()
     from services.clickhouse._settings import DEFAULT_QUERY_SETTINGS, _resource_overrides
@@ -77,7 +80,8 @@ async def _query(sql: str, params: dict | None = None, *, data: str | None = Non
     optic.trace("executing ClickHouse query (body_len={}, has_data={})", len(body), data is not None)
 
     try:
-        resp = await client.post(CLICKHOUSE_HTTP, content=body, params=query_params)
+        request_timeout = {"timeout": timeout} if timeout is not None else {}
+        resp = await client.post(CLICKHOUSE_HTTP, content=body, params=query_params, **request_timeout)
         _elapsed = (time.perf_counter() - _t0) * 1000
         if resp.status_code >= 400:
             optic.warning(

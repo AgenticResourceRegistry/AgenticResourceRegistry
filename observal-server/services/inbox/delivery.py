@@ -45,6 +45,23 @@ def record_event(
     return row
 
 
+async def _deleted_recipients(db: AsyncSession, user_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    """Recipients that are deleted-account shells, in one query.
+
+    A deleted account keeps its ``users`` row, so its foreign key no longer
+    rejects the insert the way a hard delete did; skip it explicitly instead of
+    recreating inbox rows that deletion removed.
+    """
+    if not user_ids:
+        return set()
+    from sqlalchemy import not_
+
+    from models.user import User, live_users
+
+    rows = await db.execute(select(User.id).where(User.id.in_(user_ids), not_(live_users())))
+    return set(rows.scalars().all())
+
+
 async def deliver_one(
     db: AsyncSession,
     *,
@@ -56,7 +73,33 @@ async def deliver_one(
     context: dict[str, Any] | None = None,
     action_required: bool | None = None,
 ) -> InboxItem | None:
-    """Deliver one item to one recipient. Returns None if already delivered.
+    """Deliver one item to one recipient; None if already delivered or the recipient was deleted."""
+    if await _deleted_recipients(db, [user_id]):
+        return None
+    return await _deliver_one(
+        db,
+        kind=kind,
+        user_id=user_id,
+        subject=subject,
+        actor_id=actor_id,
+        body=body,
+        context=context,
+        action_required=action_required,
+    )
+
+
+async def _deliver_one(
+    db: AsyncSession,
+    *,
+    kind: InboxKind,
+    user_id: uuid.UUID,
+    subject: Subject,
+    actor_id: uuid.UUID | None = None,
+    body: str | None = None,
+    context: dict[str, Any] | None = None,
+    action_required: bool | None = None,
+) -> InboxItem | None:
+    """Deliver one item to one (live) recipient. Returns None if already delivered.
 
     Idempotency is enforced by the ``(user_id, dedupe_key)`` unique constraint
     and recovered from inside a SAVEPOINT. The savepoint is load-bearing: this
@@ -234,10 +277,12 @@ async def deliver(
     them would put their own click in their queue.
     """
     delivered: list[InboxItem] = []
-    for user_id in _unique(recipients):
-        if skip_actor and actor_id is not None and user_id == actor_id:
+    targets = [u for u in _unique(recipients) if not (skip_actor and actor_id is not None and u == actor_id)]
+    deleted = await _deleted_recipients(db, targets)
+    for user_id in targets:
+        if user_id in deleted:
             continue
-        item = await deliver_one(
+        item = await _deliver_one(
             db,
             kind=kind,
             user_id=user_id,

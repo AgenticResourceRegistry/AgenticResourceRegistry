@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from api.deps import get_db
 from api.routes import scim
 from models.scim_token import ScimToken
-from models.user import User, UserRole
+from models.user import User, UserRole, live_users
 from services.events import UserCreated, UserDeleted
 from services.scim_service import (
     SCIM_ERROR_SCHEMA,
@@ -84,6 +84,7 @@ def _user(**overrides):
         "password_hash": "stored-password-hash",
         "auth_provider": "scim",
         "created_at": CREATED_AT,
+        "deleted_at": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -334,7 +335,7 @@ class TestUserListing:
                 "Resources": [_resource(user) for user in users],
             },
         )
-        base_query = select(User)
+        base_query = select(User).where(live_users())
         _assert_statement(
             db.execute.await_args_list[0].args[0],
             select(func.count()).select_from(base_query.subquery()),
@@ -379,7 +380,7 @@ class TestUserListing:
             "co": User.email.contains(normalized),
             "ne": User.email != normalized,
         }
-        filtered = select(User).where(predicates[operator])
+        filtered = select(User).where(live_users()).where(predicates[operator])
         _assert_statement(
             db.execute.await_args_list[0].args[0],
             select(func.count()).select_from(filtered.subquery()),
@@ -468,7 +469,7 @@ class TestUserLookup:
         response = await client.get(f"/api/v1/scim/Users/{USER_ID}")
 
         _assert_scim(response, 404, format_scim_error(404, "User not found"))
-        _assert_statement(db.execute.await_args.args[0], select(User).where(User.id == USER_ID))
+        _assert_statement(db.execute.await_args.args[0], select(User).where(User.id == USER_ID, live_users()))
         _assert_no_write(db)
 
     @pytest.mark.asyncio
@@ -480,7 +481,7 @@ class TestUserLookup:
         response = await client.get(f"/api/v1/scim/Users/{USER_ID}")
 
         _assert_scim(response, 200, _resource(user))
-        _assert_statement(db.execute.await_args.args[0], select(User).where(User.id == USER_ID))
+        _assert_statement(db.execute.await_args.args[0], select(User).where(User.id == USER_ID, live_users()))
         _assert_no_write(db)
 
     @pytest.mark.asyncio
@@ -950,37 +951,65 @@ class TestUserDeletion:
         _assert_no_write(db)
 
     @pytest.mark.asyncio
-    async def test_delete_orders_database_commit_before_audit_event_and_returns_empty_204(
-        self, app, client, monkeypatch
-    ):
+    async def test_delete_scrubs_shell_commits_then_revokes_and_emits(self, app, client, monkeypatch):
         order = []
         user = _user()
-        db = _db(_one(user))
-        db.delete.side_effect = lambda deleted: order.append(("delete", deleted))
+        db = _db(_one(user), *[MagicMock() for _ in range(6)])
         db.commit.side_effect = lambda: order.append(("commit", None))
 
         async def emit(event):
             order.append(("emit", event))
 
+        async def revoke(user_id):
+            order.append(("revoke", user_id))
+            return True
+
         monkeypatch.setattr(scim.bus, "emit", AsyncMock(side_effect=emit))
+        monkeypatch.setattr(scim, "revoke_deleted_user_tokens", AsyncMock(side_effect=revoke))
         _bind_db(app, db)
 
         response = await client.delete(f"/api/v1/scim/Users/{USER_ID}")
 
         assert response.status_code == 204
         assert response.content == b""
+        # The row is kept as a shell (never deleted); the event keeps the old address.
+        db.delete.assert_not_awaited()
         assert order == [
-            ("delete", user),
             ("commit", None),
+            ("revoke", USER_ID),
             ("emit", UserDeleted(user_id=str(USER_ID), email="alice@example.test")),
         ]
-        _assert_statement(db.execute.await_args.args[0], select(User).where(User.id == USER_ID))
+        assert user.deleted_at is not None and user.name == "Deleted user" and user.password_hash is None
+        _assert_statement(db.execute.await_args_list[0].args[0], select(User).where(User.id == USER_ID, live_users()))
+
+    @pytest.mark.asyncio
+    async def test_delete_refuses_the_last_admin_without_any_change(self, app, client, monkeypatch):
+        """A shell keeps its row, so first-run bootstrap could never replace a deleted last admin."""
+        user = _user(role=UserRole.super_admin)
+        lock = MagicMock()
+        lock.scalars.return_value.all.return_value = [USER_ID]  # the only live admin
+        db = _db(_one(user), lock)
+        emit = AsyncMock()
+        revoke = AsyncMock()
+        monkeypatch.setattr(scim.bus, "emit", emit)
+        monkeypatch.setattr(scim, "revoke_deleted_user_tokens", revoke)
+        _bind_db(app, db)
+
+        response = await client.delete(f"/api/v1/scim/Users/{USER_ID}")
+
+        _assert_scim(response, 400, format_scim_error(400, "Cannot delete the last admin"))
+        assert db.execute.await_args_list[1].args[0]._for_update_arg is not None
+        assert db.execute.await_count == 2  # nothing deleted after the refusal
+        db.rollback.assert_awaited_once()
+        db.commit.assert_not_awaited()
+        revoke.assert_not_awaited()
+        emit.assert_not_awaited()
+        assert user.deleted_at is None and user.email == "alice@example.test"
 
     @pytest.mark.asyncio
     async def test_delete_failure_before_commit_does_not_emit_deleted_event(self, app, client, monkeypatch):
         user = _user()
-        db = _db(_one(user))
-        db.delete.side_effect = RuntimeError("delete failed")
+        db = _db(_one(user), RuntimeError("delete failed"))
         emit = AsyncMock()
         monkeypatch.setattr(scim.bus, "emit", emit)
         _bind_db(app, db)
@@ -994,16 +1023,19 @@ class TestUserDeletion:
     @pytest.mark.asyncio
     async def test_delete_commit_failure_does_not_emit_deleted_event(self, app, client, monkeypatch):
         user = _user()
-        db = _db(_one(user))
+        db = _db(_one(user), *[MagicMock() for _ in range(6)])
         db.commit.side_effect = RuntimeError("commit failed")
         emit = AsyncMock()
+        revoke = AsyncMock()
         monkeypatch.setattr(scim.bus, "emit", emit)
+        monkeypatch.setattr(scim, "revoke_deleted_user_tokens", revoke)
         _bind_db(app, db)
 
         response = await client.delete(f"/api/v1/scim/Users/{USER_ID}")
 
         assert response.status_code == 500
-        db.delete.assert_awaited_once_with(user)
+        db.delete.assert_not_awaited()
+        revoke.assert_not_awaited()
         emit.assert_not_awaited()
 
 

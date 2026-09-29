@@ -238,10 +238,11 @@ async def _update_report_progress(
 async def _authorize_component_report_job(db, report: InsightReport) -> None:
     """Repeat the full API visibility, ownership and version gate at execution time."""
     from api.routes.component_activity import _authorize
-    from models.user import User
+    from models.user import User, is_deleted_account
 
     requester = await db.scalar(select(User).where(User.id == report.triggered_by))
-    if requester is None:
+    # A deleted account keeps its row as a shell; it no longer holds any authority.
+    if requester is None or is_deleted_account(requester):
         raise ValueError("Component report requester is no longer available")
     # _authorize resolves visible listings first (including current private-team
     # membership), then checks owner permission and the version's listing FK.

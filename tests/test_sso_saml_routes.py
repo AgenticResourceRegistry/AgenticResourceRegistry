@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
@@ -1123,7 +1124,8 @@ async def test_acs_surfaces_post_commit_redis_failure_without_emitting_success(c
 
 
 @pytest.mark.asyncio
-async def test_exchange_is_public_single_use_and_resets_rate_state(monkeypatch, client, settings):
+async def test_exchange_is_public_single_use_and_resets_rate_state(monkeypatch, client, settings, db):
+    db.execute = AsyncMock(return_value=_result(SimpleNamespace(id=USER_ID, auth_provider="saml", deleted_at=None)))
     redis = MagicMock()
     redis.incr = AsyncMock(return_value=1)
     redis.expire = AsyncMock()
@@ -1162,6 +1164,27 @@ async def test_exchange_is_public_single_use_and_resets_rate_state(monkeypatch, 
     redis.expire.assert_awaited_once_with("saml_exchange_rate:127.0.0.1", 60)
     redis.getdel.assert_awaited_once_with("saml_login:one-time-token")
     redis.delete.assert_awaited_once_with("saml_exchange_rate:127.0.0.1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account", [None, "shell"], ids=["missing", "deleted-shell"])
+async def test_exchange_never_hands_pre_issued_tokens_to_a_deleted_account(monkeypatch, client, settings, db, account):
+    """A SAML login completed just before the account was deleted yields nothing."""
+    shell = SimpleNamespace(id=USER_ID, auth_provider="deleted", deleted_at=datetime.now(UTC))
+    db.execute = AsyncMock(return_value=_result(shell if account else None))
+    redis = MagicMock()
+    redis.incr = AsyncMock(return_value=1)
+    redis.expire = AsyncMock()
+    redis.getdel = AsyncMock(
+        return_value=json.dumps({"access_token": "access", "refresh_token": "refresh", "user_id": str(USER_ID)})
+    )
+    redis.delete = AsyncMock()
+    monkeypatch.setattr(saml, "get_redis", lambda: redis)
+
+    response = await client.post("/api/v1/sso/saml/exchange", params={"token_id": "one-time-token"})
+
+    assert response.status_code == 400
+    assert "access" not in response.text
 
 
 @pytest.mark.parametrize(

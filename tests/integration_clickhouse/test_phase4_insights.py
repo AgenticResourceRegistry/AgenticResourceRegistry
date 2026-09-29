@@ -129,7 +129,7 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
         call_ref["_source_line_hash"],
     )
     assert from_source, (call_ref, sample_rows)
-    sampled, excerpt_map, _, _ = await component_evidence._sample(report)
+    sampled, excerpt_map, _ = await component_evidence._sample(report)
     assert sampled and "s0-goal" not in excerpt_map and "s0-call0" in excerpt_map, (sample_rows, excerpt_map)
     content = await generate_component_content(report)
     assert content["narrative"]["component_analysis"]["state"] == "assessed"

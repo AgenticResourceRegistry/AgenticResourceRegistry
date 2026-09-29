@@ -11,7 +11,7 @@ import os
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Index, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Index, String, Text, and_
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,14 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    # Set when an admin deletes the account. The row stays as an empty shell so
+    # everything that references this ID (authored listings, telemetry, reports)
+    # keeps resolving; identifying fields are scrubbed and it can never log in.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
     def __init__(self, **kwargs: object) -> None:
         kwargs.setdefault("is_demo", False)
@@ -70,3 +78,24 @@ class User(Base):
             return key.hex() == key_hex
         except (ValueError, TypeError):
             return False
+
+
+DELETED_USER_NAME = "Deleted user"
+DELETED_AUTH_PROVIDER = "deleted"
+
+
+def is_deleted_account(user: object) -> bool:
+    """True for a deleted-account shell.
+
+    Checks the scrubbed ``auth_provider`` as well as ``deleted_at``, so the
+    lockout does not depend on the marker column alone.
+    """
+    # Real rows hold a datetime or None; anything else (a test double) is not a marker.
+    return isinstance(getattr(user, "deleted_at", None), datetime) or (
+        getattr(user, "auth_provider", None) == DELETED_AUTH_PROVIDER
+    )
+
+
+def live_users():
+    """WHERE clause excluding deleted-account shells from lookups and listings."""
+    return and_(User.deleted_at.is_(None), User.auth_provider != DELETED_AUTH_PROVIDER)

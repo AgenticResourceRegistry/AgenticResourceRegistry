@@ -112,6 +112,28 @@ async def test_sample_never_fetches_user_prompts_or_tool_arguments(monkeypatch, 
     assert query.await_args.args[1]["param_expected_hash"] == "proof-hash"
 
 
+def test_pi_source_excerpt_uses_only_linked_tool_name():
+    source = {
+        "type": "message",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "mcp",
+                    "arguments": {"server": "private-server", "tool": "secret-tool", "token": "private-token"},
+                },
+                {"type": "toolCall", "id": "call-2", "name": "safe_tool", "arguments": {"key": "private"}},
+            ],
+        },
+    }
+    assert evidence._call_excerpt(source, "id:call-1") == "mcp"
+    assert evidence._call_excerpt(source, "id:call-2") == "safe_tool"
+    assert evidence._call_excerpt(source, "id:missing") == ""
+    assert evidence._call_excerpt({**source, "message": {**source["message"], "role": "user"}}, "id:call-1") == ""
+
+
 @pytest.mark.asyncio
 async def test_unattributed_session_does_not_fetch_prompt_or_infer_use(monkeypatch, report):
     monkeypatch.setattr(

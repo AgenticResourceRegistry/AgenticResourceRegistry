@@ -449,11 +449,11 @@ def test_session_start_prefers_birthtime_then_first_line_never_ctime(monkeypatch
 
     monkeypatch.setattr(type(transcript), "stat", lambda self: _Stat())
     started = sessions_base._session_started_at(transcript)
-    assert started == datetime(2026, 9, 20, 9, 45, tzinfo=UTC), "first-line timestamp minus the lead, not ctime"
+    # The real start: the matching rules apply the context lead themselves.
+    assert started == datetime(2026, 9, 20, 10, 0, tzinfo=UTC), "first-line timestamp, not ctime"
 
     (tmp_path / "no-ts.jsonl").write_text("not json\n", encoding="utf-8")
-    fallback = sessions_base._session_started_at(tmp_path / "no-ts.jsonl")
-    assert datetime.now(UTC) - fallback > timedelta(hours=23), "no signal: wide fallback window"
+    assert sessions_base._session_started_at(tmp_path / "no-ts.jsonl") is None, "no signal: start is unknown"
 
 
 def test_build_payload_caps_capabilities_to_the_ingest_contract(monkeypatch, tmp_path):

@@ -2159,7 +2159,7 @@ requires-dist = [
     { name = "idna", specifier = ">=3.15" },
     { name = "itsdangerous" },
     { name = "joserfc", specifier = ">=1.6.7" },
-    { name = "litellm", specifier = ">=1.88.6,<1.90.0" },
+    { name = "litellm", specifier = ">=1.89.7,<1.90.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "observal-shared", directory = "../packages/observal-shared" },
     { name = "orjson", specifier = ">=3.10.0" },

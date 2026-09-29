@@ -16,7 +16,7 @@ import services.dynamic_settings as ds
 from api.deps import get_db, require_role
 from models.team import Team, TeamJoinRequestStatus, TeamMembership, TeamMembershipRequest, TeamRole
 from models.team_invite import TeamInvite
-from models.user import User, UserRole
+from models.user import User, UserRole, live_users
 from schemas.team import (
     TeamCreateRequest,
     TeamInviteCallerRequestResponse,
@@ -126,11 +126,11 @@ async def _require_owner_or_admin(
 
 async def _resolve_member(db: AsyncSession, req: TeamMemberUpsertRequest) -> User:
     if req.user_id:
-        stmt = select(User).where(User.id == req.user_id)
+        stmt = select(User).where(User.id == req.user_id, live_users())
     elif req.email:
-        stmt = select(User).where(User.email == req.email.strip().lower())
+        stmt = select(User).where(User.email == req.email.strip().lower(), live_users())
     elif req.username:
-        stmt = select(User).where(User.username == req.username.strip().lstrip("@"))
+        stmt = select(User).where(User.username == req.username.strip().lstrip("@"), live_users())
     else:
         raise HTTPException(status_code=422, detail="Provide email, username, or user_id")
     target = (await db.execute(stmt)).scalar_one_or_none()

@@ -836,61 +836,107 @@ async def test_apply_resources_failure_is_not_hidden_and_emits_no_success(bounda
     boundaries.emit.assert_not_awaited()
 
 
+_PURGED_TABLES = [
+    "session_events",
+    "session_stats_agg",
+    "session_capabilities",
+    "component_activity",
+    "component_activity_publications",
+]
+
+
+def _ch_ok(status_code: int = 200):
+    return MagicMock(status_code=status_code)
+
+
 @pytest.mark.asyncio
-async def test_purge_continues_after_clickhouse_failure_and_deletes_postgres_rows(boundaries, monkeypatch):
+async def test_purge_waits_for_every_clickhouse_delete_and_reports_success(boundaries, monkeypatch):
     import services.clickhouse.client as clickhouse_client
 
-    clickhouse_error = RuntimeError("mutation unavailable")
-    query = AsyncMock(side_effect=[None, clickhouse_error])
+    query = AsyncMock(return_value=_ch_ok())
     monkeypatch.setattr(clickhouse_client, "_query", query)
-    logger = MagicMock()
-    monkeypatch.setattr(es, "optic", logger)
-    counts = [MagicMock(rowcount=value) for value in (5, 4, 3, 2)]
-    db = _db(*counts)
+    db = _db(*[MagicMock(rowcount=value) for value in (5, 4, 3, 2)])
 
     response = await es.purge_traces_and_insights(db=db, current_user=_actor())
 
     assert query.await_args_list == [
         call(
-            "ALTER TABLE session_events DELETE WHERE project_id = {project_id:String}",
-            {"param_project_id": "default"},
-        ),
-        call(
-            "ALTER TABLE session_stats_agg DELETE WHERE project_id = {project_id:String}",
-            {"param_project_id": "default"},
-        ),
+            f"ALTER TABLE {table} DELETE WHERE project_id = {{project_id:String}}",
+            {"param_project_id": "default", "mutations_sync": "2"},
+            timeout=es._PURGE_MUTATION_TIMEOUT,
+        )
+        for table in _PURGED_TABLES
     ]
-    logger.warning.assert_any_call(
-        "danger purge failed for ClickHouse table {}: {}",
-        "session_stats_agg",
-        clickhouse_error,
-    )
-    assert [statement.table.name for statement in [item.args[0] for item in db.execute.await_args_list]] == [
+    # Snapshots AND their component mappings are retained, so later sessions on
+    # an already-uploaded hash keep verified attribution without a backfill.
+    for kept in ("layer_snapshots", "layer_components", "layer_component_extractions", "session_checkpoints"):
+        assert all(kept not in item.args[0] for item in query.await_args_list)
+    statements = [item.args[0] for item in db.execute.await_args_list]
+    assert [statement.table.name for statement in statements] == [
         "insight_reports",
         "insight_session_facets",
         "insight_session_meta",
         "insight_meta_cache",
     ]
+    report_sql = str(statements[0].compile(compile_kwargs={"literal_binds": True}))
+    facet_sql = str(statements[1].compile(compile_kwargs={"literal_binds": True}))
+    # Component reports/facets have no agent_id: they must match by project.
+    assert "insight_reports.subject_type = 'component'" in report_sql
+    assert "insight_reports.project_id = 'default'" in report_sql
+    assert "insight_session_facets.project_id = 'default'" in facet_sql
     db.commit.assert_awaited_once_with()
     assert response.model_dump() == {
         "project_id": "default",
-        "clickhouse_tables": ["session_events", "session_stats_agg"],
+        "clickhouse_tables": _PURGED_TABLES,
         "deleted_reports": 5,
         "deleted_facets": 4,
         "deleted_session_meta": 3,
         "deleted_meta_cache": 2,
     }
     event = boundaries.emit.await_args.args[0]
+    assert event.outcome == "success"
     assert event.severity is Severity.CRITICAL
     assert event.target_id == "danger.purge_traces_insights"
     assert event.target_type == "danger_zone"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("mutation unavailable"), _ch_ok(500)],
+    ids=["raised", "http-error-response"],
+)
+@pytest.mark.asyncio
+async def test_purge_clickhouse_failure_is_reported_not_success(boundaries, monkeypatch, failure):
+    """An HTTP error response is returned, not raised, by the ClickHouse client;
+    both it and an exception must fail the action rather than report success."""
+    import services.clickhouse.client as clickhouse_client
+
+    effects = [_ch_ok() for _ in _PURGED_TABLES]
+    effects[1] = failure
+    query = AsyncMock(side_effect=effects)
+    monkeypatch.setattr(clickhouse_client, "_query", query)
+    db = _db(*[MagicMock(rowcount=1) for _ in range(4)])
+
+    with pytest.raises(HTTPException) as raised:
+        await es.purge_traces_and_insights(db=db, current_user=_actor())
+
+    assert raised.value.status_code == 502
+    worst = "Purge incomplete; run it again. Insight reports were removed. Failed: " + ", ".join(_PURGED_TABLES)
+    assert len(worst) < 200
+    assert "session_stats_agg" in raised.value.detail and "run it again" in raised.value.detail
+    # One failing table does not stop the rest, and PostgreSQL insight data is still removed.
+    assert query.await_count == len(_PURGED_TABLES)
+    db.commit.assert_awaited_once_with()
+    event = boundaries.emit.await_args.args[0]
+    assert event.outcome == "failure"
+    assert "session_stats_agg" in event.detail
 
 
 @pytest.mark.asyncio
 async def test_purge_database_failure_propagates_without_commit_or_success_event(boundaries, monkeypatch):
     import services.clickhouse.client as clickhouse_client
 
-    query = AsyncMock(return_value=None)
+    query = AsyncMock(return_value=_ch_ok())
     monkeypatch.setattr(clickhouse_client, "_query", query)
     db = _db()
     db.execute.side_effect = RuntimeError("postgres unavailable")
@@ -898,7 +944,7 @@ async def test_purge_database_failure_propagates_without_commit_or_success_event
     with pytest.raises(RuntimeError, match="postgres unavailable"):
         await es.purge_traces_and_insights(db=db, current_user=_actor())
 
-    assert query.await_count == 2
+    assert query.await_count == len(_PURGED_TABLES)
     db.commit.assert_not_awaited()
     boundaries.emit.assert_not_awaited()
 
