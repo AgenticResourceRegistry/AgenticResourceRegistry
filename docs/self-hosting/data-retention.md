@@ -13,7 +13,12 @@ The **Purge Traces & Insights** danger-zone action permanently deletes telemetry
 It removes:
 
 - ClickHouse session events and session aggregates for project `default`.
-- Agent insight reports and insight caches/facets for all agents.
+- Data derived from those sessions: capability actions, and component activity and publication markers.
+- Agent and component insight reports, and insight caches/facets.
+
+Each ClickHouse delete waits until it has completed. The action reports success only if every delete completed; otherwise it returns an error naming the tables that failed. Insight reports are still removed in that case, and running the purge again is safe.
+
+Layer snapshots, their component mappings, and session checkpoints are kept. Snapshots and mappings describe installed configuration rather than session content. Clients remember which snapshots they have already uploaded and do not upload them again, so deleting snapshots or mappings would leave later sessions on the same configuration without verified component attribution until a scheduled backfill rebuilt them.
 
 It does **not** delete registry agents, versions, skills, hooks, prompts, users, reviews, or audit/security logs.
 
@@ -33,6 +38,16 @@ The admin retention controls store deployment-wide policy values in the followin
 | `retention.max_trace_count` | Limits the number of retained sessions |
 
 The policy values are independent of registry ownership. Leave a threshold empty when that limit is not needed. If `retention.score_days` is empty, the purge uses twice `retention.trace_days`, with a 30-day minimum.
+
+When `retention.trace_days` or `retention.max_trace_count` is set, every scheduled run also removes data derived from sessions whose source events are gone: session summaries and checkpoints, component activity and publication markers, capability actions older than the cutoff, and scoped Insights facet caches. Matching uses the full project, user, harness, and session identity, so another user's session with the same ID is not affected. A layer snapshot and its component mapping are kept while any retained session for that user still references the snapshot hash. Component and agent reports continue to follow `retention.score_days`.
+
+This derived cleanup runs on every run, not only on runs that delete source events, so a cleanup step that failed earlier is retried even after a count-limited deployment drops back under its limit. On a run that deletes no source events, recently uploaded snapshots and recent capability actions are protected by the older of the oldest retained session event and a 7-day grace period. If a source delete fails or the source cannot be read, derived cleanup is skipped for that run.
+
+Two legacy Insights tables that current versions no longer write are cleaned conservatively:
+
+- `insight_session_meta` has no project, user, or harness identity. A row is removed only if it was computed before the cutoff and its session ID has no retained session event under any project, user, or harness.
+- `insight_meta_cache` rows whose period starts before the cutoff, or whose period cannot be parsed, are removed. They are caches and are recomputed if needed.
+
 
 <a id="data-retention"></a>
 
@@ -80,3 +95,13 @@ Cache duration, in seconds, for trace and session list endpoints.
 | `15` (default) | Keeps trace lists responsive while preserving near-live monitoring |
 | `5` | Useful during active debugging |
 | `60` | Better for large deployments where trace lists are expensive |
+
+## Deleting a user {#deleting-a-user}
+
+Telemetry belongs to the instance once it has been sent. Deleting a user, from the admin users page or through SCIM, does **not** remove or change their sessions, component activity, snapshots, facets, or insight reports. That data keeps the original user ID and is removed only by the retention settings above or by **Purge Traces & Insights**.
+
+Deletion removes the account itself. The user's row stays as an empty shell so that everything referencing the account keeps working: its email, name, username, avatar, password, and SSO subject are cleared, it can no longer log in or refresh a token, and it no longer appears in user lists, search, or SCIM. Listings, versions, reviews, and other records the user created stay in place. The account's name becomes **Deleted user**; where an author's username or email is shown, it appears as a non-identifying `deleted-…` placeholder. The account's group, team membership, work profile, recommendation feedback, and inbox rows are removed. The security event for the deletion keeps the address the account had.
+
+If the same person signs in again through SSO later, a new account is created; the deleted one is not restored.
+
+Once any user has been deleted, the database cannot be downgraded to a version from before this feature: earlier versions cannot lock deleted accounts out, so the downgrade stops with an error instead.

@@ -112,5 +112,6 @@
 * [Code Review Standard](code-review.md)
 * [Development Guide](DEVELOPMENT_GUIDE.md)
 * [Testing Guide](testing/Testing_Guide.md)
+* [Database integration tests](testing/database-integration-tests.md)
 * [Fuzzing Guide](../fuzz/README.md)
 * [AI Policy](../AI_POLICY.md)

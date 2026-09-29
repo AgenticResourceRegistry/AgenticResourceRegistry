@@ -108,13 +108,22 @@ async def _source(session: SessionKey, offset: int, expected_hash: str | None = 
 
 
 def _call_excerpt(source: dict | None, block_key: str) -> str:
-    if not source or source.get("type") != "assistant":
+    if not source:
         return ""
     message = source.get("message")
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return ""
+    # Claude source records carry tool_use blocks; Pi stores assistant toolCall
+    # blocks under type=message. Only the model-visible name is safe evidence:
+    # Pi's proxy name is just "mcp", not its untrusted server/tool arguments.
+    if source.get("type") == "assistant":
+        block_type = "tool_use"
+    elif source.get("type") == "message" and message.get("role") == "assistant":
+        block_type = "toolCall"
+    else:
+        return ""
     for index, block in enumerate(message["content"]):
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
+        if not isinstance(block, dict) or block.get("type") != block_type:
             continue
         key = f"id:{block.get('id')}" if block.get("id") else f"index:{index}"
         if block_key not in (key, f"index:{index}"):

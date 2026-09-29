@@ -24,7 +24,7 @@ from starlette.requests import Request
 import services.dynamic_settings as ds
 from database import async_session
 from models.mcp import ListingStatus
-from models.user import User, UserRole
+from models.user import User, UserRole, is_deleted_account
 from services.jwt_service import decode_access_token
 from services.redis import get_redis
 from services.registry_namespace import _namespace_slug_parts, identity_for_user
@@ -93,7 +93,9 @@ async def _authenticate_via_jwt(token: str, db: AsyncSession) -> User | None:
 
     result = await db.execute(select(User).where(User.id == uid))
     user = result.scalar_one_or_none()
-    if not user:
+    # A deleted account's shell row still exists; it never authenticates,
+    # whether or not its token revocation reached Redis.
+    if not user or is_deleted_account(user):
         return None
     user._trace_privacy = ds.get_sync_bool("security.trace_privacy")
     user._groups = payload.get("groups", [])

@@ -15,13 +15,13 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 import api.deps as deps_module
 from api.deps import get_current_user, get_db, require_password_auth
 from api.routes.admin import users
-from models.user import User, UserRole
+from models.user import User, UserRole, live_users
 from schemas.admin import (
     AdminResetPasswordRequest,
     UserCreateRequest,
@@ -168,7 +168,9 @@ async def test_list_users_orders_by_creation_time_and_serializes_exact_response(
             "created_at": None,
         },
     ]
-    _assert_statement(database.execute.await_args.args[0], select(User).order_by(User.created_at.desc()))
+    _assert_statement(
+        database.execute.await_args.args[0], select(User).where(live_users()).order_by(User.created_at.desc())
+    )
     _assert_no_write(database)
 
 
@@ -558,7 +560,7 @@ async def test_update_role_commits_refreshes_and_emits_exact_event(monkeypatch):
         _actor(UserRole.super_admin),
     )
 
-    _assert_statement(database.execute.await_args.args[0], select(User).where(User.id == TARGET_ID))
+    _assert_statement(database.execute.await_args.args[0], select(User).where(User.id == TARGET_ID, live_users()))
     assert target.role is UserRole.admin
     database.commit.assert_awaited_once_with()
     database.refresh.assert_awaited_once_with(target)
@@ -657,7 +659,7 @@ async def test_update_department_persists_nullable_value_and_returns_exact_user(
         _actor(),
     )
 
-    _assert_statement(database.execute.await_args.args[0], select(User).where(User.id == TARGET_ID))
+    _assert_statement(database.execute.await_args.args[0], select(User).where(User.id == TARGET_ID, live_users()))
     assert target.department is None
     database.commit.assert_awaited_once_with()
     database.refresh.assert_awaited_once_with(target)
@@ -716,7 +718,7 @@ async def test_bulk_departments_normalizes_lookups_strips_values_and_reports_ori
     assert second.department == "Security"
     expected_emails = ["alice@example.test", "missing@example.test", "bob@example.test"]
     for executed, email in zip(database.execute.await_args_list, expected_emails, strict=True):
-        _assert_statement(executed.args[0], select(User).where(User.email == email))
+        _assert_statement(executed.args[0], select(User).where(User.email == email, live_users()))
     database.commit.assert_awaited_once_with()
 
 
@@ -769,7 +771,7 @@ async def test_generated_password_reset_orders_commit_gate_and_exact_security_ev
 
     async def execute(statement):
         order.append("lookup")
-        _assert_statement(statement, select(User).where(User.id == TARGET_ID))
+        _assert_statement(statement, select(User).where(User.id == TARGET_ID, live_users()))
         return _one(target)
 
     async def generate(session):
@@ -968,58 +970,90 @@ async def test_reset_password_event_failure_is_after_password_persistence(monkey
     redis.setex.assert_awaited_once()
 
 
+def _shell_target(**overrides):
+    target = _target(**overrides)
+    for field in ("password_hash", "sso_subject_id", "avatar_url", "deleted_at"):
+        setattr(target, field, getattr(target, field, None))
+    if "password_hash" not in overrides:
+        target.password_hash = "salt$key"
+    if "sso_subject_id" not in overrides:
+        target.sso_subject_id = "idp-subject"
+    if "avatar_url" not in overrides:
+        target.avatar_url = "https://example.test/a.png"
+    return target
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("target_role", "admin_count"),
-    [
-        (UserRole.user, None),
-        (UserRole.admin, 2),
-        (UserRole.super_admin, None),
-    ],
+    "target_role",
+    [UserRole.user, UserRole.admin, UserRole.super_admin],
 )
-async def test_delete_user_success_orders_event_before_delete_and_commit(monkeypatch, target_role, admin_count):
+async def test_delete_user_scrubs_shell_commits_then_revokes_and_records_event(monkeypatch, target_role):
     order = []
-    target = _target(role=target_role)
-    database = _db(_one(target))
-    if target.role in (UserRole.admin, UserRole.super_admin):
-        database.scalar.return_value = admin_count
+    target = _shell_target(role=target_role)
+    is_admin = target_role in (UserRole.admin, UserRole.super_admin)
+    # An admin target first locks the live admin rows; two remain, so it may go.
+    guard = [_Result(values=[TARGET_ID, ADMIN_ID])] if is_admin else []
+    database = _db(_one(target), *guard, *[MagicMock() for _ in range(6)])
 
     async def emit(_event):
         order.append("event")
 
-    async def delete(deleted):
-        order.append("delete")
-        assert deleted is target
-
     async def commit():
         order.append("commit")
 
+    async def revoke(user_id):
+        order.append("revoke")
+        assert user_id == TARGET_ID
+        return True
+
     event_boundary = AsyncMock(side_effect=emit)
     monkeypatch.setattr(users, "emit_security_event", event_boundary)
-    database.delete.side_effect = delete
+    monkeypatch.setattr(users, "revoke_deleted_user_tokens", AsyncMock(side_effect=revoke))
     database.commit.side_effect = commit
 
     assert await users.delete_user(TARGET_ID, database, _actor()) is None
 
-    _assert_statement(database.execute.await_args.args[0], select(User).where(User.id == TARGET_ID))
-    assert order == ["event", "delete", "commit"]
-    if target.role in (UserRole.admin, UserRole.super_admin):
-        expected = select(func.count()).select_from(User).where(User.role.in_([UserRole.admin, UserRole.super_admin]))
-        _assert_statement(database.scalar.await_args.args[0], expected)
-    else:
-        database.scalar.assert_not_awaited()
+    # The row is never deleted: everything referencing this ID keeps resolving.
+    database.delete.assert_not_awaited()
+    _assert_statement(
+        database.execute.await_args_list[0].args[0], select(User).where(User.id == TARGET_ID, live_users())
+    )
+    # Rows the database used to cascade-delete with the user are removed.
+    executed = [call.args[0] for call in database.execute.await_args_list[1:]]
+    if is_admin:
+        lock = executed.pop(0)
+        assert lock._for_update_arg is not None
+        assert "users.deleted_at IS NULL" in str(lock.compile(compile_kwargs={"literal_binds": True}))
+    removed = [statement.table.name for statement in executed]
+    assert removed == [
+        "user_groups",
+        "user_work_profiles",
+        "recommendation_feedback",
+        "team_memberships",
+        "team_membership_requests",
+        "inbox_items",
+    ]
+    # The success event is recorded only after the change is committed.
+    assert order == ["commit", "revoke", "event"]
+    assert target.name == "Deleted user"
+    assert target.email == f"deleted-{TARGET_ID.hex}@deleted.invalid"
+    assert target.username == f"deleted-{TARGET_ID.hex[:24]}" and len(target.username) <= 32
+    assert target.password_hash is None and target.sso_subject_id is None and target.avatar_url is None
+    assert target.department is None and target.auth_provider == "deleted" and target.role is UserRole.user
+    assert target.deleted_at is not None
     event = event_boundary.await_args.args[0]
     assert event.event_type is EventType.USER_DELETED
-    assert event.severity is Severity.WARNING
     assert event.outcome == "success"
     assert event.actor_id == str(ADMIN_ID)
     assert event.target_id == str(TARGET_ID)
     assert event.target_type == "user"
+    # The audit trail keeps the address the account had (statement 6).
     assert event.detail == "Deleted user member@example.test"
 
 
 @pytest.mark.asyncio
-async def test_delete_user_self_missing_and_last_admin_guards_are_no_mutation(monkeypatch):
+async def test_delete_user_self_missing_already_deleted_and_last_admin_guards_are_no_mutation(monkeypatch):
     emit = AsyncMock()
     monkeypatch.setattr(users, "emit_security_event", emit)
 
@@ -1030,28 +1064,27 @@ async def test_delete_user_self_missing_and_last_admin_guards_are_no_mutation(mo
     self_db.execute.assert_not_awaited()
     _assert_no_write(self_db)
 
+    # A shell is filtered out of the lookup, so deleting it again is a 404.
     missing_db = _db(_one(None))
     with pytest.raises(HTTPException) as missing:
         await users.delete_user(TARGET_ID, missing_db, _actor())
     assert (missing.value.status_code, missing.value.detail) == (404, "User not found")
     _assert_no_write(missing_db)
 
-    last = _target(role=UserRole.super_admin)
-    last_db = _db(_one(last))
-    last_db.scalar.return_value = 1
+    last = _shell_target(role=UserRole.super_admin)
+    last_db = _db(_one(last), _Result(values=[TARGET_ID]))
     with pytest.raises(HTTPException) as last_error:
         await users.delete_user(TARGET_ID, last_db, _actor())
     assert (last_error.value.status_code, last_error.value.detail) == (400, "Cannot delete the last admin")
-    last_db.delete.assert_not_awaited()
     last_db.commit.assert_not_awaited()
+    assert last.deleted_at is None and last.email == "member@example.test"
     emit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_delete_admin_count_failure_is_loud_before_event_or_delete(monkeypatch):
-    target = _target(role=UserRole.admin)
-    database = _db(_one(target))
-    database.scalar.side_effect = RuntimeError("count unavailable")
+async def test_delete_admin_count_failure_is_loud_before_any_change(monkeypatch):
+    target = _shell_target(role=UserRole.admin)
+    database = _db(_one(target), RuntimeError("count unavailable"))
     emit = AsyncMock()
     monkeypatch.setattr(users, "emit_security_event", emit)
 
@@ -1059,69 +1092,45 @@ async def test_delete_admin_count_failure_is_loud_before_event_or_delete(monkeyp
         await users.delete_user(TARGET_ID, database, _actor())
 
     emit.assert_not_awaited()
-    database.delete.assert_not_awaited()
     database.commit.assert_not_awaited()
+    assert target.deleted_at is None
 
 
 @pytest.mark.asyncio
-async def test_delete_event_failure_prevents_database_delete(monkeypatch):
-    target = _target()
-    database = _db(_one(target))
-    monkeypatch.setattr(users, "emit_security_event", AsyncMock(side_effect=RuntimeError("event unavailable")))
-
-    with pytest.raises(RuntimeError, match="event unavailable"):
-        await users.delete_user(TARGET_ID, database, _actor())
-
-    database.delete.assert_not_awaited()
-    database.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delete_team_owner_constraint_failure_occurs_after_success_event(monkeypatch):
-    target = _target()
-    database = _db(_one(target))
-    database.commit.side_effect = IntegrityError("delete user", {}, RuntimeError("teams.created_by foreign key"))
+async def test_delete_commit_failure_records_no_success_event_or_revocation(monkeypatch):
+    target = _shell_target()
+    database = _db(_one(target), *[MagicMock() for _ in range(6)])
+    database.commit.side_effect = IntegrityError("delete user", {}, RuntimeError("commit failed"))
     emit = AsyncMock()
+    revoke = AsyncMock()
     monkeypatch.setattr(users, "emit_security_event", emit)
+    monkeypatch.setattr(users, "revoke_deleted_user_tokens", revoke)
 
     with pytest.raises(IntegrityError):
         await users.delete_user(TARGET_ID, database, _actor())
 
-    emit.assert_awaited_once()
-    database.delete.assert_awaited_once_with(target)
-    database.rollback.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delete_database_delete_failure_occurs_after_success_event(monkeypatch):
-    target = _target()
-    database = _db(_one(target))
-    database.delete.side_effect = RuntimeError("delete unavailable")
-    emit = AsyncMock()
-    monkeypatch.setattr(users, "emit_security_event", emit)
-
-    with pytest.raises(RuntimeError, match="delete unavailable"):
-        await users.delete_user(TARGET_ID, database, _actor())
-
-    emit.assert_awaited_once()
-    database.commit.assert_not_awaited()
+    emit.assert_not_awaited()
+    revoke.assert_not_awaited()
+    database.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_delete_http_success_is_an_empty_204(route_app, monkeypatch):
-    target = _target()
-    database = _db(_one(target))
+    target = _shell_target()
+    database = _db(_one(target), *[MagicMock() for _ in range(6)])
     _override_db(route_app, database)
     route_app.dependency_overrides[get_current_user] = lambda: _actor()
     monkeypatch.setattr(users, "emit_security_event", AsyncMock())
+    monkeypatch.setattr(users, "revoke_deleted_user_tokens", AsyncMock(return_value=True))
 
     async with AsyncClient(transport=ASGITransport(app=route_app), base_url="http://test") as client:
         response = await client.delete(f"/api/v1/admin/users/{TARGET_ID}")
 
     assert response.status_code == 204
     assert response.content == b""
-    database.delete.assert_awaited_once_with(target)
+    database.delete.assert_not_awaited()
     database.commit.assert_awaited_once_with()
+    assert target.deleted_at is not None
 
 
 @pytest.mark.asyncio

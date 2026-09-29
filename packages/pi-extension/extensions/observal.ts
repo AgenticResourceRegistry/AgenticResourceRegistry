@@ -91,6 +91,25 @@ const LAYER_SNAPSHOT_PATH = path.join(OBSERVAL_DIR, "layer_snapshot.json");
 const LAYER_UPLOADED_PATH = path.join(OBSERVAL_DIR, "pi_layer_uploaded.json");
 const LOCKFILE_PATH = path.join(OBSERVAL_DIR, "lockfile.json");
 const OUTBOX_DIR = path.join(OBSERVAL_DIR, "pi_session_outbox");
+const AGENT_SWITCH_PATH = path.join(OBSERVAL_DIR, "pi_agent_switch_pending.json");
+const OFFLINE_SWITCH_PATH = path.join(OBSERVAL_DIR, "pi_agent_switch_offline.json");
+const UNVERIFIED_SESSIONS_DIR = path.join(OBSERVAL_DIR, "pi_agent_switch_sessions");
+const PI_HOME = path.join(os.homedir(), ".pi", "agent");
+const AGENTS_DIR = path.join(PI_HOME, "agents");
+const ACTIVE_ITEMS = ["AGENTS.md", "SYSTEM.md", "mcp.json", "mcp-adapter.json", "skills", "sandboxes"];
+type McpRuntime = "adapter2" | "adapter3" | "builtin";
+interface AgentSwitch {
+  phase: "activating" | "ready" | "rollback";
+  profile: string;
+  runtime: McpRuntime;
+  origin: string;
+  cwd: string;
+  expected_hash: string;
+  previous_hash: string;
+  stage: string;
+}
+type OfflineSwitch = Pick<AgentSwitch, "profile" | "runtime" | "cwd"> & { files_hash: string };
+
 // Written by `observal discover use` and the install commands; read here so the
 // session payload can say which registry resources this session relied on.
 const CAPABILITY_LOCK_PATH = path.join(OBSERVAL_DIR, "capability_lock.jsonl");
@@ -207,9 +226,52 @@ export function acknowledgementCovers(acknowledgement: unknown, pending: Pending
 
 export default function (pi: ExtensionAPI) {
   let state: ObservalState | null = null;
+  // An old runtime cannot acknowledge its own swap, even if it receives a
+  // session_start from a session change while reload is still in progress.
+  const runtimeId = crypto.randomUUID();
 
   pi.on("session_start", async (event, ctx) => {
     state = initState(ctx);
+    if (fs.existsSync(AGENT_SWITCH_PATH)) {
+      try {
+        const pendingSwitch = readAgentSwitch();
+        if (pendingSwitch && pendingSwitch.origin !== runtimeId) {
+          // session_start(reload) occurs *inside* ctx.reload(). Wait for its
+          // successful return; a later reload step can still throw. A new Pi
+          // process (startup) may recover an interrupted activation directly.
+          if (pendingSwitch.phase !== "activating" || event.reason === "startup") {
+            await finishAgentSwitch(pendingSwitch, ctx);
+          } else {
+            let checks = 0;
+            const timer = setInterval(() => {
+              try {
+                const switchNow = readAgentSwitch();
+                if (switchNow?.phase === "ready") {
+                  clearInterval(timer);
+                  void finishAgentSwitch(switchNow, ctx);
+                } else if (!switchNow || switchNow.phase === "rollback" || ++checks >= 100) {
+                  clearInterval(timer);
+                }
+              } catch { clearInterval(timer); }
+            }, 50);
+            timer.unref();
+          }
+        }
+      } catch (error) {
+        if (ctx.hasUI) ctx.ui.notify(`Invalid pending Pi agent switch: ${String(error)}`, "warning");
+      }
+      if (state.config && ctx.hasUI) ctx.ui.setStatus("observal", ctx.ui.theme.fg("dim", "● observal"));
+      return;
+    }
+    if (fs.existsSync(OFFLINE_SWITCH_PATH)) {
+      try { await retryOfflineSwitch(ctx); }
+      catch (error) {
+        if (ctx.hasUI) ctx.ui.notify(`Offline Pi switch still unverified: ${String(error)}`, "warning");
+      }
+      // This session began while verification was unavailable. Only a later
+      // session may use the new agent binding and verified layer hash.
+      return;
+    }
 
     if (state.config && state.layerSnapshot) {
       uploadLayerSnapshot(state.config, state.layerSnapshot)
@@ -243,119 +305,327 @@ export default function (pi: ExtensionAPI) {
     state = null;
   });
 
-  // ─── /obs-sync command ─────────────────────────────────────────────────
+  // ─── /agent command ────────────────────────────────────────────────────
+
+  function unverifiedSessionPath(sessionId: string): string {
+    return path.join(UNVERIFIED_SESSIONS_DIR, `${sha256(Buffer.from(sessionId))}.json`);
+  }
+
+  function taintSession(sessionId: string): void {
+    fs.mkdirSync(UNVERIFIED_SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(unverifiedSessionPath(sessionId), "", { mode: 0o600 });
+    // Only an explicitly accepted discard may remove undelivered lines.
+    // Otherwise the pre-switch flush must already have cleared this batch.
+    removePending(sessionId);
+  }
+
+  async function flushBeforeSwitch(ctx: ExtensionContext): Promise<boolean> {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    if (state?.config && sessionFile && state.sessionId === sessionId) {
+      await pushNewLines(state, { final: false });
+    }
+    // A switch makes the rest of this transcript permanently unverified. Do
+    // not silently erase a batch that was queued while the server was down.
+    let undelivered = fs.existsSync(pendingPath(sessionId));
+    if (state?.config && sessionFile && fs.existsSync(sessionFile)) {
+      undelivered ||= readCursor(sessionId).offset < fs.statSync(sessionFile).size;
+    }
+    if (!undelivered) return true;
+    return ctx.ui.confirm("Discard unsent Pi telemetry?",
+      "Observal could not deliver all existing lines from this conversation. Switching now will permanently discard those lines and stop uploading this conversation. Continue?");
+  }
+
+  function readAgentSwitch(): AgentSwitch | null {
+    if (!fs.existsSync(AGENT_SWITCH_PATH)) return null;
+    const value = JSON.parse(fs.readFileSync(AGENT_SWITCH_PATH, "utf-8"));
+    if (!["activating", "ready", "rollback"].includes(value.phase)
+      || typeof value.profile !== "string" || typeof value.origin !== "string"
+      || typeof value.cwd !== "string" || typeof value.stage !== "string"
+      || !["adapter2", "adapter3", "builtin"].includes(value.runtime)
+      || typeof value.previous_hash !== "string" || typeof value.expected_hash !== "string") {
+      throw new Error("Invalid pending Pi agent switch; restore the active files before clearing its marker");
+    }
+    return value as AgentSwitch;
+  }
+
+  function activeFilesHash(snapshot: LayerSnapshot): string {
+    // Logging in adds pins and an Observal verification manifest entry. Neither
+    // changes what Pi loaded from its active config files during the switch.
+    const files = (snapshot.harnesses.pi ?? []).filter((entry) => entry.path !== PI_MCP_VERIFICATION_PATH)
+      .map((entry) => [entry.path, entry.hash]);
+    return sha256(Buffer.from(JSON.stringify(files)));
+  }
+
+  function saveOfflineSwitch(pending: AgentSwitch, snapshot: LayerSnapshot): void {
+    const offline: OfflineSwitch = { profile: pending.profile, runtime: pending.runtime,
+      cwd: pending.cwd, files_hash: activeFilesHash(snapshot) };
+    const temp = `${OFFLINE_SWITCH_PATH}.${crypto.randomUUID()}`;
+    try {
+      fs.writeFileSync(temp, JSON.stringify(offline), { flag: "wx", mode: 0o600 });
+      fs.renameSync(temp, OFFLINE_SWITCH_PATH);
+    } finally { fs.rmSync(temp, { force: true }); }
+  }
+
+  async function retryOfflineSwitch(ctx: ExtensionContext): Promise<void> {
+    const offline: OfflineSwitch = JSON.parse(fs.readFileSync(OFFLINE_SWITCH_PATH, "utf-8"));
+    const snapshot = buildPiLayerSnapshot(true, ctx.cwd);
+    if (!offline.files_hash || offline.cwd !== ctx.cwd || mcpRuntime() !== offline.runtime
+      || activeFilesHash(snapshot) !== offline.files_hash) {
+      throw new Error("Active Pi files changed; offline attribution remains unverified");
+    }
+    if (!state?.config || !await uploadLayerSnapshot(state.config, snapshot)) return;
+    recordAgentBinding(offline.profile);
+    fs.rmSync(OFFLINE_SWITCH_PATH);
+    if (ctx.hasUI) ctx.ui.notify("Pi agent verified. Start another new session for attributed telemetry.", "info");
+  }
+
+  function recordAgentBinding(profile: string): void {
+    const binding = resolvePiAgentBinding(profile);
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    if (profile === "default") delete config.active_agent;
+    else config.active_agent = { id: binding.id, name: binding.name,
+      ...(binding.version ? { version: binding.version } : {}) };
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+  }
+
+  function writeAgentSwitch(value: AgentSwitch, create = false): void {
+    fs.mkdirSync(OBSERVAL_DIR, { recursive: true });
+    if (create) {
+      fs.writeFileSync(AGENT_SWITCH_PATH, JSON.stringify(value), { flag: "wx", mode: 0o600 });
+    } else {
+      const temp = `${AGENT_SWITCH_PATH}.${crypto.randomUUID()}`;
+      try {
+        fs.writeFileSync(temp, JSON.stringify(value), { flag: "wx", mode: 0o600 });
+        fs.renameSync(temp, AGENT_SWITCH_PATH);
+      } finally {
+        fs.rmSync(temp, { force: true });
+      }
+    }
+  }
+
+  function mcpRuntime(): McpRuntime {
+    let override: unknown;
+    if (fs.existsSync(CONFIG_PATH)) override = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")).pi_mcp_runtime;
+    if (override !== undefined) {
+      if (override === "adapter2" || override === "adapter3" || override === "builtin") return override;
+      throw new Error('Invalid pi_mcp_runtime; use "adapter2", "adapter3", or "builtin"');
+    }
+    const manifest = path.join(PI_HOME, "npm", "node_modules", "pi-mcp-adapter", "package.json");
+    try {
+      const version: unknown = JSON.parse(fs.readFileSync(manifest, "utf-8")).version;
+      if (typeof version === "string" && /^2\./.test(version)) return "adapter2";
+      if (typeof version === "string" && /^3\./.test(version)) return "adapter3";
+    } catch { /* Missing or unreadable installs cannot prove the MCP runtime. */ }
+    throw new Error('Cannot identify pi-mcp-adapter 2.x or 3.x. Install it with Pi, or set pi_mcp_runtime to "adapter2", "adapter3", or "builtin" in ~/.observal/config.json for a manual install. No files changed');
+  }
+
+  function backupDefault(): void {
+    fs.mkdirSync(AGENTS_DIR, { recursive: true });
+    const defaultDir = path.join(AGENTS_DIR, "default");
+    if (fs.existsSync(defaultDir)) {
+      // An old backup never included the 3.x file. Capture it only once.
+      const marker = path.join(defaultDir, ".observal-no-adapter-config");
+      const adapter = "mcp-adapter.json";
+      if (!fs.existsSync(path.join(defaultDir, adapter)) && !fs.existsSync(marker)) {
+        if (fs.existsSync(path.join(PI_HOME, adapter))) fs.cpSync(path.join(PI_HOME, adapter), path.join(defaultDir, adapter));
+        else fs.writeFileSync(marker, "");
+      }
+      return;
+    }
+    fs.mkdirSync(defaultDir);
+    for (const name of ACTIVE_ITEMS) {
+      const src = path.join(PI_HOME, name);
+      if (fs.existsSync(src)) fs.cpSync(src, path.join(defaultDir, name), { recursive: true });
+    }
+    if (!fs.existsSync(path.join(defaultDir, "mcp-adapter.json"))) {
+      fs.writeFileSync(path.join(defaultDir, ".observal-no-adapter-config"), "");
+    }
+  }
+
+  function profileDir(name: string): string {
+    const dir = path.resolve(AGENTS_DIR, name);
+    if (!dir.startsWith(`${path.resolve(AGENTS_DIR)}${path.sep}`)
+      || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()
+      || !fs.realpathSync(dir).startsWith(`${fs.realpathSync(AGENTS_DIR)}${path.sep}`)) {
+      throw new Error(`Profile ${name} not found`);
+    }
+    return dir;
+  }
+
+  function profileMcp(name: string, runtime: McpRuntime): { source: string; target: string } {
+    const dir = profileDir(name);
+    const legacy = path.join(dir, "mcp.json");
+    const adapter = path.join(dir, "mcp-adapter.json");
+    if (name !== "default" && fs.existsSync(legacy) && fs.existsSync(adapter)
+      && !fs.readFileSync(legacy).equals(fs.readFileSync(adapter))) {
+      throw new Error(`Profile ${name} has conflicting MCP configs; active files were not changed`);
+    }
+    const target = runtime === "adapter3" ? "mcp-adapter.json" : "mcp.json";
+    const source = runtime === "adapter3" && fs.existsSync(adapter) ? adapter : legacy;
+    if (name !== "default" && !fs.existsSync(source) && fs.existsSync(adapter)) {
+      throw new Error(`Profile ${name} has no MCP config for ${runtime}; active files were not changed`);
+    }
+    return { source, target };
+  }
+
+  function copyActive(from: string): void {
+    for (const name of ACTIVE_ITEMS) fs.rmSync(path.join(PI_HOME, name), { recursive: true, force: true });
+    for (const name of ACTIVE_ITEMS) {
+      const src = path.join(from, name);
+      if (fs.existsSync(src)) fs.cpSync(src, path.join(PI_HOME, name), { recursive: true });
+    }
+  }
+
+  function applyProfile(name: string, runtime: McpRuntime): void {
+    const dir = profileDir(name);
+    const { source, target } = profileMcp(name, runtime);
+    for (const item of ACTIVE_ITEMS) fs.rmSync(path.join(PI_HOME, item), { recursive: true, force: true });
+    for (const item of ACTIVE_ITEMS) {
+      if (name !== "default" && (item === "mcp.json" || item === "mcp-adapter.json")) continue;
+      const src = path.join(dir, item);
+      if (fs.existsSync(src)) fs.cpSync(src, path.join(PI_HOME, item), { recursive: true });
+    }
+    if (name !== "default" && fs.existsSync(source)) fs.cpSync(source, path.join(PI_HOME, target));
+  }
+
+  async function finishAgentSwitch(pending: AgentSwitch, ctx: ExtensionContext): Promise<void> {
+    try {
+      // The stage lives outside the layer manifest. Never trust a marker that
+      // points outside Pi's own directory (including a symlink).
+      if (!path.basename(pending.stage).startsWith(".observal-stage-")
+        || path.dirname(pending.stage) !== PI_HOME || !fs.statSync(pending.stage).isDirectory()
+        || fs.realpathSync(pending.stage) !== path.join(fs.realpathSync(PI_HOME), path.basename(pending.stage))) {
+        throw new Error("Invalid switch staging directory");
+      }
+      const expected = pending.phase === "rollback" ? pending.previous_hash : pending.expected_hash;
+      const snapshot = buildPiLayerSnapshot(true, ctx.cwd);
+      if (!expected || pending.cwd !== ctx.cwd || mcpRuntime() !== pending.runtime
+        || snapshot.hash !== expected) {
+        throw new Error("Pi agent switch files or runtime changed; attribution remains unverified");
+      }
+      if (pending.phase !== "rollback") {
+        // The new extension sees files only after Pi has rebuilt the runtime.
+        // Publish first; a failed upload must not establish a binding.
+        if (!state?.config || !await uploadLayerSnapshot(state.config, snapshot)) {
+          // Local Pi activation must not depend on Observal authentication or
+          // availability. Keep verification pending separately; another /agent
+          // switch may still happen offline without inheriting the old binding.
+          saveOfflineSwitch(pending, snapshot);
+          fs.rmSync(AGENT_SWITCH_PATH);
+          fs.rmSync(pending.stage, { recursive: true, force: true });
+          if (ctx.hasUI) ctx.ui.notify("Agent activated locally; Observal is unavailable. Start a new session after reconnecting for verified attribution.", "warning");
+          return;
+        }
+        if (readAgentSwitch()?.phase !== pending.phase || buildPiLayerSnapshot(true, ctx.cwd).hash !== expected) {
+          throw new Error("Pi agent switch changed during snapshot upload; attribution remains unverified");
+        }
+        recordAgentBinding(pending.profile);
+      }
+      fs.rmSync(AGENT_SWITCH_PATH);
+      // A failed second switch may have restored an earlier offline profile.
+      // Its unverified marker must survive that rollback.
+      if (pending.phase !== "rollback") fs.rmSync(OFFLINE_SWITCH_PATH, { force: true });
+      fs.rmSync(pending.stage, { recursive: true, force: true });
+      // Keep the *current* session unverified: it may contain pre-reload calls
+      // or undelivered lines from the old runtime. Only a new session can use
+      // the new binding and layer hash without retrospectively crediting them.
+      if (ctx.hasUI) ctx.ui.notify(pending.phase === "rollback"
+        ? "Previous Pi agent files restored. Start a new session for verified attribution."
+        : "Agent files loaded. Start a new Pi session for verified attribution.", "info");
+    } catch (error) {
+      if (ctx.hasUI) ctx.ui.notify(`Pi agent switch pending: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
+  }
 
   pi.registerCommand("agent", {
     description: "Manage and swap active Observal agents",
     handler: async (args, ctx) => {
-      const agentId = args.trim();
-      const PI_HOME = path.join(os.homedir(), ".pi", "agent");
-      const AGENTS_DIR = path.join(PI_HOME, "agents");
-
-      function backupDefault() {
-        if (!fs.existsSync(AGENTS_DIR)) fs.mkdirSync(AGENTS_DIR, { recursive: true });
-        const defaultDir = path.join(AGENTS_DIR, "default");
-        if (fs.existsSync(defaultDir)) return; // already backed up
-
-        fs.mkdirSync(defaultDir, { recursive: true });
-
-        const filesToCopy = [
-          { name: "AGENTS.md", isDir: false },
-          { name: "SYSTEM.md", isDir: false },
-          { name: "mcp.json", isDir: false },
-          { name: "skills", isDir: true },
-          { name: "sandboxes", isDir: true }
-        ];
-
-        for (const f of filesToCopy) {
-          const src = path.join(PI_HOME, f.name);
-          const dest = path.join(defaultDir, f.name);
-          if (fs.existsSync(src)) {
-            fs.cpSync(src, dest, { recursive: true });
-          }
-        }
-      }
-
-      function applyProfile(name: string) {
-        const profileDir = path.join(AGENTS_DIR, name);
-        if (!fs.existsSync(profileDir)) throw new Error(`Profile ${name} not found`);
-
-        const activeItems = ["AGENTS.md", "SYSTEM.md", "mcp.json", "skills", "sandboxes"];
-        for (const f of activeItems) {
-          const target = path.join(PI_HOME, f);
-          if (fs.existsSync(target)) {
-            fs.rmSync(target, { recursive: true, force: true });
-          }
-        }
-
-        for (const f of activeItems) {
-          const src = path.join(profileDir, f);
-          const dest = path.join(PI_HOME, f);
-          if (fs.existsSync(src)) {
-            fs.cpSync(src, dest, { recursive: true });
-          }
-        }
-      }
-
-      if (!fs.existsSync(AGENTS_DIR)) {
-        fs.mkdirSync(AGENTS_DIR, { recursive: true });
-      }
-
-      // Automatically populate AGENTS_DIR from normal .pi/agent files if it's currently holding an active agent but no profile exists for it
-      // but primarily we rely on observal agent pull populating agents/.
-      backupDefault();
-
-      let choice = agentId;
-
-      if (!choice) {
-        const profiles = fs.readdirSync(AGENTS_DIR).filter(d => fs.statSync(path.join(AGENTS_DIR, d)).isDirectory());
-        if (profiles.length === 0) {
-          ctx.ui.notify("No agents installed yet. Use the Observal skill or 'observal agent pull <agent> --harness pi' to install one.", "info");
-          return;
-        }
-
-        const selected = await ctx.ui.select("Select agent to swap to:", profiles);
-        if (!selected) return;
-        choice = selected;
-      }
-
       try {
-        applyProfile(choice);
-
-        if (state?.config) {
-          const binding = resolvePiAgentBinding(choice);
-          state.config.agent_id = choice === "default" ? undefined : binding.id;
-          state.config.agent_version = choice === "default" ? undefined : binding.version;
+        if (fs.existsSync(AGENT_SWITCH_PATH)) {
+          throw new Error("A Pi agent switch is pending. Restart Pi to recover it; inspect the pending marker if recovery fails");
+        }
+        fs.mkdirSync(AGENTS_DIR, { recursive: true });
+        let choice = args.trim();
+        if (!choice) {
+          const profiles = fs.readdirSync(AGENTS_DIR).filter((name) =>
+            fs.statSync(path.join(AGENTS_DIR, name)).isDirectory());
+          if (!profiles.includes("default")) profiles.unshift("default");
+          const selected = await ctx.ui.select("Select agent to swap to:", profiles);
+          if (!selected) return;
+          choice = selected;
+        }
+        // Validate *before* confirmation or touching active files. A manually
+        // installed adapter with no recognizable manifest must opt in explicitly.
+        const runtime = mcpRuntime();
+        if (choice !== "default" || fs.existsSync(path.join(AGENTS_DIR, "default"))) profileMcp(choice, runtime);
+        const beforeConfirmation = buildPiLayerSnapshot(true, ctx.cwd).hash;
+        const stage = fs.mkdtempSync(path.join(PI_HOME, ".observal-stage-"));
+        let created = false;
+        try {
+          for (const name of ACTIVE_ITEMS) {
+            const src = path.join(PI_HOME, name);
+            if (fs.existsSync(src)) fs.cpSync(src, path.join(stage, name), { recursive: true });
+          }
+          if (!await ctx.ui.confirm("Activate Agent", `Activate ${choice} and reload Pi now? Start a new session afterward for verified attribution.`)) {
+            fs.rmSync(stage, { recursive: true, force: true });
+            return;
+          }
+          if (fs.existsSync(AGENT_SWITCH_PATH) || buildPiLayerSnapshot(true, ctx.cwd).hash !== beforeConfirmation) {
+            throw new Error("Pi files or switch state changed while confirming; no active files changed");
+          }
+          if (!await flushBeforeSwitch(ctx)) {
+            fs.rmSync(stage, { recursive: true, force: true });
+            return;
+          }
+          backupDefault();
+          profileMcp(choice, runtime);
+          const previous_hash = buildPiLayerSnapshot(true, ctx.cwd).hash;
+          // Pi reload retains the same transcript. Never allow its old calls
+          // to acquire a new agent on a later resume or process restart.
+          taintSession(ctx.sessionManager.getSessionId());
+          const pending: AgentSwitch = { phase: "activating", profile: choice, runtime,
+            origin: runtimeId, cwd: ctx.cwd, expected_hash: "", previous_hash, stage };
+          writeAgentSwitch(pending, true);
+          created = true;
+          applyProfile(choice, runtime);
+          writeAgentSwitch({ ...pending, expected_hash: buildPiLayerSnapshot(true, ctx.cwd).hash });
+          // No binding or snapshot may be published by the old extension. Pi
+          // sends session_shutdown on reload, so it must also be unverified.
+          if (state) {
+            state.generation++;
+            state.layerHash = null;
+            state.layerSnapshot = null;
+            if (state.config) { state.config.agent_id = undefined; state.config.agent_version = undefined; }
+          }
           try {
-            const configRaw = fs.readFileSync(CONFIG_PATH, "utf-8");
-            const configJson = JSON.parse(configRaw);
-            if (choice === "default") {
-              delete configJson.active_agent;
-            } else {
-              configJson.active_agent = {
-                id: binding.id,
-                name: binding.name,
-                ...(binding.version ? { version: binding.version } : {}),
-              };
-            }
-            fs.writeFileSync(CONFIG_PATH, JSON.stringify(configJson, null, 2));
-          } catch (err) {
-            // ignore
+            await ctx.reload();
+            // Only a successful return can authorize the new instance to
+            // publish. This is a durable acknowledgement, not old-runtime
+            // state or a snapshot generated by the old runtime.
+            const staged = readAgentSwitch();
+            if (staged?.phase !== "activating") throw new Error("Pi agent switch changed during reload");
+            writeAgentSwitch({ ...staged, phase: "ready" });
+          } catch (error) {
+            // The runtime may have been partially rebuilt. Restore the files,
+            // but keep the marker until a *new* runtime confirms the rollback.
+            writeAgentSwitch({ ...pending, phase: "rollback", expected_hash: "" });
+            copyActive(stage);
+            throw error;
           }
-
-          state.layerSnapshot = buildPiLayerSnapshot(true, ctx.cwd);
-          state.layerHash = state.layerSnapshot.hash;
-          if (!(await uploadLayerSnapshot(state.config, state.layerSnapshot))) {
-            ctx.ui.notify("Layer snapshot upload failed", "warning");
+          // ctx and this extension's state are stale after a successful reload.
+          return;
+        } catch (error) {
+          if (!created) fs.rmSync(stage, { recursive: true, force: true });
+          else if (readAgentSwitch()?.phase === "activating") {
+            const pending = readAgentSwitch()!;
+            writeAgentSwitch({ ...pending, phase: "rollback" });
+            try { copyActive(stage); } catch { /* Keep marker: never claim a partial rollback. */ }
           }
+          throw error;
         }
-
-        const ok = await ctx.ui.confirm("Agent Swapped", `Swapped to ${choice}. Reload session now?`);
-        if (ok) {
-          await ctx.reload();
-        }
-      } catch (e: any) {
-        ctx.ui.notify(`Error swapping agent: ${e.message}`, "error");
+      } catch (error) {
+        ctx.ui.notify(`Error swapping agent: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
     },
   });
@@ -400,8 +670,16 @@ export default function (pi: ExtensionAPI) {
       lineCount = cursor.line_count;
     }
 
-    const layerSnapshot = buildPiLayerSnapshot(true, ctx.cwd);
-    const layerHash = layerSnapshot.hash;
+    // A switching transcript may contain calls from both runtimes, including
+    // after a later resume. Keep it unverified for its entire lifetime.
+    const unverified = fs.existsSync(AGENT_SWITCH_PATH) || fs.existsSync(OFFLINE_SWITCH_PATH)
+      || fs.existsSync(unverifiedSessionPath(sessionId));
+    const layerSnapshot = unverified ? null : buildPiLayerSnapshot(true, ctx.cwd);
+    const layerHash = layerSnapshot?.hash ?? null;
+    if (unverified && config) {
+      config.agent_id = undefined;
+      config.agent_version = undefined;
+    }
 
     // Tools Pi runs (the bash tool included) inherit this process's environment,
     // so `observal discover use` can record the exact Pi session it ran in.
@@ -439,36 +717,56 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function sessionStartedAtMs(sessionFile: string | null): number {
-    if (sessionFile) {
-      try {
-        const stat = fs.statSync(sessionFile);
-        if (stat.birthtimeMs > 0) return stat.birthtimeMs - CAPABILITY_LEAD_MS;
-      } catch { }
-      const first = firstLineTimestampMs(sessionFile);
-      if (first !== null) return first - CAPABILITY_LEAD_MS;
-    }
-    return Date.now() - CAPABILITY_FALLBACK_MS;
+  /** When the session began, or null when that cannot be established. */
+  function sessionStartMs(sessionFile: string | null): number | null {
+    if (!sessionFile) return null;
+    try {
+      const stat = fs.statSync(sessionFile);
+      if (stat.birthtimeMs > 0) return stat.birthtimeMs;
+    } catch { }
+    return firstLineTimestampMs(sessionFile);
   }
 
-  /** Capability-lock uses that belong to this session, shaped for the ingest payload. Best effort. */
+  /**
+   * Capability-lock uses that belong to this session, shaped for the ingest
+   * payload. Same rules as ``capability_lock.for_session`` (Python):
+   * - every use must match this harness and directory, even a hinted one;
+   * - a hinted ``context`` use belongs only to its hinted session;
+   * - a ``next-session`` install is a candidate for every session that started
+   *   at or after it (never the installing or an already running session, and
+   *   never when this session's start is unknown). The server keeps only the
+   *   earliest-started candidate, so upload order cannot change the result;
+   * - other un-hinted uses match from shortly before the session started.
+   * Best effort.
+   */
   function capabilitiesForSession(s: ObservalState): Array<Record<string, unknown>> {
     try {
       if (!fs.existsSync(CAPABILITY_LOCK_PATH)) return [];
-      const since = sessionStartedAtMs(s.sessionFile);
+      const start = sessionStartMs(s.sessionFile);
       const latest = new Map<string, Record<string, unknown>>();
       for (const line of fs.readFileSync(CAPABILITY_LOCK_PATH, "utf-8").split("\n")) {
         if (!line.trim()) continue;
         let use: Record<string, unknown>;
         try { use = JSON.parse(line); } catch { continue; }
-        if (typeof use.ts !== "string" || typeof use.kind !== "string") continue;
-        const exact = typeof use.session_hint === "string" && use.session_hint === s.sessionId;
-        if (!exact) {
-          if (typeof use.harness === "string" && use.harness !== "pi") continue;
-          if (typeof use.cwd === "string" && use.cwd && s.cwd && !isSameOrUnder(use.cwd, s.cwd)) continue;
-          const at = Date.parse(use.ts);
-          if (Number.isNaN(at) || at < since) continue;
+        if (!use || typeof use.ts !== "string" || typeof use.kind !== "string") continue;
+        if (typeof use.harness === "string" && use.harness && use.harness !== "pi") continue;
+        if (typeof use.cwd === "string" && use.cwd && s.cwd && !isSameOrUnder(use.cwd, s.cwd)) continue;
+        const at = Date.parse(use.ts);
+        if (Number.isNaN(at)) continue;
+        const mode = typeof use.mode === "string" && use.mode ? use.mode : "context";
+        const hint = typeof use.session_hint === "string" && use.session_hint ? use.session_hint : null;
+        let confidence: string | null = null;
+        if (mode === "next-session") {
+          if (start !== null && at <= start && hint !== s.sessionId) confidence = "window";
+        } else if (hint) {
+          if (hint === s.sessionId) confidence = "exact";
+        } else if (start !== null) {
+          if (at >= start - CAPABILITY_LEAD_MS) confidence = "window";
+        } else if (at >= Date.now() - CAPABILITY_FALLBACK_MS) {
+          // Start unknown: only recent loads, labelled by whether we have the transcript.
+          confidence = s.sessionFile ? "window" : "loose";
         }
+        if (confidence === null) continue;
         const key = (use.identifier as string) || `${use.kind}:${use.component_id ?? use.native_ref ?? ""}`;
         const previous = latest.get(key);
         if (!previous || String(previous.used_at) <= String(use.ts)) {
@@ -479,10 +777,10 @@ export default function (pi: ExtensionAPI) {
             native_ref: use.native_ref ?? null,
             version: use.version ?? null,
             digest: use.digest ?? null,
-            mode: use.mode ?? "context",
+            mode,
             source: use.source ?? "unknown",
             used_at: use.ts,
-            confidence: exact ? "exact" : s.sessionFile ? "window" : "loose",
+            confidence,
           });
         }
       }
@@ -710,7 +1008,12 @@ export default function (pi: ExtensionAPI) {
       return { is_canonical: null, drifted_files: [], mcp_verifications: [] };
     }
     const sources = new Map<string, Record<string, unknown> | null>();
+    // Explicit built-in MCP is not an adapter: its results cannot establish
+    // adapter-specific observed-call identities, even for a matching config.
     let unverifiable = false;
+    try {
+      if (JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")).pi_mcp_runtime === "builtin") unverifiable = true;
+    } catch { /* Missing config is handled by the normal credential check. */ }
     for (const display of PI_MCP_SOURCES) {
       const bytes = sourceBytes.get(display);
       if (!bytes) {
@@ -741,7 +1044,12 @@ export default function (pi: ExtensionAPI) {
           ? component.local_name : "";
         const scope = text(component.scope) || (parent ? text(parent.scope) : "") || "project";
         let status = "unverified";
-        const active = scope === "user" ? "user:mcp.json" : scope === "project" ? "project:.pi/mcp.json" : "";
+        // pi-mcp-adapter 3.x loads mcp-adapter.json; 2.x loads mcp.json.
+        // Prefer the 3.x entry when present, but treat a different definition
+        // at the other path as a shadowing conflict below, never as verified.
+        const activePaths = scope === "user" ? ["user:mcp-adapter.json", "user:mcp.json"]
+          : scope === "project" ? ["project:.pi/mcp-adapter.json", "project:.pi/mcp.json"] : [];
+        const active = activePaths.find((display) => alias && isPlainObject(sources.get(display)?.[alias])) ?? "";
         const integrity = typeof component.mcp_integrity === "string" ? component.mcp_integrity : "";
         const servers = active ? sources.get(active) : undefined;
         const entry = alias && servers ? servers[alias] : undefined;
@@ -1181,7 +1489,7 @@ export default function (pi: ExtensionAPI) {
     s: ObservalState,
     opts: { final: boolean; repairAttempted?: boolean },
   ): Promise<void> {
-    if (!s.config || !s.sessionFile) return;
+    if (!s.config || !s.sessionFile || fs.existsSync(unverifiedSessionPath(s.sessionId))) return;
 
     const gen = ++s.generation;
 
@@ -1257,7 +1565,7 @@ export default function (pi: ExtensionAPI) {
           session_hash: audit?.hash,
           hashed_line_count: audit?.lineCount,
         };
-        const finalCapabilities = capabilitiesForSession(s);
+        const finalCapabilities = s.layerHash ? capabilitiesForSession(s) : [];
         if (finalCapabilities.length > 0) payload.capabilities_used = finalCapabilities;
         const pending: PendingBatch = {
           session_id: s.sessionId,
@@ -1305,7 +1613,7 @@ export default function (pi: ExtensionAPI) {
               }
             : {}),
         };
-        const chunkCapabilities = capabilitiesForSession(s);
+        const chunkCapabilities = s.layerHash ? capabilitiesForSession(s) : [];
         if (chunkCapabilities.length > 0) payload.capabilities_used = chunkCapabilities;
         const pending: PendingBatch = {
           session_id: s.sessionId,
@@ -1444,7 +1752,8 @@ export default function (pi: ExtensionAPI) {
       if (!name.endsWith(".json")) continue;
       try {
         const pending = JSON.parse(fs.readFileSync(path.join(OUTBOX_DIR, name), "utf-8"));
-        if (!pending?.session_id || !pending?.payload) continue;
+        if (!pending?.session_id || !pending?.payload
+          || fs.existsSync(unverifiedSessionPath(pending.session_id))) continue;
         await deliverPending(config, pending);
       } catch {
         // Keep corrupt or unreachable entries for manual recovery.
@@ -1475,7 +1784,8 @@ export default function (pi: ExtensionAPI) {
       const now = Date.now();
 
       for (const [sessionId, storedEntry] of Object.entries(data)) {
-        if (sessionId === s.sessionId || recovered >= RECOVERY_MAX_SESSIONS) continue;
+        if (sessionId === s.sessionId || recovered >= RECOVERY_MAX_SESSIONS
+          || fs.existsSync(unverifiedSessionPath(sessionId))) continue;
         const entry = storedEntry;
         if (entry.finalized) continue;
         if (!fs.existsSync(fullDir)) continue;

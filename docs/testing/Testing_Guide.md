@@ -449,6 +449,7 @@ Use the existing directories:
 - `observal-server/tests/` for server-focused tests that live with the server package
 - `observal_cli/tests/` for CLI command and CLI package tests
 - `tests/e2e/` for Playwright tests that require the running stack
+- `tests/integration_clickhouse/` for opt-in tests against real ClickHouse and PostgreSQL; see [Database integration tests](database-integration-tests.md)
 
 Shared setup should stay small:
 

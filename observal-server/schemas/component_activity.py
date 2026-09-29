@@ -118,7 +118,10 @@ class ActivationActions(BaseModel):
     context_sessions: int = 0
     next_session_sessions: int = 0
     scope: Literal["component", "component_version"] = "component"
-    note: str = "activation/configuration actions only; never counted as observed use"
+    note: str = (
+        "activation/configuration actions only; never counted as observed use. An install counts for the "
+        "earliest delivered session that started after it; best effort, not a complete history"
+    )
 
 
 class ComponentRef(BaseModel):

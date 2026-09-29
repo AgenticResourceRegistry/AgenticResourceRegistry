@@ -169,16 +169,44 @@ _HARNESSES = (
 )
 
 # Activation/configuration actions for present sessions only; never usage.
+# A ``next-session`` install is sent as a candidate with every session that
+# started after it; it belongs to the EARLIEST-started candidate session of the
+# same user and harness, whatever order sessions were delivered in; sessions
+# that started at the same instant are broken by session ID, so the owner is
+# deterministic. It counts only when that session is in the present cohort.
+# Best effort: the owner is the earliest DELIVERED candidate, and a sender can
+# omit an old install once its capability list reaches the payload cap.
 _ACTIVATIONS = (
-    """SELECT countDistinctIf((user_id, harness, session_id), mode = 'context') AS context_sessions,
-           countDistinctIf((user_id, harness, session_id), mode = 'next-session') AS next_session_sessions
-    FROM session_capabilities FINAL
-    WHERE project_id = {project_id:String} AND kind = {component_type:String}
-      AND component_id = {component_id:String}
-      AND ({component_version_id:String} = '' OR version = {component_version:String})
-      AND (user_id, harness, session_id) IN (SELECT user_id, harness, session_id FROM ("""
+    """WITH present AS (SELECT user_id, harness, session_id FROM ("""
     + PRESENCE_COHORT_SQL
-    + """)) FORMAT JSON"""
+    + """)),
+    started AS (
+        SELECT user_id, harness, session_id, min(first_event_time) AS started_at
+        FROM session_stats_agg WHERE project_id = {project_id:String}
+        GROUP BY user_id, harness, session_id
+    ),
+    installs AS (
+        SELECT c.user_id AS user_id, c.harness AS harness, argMin(c.session_id, (s.started_at, c.session_id)) AS session_id
+        FROM session_capabilities AS c FINAL
+        INNER JOIN started AS s
+          ON c.user_id = s.user_id AND c.harness = s.harness AND c.session_id = s.session_id
+        WHERE c.project_id = {project_id:String} AND c.kind = {component_type:String}
+          AND c.component_id = {component_id:String} AND c.mode = 'next-session'
+          AND ({component_version_id:String} = '' OR c.version = {component_version:String})
+          AND s.started_at >= c.used_at
+        GROUP BY c.user_id, c.harness, c.identifier, c.version, c.used_at
+    )
+    SELECT
+        (SELECT countDistinct((user_id, harness, session_id)) FROM session_capabilities FINAL
+         WHERE project_id = {project_id:String} AND kind = {component_type:String}
+           AND component_id = {component_id:String} AND mode = 'context'
+           AND ({component_version_id:String} = '' OR version = {component_version:String})
+           AND (user_id, harness, session_id) IN (SELECT user_id, harness, session_id FROM present)
+        ) AS context_sessions,
+        (SELECT countDistinct((user_id, harness, session_id)) FROM installs
+         WHERE (user_id, harness, session_id) IN (SELECT user_id, harness, session_id FROM present)
+        ) AS next_session_sessions
+    FORMAT JSON"""
 )
 
 

@@ -75,7 +75,13 @@ Unapproved resources are refused without `--yes`. A resource whose `obs:supporte
 
 ## The capability lock
 
-Every activation appends one line to `~/.observal/capability_lock.jsonl`: timestamp, harness, working directory, identifier, kind, version, digest, and mode. `agent pull` and the component install commands append too. Session upload (`session_push` hooks and `observal reconcile`) attaches the lines that fall inside a session's harness, directory, and time window as `capabilities_used`, which is how Observal knows which resources a session relied on. Nothing secret is stored.
+Every activation appends one line to `~/.observal/capability_lock.jsonl`: timestamp, harness, working directory, identifier, kind, version, digest, and mode. `agent pull` and the component install commands append too. Session upload (`session_push` hooks, `observal reconcile`, and the Pi extension) attaches lines to a session as `capabilities_used`, which is how Observal knows which resources a session relied on:
+
+- Every line must match the session's harness and directory. A line recorded inside a harness session (it carries that session's ID) belongs only to that session; the same ID in another harness or directory is a different session.
+- An install (`mode: next-session`) takes effect in the **next** session: the earliest session in the same harness and directory that started after the install. Each later session carries the install; the server keeps only the earliest-started one, so the order sessions are uploaded or reconciled in does not matter. It is never attached to the session that ran the install or to one already running.
+- Any other line (for example a `discover use` run from a plain terminal) belongs to sessions in the same harness and directory that started up to 15 minutes after it.
+
+Install lines are configuration actions; Observal never counts them as use. The resulting activation count is best effort, not a complete history: it only considers sessions that were delivered, and a sender with more than 200 capability lines for one session sends the most recent and omits older installs. Sessions that started at the same instant are ordered by session ID. Nothing secret is stored.
 
 Entries older than 30 days are pruned. Related: [`observal agent init --from-capabilities`](/cli/agent) turns the resources used in a directory into a draft Agent.
 

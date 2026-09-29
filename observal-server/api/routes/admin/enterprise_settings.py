@@ -12,7 +12,7 @@ import litellm
 from fastapi import Depends, HTTPException
 from loguru import logger as optic
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import services.dynamic_settings as ds
@@ -438,49 +438,101 @@ class _PurgeTracesInsightsResponse(BaseModel):
     deleted_meta_cache: int | None = None
 
 
+# Mutations run synchronously (mutations_sync=2) so success means the rows are
+# gone, not merely scheduled. Large tables can take a while.
+_PURGE_MUTATION_TIMEOUT = 600.0
+
+
 @router.post("/settings/danger/purge-traces-insights", response_model=_PurgeTracesInsightsResponse)
 async def purge_traces_and_insights(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
-    """Danger-zone purge: delete all deployment telemetry and insight reports."""
+    """Danger-zone purge: delete all deployment telemetry and insight reports.
+
+    Success is reported only when every ClickHouse delete completed. Any
+    failed table makes the whole action fail (502) after the PostgreSQL
+    insight data is removed; rerunning the purge is safe.
+    """
     optic.warning("danger purge traces+insights requested by user={}", current_user.id)
     project_id = DEFAULT_PROJECT_ID
 
     from services.clickhouse.client import _query as ch_query
 
-    clickhouse_tables = ["session_events", "session_stats_agg"]
+    # Session telemetry and the activity projected from it. Kept:
+    # - layer_snapshots and their component mappings (layer_components,
+    #   layer_component_extractions): configuration identity, not session
+    #   content. Senders cache "already uploaded" per hash, so deleting either
+    #   would leave later sessions on that hash without verified attribution
+    #   until a scheduled backfill ran.
+    # - session_checkpoints, as before (existing sender-resume behavior).
+    clickhouse_tables = [
+        "session_events",
+        "session_stats_agg",
+        "session_capabilities",
+        "component_activity",
+        "component_activity_publications",
+    ]
+    failed_tables: list[str] = []
     for table in clickhouse_tables:
         try:
-            await ch_query(
+            response = await ch_query(
                 f"ALTER TABLE {table} DELETE WHERE project_id = {{project_id:String}}",
-                {"param_project_id": project_id},
+                {"param_project_id": project_id, "mutations_sync": "2"},
+                timeout=_PURGE_MUTATION_TIMEOUT,
             )
+            if response.status_code != 200:
+                failed_tables.append(table)
+                optic.warning("danger purge failed for ClickHouse table {}: HTTP {}", table, response.status_code)
         except Exception as e:
-            optic.warning("danger purge failed for ClickHouse table {}: {}", table, e)
+            failed_tables.append(table)
+            optic.warning("danger purge failed for ClickHouse table {}: {}", table, type(e).__name__)
 
     agent_ids_stmt = select(Agent.id)
-    report_result = await db.execute(delete(InsightReport).where(InsightReport.agent_id.in_(agent_ids_stmt)))
+    # Component reports and facets have no agent_id; an agent_id filter alone
+    # would silently keep them.
+    report_result = await db.execute(
+        delete(InsightReport).where(
+            or_(
+                InsightReport.agent_id.in_(agent_ids_stmt),
+                (InsightReport.subject_type == "component") & (InsightReport.project_id == project_id),
+            )
+        )
+    )
     facets_result = await db.execute(
-        delete(InsightSessionFacets).where(InsightSessionFacets.agent_id.in_(agent_ids_stmt))
+        delete(InsightSessionFacets).where(
+            or_(InsightSessionFacets.agent_id.in_(agent_ids_stmt), InsightSessionFacets.project_id == project_id)
+        )
     )
     meta_result = await db.execute(delete(InsightSessionMeta).where(InsightSessionMeta.agent_id.in_(agent_ids_stmt)))
     cache_result = await db.execute(delete(InsightMetaCache).where(InsightMetaCache.agent_id.in_(agent_ids_stmt)))
     await db.commit()
 
+    complete = not failed_tables
     await emit_security_event(
         SecurityEvent(
             event_type=EventType.SETTING_CHANGED,
             severity=Severity.CRITICAL,
-            outcome="success",
+            outcome="success" if complete else "failure",
             actor_id=str(current_user.id),
             actor_email=current_user.email,
             actor_role=current_user.role.value,
             target_id="danger.purge_traces_insights",
             target_type="danger_zone",
-            detail="Purged deployment telemetry traces/session data and insight reports",
+            detail=(
+                "Purged deployment telemetry traces/session data and insight reports"
+                if complete
+                else "Partial purge: insight reports removed; ClickHouse deletion failed for "
+                + ", ".join(failed_tables)
+            ),
         )
     )
+    if not complete:
+        raise HTTPException(
+            status_code=502,
+            # Kept under the web client's 200-character error display limit.
+            detail="Purge incomplete; run it again. Insight reports were removed. Failed: " + ", ".join(failed_tables),
+        )
 
     return _PurgeTracesInsightsResponse(
         project_id=project_id,

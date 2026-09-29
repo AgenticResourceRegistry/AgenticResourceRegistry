@@ -77,7 +77,7 @@ For a broad answer, report:
 5. Version improvements or regressions.
 6. Two or three concrete next actions.
 
-Say when a section is absent, evidence is thin, or the report predates a feature. Do not infer certainty from narrative prose alone. For component reports, read `coverage`: pending, stale, failed, unsupported or missing-source sessions are unknown, not unused. `observed_calls` counts only attributed calls from published generations; activation actions never count as use. Never claim per-tool cost or a causal effect from these counts. Interpretive findings are from a small, possibly truncated sample: cite their evidence refs, distinguish inference from observed calls, and do not generalize them to all users or sessions.
+Say when a section is absent, evidence is thin, or the report predates a feature. Do not infer certainty from narrative prose alone. For component reports, read `coverage`: pending, stale, failed, unsupported or missing-source sessions are unknown, not unused. `observed_calls` counts only attributed calls from published generations; activation actions never count as use, and are a best-effort count from delivered sessions, not a complete install history. Never claim per-tool cost or a causal effect from these counts. Interpretive findings are from a small, possibly truncated sample: cite their evidence refs, distinguish inference from observed calls, and do not generalize them to all users or sessions.
 
 ## Reuse Registry components safely
 

@@ -329,3 +329,78 @@ async def test_latency_on_synthetic_isolated_dataset(capsys):
             f"max={max(summary_ms):.0f}ms; sessions page(100) median={statistics.median(page_ms):.0f}ms "
             f"max={max(page_ms):.0f}ms"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("present", ["earlier", "later"])
+async def test_next_session_install_belongs_to_the_earliest_later_session_whatever_the_delivery_order(present):
+    """Both later sessions carry the install as a candidate; the one that STARTED
+    first owns it even when it is delivered last (e.g. by reconcile)."""
+    project, user = "phase3n-" + uuid.uuid4().hex, "install-owner"
+    component = str(uuid.uuid4())
+    installed = datetime.now(UTC) - timedelta(hours=3)
+    earlier, later = "started-one-hour-after", "started-two-hours-after"
+    starts = {earlier: installed + timedelta(hours=1), later: installed + timedelta(hours=2)}
+    await _mapping(project, user, [(_ALIAS_A, component, "verified")])
+    # Only one of the two sessions is on the mapped (present) layer.
+    stats = []
+    for session, started in starts.items():
+        row = _stats(project, user, session, started)
+        if session != (earlier if present == "earlier" else later):
+            row["layer_hash"] = "v2_" + "b" * 60  # unmapped: not a present session
+        stats.append(row)
+    await _insert("session_stats_agg", stats)
+    install = {
+        "project_id": project,
+        "user_id": user,
+        "harness": "claude-code",
+        "kind": "mcp",
+        "component_id": component,
+        "version": "1.0.0",
+        "mode": "next-session",
+        "identifier": "one-install",
+        "used_at": _ts(installed),
+    }
+    # Delivered out of order: the later-started session first.
+    for session in (later, earlier):
+        await _insert("session_capabilities", [install | {"session_id": session}])
+
+    summary = await queries.activity_summary(project, "mcp", component, None, _period())
+    assert summary["present_sessions"] == 1
+    # Owned by the earlier-started session: counted only when THAT one is present.
+    assert summary["activation_actions"]["next_session_sessions"] == (1 if present == "earlier" else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("present", ["a-session", "b-session"])
+async def test_next_session_install_owner_is_deterministic_for_tied_start_times(present):
+    """Two candidates that started at the same instant: the lower session ID owns it."""
+    project, user = "phase3t-" + uuid.uuid4().hex, "install-owner"
+    component = str(uuid.uuid4())
+    installed = datetime.now(UTC) - timedelta(hours=3)
+    tied = installed + timedelta(hours=1)
+    await _mapping(project, user, [(_ALIAS_A, component, "verified")])
+    stats = []
+    for session in ("a-session", "b-session"):
+        row = _stats(project, user, session, tied)
+        if session != present:
+            row["layer_hash"] = "v2_" + "b" * 60  # unmapped: not a present session
+        stats.append(row)
+    await _insert("session_stats_agg", stats)
+    install = {
+        "project_id": project,
+        "user_id": user,
+        "harness": "claude-code",
+        "kind": "mcp",
+        "component_id": component,
+        "version": "1.0.0",
+        "mode": "next-session",
+        "identifier": "tied-install",
+        "used_at": _ts(installed),
+    }
+    for session in ("b-session", "a-session"):
+        await _insert("session_capabilities", [install | {"session_id": session}])
+
+    summary = await queries.activity_summary(project, "mcp", component, None, _period())
+    assert summary["present_sessions"] == 1
+    assert summary["activation_actions"]["next_session_sessions"] == (1 if present == "a-session" else 0)

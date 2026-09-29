@@ -1487,3 +1487,56 @@ async def test_a_member_still_sees_a_subject_that_turned_private(sessions):
             .all()
         )
         assert item.id in visible_ids
+
+
+# ── Deleted-account shells ──────────────────────────────────────────────────
+
+
+async def _shell(db) -> User:
+    """A deleted account: the row stays, scrubbed and marked, as account deletion leaves it."""
+    user = await _user(db)
+    user.auth_provider = "deleted"
+    user.deleted_at = datetime.now(UTC)
+    await db.flush()
+    return user
+
+
+async def _items_for(db, user) -> list[InboxItem]:
+    return list((await db.execute(select(InboxItem).where(InboxItem.user_id == user.id))).scalars().all())
+
+
+@pytest.mark.asyncio
+async def test_fan_out_skips_deleted_account_but_delivers_to_the_rest(sessions):
+    """Deletion removed the shell's inbox; no later notification may recreate it."""
+    async with sessions() as db:
+        live, shell = await _user(db), await _shell(db)
+        items = await delivery.deliver(
+            db, kind=InboxKind.insight_ready, recipients=[shell.id, live.id], subject=_subject(), skip_actor=False
+        )
+        assert [item.user_id for item in items] == [live.id]
+        assert await _items_for(db, shell) == []
+
+
+@pytest.mark.asyncio
+async def test_single_delivery_to_deleted_account_is_skipped(sessions):
+    async with sessions() as db:
+        shell = await _shell(db)
+        assert (
+            await delivery.deliver_one(db, kind=InboxKind.insight_ready, user_id=shell.id, subject=_subject()) is None
+        )
+        assert await _items_for(db, shell) == []
+
+
+@pytest.mark.asyncio
+async def test_report_queued_before_deletion_completes_without_delivery(sessions):
+    """An agent report the user asked for may finish after they were deleted: it
+    completes (reports are instance data) but nothing lands in the shell's inbox."""
+    from types import SimpleNamespace
+
+    from services.inbox import sources
+
+    async with sessions() as db:
+        shell = await _shell(db)
+        report = SimpleNamespace(id=uuid.uuid4(), triggered_by=shell.id)
+        assert await sources.on_insight_ready(db, report, agent_name="demo", requester_id=shell.id) == 0
+        assert await _items_for(db, shell) == []

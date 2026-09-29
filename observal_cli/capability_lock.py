@@ -221,6 +221,62 @@ def matching(
     return out
 
 
+CONTEXT_LEAD = timedelta(minutes=15)
+# Without a session start time, only recent context loads can be attributed.
+LOOSE_WINDOW = timedelta(hours=24)
+
+
+def for_session(
+    *,
+    session_id: str,
+    harness: str | None,
+    cwd: str | None,
+    started_at: datetime | None,
+    has_transcript: bool = True,
+    path: Path | None = None,
+) -> list[tuple[CapabilityUse, str]]:
+    """Uses attributable to one session, each with its confidence.
+
+    Every use must match the session's harness and directory, including one
+    recorded with a session hint: an ID alone does not identify a session
+    across harnesses.
+
+    - A hinted ``context`` use belongs only to its hinted session.
+    - A ``next-session`` use (an install that takes effect after a restart) is
+      a *candidate* for every session that started at or after the install. It
+      is never attached to the session that ran the install or to one already
+      running. The server keeps only the earliest-started candidate, so upload
+      order, ``reconcile`` and concurrent senders cannot change the result.
+      A session with no known start time gets none.
+    - Any other un-hinted use (a ``context`` load) matches from shortly before
+      the session started. If the start is unknown, only recent loads match.
+
+    Confidence is ``exact`` for a hint, ``window`` when the sender has this
+    session's transcript, and ``loose`` when it does not.
+    """
+    out: list[tuple[CapabilityUse, str]] = []
+    for use in read_all(path):
+        if harness and use.harness and use.harness != harness:
+            continue
+        if cwd and use.cwd and not _same_or_parent(use.cwd, cwd):
+            continue
+        ts = use.timestamp
+        if use.mode == MODE_NEXT_SESSION:
+            if started_at is not None and ts <= started_at and use.session_hint != session_id:
+                out.append((use, "window"))
+            continue
+        if use.session_hint:
+            if use.session_hint == session_id:
+                out.append((use, "exact"))
+            continue
+        if started_at is not None:
+            if ts >= started_at - CONTEXT_LEAD:
+                out.append((use, "window"))
+        elif ts >= _now() - LOOSE_WINDOW:
+            out.append((use, "window" if has_transcript else "loose"))
+    return out
+
+
 def dedupe_latest(uses: Iterable[CapabilityUse]) -> list[CapabilityUse]:
     """One entry per resource, keeping the most recent use."""
     latest: dict[str, CapabilityUse] = {}

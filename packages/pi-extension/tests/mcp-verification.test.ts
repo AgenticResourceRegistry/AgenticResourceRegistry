@@ -145,6 +145,24 @@ const golden = python(`import json\nfrom observal_cli.layer import build_upload_
 assert.equal(sameShadow.hash, golden.hash);
 assert.deepEqual(sameShadow.harnesses, golden.harnesses);
 
+// pi-mcp-adapter 3.x uses mcp-adapter.json, not mcp.json. A pulled project
+// profile activated there must be verifiable without a legacy active file.
+fs.rmSync(path.join(project, ".pi", "mcp.json"));
+writeJson(path.join(project, ".pi", "mcp-adapter.json"), { mcpServers: { "project-probe": active } });
+const adapter3 = await snapshot();
+assert.equal(statuses(adapter3)["project-probe"], "verified");
+assert.equal(adapter3.harnesses.pi.find((item: any) => item.path === "project:.pi/mcp-adapter.json")?.content, "");
+writeJson(path.join(project, ".pi", "mcp.json"), { mcpServers: { "project-probe": { command: "shadow" } } });
+assert.equal(statuses(await snapshot())["project-probe"], "unverified");
+fs.rmSync(path.join(project, ".pi", "mcp.json"));
+fs.rmSync(path.join(piDir, "mcp.json"));
+writeJson(path.join(piDir, "mcp-adapter.json"), { mcpServers: { "team-probe": active } });
+assert.equal(statuses(await snapshot())["team-probe"], "verified");
+writeJson(path.join(piDir, "mcp.json"), { mcpServers: { "team-probe": { command: "shadow" } } });
+assert.equal(statuses(await snapshot())["team-probe"], "unverified");
+writeJson(path.join(piDir, "mcp.json"), { mcpServers: { "team-probe": { ...active, directTools: true } } });
+writeJson(path.join(piDir, "mcp-adapter.json"), { mcpServers: { unrelated: { command: "x" } } });
+
 // A different definition of the same name elsewhere may be what the adapter runs.
 writeJson(path.join(home, ".agents", "mcp.json"), { mcpServers: { "team-probe": { command: "other" } } });
 assert.equal(statuses(await snapshot())["team-probe"], "unverified");

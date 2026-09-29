@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import case, desc, func, literal, or_, select
 
 from api.sanitize import escape_like
-from models.user import User
+from models.user import User, live_users
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -79,6 +79,7 @@ def build_user_search_stmt(query: str, limit: int = 10):
     return (
         select(User, score)
         .where(
+            live_users(),
             or_(
                 User.username.ilike(prefix, escape="\\"),
                 User.email.ilike(prefix, escape="\\"),
@@ -87,7 +88,7 @@ def build_user_search_stmt(query: str, limit: int = 10):
                 User.email.op("%")(q),
                 User.name.op("%")(q),
                 similarity >= _MIN_SIMILARITY,
-            )
+            ),
         )
         .order_by(desc(score), User.name, User.email)
         .limit(max(1, min(limit, 50)))

@@ -28,7 +28,7 @@ import services.dynamic_settings as ds
 from api.deps import get_current_user, get_db
 from api.ratelimit import limiter
 from api.routes.auth import _issue_tokens
-from models.user import User
+from models.user import User, is_deleted_account
 from schemas.auth import (
     DeviceAuthRequest,
     DeviceAuthResponse,
@@ -253,7 +253,8 @@ async def device_token(request: Request, req: DeviceTokenRequest, db: AsyncSessi
 
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
-        if not user:
+        # An approval that predates the account's deletion never yields tokens.
+        if not user or is_deleted_account(user):
             return JSONResponse(status_code=400, content={"error": "expired_token"})
 
         # Clean up Redis keys
