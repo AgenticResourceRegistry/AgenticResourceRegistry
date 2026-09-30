@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from services.otel.projectors.claude_code import ClaudeCodeProjector
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -40,7 +42,9 @@ class Projector(Protocol):
 
 
 # Maps session_parser ID -> projector.
-_PROJECTORS: dict[str, Projector] = {}
+_PROJECTORS: dict[str, Projector] = {
+    "claude-code": ClaudeCodeProjector(),
+}
 
 
 def get_projector(harness: str) -> Projector | None:

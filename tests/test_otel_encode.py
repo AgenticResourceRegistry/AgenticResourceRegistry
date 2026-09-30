@@ -264,7 +264,7 @@ def test_unknown_protocol_is_rejected():
 
 
 def test_harness_without_projector_or_unknown_harness_gets_none():
-    assert projectors.get_projector("claude-code") is None
+    assert projectors.get_projector("cursor") is None
     assert projectors.get_projector("no-such-harness") is None
 
 

@@ -20,6 +20,7 @@ The dead `ops metrics`, legacy `ops spans`, and synthetic `ops telemetry test` c
 | `rate-delete` | Delete the caller's feedback |
 | `feedback` | Show aggregate and individual feedback |
 | `traces` | List current sessions or fetch their details |
+| `export-trace` | Export sessions as OpenTelemetry traces |
 | `telemetry status` | Check server event counts and local outbox health |
 | `logs` | Follow local or remote development logs |
 | `insights activity` | Summarize verified component presence, usage and evidence gaps |
@@ -115,6 +116,17 @@ Default JSON returns the direct session summary array. Turn and span JSON fetch 
 ```
 
 `--turn` renders prompts and tool calls. `--span` includes full assistant and tool-result detail. Detail failures are surfaced rather than replaced with incomplete summaries.
+
+## Export traces
+
+`export-trace` converts sessions to OpenTelemetry traces through `GET /api/v1/sessions/{session_id}/otlp`. It prints OTLP/JSON Lines, writes them to a file, or pushes each session to any OTLP/HTTP endpoint, using `http/protobuf` by default or `http/json` with `--protocol`.
+
+```bash
+observal ops export-trace <session-id> --file traces.jsonl --output json
+observal ops export-trace --recent 20 --endpoint http://localhost:4318
+```
+
+Prompts, responses, and tool payloads are only exported with `--include-content`. See [OpenTelemetry export](../integrations/opentelemetry-export.md) for protocols, verified receivers, and the span mapping.
 
 ## Telemetry status
 
