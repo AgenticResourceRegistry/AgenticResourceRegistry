@@ -18,8 +18,9 @@ raw JSONL rows into frontend-friendly event dicts.
 
 import asyncio
 import uuid as _uuid
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi_cache.decorator import cache
 from loguru import logger as optic
 from sqlalchemy import select
@@ -47,6 +48,9 @@ def _harness_id(value: str) -> str:
         if normalized == label.casefold():
             return harness
     return value
+
+
+_OTLP_EXPORT_READS = 4  # concurrent session reads per OTLP export
 
 
 async def _ch_json(sql: str, params: dict | None = None) -> list[dict]:
@@ -368,15 +372,11 @@ async def sessions_stats(current_user: User = Depends(require_role(UserRole.admi
     }
 
 
-@router.get("/{session_id}")
-async def get_session(
-    session_id: str,
-    after_offset: int | None = Query(
-        None, ge=0, description="Return only events after this line_offset (incremental fetch)"
-    ),
-    current_user: User = Depends(require_role(UserRole.user)),
-):
-    optic.trace("session_id={}, after_offset={}", session_id, after_offset)
+async def _session_identity(session_id: str, current_user: User) -> dict | None:
+    """Return the session's ``project_id``, ``user_id`` and ``harness``, or None.
+
+    Non-admins only see their own sessions.
+    """
     is_admin = _has_admin_trace_access(current_user)
     identity_params: dict[str, str] = {"param_sid": session_id}
     identity_user_filter = ""
@@ -388,10 +388,22 @@ async def get_session(
         "WHERE session_id = {sid:String} " + identity_user_filter + "ORDER BY ingested_at DESC LIMIT 1",
         identity_params,
     )
-    if not identity_rows:
+    return identity_rows[0] if identity_rows else None
+
+
+@router.get("/{session_id}")
+async def get_session(
+    session_id: str,
+    after_offset: int | None = Query(
+        None, ge=0, description="Return only events after this line_offset (incremental fetch)"
+    ),
+    current_user: User = Depends(require_role(UserRole.user)),
+):
+    optic.trace("session_id={}, after_offset={}", session_id, after_offset)
+    identity = await _session_identity(session_id, current_user)
+    if identity is None:
         return {"session_id": session_id, "harness": "", "events": []}
 
-    identity = identity_rows[0]
     params: dict[str, str] = {
         "param_sid": session_id,
         "param_pid": str(identity["project_id"]),
@@ -513,6 +525,73 @@ async def get_session(
         "subagent_sessions": subagent_sessions,
         "max_offset": max_offset,
     }
+
+
+@router.get("/{session_id}/otlp")
+async def export_session_otlp(
+    session_id: str,
+    include_content: bool = Query(False, description="Include prompt, response and tool payload text"),
+    encoding: Literal["json", "protobuf"] = Query("json", description="OTLP encoding of the response body"),
+    current_user: User = Depends(require_role(UserRole.user)),
+):
+    """Export one session, with its subagents, as an OpenTelemetry trace (an OTLP ExportTraceServiceRequest).
+
+    The session is projected as closed, so open turns and tool calls without a
+    result are included.  The body can be POSTed unchanged to any OTLP/HTTP
+    ``/v1/traces`` endpoint that accepts the chosen encoding.
+    ``X-Observal-Span-Count`` carries the number of spans.
+    """
+    optic.trace("session_id={}, include_content={}, encoding={}", session_id, include_content, encoding)
+    identity = await _session_identity(session_id, current_user)
+    if identity is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    harness = str(identity["harness"])
+
+    from services.clickhouse import query_session_rows
+    from services.otel.encode import encode_spans, to_bytes
+    from services.otel.projectors import get_projector
+    from services.otel.types import SessionKey
+
+    projector = get_projector(harness)
+    if projector is None:
+        raise HTTPException(status_code=422, detail=f"OpenTelemetry export is not available for {harness} sessions yet")
+
+    def key(sid: str) -> SessionKey:
+        return SessionKey(
+            project_id=str(identity["project_id"]), user_id=str(identity["user_id"]), harness=harness, session_id=sid
+        )
+
+    subagent_ids = await _ch_json(
+        "SELECT DISTINCT session_id FROM session_events "
+        "WHERE parent_session_id = {sid:String} AND project_id = {pid:String} "
+        "AND user_id = {uid:String} AND harness = {harness:String} ORDER BY session_id",
+        {
+            "param_sid": session_id,
+            "param_pid": str(identity["project_id"]),
+            "param_uid": str(identity["user_id"]),
+            "param_harness": harness,
+        },
+    )
+    # A session can have dozens of subagents; don't let one export take the whole ClickHouse pool.
+    reads = asyncio.Semaphore(_OTLP_EXPORT_READS)
+
+    async def read(sid: str) -> list[dict]:
+        async with reads:
+            return await query_session_rows(key(sid))
+
+    sessions = await asyncio.gather(read(session_id), *(read(str(row["session_id"])) for row in subagent_ids))
+    if not sessions[0]:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    def build() -> tuple[bytes, int]:
+        spans = [span for rows in sessions for span in projector.project_spans(rows, session_closed=True)]
+        request = encode_spans(spans, service_name=harness, include_content=include_content)
+        return to_bytes(request, protocol="http/protobuf" if encoding == "protobuf" else "http/json"), len(spans)
+
+    # Projection is CPU-bound (seconds for very long sessions); keep it off the event loop.
+    body, span_count = await asyncio.to_thread(build)
+    media_type = "application/x-protobuf" if encoding == "protobuf" else "application/json"
+    return Response(content=body, media_type=media_type, headers={"X-Observal-Span-Count": str(span_count)})
 
 
 @router.post("/{session_id}/bind-agent")

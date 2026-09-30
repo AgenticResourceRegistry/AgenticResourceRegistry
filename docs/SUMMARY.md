@@ -88,6 +88,7 @@
 * [Goose](integrations/goose.md)
 * [Kiro](integrations/kiro.md)
 * [OpenCode](integrations/opencode.md)
+* [OpenTelemetry export](integrations/opentelemetry-export.md)
 * [Pi](integrations/pi.md)
 
 ## Reference

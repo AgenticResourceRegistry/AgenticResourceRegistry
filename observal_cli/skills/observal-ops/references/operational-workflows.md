@@ -41,6 +41,15 @@ observal ops traces --span --limit 3 --output json
 
 Report filters, count, time range, platforms, and notable failure signals. Avoid reproducing raw prompts, tool arguments, or outputs unless they are needed and authorized.
 
+Export sessions as OpenTelemetry traces to any OTLP/HTTP receiver (protobuf by default, `--protocol http/json` otherwise):
+
+```bash
+observal ops export-trace <session-id> --file traces.jsonl --output json
+observal ops export-trace --recent 20 --endpoint http://localhost:4318 --output json
+```
+
+Only add `--include-content` when the user asked to send prompts and outputs to that destination. Never print or log header values.
+
 ## Telemetry diagnosis
 
 ```bash
