@@ -115,7 +115,7 @@ SPDX-License-Identifier = "Apache-2.0"
 # Pi JSONL fixtures must remain valid canonical session records; license them
 # without adding comment lines that would break parsing.
 [[annotations]]
-path = ["tests/fixtures/component_insights/pi/direct_session.jsonl", "tests/fixtures/component_insights/pi/proxy_session.jsonl", "tests/fixtures/component_insights/pi/skill_session_model_read.jsonl", "tests/fixtures/component_insights/pi/skill_session_slash_command.jsonl"]
+path = ["tests/fixtures/component_insights/pi/adapter4_proxy_session.jsonl", "tests/fixtures/component_insights/pi/direct_session.jsonl", "tests/fixtures/component_insights/pi/proxy_session.jsonl", "tests/fixtures/component_insights/pi/skill_session_model_read.jsonl", "tests/fixtures/component_insights/pi/skill_session_slash_command.jsonl"]
 SPDX-FileCopyrightText = "2026 Naraen Rammoorthi"
 SPDX-License-Identifier = "Apache-2.0"
 

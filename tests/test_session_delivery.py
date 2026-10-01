@@ -1187,3 +1187,67 @@ def test_log_error_uses_default_home_and_never_masks_the_original_failure(tmp_pa
     not_a_directory = tmp_path / "file"
     not_a_directory.write_text("content")
     base.log_error("ignored", home=not_a_directory)
+
+
+def test_layer_snapshot_upload_passes_the_servers_cli_version_check(monkeypatch):
+    """Regression: the hook's snapshot upload sent no X-Observal-CLI-Version, so the server's
+    parity middleware answered 426 and presence was never published from real sessions."""
+    import sys
+
+    import httpx
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "observal-server"))
+    import version as server_version
+    from middleware import configure_version_middleware
+    from observal_cli import client as cli_client
+    from observal_cli import layer
+
+    monkeypatch.setattr(server_version, "get_server_version", lambda: "1.13.1")
+    monkeypatch.setattr(cli_client, "_get_cli_version", lambda: "1.13.1")
+    app = FastAPI()
+    configure_version_middleware(app)
+    app.post("/api/v1/layer-snapshots", status_code=201)(lambda: {"stored": True})
+    server = TestClient(app)
+
+    def handler(request):
+        # A python-httpx user agent and a bearer token: exactly what the middleware checks.
+        response = server.post(request.url.path, headers=dict(request.headers), content=request.content)
+        return httpx.Response(response.status_code, content=response.content)
+
+    saved = []
+    monkeypatch.setattr(layer, "needs_upload", lambda _hash: True)
+    monkeypatch.setattr(layer, "build_upload_payload", lambda **_kwargs: {"hash": "layer-hash"})
+    monkeypatch.setattr(layer, "save_local_snapshot", saved.append)
+    monkeypatch.setattr(layer, "set_last_uploaded_hash", lambda *_args: None)
+    _install_http_transport(monkeypatch, handler)
+
+    base._maybe_upload_layer_snapshot("https://server.example", "token", "layer-hash", "claude-code", "/repo")
+    assert saved == [{"hash": "layer-hash"}], "the server accepted the upload"
+
+
+def test_recovered_sessions_hash_the_recorded_project_or_send_no_layer_hash(tmp_path, monkeypatch):
+    """Regression: recovery rebuilt Claude Code sources with no cwd, so the payload carried a
+    user-scope-only layer hash (and the hook uploaded an empty snapshot) for a project session."""
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(base, "_compute_layer_hash_safe", lambda cwd, harness: f"hash-of:{cwd}")
+    monkeypatch.setattr(base, "_resolve_agent", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(base, "_capabilities_for_session", lambda *args, **kwargs: None)
+
+    recorded = [json.dumps({"type": "user", "cwd": str(project), "message": {"content": "hi"}})]
+    payload = base.build_payload("s1", recorded, 0, "CrashRecovery", 0, cwd="")
+    assert payload["layer_hash"] == f"hash-of:{project}"
+
+    transcript = tmp_path / "s2.jsonl"
+    transcript.write_text("\n".join(recorded) + "\n")
+    later_chunk = [json.dumps({"type": "assistant", "message": {"content": "ok"}})]
+    payload = base.build_payload("s2", later_chunk, 5, "CrashRecovery", 5, cwd="", session_jsonl=transcript)
+    assert payload["layer_hash"] == f"hash-of:{project}", "found in the transcript's earlier records"
+
+    unknown = [json.dumps({"type": "user", "cwd": str(tmp_path / "gone")})]
+    assert base.build_payload("s3", unknown, 0, "CrashRecovery", 0, cwd="")["layer_hash"] is None
+
+    live = base.build_payload("s4", later_chunk, 0, "UserPromptSubmit", 0, cwd="")
+    assert live["layer_hash"] == "hash-of:", "live hook paths are unchanged"

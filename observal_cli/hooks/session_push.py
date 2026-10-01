@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -111,14 +110,17 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None) -> None:
 
 def _spawn_worker(*args: str, harness: str) -> None:
     try:
-        worker_env = get_adapter(harness).session_worker_environment()
+        from observal_cli.shared.launcher import module_subprocess
+
+        argv, env = module_subprocess("observal_cli.hooks.session_push", "--harness", harness, *args)
+        env.update(get_adapter(harness).session_worker_environment())
         subprocess.Popen(
-            [sys.executable, "-m", "observal_cli.hooks.session_push", "--harness", harness, *args],
+            argv,
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
-            env={**os.environ, **worker_env} if worker_env else None,
         )
     except Exception as exc:
         optic.trace("could not spawn {} session worker: {}", harness, exc)

@@ -190,9 +190,10 @@ def test_a_project_cannot_shadow_the_gate_from_its_working_directory(tmp_path):
 
 
 def test_bad_arguments_fail_without_blocking():
-    result = subprocess.run(
-        [sys.executable, "-m", "observal_cli.hook_gate", "--agent", "x"], input=b"{}", capture_output=True, check=False
-    )
+    from observal_cli.shared.launcher import module_subprocess
+
+    argv, env = module_subprocess("observal_cli.hook_gate", "--agent", "x")
+    result = subprocess.run(argv, env=env, input=b"{}", capture_output=True, check=False)
     assert result.returncode == 1 and b"usage" in result.stderr
 
 

@@ -37,6 +37,7 @@ establishes nothing; the extractor id must also resolve to an implementation.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -47,6 +48,69 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 HookEvidenceKind = Literal["ran_with_output", "failed", "blocked"]
+
+
+# Observal's own telemetry hooks are never a registry component, so a recorded run of
+# one is not a candidate for attribution. Only the complete launcher Observal writes is
+# recognised (server configs, ``agent pull`` rewrites and ``doctor`` specs):
+#
+#     [OBSERVAL_AGENT_ID=<id>] [PYTHONPATH=<root>] <python> [-I|-P] -m <session-push module>
+#         [--harness <name>] [--json-response]
+#
+# A compound or wrapped command (``echo hi && python3 -m ...``, a ``hook_gate`` whose
+# argument mentions the module, anything with shell substitution) is a user's hook and
+# stays a candidate. Windows ``set "...=..." && ...`` forms are deliberately not matched.
+_TELEMETRY_MODULES = frozenset(
+    {
+        "observal_cli.hooks.session_push",
+        "observal_cli.hooks.codex_session_push",
+        "observal_cli.hooks.antigravity_session_push",
+    }
+)
+# The value is already unquoted by shlex, so a quoted package root may contain spaces.
+_TELEMETRY_ENV = re.compile(r"(OBSERVAL_AGENT_ID|PYTHONPATH)=.+\Z")
+_PYTHON = re.compile(r"python(?:3(?:\.\d{1,2})?)?\Z")  # interpreter basename; the path may contain spaces
+_HARNESS_NAME = re.compile(r"[a-z][a-z0-9-]{0,40}\Z")
+# Substitution, line breaks and control operators anywhere: never a single direct launcher.
+_SHELL_ACTIVE = re.compile(r"[$`\n\r;&|<>()]")
+
+
+def is_observal_telemetry_hook(command: str) -> bool:
+    """Whether a recorded hook command is exactly Observal's own telemetry launcher."""
+    import posixpath
+    import shlex
+
+    if _SHELL_ACTIVE.search(command):
+        return False
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    index, seen_env = 0, set()
+    while index < len(tokens) and (match := _TELEMETRY_ENV.match(tokens[index])):
+        if match.group(1) in seen_env:
+            return False
+        seen_env.add(match.group(1))
+        index += 1
+    if index >= len(tokens) or "=" in tokens[index] or not _PYTHON.match(posixpath.basename(tokens[index])):
+        return False
+    index += 1
+    if index < len(tokens) and tokens[index] in ("-I", "-P"):
+        index += 1
+    if tokens[index : index + 1] != ["-m"] or index + 1 >= len(tokens) or tokens[index + 1] not in _TELEMETRY_MODULES:
+        return False
+    rest, seen_args = tokens[index + 2 :], set()
+    while rest:
+        option = rest.pop(0)
+        if option in seen_args:
+            return False
+        seen_args.add(option)
+        if option == "--harness":
+            if not rest or not _HARNESS_NAME.match(rest.pop(0)):
+                return False
+        elif option != "--json-response":
+            return False
+    return True
 
 
 def hook_binding_sha256(event: str, command: str) -> str:

@@ -319,9 +319,13 @@ def _spawn(task_id: str) -> int | None:
         )
     else:
         kwargs["start_new_session"] = True
+    from observal_cli.shared.launcher import module_subprocess
+
+    argv, env = module_subprocess("observal_cli.delegation.runner", task_id)
     with log.open("ab") as handle:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "observal_cli.delegation.runner", task_id],
+            argv,
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=handle,
             stderr=subprocess.STDOUT,

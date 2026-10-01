@@ -88,6 +88,21 @@ def test_real_derived_proxy_calls_use_adapter_reported_server_and_ignore_search(
     assert extract_invocations("pi", _rows("proxy_session.jsonl")) == extracted  # stable redelivery
 
 
+def test_real_derived_adapter_4_proxy_calls_keep_the_same_identity_contract():
+    """pi-mcp-adapter 4.0.0 session (recorded 2026-10-02 through Observal /agent activation)."""
+    extracted = extract_invocations("pi", _rows("adapter4_proxy_session.jsonl"))
+    assert extracted.status == "supported"
+    assert extracted.malformed_source_records == 0
+    assert [(call.mcp_server, call.tool_name, call.result_state) for call in extracted.invocations] == [
+        ("e2e-clock", "get_time", "success"),
+        ("e2e-clock", "fail", "error"),
+    ]  # the skill read is not an MCP invocation
+    assert [call.tool_use_id for call in extracted.invocations] == [
+        "toolu_bdrk_fixture0002",
+        "toolu_bdrk_fixture0003",
+    ]
+
+
 def test_real_derived_direct_tools_and_parallel_proxy_calls_keep_distinct_blocks():
     extracted = extract_invocations("pi", _rows("direct_session.jsonl"))
     assert _facts(extracted) == [

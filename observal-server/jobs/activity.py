@@ -18,12 +18,24 @@ from services.component_activity import (
     project_session_skill_evidence,
     publication_version,
 )
+from services.component_activity.projector import ProjectionRaceError
 
 _MAX_RETRIES = 5
 _RETRY_STATUSES = frozenset({"pending_source", "pending_mapping"})
 # The daily safety net replays recently active sessions (late snapshots, missed
 # enqueues). The revision-triggered job below runs a durable full replay.
 _DEFAULT_REPAIR_DAYS = 7
+
+
+def _describe(error: Exception) -> str:
+    """Type name, plus the message only for our own fixed-text race error.
+
+    Other exceptions (ClickHouse, HTTP, parsing) can carry query text or data,
+    so only their type is logged.
+    """
+    if isinstance(error, ProjectionRaceError):
+        return f"{type(error).__name__}: {error}"
+    return type(error).__name__
 
 
 def _chain_id(project_id: str, user_id: str, harness: str, session_id: str, revision: str = "") -> str:
@@ -89,7 +101,7 @@ async def project_component_activity(
         try:
             extra[name] = await project(project_id, user_id, harness, session_id)
         except Exception as error:
-            optic.warning("{} evidence projection failed: {}", name, type(error).__name__)
+            optic.warning("{} evidence projection failed: {}", name, _describe(error))
             extra[name] = {"status": "failed"}
     pending = result["status"] in _RETRY_STATUSES or any(value["status"] in _RETRY_STATUSES for value in extra.values())
     scheduled = False
@@ -206,7 +218,7 @@ async def backfill_component_activity(
                 )
             except Exception as error:
                 counts["failed"] += 1
-                optic.warning("activity backfill session projection failed: {}", type(error).__name__)
+                optic.warning("activity backfill session projection failed: {}", _describe(error))
                 continue
             if any(result.get(name, {}).get("status") == "failed" for name in ("skill", "hook")):
                 # The MCP projection succeeded; still retry the failed one on the next replay pass.

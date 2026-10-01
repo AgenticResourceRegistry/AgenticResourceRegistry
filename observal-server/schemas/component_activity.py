@@ -50,8 +50,10 @@ class PresenceCoverage(BaseModel):
     stale_extractor_sessions: int = 0
     identity_conflict_sessions: int = 0
     mapping_complete_sessions: int = 0
+    # Layer-wide: any unresolved or ambiguous occurrence in the session's layer.
     unresolved_identity_sessions: int = 0
     ambiguous_identity_sessions: int = 0
+    # For the selected listing (and version) only.
     unverified_presence_sessions: int = 0
     drifted_presence_sessions: int = 0
     verified_presence_sessions: int = 0

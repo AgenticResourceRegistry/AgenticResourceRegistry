@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from services.session_parsers.hook_evidence import extract_hook_evidence, hook_binding_sha256, hook_extractor
 
 FIXTURES = Path(__file__).parent / "fixtures" / "component_insights" / "claude_code"
@@ -94,3 +96,101 @@ def test_facts_carry_no_commands_output_or_paths():
 def test_other_harnesses_are_unsupported_not_empty():
     assert extract_hook_evidence("pi", []).status == "unsupported"
     assert hook_extractor("pi") is None
+
+
+def _hook_record(command: str, event: str = "UserPromptSubmit") -> str:
+    return json.dumps(
+        {
+            "type": "attachment",
+            "timestamp": "2026-10-01T23:07:40.000Z",
+            "attachment": {
+                "type": "hook_success",
+                "hookEvent": event,
+                "hookName": event,
+                "command": command,
+                "exitCode": 0,
+                "stdout": "x",
+            },
+        }
+    )
+
+
+def test_observal_telemetry_hook_runs_are_not_candidates():
+    """Regression: the live run reported Observal's own session-push runs as unmatched hook runs.
+
+    Command forms are the complete launchers agent pull and doctor write: installed (-I),
+    source checkout (PYTHONPATH= with -P), agent-attributed, a quoted interpreter, and bare python3.
+    """
+    from services.component_activity.hook_matcher import match_hook_evidence
+
+    telemetry = [
+        "/opt/venv/bin/python3 -I -m observal_cli.hooks.session_push",
+        "PYTHONPATH=/src/observal /usr/bin/python3.12 -P -m observal_cli.hooks.session_push --harness claude-code",
+        "OBSERVAL_AGENT_ID=a1 '/opt/py 3/bin/python' -I -m observal_cli.hooks.codex_session_push",
+        "python3 -m observal_cli.hooks.session_push",
+    ]
+    user = 'echo "e2e-prompt-note: prompt received"'
+    gated = "/opt/venv/bin/python3 -I -m observal_cli.hook_gate --agent reviewer -- make lint"
+    lines = [_hook_record(command) for command in telemetry] + [_hook_record(user), _hook_record(gated, "Stop")]
+    extraction = _extract(lines)
+    assert _facts(extraction) == [
+        ("ran_with_output", hook_binding_sha256("UserPromptSubmit", user)),
+        ("ran_with_output", hook_binding_sha256("Stop", gated)),
+    ], "the user's hook and a gated user hook stay; telemetry runs are dropped"
+    assert extraction.malformed_source_records == 0, "dropped, not counted as malformed"
+    result = match_hook_evidence(extraction, {}, {})
+    assert result.unmatched_count == 2, "only the user hooks are candidates"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Reviewer reproductions: a compound command and a gate wrapping a user's command.
+        "echo hi && python3 -m observal_cli.hooks.session_push --harness claude-code",
+        "/opt/venv/bin/python3 -I -m observal_cli.hook_gate --command "
+        "'python3 -m observal_cli.hooks.session_push --harness claude-code'",
+        "python3 -m observal_cli.hooks.session_push; rm -rf build",
+        "python3 -m observal_cli.hooks.session_push --harness claude-code && notify-send done",
+        "python3 -m observal_cli.hooks.session_push --harness claude-code > /tmp/push.log",
+        "python3 -m observal_cli.hooks.session_push --harness $(whoami)",
+        "PYTHONPATH=$HOME/x python3 -m observal_cli.hooks.session_push",
+        "bash -c 'python3 -m observal_cli.hooks.session_push'",
+        "python3 -m observal_cli.hooks.session_push --extra",
+        "python3 -m observal_cli.hooks.not_telemetry",
+        "python3 -m observal_cli.hooks.session_push --harness claude-code --harness kiro",
+        'set "PYTHONPATH=C:\\x" && python -m observal_cli.hooks.session_push',
+        "python3 -m observal_cli.hooks.session_push 'unterminated",
+        "OBSERVAL_AGENT_ID=x;evil PYTHONPATH=/y python3 -m observal_cli.hooks.session_push",
+        "PYTHONPATH=/y python3 -m observal_cli.hooks.session_push --harness claude-code&",
+    ],
+)
+def test_compound_wrapped_or_unusual_commands_stay_candidates(command):
+    from services.session_parsers.hook_evidence import is_observal_telemetry_hook
+
+    assert not is_observal_telemetry_hook(command)
+    extraction = _extract([_hook_record(command)])
+    assert _facts(extraction) == [("ran_with_output", hook_binding_sha256("UserPromptSubmit", command))]
+
+
+@pytest.mark.parametrize("installed", [True, False])
+def test_generated_launchers_with_spaces_in_their_paths_are_telemetry(monkeypatch, installed):
+    """Regression: a source checkout under a path with spaces gets a quoted PYTHONPATH, which
+    the classifier rejected, so its session pushes came back as unmatched runs."""
+    import sys
+
+    from observal_cli import cmd_pull
+    from observal_cli.shared import launcher
+    from services.session_parsers.hook_evidence import is_observal_telemetry_hook
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: installed)
+    monkeypatch.setattr(launcher, "package_root", lambda: "/tmp/Observal Flare/clone")
+    monkeypatch.setattr(sys, "executable", "/opt/py 3/bin/python3")
+    # The launchers agent pull writes into agent files and doctor writes for Cursor.
+    generated = [
+        launcher.posix_module_command("observal_cli.hooks.session_push"),
+        cmd_pull.rewrite_launcher_command("python3 -m observal_cli.hooks.session_push"),
+    ]
+    assert installed or all("PYTHONPATH='/tmp/Observal Flare/clone'" in command for command in generated)
+    for command in generated:
+        assert is_observal_telemetry_hook(command), command
+    assert not is_observal_telemetry_hook(generated[0] + " && echo hi"), "compound still rejected"

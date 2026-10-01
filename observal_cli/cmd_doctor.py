@@ -1456,9 +1456,9 @@ def _patch_cursor(dry_run: bool) -> bool:
     # Use the current interpreter (from the observal CLI's venv) so that
     # httpx and other dependencies are available when Cursor fires the hook,
     # with PYTHONPATH when it cannot import observal_cli on its own.
-    from observal_cli.shared.launcher import posix_module_command
+    from observal_cli.shared.launcher import module_command
 
-    cmd = f"{posix_module_command('observal_cli.hooks.session_push')} --harness cursor"
+    cmd = f"{module_command('observal_cli.hooks.session_push')} --harness cursor"
 
     desired = {
         "version": 1,

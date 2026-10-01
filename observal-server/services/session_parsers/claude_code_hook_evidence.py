@@ -19,6 +19,10 @@ Observed in Claude Code 2.1.286 sessions (``tests/fixtures/component_insights/cl
 Session context: ``entrypoint`` is ``sdk-cli`` for headless ``-p`` runs and
 ``cli`` for interactive ones. ``agent-setting`` records name the active
 ``--agent``.
+
+Runs of Observal's own telemetry hooks (``-m observal_cli.hooks.*``) are not
+evidence: they are never a registry component, and counting them would report
+an attribution gap where there is none.
 """
 
 from __future__ import annotations
@@ -28,7 +32,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from .base import load_line, str_field
-from .hook_evidence import HookEvidence, HookEvidenceExtraction, HookSession, hook_binding_sha256
+from .hook_evidence import (
+    HookEvidence,
+    HookEvidenceExtraction,
+    HookSession,
+    hook_binding_sha256,
+    is_observal_telemetry_hook,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -105,7 +115,10 @@ class ClaudeCodeHookEvidenceExtractor:
                 outcome = _OUTCOMES[attachment["type"]]
                 code = attachment.get("exitCode")
                 consistent = type(code) is int and ((code == 0) == (outcome == "ran_with_output"))
-                binding = _binding(attachment.get("hookEvent"), attachment.get("command"))
+                command = attachment.get("command")
+                if isinstance(command, str) and is_observal_telemetry_hook(command):
+                    continue  # Observal's own session push, not a component
+                binding = _binding(attachment.get("hookEvent"), command)
                 if binding is None or not consistent:
                     malformed += 1
                     continue
@@ -134,6 +147,8 @@ class ClaudeCodeHookEvidenceExtractor:
                     continue
                 text = block.get("content")
                 match = _BLOCKED.match(text) if isinstance(text, str) else None
+                if match and is_observal_telemetry_hook(match["command"]):
+                    continue
                 binding = _binding(match["event"], match["command"]) if match else None
                 if binding is None:
                     continue

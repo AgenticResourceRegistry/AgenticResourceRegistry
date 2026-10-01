@@ -288,3 +288,69 @@ async def test_missing_evidence_and_oversized_input_abstain(monkeypatch, report)
     )
     assert (await evidence.component_findings(report))["state"] == "unknown"
     model.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prompt_states_every_rule_the_validator_enforces(monkeypatch, report):
+    """The live run abstained because the prompt never stated the one-session rule."""
+    sample = ([{"refs": ["s0-call0"]}], {"s0-call0": "search (result: unknown)"}, False)
+    monkeypatch.setattr(evidence, "_sample", AsyncMock(return_value=sample))
+    model = AsyncMock(return_value=_result(report))
+    monkeypatch.setattr(evidence, "get_call_model", lambda: model)
+    await evidence.component_findings(report)
+    prompt = model.await_args_list[0].args[0]
+    for rule in (
+        "exactly one session",
+        "sN- prefix",
+        "at least one call ref",
+        "never repeat a ref",
+        "never state a number of calls, sessions or users",
+        "unused, never used, no use, cost, savings, saved, caused or responsible for",
+        "friction only when a cited call has result:error",
+        "result:unknown means the harness did not record",
+    ):
+        assert rule in prompt, rule
+
+
+@pytest.mark.asyncio
+async def test_a_cross_session_finding_is_still_rejected_and_the_repair_names_the_rule(monkeypatch, report):
+    """Shape of the live run's rejected answer: one finding citing two sessions."""
+    sample = (
+        [
+            {"refs": ["s0-call0"], "excerpts": {"s0-call0": "mcp__clock__get_time (result: unknown)"}},
+            {"refs": ["s1-call0"], "excerpts": {"s1-call0": "mcp__clock__get_time (result: success)"}},
+        ],
+        {"s0-call0": "mcp__clock__get_time (result: unknown)", "s1-call0": "mcp__clock__get_time (result: success)"},
+        False,
+    )
+    monkeypatch.setattr(evidence, "_sample", AsyncMock(return_value=sample))
+    cross = _result(
+        report,
+        findings=[
+            {
+                "kind": "workflow",
+                "insight": "The get_time call appears in both sessions.",
+                "confidence": "low",
+                "evidence_refs": ["s0-call0", "s1-call0"],
+            }
+        ],
+    )
+    single = _result(
+        report,
+        findings=[
+            {
+                "kind": "workflow",
+                "insight": "The session invoked get_time.",
+                "confidence": "low",
+                "evidence_refs": ["s1-call0"],
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="one scoped session"):
+        evidence._validate(cross, str(report.component_id), None, sample[1])
+    model = AsyncMock(side_effect=[cross, single])
+    monkeypatch.setattr(evidence, "get_call_model", lambda: model)
+    result = await evidence.component_findings(report)
+    assert result["state"] == "assessed" and result["findings"][0]["evidence_refs"] == ["s1-call0"]
+    repair_prompt = model.await_args_list[1].args[0]
+    assert "rejected: One finding must be grounded in one scoped session" in repair_prompt

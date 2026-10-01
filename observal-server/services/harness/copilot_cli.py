@@ -14,6 +14,7 @@ from services.harness.helpers import (
     _generate_prompt_files,
     _generate_skill,
     _merge_hook_components_into_config,
+    _yaml_double_quoted,
 )
 
 # Session push command used in generated hook files
@@ -89,7 +90,7 @@ class CopilotCliAdapter(BaseHarnessAdapter):
         frontmatter_lines = [
             "---",
             f"name: {safe_name}",
-            f'description: "{agent_desc}"',
+            f"description: {_yaml_double_quoted(agent_desc)}",
             "tools: ['*']",
         ]
         # Add mcp-servers to frontmatter if present
@@ -100,13 +101,15 @@ class CopilotCliAdapter(BaseHarnessAdapter):
                 cfg = copilot_cli_configs[mcp_name]
                 if cfg.get("type"):
                     frontmatter_lines.append(f"    type: {cfg['type']}")
+                # Quoted scalars: a command, argument or URL may contain ": ", "#",
+                # commas, brackets or quotes (the sandbox server's JSON argument does).
                 if cfg.get("command"):
-                    frontmatter_lines.append(f"    command: {cfg['command']}")
+                    frontmatter_lines.append(f"    command: {_yaml_double_quoted(str(cfg['command']))}")
                 if cfg.get("args"):
-                    args_str = ", ".join(str(a) for a in cfg["args"])
+                    args_str = ", ".join(_yaml_double_quoted(str(a)) for a in cfg["args"])
                     frontmatter_lines.append(f"    args: [{args_str}]")
                 if cfg.get("url"):
-                    frontmatter_lines.append(f"    url: {cfg['url']}")
+                    frontmatter_lines.append(f"    url: {_yaml_double_quoted(str(cfg['url']))}")
         frontmatter_lines.append("---")
         agent_content = "\n".join(frontmatter_lines) + "\n\n" + rules_content
 

@@ -417,9 +417,12 @@ export default function (pi: ExtensionAPI) {
     try {
       const version: unknown = JSON.parse(fs.readFileSync(manifest, "utf-8")).version;
       if (typeof version === "string" && /^2\./.test(version)) return "adapter2";
-      if (typeof version === "string" && /^3\./.test(version)) return "adapter3";
+      // 4.x reads the same mcp-adapter.json and records the same call identity as
+      // 3.x (checked against 4.0.0's sources and a recorded 4.0.0 session), so it is
+      // the same runtime here. Later majors stay unidentified until checked.
+      if (typeof version === "string" && /^[34]\./.test(version)) return "adapter3";
     } catch { /* Missing or unreadable installs cannot prove the MCP runtime. */ }
-    throw new Error('Cannot identify pi-mcp-adapter 2.x or 3.x. Install it with Pi, or set pi_mcp_runtime to "adapter2", "adapter3", or "builtin" in ~/.observal/config.json for a manual install. No files changed');
+    throw new Error('Cannot identify pi-mcp-adapter 2.x, 3.x or 4.x. Install it with Pi, or set pi_mcp_runtime to "adapter2", "adapter3", or "builtin" in ~/.observal/config.json for a manual install. No files changed');
   }
 
   function backupDefault(): void {

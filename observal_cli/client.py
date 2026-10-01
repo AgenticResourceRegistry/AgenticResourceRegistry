@@ -95,10 +95,27 @@ def _safe_detail(response: httpx.Response) -> str | None:
     # FastAPI errors use ``detail``; ARD routes use ``{"errorCode", "message"}``.
     detail = (data.get("detail") or data.get("message")) if isinstance(data, dict) else None
     if isinstance(detail, list):
-        # Validation lists: pydantic items carry ``msg``; component checks carry ``reason``.
-        parts = [item.get("reason") or item.get("msg") for item in detail if isinstance(item, dict)]
-        detail = "; ".join(str(part).removeprefix("Value error, ") for part in parts if part)
+        detail = _validation_detail(detail)
     return detail.strip()[:500] if isinstance(detail, str) and detail.strip() else None
+
+
+def _validation_detail(items: list) -> str | None:
+    """FastAPI's 422 ``detail`` list as ``field: message`` lines.
+
+    Only ``loc`` and ``msg`` (or a component check's ``reason``) are used; ``input``
+    (an echo of the submitted value) and ``ctx`` are never shown.
+    """
+    lines = []
+    for item in items[:3]:
+        message = item.get("reason") or item.get("msg") if isinstance(item, dict) else None
+        if not isinstance(message, str):
+            continue
+        message = message.removeprefix("Value error, ")
+        location = [str(part) for part in item.get("loc") or [] if part != "body"]
+        lines.append(f"{'.'.join(location)}: {message}" if location else message)
+    if len(items) > 3 and lines:
+        lines.append(f"(and {len(items) - 3} more)")
+    return "; ".join(lines) or None
 
 
 def _install_command(response: httpx.Response) -> str | None:
@@ -149,6 +166,38 @@ def _handle_error(
         "http_status": code,
         "detail": repr(error),
     }
+
+    if code == 422 and path.startswith("/api/v1/insights/components/") and path.endswith("/generate"):
+        try:
+            payload = response.json()
+            problem = payload.get("detail") if isinstance(payload, dict) else None
+        except (ValueError, UnicodeDecodeError):
+            problem = None
+        if isinstance(problem, dict) and problem.get("message") == "No verified present sessions":
+            coverage = problem.get("coverage")
+            presence = coverage.get("presence") if isinstance(coverage, dict) else None
+            presence = presence if isinstance(presence, dict) else {}
+            counts = ", ".join(
+                f"{label}: {presence[key]}"
+                for key, label in (
+                    ("eligible_sessions", "eligible"),
+                    ("legacy_hash_sessions", "legacy hashes"),
+                    ("snapshot_missing_sessions", "missing snapshots"),
+                    ("mapping_pending_sessions", "mapping pending"),
+                    ("mapping_failed_sessions", "mapping failed"),
+                )
+                if type(presence.get(key)) is int and presence[key] > 0
+            )
+            fail(
+                ErrorCategory.VALIDATION,
+                "No verified-present sessions for this component" + (f" ({counts})." if counts else "."),
+                remediation=(
+                    "Check component activity and coverage; run a new session with the exact verified install. "
+                    "Legacy Agent traces alone do not prove component presence."
+                ),
+                result={"coverage": coverage} if isinstance(coverage, dict) else None,
+                **context,
+            )
 
     if code == 401:
         fail(
