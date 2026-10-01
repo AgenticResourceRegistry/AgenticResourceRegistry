@@ -26,7 +26,7 @@ from .scope import SessionKey
 if TYPE_CHECKING:
     from models.insight_report import InsightReport
 
-EVIDENCE_VERSION = 3
+EVIDENCE_VERSION = 4
 MAX_SESSIONS = 8  # published presence cohort, observed sessions prioritized
 MAX_CALLS_PER_SESSION = 1
 MAX_SOURCE_CHARS = 8192
@@ -258,6 +258,14 @@ async def component_findings(report: InsightReport) -> dict:
         "succeeded, completed, failed or worked. Only say 'a published call returned an error' when a cited "
         "call has result:error. Do not infer use from prompts. Do not assert cost, impact, or that "
         "a component was unused. If evidence is inadequate return an empty findings list. Never output high confidence. "
+        # Each rule below is one _validate enforces; a finding that breaks any of them is rejected.
+        "Rules for every finding: cite refs from exactly one session, so all of its evidence_refs share one "
+        "sN- prefix (a pattern seen in several sessions is separate findings, one per session, or none); "
+        "cite at least one call ref (sN-callM); never repeat a ref; never state a number of calls, sessions or "
+        "users; never use the words unused, never used, no use, cost, savings, saved, caused or responsible for; "
+        "use kind friction only when a cited call has result:error. "
+        "result:unknown means the harness did not record the call's outcome; it is not an error, a failure or a "
+        "problem, and it is not a difference worth reporting. "
         f"Echo subject_id={json.dumps(subject)} and subject_version_id={json.dumps(version)}. "
         "Return {subject_id, subject_version_id, findings:[{kind:workflow|friction, "
         "insight:string, confidence:low|medium, evidence_refs:[opaque refs]}]}. "
@@ -283,10 +291,14 @@ async def component_findings(report: InsightReport) -> dict:
                     ],
                     "evidence": {ref: evidence[ref] for finding in result.findings for ref in finding.evidence_refs},
                 }
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as error:
+                # Our own ValueError messages are fixed strings naming the broken rule; a
+                # ValidationError can echo model text, so only its kind is named.
+                reason = str(error) if type(error) is ValueError else "the JSON did not match the schema"
                 repair = (
-                    "\nYour response failed schema, identity or evidence validation. "
-                    "Return only the required JSON using supplied refs; otherwise an empty findings list."
+                    f"\nYour response was rejected: {reason}. "
+                    "Return only the required JSON using supplied refs and the rules above; "
+                    "otherwise an empty findings list."
                 )
                 if attempt == 0 and len(prompt) + len(repair) <= MAX_PROMPT_CHARS:
                     prompt += repair

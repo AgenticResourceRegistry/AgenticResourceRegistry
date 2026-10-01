@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import json as _json
-import os
 import re
 import shutil
 import sys
@@ -1636,12 +1635,17 @@ def _run_doctor_patch(ide_name: str):
     """Run 'observal doctor patch --harness <name>' as a subprocess."""
     optic.trace("ide_name={}", ide_name)
     import subprocess
-    import sys
+
+    from observal_cli.shared.launcher import module_subprocess
 
     try:
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        # -X utf8: -I ignores PYTHONIOENCODING, and the output is decoded as UTF-8 below.
+        command, env = module_subprocess(
+            "observal_cli.main", "doctor", "patch", "--harness", ide_name, options=("-X", "utf8")
+        )
+        env["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
-            [sys.executable, "-m", "observal_cli.main", "doctor", "patch", "--harness", ide_name],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",

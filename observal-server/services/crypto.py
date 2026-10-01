@@ -7,16 +7,22 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import os
+import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from loguru import logger as optic
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 SigningAlgorithm = Literal["ES256", "RS256"]
 PrivateKey: TypeAlias = ec.EllipticCurvePrivateKey | rsa.RSAPrivateKey
@@ -74,6 +80,52 @@ def _public_key_to_jwk(pub: PublicKey, kid: str) -> dict:
     }
 
 
+_LOCK_TIMEOUT_SECONDS = 60.0
+# What msvcrt.locking raises when another process holds the byte range.
+_WINDOWS_LOCK_CONTENTION = frozenset({errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK)})
+
+
+@contextmanager
+def _exclusive_lock(path: Path, timeout: float = _LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+    """Hold an exclusive cross-process lock on ``path`` (created if missing).
+
+    On Windows a held lock is retried until ``timeout`` and then raises
+    ``TimeoutError``; any other locking error is raised at once, so startup
+    fails instead of hanging.
+    """
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as error:
+                    if error.errno not in _WINDOWS_LOCK_CONTENTION:
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Timed out after {timeout:g}s waiting for {path.name}") from error
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
 class KeyManager:
     """Manage ES256 or RS256 JWT keys while retaining old verification keys."""
 
@@ -108,15 +160,19 @@ class KeyManager:
             pass
 
         signing_path = self._key_dir / "signing.pem"
-        if signing_path.exists():
-            self._load_private_key(signing_path)
-            if _algorithm_for_key(self.get_private_key()) != self._algorithm:
-                optic.info("JWT algorithm changed; retiring current signing key")
-                self._retire_current_key()
+        # API workers (and replicas sharing the volume) start together. Without the lock
+        # each would find no key, generate its own and keep signing with it after another
+        # worker's write won, so its tokens would fail everywhere else.
+        with _exclusive_lock(self._key_dir / ".signing.lock"):
+            if signing_path.exists():
+                self._load_private_key(signing_path)
+                if _algorithm_for_key(self.get_private_key()) != self._algorithm:
+                    optic.info("JWT algorithm changed; retiring current signing key")
+                    self._retire_current_key()
+                    self._generate_key_pair(signing_path)
+            else:
                 self._generate_key_pair(signing_path)
-        else:
-            self._generate_key_pair(signing_path)
-        self._load_retired_keys()
+            self._load_retired_keys()
         optic.info("JWT signing key ready (alg={}, kid={})", self._algorithm, self._kid)
 
     def get_private_key(self) -> PrivateKey:
@@ -194,15 +250,23 @@ class KeyManager:
             serialization.PrivateFormat.PKCS8,
             self._encryption_args(),
         )
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # Write a temporary file and rename it over the key, so a reader never sees a
+        # truncated or half-written key.
+        temporary = path.with_name(f"{path.name}.tmp{os.getpid()}")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.fchmod(descriptor, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "wb") as handle:
                 descriptor = -1
                 handle.write(pem)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
+            temporary.unlink(missing_ok=True)
 
     def _generate_key_pair(self, path: Path) -> None:
         optic.debug("generating {} JWT signing key", self._algorithm)

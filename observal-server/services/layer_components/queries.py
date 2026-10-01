@@ -157,6 +157,13 @@ async def presence_version_distribution(
     return {row["version"]: int(row["sessions"]) for row in rows}
 
 
+# The selected listing (and version, when scoped) inside a layer_components row.
+_TARGET = (
+    "c.component_type = {component_type:String} AND c.component_id = {component_id:String} "
+    "AND ({component_version_id:String} = '' OR c.component_version_id = {component_version_id:String})"
+)
+
+
 async def presence_coverage(
     project_id: str,
     component_type: str,
@@ -166,9 +173,10 @@ async def presence_coverage(
 ) -> dict:
     """Report exact presence-stage coverage; unknown is never absence.
 
-    Occurrence diagnostic counters cover all components in a session's layer,
-    not just the selected listing. Only present_sessions/present_users are
-    target-specific; never use a layer-level verified count as target presence.
+    The verified, unverified and drifted presence counters are for the selected
+    listing (and version), so they never exceed the eligible sessions that hold
+    it. The unresolved and ambiguous identity counters cover all components in a
+    session's layer: an unresolved occurrence has no listing to select by.
     """
     params = _params(project_id, period) | _identity_params(component_type, component_id, component_version_id)
     sql = (
@@ -211,9 +219,15 @@ async def presence_coverage(
     LEFT JOIN (SELECT c.project_id, c.user_id, c.layer_hash, c.extraction_generation,
                       countIf(c.identity_status = 'unresolved') AS unresolved,
                       countIf(c.identity_status = 'ambiguous') AS ambiguous,
-                      countIf(c.verification_status = 'unverified') AS unverified,
-                      countIf(c.verification_status IN ('drifted', 'missing')) AS drifted,
-                      countIf(c.identity_status = 'resolved' AND c.verification_status = 'verified') AS verified
+                      countIf(c.verification_status = 'unverified' AND """
+        + _TARGET
+        + """) AS unverified,
+                      countIf(c.verification_status IN ('drifted', 'missing') AND """
+        + _TARGET
+        + """) AS drifted,
+                      countIf(c.identity_status = 'resolved' AND c.verification_status = 'verified' AND """
+        + _TARGET
+        + """) AS verified
                FROM layer_components AS c FINAL
                WHERE c.project_id = {project_id:String} AND c.extractor_version = {extractor_version:UInt16}
                GROUP BY c.project_id, c.user_id, c.layer_hash, c.extraction_generation) AS d

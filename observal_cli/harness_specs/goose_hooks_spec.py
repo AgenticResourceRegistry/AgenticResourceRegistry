@@ -25,12 +25,13 @@ block signals are never triggered and telemetry can never deny a tool call.
 
 from __future__ import annotations
 
-import shlex
-import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from observal_cli.shared.launcher import isolation_flag
+from observal_cli.shared.launcher import posix_module_command
 from observal_cli.shared.utils import resolve_goose_agents_home
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 PLUGIN_NAME = "observal"
 
@@ -43,8 +44,6 @@ GOOSE_HOOK_EVENTS = (
 
 # goose defaults to 30s; keep it explicit so a slow first spool cannot be killed.
 HOOK_TIMEOUT_SECONDS = 30
-
-_PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 
 
 def plugin_dir(home: Path | None = None) -> Path:
@@ -62,25 +61,10 @@ def manifest_file(home: Path | None = None) -> Path:
     return plugin_dir(home) / "plugin.json"
 
 
-def _python_cmd() -> str:
-    """Return the python invocation, adding PYTHONPATH when the CLI is not importable.
-
-    goose always runs hook commands through ``sh -c`` (on every platform), so
-    this is POSIX shell syntax and the interpreter path is quoted.
-    """
-    interpreter = shlex.quote(sys.executable)
-    # Checked in an isolated interpreter: the CLI's own process may import
-    # observal_cli only through its working directory or PYTHONPATH.
-    from observal_cli.shared.launcher import importable_in_isolation
-
-    if importable_in_isolation():
-        return interpreter
-    return f"PYTHONPATH={shlex.quote(_PKG_ROOT)} {interpreter}"
-
-
 def hook_command() -> str:
     """Return the shell command goose runs for every Observal hook event."""
-    return f"{_python_cmd()} {isolation_flag()} -m observal_cli.hooks.session_push --harness goose"
+    # goose runs every hook through ``sh -c``, Windows included, so the POSIX form always.
+    return f"{posix_module_command('observal_cli.hooks.session_push')} --harness goose"
 
 
 def build_plugin_manifest() -> dict:

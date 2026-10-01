@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,6 +20,7 @@ from observal_cli.constants import VALID_HARNESSES
 from observal_cli.errors import ErrorCategory, fail
 from observal_cli.prompts import select_many, select_one
 from observal_cli.render import OutputMode, console, esc, output_json, spinner
+from observal_cli.shared.launcher import module_subprocess
 
 _OPERATION = "Share repository agents"
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -350,9 +350,7 @@ def open_share(
 
     failures: list[str] = []
     for item in selected:
-        command = [
-            sys.executable,
-            "-m",
+        command, env = module_subprocess(
             "observal_cli",
             "agent",
             "pull",
@@ -363,10 +361,10 @@ def open_share(
             target_harness,
             "--dir",
             str(Path(directory).resolve()),
-        ]
+        )
         if yes:
             command.append("--no-prompt")
-        completed = subprocess.run(command, check=False)
+        completed = subprocess.run(command, check=False, env=env)
         if completed.returncode != 0:
             failures.append(item["qualified_name"])
     if failures:

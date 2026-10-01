@@ -166,3 +166,42 @@ def test_presence_index_reads_claude_code_skill_results(home):
     (occurrence,) = normalize_snapshot(json.loads(json.dumps(pins)), {"skill_verifications": [record]})
     assert occurrence.verification_status == "verified"
     assert occurrence.location_sha256 == record["location_sha256"]
+
+
+def test_a_pulled_registry_skill_without_a_server_path_is_fingerprinted_and_verified(home, tmp_path, monkeypatch):
+    """Regression: agent pull left Claude Code skills unfingerprinted, so they were never verified.
+
+    The server gives Claude Code skills no path; the installer writes .agents/skills/<name>
+    and links it into .claude/skills. The pull must fingerprint the file it actually wrote.
+    """
+    from observal_cli.cmd_pull import _fingerprint_written_skills, write_install_snippet
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    snippet = {
+        # The profile is written first, as in a real pull, so .claude/ exists for the skill link.
+        "agent_profile": {"path": ".claude/agents/agent.md", "content": "---\nname: agent\n---\n"},
+        "skill_components": [{"name": "review", "skill_md_content": CONTENT.decode()}],
+    }
+    write_install_snippet(
+        snippet,
+        harness="claude-code",
+        adapter=get_adapter("claude-code"),
+        target_dir=project,
+        agent_id=AGENT,
+        is_user_scope=False,
+        quiet=True,
+    )
+    assert (project / ".claude" / "skills" / "review" / "SKILL.md").read_bytes() == CONTENT
+    components = [{"type": "skill", "local_name": "review"}]
+    assert _fingerprint_written_skills(snippet, components, project, False) == []
+    assert components[0]["skill_integrity"] == FINGERPRINT
+    record = _record(
+        _registry(components[0]["skill_integrity"], scope="project", directory=str(project)),
+        {"project:.claude/skills/review/SKILL.md": CONTENT},
+        str(project),
+    )
+    assert record["status"] == "verified"

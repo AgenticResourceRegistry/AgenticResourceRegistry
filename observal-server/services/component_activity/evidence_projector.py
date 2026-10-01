@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 from .projector import (
+    ProjectionRaceError,
     _canonical_row,
     _index_layer,
     _inputs_unchanged,
@@ -181,7 +182,7 @@ async def project_session_evidence(
                 data="\n".join(json.dumps(row | {"projection_generation": generation}) for row in rows),
             )
         if not await _inputs_unchanged(params, revision, source, generations, project_id, user_id, harness, kind):
-            raise RuntimeError(f"Canonical source or published {kind} mapping changed during publication")
+            raise ProjectionRaceError(f"Canonical source or published {kind} mapping changed during publication")
         await _marker(params, version, generation, "complete", revision, counts, kind)
     except Exception:
         try:

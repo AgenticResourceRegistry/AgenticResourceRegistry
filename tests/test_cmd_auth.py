@@ -2165,11 +2165,15 @@ def test_run_doctor_patch_uses_isolated_subprocess_environment(
     completed = SimpleNamespace(returncode=1, stdout="doctor output\n", stderr="doctor warning\n")
     run = MagicMock(return_value=completed)
     monkeypatch.setattr(subprocess, "run", run)
+    from observal_cli.shared import launcher
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
 
     auth._run_doctor_patch("cursor")
 
     command = run.call_args.args[0]
-    assert command[:4] == [sys.executable, "-m", "observal_cli.main", "doctor"]
+    # -I keeps the working directory and any inherited PYTHONPATH off sys.path.
+    assert command[:6] == [sys.executable, "-I", "-X", "utf8", "-m", "observal_cli.main"]
     assert command[-1] == "cursor"
     assert run.call_args.kwargs["capture_output"] is True
     assert run.call_args.kwargs["timeout"] == 30

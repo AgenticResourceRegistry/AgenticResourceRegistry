@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import TYPE_CHECKING
 
+import yaml
 from loguru import logger as optic
 
 from observal_shared.agent_model import is_auto_model
@@ -155,6 +156,21 @@ def _claude_code_hook_bindings(hook_configs: list[dict]) -> list[dict]:
     return bindings
 
 
+def _yaml_double_quoted(value: str) -> str:
+    """``value`` as a one-line YAML double-quoted scalar that parses back to exactly ``value``.
+
+    Written by the YAML emitter, not JSON: JSON's surrogate-pair escapes for astral
+    characters (an emoji) do not round-trip through a YAML reader, and a raw Unicode
+    line separator would be folded. The emitter escapes those (``\\U0001F642``,
+    ``\\L``, ``\\P``), so Claude Code reads back the command the hook binding records.
+    """
+    text = yaml.safe_dump(value, default_style='"', allow_unicode=True, width=float("inf"))
+    text = text.removesuffix("\n")
+    if "\n" in text or yaml.safe_load(text) != value:
+        raise ValueError("value cannot be written as one YAML scalar")
+    return text
+
+
 def _custom_hook_matcher_lines(hook: dict) -> list[str]:
     """Build YAML lines for a single custom hook matcher group."""
     handler_type = hook.get("handler_type", "command")
@@ -171,7 +187,11 @@ def _custom_hook_matcher_lines(hook: dict) -> list[str]:
         ]
     else:
         command = _claude_code_hook_command(hook)
-        lines = ["    - hooks:", "        - type: command", f'          command: "{command}"'] if command else []
+        lines = (
+            ["    - hooks:", "        - type: command", f"          command: {_yaml_double_quoted(command)}"]
+            if command
+            else []
+        )
     return lines
 
 

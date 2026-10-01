@@ -13,6 +13,7 @@ from services.harness.helpers import (
     _claude_code_hooks_frontmatter_lines,
     _collect_hook_script_files,
     _model_name_to_frontmatter,
+    _yaml_double_quoted,
 )
 
 
@@ -149,7 +150,7 @@ class ClaudeCodeAdapter(BaseHarnessAdapter):
         ]
         agent_desc = getattr(ctx.agent, "description", "") or ""
         if agent_desc:
-            frontmatter_lines.append(f'description: "{agent_desc}"')
+            frontmatter_lines.append(f"description: {_yaml_double_quoted(agent_desc)}")
         if model_choice:
             frontmatter_lines.append(f"model: {model_choice}")
         if tools:

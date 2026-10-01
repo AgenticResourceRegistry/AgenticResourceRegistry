@@ -26,6 +26,10 @@ The adapter records the configured server name it actually dispatched to in the 
 
 `isError` is an explicit boolean on every result. The same `details` shapes appear in the `pi-mcp-adapter` 3.2.0 source (`proxy-modes.ts` `callIdentity`, `direct-tools.ts`). Version 3.x reads `mcp-adapter.json` instead of Pi's `mcp.json`, which is why the Pi extension hashes and checks both file sets before reporting an MCP as verified.
 
+### Adapter 4.0
+
+`adapter4_proxy_session.jsonl` is a sanitized copy of a headless Pi 0.99.2 session recorded on 2026-10-02 with `pi-mcp-adapter` 4.0.0 and Opus 4.6 on Amazon Bedrock, in an isolated `HOME`, after `/agent` activated a pulled synthetic Agent. Its stdio server `e2e-clock` has `get_time` (succeeds) and `fail` (returns an MCP tool error). The model read the agent's skill, then called both tools through the adapter's `mcp__e2e_clock` namespace proxy. IDs, the `cwd`, paths, the system prompt and sections, user and assistant text, thinking, signatures, tool-result content and `details.mcpResult` were replaced as above. Tool names, arguments, `toolCallId` links, `isError`, `details.mode`, `details.server`, `details.tool`, `details.error`, `details.canonicalTool`, timestamps, model and usage come from the recording. The `details` shapes are the same as 2.38.0 and the 3.2.0 source, and 4.0.0 reads the same `mcp-adapter.json`. Direct tools were not recorded with 4.0.0; their `details` construction is unchanged from 3.2.0 in the 4.0.0 source.
+
 ## Skill fixtures
 
 Sanitized copies of two headless Pi sessions recorded on 2026-10-01 with Pi 0.99.2, using a synthetic user-scope skill `observal-probe` (installed at `<agent>/skills/observal-probe/SKILL.md`) in an isolated `PI_CODING_AGENT_DIR` with `--no-extensions`. The skill tells the model to reply `PROBE-7F3A`; both sessions did.

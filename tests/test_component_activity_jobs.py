@@ -340,3 +340,33 @@ async def test_recency_window_and_unprojectable_statuses(monkeypatch):
     assert page.await_args.args[3] is None
     with pytest.raises(ValueError):
         await activity.backfill_component_activity({}, since_days=0)
+
+
+@pytest.mark.asyncio
+async def test_a_projection_race_is_logged_with_its_reason_and_other_errors_by_type_only(monkeypatch):
+    """Regression: the worker logged only "RuntimeError" for the designed fail-closed race."""
+    from services.component_activity.projector import ProjectionRaceError
+
+    logged = []
+    monkeypatch.setattr(activity.optic, "warning", lambda message, *args: logged.append(message.format(*args)))
+    monkeypatch.setattr(activity, "project_session_activity", AsyncMock(return_value={"status": "complete"}))
+    monkeypatch.setattr(
+        activity,
+        "project_session_skill_evidence",
+        AsyncMock(
+            side_effect=ProjectionRaceError("Canonical source or published skill mapping changed during publication")
+        ),
+    )
+    monkeypatch.setattr(
+        activity,
+        "project_session_hook_evidence",
+        AsyncMock(side_effect=ValueError("SELECT secret FROM sessions WHERE user = 'alice'")),
+    )
+    result = await activity.project_component_activity({}, "default", "u1", "claude-code", "s1")
+    assert result["skill"] == {"status": "failed"} and result["hook"] == {"status": "failed"}
+    assert (
+        "skill evidence projection failed: ProjectionRaceError: "
+        "Canonical source or published skill mapping changed during publication"
+    ) in logged
+    assert "hook evidence projection failed: ValueError" in logged
+    assert not any("secret" in line for line in logged), "other exceptions are logged by type only"

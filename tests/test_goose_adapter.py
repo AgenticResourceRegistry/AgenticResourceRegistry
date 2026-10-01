@@ -253,7 +253,8 @@ def test_hook_command_is_posix_shell_safe(monkeypatch: pytest.MonkeyPatch):
     from observal_cli.harness_specs import goose_hooks_spec
     from observal_cli.shared import launcher
 
-    monkeypatch.setattr(goose_hooks_spec.sys, "executable", "/opt/py 3.14/bin/python")
+    monkeypatch.setattr(launcher.sys, "executable", "/opt/py 3.14/bin/python")
+    monkeypatch.setattr(launcher.sys, "platform", "win32")  # still POSIX: goose uses sh -c everywhere
     monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)  # an installed CLI
     command = goose_hooks_spec.hook_command()
 

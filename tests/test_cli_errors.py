@@ -140,6 +140,31 @@ def test_handle_error_reads_ard_error_message():
     assert raised.value.message == "Agent Cards must use https."
 
 
+def test_handle_error_shows_fastapi_validation_messages_without_echoing_input():
+    """Regression: a 422 list ``detail`` was dropped, so the CLI said only "rejected with HTTP 422"."""
+    detail = [
+        {
+            "type": "value_error",
+            "loc": ["body", "category"],
+            "msg": "Value error, Invalid category 'utilities'. Valid options: developer-tools, general",
+            "input": "utilities-with-private-input",
+            "ctx": {"error": {}},
+        },
+        {"type": "missing", "loc": ["body", "name"], "msg": "Field required", "input": {"token": "secret"}},
+    ]
+    response = _response(422, data={"detail": detail})
+    error = httpx.HTTPStatusError("", request=response.request, response=response)
+
+    with pytest.raises(CliError) as raised:
+        client._handle_error(error, "/api/v1/mcps/submit", operation="Submit MCP server", resource="MCP registry")
+
+    assert raised.value.message == (
+        "category: Value error, Invalid category 'utilities'. Valid options: developer-tools, general; "
+        "name: Field required"
+    )
+    assert "private-input" not in raised.value.message and "secret" not in raised.value.message
+
+
 def test_handle_error_preserves_request_id_and_http_status():
     response = _response(503, text="Internal error", headers={"X-Request-ID": "request-123"})
     error = httpx.HTTPStatusError("", request=response.request, response=response)

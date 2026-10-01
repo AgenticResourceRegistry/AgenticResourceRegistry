@@ -282,3 +282,53 @@ def test_presence_index_reads_hook_results(project):
     assert occurrence.location_sha256 == record["location_sha256"]
     (as_skill,) = normalize_snapshot(pins, {"skill_verifications": [record]})
     assert as_skill.verification_status == "unverified", "a skill result never verifies a hook"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "note: \\"quoted\\" \\\\ done" && printf \'%s\\n\' it\'s',
+        'printf "\U0001f642"',
+        "echo a\u2028b",
+        "echo a\u2029b",
+        "echo a\x85b",
+        "printf 'tab\there'\nnext",
+    ],
+    ids=["quotes-backslashes", "emoji", "line-separator", "paragraph-separator", "next-line", "tab-newline"],
+)
+def test_a_hook_command_reads_back_exactly_and_keeps_launchers_rewritable(monkeypatch, command):
+    """Regression: an unescaped `command: "echo "x""` made the agent file invalid YAML, and
+    json.dumps escaped an emoji as a surrogate pair that YAML reads back as two code points.
+
+    Either way Claude Code could not read back the bound command, and agent pull's launcher
+    rewrite (which refuses unparseable frontmatter) left the session-push hooks on a bare python3.
+    """
+    import sys
+
+    import yaml
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "observal-server"))
+    from observal_cli import cmd_pull
+    from observal_cli.shared import launcher
+    from services.harness import ConfigContext
+    from services.harness.claude_code import ClaudeCodeAdapter
+
+    hook = {"event": "UserPromptSubmit", "handler_type": "command", "handler_config": {"command": command}}
+    ctx = ConfigContext(
+        agent=None,
+        safe_name="reviewer",
+        harness="claude-code",
+        observal_url="http://localhost:8000",
+        hook_configs=[{**hook, "name": "note"}],
+        options={"scope": "project"},
+    )
+    result = ClaudeCodeAdapter().format_config(ctx)
+    profile = result["agent_profile"]["content"]
+    hooks = yaml.safe_load(profile.split("\n---", 1)[0][4:])["hooks"]["UserPromptSubmit"]
+    commands = [h["command"] for group in hooks for h in group["hooks"]]
+    assert command in commands, "the command reads back exactly"
+    assert result["hook_bindings"][0]["command"] == command, "and matches the binding"
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
+    rewritten = cmd_pull.rewrite_frontmatter_hook_launchers(profile)
+    assert rewritten != profile and "python3 -m observal_cli" not in rewritten.split("\n---", 1)[0]

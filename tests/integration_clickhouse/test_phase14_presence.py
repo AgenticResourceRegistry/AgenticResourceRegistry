@@ -571,3 +571,40 @@ async def test_genuine_standalone_install_fixture_extracts_exact_scoped_cohort()
     assert await presence_cohort(project, "mcp", listing["id"], str(version_id), period) == []
     coverage = await presence_coverage(project, "mcp", listing["id"], str(version_id), period)
     assert coverage["identity_conflict_sessions"] >= 1 and coverage["present_sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_presence_verification_counters_are_for_the_selected_component():
+    """Regression: verified/unverified/drifted counted every component in the layer, so a hook
+    report showed 3 verified sessions against 2 present (live end-to-end run)."""
+    project = "phase14-" + uuid.uuid4().hex
+    layer_hash = "v2_" + "c" * 60
+    skill = "44444444-4444-4444-8444-444444444444"
+    period = (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC))
+    _insert("session_stats_agg", [_session(project, "owner", layer_hash, "one")])
+    other = {
+        **_component(project, "owner", layer_hash, 1),
+        "occurrence_key": "proof-skill",
+        "component_type": "skill",
+        "raw_listing_id": skill,
+        "component_id": skill,
+        "component_version_id": "",
+        "verification_status": "unverified",
+    }
+    _insert("layer_components", [_component(project, "owner", layer_hash, 1), other])
+    _insert("layer_component_extractions", [_marker(project, "owner", layer_hash, 1, "complete")])
+
+    mcp = await presence_coverage(project, "mcp", COMPONENT, None, period)
+    assert (mcp["present_sessions"], mcp["verified_presence_sessions"], mcp["unverified_presence_sessions"]) == (
+        1,
+        1,
+        0,
+    )
+    unverified_skill = await presence_coverage(project, "skill", skill, None, period)
+    assert (
+        unverified_skill["present_sessions"],
+        unverified_skill["verified_presence_sessions"],
+        unverified_skill["unverified_presence_sessions"],
+    ) == (0, 0, 1)
+    scoped = await presence_coverage(project, "mcp", COMPONENT, OTHER_VERSION, period)
+    assert scoped["verified_presence_sessions"] == 0, "a version-scoped query counts only that version"
