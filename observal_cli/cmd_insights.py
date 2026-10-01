@@ -29,11 +29,12 @@ from observal_cli.render import (
 
 insights_app = typer.Typer(
     help=(
-        "Agent and MCP component insight reports\n\n"
+        "Agent, MCP, skill and hook component insight reports\n\n"
         "Examples:\n"
         "  observal ops insights list alice/my-agent\n"
         "  observal ops insights show alice/my-agent latest\n"
-        "  observal ops insights generate alice/my-agent"
+        "  observal ops insights generate alice/my-agent\n"
+        "  observal ops insights generate --component skill alice/review"
     )
 )
 
@@ -130,14 +131,18 @@ def _select_report_id(reports: list[dict], report_ref: str | None) -> str:
     )
 
 
+_COMPONENT_REPORT_TYPES = ("mcp", "skill", "hook")
+
+
 def _component_path(component: tuple[str, str]) -> str:
     kind, ref = component
-    if kind != "mcp":
+    if kind not in _COMPONENT_REPORT_TYPES:
         fail(
             ErrorCategory.VALIDATION,
-            "Only MCP component reports are supported.",
+            f"Component reports support {', '.join(_COMPONENT_REPORT_TYPES)} only.",
             operation="Component insight report",
             resource="component type",
+            remediation="Use --component mcp|skill|hook <ref>.",
         )
     resolved = client.resolve_registry_reference(kind, ref)
     return f"/api/v1/insights/components/{kind}/{resolved}"
@@ -332,6 +337,14 @@ def insights_show(
             rprint(f"  [red]Error:[/red] {esc(data['error_message'])}")
         return
 
+    if data.get("subject_type") == "component" and data.get("component_type") == "skill":
+        _render_skill_report(data)
+        return
+
+    if data.get("subject_type") == "component" and data.get("component_type") == "hook":
+        _render_hook_report(data)
+        return
+
     if data.get("subject_type") == "component":
         metrics = data.get("metrics") or {}
         coverage = data.get("coverage") or {}
@@ -454,6 +467,114 @@ def insights_show(
                 note_rendered = True
     if not note_rendered:
         _render_registry_match_note(registry_match)
+
+
+def _skill_count(metrics: dict, key: str, measured: bool, partial: bool) -> str:
+    """A measured count, "not measured" for this period, or "not recorded" by the cohort's harnesses."""
+    value = metrics.get(key)
+    if value is None and key in metrics:
+        return "not recorded"
+    if not measured or value is None:
+        return "not measured"
+    return f"{value} (only harnesses that record it)" if partial else str(value)
+
+
+def _render_skill_report(data: dict) -> None:
+    """Deterministic skill evidence: loads and invocations show context, never that a skill helped."""
+    metrics = data.get("metrics") or {}
+    coverage = data.get("coverage") or {}
+    reasons = coverage.get("reasons") or []
+    measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
+    rprint(f"[bold]{esc(data.get('component_name') or 'Skill')} Insights[/bold]")
+    rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
+    rows = (
+        ("Present sessions", str(metrics.get("present_sessions", 0))),
+        ("Sessions with a confirmed load", _skill_count(metrics, "loaded_sessions", measured, False)),
+        (
+            "Sessions with an invocation",
+            _skill_count(metrics, "invoked_sessions", measured, "invoked_not_recorded_on_some_harnesses" in reasons),
+        ),
+        (
+            "Sessions where offered",
+            _skill_count(
+                metrics, "available_sessions", measured, "available_not_recorded_on_some_harnesses" in reasons
+            ),
+        ),
+    )
+    for label, value in rows:
+        rprint(f"  {label}: {esc(value)}")
+    if measured and metrics.get("load_attempts"):
+        rprint(f"  [dim]{metrics['load_attempts']} load attempts failed or had no confirmed result (not loads).[/dim]")
+    for label, values in (
+        ("Versions", metrics.get("version_distribution") or {}),
+        ("Harnesses", metrics.get("harness_distribution") or {}),
+    ):
+        if values:
+            rprint(f"  {label}: " + ", ".join(f"{esc(name)} ({count})" for name, count in sorted(values.items())))
+    projection = coverage.get("projection") or {}
+    evidence = coverage.get("evidence") or {}
+    rprint(
+        f"  Coverage: {projection.get('projection_complete_sessions', 0)} of "
+        f"{(coverage.get('presence') or {}).get('present_sessions', 0)} present sessions processed; "
+        f"state: {esc(coverage.get('attribution_state', 'unknown'))}"
+    )
+    rprint(
+        f"  Not counted: {evidence.get('collision_facts', 0)} ambiguous, "
+        f"{evidence.get('unmatched_facts', 0)} unmatched skill records (not tied to this verified install)"
+    )
+    if reasons:
+        rprint(f"  Gaps: {esc(', '.join(reasons))}")
+    for limitation in coverage.get("limitations") or []:
+        rprint(f"  [dim]{esc(limitation)}[/dim]")
+
+
+def _render_hook_report(data: dict) -> None:
+    """Deterministic hook evidence: recorded runs are a lower bound and never show effect."""
+    metrics = data.get("metrics") or {}
+    coverage = data.get("coverage") or {}
+    eligibility = coverage.get("eligibility") or {}
+    measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
+    rprint(f"[bold]{esc(data.get('component_name') or 'Hook')} Insights[/bold]")
+    rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
+    rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}")
+    rprint(f"  Sessions where it could run: {metrics.get('eligible_sessions', 0)}")
+    if measured:
+        rprint(f"  Sessions with a recorded run: {metrics.get('sessions_with_recorded_run', 0)} (a lower bound)")
+        rprint(
+            f"  Recorded runs: {metrics.get('runs_with_output', 0)} with output, "
+            f"{metrics.get('failures', 0)} failed, {metrics.get('blocks', 0)} blocked"
+        )
+    else:
+        rprint("  Recorded runs: not measured (no processed session where it could run)")
+    labels = (
+        ("headless_sessions", "headless (agent hooks do not run)"),
+        ("agent_inactive_sessions", "agent not active"),
+        ("mode_unknown_sessions", "session mode unknown"),
+    )
+    could_not = [f"{eligibility[key]} {label}" for key, label in labels if eligibility.get(key)]
+    if could_not:
+        rprint(f"  Could not run: {esc(', '.join(could_not))}")
+    for label, values in (
+        ("Versions", metrics.get("version_distribution") or {}),
+        ("Harnesses", metrics.get("harness_distribution") or {}),
+    ):
+        if values:
+            rprint(f"  {label}: " + ", ".join(f"{esc(name)} ({count})" for name, count in sorted(values.items())))
+    projection = coverage.get("projection") or {}
+    evidence = coverage.get("evidence") or {}
+    rprint(
+        f"  Coverage: {projection.get('projection_complete_sessions', 0)} of "
+        f"{(coverage.get('presence') or {}).get('present_sessions', 0)} present sessions processed; "
+        f"state: {esc(coverage.get('attribution_state', 'unknown'))}"
+    )
+    rprint(
+        f"  Not counted: {evidence.get('collision_runs', 0)} ambiguous, "
+        f"{evidence.get('unmatched_runs', 0)} unmatched recorded runs (not tied to this verified hook)"
+    )
+    if coverage.get("reasons"):
+        rprint(f"  Gaps: {esc(', '.join(coverage['reasons']))}")
+    for limitation in coverage.get("limitations") or []:
+        rprint(f"  [dim]{esc(limitation)}[/dim]")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

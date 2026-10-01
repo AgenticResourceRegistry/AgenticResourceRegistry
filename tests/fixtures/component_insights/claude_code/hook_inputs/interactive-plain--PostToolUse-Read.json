@@ -1,0 +1,16 @@
+{
+ "cwd": "/home/fixture/project",
+ "duration_ms": 6,
+ "effort": {
+  "level": "high"
+ },
+ "hook_event_name": "PostToolUse",
+ "permission_mode": "default",
+ "prompt_id": "fixture-prompt_id",
+ "session_id": "fixture-session_id",
+ "tool_input": {},
+ "tool_name": "Read",
+ "tool_response": {},
+ "tool_use_id": "fixture-tool_use_id",
+ "transcript_path": "/home/fixture/.claude/projects/-home-fixture-project/transcript_path.jsonl"
+}

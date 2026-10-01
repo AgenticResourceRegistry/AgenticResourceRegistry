@@ -474,3 +474,44 @@ async def test_worker_does_not_read_activity_after_team_visibility_revoked(monke
     await batch.run_single_report(str(report.id))
     assert report.status == InsightReportStatus.failed
     read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skill_report_generation_uses_skill_evidence_never_mcp_calls(monkeypatch):
+    from api.routes import insights
+    from services.component_activity import skill_queries
+    from services.component_activity.skill_queries import build_skill_coverage
+
+    listing_id = uuid.uuid4()
+    user = SimpleNamespace(id=uuid.uuid4())
+    added: list = []
+
+    async def flush():
+        for report in added:
+            report.id = report.id or uuid.uuid4()
+            report.created_at = report.started_at
+            for column in ("sessions_analyzed", "progress_current", "progress_total", "progress_percent"):
+                setattr(report, column, getattr(report, column) or 0)  # server defaults on insert
+
+    db = SimpleNamespace(add=added.append, flush=flush, commit=AsyncMock())
+    ref = SimpleNamespace(component_version_id=None, qualified_name="team/review")
+    monkeypatch.setattr(
+        insights, "_authorize_component", AsyncMock(return_value=(SimpleNamespace(id=listing_id), ref, None))
+    )
+    mcp = AsyncMock()
+    monkeypatch.setattr(insights, "activity_summary", mcp)
+    coverage = build_skill_coverage(
+        {"present_sessions": 2}, {"projection_complete_sessions": 2, "observed_sessions": 1}, 515
+    )
+    skill = AsyncMock(return_value={"present_sessions": 2, "coverage": coverage})
+    monkeypatch.setattr(skill_queries, "skill_activity_summary", skill)
+    pool = SimpleNamespace(enqueue_job=AsyncMock())
+    monkeypatch.setattr(insights, "_get_arq_pool", AsyncMock(return_value=pool))
+
+    item = await insights.generate_component_insight("skill", "team/review", None, db, user)
+    assert item.component_type == "skill" and item.status == "pending"
+    assert (added[0].component_type, added[0].coverage["attribution_state"]) == ("skill", "observed")
+    assert "evidence" in added[0].coverage and "calls" not in added[0].coverage
+    skill.assert_awaited_once()
+    mcp.assert_not_awaited()
+    pool.enqueue_job.assert_awaited_once_with("generate_insight_report", str(added[0].id))

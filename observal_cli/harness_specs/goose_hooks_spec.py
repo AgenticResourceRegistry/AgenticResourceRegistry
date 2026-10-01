@@ -29,6 +29,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from observal_cli.shared.launcher import isolation_flag
 from observal_cli.shared.utils import resolve_goose_agents_home
 
 PLUGIN_NAME = "observal"
@@ -68,19 +69,18 @@ def _python_cmd() -> str:
     this is POSIX shell syntax and the interpreter path is quoted.
     """
     interpreter = shlex.quote(sys.executable)
-    try:
-        import importlib.util
+    # Checked in an isolated interpreter: the CLI's own process may import
+    # observal_cli only through its working directory or PYTHONPATH.
+    from observal_cli.shared.launcher import importable_in_isolation
 
-        if importlib.util.find_spec("observal_cli") is not None:
-            return interpreter
-    except Exception:
-        pass
+    if importable_in_isolation():
+        return interpreter
     return f"PYTHONPATH={shlex.quote(_PKG_ROOT)} {interpreter}"
 
 
 def hook_command() -> str:
     """Return the shell command goose runs for every Observal hook event."""
-    return f"{_python_cmd()} -m observal_cli.hooks.session_push --harness goose"
+    return f"{_python_cmd()} {isolation_flag()} -m observal_cli.hooks.session_push --harness goose"
 
 
 def build_plugin_manifest() -> dict:

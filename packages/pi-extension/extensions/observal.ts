@@ -136,6 +136,8 @@ const PI_MCP_SOURCES = [
 const PI_MCP_VERIFICATION_PATH = "observal:mcp-verification";
 // Bump when verification semantics change: the layer hash then changes too.
 const PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1";
+const PI_SKILL_VERIFICATION_PATH = "observal:skill-verification";
+const PI_SKILL_VERIFIER = "observal-pi-skill-verification-v1";
 // The alias alphabet the CLI installs and verifies.
 const SAFE_MCP_ALIAS = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -872,6 +874,7 @@ export default function (pi: ExtensionAPI) {
   function buildPiLayerSnapshot(includeContent: boolean, cwd: string): LayerSnapshot {
     const piHome = path.join(os.homedir(), ".pi", "agent");
     const registry = currentRegistryLockfile();
+    const managed = piObservalManagedFiles(registry);
     const manifest: LayerFileEntry[] = [];
     // The exact bytes hashed for each MCP config source, reused for verification.
     const mcpSourceBytes = new Map<string, Buffer>();
@@ -890,7 +893,7 @@ export default function (pi: ExtensionAPI) {
           path: display,
           hash: `sha256-${sha256(content)}`,
           size: content.length,
-          source: "user",
+          source: managed.has(display) ? "observal" : "user",
         };
         // MCP/settings JSON may contain inline credentials. Keep the hash of
         // the original bytes for v2 identity but never upload their contents.
@@ -901,8 +904,8 @@ export default function (pi: ExtensionAPI) {
         continue;
       }
     }
-    const verification = piMcpVerificationEntry(registry, cwd);
-    if (verification) {
+    for (const verification of [piMcpVerificationEntry(registry, cwd), piSkillVerificationEntry(registry, cwd)]) {
+      if (!verification) continue;
       if (includeContent) verification.content = "";
       manifest.push(verification);
     }
@@ -913,8 +916,34 @@ export default function (pi: ExtensionAPI) {
       harnesses: { pi: manifest },
       lockfile_hash: computeLockfileHash(registry),
       pinned_versions: pins,
-      drift: computePiMcpDrift(registry, cwd, mcpSourceBytes, piHome),
+      drift: withSkillVerifications(
+        computePiMcpDrift(registry, cwd, mcpSourceBytes, piHome),
+        computePiSkillVerifications(registry, cwd, manifest),
+      ),
     };
+  }
+
+  /**
+   * Display paths Observal manages, labelled ``source: "observal"``. Mirrors
+   * ``PiAdapter.get_observal_managed_files`` (Python): the user AGENTS.md once
+   * any agent is pinned, and each pinned skill's user SKILL.md by its name.
+   */
+  function piObservalManagedFiles(registry: Record<string, any> | null): Set<string> {
+    const managed = new Set<string>();
+    const section = registry?.harnesses?.pi;
+    if (!isPlainObject(section)) return managed;
+    const skill = (item: unknown) => {
+      if (isPlainObject(item) && item.type === "skill" && typeof item.name === "string" && item.name) {
+        managed.add(`user:skills/${item.name}/SKILL.md`);
+      }
+    };
+    for (const agent of Array.isArray(section.agents) ? section.agents : []) {
+      if (!isPlainObject(agent)) continue;
+      if (typeof agent.name === "string" && agent.name) managed.add("user:AGENTS.md");
+      for (const component of Array.isArray(agent.components) ? agent.components : []) skill(component);
+    }
+    for (const item of Array.isArray(section.standalone) ? section.standalone : []) skill(item);
+    return managed;
   }
 
   /**
@@ -924,6 +953,57 @@ export default function (pi: ExtensionAPI) {
    * ``observal_cli.layer.pi_mcp_verification_entry`` byte for byte.
    */
   function piMcpVerificationEntry(registry: Record<string, any> | null, cwd: string): LayerFileEntry | null {
+    return piPinVerificationEntry(registry, cwd, "mcp", "mcp_integrity", PI_MCP_VERIFIER, PI_MCP_VERIFICATION_PATH, false);
+  }
+
+  /** Mirrors ``observal_cli.layer.skill_verification_entry("pi", ...)``: only fingerprinted skills, else absent. */
+  function piSkillVerificationEntry(registry: Record<string, any> | null, cwd: string): LayerFileEntry | null {
+    // Same-named skills Pi could load instead live outside the hashed manifest;
+    // their state must still change the layer identity.
+    // The active file's absolute location is part of the identity too.
+    const shadowState = (component: Record<string, any>, scope: string) => {
+      const alias = text(component.local_name);
+      return [skillLocationSha256(scope, alias, cwd), ...(alias ? skillShadowPaths(alias, cwd).map(fileFingerprint) : [])]
+        .join("|");
+    };
+    return piPinVerificationEntry(registry, cwd, "skill", "skill_integrity", PI_SKILL_VERIFIER, PI_SKILL_VERIFICATION_PATH, true, shadowState);
+  }
+
+  /**
+   * Mirrors ``observal_cli.layer.skill_location_sha256``: SHA-256 of the absolute
+   * SKILL.md path Pi advertises and reads. Skill evidence must name this file.
+   */
+  function skillLocationSha256(scope: string, alias: string, cwd: string): string {
+    if (!alias) return "";
+    const location = scope === "user" ? path.join(PI_HOME, "skills", alias, "SKILL.md")
+      : scope === "project" ? path.join(path.resolve(cwd), ".pi", "skills", alias, "SKILL.md") : "";
+    return location ? sha256(Buffer.from(location, "utf8")) : "";
+  }
+
+  /** Mirrors ``PiAdapter.skill_shadow_paths``: Agent Skills locations Pi also reads. */
+  function skillShadowPaths(alias: string, cwd: string): string[] {
+    return [path.join(os.homedir(), ".agents", "skills", alias, "SKILL.md"), path.join(cwd, ".agents", "skills", alias, "SKILL.md")];
+  }
+
+  /** ``observal_cli.layer.skill_file_fingerprint``: ``sha256-<hex>`` of a file, or "" if unreadable. */
+  function fileFingerprint(file: string): string {
+    try {
+      return `sha256-${sha256(fs.readFileSync(file))}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function piPinVerificationEntry(
+    registry: Record<string, any> | null,
+    cwd: string,
+    componentType: string,
+    integrityKey: string,
+    verifier: string,
+    entryPath: string,
+    requireIntegrity: boolean,
+    extra?: (component: Record<string, any>, scope: string) => string,
+  ): LayerFileEntry | null {
     const section = registry?.harnesses?.pi;
     if (!section || typeof section !== "object" || Array.isArray(section)) return null;
     const directory = path.resolve(cwd);
@@ -938,10 +1018,13 @@ export default function (pi: ExtensionAPI) {
       .filter((item: unknown) => isPlainObject(item) && included(item))]);
     for (const [parent, components] of parents) {
       for (const component of Array.isArray(components) ? components : []) {
-        if (!isPlainObject(component) || component.type !== "mcp") continue;
+        if (!isPlainObject(component) || component.type !== componentType) continue;
+        if (requireIntegrity && !text(component[integrityKey])) continue;
         const scope = text(component.scope) || (parent ? text(parent.scope) : "") || "project";
-        rows.push([parent ? uuid(parent.id) : "", uuid(component.id), text(component.local_name), scope,
-          text(component.mcp_integrity)]);
+        const row = [parent ? uuid(parent.id) : "", uuid(component.id), text(component.local_name), scope,
+          text(component[integrityKey])];
+        if (extra) row.push(extra(component, scope));
+        rows.push(row);
       }
     }
     if (!rows.length) return null;
@@ -952,8 +1035,8 @@ export default function (pi: ExtensionAPI) {
       }
       return 0;
     });
-    const data = Buffer.from(JSON.stringify([PI_MCP_VERIFIER, rows]), "utf-8");
-    return { path: PI_MCP_VERIFICATION_PATH, hash: `sha256-${sha256(data)}`, size: data.length, source: "observal" };
+    const data = Buffer.from(JSON.stringify([verifier, rows]), "utf-8");
+    return { path: entryPath, hash: `sha256-${sha256(data)}`, size: data.length, source: "observal" };
   }
 
   function isSensitivePiConfig(display: string): boolean {
@@ -1090,6 +1173,80 @@ export default function (pi: ExtensionAPI) {
       }
     }
     return { is_canonical: drifted.length ? false : null, drifted_files: drifted, mcp_verifications: verifications };
+  }
+
+  /**
+   * Verify each pinned, fingerprinted skill against the SKILL.md Pi loads; fail
+   * closed. Mirrors ``observal_cli.layer._skill_status``: ``verified`` needs the
+   * active file in this manifest to hash to the pull-time fingerprint, no
+   * same-named skill in the other scope with different content, and none in
+   * ``~/.agents/skills`` or the project's ``.agents/skills`` (unhashed). A
+   * present file with different content is ``drifted``; an absent one is
+   * ``unverified``, never drift or use.
+   */
+  function computePiSkillVerifications(
+    registry: Record<string, any> | null,
+    cwd: string,
+    manifest: LayerFileEntry[],
+  ): Array<Record<string, string>> {
+    const section = registry?.harnesses?.pi;
+    if (!isPlainObject(section)) return [];
+    const hashes = new Map(manifest.map((entry) => [entry.path, entry.hash]));
+    const directory = path.resolve(cwd);
+    const included = (item: Record<string, any>): boolean =>
+      item.scope === "user" || (typeof item.directory === "string" && path.resolve(item.directory) === directory);
+    const activePath = (scope: string, alias: string): string | null =>
+      scope === "user" ? `user:skills/${alias}/SKILL.md` : scope === "project" ? `project:.pi/skills/${alias}/SKILL.md` : null;
+    const parents: Array<[Record<string, any> | null, unknown[]]> = [];
+    for (const agent of Array.isArray(section.agents) ? section.agents : []) {
+      if (isPlainObject(agent) && included(agent)) parents.push([agent, Array.isArray(agent.components) ? agent.components : []]);
+    }
+    parents.push([null, (Array.isArray(section.standalone) ? section.standalone : []).filter(
+      (item: unknown) => isPlainObject(item) && included(item))]);
+    const out: Array<Record<string, string>> = [];
+    for (const [parent, components] of parents) {
+      for (const component of components as Array<Record<string, any>>) {
+        if (!isPlainObject(component) || component.type !== "skill") continue;
+        const alias = typeof component.local_name === "string" && SAFE_MCP_ALIAS.test(component.local_name)
+          ? component.local_name : "";
+        const scope = text(component.scope) || (parent ? text(parent.scope) : "") || "project";
+        const expected = typeof component.skill_integrity === "string" ? component.skill_integrity : "";
+        let status = "unverified";
+        const active = alias ? activePath(scope, alias) : null;
+        const actual = active ? hashes.get(active) : undefined;
+        if (alias && expected && actual !== undefined) {
+          if (actual !== expected) {
+            status = "drifted";
+          } else {
+            const other = activePath(scope === "user" ? "project" : "user", alias);
+            const otherHash = other ? hashes.get(other) : undefined;
+            const shadowed = skillShadowPaths(alias, cwd).some((candidate) => fs.existsSync(candidate));
+            status = (otherHash !== undefined && otherHash !== expected) || shadowed ? "unverified" : "verified";
+          }
+        }
+        out.push({
+          harness: "pi",
+          component_id: uuid(component.id),
+          alias,
+          scope,
+          parent_agent_id: parent ? uuid(parent.id) : "",
+          status,
+          location_sha256: skillLocationSha256(scope, alias, cwd),
+        });
+      }
+    }
+    return out;
+  }
+
+  function withSkillVerifications(
+    drift: Record<string, any>,
+    skills: Array<Record<string, string>>,
+  ): Record<string, unknown> {
+    const skillDrift = skills.filter((item) => item.status === "drifted")
+      .map((item) => ({ harness: "pi", component: item.component_id, alias: item.alias, status: item.status }));
+    const drifted = [...(drift.drifted_files ?? []), ...skillDrift];
+    return { ...drift, is_canonical: drifted.length ? false : drift.is_canonical ?? null, drifted_files: drifted,
+      skill_verifications: skills };
   }
 
   function piMcpSourcePath(display: string, cwd: string, piHome: string): string {

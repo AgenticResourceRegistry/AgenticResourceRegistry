@@ -42,13 +42,14 @@ def build_copilot_hooks(hooks_dir: str = ".github/hooks", bash_cmd: str | None =
         hooks_dir: Relative path to the hooks directory (for the .ps1 script reference).
         bash_cmd: The bash command for Linux/WSL. If None, uses sys.executable.
     """
-    import sys
 
     ps1_path = f"{hooks_dir}/run_hook.ps1"
     win_cmd = f"powershell -ExecutionPolicy Bypass -File {ps1_path}"
 
     if bash_cmd is None:
-        bash_cmd = f'"{sys.executable}" -m observal_cli.hooks.session_push --harness copilot --json-response'
+        from observal_cli.shared.launcher import posix_module_command
+
+        bash_cmd = f"{posix_module_command('observal_cli.hooks.session_push')} --harness copilot --json-response"
 
     hooks: dict[str, list[dict]] = {}
     for event in COPILOT_HOOK_EVENTS:
@@ -58,8 +59,12 @@ def build_copilot_hooks(hooks_dir: str = ".github/hooks", bash_cmd: str | None =
 
 def build_copilot_run_hook_ps1(python_path: str) -> str:
     """Return the PowerShell bridge to the shared acknowledged session hook."""
+    from observal_cli.shared.launcher import isolation_flag, pythonpath_env
+
+    env = "".join(f'$env:{key} = "{value}"\n' for key, value in pythonpath_env().items())
+    flag = isolation_flag()
     return f"""# Observal session push hook for VS Code Copilot.
 $stdinData = [Console]::In.ReadToEnd()
-$python = "{python_path}"
-$stdinData | & $python -m observal_cli.hooks.session_push --harness copilot --json-response 2>$null
+{env}$python = "{python_path}"
+$stdinData | & $python {flag} -m observal_cli.hooks.session_push --harness copilot --json-response 2>$null
 """

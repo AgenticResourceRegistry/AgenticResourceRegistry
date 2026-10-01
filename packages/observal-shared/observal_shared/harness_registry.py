@@ -143,6 +143,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
         "capabilities": {"skills", "hooks", "mcp_servers"},
         "session_parser": "claude-code",
         "invocation_extractor": "claude-code",
+        # Skill loads (Skill tool + linked expansion) and /name invocations (harness-written
+        # isMeta expansion); the skill listing has no locations, so never availability.
+        # Verified against Claude Code 2.1.286 (session_parsers/claude_code_skill_evidence.py).
+        "skill_evidence_extractor": "claude-code",
+        # Hook runs that printed output, failed, or blocked a tool; silent successes leave no
+        # record (session_parsers/claude_code_hook_evidence.py, Claude Code 2.1.286).
+        "hook_evidence_extractor": "claude-code",
         "scopes": ["project", "user"],
         "default_scope": "project",
         "scope_labels": ("project (.claude/agents/)", "user (~/.claude/agents/)"),
@@ -457,6 +464,9 @@ HARNESS_REGISTRY: dict[str, dict] = {
         # MCP call identity comes from pi-mcp-adapter's tool-result details
         # (fixture-verified against pi-mcp-adapter 2.38.0 and 3.2.0 sources).
         "invocation_extractor": "pi",
+        # Skill availability and model loads (session_parsers/pi_skill_evidence.py). Pi records no
+        # distinguishable /skill:name origin, so it never reports invocations.
+        "skill_evidence_extractor": "pi",
         "scopes": ["project", "user"],
         "default_scope": "user",
         "scope_labels": ("project (.pi/)", "user (~/.pi/agent/)"),

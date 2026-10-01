@@ -19,7 +19,9 @@ from services.session_parsers.invocations import extract_invocations
 
 from .matcher import MatchResult, match_invocations
 
-PROJECTION_VERSION = 1
+# 2: activity rows carry evidence_kind and publications evidence_type, so MCP
+# and skill projections complete independently (ClickHouse migration 008).
+PROJECTION_VERSION = 2
 # 2: result-link ordering changed. 3: harness-reported server identity (Pi).
 # Every bump makes old publications invisible until the durable full replay
 # (``jobs.activity.replay_activity_revision``) republishes them.
@@ -102,13 +104,16 @@ def _source_revision(rows: list[dict]) -> str | None:
     return hashlib.sha256(json.dumps(pairs, separators=(",", ":")).encode()).hexdigest()
 
 
-async def _mapping(project_id: str, user_id: str, layer_hash: str, harness: str) -> tuple[str, int, list[dict]]:
+async def _mapping(
+    project_id: str, user_id: str, layer_hash: str, harness: str, component_type: str = "mcp"
+) -> tuple[str, int, list[dict]]:
     params = {
         "param_project_id": project_id,
         "param_user_id": user_id,
         "param_layer_hash": layer_hash,
         "param_extractor_version": CURRENT_EXTRACTOR_VERSION,
         "param_harness": harness,
+        "param_component_type": component_type,
     }
     published = await _query(
         """SELECT extraction_generation, max(identity_conflict) AS conflict
@@ -142,19 +147,20 @@ async def _mapping(project_id: str, user_id: str, layer_hash: str, harness: str)
         return "identity_conflict", generation, []
     params["param_generation"] = generation
     candidates = await _query(
-        """SELECT local_name, component_id, component_version_id, identity_status, verification_status
+        """SELECT local_name, scope, component_id, component_version_id, identity_status, verification_status,
+               location_sha256, binding_agent
         FROM layer_components FINAL
         WHERE project_id = {project_id:String} AND user_id = {user_id:String}
           AND layer_hash = {layer_hash:String} AND harness = {harness:String}
           AND extractor_version = {extractor_version:UInt16}
           AND extraction_generation = {generation:UInt64} AND hash_schema_version = 2
-          AND component_type = 'mcp' FORMAT JSON""",
+          AND component_type = {component_type:String} FORMAT JSON""",
         params,
     )
     return "complete", generation, candidates
 
 
-async def _latest_complete(params: dict, version: int) -> dict | None:
+async def _latest_complete(params: dict, version: int, evidence_type: str = "mcp") -> dict | None:
     rows = await _query(
         """SELECT projection_generation, any(source_revision) AS source_revision,
                   max(candidate_count) AS candidate_count, max(attributed_count) AS attributed_count,
@@ -163,11 +169,11 @@ async def _latest_complete(params: dict, version: int) -> dict | None:
         FROM component_activity_publications
         WHERE project_id = {project_id:String} AND user_id = {user_id:String}
           AND harness = {harness:String} AND session_id = {session_id:String}
-          AND projection_version = {projection_version:UInt16}
+          AND projection_version = {projection_version:UInt16} AND evidence_type = {evidence_type:String}
         GROUP BY projection_generation
         HAVING countIf(status = 'complete') > 0 AND countIf(status = 'failed') = 0
         ORDER BY projection_generation DESC LIMIT 1 FORMAT JSON""",
-        params | {"param_projection_version": version},
+        params | {"param_projection_version": version, "param_evidence_type": evidence_type},
     )
     return rows[0] if rows else None
 
@@ -176,7 +182,7 @@ async def _published_rows(params: dict, version: int, generation: int) -> list[d
     return await _query(
         """SELECT source_line_offset, source_block_key, source_line_hash, layer_hash,
                   component_type, component_id, component_version_id, tool_name, tool_use_id,
-                  event_time, result_state, attribution_method, matcher_version, extractor_version
+                  event_time, result_state, attribution_method, matcher_version, extractor_version, evidence_kind
         FROM component_activity FINAL
         WHERE project_id = {project_id:String} AND user_id = {user_id:String}
           AND harness = {harness:String} AND session_id = {session_id:String}
@@ -200,6 +206,7 @@ _STORED_FACTS = (
     "attribution_method",
     "matcher_version",
     "extractor_version",
+    "evidence_kind",
 )
 
 
@@ -233,6 +240,7 @@ async def _inputs_unchanged(
     project_id: str,
     user_id: str,
     harness: str,
+    component_type: str = "mcp",
 ) -> bool:
     current_rows = await _source_rows(params)
     if current_rows is None:
@@ -240,18 +248,26 @@ async def _inputs_unchanged(
     if _source_revision(current_rows) != revision or _source_facts(current_rows) != _source_facts(source_rows):
         return False
     for layer_hash, pinned_generation in generations.items():
-        status, current_generation, _ = await _mapping(project_id, user_id, layer_hash, harness)
+        status, current_generation, _ = await _mapping(project_id, user_id, layer_hash, harness, component_type)
         if status != "complete" or current_generation != pinned_generation:
             return False
     return True
 
 
-async def _marker(params: dict, version: int, generation: int, status: str, revision: str, counts: dict) -> None:
+async def _marker(
+    params: dict,
+    version: int,
+    generation: int,
+    status: str,
+    revision: str,
+    counts: dict,
+    evidence_type: str = "mcp",
+) -> None:
     await _query(
         "INSERT INTO component_activity_publications "
         "(project_id, user_id, harness, session_id, projection_version, projection_generation, "
         "status, source_revision, candidate_count, attributed_count, collision_count, unmatched_count, "
-        "unknown_result_count) FORMAT JSONEachRow",
+        "unknown_result_count, evidence_type) FORMAT JSONEachRow",
         data=json.dumps(
             {
                 "project_id": params["param_project_id"],
@@ -262,6 +278,7 @@ async def _marker(params: dict, version: int, generation: int, status: str, revi
                 "projection_generation": generation,
                 "status": status,
                 "source_revision": revision,
+                "evidence_type": evidence_type,
                 **counts,
             }
         ),
@@ -269,15 +286,15 @@ async def _marker(params: dict, version: int, generation: int, status: str, revi
 
 
 async def _publish_unattributable(
-    params: dict, version: int, revision: str, unattributed: dict, layer_hash: str
+    params: dict, version: int, revision: str, unattributed: dict, layer_hash: str, evidence_type: str = "mcp"
 ) -> dict:
     counts = {"attributed_count": 0, "collision_count": 0, **unattributed}
     generation = await next_projection_generation()
     try:
-        await _marker(params, version, generation, "complete", revision, counts)
+        await _marker(params, version, generation, "complete", revision, counts, evidence_type)
     except Exception:
         try:
-            await _marker(params, version, generation, "failed", revision, counts)
+            await _marker(params, version, generation, "failed", revision, counts, evidence_type)
         except Exception as marker_error:
             optic.warning("failed to publish activity failure: {}", type(marker_error).__name__)
         raise
@@ -396,6 +413,7 @@ async def project_session_activity(
                 "event_time": matched_row["event_time"].astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:23],
                 "matcher_version": MATCHER_VERSION,
                 "extractor_version": CURRENT_EXTRACTOR_VERSION,
+                "evidence_kind": "call",
             }
         )
     counts = {
@@ -430,7 +448,7 @@ async def project_session_activity(
                 "(project_id, user_id, harness, session_id, projection_version, projection_generation, "
                 "source_line_offset, source_block_key, source_line_hash, layer_hash, component_type, "
                 "component_id, component_version_id, tool_name, tool_use_id, event_time, result_state, "
-                "attribution_method, matcher_version, extractor_version) FORMAT JSONEachRow",
+                "attribution_method, matcher_version, extractor_version, evidence_kind) FORMAT JSONEachRow",
                 data="\n".join(json.dumps(row | {"projection_generation": generation}) for row in rows),
             )
         if not await _inputs_unchanged(params, revision, source, generations, project_id, user_id, harness):

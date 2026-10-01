@@ -20,6 +20,18 @@ _URL = os.getenv("OBSERVAL_PG_PHASE4_URL")
 pytestmark = pytest.mark.skipif(not _URL, reason="opt-in isolated Phase 4 PostgreSQL proof")
 
 
+def _alembic_head() -> str:
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    server = Path(__file__).resolve().parents[2] / "observal-server"
+    config = Config(str(server / "alembic.ini"))
+    config.set_main_option("script_location", str(server / "alembic"))
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
 @pytest.mark.asyncio
 async def test_listing_delete_and_rollback_cleanup_component_reports():
     pg = urlparse(_URL or "")
@@ -28,7 +40,7 @@ async def test_listing_delete_and_rollback_cleanup_component_reports():
     listing_id, report_id, owner_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     tag = owner_id.hex[:12]
     try:
-        assert await connection.fetchval("SELECT version_num FROM alembic_version") == "032_user_deleted_at"
+        assert await connection.fetchval("SELECT version_num FROM alembic_version") == _alembic_head()
         triggers = await connection.fetch(
             "SELECT tgname FROM pg_trigger WHERE tgname IN "
             "('trg_mcp_insight_report_cleanup','trg_skill_insight_report_cleanup','trg_hook_insight_report_cleanup')"

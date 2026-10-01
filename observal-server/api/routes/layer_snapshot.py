@@ -87,21 +87,23 @@ class LayerSnapshotRequest(BaseModel):
     @classmethod
     def bound_drift(cls, value: dict) -> dict:
         """Bound the drift fields the extractor reads; the rest is opaque, stored metadata."""
-        verifications = value.get("mcp_verifications")
-        if verifications is not None:
+        for key in ("mcp_verifications", "skill_verifications"):
+            verifications = value.get(key)
+            if verifications is None:
+                continue
             if not isinstance(verifications, list) or len(verifications) > _MAX_MCP_VERIFICATIONS:
-                raise ValueError("drift.mcp_verifications must be a bounded list")
+                raise ValueError(f"drift.{key} must be a bounded list")
             for item in verifications:
                 if not isinstance(item, dict) or len(item) > 16:
-                    raise ValueError("drift.mcp_verifications entries must be small objects")
+                    raise ValueError(f"drift.{key} entries must be small objects")
                 for field_value in item.values():
                     if not (field_value is None or isinstance(field_value, bool)) and (
                         not isinstance(field_value, str) or len(field_value) > 300
                     ):
-                        raise ValueError("drift.mcp_verifications values must be short strings")
+                        raise ValueError(f"drift.{key} values must be short strings")
         drifted = value.get("drifted_files")
         if drifted is not None and (
-            not isinstance(drifted, list) or len(drifted) > _MAX_MCP_VERIFICATIONS + 4 * _MAX_FILES_PER_SNAPSHOT
+            not isinstance(drifted, list) or len(drifted) > 2 * _MAX_MCP_VERIFICATIONS + 4 * _MAX_FILES_PER_SNAPSHOT
         ):
             raise ValueError("drift.drifted_files must be a bounded list")
         return value

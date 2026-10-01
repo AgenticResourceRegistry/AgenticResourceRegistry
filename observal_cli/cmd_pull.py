@@ -972,6 +972,119 @@ def _installed_components(lock: dict, planned: list[dict]) -> list[dict]:
     ]
 
 
+def _record_hook_bindings(
+    snippet: dict,
+    lock_components: list[dict],
+    target_dir: Path,
+    is_user_scope: bool,
+    *,
+    gated: dict | None = None,
+    settings_display: str = "",
+) -> list[str]:
+    """Record where each pinned hook was written, so a later snapshot can verify it.
+
+    ``hook_command`` and ``hook_event`` are exactly what the agent file contains
+    (the harness records the command verbatim when the hook runs). The agent
+    file and script are stored as layer display paths; ``hook_integrity`` is the
+    written script's fingerprint, or the command's when there is no script.
+
+    ``gated`` (component local name -> ``agent_hooks.AgentHook``) marks hooks
+    placed in ``settings_display`` behind the agent gate: their recorded command
+    is the gated command (what Claude Code records), with the original kept so
+    verification can require that the agent file no longer carries it.
+    """
+    import hashlib
+
+    from observal_cli.agent_hooks import GATED_PLACEMENT
+    from observal_cli.layer import skill_file_fingerprint
+
+    bindings = {b.get("name"): b for b in snippet.get("hook_bindings") or [] if isinstance(b, dict)}
+    profile = snippet.get("agent_profile") or {}
+    profile_path = profile.get("path") if isinstance(profile, dict) else None
+    config = ""
+    if isinstance(profile_path, str):
+        config = (
+            f"user:{profile_path[len('~/.claude/') :]}"
+            if profile_path.startswith("~/.claude/")
+            else f"project:{profile_path}"
+        )
+    warnings: list[str] = []
+    for component in lock_components:
+        if component.get("type") != "hook" or not component.get("local_name"):
+            continue
+        binding = bindings.get(component["local_name"])
+        if not binding or not config:
+            continue  # HTTP or unbound hooks stay unverified
+        script = binding.get("script")
+        if script:
+            fingerprint = skill_file_fingerprint(_resolve_path(script, target_dir, allow_home=is_user_scope))
+            if not fingerprint:
+                warnings.append("Installed hook script could not be fingerprinted; its presence will be unverified.")
+                continue
+        else:
+            fingerprint = f"sha256-{hashlib.sha256(binding['command'].encode()).hexdigest()}"
+        for key in [key for key in component if key.startswith("hook_")]:
+            del component[key]  # a stale placement from an earlier pull must not survive
+        component.update(
+            hook_event=binding["event"],
+            hook_command=binding["command"],
+            hook_agent=binding.get("agent") or "",
+            hook_config=config,
+            hook_script=f"project:{script}" if script else "",
+            hook_integrity=fingerprint,
+        )
+        hook = (gated or {}).get(component["local_name"])
+        if hook is not None:
+            if hook.event != binding["event"] or hook.command != binding["command"]:
+                raise ValueError("gated hook does not match its binding")
+            component.update(
+                hook_command=hook.gated,
+                hook_config=settings_display,
+                hook_placement=GATED_PLACEMENT,
+                hook_original_command=hook.command,
+                hook_agent_profile=config,
+                hook_gate_python=sys.executable,
+            )
+    return warnings
+
+
+def _fingerprint_written_skills(
+    snippet: dict, lock_components: list[dict], target_dir: Path, is_user_scope: bool
+) -> list[str]:
+    """Record ``skill_integrity`` for each pinned skill from the SKILL.md this pull wrote.
+
+    The written file (a Pi profile's copy, for example) is what a later session
+    snapshot must match before the skill counts as verified-present. A skill
+    whose file cannot be read is left without a fingerprint, so it stays
+    unverified rather than guessed. Returns warnings for the caller to show.
+    """
+    from observal_cli.cmd_skill import _sanitize_name
+    from observal_cli.layer import skill_file_fingerprint
+
+    written = {}
+    for sc in snippet.get("skill_components") or []:
+        if not isinstance(sc, dict):
+            continue
+        if isinstance(sc.get("path"), str):
+            written[_sanitize_name(sc.get("name", ""))] = _resolve_path(
+                sc["path"], target_dir, allow_home=is_user_scope
+            )
+        elif isinstance(sc.get("installed_skill_md"), str):
+            # Written where the installer chose (Claude Code: .agents/skills, linked into .claude/skills).
+            written[_sanitize_name(sc.get("name", ""))] = Path(sc["installed_skill_md"])
+    warnings: list[str] = []
+    for component in lock_components:
+        if component.get("type") != "skill" or not component.get("local_name"):
+            continue
+        path = written.get(component["local_name"])
+        fingerprint = skill_file_fingerprint(path) if path else None
+        if fingerprint:
+            component["skill_integrity"] = fingerprint
+        else:
+            warnings.append("Installed skill could not be fingerprinted; its presence will be unverified.")
+    return warnings
+
+
 def _progress(output: OutputMode | str, message: str | None = None):
     return nullcontext() if output == "json" else spinner(message)
 
@@ -1035,13 +1148,14 @@ def _display_setup_command(command: list[str]) -> list[str]:
     return shown
 
 
-def _run_reset_commands(commands: list, *, cwd: Path | None) -> None:
+def _run_reset_commands(commands: list, *, cwd: Path | None, adapter, scope: str) -> None:
     """Best-effort cleanup before setup commands; a failure means nothing was there to reset."""
     for command in commands:
         if not _valid_setup_command(command):
             continue
         try:
-            subprocess.run(command, capture_output=True, text=True, timeout=60, cwd=cwd)
+            native_command = adapter.prepare_mcp_setup_command(command, scope)
+            subprocess.run(native_command, capture_output=True, text=True, timeout=60, cwd=cwd)
         except (OSError, subprocess.SubprocessError):
             continue
 
@@ -1242,13 +1356,186 @@ def _collect_install_options(
     return opts
 
 
+# Server-emitted launchers name a bare python3, which rarely imports an installed
+# observal_cli but does import one from the working directory (often a project).
+# They are rewritten to this CLI's interpreter, isolated with -I when it imports
+# observal_cli on its own, else with -P and an explicit PYTHONPATH set to the
+# package root (observal_cli.shared.launcher). On Windows they use the shell-neutral
+# form instead: a quoted interpreter with -I, and the package root set from -c code.
+_BARE_LAUNCHER = re.compile(r"(?<![/\\\w.-])python3? -m observal_cli\.")
+_BARE_LAUNCHER_MODULE = re.compile(r"(?<![/\\\w.-])python3? -m (observal_cli(?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
+
+
+def rewrite_launcher_command(command: str) -> str:
+    """Rewrite bare ``python3 -m observal_cli.`` launchers inside one shell command string."""
+    from observal_cli.shared.launcher import isolation_flag, posix_prefix, windows_module_command
+
+    if sys.platform == "win32":
+        return _BARE_LAUNCHER_MODULE.sub(lambda match: windows_module_command(match[1]), command)
+    return _BARE_LAUNCHER.sub(lambda _m: f"{posix_prefix()} {isolation_flag()} -m observal_cli.", command)
+
+
+def rewrite_launchers_in_strings(value):
+    """Apply ``rewrite_launcher_command`` to every string inside JSON-like content (never to its text)."""
+    if isinstance(value, dict):
+        return {key: rewrite_launchers_in_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [rewrite_launchers_in_strings(item) for item in value]
+    return rewrite_launcher_command(value) if isinstance(value, str) else value
+
+
+def _hook_commands(hooks: object) -> list:
+    """Every ``command`` value inside a Claude Code-style ``hooks`` mapping."""
+    found = []
+    for groups in hooks.values() if isinstance(hooks, dict) else ():
+        for group in groups if isinstance(groups, list) else ():
+            for hook in (group.get("hooks") or []) if isinstance(group, dict) else ():
+                if isinstance(hook, dict) and "command" in hook:
+                    found.append(hook)
+    return found
+
+
+_COMMAND_LINE = re.compile(r"^(?P<lead>\s*(?:-\s+)?command:\s*)(?P<value>.+?)\s*$")
+
+
+_MCP_SERVER_KEYS = ("mcp-servers", "mcpServers")
+
+
+def _frontmatter_mcp_launcher(entry: object) -> dict | None:
+    """The rewritten MCP entry if it launches observal_cli through a bare interpreter, else None.
+
+    The fallback package root goes into the argv (``env PYTHONPATH=...``, or
+    ``-I -c`` code on Windows), not an ``env:`` key, so it does not depend on the
+    harness reading one.
+    """
+    if not isinstance(entry, dict):
+        return None
+    argv = [entry.get("command"), *(entry.get("args") or [])] if isinstance(entry.get("args") or [], list) else []
+    if not argv or not all(isinstance(item, str) for item in argv):
+        return None
+    rewritten = rewrite_observal_interpreter(argv)
+    if rewritten == argv:
+        return None
+    return {**entry, "command": rewritten[0], "args": rewritten[1:]}
+
+
+def _top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
+    """Line range of a top-level ``key:`` mapping and its indented children."""
+    for start, line in enumerate(lines):
+        if line.rstrip() == f"{key}:":
+            end = start + 1
+            while end < len(lines) and (not lines[end].strip() or lines[end][:1] in (" ", "\t")):
+                end += 1
+            return start, end
+    return None
+
+
+def _rewrite_mcp_block(lines: list[str], key: str, servers: dict) -> list[str]:
+    """Re-emit only the changed server entries of a ``key:`` block, values as JSON (valid YAML)."""
+    span = _top_level_block(lines, key)
+    if span is None:
+        return lines
+    start, end = span
+    out = lines[: start + 1]
+    index = start + 1
+    while index < end:
+        line = lines[index]
+        indent = len(line) - len(line.lstrip(" "))
+        name = line.strip()[:-1] if line.strip().endswith(":") else None
+        block_end = index + 1
+        while block_end < end and (
+            not lines[block_end].strip() or len(lines[block_end]) - len(lines[block_end].lstrip(" ")) > indent
+        ):
+            block_end += 1
+        replacement = servers.get(name) if name is not None else None
+        if replacement is None:
+            out.extend(lines[index:block_end])
+        else:
+            out.append(line)
+            out.extend(
+                f"{' ' * (indent + 2)}{field}: {json.dumps(value, ensure_ascii=False)}"
+                for field, value in replacement.items()
+            )
+        index = block_end
+    return out + lines[end:]
+
+
+def rewrite_frontmatter_hook_launchers(text: str) -> str:
+    """Rewrite bare observal_cli launchers in a profile's YAML frontmatter, and nowhere else.
+
+    Only hook ``command`` values and MCP server entries (``mcp-servers`` /
+    ``mcpServers``) that launch ``observal_cli`` are rewritten; the body and
+    every other value are left alone. Rewritten values are written as JSON,
+    which is valid YAML for any interpreter path. If the result does not parse
+    to exactly the original with only those values changed, the profile is
+    returned unchanged.
+    """
+    import yaml
+
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---", 4)
+    if end == -1:
+        return text
+    head, rest = text[4:end], text[end:]
+    try:
+        original = yaml.safe_load(head)
+    except yaml.YAMLError:
+        return text
+    if not isinstance(original, dict):
+        return text
+    expected = json.loads(json.dumps(original))
+    targets = {hook["command"] for hook in _hook_commands(original.get("hooks")) if isinstance(hook["command"], str)}
+    targets = {command for command in targets if rewrite_launcher_command(command) != command}
+    servers: dict[str, dict[str, dict]] = {}
+    for key in _MCP_SERVER_KEYS:
+        block = original.get(key)
+        for name, entry in block.items() if isinstance(block, dict) else ():
+            replacement = _frontmatter_mcp_launcher(entry)
+            if replacement is not None and isinstance(name, str):
+                servers.setdefault(key, {})[name] = replacement
+                expected[key][name] = json.loads(json.dumps(replacement))
+    if not targets and not servers:
+        return text
+    lines = head.split("\n")
+    for index, line in enumerate(lines):
+        match = _COMMAND_LINE.match(line)
+        if not match:
+            continue
+        try:
+            value = yaml.safe_load(match["value"])
+        except yaml.YAMLError:
+            continue
+        if value in targets:
+            lines[index] = match["lead"] + json.dumps(rewrite_launcher_command(value), ensure_ascii=False)
+    for key, replacements in servers.items():
+        lines = _rewrite_mcp_block(lines, key, replacements)
+    new_head = "\n".join(lines)
+    try:
+        rewritten = yaml.safe_load(new_head)
+    except yaml.YAMLError:
+        return text
+    for hook in _hook_commands(expected.get("hooks")):
+        if hook["command"] in targets:
+            hook["command"] = rewrite_launcher_command(hook["command"])
+    if rewritten != expected:
+        return text
+    return "---\n" + new_head + rest
+
+
 def rewrite_observal_interpreter(value):
     """Point server-emitted ``python3 -m observal_cli.<module>`` launchers at this CLI's interpreter.
 
     Handles MCP entries (``command`` + ``args``) and argv lists such as
     ``claude mcp add`` setup commands. A bare ``python3`` rarely has
     ``observal_cli`` importable when the CLI was installed with uv or pipx.
+    The rewritten launcher runs with ``-P``, and with ``PYTHONPATH`` (an MCP
+    entry's ``env``, or ``env PYTHONPATH=...`` in argv) when needed.
     """
+    from observal_cli.shared.launcher import isolation_flag, pythonpath_env, windows_module_argv
+
+    extra_env = pythonpath_env()
+    flag = isolation_flag()
     if isinstance(value, dict):
         out = {key: rewrite_observal_interpreter(item) for key, item in value.items()}
         args = out.get("args")
@@ -1260,19 +1547,84 @@ def rewrite_observal_interpreter(value):
             and str(args[1]).startswith("observal_cli.")
         ):
             out["command"] = sys.executable
+            out["args"] = [flag, *args]
+            if extra_env:
+                env = out.get("env") if isinstance(out.get("env"), dict) else {}
+                out["env"] = {**env, **extra_env}
         return out
     if isinstance(value, list):
         items = [rewrite_observal_interpreter(item) for item in value]
-        for index in range(len(items) - 2):
+        index = 0
+        while index < len(items) - 2:
             if (
                 items[index] in ("python3", "python")
                 and items[index + 1] == "-m"
                 and isinstance(items[index + 2], str)
                 and items[index + 2].startswith("observal_cli.")
             ):
-                items[index] = sys.executable
+                if sys.platform == "win32":
+                    # No `env` program on Windows: -I, with the package root set from -c when needed.
+                    launcher = windows_module_argv(items[index + 2])
+                    items[index : index + 3] = launcher
+                    index += len(launcher) - 1
+                else:
+                    prefix = [f"{key}={val}" for key, val in extra_env.items()]
+                    launcher = [*(["env", *prefix] if prefix else []), sys.executable, flag]
+                    items[index : index + 1] = launcher
+                    index += len(launcher) - 1
+            index += 1
         return items
     return value
+
+
+def _localize_hooks_content(content, adapter, agent_id: str):
+    """A hooks config with resolved hook script paths and launchers on this CLI's interpreter."""
+    if isinstance(content, str):
+        return _pin_hook_interpreter(_resolve_hook_paths(content))
+    if isinstance(content, dict):
+        # Resolve hook paths inside JSON content (command fields)
+        raw = _resolve_hook_paths(json.dumps(content))
+        # Launchers are rewritten in the parsed strings, so no interpreter path can break the JSON.
+        return adapter.rewrite_hooks(rewrite_launchers_in_strings(json.loads(raw)), agent_id=agent_id)
+    return content
+
+
+def _localize_agent_profile(agent_profile: dict, adapter, agent_id: str) -> None:
+    """Point an agent profile's Observal launchers at this CLI's interpreter, in place."""
+    if isinstance(agent_profile.get("content"), dict):
+        agent_profile["content"] = adapter.rewrite_agent_profile(agent_profile["content"], agent_id=agent_id)
+    elif isinstance(agent_profile.get("content"), str):
+        # Claude Code and other markdown agents carry their hooks in frontmatter. Isolated
+        # launchers first; any launcher that rewrite declines (a YAML block scalar, say)
+        # is then pinned to this interpreter rather than left bare.
+        agent_profile["content"] = _pin_agent_profile_hooks(
+            rewrite_frontmatter_hook_launchers(_resolve_hook_paths(agent_profile["content"]))
+        )
+
+
+def localize_install_snippet(snippet: dict, *, adapter, agent_id: str) -> dict:
+    """An agent install snippet as ``agent pull`` would write it, without writing anything.
+
+    The server cannot know which interpreter has ``observal_cli`` installed, so
+    it names a bare ``python3`` (``python`` on Windows) in telemetry hooks and
+    in the sandbox and delegation MCP servers. A snippet printed for the user
+    to copy (``observal agent install``) gets the same rewrites a pull applies:
+    this CLI's interpreter with its isolation flag, resolved hook script paths
+    and the harness adapter's hook and profile rewrites. The input is not
+    modified.
+    """
+    import copy
+
+    if not isinstance(snippet, dict):
+        return snippet
+    localized = rewrite_observal_interpreter(copy.deepcopy(snippet))
+    hooks_cfg = localized.get("hooks_config")
+    if isinstance(hooks_cfg, dict) and "content" in hooks_cfg:
+        hooks_cfg["content"] = _localize_hooks_content(hooks_cfg["content"], adapter, agent_id)
+    agent_profile = localized.get("agent_profile")
+    if isinstance(agent_profile, dict):
+        _localize_agent_profile(agent_profile, adapter, agent_id)
+    return localized
 
 
 def _preflight_existing_managed_skill_paths(
@@ -1861,15 +2213,7 @@ def write_install_snippet(
     hooks_cfg = snippet.get("hooks_config")
     if hooks_cfg and isinstance(hooks_cfg, dict) and "path" in hooks_cfg:
         p = _resolve_path(hooks_cfg["path"], target_dir, allow_home=is_user_scope)
-        content = hooks_cfg["content"]
-        if isinstance(content, str):
-            content = _pin_hook_interpreter(_resolve_hook_paths(content))
-        elif isinstance(content, dict):
-            # Resolve hook paths inside JSON content (command fields)
-            raw = json.dumps(content)
-            raw = _pin_hook_interpreter(_resolve_hook_paths(raw))
-            content = json.loads(raw)
-            content = adapter.rewrite_hooks(content, agent_id=agent_id)
+        content = _localize_hooks_content(hooks_cfg["content"], adapter, agent_id)
         if dry_run:
             written.append((str(p), "would write"))
         else:
@@ -1881,11 +2225,7 @@ def write_install_snippet(
     if agent_profile:
         # Rewrite hook commands to use the current Python interpreter
         # so they work regardless of which directory Kiro is launched from.
-        if isinstance(agent_profile.get("content"), dict):
-            agent_profile["content"] = adapter.rewrite_agent_profile(agent_profile["content"], agent_id=agent_id)
-        elif isinstance(agent_profile.get("content"), str):
-            # Claude Code and other markdown agents carry their hooks in frontmatter.
-            agent_profile["content"] = _pin_agent_profile_hooks(_resolve_hook_paths(agent_profile["content"]))
+        _localize_agent_profile(agent_profile, adapter, agent_id)
         agent_profile_allow_home = adapter.allow_home_agent_profile(is_user_scope)
         p = _resolve_path(agent_profile["path"], target_dir, allow_home=agent_profile_allow_home)
         if dry_run:
@@ -2024,8 +2364,358 @@ def write_install_snippet(
                 failed_skills.append(sc_name)
                 if not quiet:
                     rprint(f"[red]✗ Failed to install skill '{esc(sc_name)}'.[/red] No content available.")
+        if result_path and not sc.get("path"):
+            # No server-given path: the installer chose the location. Remember the
+            # SKILL.md it wrote so the pull can fingerprint it (_fingerprint_written_skills).
+            sc["installed_skill_md"] = str(Path(result_path) / "SKILL.md")
 
     return written, failed_skills
+
+
+def _validate_hook_flags(harness: str, hooks: str | None, on_unknown: str | None, force_hooks: bool) -> None:
+    """Reject agent-hook placement flags that do not apply, before any network call."""
+    from observal_cli.agent_hooks import ON_UNKNOWN, PLACEMENTS
+
+    if hooks is not None and hooks not in PLACEMENTS:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Unknown hook placement: {hooks}.",
+            operation="Pull agent",
+            resource="--hooks",
+            remediation="Use --hooks=frontmatter or --hooks=settings.",
+        )
+    if on_unknown is not None and on_unknown not in ON_UNKNOWN:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Unknown --on-unknown policy: {on_unknown}.",
+            operation="Pull agent",
+            resource="--on-unknown",
+            remediation="Use --on-unknown=skip or --on-unknown=run.",
+        )
+    if (hooks is not None or on_unknown is not None or force_hooks) and harness != "claude-code":
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Harness {harness} does not support agent hook placement.",
+            operation="Pull agent",
+            resource="agent hook placement",
+            remediation="Remove --hooks, --on-unknown and --force-hooks, or select claude-code.",
+        )
+    if on_unknown is not None and hooks == "frontmatter":
+        fail(
+            ErrorCategory.VALIDATION,
+            "--on-unknown applies only to hooks placed in settings.json.",
+            operation="Pull agent",
+            resource="--on-unknown",
+            remediation="Remove --on-unknown, or use --hooks=settings.",
+        )
+
+
+def _resolve_hook_placement(
+    harness: str,
+    hooks: str | None,
+    on_unknown: str | None,
+    installed: dict | None,
+    existing: str | None = None,
+) -> tuple[str, str, list[str]]:
+    """(placement, on-unknown policy, warnings) for this pull; an earlier choice is kept.
+
+    The choice is remembered in the local lockfile (``installed``), and also
+    found in settings.json itself (``existing``: the policy of gated hooks this
+    agent already owns there), so a teammate's committed settings or a failed
+    lockfile write never silently moves the hooks back. The opt-in is offered
+    only on POSIX. On an untested Claude Code version it is allowed with a
+    warning: hook evidence from that version is reported as unverified, so a
+    Claude Code update never blocks a pull.
+    """
+    from observal_cli import agent_hooks
+
+    if harness != "claude-code":
+        return "frontmatter", "skip", []
+    previous = installed if isinstance(installed, dict) else {}
+    recorded = previous.get("hook_placement") == "settings"
+    remembered = recorded or existing is not None
+    placement = hooks or ("settings" if remembered else "frontmatter")
+    if placement != "settings":
+        if on_unknown is not None:
+            fail(
+                ErrorCategory.VALIDATION,
+                "--on-unknown applies only to hooks placed in settings.json.",
+                operation="Pull agent",
+                resource="--on-unknown",
+                remediation="Add --hooks=settings, or remove --on-unknown.",
+            )
+        return "frontmatter", "skip", []
+    remembered_policy = previous.get("hook_on_unknown") if recorded else existing
+    policy = on_unknown or (remembered_policy if remembered_policy in agent_hooks.ON_UNKNOWN else "skip")
+    found: list[str] = []
+    if hooks is None and not recorded:
+        found.append(
+            "Found this agent's gated hooks in settings.json; keeping them there. "
+            "Pull with --hooks=frontmatter to move them back to the agent file."
+        )
+    if sys.platform == "win32":
+        fail(
+            ErrorCategory.VALIDATION,
+            "Agent hooks in settings.json are not supported on Windows.",
+            operation="Pull agent",
+            resource="agent hook placement",
+            remediation="Pull with --hooks=frontmatter.",
+        )
+    version = agent_hooks.claude_code_version()
+    if agent_hooks.is_tested_version(version):
+        return "settings", policy, found
+    # Never blocks: hook evidence from an untested version is reported as unverified
+    # by the server instead, so the opt-in keeps working when Claude Code updates.
+    seen = f"Claude Code {version}" if version else "no Claude Code version (is `claude` on PATH?)"
+    return (
+        "settings",
+        policy,
+        [
+            *found,
+            f"Gated agent hooks were tested only with Claude Code {agent_hooks.tested_range()}; found {seen}. "
+            "They may not run as expected, and their Component Insights evidence is reported as unverified "
+            "until this version is tested; pull with --hooks=frontmatter to move them back.",
+        ],
+    )
+
+
+def _agent_hook_request(
+    snippet: dict,
+    lock_components: list[dict],
+    *,
+    placement: str,
+    on_unknown: str,
+    scope: str,
+    target_dir: Path,
+    installed: dict | None,
+    force: bool,
+):
+    """The settings.json agent-hook request for a Claude Code pull, or None when there is nothing to manage.
+
+    In frontmatter placement the request is empty, so a reconcile only removes
+    groups this agent owned from an earlier ``--hooks=settings`` pull.
+    """
+    from observal_cli import agent_hooks
+
+    profile = snippet.get("agent_profile") or {}
+    profile_path = profile.get("path") if isinstance(profile, dict) else None
+    agent = Path(profile_path).stem if isinstance(profile_path, str) and profile_path.endswith(".md") else ""
+    previous = installed if isinstance(installed, dict) else {}
+    remembered = previous.get("hook_placement") == "settings"
+    owners = tuple(
+        name
+        for name in (previous.get("hook_gate_agent") if remembered else None,)
+        if agent_hooks.valid_agent_name(name) and name != agent
+    )
+    path, display = agent_hooks.settings_location(scope, target_dir)
+    hooks: list = []
+    if placement == "settings":
+        if snippet.get("hook_placement") != "settings":
+            fail(
+                ErrorCategory.VERSION,
+                "This Observal server does not support placing agent hooks in settings.json.",
+                operation="Pull agent",
+                resource="agent hook placement",
+                remediation="Upgrade the Observal server, or pull with --hooks=frontmatter.",
+            )
+        bindings = [b for b in snippet.get("hook_bindings") or [] if isinstance(b, dict)]
+        if not agent_hooks.valid_agent_name(agent) or any(b.get("agent") != agent for b in bindings):
+            fail(
+                ErrorCategory.VALIDATION,
+                "The agent's hooks cannot be tied to its Claude Code agent name.",
+                operation="Pull agent",
+                resource="agent hook placement",
+                remediation="Pull with --hooks=frontmatter.",
+            )
+        try:
+            hooks = agent_hooks.build_agent_hooks(agent, bindings, lock_components, on_unknown)
+        except ValueError as error:
+            fail(
+                ErrorCategory.VALIDATION,
+                str(error),
+                operation="Pull agent",
+                resource="agent hook placement",
+                remediation="Pull with --hooks=frontmatter, and report the agent to its publisher.",
+            )
+    elif not agent_hooks.valid_agent_name(agent):
+        return None
+    return agent_hooks.AgentHookRequest(
+        placement=placement,
+        on_unknown=on_unknown,
+        path=path,
+        display=display,
+        agent=agent,
+        hooks=tuple(hooks),
+        owners=owners,
+        force=force,
+    )
+
+
+def _plan_agent_hooks(request, *, remembered: bool, dry_run: bool):
+    """Plan before writing anything; refuse invalid settings and (outside a dry run) conflicts."""
+    from observal_cli import agent_hooks
+
+    try:
+        plan = request.plan()
+    except agent_hooks.SettingsError as error:
+        if request.placement != "settings" and not remembered:
+            return None  # nothing of this agent's can be there; leave the file alone
+        fail(
+            ErrorCategory.CONFLICT,
+            f"{request.path}: {error}",
+            operation="Pull agent",
+            resource=str(request.path),
+            remediation="Fix settings.json (it must be a JSON object), then pull again. Nothing was written.",
+        )
+    return plan
+
+
+def _agent_hook_conflict_warnings(request, plan) -> list[str]:
+    """Edited Observal-owned groups are left exactly as the user made them; the rest of the pull continues.
+
+    Each stays in settings.json and keeps running as edited, but is not updated
+    and verifies as drifted, so Component Insights does not count it.
+    """
+    if plan is None or not plan.conflicts:
+        return []
+    edited = ", ".join(f"{item['event']} ({item['component_id'] or 'unknown component'})" for item in plan.conflicts)
+    return [
+        f"{len(plan.conflicts)} Observal-owned agent hook(s) in {request.path} were edited locally and were left "
+        f"as they are: {edited}. They were not updated, and Component Insights does not count them. Pass "
+        '--force-hooks to replace them with the agent\'s hooks, or delete their "_observal" key to keep them '
+        "as your own hooks."
+    ]
+
+
+def _apply_agent_hooks(
+    request, written: list[tuple[str, str]], setup_results: list[dict], *, reports_sessions: bool = False
+):
+    """Re-plan from a fresh read and write settings.json atomically, before the lockfile.
+
+    If the lockfile write then fails, the next pull recovers ownership from the
+    groups' ``_observal`` metadata.
+    """
+    from observal_cli import agent_hooks
+
+    def failure(stage: str) -> dict:
+        return _pull_failure_result(
+            written,
+            stage,
+            setup_results=setup_results,
+            installation_tracked=False,
+            reports_sessions=reports_sessions,
+        )
+
+    try:
+        plan = request.plan()
+    except agent_hooks.SettingsError as error:
+        fail(
+            ErrorCategory.CONFLICT,
+            f"{request.path}: {error}",
+            operation="Pull agent",
+            resource=str(request.path),
+            remediation="Fix settings.json (it must be a JSON object), then pull again.",
+            result=failure("write_agent_hooks"),
+        )
+    if plan.changed:
+        try:
+            agent_hooks.write_settings(request.path, plan.data)
+        except OSError as error:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                f"Could not write {request.path}.",
+                operation="Pull agent",
+                resource=str(request.path),
+                remediation="Check the file's permissions, then pull again.",
+                detail=repr(error),
+                result=failure("write_agent_hooks"),
+            )
+        written.append((str(request.path), "created" if plan.original is None else "updated"))
+    return plan
+
+
+def _agent_hooks_relevant(request, plan) -> bool:
+    """Whether this pull placed, moved or found agent hooks in settings.json worth reporting."""
+    if request is None or plan is None:
+        return False
+    return request.placement == "settings" or bool(plan.removed or plan.conflicts)
+
+
+def _agent_hooks_output(request, plan, startup_ms: float | None) -> dict:
+    from observal_cli.agent_hooks import BLOCKING_EVENTS
+
+    return {
+        "placement": request.placement,
+        "on_unknown": request.on_unknown if request.placement == "settings" else None,
+        **plan.summary(),
+        "hooks": [
+            {
+                "name": hook.name,
+                "event": hook.event,
+                "component_id": hook.component_id,
+                "command": hook.gated,
+                "timeout": "unchanged (Claude Code default)",
+                "can_block": hook.event in BLOCKING_EVENTS,
+            }
+            for hook in request.hooks
+        ],
+        "gate_startup_ms": startup_ms,
+    }
+
+
+def _render_agent_hooks(request, plan, startup_ms: float | None, *, dry_run: bool, http_hooks: int) -> None:
+    """Human-readable plan: the settings.json diff, cost and caveats."""
+    from observal_cli.agent_hooks import BLOCKING_EVENTS
+
+    if request.placement != "settings" and not (plan.removed or plan.conflicts):
+        return
+    title = (
+        "Agent hooks in settings.json" if request.placement == "settings" else "Agent hooks restored to the agent file"
+    )
+    rprint(f"\n[bold]{title}[/bold] ({esc(str(request.path))}):")
+    names = {hook.component_id: hook.name for hook in request.hooks}
+    verb = ("would add", "would remove") if dry_run else ("added", "removed")
+    for item in plan.added:
+        rprint(f"  [green]+ {verb[0]}[/green] {esc(item['event'])}: {esc(item['name'])}")
+    for item in plan.removed:
+        label = names.get(item["component_id"]) or item["component_id"] or "unknown component"
+        suffix = " (edited, replaced with --force-hooks)" if item.get("edited") else ""
+        rprint(f"  [red]- {verb[1]}[/red] {esc(item['event'])}: {esc(label)}{esc(suffix)}")
+    for item in plan.kept:
+        rprint(f"  [dim]= unchanged {esc(item['event'])}: {esc(item['name'])}[/dim]")
+    for item in plan.conflicts:
+        label = names.get(item["component_id"]) or item["component_id"] or "unknown component"
+        rprint(
+            f"  [yellow]! edited locally[/yellow] {esc(item['event'])}: {esc(label)} "
+            "[dim](kept; --force-hooks replaces it)[/dim]"
+        )
+    if request.placement != "settings":
+        return
+    if request.hooks:
+        cost = f"{startup_ms:g} ms" if startup_ms is not None else "not measured"
+        rprint(f"  Gate startup on this machine: {esc(cost)} per hook, on every matching event, even when")
+        rprint("  the agent is not active. Hooks on one event run in parallel. Timeouts are unchanged:")
+        per_event: dict[str, int] = {}
+        for hook in request.hooks:
+            per_event[hook.event] = per_event.get(hook.event, 0) + 1
+        for event, count in sorted(per_event.items()):
+            rprint(f"    {esc(event)}: {count} gated hook{'s' if count != 1 else ''}, timeout Claude Code default")
+        blocking = sorted({hook.name for hook in request.hooks if hook.event in BLOCKING_EVENTS})
+        if blocking and request.on_unknown == "skip":
+            rprint(
+                f"  [yellow]⚠[/yellow]  {esc(', '.join(blocking))} can block an action. If Claude Code ever sends hook "
+                "input the gate does not recognize, the hook is skipped (--on-unknown skip) and cannot block; "
+                "--on-unknown run runs it instead, in every session."
+            )
+    rprint(
+        "  [yellow]⚠[/yellow]  The agent file no longer lists these hooks; scripts that read its hooks: "
+        "section will not find them. Pull with --hooks=frontmatter to move them back."
+    )
+    if http_hooks:
+        rprint(
+            f"  [dim]{http_hooks} HTTP hook(s) have no command to gate and stay in the agent file "
+            "(interactive sessions only).[/dim]"
+        )
 
 
 def _install_skill_bundle(
@@ -2167,6 +2857,28 @@ def register_pull(app: typer.Typer):
                 "Defaults to the OBSERVAL_STRICT environment variable."
             ),
         ),
+        hooks: str | None = typer.Option(
+            None,
+            "--hooks",
+            help=(
+                "Claude Code only: where the agent's hooks go. 'frontmatter' (default) keeps them in the agent "
+                "file, where Claude Code runs them only in interactive sessions; 'settings' moves them into "
+                "settings.json behind an agent gate so they also run headless. Remembered for later pulls."
+            ),
+        ),
+        on_unknown: str | None = typer.Option(
+            None,
+            "--on-unknown",
+            help=(
+                "With --hooks=settings: what a gated hook does when Claude Code's hook input is unrecognized, "
+                "'skip' (default, keeps agent isolation) or 'run'."
+            ),
+        ),
+        force_hooks: bool = typer.Option(
+            False,
+            "--force-hooks",
+            help="Replace or remove Observal-owned agent hooks in settings.json that were edited locally.",
+        ),
         output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
     ):
         """Fetch agent config and write harness files to disk.
@@ -2191,12 +2903,21 @@ def register_pull(app: typer.Typer):
         credentials, omit --no-prompt and enter values interactively. When
         --no-prompt is set, prompts are skipped and only flag values are used.
 
+        Claude Code runs hooks from an agent file only in interactive
+        sessions. --hooks=settings moves the agent's command hooks into
+        settings.json, each wrapped by a gate that runs it only while that
+        agent is active, headless included (POSIX only; untested Claude Code
+        versions warn). Preview with --dry-run first; --hooks=frontmatter moves
+        them back.
+
         Examples:
           observal agent pull my-agent --harness claude-code --no-prompt
           observal agent pull my-agent --harness claude-code --no-prompt --upgrade
           observal agent pull my-agent --harness cursor --version 1.2.0 --strict
+          observal agent pull my-agent --harness claude-code --hooks=settings --dry-run
         """
         harness, scope, version = _validate_pull_inputs(harness, scope, version)
+        _validate_hook_flags(harness, hooks, on_unknown, force_hooks)
         if output == "json" and not no_prompt:
             fail(
                 ErrorCategory.VALIDATION,
@@ -2292,11 +3013,12 @@ def register_pull(app: typer.Typer):
         )
         agent_uuid = str(agent_detail.get("id", resolved))
         locked_entry = None if is_user_scope else _project_locked_agent(target_dir, qualified_name, agent_uuid)
+        installed_entry = _installed_agent(harness, agent_uuid, options, target_dir)
         version, resolved_from = _target_version(
             requested=version,
             upgrade=upgrade,
             project_locked=locked_entry,
-            installed=_installed_agent(harness, agent_uuid, options, target_dir),
+            installed=installed_entry,
         )
 
         # MCP env vars and headers come from the versions that will be installed
@@ -2367,6 +3089,20 @@ def register_pull(app: typer.Typer):
                 detail=repr(error),
             )
         options["local_name"] = local_name
+
+        existing_hooks = None
+        if harness == "claude-code" and hooks is None:
+            from observal_cli.agent_hooks import existing_placement, expected_agent_name, settings_location
+
+            existing_hooks = existing_placement(
+                settings_location(options.get("scope", "project"), target_dir)[0],
+                expected_agent_name(local_name),
+            )
+        hook_placement, hook_on_unknown, hook_warnings = _resolve_hook_placement(
+            harness, hooks, on_unknown, installed_entry, existing_hooks
+        )
+        if hook_placement == "settings":
+            options["hook_placement"] = "settings"
 
         planned_components = [
             {
@@ -2523,6 +3259,33 @@ def register_pull(app: typer.Typer):
                     resource=qualified_name,
                     remediation="Keep the pinned folder release or perform an explicit manual migration first.",
                 )
+
+        # Agent hooks in settings.json (Claude Code): planned before any file is written,
+        # so invalid settings or locally edited Observal groups refuse the pull cleanly.
+        hook_request = None
+        hook_plan = None
+        if harness == "claude-code":
+            hook_request = _agent_hook_request(
+                snippet,
+                lock_components,
+                placement=hook_placement,
+                on_unknown=hook_on_unknown,
+                scope=options.get("scope", "project"),
+                target_dir=target_dir,
+                installed=installed_entry,
+                force=force_hooks,
+            )
+        remembered_settings = existing_hooks is not None or (
+            isinstance(installed_entry, dict) and installed_entry.get("hook_placement") == "settings"
+        )
+        if hook_request is not None:
+            hook_plan = _plan_agent_hooks(hook_request, remembered=remembered_settings, dry_run=dry_run)
+        gated_hooks = {hook.name: hook for hook in hook_request.hooks} if hook_request is not None else {}
+        gate_startup_ms = None
+        if dry_run and hook_request is not None and hook_request.hooks:
+            from observal_cli.agent_hooks import measure_gate_startup
+
+            gate_startup_ms = measure_gate_startup()
 
         def disclose_telemetry() -> None:
             if output != "json" and not dry_run:
@@ -2705,6 +3468,9 @@ def register_pull(app: typer.Typer):
                     disclose_telemetry()
             raise
 
+        if dry_run and hook_plan is not None and hook_plan.changed:
+            written.append((str(hook_request.path), "would write"))
+
         reports_sessions = (
             _reports_sessions(snippet, target_dir=target_dir, is_user_scope=is_user_scope, dry_run=True)
             if dry_run
@@ -2751,13 +3517,20 @@ def register_pull(app: typer.Typer):
             )
 
         warnings_list = (
-            lock_warnings + conflict_warnings + list(result.get("warnings") or []) + (snippet.get("_warnings") or [])
+            lock_warnings
+            + conflict_warnings
+            + hook_warnings
+            + list(result.get("warnings") or [])
+            + (snippet.get("_warnings") or [])
         )
+        if dry_run and hook_request is not None:
+            warnings_list.extend(_agent_hook_conflict_warnings(hook_request, hook_plan))
 
         # Run required harness registration before recording the pull as installed.
         setup_results: list[dict] = []
         setup_failures: list[str] = []
         setup_cmds = snippet.get("mcp_setup_commands") or []
+        # Local-scope registrations (Claude Code) belong to the directory they run in.
         if setup_cmds and not dry_run:
             try:
                 target_dir.mkdir(parents=True, exist_ok=True)
@@ -2770,8 +3543,15 @@ def register_pull(app: typer.Typer):
                     remediation="Check directory permissions.",
                     detail=repr(error),
                 )
-            _run_reset_commands(snippet.get("mcp_reset_commands") or [], cwd=target_dir)
+            setup_cwd = target_dir.resolve()
+            _run_reset_commands(
+                snippet.get("mcp_reset_commands") or [],
+                cwd=setup_cwd,
+                adapter=adapter,
+                scope=options.get("scope", "project"),
+            )
             for command in setup_cmds:
+                # Never expose command arguments: MCP setup may carry secrets.
                 if not _valid_setup_command(command):
                     setup_results.append({"command": [], "status": "failed", "return_code": None})
                     setup_failures.append("invalid setup command")
@@ -2779,7 +3559,7 @@ def register_pull(app: typer.Typer):
                 shown = _display_setup_command(command)
                 try:
                     setup_command = adapter.prepare_mcp_setup_command(command, options.get("scope", "project"))
-                    process = subprocess.run(setup_command, cwd=target_dir, capture_output=True, text=True, timeout=60)
+                    process = subprocess.run(setup_command, capture_output=True, text=True, timeout=60, cwd=setup_cwd)
                 except FileNotFoundError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
                     setup_failures.append(f"{command[0]} not found")
@@ -2841,6 +3621,23 @@ def register_pull(app: typer.Typer):
             agent_version = installed_version
             from observal_cli.layer import verify_installed_mcp
 
+            if hook_request is not None and hook_plan is not None:
+                hook_plan = _apply_agent_hooks(hook_request, written, setup_results, reports_sessions=reports_sessions)
+                warnings_list.extend(_agent_hook_conflict_warnings(hook_request, hook_plan))
+
+            warnings_list.extend(_fingerprint_written_skills(snippet, lock_components, target_dir, is_user_scope))
+            warnings_list.extend(
+                _record_hook_bindings(
+                    snippet,
+                    lock_components,
+                    target_dir,
+                    is_user_scope,
+                    gated=gated_hooks if hook_plan is not None else None,
+                    settings_display=hook_request.display if hook_request is not None else "",
+                )
+            )
+            warnings_list.extend(adapter.bind_pulled_hooks(snippet, lock_components, target_dir, is_user_scope))
+
             # The MCP file this pull wrote (a Pi profile's mcp.json, for example).
             mcp_cfg = snippet.get("mcp_config")
             written_mcp_config = (
@@ -2860,7 +3657,7 @@ def register_pull(app: typer.Typer):
                 )
                 if status == "verified" and fingerprint:
                     component["mcp_integrity"] = fingerprint
-                elif status in {"missing", "drifted"}:
+                else:
                     warnings_list.append("Installed MCP entry could not be verified; attribution will be unavailable.")
 
             from observal_cli.lockfile import upsert_agent
@@ -2883,6 +3680,14 @@ def register_pull(app: typer.Typer):
                         "lock_digest": lock.get("digest"),
                         "lock_status": lock.get("status"),
                     }
+                    if hook_placement == "settings" and hook_request is not None and hook_plan is not None:
+                        metadata.update(
+                            {
+                                "hook_placement": "settings",
+                                "hook_on_unknown": hook_on_unknown,
+                                "hook_gate_agent": hook_request.agent,
+                            }
+                        )
                     _sync_managed_agent_lock(
                         harness=harness,
                         scope=options.get("scope", "project"),
@@ -2907,6 +3712,15 @@ def register_pull(app: typer.Typer):
                         local_name=local_name,
                         lock_digest=lock.get("digest"),
                         lock_status=lock.get("status"),
+                        **(
+                            {
+                                "hook_placement": "settings",
+                                "hook_on_unknown": hook_on_unknown,
+                                "hook_gate_agent": hook_request.agent,
+                            }
+                            if hook_placement == "settings" and hook_request is not None and hook_plan is not None
+                            else {}
+                        ),
                     )
             except (OSError, RuntimeError) as error:
                 recovery = _rollback_managed_agent_state(
@@ -3056,6 +3870,11 @@ def register_pull(app: typer.Typer):
                     "warnings": warnings_list,
                     "setup_commands": setup_results,
                     "reports_sessions": reports_sessions,
+                    **(
+                        {"agent_hooks": _agent_hooks_output(hook_request, hook_plan, gate_startup_ms)}
+                        if _agent_hooks_relevant(hook_request, hook_plan)
+                        else {}
+                    ),
                 }
             )
             return
@@ -3112,6 +3931,19 @@ def register_pull(app: typer.Typer):
                     f"  [dim]{esc(component['type'])}[/dim] {esc(component.get('qualified_name') or component['name'])}"
                     f" [cyan]v{esc(component.get('version') or '?')}[/cyan]"
                 )
+        if _agent_hooks_relevant(hook_request, hook_plan):
+            gated_names = {hook.name for hook in hook_request.hooks}
+            _render_agent_hooks(
+                hook_request,
+                hook_plan,
+                gate_startup_ms,
+                dry_run=dry_run,
+                http_hooks=sum(
+                    1
+                    for component in lock_components
+                    if component.get("type") == "hook" and component.get("local_name") not in gated_names
+                ),
+            )
         if warnings_list:
             rprint("")
             for warning in warnings_list:

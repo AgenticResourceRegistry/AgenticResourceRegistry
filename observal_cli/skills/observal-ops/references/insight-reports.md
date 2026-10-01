@@ -23,7 +23,7 @@ observal ops insights show NAMESPACE/AGENT_SLUG latest --output json
 
 Use the full report for broad questions. Cite report period, session count, Agent version, and comparison baseline when present.
 
-For an owned MCP, list and inspect component reports separately:
+For an owned MCP, skill or hook, list and inspect component reports separately (use `--component skill` or `--component hook`):
 
 ```bash
 observal ops insights list --component mcp NAMESPACE/SLUG --output json
@@ -48,6 +48,8 @@ Generate a component report (1–90 days; the deterministic block works without 
 ```bash
 observal ops insights generate --component mcp NAMESPACE/SLUG --period 14 --wait --output json
 ```
+
+Skill reports use the same commands with `--component skill NAMESPACE/SLUG`. They are deterministic (no model findings) and report present sessions, sessions with a confirmed load (a successful read or `Skill` call that put the file's text into context), sessions with an invocation (an explicit `/name`, only where the harness records its origin), and sessions where the skill was offered. A `null` count means no harness in the cohort records that kind, which is unknown, not zero; `*_not_recorded_on_some_harnesses` in `coverage.reasons` means the count covers only the harnesses that record it. Load attempts that failed are not loads. Skill evidence counts only for a verified install at the exact file location the session named. Never say a skill helped, was followed, or improved an outcome: the evidence shows only that its instructions entered context. Hook reports (`--component hook`, Claude Code only) are deterministic. They report present sessions, `eligible_sessions` (sessions where the hook could run), `sessions_with_recorded_run`, and runs that printed output, failed or blocked. Recorded runs are a lower bound, because a hook that succeeds silently leaves no record; "no recorded runs" never means the hook did not run. Hooks installed by `agent pull` run only while their agent is active and never in headless `claude -p` sessions; `coverage.eligibility` counts those sessions separately, outside the denominator. Never say a hook helped or changed an outcome.
 
 Generation can take longer than normal CLI calls. Verify final status before reading the report. If the component presence cohort is empty, the server returns 422 with coverage rather than a zero-use report.
 

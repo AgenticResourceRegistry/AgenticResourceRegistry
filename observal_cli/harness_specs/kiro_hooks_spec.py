@@ -25,8 +25,7 @@ session JSONL incrementally).
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from observal_cli.shared.launcher import module_command
 
 # CLI 2.x inline trigger names.
 KIRO_HOOK_EVENTS = ("userPromptSubmit", "stop")
@@ -40,32 +39,11 @@ KIRO_V1_HOOK_NAME_PREFIX = "observal-session-push"
 # Basename of the standalone hooks file Observal owns.
 KIRO_V1_HOOK_FILENAME = "observal.json"
 
-# Parent of the observal_cli package directory
-_PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
-
-
-def _python_cmd() -> str:
-    """Return python command with PYTHONPATH set if needed."""
-    try:
-        import importlib.util
-
-        if importlib.util.find_spec("observal_cli") is not None:
-            return sys.executable
-    except Exception:
-        pass
-    if sys.platform == "win32":
-        return f'set "PYTHONPATH={_PKG_ROOT}" && {sys.executable}'
-    return f"PYTHONPATH={_PKG_ROOT} {sys.executable}"
-
 
 def build_kiro_push_command(agent_id: str = "") -> str:
     """Return the session-push shell command, optionally agent-attributed."""
-    cmd = f"{_python_cmd()} -m observal_cli.hooks.session_push --harness kiro"
-    if not agent_id:
-        return cmd
-    if sys.platform == "win32":
-        return f'set "OBSERVAL_AGENT_ID={agent_id}" && {cmd}'
-    return f"OBSERVAL_AGENT_ID={agent_id} {cmd}"
+    env = {"OBSERVAL_AGENT_ID": agent_id} if agent_id else None
+    return f"{module_command('observal_cli.hooks.session_push', env)} --harness kiro"
 
 
 def build_kiro_hooks(*args, **kwargs) -> dict:

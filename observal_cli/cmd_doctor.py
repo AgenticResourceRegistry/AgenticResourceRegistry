@@ -1445,7 +1445,6 @@ def _patch_kiro_hook_file(config_dir: Path, dry_run: bool) -> bool:
 def _patch_cursor(dry_run: bool) -> bool:
     """Install session push hooks into ~/.cursor/hooks.json."""
     optic.trace("dry_run={}", dry_run)
-    import sys
 
     rprint("[cyan]Cursor - session push hooks[/cyan]")
 
@@ -1455,8 +1454,11 @@ def _patch_cursor(dry_run: bool) -> bool:
         return False
 
     # Use the current interpreter (from the observal CLI's venv) so that
-    # httpx and other dependencies are available when Cursor fires the hook.
-    cmd = f"{sys.executable} -m observal_cli.hooks.session_push --harness cursor"
+    # httpx and other dependencies are available when Cursor fires the hook,
+    # with PYTHONPATH when it cannot import observal_cli on its own.
+    from observal_cli.shared.launcher import posix_module_command
+
+    cmd = f"{posix_module_command('observal_cli.hooks.session_push')} --harness cursor"
 
     desired = {
         "version": 1,

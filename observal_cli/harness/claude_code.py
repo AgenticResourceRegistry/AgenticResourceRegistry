@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,6 +35,7 @@ from observal_cli.shared.utils import (
     extract_body,
     extract_mcp_servers,
     first_content_line,
+    is_observal_agent_hook_group,
     parse_frontmatter_field,
 )
 from observal_shared.agent_model import is_auto_model
@@ -169,34 +173,295 @@ class ClaudeCodeAdapter(BaseAdapter):
         return self._scan_claude_dir(claude_dir)
 
     def prepare_mcp_setup_command(self, command: list[str], scope: str) -> list[str]:
-        if command[:3] == ["claude", "mcp", "add"]:
-            return [*command[:3], "--scope", scope, *command[3:]]
+        if not command or command[0] != "claude":
+            return command
+        # npm installs a .cmd launcher on Windows. CreateProcess cannot execute
+        # its extensionless POSIX shim, even though `where claude` finds it.
+        if sys.platform == "win32":
+            import shutil
+
+            native = shutil.which("claude.cmd")
+            if native:
+                command = [native, *command[1:]]
+        flags = command[: command.index("--")] if "--" in command else command
+        if command[1:3] == ["mcp", "add"] and "--scope" not in flags:
+            # Server-generated commands already select Claude's native local/user
+            # scope. Ignore flags after `--` (they belong to the MCP process).
+            return [*command[:3], "--scope", "local" if scope == "project" else scope, *command[3:]]
         return command
 
     def mcp_manifest_path(self, scope: str) -> str | None:
         return {"project": "project:.mcp.json", "user": "user:.claude.json"}.get(scope)
 
+    def _installed_mcp_entry(
+        self, scope: str, directory: str | None, alias: str
+    ) -> tuple[str, dict | None, str | None]:
+        """Claude local scope lives under projects[realpath] in ~/.claude.json.
+
+        A separate project-wide .mcp.json can also exist; local takes precedence.
+        Never fall through a malformed local registration to a different entry.
+        """
+        if scope not in {"project", "user"} or (scope == "project" and not directory):
+            return "unverified", None, None
+        user_path = Path.home() / ".claude.json"
+        try:
+            user_data = json.loads(user_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            user_data = None
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return "unverified", None, "user:.claude.json"
+        if user_data is not None and not isinstance(user_data, dict):
+            return "unverified", None, "user:.claude.json"
+        if scope == "user":
+            data, display = user_data, "user:.claude.json"
+        else:
+            projects = user_data.get("projects", {}) if user_data else {}
+            if not isinstance(projects, dict):
+                return "unverified", None, "user:.claude.json"
+            project = projects.get(str(Path(directory).resolve()))
+            if project is not None:
+                if not isinstance(project, dict):
+                    return "unverified", None, "user:.claude.json"
+                local_servers = project.get("mcpServers", {})
+                if not isinstance(local_servers, dict):
+                    return "unverified", None, "user:.claude.json"
+                if alias in local_servers:
+                    entry = local_servers[alias]
+                    return (
+                        ("verified", entry, "user:.claude.json")
+                        if isinstance(entry, dict)
+                        else ("unverified", None, "user:.claude.json")
+                    )
+            display = "project:.mcp.json"
+            try:
+                data = json.loads((Path(directory) / ".mcp.json").read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return "missing", None, display
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                return "unverified", None, display
+        if not isinstance(data, dict) or not isinstance(data.get("mcpServers"), dict):
+            return "unverified", None, display
+        entry = data["mcpServers"].get(alias)
+        if entry is None:
+            return "missing", None, display
+        return ("verified", entry, display) if isinstance(entry, dict) else ("unverified", None, display)
+
+    def installed_mcp_manifest_path(self, scope: str, directory: str | None, alias: str) -> str | None:
+        return self._installed_mcp_entry(scope, directory, alias)[2]
+
     def redact_layer_content(self, display_path: str) -> bool:
         return display_path in {"user:.claude.json", "project:.mcp.json"}
 
+    def standalone_hook_binding(
+        self, config_path: str, config_snippet: dict, written: list[tuple[Path, Path]]
+    ) -> dict | None:
+        """Bind a ``hook install`` that wrote exactly one command hook into a settings file."""
+        import hashlib
+
+        from observal_cli.layer import skill_file_fingerprint
+
+        if config_path.startswith("~/.claude/"):
+            config = f"user:{config_path[len('~/.claude/') :]}"
+        elif config_path and not config_path.startswith(("~", "/")):
+            config = f"project:{config_path}"
+        else:
+            return None
+        commands = [
+            (event, hook.get("command"))
+            for event, groups in (config_snippet.get("hooks") or {}).items()
+            if isinstance(groups, list)
+            for group in groups
+            if isinstance(group, dict)
+            for hook in group.get("hooks") or []
+            if isinstance(hook, dict) and hook.get("type", "command") == "command"
+        ]
+        if len(commands) != 1 or not isinstance(commands[0][1], str) or not commands[0][1]:
+            return None
+        event, command = commands[0]
+        scripts = [
+            (path, rel) for path, rel in written if command == rel.as_posix() or command.endswith(rel.as_posix())
+        ]
+        if scripts:
+            fingerprint = skill_file_fingerprint(scripts[0][0])
+            if not fingerprint:
+                return None
+            script = f"project:{scripts[0][1].as_posix()}"
+        else:
+            fingerprint, script = f"sha256-{hashlib.sha256(command.encode()).hexdigest()}", ""
+        return {
+            "hook_event": event,
+            "hook_command": command,
+            "hook_agent": "",
+            "hook_config": config,
+            "hook_script": script,
+            "hook_integrity": fingerprint,
+        }
+
+    def _hook_file(self, display: str, directory: str | None) -> Path | None:
+        if display.startswith("user:"):
+            return Path.home() / ".claude" / display[len("user:") :]
+        if display.startswith("project:") and directory:
+            return Path(directory) / display[len("project:") :]
+        return None
+
+    @staticmethod
+    def _hook_entries(path: Path) -> Counter[tuple[str, str]] | None:
+        """How many times each (event, command) is configured in a settings file or agent frontmatter.
+
+        Counts, not a set: two identical entries are two hooks that Claude Code's
+        records cannot tell apart. None when the file cannot be read or parsed.
+        """
+        import yaml
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        try:
+            if path.suffix == ".md":
+                if not text.startswith("---"):
+                    return Counter()
+                data = yaml.safe_load(text.split("---", 2)[1]) or {}
+            else:
+                data = json.loads(text)
+        except (ValueError, yaml.YAMLError, IndexError):
+            return None
+        hooks = data.get("hooks") if isinstance(data, dict) else None
+        return Counter(
+            (event, hook["command"])
+            for event, groups in (hooks.items() if isinstance(hooks, dict) else ())
+            if isinstance(groups, list)
+            for group in groups
+            if isinstance(group, dict)
+            for hook in group.get("hooks") or []
+            if isinstance(hook, dict) and isinstance(hook.get("command"), str)
+        )
+
+    def _hook_locations(self, directory: str | None) -> list[Path]:
+        """Every place Claude Code reads command hooks from (settings and agent frontmatter)."""
+        base = Path.home() / ".claude"
+        paths = [base / "settings.json", *sorted((base / "agents").glob("*.md"))]
+        if directory:
+            project = Path(directory) / ".claude"
+            paths += [
+                project / "settings.json",
+                project / "settings.local.json",
+                *sorted((project / "agents").glob("*.md")),
+            ]
+        return paths
+
+    def verify_hook_binding(self, directory: str | None, component: dict) -> str:
+        """The recorded hook is configured exactly once where it was written, its script is
+        unchanged, and no other hook location configures the same event and command (which
+        Claude Code's records could not tell apart). A hook location that exists but cannot be
+        read or parsed cannot rule out a duplicate, so it also leaves the hook unverified.
+        """
+        from observal_cli.layer import skill_file_fingerprint
+
+        event, command = component.get("hook_event"), component.get("hook_command")
+        config = self._hook_file(str(component.get("hook_config") or ""), directory)
+        if not event or not command or config is None or not component.get("hook_integrity"):
+            return "unverified"
+        entries = self._hook_entries(config)
+        if entries is None:
+            return "unverified"
+        if entries[event, command] == 0:
+            return "drifted"
+        if entries[event, command] > 1:
+            return "unverified"  # duplicated in the same file: a recorded run names neither copy
+        if component.get("hook_placement") == "gated_settings":
+            gated = self._gated_hook_state(directory, config, component)
+            if gated != "verified":
+                return gated
+        script = component.get("hook_script") or ""
+        if script:
+            path = self._hook_file(script, directory)
+            fingerprint = skill_file_fingerprint(path) if path else None
+            if fingerprint is None:
+                return "unverified"
+            if fingerprint != component["hook_integrity"]:
+                return "drifted"
+        for other in self._hook_locations(directory):
+            if not other.exists() or other.resolve() == config.resolve():
+                continue
+            found = self._hook_entries(other)
+            if found is None or found[event, command]:
+                return "unverified"
+        return "verified"
+
+    def _gated_hook_state(self, directory: str | None, config: Path, component: dict) -> str:
+        """Extra checks for an agent hook placed in settings.json behind its agent gate.
+
+        Its Observal-owned group must be there exactly once and unedited (any change
+        to matcher, timeout or options is drift), and the agent file must no longer
+        carry the original hook: a copy there would run as well in interactive
+        sessions, and its runs would name a different command.
+        """
+        from observal_cli.agent_hooks import agent_hook_metadata, is_edited
+
+        event, command = component["hook_event"], component["hook_command"]
+        original = component.get("hook_original_command")
+        agent = component.get("hook_agent")
+        profile = self._hook_file(str(component.get("hook_agent_profile") or ""), directory)
+        if not isinstance(original, str) or not original or not agent or profile is None:
+            return "unverified"
+        try:
+            data = json.loads(config.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return "unverified"
+        hooks = data.get("hooks") if isinstance(data, dict) else None
+        owned = [
+            group
+            for group in (hooks.get(event) if isinstance(hooks, dict) else None) or []
+            if (meta := agent_hook_metadata(group)) is not None
+            and meta.get("agent") == agent
+            and meta.get("component_id") == component.get("id")
+        ]
+        if not owned:
+            return "unverified"  # the group was handed to the user (no _observal key) or moved
+        if len(owned) > 1:
+            return "unverified"
+        if is_edited(event, owned[0]):
+            return "drifted"
+        if not any(isinstance(hook, dict) and hook.get("command") == command for hook in owned[0].get("hooks") or []):
+            return "drifted"
+        if profile.exists():
+            entries = self._hook_entries(profile)
+            if entries is None or entries[event, original]:
+                return "unverified"
+        return "verified"
+
+    def skill_manifest_path(self, scope: str, alias: str) -> str | None:
+        """Claude Code loads ``~/.claude/skills/<name>`` (personal) or the project's ``.claude/skills``."""
+        if scope == "user":
+            return f"user:skills/{alias}/SKILL.md"
+        if scope == "project":
+            return f"project:.claude/skills/{alias}/SKILL.md"
+        return None
+
+    def skill_shadow_paths(self, scope: str, directory: str | None, alias: str) -> list[Path]:
+        """An enterprise skill of the same name runs instead of a personal or project one (unhashed)."""
+        managed = (
+            Path("/Library/Application Support/ClaudeCode")
+            if sys.platform == "darwin"
+            else Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "ClaudeCode"
+            if sys.platform == "win32"
+            else Path("/etc/claude-code")
+        )
+        return [managed / ".claude" / "skills" / alias / "SKILL.md"]
+
+    def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
+        """``<base dir>/SKILL.md`` as Claude Code names it in the skill's expansion record."""
+        if scope == "user":
+            return str(Path.home() / ".claude" / "skills" / alias / "SKILL.md")
+        if scope == "project" and directory:
+            return os.path.join(os.path.abspath(directory), ".claude", "skills", alias, "SKILL.md")
+        return None
+
     def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
         """Read the effective MCP key without exporting the shared settings document."""
-        if scope == "project" and directory:
-            path = Path(directory) / ".mcp.json"
-        elif scope == "user":
-            path = Path.home() / ".claude.json"
-        else:
-            return "unverified", None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return "unverified", None
-        if not isinstance(data, dict) or not isinstance(data.get("mcpServers"), dict):
-            return "unverified", None
-        entry = data["mcpServers"].get(alias)
-        if entry is None:
-            return "missing", None
-        return ("verified", entry) if isinstance(entry, dict) else ("unverified", None)
+        status, entry, _ = self._installed_mcp_entry(scope, directory, alias)
+        return status, entry
 
     def scan_project(self, project_dir: Path) -> ScanResult:
         # Claude Code uses .mcp.json at project root
@@ -291,6 +556,8 @@ class ClaudeCodeAdapter(BaseAdapter):
             if not isinstance(groups, list):
                 continue
             for group in groups:
+                if is_observal_agent_hook_group(group):
+                    continue  # an agent's gated hook, not telemetry
                 for hook in group.get("hooks", []):
                     command, url = hook.get("command", ""), hook.get("url", "")
                     if any(marker in command or marker in url for marker in _OBSERVAL_HOOK_MARKERS):

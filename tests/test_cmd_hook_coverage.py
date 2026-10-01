@@ -654,6 +654,8 @@ def test_install_writes_safe_files_config_and_lock_entry(tmp_path, monkeypatch):
         namespace="alice",
         slug="guard",
         local_name="guard",
+        # Not the nested Claude Code hook shape, so the install stays unbound (unverified).
+        hook_binding=None,
     )
 
 

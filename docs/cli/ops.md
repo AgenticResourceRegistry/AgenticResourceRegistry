@@ -229,6 +229,35 @@ Report sections include:
 * `on_the_horizon`
 * `fun_ending`
 
+## Component insights
+
+Owners, co-authors and admins of an MCP, skill or hook can report on it with `--component TYPE NAMESPACE/SLUG`:
+
+```bash
+observal ops insights generate --component skill alice/review --period 14 --wait --output json
+observal ops insights list --component skill alice/review --output json
+observal ops insights show --component skill alice/review latest
+```
+
+Periods accept 1 through 90 days. Component reports count only sessions where the component was verified present. If there are none, generation returns 422 with the coverage instead of a zero-use report.
+
+MCP reports count attributed calls. They can add model-written findings when insights are configured.
+
+Skill reports are deterministic. They count present sessions, sessions with a confirmed load (the skill's file text entered the model's context), sessions with an explicit invocation, and sessions where the skill was offered. Each harness records a different subset:
+
+| Harness | Offered | Confirmed load | Invocation |
+| --- | --- | --- | --- |
+| Pi | yes | model read of the skill's `SKILL.md` | not recorded |
+| Claude Code | not recorded | `Skill` tool call with its linked expansion | `/name` command with its harness-written expansion |
+
+"Not recorded" is unknown, never zero. If a cohort mixes harnesses, a count covers only the harnesses that record it, and the report says so. Skill evidence counts only for a verified install at the exact `SKILL.md` location the session names. The verifier assumes the default `~/.claude` and `~/.pi/agent` directories. Skills under a custom `CLAUDE_CONFIG_DIR` or `PI_CODING_AGENT_DIR` are not counted. A load or invocation shows the skill's instructions entered context. It does not show that the skill was followed or that it helped. Hook reports are deterministic and currently cover Claude Code. They count present sessions, sessions where the hook **could run**, and recorded runs: successful runs that printed output, failures, and runs that blocked an action. A recorded run must name the exact event and command of the verified install.
+
+- **Silent runs are not recorded.** Claude Code leaves no record of a hook that succeeds without printing anything, so recorded runs are a lower bound. A hook with no recorded runs may still have run.
+- **Agent hooks only run with their agent, and only interactively.** Hooks installed by `agent pull` live in the agent's frontmatter. They run only while that agent is active, and not at all in headless `claude -p` sessions. Those sessions are reported as "could not run" and kept out of the denominator rather than counted as no use. Hooks installed with `hook install` (in `settings.json`) run in every session.
+- A recorded run shows the hook executed. It does not show what it changed or that it helped.
+
+Pi does not install hook components, so hook reports are `unsupported` there.
+
 ## Exit codes
 
 | Code | Meaning |

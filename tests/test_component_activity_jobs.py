@@ -41,8 +41,15 @@ async def test_pending_mapping_and_source_retry_are_bounded_not_complete(monkeyp
     projector = AsyncMock(return_value={"status": "pending_mapping"})
     redis = SimpleNamespace(enqueue_job=AsyncMock(return_value=object()))
     monkeypatch.setattr(activity, "project_session_activity", projector)
+    monkeypatch.setattr(activity, "project_session_skill_evidence", AsyncMock(return_value={"status": "unsupported"}))
+    monkeypatch.setattr(activity, "project_session_hook_evidence", AsyncMock(return_value={"status": "unsupported"}))
     pending = await activity.project_component_activity({"redis": redis}, "p", "u", "claude-code", "s", chain="chain-a")
-    assert pending == {"status": "pending_mapping", "retry_scheduled": True}
+    assert pending == {
+        "status": "pending_mapping",
+        "skill": {"status": "unsupported"},
+        "hook": {"status": "unsupported"},
+        "retry_scheduled": True,
+    }
     redis.enqueue_job.assert_awaited_once_with(
         "project_component_activity",
         "p",
@@ -75,9 +82,13 @@ async def test_pending_mapping_and_source_retry_are_bounded_not_complete(monkeyp
 @pytest.mark.asyncio
 async def test_retry_enqueue_failure_leaves_pending_for_backfill(monkeypatch):
     monkeypatch.setattr(activity, "project_session_activity", AsyncMock(return_value={"status": "pending_mapping"}))
+    monkeypatch.setattr(activity, "project_session_skill_evidence", AsyncMock(return_value={"status": "unsupported"}))
+    monkeypatch.setattr(activity, "project_session_hook_evidence", AsyncMock(return_value={"status": "unsupported"}))
     redis = SimpleNamespace(enqueue_job=AsyncMock(side_effect=ConnectionError("queue down")))
     assert (await activity.project_component_activity({"redis": redis}, "p", "u", "h", "s")) == {
         "status": "pending_mapping",
+        "skill": {"status": "unsupported"},
+        "hook": {"status": "unsupported"},
         "retry_scheduled": False,
     }
 
