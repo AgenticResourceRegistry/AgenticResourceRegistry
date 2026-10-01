@@ -195,6 +195,8 @@ export default function ComponentDetailPage({
   const [forkOpen, setForkOpen] = useState(false);
   const [forkPage, setForkPage] = useState(1);
   const [activeTab, setActiveTab] = useState(search.tab === "edit" ? "edit" : "overview");
+  // The router reuses this detail page when the resolved listing changes.
+  useEffect(() => { setActiveTab("overview"); setForkPage(1); }, [id, type]);
   useEffect(() => { if (search.tab === "edit") setActiveTab("edit"); }, [id, search.tab]);
   const forkComponent = useForkComponent(type);
   const updateDraft = useComponentUpdateDraft(type);
@@ -202,14 +204,21 @@ export default function ComponentDetailPage({
   const [draftEditOpen, setDraftEditOpen] = useState(false);
   const { data: publicForks, isLoading: forksLoading, error: forksError } = useComponentForks(type, id, forkPage, activeTab === "forks");
   const canEdit = isAuthenticated && (item?.user_permission === "owner");
+  // Component Insights exist for MCPs (observed calls), skills (loads and invocations) and hooks (recorded runs).
+  const insightType = type === "mcps" ? "mcp" : type === "skills" ? "skill" : type === "hooks" ? "hook" : null;
+  const showInsights = insightType !== null && canEdit;
+  const { data: reportPages, isLoading: reportsLoading, isError: reportsError, hasNextPage, fetchNextPage, isFetchingNextPage } = useComponentInsightReports(insightType ?? "mcp", id, showInsights);
+  const componentReports = reportPages?.pages.flat() ?? [];
+  const generateComponentInsight = useGenerateComponentInsight();
   // Only owners can read sync status, so only their open page follows GitHub syncs.
   useMcpSyncWatcher(item ? String(item.id) : undefined, canEdit && type === "mcps" && !!item?.git_url);
   const isEditableDraft = item?.status === "draft" || item?.status === "rejected";
   // Legacy draft dialogs also edit saved skill revisions. They must observe
   // the exact version, not silently retry a stale listing-level update.
-  const skillDraftVersionId = type === "skills" && isEditableDraft
-    ? versionsData?.items.find((v) => v.version === item?.version && ["draft", "rejected"].includes(v.status))?.id
+  const skillDraftVersion = type === "skills" && isEditableDraft
+    ? versionsData?.items.find((v) => v.version === item?.version && ["draft", "rejected"].includes(v.status))
     : undefined;
+  const skillDraftVersionId = skillDraftVersion?.id;
   async function saveDialogDraft(body: Record<string, unknown>): Promise<string | undefined> {
     if (type !== "skills") {
       await updateDraft.mutateAsync({ id, body });
@@ -218,6 +227,10 @@ export default function ComponentDetailPage({
     if (!skillDraftVersionId) {
       toast.error("Skill version is still loading; refresh before saving");
       throw new Error("Skill version is still loading");
+    }
+    if (skillDraftVersion?.delivery_mode !== "registry_direct") {
+      await updateDraft.mutateAsync({ id, body });
+      return undefined;
     }
     const manifest = await registry.getSkillVersionManifest(id, skillDraftVersionId);
     if ((Array.isArray(body.extra_files) && body.extra_files.length > 0) ||
@@ -232,10 +245,6 @@ export default function ComponentDetailPage({
     if (search.tab === "edit" && isEditableDraft) setDraftEditOpen(true);
   }, [id, search.tab, isEditableDraft]);
   const isAdmin = isAuthenticated && hasMinRole(getUserRole(), "admin");
-  const showInsights = type === "mcps" && canEdit;
-  const { data: reportPages, isLoading: reportsLoading, isError: reportsError, hasNextPage, fetchNextPage, isFetchingNextPage } = useComponentInsightReports("mcp", id, showInsights);
-  const componentReports = reportPages?.pages.flat() ?? [];
-  const generateComponentInsight = useGenerateComponentInsight();
   const owningTeam = item?.team_id ? teams.find((team) => team.id === String(item.team_id)) : undefined;
   const personalTeam = teams.find((team) => team.is_personal && team.visibility === "private");
   const teamRole = owningTeam?.role;
@@ -288,6 +297,7 @@ export default function ComponentDetailPage({
   const versionsForDropdown = versions.filter((v) => v.status === "approved" && !v.requires_global_review) as unknown as import("@/lib/types").AgentVersionSummary[];
   const latestApprovedVersion = versions.find((v) => v.status === "approved" && !v.requires_global_review)?.version;
   const effectiveVersion = selectedVersion ?? latestApprovedVersion ?? (item?.version as string | undefined);
+  const selectedInsightVersion = selectedVersion ? versions.find((version) => version.version === selectedVersion) : undefined;
   // Never substitute the listing-level latest release when the viewer selected
   // an older version that is missing or still loading. Both the command and
   // resource view must resolve to the exact approved version UUID.
@@ -327,7 +337,6 @@ export default function ComponentDetailPage({
     singularType === "skill" && latestApprovedSkillVersion?.delivery_mode === "registry_direct" ? String(item?.id) : undefined,
     latestApprovedSkillVersion?.delivery_mode === "registry_direct" ? latestApprovedSkillVersion.id : undefined,
   );
-  const selectedInsightVersion = selectedVersion ? versions.find((version) => version.version === selectedVersion) : undefined;
   // Overlay version-specific description when a version is selected
   const effectiveItem: RegistryItem | undefined = item
     ? { ...item, ...((selectedApprovedSkillVersion ?? versionDetail) as unknown as RegistryItem | undefined),
@@ -600,8 +609,8 @@ export default function ComponentDetailPage({
                     </span>
                   )}
                 </TabsTrigger>
-                <TabsTrigger value="forks">Forks{item.fork_count ? ` (${item.fork_count})` : ""}</TabsTrigger>
                 {showInsights && <TabsTrigger value="insights">Insights</TabsTrigger>}
+                <TabsTrigger value="forks">Forks{item.fork_count ? ` (${item.fork_count})` : ""}</TabsTrigger>
                 {canEdit && <TabsTrigger value="edit">Edit</TabsTrigger>}
                 {canEdit && singularType === "mcp" && <TabsTrigger value="sync">Sync</TabsTrigger>}
               </TabsList>
@@ -610,10 +619,14 @@ export default function ComponentDetailPage({
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="space-y-1">
                     <h2 className="text-lg font-semibold">Component Insights</h2>
-                    <p className="max-w-[65ch] text-sm text-muted-foreground">Observed MCP calls and attribution coverage across verified present sessions. Partial activity never proves no use.</p>
+                    <p className="max-w-[65ch] text-sm text-muted-foreground">{insightType === "skill"
+                      ? "Confirmed loads and invocations of this verified skill, and their coverage. A load shows the instructions entered context, not that they helped."
+                      : insightType === "hook"
+                        ? "Recorded runs of this verified hook in sessions where it could run. Silent successes leave no record, so runs are a lower bound."
+                        : "Observed MCP calls and attribution coverage across verified present sessions. Partial activity never proves no use."}</p>
                   </div>
                   <Button type="button" disabled={generateComponentInsight.isPending || (!!selectedVersion && !selectedInsightVersion)}
-                    onClick={() => generateComponentInsight.mutate({ type: "mcp", id, versionId: selectedInsightVersion?.id })}>
+                    onClick={() => insightType && generateComponentInsight.mutate({ type: insightType, id, versionId: selectedInsightVersion?.id })}>
                     {generateComponentInsight.isPending ? "Queueing…" : selectedVersion ? `Generate v${selectedVersion} report` : "Generate all-versions report"}
                   </Button>
                 </div>
@@ -974,7 +987,7 @@ export default function ComponentDetailPage({
             void (async () => {
               try {
                 const revision = await saveDialogDraft(body);
-                if (type === "skills") {
+                if (type === "skills" && skillDraftVersion?.delivery_mode === "registry_direct") {
                   await submitFolderDraft.mutateAsync({ listingId: id, versionId: skillDraftVersionId!, observedRevision: revision! });
                 } else {
                   await submitDraft.mutateAsync(id);

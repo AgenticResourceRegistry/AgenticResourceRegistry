@@ -129,13 +129,153 @@ def test_version_must_belong_to_listing_and_is_forwarded(api):
     assert api.summary.await_args.kwargs["component_version"] == "1.2.3"
 
 
-@pytest.mark.parametrize("kind", ["skill", "hook"])
-def test_skill_and_hook_are_explicitly_unsupported_not_zero(api, kind):
+def test_unknown_component_type_is_rejected_before_any_query(api):
     for endpoint in ("summary", "sessions"):
-        response = api.client.get(f"/api/v1/components/{kind}/{LISTING_ID}/activity/{endpoint}")
-        assert response.status_code == 501
-        assert response.json()["status"] == "unsupported" and "present_sessions" not in response.json()
-    api.resolve.assert_not_awaited()
+        response = api.client.get(f"/api/v1/components/prompt/{LISTING_ID}/activity/{endpoint}")
+        assert response.status_code == 422
+    api.summary.assert_not_awaited()
+
+
+def _hook_summary(aggregate: dict | None = None) -> dict:
+    from services.component_activity.hook_queries import build_hook_coverage
+
+    aggregate = aggregate or {
+        "supported_present_sessions": 3,
+        "projection_complete_sessions": 3,
+        "eligible_sessions": 2,
+        "headless_sessions": 1,
+        "observed_sessions": 1,
+    }
+    coverage = build_hook_coverage({"present_sessions": 3, "present_users": 1}, aggregate, 515)
+    return {
+        "present_sessions": 3,
+        "present_users": 1,
+        "eligible_sessions": coverage.eligibility.eligible_sessions,
+        "sessions_with_recorded_run": coverage.observed_sessions,
+        "runs_with_output": 1,
+        "failures": 1,
+        "blocks": 0,
+        "harness_distribution": {"claude-code": 3},
+        "version_distribution": {},
+        "activation_actions": {"context_sessions": 0, "next_session_sessions": 0, "scope": "component"},
+        "coverage": coverage,
+    }
+
+
+def test_hook_reads_hook_evidence_never_mcp_or_skill_fields(api, monkeypatch):
+    from services.component_activity import hook_queries
+
+    summary = AsyncMock(return_value=_hook_summary())
+    sessions = AsyncMock(return_value=([], None))
+    monkeypatch.setattr(hook_queries, "hook_activity_summary", summary)
+    monkeypatch.setattr(hook_queries, "hook_activity_sessions", sessions)
+    response = api.client.get(f"/api/v1/components/hook/{LISTING_ID}/activity/summary")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["eligible_sessions"], body["sessions_with_recorded_run"]) == (2, 1)
+    assert body["coverage"]["eligibility"]["headless_sessions"] == 1
+    assert "agent_hook_headless_sessions" in body["coverage"]["reasons"]
+    for other in ("observed_calls", "result_states", "loaded_sessions", "invocations"):
+        assert other not in body
+    api.summary.assert_not_awaited()
+    assert api.client.get(f"/api/v1/components/hook/{LISTING_ID}/activity/sessions").status_code == 200
+    sessions.assert_awaited_once()
+    api.state["user"] = _user(role=UserRole.reviewer)
+    assert api.client.get(f"/api/v1/components/hook/{LISTING_ID}/activity/summary").status_code == 403
+
+
+def test_hook_denominator_counts_only_sessions_where_the_hook_could_run():
+    from services.component_activity.hook_queries import build_hook_coverage
+
+    coverage = build_hook_coverage(
+        {"present_sessions": 4},
+        {
+            "projection_complete_sessions": 4,
+            "eligible_sessions": 1,
+            "headless_sessions": 2,
+            "agent_inactive_sessions": 1,
+            "observed_sessions": 0,
+        },
+        515,
+    )
+    assert coverage.usage_rate_denominator_sessions == 1
+    assert coverage.attribution_state == "no_recorded_runs"
+    none_could_run = build_hook_coverage({"present_sessions": 2}, {"headless_sessions": 2}, 515)
+    assert none_could_run.attribution_state == "attribution_not_possible" and none_could_run.usage_rate is None
+    assert any(item.startswith("effect_not_observed") for item in coverage.limitations)
+
+
+def _skill_summary(state: str = "observed") -> dict:
+    from services.component_activity.skill_queries import build_skill_coverage
+
+    aggregate = {"projection_complete_sessions": 2, "observed_sessions": 1, "supported_present_sessions": 2}
+    coverage = build_skill_coverage({"present_sessions": 2, "present_users": 1}, aggregate, 515)
+    assert coverage.attribution_state == state
+    return {
+        "present_sessions": 2,
+        "present_users": 1,
+        "available_sessions": 2,
+        "loaded_sessions": 1,
+        "confirmed_loads": 1,
+        "load_attempts": 1,
+        "invoked_sessions": 0,
+        "invocations": 0,
+        "harness_distribution": {"pi": 2},
+        "version_distribution": {},
+        "activation_actions": {"context_sessions": 0, "next_session_sessions": 0, "scope": "component"},
+        "coverage": coverage,
+    }
+
+
+def test_skill_reads_skill_evidence_never_mcp_fields(api, monkeypatch):
+    """Skills have their own queries, fields and coverage; owner checks are the same."""
+    from services.component_activity import skill_queries
+
+    skill_summary = AsyncMock(return_value=_skill_summary() | {"invoked_sessions": None, "invocations": None})
+    skill_sessions = AsyncMock(return_value=([], None))
+    monkeypatch.setattr(skill_queries, "skill_activity_summary", skill_summary)
+    monkeypatch.setattr(skill_queries, "skill_activity_sessions", skill_sessions)
+    response = api.client.get(f"/api/v1/components/skill/{LISTING_ID}/activity/summary")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["loaded_sessions"], body["confirmed_loads"], body["load_attempts"]) == (1, 1, 1)
+    assert (body["invoked_sessions"], body["invocations"]) == (None, None), "unknown, not zero"
+    for mcp_only in ("observed_calls", "result_states"):
+        assert mcp_only not in body
+    assert "calls" not in body["coverage"] and "evidence" in body["coverage"]
+    assert any(item.startswith("entered_context_not_helped") for item in body["coverage"]["limitations"])
+    api.summary.assert_not_awaited()  # the MCP query is never consulted for a skill
+    assert api.client.get(f"/api/v1/components/skill/{LISTING_ID}/activity/sessions").status_code == 200
+    api.sessions.assert_not_awaited()
+    skill_sessions.assert_awaited_once()
+    # Same visibility and ownership gate as MCP: a reviewer who is not an owner is refused.
+    api.state["user"] = _user(role=UserRole.reviewer)
+    assert api.client.get(f"/api/v1/components/skill/{LISTING_ID}/activity/summary").status_code == 403
+
+
+def test_skill_coverage_excludes_unsupported_and_incomplete_from_the_denominator():
+    from services.component_activity.skill_queries import build_skill_coverage
+
+    coverage = build_skill_coverage(
+        {"present_sessions": 3, "present_users": 2},
+        {
+            "supported_present_sessions": 2,
+            "unsupported_present_sessions": 1,
+            "projection_complete_sessions": 1,
+            "projection_pending_sessions": 1,
+            "observed_sessions": 0,
+            "unknown_load_results": 1,
+        },
+        515,
+    )
+    assert coverage.usage_rate_denominator_sessions == 1
+    assert coverage.attribution_state == "no_observed_skill_use"
+    assert {"unsupported_harness_sessions", "projection_pending_sessions", "unconfirmed_load_attempts"} <= set(
+        coverage.reasons
+    )
+    none_complete = build_skill_coverage({"present_sessions": 1}, {"unsupported_present_sessions": 1}, 515)
+    assert none_complete.attribution_state == "attribution_not_possible"
+    assert none_complete.usage_rate is None
 
 
 def test_unknown_type_and_period_and_limit_bounds(api):

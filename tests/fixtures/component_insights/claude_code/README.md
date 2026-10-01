@@ -17,3 +17,74 @@ Current MCP call names follow `mcp__<installed-alias>__<tool>`. Do not identify 
 `standalone_install.json` is a **sanitized identity projection** from a later genuine tracked standalone MCP `--apply` installation into an isolated project. The installed registry item actually lived in a separately isolated PostgreSQL database and was served by the current-source Observal registry resolution/show/install routes (with test-only authentication override), not the older sample server. The real Claude Code 2.1.283 executable wrote a project `.mcp.json` entry; the CLI verified that effective alias, persisted a scoped standalone lockfile entry with the selected version and integrity fingerprint, and built a v2 pinned snapshot. A preliminary attempt in a *different* temporary project registered a Claude entry but failed before tracking when the output pipe closed; it is not the fixture. No existing sample migration, production install, or real user credentials were involved.
 
 The stored fixture replaces the original registry UUID and namespace with constructed values, omits server URL, original layer/file hashes, absolute paths, raw command/arguments, settings content, and the original integrity fingerprint. `v2_hash_built` reports the observed result, **not** an assertion that a hash computed from the sanitized fixture equals the original upload hash. The first-harness integration test creates a synthetic scoped snapshot and registry row from these sanitized pins to test the actual extractor and `presence_cohort`; it does not represent a historical session upload.
+
+## Skill fixtures
+
+Sanitized copies of six headless Claude Code 2.1.286 sessions, recorded on 2026-10-01 with Opus 4.6 on Amazon Bedrock. The recording ran in an isolated `HOME` and `CLAUDE_CONFIG_DIR` with `--allowedTools Skill Read`. Only the authentication variables were passed through. It used two synthetic skills: user-scope `observal-probe`, which replies `PROBE-7F3A`, and project-scope `project-probe`, which replies `PROJECT-9C1D`.
+
+- `skill_session_model_read.jsonl`: "Use the observal-probe skill." The model called `Skill`.
+- `skill_session_slash_command.jsonl`: `/observal-probe`.
+- `skill_session_slash_args.jsonl`: `/observal-probe with extra words`.
+- `skill_session_literal_text.jsonl`: the user typed the `<command-name>`/`<command-message>` tags as literal text. No skill ran.
+- `skill_session_project_skill.jsonl`: "Use the project-probe skill." (project scope).
+- `skill_session_unknown_skill.jsonl`: the model was asked to call `Skill` with `missing-probe`, which failed.
+
+Every line is kept in order. Session, entry, prompt, request, message and tool-use IDs were replaced with fixture values. The isolated config directory was mapped to `/home/fixture/.claude` and the project to `/home/fixture/project`. The system prompt, agent listing, thinking text and signatures were replaced with placeholders. The skill listing was reduced to the two probe skills; the recording also listed Claude Code's bundled skills. Record types, `isMeta`, `promptId`, `sourceToolUseID`, `toolUseResult`, `is_error`, tool names and inputs, the `Base directory for this skill:` expansion text, timestamps, model and usage come from the recording.
+
+### Observed skill evidence
+
+- **Offered:** the `skill_listing` attachment lists `names` and descriptions, but no locations. It cannot be tied to the verified file, so it is not counted.
+- **Loaded by the model:** an assistant `tool_use` named `Skill` with `input.skill`, then its `tool_result` (with `is_error: true` on failure, or `toolUseResult.success: true`), then an `isMeta: true` user record with `sourceToolUseID` set to the call id, whose text starts `Base directory for this skill: <dir>`. An unknown skill gets an error result and no expansion.
+- **Invoked by the user:** `/name` is a user record whose content is exactly `<command-message>name</command-message>\n<command-name>/name</command-name>`, optionally followed by `\n<command-args>…</command-args>`. It is followed by an `isMeta: true` expansion with the same `promptId` and no `sourceToolUseID`. Typing the same tags produces an ordinary user record with no expansion.
+
+None of these shows that a skill achieved anything.
+
+## Hook fixtures
+
+Sanitized copies of four Claude Code 2.1.286 sessions, recorded on 2026-10-01 with Opus 4.6 on Amazon Bedrock. The recording used the same isolation as the skill fixtures, with `--allowedTools Read` (plus `Glob` where noted). Probe hooks in the project's `.claude/hooks/` appended a line to a marker file each time they ran, so whether a hook actually ran is known independently of the transcript:
+
+- `probe-prompt.sh` (`UserPromptSubmit`) prints one line to stdout and exits 0.
+- `probe-pre.sh` (`PreToolUse`) prints nothing and exits 0.
+- `probe-fail.sh` (`PostToolUse`) writes to stderr and exits 1.
+- `probe-block.sh` (`PreToolUse`, matcher `Glob`) writes to stderr and exits 2.
+
+| Fixture | Mode and install path | Ran (marker file) | Recorded in the transcript |
+| --- | --- | --- | --- |
+| `hook_session_settings_outcomes.jsonl` | headless `-p`, project `settings.json` (the standalone `hook install` shape) | prompt, block, fail | `hook_success` (prompt), a blocked `tool_result`, `hook_non_blocking_error` (fail) |
+| `hook_session_silent_success.jsonl` | headless `-p`, project `settings.json` | pre | nothing |
+| `hook_session_agent_interactive.jsonl` | interactive `--agent probe-agent`, hooks in the agent's frontmatter exactly as Observal writes them (no `matcher`) | prompt, pre, fail | `hook_success` (prompt), `hook_non_blocking_error` (fail); nothing for the silent pre |
+| `hook_session_agent_headless.jsonl` | headless `-p --agent probe-agent`, same frontmatter | none | nothing |
+
+The interactive session was driven through a pseudo-terminal, with onboarding marked complete and the project marked trusted in the isolated config. IDs, paths, the system prompt and thinking were replaced as for the skill fixtures. Hook record fields, `toolDenialKind`, tool results, timestamps and usage come from the recording.
+
+### Observed hook evidence
+
+- **Success with output:** `attachment.type: "hook_success"`, with `hookEvent`, `hookName`, `command` (exactly as configured), `exitCode: 0`, `stdout`, `durationMs` and `toolUseID`.
+- **Silent success:** no record at all. A hook that ran and printed nothing cannot be distinguished from a hook that did not run.
+- **Non-blocking failure:** `attachment.type: "hook_non_blocking_error"`, with the same fields and the non-zero `exitCode`.
+- **Blocking failure (exit 2):** no hook attachment. The blocked tool's `tool_result` has `is_error: true` and the content `"<Event>:<Tool> hook error: [<command>]: <stderr>"`, and the record has `toolDenialKind: "permission-rule"`.
+- **Agent frontmatter hooks** ran only in the interactive session. They did not run under headless `-p`, either with `--agent` or when the agent ran as a subagent; that subagent recording is not kept as a fixture. A matcher of `"*"` made no difference. Settings hooks ran in both modes, including inside a headless subagent.
+
+None of these shows what a hook achieved.
+
+## Agent hook gate fixtures (prototype)
+
+These were recorded on 2026-10-01 with Claude Code 2.1.286 and Opus 4.6 on Bedrock, using the same isolation as the fixtures above. They inform the opt-in move of agent hooks from frontmatter into a gated `settings.json` (`observal_cli/hook_gate.py`). `agent pull` does not use the gate yet.
+
+`hook_inputs/` holds the raw hook input JSON that Claude Code passed to a recorder hook, for every event in six modes: headless and interactive `--agent probe-agent`, headless and interactive plain sessions, and headless and interactive plain sessions that ran `probe-agent` as a subagent. File names are `<mode>-<owner>--<event>[-<tool>].json`. The owner is `probe-agent` when the event belongs to that agent, and `main` for the main thread of a subagent session. Session, prompt and tool-use IDs, paths, prompts, tool inputs and responses are replaced. Keys, `hook_event_name`, `agent_type`, the presence of `agent_id`, `tool_name`, `permission_mode` and `source` come from the recording. Observed:
+
+- With `--agent`, every event, from `SessionStart` to `Stop`, carries `agent_type` set to the agent and no `agent_id`, headless and interactive.
+- A subagent's own events (`PreToolUse`, `PostToolUse`, `SubagentStop`) carry `agent_type` and `agent_id`. The main thread's events in the same session carry neither.
+- Plain sessions carry no `agent_type` on any event. A present but malformed `agent_type` was never seen.
+- Claude Code runs a hook command as `/bin/sh -c <command>` (bash 3.2 in POSIX mode on macOS) in the project directory.
+
+`gate_session_*.jsonl` are sanitized transcripts of sessions in which the probe hooks were configured in `settings.json`, each wrapped by the gate for `probe-agent`: prompt context, a silent success, a failure, an exit-2 block on `Glob`, and a shell-heavy `Stop`/`SubagentStop` command. The marker file showed:
+
+| Fixture | Mode | Gated hooks that ran |
+| --- | --- | --- |
+| `gate_session_headless_agent.jsonl` | headless `--agent probe-agent` | all five (the headless gap is closed) |
+| `gate_session_headless_other_agent.jsonl` | headless `--agent other-agent` | none |
+| `gate_session_headless_plain.jsonl` | headless plain | none |
+| `gate_session_headless_subagent_main.jsonl` / `gate_session_headless_subagent.jsonl` | headless plain session, and its `probe-agent` subagent transcript | the subagent's pre, fail and `SubagentStop`; not the main thread's prompt hook |
+
+Interactive `--agent probe-agent` ran all five, and interactive plain ran none. Those transcripts are not kept. The shell-heavy command wrote `A B|it's` and received the exact stdin. Records name the full gated command. The interpreter and source paths in those commands were replaced with `/home/fixture/.local/share/observal/bin/python3` and `/home/fixture/observal-src`; the recording used the source-checkout `PYTHONPATH` fallback.

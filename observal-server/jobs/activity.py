@@ -12,7 +12,12 @@ from datetime import timedelta
 from loguru import logger as optic
 
 import services.clickhouse.client as clickhouse
-from services.component_activity import project_session_activity, publication_version
+from services.component_activity import (
+    project_session_activity,
+    project_session_hook_evidence,
+    project_session_skill_evidence,
+    publication_version,
+)
 
 _MAX_RETRIES = 5
 _RETRY_STATUSES = frozenset({"pending_source", "pending_mapping"})
@@ -77,8 +82,18 @@ async def project_component_activity(
     if not 0 <= retry_count <= _MAX_RETRIES:
         raise ValueError("Activity retry count is out of bounds")
     result = await project_session_activity(project_id, user_id, harness, session_id)
+    # Skill and hook evidence are independent projections: their outcomes never
+    # change the MCP result, and a failure in one never blocks another.
+    extra: dict[str, dict] = {}
+    for name, project in (("skill", project_session_skill_evidence), ("hook", project_session_hook_evidence)):
+        try:
+            extra[name] = await project(project_id, user_id, harness, session_id)
+        except Exception as error:
+            optic.warning("{} evidence projection failed: {}", name, type(error).__name__)
+            extra[name] = {"status": "failed"}
+    pending = result["status"] in _RETRY_STATUSES or any(value["status"] in _RETRY_STATUSES for value in extra.values())
     scheduled = False
-    if result["status"] in _RETRY_STATUSES and retry_count < _MAX_RETRIES and ctx.get("redis") is not None:
+    if pending and retry_count < _MAX_RETRIES and ctx.get("redis") is not None:
         chain = chain or _chain_id(project_id, user_id, harness, session_id, "repair")
         try:
             queued = await ctx["redis"].enqueue_job(
@@ -95,7 +110,7 @@ async def project_component_activity(
             scheduled = queued is not None
         except Exception as error:
             optic.warning("activity projection retry enqueue failed: {}", type(error).__name__)
-    return {**result, "retry_scheduled": scheduled}
+    return {**result, **extra, "retry_scheduled": scheduled}
 
 
 async def _source_session_page(
@@ -192,6 +207,10 @@ async def backfill_component_activity(
             except Exception as error:
                 counts["failed"] += 1
                 optic.warning("activity backfill session projection failed: {}", type(error).__name__)
+                continue
+            if any(result.get(name, {}).get("status") == "failed" for name in ("skill", "hook")):
+                # The MCP projection succeeded; still retry the failed one on the next replay pass.
+                counts["failed"] += 1
                 continue
             status = result["status"]
             if status == "complete":

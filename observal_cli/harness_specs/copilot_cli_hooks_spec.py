@@ -16,6 +16,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from observal_cli.shared.launcher import isolation_flag, windows_module_command, windows_powershell_module_command
+
 COPILOT_CLI_HOOK_EVENTS = (
     "sessionStart",
     "sessionEnd",
@@ -33,16 +35,13 @@ def _python_cmd() -> str:
 
     Quotes the path to handle spaces in directory names.
     """
-    try:
-        import importlib.util
+    # Checked in an isolated interpreter: the CLI's own process may import
+    # observal_cli only through its working directory or PYTHONPATH.
+    from observal_cli.shared.launcher import importable_in_isolation
 
-        if importlib.util.find_spec("observal_cli") is not None:
-            # Quote to handle spaces in paths
-            return f'"{sys.executable}"'
-    except Exception:
-        pass
-    if sys.platform == "win32":
-        return f'set "PYTHONPATH={_PKG_ROOT}" && "{sys.executable}"'
+    if importable_in_isolation():
+        # Quote to handle spaces in paths
+        return f'"{sys.executable}"'
     return f'PYTHONPATH="{_PKG_ROOT}" "{sys.executable}"'
 
 
@@ -63,19 +62,14 @@ def build_copilot_cli_hooks(agent_id: str = "") -> dict:
     identifies whichever agent was pulled into that project.
     """
     module = "observal_cli.hooks.session_push"
-    bash_cmd = f"{_python_cmd()} -m {module} --harness copilot-cli"
-    # A PowerShell single-quoted literal does not expand $ or subexpressions;
-    # double apostrophes so even unusual interpreter paths stay literal.
-    ps_path = sys.executable.replace("'", "''")
-    ps_cmd = f"& '{ps_path}' -m {module} --harness copilot-cli"
-
-    if agent_id:
-        if sys.platform == "win32":
-            bash_cmd = f'set "OBSERVAL_AGENT_ID={agent_id}" && {bash_cmd}'
-        else:
+    env = {"OBSERVAL_AGENT_ID": agent_id} if agent_id else None
+    if sys.platform == "win32":
+        bash_cmd = f"{windows_module_command(module, env)} --harness copilot-cli"
+    else:
+        bash_cmd = f"{_python_cmd()} {isolation_flag()} -m {module} --harness copilot-cli"
+        if agent_id:
             bash_cmd = f"OBSERVAL_AGENT_ID={agent_id} {bash_cmd}"
-        # PowerShell (used on Windows) sets the env var in-process for the child.
-        ps_cmd = f"$env:OBSERVAL_AGENT_ID='{agent_id}'; {ps_cmd}"
+    ps_cmd = f"{windows_powershell_module_command(module, env)} --harness copilot-cli"
 
     hooks: dict[str, list[dict]] = {}
     for event in COPILOT_CLI_HOOK_EVENTS:

@@ -19,7 +19,7 @@ import json
 import re
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 try:
@@ -30,6 +30,9 @@ except ModuleNotFoundError:
     optic = logging.getLogger(__name__)
 
 from observal_cli.config import CONFIG_DIR
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Cache for file hashes by mtime (avoids re-reading unchanged files)
 _FILE_HASH_CACHE_PATH = CONFIG_DIR / ".file_hash_cache.json"
@@ -492,8 +495,14 @@ def build_layer_manifest(
     # Save updated cache
     _save_hash_cache(cache)
 
+    verifications: list[dict | None] = []
     if harness == "pi":
-        verification = pi_mcp_verification_entry(registry_data, project_dir)
+        verifications.append(pi_mcp_verification_entry(registry_data, project_dir))
+    if harness in SKILL_VERIFICATION_HARNESSES:
+        verifications.append(skill_verification_entry(harness, registry_data, project_dir))
+    if harness in HOOK_VERIFICATION_HARNESSES:
+        verifications.append(hook_verification_entry(harness, registry_data, project_dir))
+    for verification in verifications:
         if verification is not None:
             if include_content:
                 verification["content"] = ""
@@ -508,6 +517,103 @@ PI_MCP_VERIFICATION_PATH = "observal:mcp-verification"
 PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1"
 
 
+SKILL_VERIFICATION_PATH = "observal:skill-verification"
+# Harnesses whose skill presence (and location) is bound into the layer identity.
+SKILL_VERIFICATION_HARNESSES = frozenset({"pi", "claude-code"})
+
+
+HOOK_VERIFICATION_PATH = "observal:hook-verification"
+# Harnesses whose hook bindings are verified and bound into the layer identity.
+HOOK_VERIFICATION_HARNESSES = frozenset({"claude-code"})
+
+
+def hook_verification_entry(harness: str, registry_data: dict | None, project_dir: str | None) -> dict | None:
+    """Hash-only manifest entry binding pinned hook bindings and their current state to the layer identity.
+
+    Hook configs and scripts are not in the hashed manifest (settings files can
+    hold secrets), so the binding, its agent and its verification result are
+    bound here instead. Absent unless a pinned hook carries ``hook_integrity``.
+    """
+
+    def state(component: dict, scope: str) -> str:
+        return "|".join(
+            [
+                hook_binding_sha256(component),
+                _nfc(component.get("hook_agent")),
+                _hook_status(harness, project_dir, component),
+            ]
+        )
+
+    return _pin_verification_entry(
+        registry_data,
+        project_dir,
+        "hook",
+        "hook_integrity",
+        f"observal-{harness}-hook-verification-v1",
+        HOOK_VERIFICATION_PATH,
+        require_integrity=True,
+        extra=state,
+        harness=harness,
+    )
+
+
+def _skill_verifier(harness: str) -> str:
+    return f"observal-{harness}-skill-verification-v1"
+
+
+def skill_file_fingerprint(path: Path) -> str | None:
+    """``sha256-<hex>`` of an installed SKILL.md, in the layer manifest's hash format."""
+    try:
+        return f"sha256-{hashlib.sha256(path.read_bytes()).hexdigest()}"
+    except OSError:
+        return None
+
+
+def skill_location_sha256(harness: str, scope: str, directory: str | None, alias: str) -> str:
+    """SHA-256 of the absolute active SKILL.md path; skill evidence must name this exact file."""
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    try:
+        location = get_adapter(harness).skill_location(scope, directory, alias) if alias else None
+    except KeyError:
+        location = None
+    return hashlib.sha256(location.encode("utf-8")).hexdigest() if location else ""
+
+
+def skill_verification_entry(harness: str, registry_data: dict | None, project_dir: str | None) -> dict | None:
+    """Hash-only manifest entry binding a harness's pinned skill fingerprints to the layer identity.
+
+    Present only when at least one pinned skill carries ``skill_integrity``, so
+    layers without fingerprinted skills keep their existing hashes. For Pi it
+    must match ``piSkillVerificationEntry`` in the Pi extension byte for byte.
+    """
+
+    def shadow_state(component: dict, scope: str) -> str:
+        # The active file's absolute location, and same-named skills Pi could
+        # load instead, live outside the hashed manifest; both must still
+        # change the layer identity.
+        from observal_cli.harness import ensure_loaded, get_adapter
+
+        ensure_loaded()
+        alias = _nfc(component.get("local_name"))
+        paths = get_adapter(harness).skill_shadow_paths(scope, project_dir, alias) if alias else []
+        location = skill_location_sha256(harness, scope, project_dir, alias)
+        return "|".join([location, *(skill_file_fingerprint(path) or "" for path in paths)])
+
+    return _pin_verification_entry(
+        registry_data,
+        project_dir,
+        "skill",
+        "skill_integrity",
+        _skill_verifier(harness),
+        SKILL_VERIFICATION_PATH,
+        require_integrity=True,
+        extra=shadow_state,
+        harness=harness,
+    )
+
+
 def pi_mcp_verification_entry(registry_data: dict | None, project_dir: str | None) -> dict | None:
     """A synthetic, hash-only manifest entry binding Pi's MCP verification inputs to identity.
 
@@ -518,8 +624,25 @@ def pi_mcp_verification_entry(registry_data: dict | None, project_dir: str | Non
     verifier change yields a new snapshot instead of a stale or conflicting one.
     Must match ``piMcpVerificationEntry`` in the Pi extension byte for byte.
     """
+    return _pin_verification_entry(
+        registry_data, project_dir, "mcp", "mcp_integrity", PI_MCP_VERIFIER, PI_MCP_VERIFICATION_PATH
+    )
+
+
+def _pin_verification_entry(
+    registry_data: dict | None,
+    project_dir: str | None,
+    component_type: str,
+    integrity_key: str,
+    verifier: str,
+    entry_path: str,
+    *,
+    require_integrity: bool = False,
+    extra: Callable[[dict, str], str] | None = None,
+    harness: str = "pi",
+) -> dict | None:
     sections = registry_data.get("harnesses", {}) if isinstance(registry_data, dict) else {}
-    section = sections.get("pi") if isinstance(sections, dict) else None
+    section = sections.get(harness) if isinstance(sections, dict) else None
     if not isinstance(section, dict):
         return None
     directory = str(Path(project_dir).resolve()) if project_dir else None
@@ -537,24 +660,27 @@ def pi_mcp_verification_entry(registry_data: dict | None, project_dir: str | Non
     parents.append((None, [item for item in standalone if isinstance(item, dict) and included(item)]))
     for parent, components in parents:
         for component in components if isinstance(components, list) else []:
-            if not isinstance(component, dict) or component.get("type") != "mcp":
+            if not isinstance(component, dict) or component.get("type") != component_type:
+                continue
+            if require_integrity and not _nfc(component.get(integrity_key)):
                 continue
             scope = _nfc(component.get("scope")) or (_nfc(parent.get("scope")) if parent else "") or "project"
-            rows.append(
-                [
-                    _uuid_or_original(parent.get("id")) if parent else "",
-                    _uuid_or_original(component.get("id")),
-                    _nfc(component.get("local_name")),
-                    scope,
-                    _nfc(component.get("mcp_integrity")),
-                ]
-            )
+            row = [
+                _uuid_or_original(parent.get("id")) if parent else "",
+                _uuid_or_original(component.get("id")),
+                _nfc(component.get("local_name")),
+                scope,
+                _nfc(component.get(integrity_key)),
+            ]
+            if extra is not None:
+                row.append(extra(component, scope))
+            rows.append(row)
     if not rows:
         return None
     rows.sort(key=lambda row: [value.encode("utf-8") for value in row])
-    data = json.dumps([PI_MCP_VERIFIER, rows], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    data = json.dumps([verifier, rows], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return {
-        "path": PI_MCP_VERIFICATION_PATH,
+        "path": entry_path,
         "hash": f"sha256-{hashlib.sha256(data).hexdigest()}",
         "size": len(data),
         "source": "observal",
@@ -1008,11 +1134,19 @@ def _compute_drift(
     """Verify installed MCP aliases and retained file integrities (fail closed)."""
     drifted: list[dict] = []
     mcp_verifications: list[dict] = []
+    skill_verifications: list[dict] = []
+    hook_verifications: list[dict] = []
     unverified = False
     directory = str(Path(project_dir).resolve()) if project_dir else None
     sections = lockfile_data.get("harnesses", {}) if isinstance(lockfile_data, dict) else {}
     if not isinstance(sections, dict):
-        return {"is_canonical": None, "drifted_files": [], "mcp_verifications": []}
+        return {
+            "is_canonical": None,
+            "drifted_files": [],
+            "mcp_verifications": [],
+            "skill_verifications": [],
+            "hook_verifications": [],
+        }
     for harness_name, section in sections.items():
         if not isinstance(section, dict) or harness_name not in harnesses_section:
             continue
@@ -1080,6 +1214,62 @@ def _compute_drift(
                                 "status": status,
                             }
                         )
+                if comp.get("type") == "skill":
+                    scope = comp.get("scope", parent.get("scope", ""))
+                    status = _skill_status(
+                        harness_name,
+                        scope,
+                        project_dir,
+                        safe_alias,
+                        comp.get("skill_integrity"),
+                        actual_hashes,
+                    )
+                    skill_verifications.append(
+                        {
+                            "harness": harness_name,
+                            "component_id": _uuid_or_original(comp.get("id")),
+                            "alias": safe_alias,
+                            "scope": scope,
+                            "parent_agent_id": _uuid_or_original(parent.get("id")),
+                            "status": status,
+                            "location_sha256": skill_location_sha256(harness_name, scope, project_dir, safe_alias),
+                        }
+                    )
+                    if status == "drifted":
+                        drifted.append(
+                            {
+                                "harness": harness_name,
+                                "component": _uuid_or_original(comp.get("id")),
+                                "alias": safe_alias,
+                                "status": status,
+                            }
+                        )
+                if comp.get("type") == "hook":
+                    scope = comp.get("scope", parent.get("scope", ""))
+                    status = _hook_status(harness_name, project_dir, comp)
+                    hook_verifications.append(
+                        {
+                            "harness": harness_name,
+                            "component_id": _uuid_or_original(comp.get("id")),
+                            "alias": safe_alias,
+                            "scope": scope,
+                            "parent_agent_id": _uuid_or_original(parent.get("id")),
+                            "status": status,
+                            # The (event, command) Claude Code records verbatim when the hook runs.
+                            "location_sha256": hook_binding_sha256(comp),
+                            # Agent-scoped hooks run only while that agent is active.
+                            "hook_agent": _nfc(comp.get("hook_agent")),
+                        }
+                    )
+                    if status == "drifted":
+                        drifted.append(
+                            {
+                                "harness": harness_name,
+                                "component": _uuid_or_original(comp.get("id")),
+                                "alias": safe_alias,
+                                "status": status,
+                            }
+                        )
                 integrity = comp.get("integrity")
                 if not integrity:
                     continue
@@ -1101,7 +1291,68 @@ def _compute_drift(
         "is_canonical": False if drifted else None if unverified else True,
         "drifted_files": drifted,
         "mcp_verifications": mcp_verifications,
+        "skill_verifications": skill_verifications,
+        "hook_verifications": hook_verifications,
     }
+
+
+def hook_binding_sha256(component: dict) -> str:
+    """SHA-256 of ``event NUL command``: what a hook's runs must name to be attributed to it."""
+    event, command = component.get("hook_event"), component.get("hook_command")
+    if not isinstance(event, str) or not isinstance(command, str) or not event or not command:
+        return ""
+    return hashlib.sha256(f"{event}\0{command}".encode()).hexdigest()
+
+
+def _hook_status(harness: str, project_dir: str | None, component: dict) -> str:
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    try:
+        return get_adapter(harness).verify_hook_binding(project_dir, component)
+    except KeyError:
+        return "unverified"
+
+
+def _skill_status(
+    harness: str,
+    scope: str,
+    directory: str | None,
+    alias: str,
+    expected: str | None,
+    actual_hashes: dict[str, str],
+) -> str:
+    """Verify one installed skill against the file the harness actually loads (fail closed).
+
+    ``verified`` needs the active SKILL.md in this snapshot to hash to the
+    pull-time fingerprint, no same-named skill in the other scope with
+    different content, and none in an unhashed location the harness also
+    reads. A present file with different content is ``drifted``. An absent
+    active file (for example an inactive ``/agent`` profile) is ``unverified``,
+    never evidence of drift or use.
+    """
+    if not alias or not expected:
+        return "unverified"
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    try:
+        adapter = get_adapter(harness)
+        active = adapter.skill_manifest_path(scope, alias)
+        other = adapter.skill_manifest_path("project" if scope == "user" else "user", alias)
+        shadows = adapter.skill_shadow_paths(scope, directory, alias)
+    except KeyError:
+        return "unverified"
+    actual = actual_hashes.get(active) if active else None
+    if actual is None:
+        return "unverified"
+    if actual != expected:
+        return "drifted"
+    if other and other in actual_hashes and actual_hashes[other] != expected:
+        return "unverified"
+    if any(path.exists() for path in shadows):
+        return "unverified"
+    return "verified"
 
 
 def _integrity_check_paths(harness: str, comp_type: str, comp_name: str) -> list[str]:

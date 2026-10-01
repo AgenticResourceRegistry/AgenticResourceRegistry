@@ -126,7 +126,7 @@ Every command available in the installed CLI. This block is generated from the T
 
 **`observal ops`**: Observability and operational commands (sessions, telemetry, rankings, feedback, insights)
 
-- `observal ops insights`: Agent and MCP component insight reports
+- `observal ops insights`: Agent, MCP, skill and hook component insight reports
   - `observal ops insights generate`: Trigger generation of a new insight report.
   - `observal ops insights list`: List insight reports for an agent.
   - `observal ops insights show`: Show an insight report with pretty-printed narrative.

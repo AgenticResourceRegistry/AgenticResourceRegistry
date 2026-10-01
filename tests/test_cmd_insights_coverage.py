@@ -875,3 +875,119 @@ def test_component_cli_all_pages_and_exact_historical_id(cli):
     )
     assert shown.exit_code == 0, shown.output
     cli.client_get.assert_called_once_with(f"/api/v1/insights/reports/{REPORT_ID}")
+
+
+def _skill_report(**metrics) -> dict:
+    """Shape of a real skill report (services.insights.component_report._generate_skill_content)."""
+    base = {
+        "present_sessions": 6,
+        "loaded_sessions": 2,
+        "confirmed_loads": 2,
+        "load_attempts": 0,
+        "invoked_sessions": 2,
+        "invocations": 2,
+        "available_sessions": 1,
+        "harness_distribution": {"claude-code": 5, "pi": 1},
+        "version_distribution": {"unknown": 6},
+    }
+    return {
+        "id": REPORT_ID,
+        "subject_type": "component",
+        "component_type": "skill",
+        "component_name": "team/review",
+        "status": "completed",
+        "metrics": base | metrics,
+        "narrative": {"summary": "The skill's instructions entered context in processed present sessions."},
+        "coverage": {
+            "attribution_state": "observed",
+            "presence": {"present_sessions": 6},
+            "projection": {"projection_complete_sessions": 6},
+            "evidence": {"collision_facts": 0, "unmatched_facts": 1},
+            "usage_rate_denominator_sessions": 6,
+            "reasons": ["available_not_recorded_on_some_harnesses", "invoked_not_recorded_on_some_harnesses"],
+            "limitations": ["entered_context_not_helped: a load shows context, not help"],
+        },
+    }
+
+
+def test_skill_component_reports_use_skill_routes_and_never_mcp_wording(cli):
+    _returns(cli.resolve, "skill-id")
+    cli.client_get.side_effect = [[{"id": REPORT_ID, "status": "completed"}], _skill_report()]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "skill", "team/review"])
+    assert shown.exit_code == 0, shown.output
+    assert cli.client_get.call_args_list[0] == call("/api/v1/insights/components/skill/skill-id/reports")
+    text = " ".join(cli.messages())
+    assert "Sessions with a confirmed load: 2" in text
+    assert "Sessions where offered: 1 (only harnesses that record it)" in text
+    assert "entered_context_not_helped" in text
+    for mcp_only in ("Observed calls", "What the published calls suggest", "collisions,"):
+        assert mcp_only not in text
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        _skill_report(available_sessions=None, invoked_sessions=None, invocations=None),
+    ]
+    runner.invoke(insights.insights_app, ["show", "--component", "skill", "team/review"])
+    text = " ".join(cli.messages())
+    assert "Sessions where offered: not recorded" in text and "Sessions with an invocation: not recorded" in text
+
+    cli.client_get.side_effect = _blocked("skill generate should not check LLM status").side_effect
+    _returns(cli.client_post, {"id": REPORT_ID, "status": "pending"})
+    queued = runner.invoke(insights.insights_app, ["generate", "--component", "skill", "team/review", "-o", "json"])
+    assert queued.exit_code == 0, queued.output
+    cli.client_post.assert_called_once_with("/api/v1/insights/components/skill/skill-id/generate", {"period_days": 14})
+
+
+def test_unsupported_component_reports_are_refused_before_any_request(cli):
+    result = runner.invoke(insights.insights_app, ["list", "--component", "prompt", "team/p"])
+    assert result.exit_code != 0
+    cli.resolve.assert_not_called()
+    cli.client_get.assert_not_called()
+
+
+def _hook_report(**metrics) -> dict:
+    """Shape of a real hook report (services.insights.component_report._generate_hook_content)."""
+    return {
+        "id": REPORT_ID,
+        "subject_type": "component",
+        "component_type": "hook",
+        "component_name": "team/lint",
+        "status": "completed",
+        "metrics": {
+            "present_sessions": 3,
+            "eligible_sessions": 1,
+            "sessions_with_recorded_run": 1,
+            "runs_with_output": 0,
+            "failures": 1,
+            "blocks": 0,
+            "harness_distribution": {"claude-code": 3},
+            "version_distribution": {},
+        }
+        | metrics,
+        "narrative": {"summary": "The hook has recorded runs in sessions where it could run."},
+        "coverage": {
+            "attribution_state": "observed",
+            "presence": {"present_sessions": 3},
+            "projection": {"projection_complete_sessions": 3},
+            "eligibility": {"eligible_sessions": 1, "headless_sessions": 1, "agent_inactive_sessions": 1},
+            "evidence": {"collision_runs": 0, "unmatched_runs": 0},
+            "usage_rate_denominator_sessions": 1,
+            "reasons": ["agent_hook_headless_sessions"],
+            "limitations": ["silent_success_unrecorded: recorded runs are a lower bound"],
+        },
+    }
+
+
+def test_hook_component_reports_show_lower_bounds_and_sessions_that_could_not_run(cli):
+    _returns(cli.resolve, "hook-id")
+    cli.client_get.side_effect = [[{"id": REPORT_ID, "status": "completed"}], _hook_report()]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "hook", "team/lint"])
+    assert shown.exit_code == 0, shown.output
+    assert cli.client_get.call_args_list[0] == call("/api/v1/insights/components/hook/hook-id/reports")
+    text = " ".join(cli.messages())
+    assert "Sessions with a recorded run: 1 (a lower bound)" in text
+    assert "0 with output, 1 failed, 0 blocked" in text
+    assert "1 headless (agent hooks do not run), 1 agent not active" in text
+    for other in ("Observed calls", "confirmed load", "invocation"):
+        assert other not in text

@@ -33,7 +33,8 @@ from services.layer_components.queries import (
 
 MAX_REFERENCES_PER_SESSION = 20
 
-# Latest complete, non-failed generation per scoped session at the current version.
+# Latest complete, non-failed MCP generation per scoped session at the current
+# version. Skill publications (evidence_type = 'skill') never count here.
 _LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_generation) AS generation,
            argMax(source_revision, projection_generation) AS source_revision,
            argMax(candidate_count, projection_generation) AS candidate_count,
@@ -48,6 +49,7 @@ _LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_gen
                max(unknown_result_count) AS unknown_result_count
         FROM component_activity_publications
         WHERE project_id = {project_id:String} AND projection_version = {projection_version:UInt16}
+          AND evidence_type = 'mcp'
         GROUP BY user_id, harness, session_id, projection_generation
         HAVING countIf(status = 'complete') > 0 AND countIf(status = 'failed') = 0
     ) GROUP BY user_id, harness, session_id"""
@@ -55,7 +57,7 @@ _LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_gen
 _MARKER_STATES = """SELECT user_id, harness, session_id,
            countIf(status = 'failed' AND projection_version = {projection_version:UInt16}) AS failed_markers,
            countIf(status = 'complete' AND projection_version != {projection_version:UInt16}) AS other_complete
-    FROM component_activity_publications WHERE project_id = {project_id:String}
+    FROM component_activity_publications WHERE project_id = {project_id:String} AND evidence_type = 'mcp'
     GROUP BY user_id, harness, session_id"""
 
 _COMPONENT_ACTIVITY = (
@@ -71,6 +73,7 @@ _COMPONENT_ACTIVITY = (
       ON a.user_id = latest.user_id AND a.harness = latest.harness AND a.session_id = latest.session_id
      AND a.projection_generation = latest.generation
     WHERE a.project_id = {project_id:String} AND a.projection_version = {projection_version:UInt16}
+      AND a.evidence_kind = 'call'
       AND a.component_type = {component_type:String} AND a.component_id = {component_id:String}
       AND ({component_version_id:String} = '' OR a.component_version_id = {component_version_id:String})
     GROUP BY a.user_id, a.harness, a.session_id"""

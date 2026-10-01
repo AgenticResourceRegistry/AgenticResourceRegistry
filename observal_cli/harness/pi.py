@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from observal_cli.discovery.adapter_support import RichAdapterScanner
@@ -48,6 +49,29 @@ class PiAdapter(BaseAdapter):
     @property
     def harness_name(self) -> str:
         return "pi"
+
+    def skill_manifest_path(self, scope: str, alias: str) -> str | None:
+        """Pi loads ``skills/<name>/SKILL.md`` from its agent dir, or ``.pi/skills`` in a project."""
+        if scope == "user":
+            return f"user:skills/{alias}/SKILL.md"
+        if scope == "project":
+            return f"project:.pi/skills/{alias}/SKILL.md"
+        return None
+
+    def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
+        """The ``location`` Pi advertises and reads for an active skill (``skill.filePath``)."""
+        if scope == "user":
+            return str(Path.home() / ".pi" / "agent" / "skills" / alias / "SKILL.md")
+        if scope == "project" and directory:
+            return os.path.join(os.path.abspath(directory), ".pi", "skills", alias, "SKILL.md")
+        return None
+
+    def skill_shadow_paths(self, scope: str, directory: str | None, alias: str) -> list[Path]:
+        """Pi also discovers ``~/.agents/skills`` and a project's ``.agents/skills``; neither is hashed."""
+        paths = [Path.home() / ".agents" / "skills" / alias / "SKILL.md"]
+        if directory:
+            paths.append(Path(directory) / ".agents" / "skills" / alias / "SKILL.md")
+        return paths
 
     def redact_layer_content(self, display_path: str) -> bool:
         """MCP and settings JSON can hold inline credentials; retain only their hashes."""

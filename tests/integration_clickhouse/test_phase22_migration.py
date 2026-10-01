@@ -107,8 +107,14 @@ async def test_production_runner_applies_activity_tables_and_is_idempotent():
             "unknown_result_count",
             "attempted_at",
         }
+        # 008 adds one column to each table; the 007 sorting keys above are unchanged,
+        # and existing rows default to MCP calls and MCP publications.
+        activity_fields.add("evidence_kind")
+        publication_fields.add("evidence_type")
         assert {name for table, name in actual if table == "component_activity"} == activity_fields
         assert {name for table, name in actual if table == "component_activity_publications"} == publication_fields
+        assert actual[("component_activity", "evidence_kind")]["default_expression"] == "'call'"
+        assert actual[("component_activity_publications", "evidence_type")]["default_expression"] == "'mcp'"
         assert actual[("component_activity", "row_revision")]["type"] == "UInt64"
         assert actual[("component_activity", "row_revision")]["default_expression"] == "1"
         assert actual[("component_activity_publications", "source_revision")]["default_expression"] == "''"

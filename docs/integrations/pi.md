@@ -194,6 +194,19 @@ sender-cached; changes **during** a session cannot be proven stable, and
 historical sessions without verified layer snapshots cannot be retroactively
 attributed.
 
+### Skill component insights
+
+Skills have their own evidence, separate from MCP calls:
+
+- **Verified presence.** A pull fingerprints each `SKILL.md` it writes. A session snapshot reports the skill as verified only when the active file Pi loads (`~/.pi/agent/skills/<name>/SKILL.md`, or `.pi/skills/<name>/SKILL.md` in a project) matches that fingerprint and no same-named skill exists where Pi could load it instead, such as `~/.agents/skills`. A skill that is installed but not yet activated with `/agent` is unverified, not drifted.
+- **Available.** The session advertised the skill to the model.
+- **Confirmed load.** The model read the skill's `SKILL.md` and the read succeeded. A failed or unlinked read is reported as a load attempt, not a load.
+- **Not counted: `/skill:<name>`.** Pi stores the expanded command as an ordinary user message, which the same text typed or pasted by a user would reproduce, so Pi sessions never report invocations. When the model then reads the skill file, that read counts as a load.
+
+Evidence is tied to the exact file that was verified. The verifier records a SHA-256 of the absolute `SKILL.md` path it fingerprinted, and a session's skill evidence is attributed only when the location Pi recorded hashes to the same value. A same-named skill under another directory, such as another user's `.pi/agent/skills`, is not counted. A custom `PI_CODING_AGENT_DIR` is not yet followed by the verifier, so skills there are not counted.
+
+Counts cover only verified-present skills. Pi and Claude Code record different evidence (see [Component insights](../cli/ops.md#component-insights)); other harnesses report skill evidence as `unsupported`. A confirmed load or an invocation shows that the skill's instructions entered the model's context. It does not show that the skill was followed or helped. Component reports for skills are deterministic and include no model-written findings.
+
 ---
 
 ## Agent profiles and swapping

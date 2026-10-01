@@ -251,11 +251,13 @@ def test_hook_command_is_posix_shell_safe(monkeypatch: pytest.MonkeyPatch):
     import shlex
 
     from observal_cli.harness_specs import goose_hooks_spec
+    from observal_cli.shared import launcher
 
     monkeypatch.setattr(goose_hooks_spec.sys, "executable", "/opt/py 3.14/bin/python")
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)  # an installed CLI
     command = goose_hooks_spec.hook_command()
 
-    assert shlex.split(command)[:3] == ["/opt/py 3.14/bin/python", "-m", "observal_cli.hooks.session_push"]
+    assert shlex.split(command)[:4] == ["/opt/py 3.14/bin/python", "-I", "-m", "observal_cli.hooks.session_push"]
     assert "&&" not in command  # cmd.exe syntax would never parse under sh -c
 
 

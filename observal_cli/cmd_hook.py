@@ -693,8 +693,18 @@ def hook_install(
             _atomic_write_text(cfg_file, config_content)
             rprint(f"  [green]✓[/green] Updated {esc(cfg_file)}")
 
+    from observal_cli.harness import ensure_loaded, get_adapter
     from observal_cli.lockfile import upsert_standalone
 
+    ensure_loaded()
+    try:
+        binding = get_adapter(harness).standalone_hook_binding(
+            config_path or "",
+            config_snippet if isinstance(config_snippet, dict) else {},
+            [(path, path.relative_to(project_root)) for path, _content, _executable in file_writes],
+        )
+    except KeyError:
+        binding = None
     try:
         upsert_standalone(
             harness,
@@ -710,6 +720,7 @@ def hook_install(
             namespace=listing.get("namespace"),
             slug=listing.get("slug"),
             local_name=local_name,
+            hook_binding=binding,
         )
     except PermissionError as error:
         fail(

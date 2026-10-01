@@ -28,7 +28,7 @@ class InsightReport(Base):
         CheckConstraint(
             "(subject_type = 'agent' AND agent_id IS NOT NULL AND component_id IS NULL AND component_type IS NULL) OR "
             "(subject_type = 'component' AND agent_id IS NULL AND component_id IS NOT NULL AND "
-            "component_type = 'mcp' AND project_id IS NOT NULL)",
+            "component_type IN ('mcp', 'skill', 'hook') AND project_id IS NOT NULL)",
             name="ck_insight_report_subject",
         ),
         Index(

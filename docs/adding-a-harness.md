@@ -562,6 +562,19 @@ observal doctor patch --harness my-harness --dry-run
 observal reconcile --harness my-harness --dry-run
 ```
 
+## Component evidence (skills and hooks)
+
+Component Insights count skill and hook evidence only where it is proven for the harness. Setting `skill_evidence_extractor` or `hook_evidence_extractor` in the registry establishes nothing on its own: the id must resolve to an implementation in `services/session_parsers/`, and each (type × harness) cell needs all of the following, from recorded, sanitized sessions in `tests/fixtures/component_insights/<harness>/`:
+
+1. **A verified binding.** The CLI adapter verifies the installed component against the file the harness actually loads (`skill_manifest_path`, `skill_shadow_paths`, `skill_location` for skills; `verify_hook_binding` for hooks). Anything it cannot rule out, such as an unreadable config, a duplicate entry or a same-named copy elsewhere, must leave the component unverified. Add the harness to `SKILL_VERIFICATION_HARNESSES` or `HOOK_VERIFICATION_HARNESSES` in `observal_cli/layer.py` so the result is bound into the layer identity.
+2. **An observable identity.** The transcript must name the same identity the verifier recorded: the exact `SKILL.md` location for skills, the exact event and command for hooks. Typed or pasted text must not be able to produce it; rely on harness-written fields.
+3. **Declared limits.** The extractor declares which kinds it can observe (`observed_kinds`). For hooks it also declares whether silent successes are recorded (`records_silent_success`) and whether agent-scoped hooks run headless (`agent_hooks_run_headless`). Unknown is reported as not recorded or not eligible, never as zero.
+4. **When it could run.** For hooks, prove from recordings when an installed hook can run at all (settings versus agent placement, interactive versus headless) before counting a session in the denominator.
+
+Without all four the cell stays `unsupported`.
+
+---
+
 ## Architecture Notes
 
 **Skills are mostly universal.** All harnesses that support skills use the same

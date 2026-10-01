@@ -131,6 +131,30 @@ def _claude_code_hooks_frontmatter_lines(
     return lines
 
 
+def _claude_code_hook_command(hook: dict) -> str:
+    """The exact command string a custom command hook is written with (Claude Code records it verbatim)."""
+    command = (hook.get("handler_config") or {}).get("command", "")
+    # Rewrite bare script filenames to the harness hooks directory path
+    script_filename = hook.get("script_filename")
+    if script_filename and command == script_filename:
+        command = f".claude/hooks/{script_filename}"
+    return command
+
+
+def _claude_code_hook_bindings(hook_configs: list[dict]) -> list[dict]:
+    """Where each custom command hook was written, so the CLI can verify it later.
+
+    HTTP hooks have no command and are not bound (they stay unverified).
+    """
+    bindings = []
+    for hook in hook_configs:
+        command = _claude_code_hook_command(hook) if hook.get("handler_type", "command") != "http" else ""
+        if hook.get("event") and command and hook.get("name"):
+            script = f".claude/hooks/{hook['script_filename']}" if hook.get("script_filename") else None
+            bindings.append({"name": hook["name"], "event": hook["event"], "command": command, "script": script})
+    return bindings
+
+
 def _custom_hook_matcher_lines(hook: dict) -> list[str]:
     """Build YAML lines for a single custom hook matcher group."""
     handler_type = hook.get("handler_type", "command")
@@ -146,11 +170,7 @@ def _custom_hook_matcher_lines(hook: dict) -> list[str]:
             f"          timeout: {timeout}",
         ]
     else:
-        command = handler_config.get("command", "")
-        # Rewrite bare script filenames to the harness hooks directory path
-        script_filename = hook.get("script_filename")
-        if script_filename and command == script_filename:
-            command = f".claude/hooks/{script_filename}"
+        command = _claude_code_hook_command(hook)
         lines = ["    - hooks:", "        - type: command", f'          command: "{command}"'] if command else []
     return lines
 

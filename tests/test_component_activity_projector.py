@@ -94,6 +94,7 @@ def test_published_row_comparison_normalizes_clickhouse_uint64_and_ignores_publi
         "attribution_method": "verified_alias",
         "matcher_version": 2,
         "extractor_version": 2,
+        "evidence_kind": "call",
     }
     newly_built = stored | {
         "source_line_offset": 0,
@@ -153,7 +154,11 @@ async def test_rows_acknowledged_before_complete_marker_and_never_store_content(
 async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without_rows(monkeypatch):
     sources = [_source(0, [{"type": "text"}])]
     writes = []
-    previous = {258: None, 259: None}
+    # Publication versions pack (projection << 8 | matcher); derive them so a
+    # projection-version bump does not invalidate what this test checks.
+    v_matcher2 = projector.PROJECTION_VERSION << 8 | 2
+    v_matcher3 = projector.PROJECTION_VERSION << 8 | 3
+    previous = {v_matcher2: None, v_matcher3: None}
     monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
 
     async def fake_query(sql, params=None, *, data=None):
@@ -170,7 +175,7 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
     monkeypatch.setattr(projector, "_published_rows", AsyncMock(return_value=[]))
     monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(side_effect=[21, 22]))
     first = await projector.project_session_activity("p", "u", "claude-code", "s")
-    previous[258] = {
+    previous[v_matcher2] = {
         "projection_generation": 21,
         "source_revision": first["source_revision"],
         **{
@@ -187,7 +192,7 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
     assert (await projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "already_complete"
     monkeypatch.setattr(projector, "MATCHER_VERSION", 3)
     bumped = await projector.project_session_activity("p", "u", "claude-code", "s")
-    assert first["publication_version"] == 258 and bumped["publication_version"] == 259
+    assert first["publication_version"] == v_matcher2 and bumped["publication_version"] == v_matcher3
     assert [marker["status"] for marker in writes] == ["complete", "complete"]
     assert [marker["attributed_count"] for marker in writes] == [0, 0]
     monkeypatch.setattr(projector, "MATCHER_VERSION", 256)
@@ -273,7 +278,7 @@ async def test_two_verified_source_line_hashes_split_only_with_scoped_mapping(mo
         writes.extend(json.loads(line) for line in data.splitlines())
         return []
 
-    async def mapping(_project, _user, layer_hash, _harness):
+    async def mapping(_project, _user, layer_hash, _harness, _component_type="mcp"):
         return "complete", 8 if layer_hash == _HASH_A else 9, [_CANDIDATE | {"component_id": layer_hash}]
 
     monkeypatch.setattr(projector, "_query", fake_query)

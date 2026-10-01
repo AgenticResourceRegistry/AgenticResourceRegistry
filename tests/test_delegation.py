@@ -986,7 +986,10 @@ def test_codex_answer_is_read_from_its_output_file(tmp_path):
     assert adapter.parse_headless_output(plan, "noise").text == "final answer"
 
 
-def test_rewrite_observal_interpreter_handles_entries_and_argv():
+def test_rewrite_observal_interpreter_handles_entries_and_argv(monkeypatch):
+    from observal_cli.shared import launcher
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)  # an installed CLI
     snippet = {
         "mcp_config": {"observal-agents": {"command": "python3", "args": ["-m", "observal_cli.delegation.mcp_server"]}},
         "mcp_setup_commands": [["claude", "mcp", "add", "x", "--", "python3", "-m", "observal_cli.sandbox_mcp"]],
@@ -994,7 +997,7 @@ def test_rewrite_observal_interpreter_handles_entries_and_argv():
     }
     out = rewrite_observal_interpreter(snippet)
     assert out["mcp_config"]["observal-agents"]["command"] == sys.executable
-    assert out["mcp_setup_commands"][0][5] == sys.executable
+    assert out["mcp_setup_commands"][0][5:8] == [sys.executable, "-I", "-m"]
     assert out["other"]["command"] == "python3"
 
 

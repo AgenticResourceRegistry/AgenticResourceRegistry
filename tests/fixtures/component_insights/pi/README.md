@@ -25,3 +25,22 @@ The adapter records the configured server name it actually dispatched to in the 
 - direct failure: `{"error":"tool_error","server":…}`, which has **no** `tool`.
 
 `isError` is an explicit boolean on every result. The same `details` shapes appear in the `pi-mcp-adapter` 3.2.0 source (`proxy-modes.ts` `callIdentity`, `direct-tools.ts`). Version 3.x reads `mcp-adapter.json` instead of Pi's `mcp.json`, which is why the Pi extension hashes and checks both file sets before reporting an MCP as verified.
+
+## Skill fixtures
+
+Sanitized copies of two headless Pi sessions recorded on 2026-10-01 with Pi 0.99.2, using a synthetic user-scope skill `observal-probe` (installed at `<agent>/skills/observal-probe/SKILL.md`) in an isolated `PI_CODING_AGENT_DIR` with `--no-extensions`. The skill tells the model to reply `PROBE-7F3A`; both sessions did.
+
+- `skill_session_model_read.jsonl`: prompt "Use the observal-probe skill." The model chose to load the skill.
+- `skill_session_slash_command.jsonl`: the user forced the skill with `/skill:observal-probe`.
+
+Every line is kept in order. Paths were replaced with `/home/fixture/...`, entry, tool-call and response IDs with fixture values, and thinking text and signatures with placeholders. The available-skills list was reduced to the probe (the recording machine's other skills were removed). Record types, roles, `sections`, tool names and arguments, the `<skill>` block, tool results, timestamps, model and usage come from the recording.
+
+### Observed skill evidence
+
+- **Available:** the `system` message's `sections.skills` contains `<available_skills>` with each skill's `name`, `description` and `location` (absolute `SKILL.md` path). This lists what was advertised, not what was used.
+- **Loaded by the model:** an assistant `toolCall` named `read` whose `arguments.path` is the skill's `SKILL.md` location, followed by its `toolResult`.
+- **`/skill:name`:** becomes an ordinary user message containing `<skill name="…" location="…">` with the instructions expanded (Pi 0.99.2 `_expandSkillCommand`). Pi records no origin that separates it from the same text typed or pasted by a user, so the extractor does not treat it as an invocation. In the recording the model then also read the file, which counts as a load.
+
+Locations are absolute and recorded as Pi saw them, so the extractor emits a SHA-256 of each location and the server matches it against the path the verifier fingerprinted. Layout and alias alone do not identify this installation's skill.
+
+None of these shows that a skill achieved anything.

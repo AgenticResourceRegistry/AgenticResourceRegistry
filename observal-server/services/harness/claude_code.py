@@ -9,6 +9,7 @@ from __future__ import annotations
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.harness import BaseHarnessAdapter, ConfigContext, McpConfigContext, register_adapter
 from services.harness.helpers import (
+    _claude_code_hook_bindings,
     _claude_code_hooks_frontmatter_lines,
     _collect_hook_script_files,
     _model_name_to_frontmatter,
@@ -178,6 +179,10 @@ class ClaudeCodeAdapter(BaseHarnessAdapter):
         cc_hook_files = _collect_hook_script_files(hook_configs, ctx.hook_listings, "claude-code")
         if cc_hook_files:
             result["hook_files"] = cc_hook_files
+        bindings = _claude_code_hook_bindings(hook_configs)
+        if bindings:
+            # Agent-scoped: these run only while this agent is active (interactive sessions).
+            result["hook_bindings"] = [binding | {"agent": safe_name} for binding in bindings]
 
         warnings_combined = list(ctx.compatibility_warnings)
         warnings_combined.extend(options.get("_model_warnings") or [])
