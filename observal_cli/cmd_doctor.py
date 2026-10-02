@@ -38,6 +38,7 @@ from observal_cli.harness_specs.claude_code_hooks_spec import (
 from observal_cli.render import OutputMode, esc, output_json
 from observal_cli.shared.utils import (
     atomic_write,
+    quote_shell_arg,
 )
 from observal_cli.shared.utils import (
     is_observal_hook_entry as _is_observal_hook_entry,
@@ -1365,6 +1366,15 @@ def _patch_kiro_hook_file(config_dir: Path, dry_run: bool) -> bool:
     return True
 
 
+# What marks a hook command as ours. A bare "session_push" is not enough: other
+# tools name their own hooks that way, and repairing ours must leave those alone.
+_OBSERVAL_PUSH_MARKERS = ("observal_cli.hooks.session_push", "cursor_session_push")
+
+
+def _is_observal_push(command: object) -> bool:
+    return isinstance(command, str) and any(marker in command for marker in _OBSERVAL_PUSH_MARKERS)
+
+
 def _patch_cursor(dry_run: bool) -> bool:
     """Install session push hooks into ~/.cursor/hooks.json."""
     optic.trace("dry_run={}", dry_run)
@@ -1379,7 +1389,7 @@ def _patch_cursor(dry_run: bool) -> bool:
 
     # Use the current interpreter (from the observal CLI's venv) so that
     # httpx and other dependencies are available when Cursor fires the hook.
-    cmd = f"{sys.executable} -m observal_cli.hooks.session_push --harness cursor"
+    cmd = f"{quote_shell_arg(sys.executable)} -m observal_cli.hooks.session_push --harness cursor"
 
     desired = {
         "version": 1,
@@ -1394,14 +1404,16 @@ def _patch_cursor(dry_run: bool) -> bool:
     if hooks_path.exists():
         existing = _read_json_object(hooks_path)
 
-    # Check if already patched
+    # Check if already patched. Our entries must be exactly the current command:
+    # matching only the module would keep an unquoted or stale interpreter, and
+    # accepting any one match would leave a stale copy firing next to it.
     existing_hooks = existing.get("hooks", {})
     needs_update = False
 
     for event in ("beforeSubmitPrompt", "stop"):
         entries = existing_hooks.get(event, [])
-        has_observal = any("hooks.session_push --harness cursor" in e.get("command", "") for e in entries)
-        if not has_observal:
+        observal_cmds = [e.get("command") for e in entries if _is_observal_push(e.get("command"))]
+        if observal_cmds != [cmd]:
             needs_update = True
             break
 
@@ -1414,11 +1426,7 @@ def _patch_cursor(dry_run: bool) -> bool:
     for event, desired_entries in desired["hooks"].items():
         current = merged_hooks.get(event, [])
         # Remove old Observal hooks
-        cleaned = [
-            h
-            for h in current
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
-        ]
+        cleaned = [h for h in current if not _is_observal_push(h.get("command"))]
         merged_hooks[event] = cleaned + desired_entries
 
     result = {"version": 1, "hooks": merged_hooks}
@@ -1453,7 +1461,8 @@ def _patch_antigravity(dry_run: bool) -> bool:
     if hooks_path.exists():
         existing = _read_json_object(hooks_path)
 
-    if _OBSERVAL_HOOK_NAME in existing:
+    # Compare the whole entry so an older unquoted or stale interpreter is replaced.
+    if existing.get(_OBSERVAL_HOOK_NAME) == desired[_OBSERVAL_HOOK_NAME]:
         rprint("  [dim]Already up to date[/dim]")
         return False
 
@@ -1533,20 +1542,23 @@ def _patch_codex(dry_run: bool) -> bool:
     if hooks_path.exists():
         existing = _read_json_object(hooks_path)
 
-    # Check if already patched
+    # Check if already patched. Our hooks must be exactly the current command,
+    # for the same reasons as Cursor: no stale interpreter, and no stale copy
+    # left running beside the current one.
     existing_hooks = existing.get("hooks", {})
     needs_update = False
+    cmd = desired["hooks"]["Stop"][0]["hooks"][0]["command"]
 
     for event in ("UserPromptSubmit", "Stop"):
         groups = existing_hooks.get(event, [])
-        has_observal = any(
-            "hooks.session_push --harness codex" in h.get("command", "")
+        observal_cmds = [
+            h.get("command")
             for g in groups
             if isinstance(g, dict)
             for h in g.get("hooks", [])
-            if isinstance(h, dict)
-        )
-        if not has_observal:
+            if isinstance(h, dict) and _is_observal_push(h.get("command"))
+        ]
+        if observal_cmds != [cmd]:
             needs_update = True
             break
 
@@ -1568,13 +1580,17 @@ def _patch_codex(dry_run: bool) -> bool:
         merged_hooks = existing_hooks.copy()
         for event, desired_groups in desired["hooks"].items():
             current = merged_hooks.get(event, [])
-            # Remove old Observal hook groups
-            cleaned = [
-                g
-                for g in current
-                if not isinstance(g, dict)
-                or not any("session_push" in h.get("command", "") for h in g.get("hooks", []) if isinstance(h, dict))
-            ]
+            # Remove our old hooks, not whole groups: a group can also hold
+            # another tool's hook, and that one stays.
+            cleaned = []
+            for g in current:
+                if not isinstance(g, dict):
+                    cleaned.append(g)
+                    continue
+                hooks = g.get("hooks", [])
+                kept = [h for h in hooks if not (isinstance(h, dict) and _is_observal_push(h.get("command")))]
+                if kept or not hooks:
+                    cleaned.append({**g, "hooks": kept} if len(kept) != len(hooks) else g)
             merged_hooks[event] = cleaned + desired_groups
 
         result = {"hooks": merged_hooks}

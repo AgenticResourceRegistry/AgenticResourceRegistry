@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -277,6 +279,54 @@ def is_observal_matcher_group(group: dict) -> bool:
     if OBSERVAL_METADATA_KEY in group:
         return True
     return any(is_observal_hook_entry(h) for h in group.get("hooks", []))
+
+
+# ---------------------------------------------------------------------------
+# Hook interpreter
+# ---------------------------------------------------------------------------
+
+# Parent of the observal_cli package directory
+_PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+
+# Characters cmd.exe treats as operators or token separators outside double
+# quotes. list2cmdline only quotes whitespace, so C:\R&D\python.exe would be
+# cut at the "&" and run as two commands.
+_CMD_NEEDS_QUOTES = re.compile(r'[\s&|<>^(),;="]')
+
+
+def quote_shell_arg(arg: str) -> str:
+    """Quote one argument for the shell a hook command runs under.
+
+    An unquoted path with a space is split into several arguments, and on
+    Windows the CLI usually lives under a user directory that may have one.
+    cmd.exe ignores single quotes, so Windows gets double quotes, which make
+    every character above literal. Both leave a path that needs no quoting
+    untouched, so existing hooks do not change.
+    """
+    if sys.platform == "win32":
+        return f'"{arg}"' if not arg or _CMD_NEEDS_QUOTES.search(arg) else arg
+    return shlex.quote(arg)
+
+
+def hook_python_cmd() -> str:
+    """Return this CLI's interpreter for a hook command, with PYTHONPATH if needed.
+
+    Hooks run outside the CLI's environment, so bare ``python3`` may not be
+    able to import observal_cli. The package root can contain a space just
+    like the interpreter, so it is quoted too. ``set "NAME=value"`` already
+    keeps the whole assignment as one token on Windows.
+    """
+    interpreter = quote_shell_arg(sys.executable)
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("observal_cli") is not None:
+            return interpreter
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        return f'set "PYTHONPATH={_PKG_ROOT}" && {interpreter}'
+    return f"PYTHONPATH={shlex.quote(_PKG_ROOT)} {interpreter}"
 
 
 # ---------------------------------------------------------------------------

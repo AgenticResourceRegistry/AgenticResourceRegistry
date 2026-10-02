@@ -141,6 +141,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- quote the interpreter and `PYTHONPATH` in hooks written by `observal doctor patch`, so a CLI installed under a path with a space, or on Windows a `cmd.exe` operator such as `&`, still runs them, and replace older unquoted or duplicated Cursor, Codex and Antigravity hooks on the next patch ([#1777](https://github.com/Observal/Observal/issues/1777))
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
 - support multi-artifact migration validation and import uploads
 - restore teamspace discovery, membership controls, private join requests, and empty personal deletion
