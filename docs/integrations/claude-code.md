@@ -29,7 +29,7 @@ A session is credited to an agent only when the agent ran. That means a session 
 | --------------- | ------------------------------------------------------------------------------------ |
 | Agent profiles  | Project and user scope                                                               |
 | Hook bridge     | `UserPromptSubmit` and `Stop`                                                        |
-| Custom hooks    | Hook components attached to an agent are added to its `hooks:` frontmatter           |
+| Custom hooks    | Hook components attached to an agent are added to its `hooks:` frontmatter, or (opt-in) gated in `settings.json` |
 | MCP servers     | Registered with `claude mcp add` and referenced from the agent's `mcpServers:` list  |
 | Skills          | `.claude/skills/{name}/SKILL.md` and `~/.claude/skills/{name}/SKILL.md`              |
 | Guidance files  | Scanned, never overwritten (see [Guidance files](#guidance-files))                   |
@@ -96,7 +96,7 @@ This reconciles Observal's hooks into `~/.claude/settings.json` without removing
 | Session JSONL       | `~/.claude/projects/<project>/{session_id}.jsonl` | same                |
 | Observal credentials | `~/.observal/config.json`         | `~/.observal/config.json`          |
 
-Observal itself only writes hook config to `~/.claude/settings.json` (via `doctor patch`) and to agent frontmatter (via `agent pull`). `.claude/settings.json` is listed because Claude Code reads it, not because Observal manages it.
+Observal writes hook config to `~/.claude/settings.json` (via `doctor patch`) and to agent frontmatter (via `agent pull`). It writes an agent's hooks to `.claude/settings.json` or `~/.claude/settings.json` only when you opt in with `agent pull --hooks=settings` (see [Agent hooks in headless sessions](#agent-hooks-in-headless-sessions)); otherwise those files are listed because Claude Code reads them.
 
 ---
 
@@ -164,6 +164,20 @@ Agent instructions go here.
 ```
 
 `<observal-python>` is the Python interpreter that has `observal_cli` installed. If the package is not importable, the command is prefixed with `PYTHONPATH=<package root>`. No environment variables are written to `settings.json`.
+
+---
+
+## Agent hooks in headless sessions
+
+Claude Code runs hooks from an agent's frontmatter only in interactive sessions. In headless runs (`claude -p --agent …`, including Observal delegation) they don't run. Pulling with `--hooks=settings` moves the agent's hooks into `.claude/settings.json` (or `~/.claude/settings.json` for user scope), each wrapped by `observal_cli.hook_gate`. The gate runs a hook only while that agent is active, in interactive and headless sessions, and does nothing in other sessions.
+
+```bash
+observal agent pull alice/reviewer --harness claude-code --hooks=settings --dry-run
+observal agent pull alice/reviewer --harness claude-code --hooks=settings
+observal agent pull alice/reviewer --harness claude-code --hooks=frontmatter   # move them back
+```
+
+Each gated hook adds startup time on every matching event (about 40 ms on an Apple M1), even when the agent isn't active; the dry run measures it on your machine. Hook timeouts are not changed. The agent file no longer contains those hooks, so update any script that reads them there. The opt-in is POSIX-only and offered only on tested Claude Code versions (currently 2.1.286). See the [pull reference](../cli/pull.md#agent-hooks-in-headless-sessions) for ownership, conflicts and the `--on-unknown` policy.
 
 ---
 

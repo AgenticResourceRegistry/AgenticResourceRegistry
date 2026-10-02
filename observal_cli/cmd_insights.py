@@ -554,6 +554,11 @@ def _render_hook_report(data: dict) -> None:
     could_not = [f"{eligibility[key]} {label}" for key, label in labels if eligibility.get(key)]
     if could_not:
         rprint(f"  Could not run: {esc(', '.join(could_not))}")
+    if eligibility.get("agent_unknown_sessions"):
+        rprint(
+            f"  Not known whether it could run: {eligibility['agent_unknown_sessions']} subagent session(s) "
+            "did not record which agent ran"
+        )
     for label, values in (
         ("Versions", metrics.get("version_distribution") or {}),
         ("Harnesses", metrics.get("harness_distribution") or {}),

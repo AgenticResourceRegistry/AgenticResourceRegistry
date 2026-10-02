@@ -24,8 +24,10 @@ leave the extractor.
 
 The extraction also reports the session context that decides whether an
 installed hook could run at all: whether the session was headless, which
-agents were active, and whether this harness runs agent-scoped hooks in a
-headless session (Claude Code 2.1.286 does not, per the recorded fixtures).
+agents were active, whether the transcript is a subagent's own, and whether
+this harness runs agent-scoped hooks from the agent file in a headless session
+(Claude Code 2.1.286 does not, per the recorded fixtures; gated settings hooks
+run in every mode).
 
 This contract is not harness-agnostic. A harness opts in only with its own
 verified binding (``observal_cli`` adapter ``verify_hook_binding`` and a
@@ -136,6 +138,9 @@ class HookSession:
     # Harness fact, declared by the extractor from recorded sessions: whether
     # agent-scoped hooks run in a headless session.
     agent_hooks_run_headless: bool = False
+    # True for a subagent's own transcript. It records that a subagent ran, not
+    # which agent it was, so ``agents`` is empty there without meaning "inactive".
+    subagent: bool = False
 
 
 @dataclass(frozen=True)

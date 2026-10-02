@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recorded Claude Code sessions with gated agent hooks in settings.json (prototype evidence)."""
+"""Recorded Claude Code sessions with gated agent hooks in settings.json."""
 
 from __future__ import annotations
 

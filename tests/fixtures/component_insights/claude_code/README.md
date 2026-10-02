@@ -67,9 +67,9 @@ The interactive session was driven through a pseudo-terminal, with onboarding ma
 
 None of these shows what a hook achieved.
 
-## Agent hook gate fixtures (prototype)
+## Agent hook gate fixtures
 
-These were recorded on 2026-10-01 with Claude Code 2.1.286 and Opus 4.6 on Bedrock, using the same isolation as the fixtures above. They inform the opt-in move of agent hooks from frontmatter into a gated `settings.json` (`observal_cli/hook_gate.py`). `agent pull` does not use the gate yet.
+These were recorded on 2026-10-01 with Claude Code 2.1.286 and Opus 4.6 on Bedrock, using the same isolation as the fixtures above. They inform the opt-in move of agent hooks from frontmatter into a gated `settings.json` (`observal_cli/hook_gate.py`), which `agent pull --hooks=settings` writes (`observal_cli/agent_hooks.py`). The gated sessions were recorded before that command existed.
 
 `hook_inputs/` holds the raw hook input JSON that Claude Code passed to a recorder hook, for every event in six modes: headless and interactive `--agent probe-agent`, headless and interactive plain sessions, and headless and interactive plain sessions that ran `probe-agent` as a subagent. File names are `<mode>-<owner>--<event>[-<tool>].json`. The owner is `probe-agent` when the event belongs to that agent, and `main` for the main thread of a subagent session. Session, prompt and tool-use IDs, paths, prompts, tool inputs and responses are replaced. Keys, `hook_event_name`, `agent_type`, the presence of `agent_id`, `tool_name`, `permission_mode` and `source` come from the recording. Observed:
 

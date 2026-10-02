@@ -119,6 +119,7 @@ def doctor(
         checks = (
             ("Observal config", _check_observal_config),
             ("Claude Code", _check_claude_code),
+            ("Claude Code agent hooks", _check_claude_code_agent_hooks),
             ("Kiro", _check_kiro),
             ("Pi", _check_pi),
             ("Cursor", _check_cursor),
@@ -329,6 +330,56 @@ def _check_claude_code(issues: list, warnings: list):
         warnings.append(
             "Legacy Observal hooks detected (old hook scripts). "
             "Run `observal doctor cleanup --harness claude-code` to remove them."
+        )
+
+
+def _check_claude_code_agent_hooks(issues: list, warnings: list):
+    """Agents pulled with --hooks=settings: tested Claude Code version and a working gate interpreter.
+
+    A warning after an untested Claude Code upgrade is not proof the gate still
+    behaves: the gate depends on recorded hook-input behaviour.
+    """
+    from observal_cli import agent_hooks
+    from observal_cli.lockfile import read_registry_lockfile
+
+    try:
+        _, registry = read_registry_lockfile()
+    except (OSError, RuntimeError):
+        rprint("  [dim]Lockfile unreadable; agent hooks not checked[/dim]")
+        return
+    section = registry.get("harnesses", {}).get("claude-code", {}) if isinstance(registry, dict) else {}
+    agents = section.get("agents") if isinstance(section, dict) else None
+    gated = [
+        agent
+        for agent in (agents if isinstance(agents, list) else [])
+        if isinstance(agent, dict) and agent.get("hook_placement") == "settings"
+    ]
+    if not gated:
+        rprint("  [dim]No agent hooks placed in settings.json[/dim]")
+        return
+    version = agent_hooks.claude_code_version()
+    if not agent_hooks.is_tested_version(version):
+        found = f"Claude Code {version}" if version else "no Claude Code version"
+        warnings.append(
+            f"{len(gated)} agent(s) have hooks gated in settings.json, which were tested only with Claude Code "
+            f"{agent_hooks.tested_range()}; found {found}. They may not run as expected. "
+            "Pull them with --hooks=frontmatter to move the hooks back to the agent file."
+        )
+    missing = sorted(
+        {
+            str(agent.get("name") or agent.get("id") or "?")
+            for agent in gated
+            for component in (agent.get("components") if isinstance(agent.get("components"), list) else [])
+            if isinstance(component, dict)
+            and component.get("hook_placement") == agent_hooks.GATED_PLACEMENT
+            and isinstance(component.get("hook_gate_python"), str)
+            and not Path(component["hook_gate_python"]).exists()
+        }
+    )
+    if missing:
+        warnings.append(
+            f"Gated agent hooks point at a Python interpreter that no longer exists (agents: {', '.join(missing)}). "
+            "Pull those agents again to refresh the hooks."
         )
 
 

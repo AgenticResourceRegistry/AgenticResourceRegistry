@@ -5,8 +5,9 @@
 
 Reads only ``evidence_type = 'hook'`` publications and ``hook_*`` rows. The
 denominator is processed present sessions where the hook could run
-(``eligible``): agent-scoped hooks whose agent did not run, or ran headless,
-are excluded rather than counted as no use. Recorded runs are a lower bound
+(``eligible``): agent-scoped hooks whose agent did not run, ran headless (for
+agent-file hooks), or cannot be identified (gated hooks in a subagent's own
+transcript) are excluded rather than counted as no use. Recorded runs are a lower bound
 where silent successes leave no record.
 """
 
@@ -58,7 +59,8 @@ _HOOK_EVIDENCE = (
            countIf(a.evidence_kind = 'hook_context_eligible') AS ctx_eligible,
            countIf(a.evidence_kind = 'hook_context_headless') AS ctx_headless,
            countIf(a.evidence_kind = 'hook_context_agent_inactive') AS ctx_agent_inactive,
-           countIf(a.evidence_kind = 'hook_context_mode_unknown') AS ctx_mode_unknown
+           countIf(a.evidence_kind = 'hook_context_mode_unknown') AS ctx_mode_unknown,
+           countIf(a.evidence_kind = 'hook_context_agent_unknown') AS ctx_agent_unknown
     FROM component_activity AS a FINAL
     INNER JOIN ("""
     + _LATEST
@@ -88,6 +90,7 @@ _HOOK_SESSIONS = (
            multiIf(e.ctx_eligible > 0 OR e.runs_with_output + e.failures + e.blocks > 0, 'eligible',
                    e.ctx_headless > 0, 'headless',
                    e.ctx_mode_unknown > 0, 'mode_unknown',
+                   e.ctx_agent_unknown > 0, 'agent_unknown',
                    e.ctx_agent_inactive > 0, 'agent_inactive',
                    'not_processed') AS eligibility
     FROM ("""
@@ -126,6 +129,7 @@ _HOOK_SUMMARY = (
            countIf(projection_state = 'complete' AND eligibility = 'headless') AS headless_sessions,
            countIf(projection_state = 'complete' AND eligibility = 'agent_inactive') AS agent_inactive_sessions,
            countIf(projection_state = 'complete' AND eligibility = 'mode_unknown') AS mode_unknown_sessions,
+           countIf(projection_state = 'complete' AND eligibility = 'agent_unknown') AS agent_unknown_sessions,
            countIf(projection_state = 'complete' AND runs_with_output + failures + blocks > 0) AS observed_sessions,
            sumIf(runs_with_output, projection_state = 'complete') AS total_runs_with_output,
            sumIf(failures, projection_state = 'complete') AS total_failures,
@@ -191,6 +195,8 @@ def build_hook_coverage(presence: dict, aggregate: dict, version: int) -> HookAc
         reasons.append("agent_hook_headless_sessions")
     if eligibility.mode_unknown_sessions:
         reasons.append("session_mode_unknown")
+    if eligibility.agent_unknown_sessions:
+        reasons.append("subagent_agent_unknown")
     if evidence.collision_runs or evidence.unmatched_runs:
         reasons.append("unattributed_hook_runs")
     state = "observed" if observed else "no_recorded_runs" if denominator else "attribution_not_possible"

@@ -536,13 +536,12 @@ def hook_verification_entry(harness: str, registry_data: dict | None, project_di
     """
 
     def state(component: dict, scope: str) -> str:
-        return "|".join(
-            [
-                hook_binding_sha256(component),
-                _nfc(component.get("hook_agent")),
-                _hook_status(harness, project_dir, component),
-            ]
-        )
+        fields = [hook_binding_sha256(component), _nfc(component.get("hook_agent"))]
+        if hook_placement(component) == "gated_settings":
+            # Only a gated placement adds a field, so frontmatter and settings hooks
+            # keep the layer identity they had before gated placement existed.
+            fields.append("gated_settings")
+        return "|".join([*fields, _hook_status(harness, project_dir, component)])
 
     return _pin_verification_entry(
         registry_data,
@@ -1259,6 +1258,9 @@ def _compute_drift(
                             "location_sha256": hook_binding_sha256(comp),
                             # Agent-scoped hooks run only while that agent is active.
                             "hook_agent": _nfc(comp.get("hook_agent")),
+                            # Where an agent hook is placed decides when it can run: the agent
+                            # file (interactive only) or settings.json behind its agent gate.
+                            "hook_placement": hook_placement(comp),
                         }
                     )
                     if status == "drifted":
@@ -1302,6 +1304,13 @@ def hook_binding_sha256(component: dict) -> str:
     if not isinstance(event, str) or not isinstance(command, str) or not event or not command:
         return ""
     return hashlib.sha256(f"{event}\0{command}".encode()).hexdigest()
+
+
+def hook_placement(component: dict) -> str:
+    """``gated_settings``, ``frontmatter`` (an agent-file hook) or ``settings`` (a standalone settings hook)."""
+    if component.get("hook_placement") == "gated_settings" and component.get("hook_agent"):
+        return "gated_settings"
+    return "frontmatter" if component.get("hook_agent") else "settings"
 
 
 def _hook_status(harness: str, project_dir: str | None, component: dict) -> str:

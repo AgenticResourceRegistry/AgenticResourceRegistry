@@ -161,7 +161,15 @@ class ClaudeCodeAdapter(BaseHarnessAdapter):
             frontmatter_lines.append("mcpServers:")
             for mcp_name in claude_mcps:
                 frontmatter_lines.append(f"  - {mcp_name}")
-        frontmatter_lines.extend(_claude_code_hooks_frontmatter_lines(custom_hooks=hook_configs))
+        bindings = _claude_code_hook_bindings(hook_configs)
+        # Opt-in (``agent pull --hooks=settings``): the CLI places every bound command
+        # hook in settings.json behind its agent gate, so the agent file must not
+        # also carry it. Unbound hooks (HTTP) have no command to gate and stay here.
+        settings_placement = options.get("hook_placement") == "settings"
+        frontmatter_hooks = hook_configs
+        if settings_placement:
+            frontmatter_hooks = [hook for hook in hook_configs if not _claude_code_hook_bindings([hook])]
+        frontmatter_lines.extend(_claude_code_hooks_frontmatter_lines(custom_hooks=frontmatter_hooks))
         frontmatter_lines.append("---")
         agent_content = "\n".join(frontmatter_lines) + "\n\n" + rules_content
 
@@ -180,10 +188,14 @@ class ClaudeCodeAdapter(BaseHarnessAdapter):
         cc_hook_files = _collect_hook_script_files(hook_configs, ctx.hook_listings, "claude-code")
         if cc_hook_files:
             result["hook_files"] = cc_hook_files
-        bindings = _claude_code_hook_bindings(hook_configs)
         if bindings:
-            # Agent-scoped: these run only while this agent is active (interactive sessions).
+            # Agent-scoped: these run only while this agent is active (interactive sessions,
+            # or any session once the CLI places them behind the agent gate).
             result["hook_bindings"] = [binding | {"agent": safe_name} for binding in bindings]
+        if settings_placement:
+            # Echoed so the CLI can refuse a server that ignored the request (and so
+            # left the hooks in the agent file) before writing anything.
+            result["hook_placement"] = "settings"
 
         warnings_combined = list(ctx.compatibility_warnings)
         warnings_combined.extend(options.get("_model_warnings") or [])

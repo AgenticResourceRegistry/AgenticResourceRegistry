@@ -58,6 +58,16 @@ Inspect `files`, `warnings`, `setup_commands`, `reports_sessions`, `agent.versio
 observal scan --harness kiro --output json
 ```
 
+Claude Code runs an Agent file's hooks only in interactive sessions. When the user needs an Agent's hooks to run in headless sessions (`claude -p --agent`, delegation), offer `--hooks=settings`, which moves them into `settings.json` behind a gate that runs them only while that Agent is active. Always show the plan first and apply only after the user agrees:
+
+```bash
+observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --hooks=settings --dry-run --no-prompt --output json
+observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --hooks=settings --no-prompt --output json
+observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --hooks=frontmatter --no-prompt --output json
+```
+
+The choice is remembered for later pulls; `--hooks=frontmatter` moves the hooks back. It is POSIX-only and refused on untested Claude Code versions (exit 7). Report the dry run's `agent_hooks.gate_startup_ms` and any hook with `can_block: true`: with the default `--on-unknown skip`, an unrecognized hook input skips the hook, so it cannot block; `--on-unknown run` runs it in every session instead. Let the user choose. A conflict (exit 6) means the user edited an Observal-owned hook group: never pass `--force-hooks` without the user's explicit agreement.
+
 For Pi, use the exact local profile name returned by pull with the harness profile command.
 
 ## Direct create

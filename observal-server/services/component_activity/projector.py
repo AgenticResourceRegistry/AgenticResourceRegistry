@@ -158,7 +158,7 @@ async def _mapping(
     params["param_generation"] = generation
     candidates = await _query(
         """SELECT local_name, scope, component_id, component_version_id, identity_status, verification_status,
-               location_sha256, binding_agent
+               location_sha256, binding_agent, binding_placement
         FROM layer_components FINAL
         WHERE project_id = {project_id:String} AND user_id = {user_id:String}
           AND layer_hash = {layer_hash:String} AND harness = {harness:String}

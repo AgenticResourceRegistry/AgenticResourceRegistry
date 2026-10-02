@@ -33,6 +33,7 @@ Doctor checks:
 * Registry lockfile metadata against the active Registry
 * Managed hooks, plugins, or extensions for all registered harnesses
 * UUID-attributed Kiro Agent hooks
+* Claude Code Agents pulled with `--hooks=settings`: a warning when Claude Code is outside the tested version range, or when the Python interpreter their gated hooks name no longer exists (pull those Agents again)
 * Bundled Observal skill installation
 
 JSON diagnosis exits zero when the checks ran successfully. Health is reported through `healthy`, `issues`, and `warnings`:
@@ -110,7 +111,7 @@ Remove instrumentation from all registered harnesses except selected entries:
 observal doctor cleanup --exclude kiro --yes --output json
 ```
 
-Cleanup removes only Observal-managed hooks, plugins, extensions, and legacy telemetry settings. User-owned hooks remain. Human mode confirms before writing unless `--yes` is present. JSON cleanup requires `--yes` unless it is a dry run.
+Cleanup removes only Observal-managed hooks, plugins, extensions, and legacy telemetry settings. User-owned hooks remain, and so do an Agent's gated hooks placed by `agent pull --hooks=settings` (move those back with `--hooks=frontmatter`). Human mode confirms before writing unless `--yes` is present. JSON cleanup requires `--yes` unless it is a dry run.
 
 Unknown harnesses, conflicting selections, malformed configuration, and write failures are surfaced before success is reported.
 
