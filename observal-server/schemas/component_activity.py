@@ -283,7 +283,9 @@ class SkillActivitySessionsResponse(BaseModel):
 # it never shows what the hook changed or that it helped.
 
 HookAttributionState = Literal["observed", "no_recorded_runs", "attribution_not_possible"]
-HookEligibilityState = Literal["eligible", "headless", "agent_inactive", "mode_unknown", "not_processed"]
+HookEligibilityState = Literal[
+    "eligible", "headless", "agent_inactive", "mode_unknown", "agent_unknown", "not_processed"
+]
 HOOK_EFFECT_LIMITATION = (
     "effect_not_observed: a recorded run shows the hook executed, not what it changed or whether it helped"
 )
@@ -305,10 +307,19 @@ class HookEvidenceCoverage(BaseModel):
 class HookEligibility(BaseModel):
     """Whether each processed present session's installed hook could run at all."""
 
-    eligible_sessions: int = Field(0, description="Settings hooks, or agent hooks whose agent ran interactively")
-    headless_sessions: int = Field(0, description="Agent hooks whose agent ran headless, where they do not run")
+    eligible_sessions: int = Field(
+        0,
+        description=(
+            "Settings hooks, agent-file hooks whose agent ran interactively, or gated settings hooks "
+            "whose agent ran in any mode"
+        ),
+    )
+    headless_sessions: int = Field(0, description="Agent-file hooks whose agent ran headless, where they do not run")
     agent_inactive_sessions: int = Field(0, description="Agent hooks whose agent did not run in the session")
     mode_unknown_sessions: int = 0
+    agent_unknown_sessions: int = Field(
+        0, description="Gated agent hooks in a subagent's own transcript, which does not record which agent ran"
+    )
 
 
 class HookActivityCoverage(BaseModel):

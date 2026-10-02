@@ -12,13 +12,16 @@ Because a hook that succeeds silently may leave no record, "no recorded run"
 is never evidence of no run. To keep the denominator honest, each verified
 hook in the session also gets one context row saying whether it could run:
 
-* ``eligible``: a settings-file hook, or an agent-scoped hook whose agent was
-  active in an interactive session. Any attributed run also makes a hook
-  eligible.
+* ``eligible``: a standalone settings-file hook; an agent hook in the agent
+  file whose agent was active in an interactive session; or an agent hook in
+  settings.json behind the agent gate whose agent was active in any mode. Any
+  attributed run also makes a hook eligible.
 * ``agent_inactive``: its agent did not run in this session, so it could not fire.
 * ``headless``: its agent ran headless, and the harness's extractor declares
-  that agent hooks do not run headless (Claude Code's recorded behaviour).
+  that agent-file hooks do not run headless (Claude Code's recorded behaviour).
 * ``mode_unknown``: the session did not record whether it was headless.
+* ``agent_unknown``: a gated hook in a subagent's own transcript, which records
+  that a subagent ran but not which agent it was.
 
 Only ``eligible`` sessions enter the denominator.
 """
@@ -33,7 +36,11 @@ if TYPE_CHECKING:
 
     from services.session_parsers.hook_evidence import HookEvidenceExtraction, HookSession
 
-HOOK_MATCHER_VERSION = 1
+# 2: agent hooks placed in settings.json behind the agent gate (binding_placement
+# 'gated_settings') can run in headless sessions, and are 'agent_unknown' in a
+# subagent's own transcript. Frontmatter and standalone hooks are unchanged, and
+# no gated placement existed before, so earlier publications stay correct.
+HOOK_MATCHER_VERSION = 2
 _RESULT = {"ran_with_output": "success", "failed": "error", "blocked": "error"}
 
 
@@ -62,6 +69,11 @@ def _state(candidate: dict, session: HookSession) -> str:
     agent = candidate.get("binding_agent") or ""
     if not agent:
         return "eligible"
+    if candidate.get("binding_placement") == "gated_settings":
+        # The gate runs it whenever its agent is active, interactive or headless.
+        if agent in session.agents:
+            return "eligible"
+        return "agent_unknown" if session.subagent else "agent_inactive"
     if agent not in session.agents:
         return "agent_inactive"
     if session.agent_hooks_run_headless:

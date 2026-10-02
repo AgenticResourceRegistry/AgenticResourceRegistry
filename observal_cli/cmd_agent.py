@@ -1242,6 +1242,10 @@ def agent_install(
     files depending on the target harness. Use --raw to pipe JSON directly
     to a file.
 
+    Observal's own launchers (telemetry hooks, sandbox and delegation MCP
+    servers) are rewritten to this CLI's Python interpreter, exactly as
+    `agent pull` writes them, so a copied snippet works on this machine.
+
     Examples:
       observal agent install my-agent --harness claude-code
       observal agent install my-agent --harness cursor --raw > config.json
@@ -1252,7 +1256,16 @@ def agent_install(
     with _progress("json" if raw else output, f"Generating {harness} config..."):
         result = client.post_public(f"/api/v1/agents/{resolved}/install", {"harness": harness})
 
-    snippet = result.get("config_snippet", {})
+    # The server names a bare python3; localize the launchers the way agent pull writes them.
+    from observal_cli.cmd_pull import localize_install_snippet
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    snippet = localize_install_snippet(
+        result.get("config_snippet", {}), adapter=get_adapter(harness), agent_id=str(resolved)
+    )
+    if "config_snippet" in result:
+        result = {**result, "config_snippet": snippet}
     if raw:
         output_json(snippet)
         return

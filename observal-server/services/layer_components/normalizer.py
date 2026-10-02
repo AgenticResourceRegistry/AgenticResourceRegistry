@@ -36,8 +36,12 @@ class Occurrence:
     # Skills: SHA-256 of the absolute SKILL.md path the verifier hashed.
     # Hooks: SHA-256 of the (event, command) the harness records when the hook runs.
     location_sha256: str = ""
-    # Hooks only: the agent whose frontmatter installed it ('' for a settings-file hook).
+    # Hooks only: the agent whose hook it is ('' for a standalone settings-file hook).
     binding_agent: str = ""
+    # Hooks with a binding agent only: ``frontmatter`` (in the agent file, so Claude Code
+    # runs it only interactively) or ``gated_settings`` (in settings.json behind the
+    # agent gate, so it runs whenever the agent is active). Ignored without an agent.
+    binding_placement: str = "frontmatter"
 
 
 def _text(value: object) -> str:
@@ -56,6 +60,7 @@ def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrenc
     verification_index: dict[str, dict[tuple, object]] = {"mcp": {}, "skill": {}, "hook": {}}
     locations: dict[tuple[str, tuple], str] = {}
     hook_agents: dict[tuple, str] = {}
+    hook_placements: dict[tuple, str] = {}
     for kind, field_name in (
         ("mcp", "mcp_verifications"),
         ("skill", "skill_verifications"),
@@ -76,6 +81,8 @@ def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrenc
                     agent = item.get("hook_agent")
                     if kind == "hook" and isinstance(agent, str) and _AGENT.fullmatch(agent):
                         hook_agents[key] = agent
+                        if item.get("hook_placement") == "gated_settings":
+                            hook_placements[key] = "gated_settings"
                 except TypeError:
                     continue
     records: list[dict[str, str]] = []
@@ -93,6 +100,7 @@ def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrenc
         key = (harness, raw_id, alias, item_scope, parent_id)
         location = locations.get((kind, key), "")
         binding_agent = hook_agents.get(key, "") if kind == "hook" else ""
+        binding_placement = hook_placements.get(key, "frontmatter") if binding_agent else "frontmatter"
         if kind in verification_index and key in verification_index[kind]:
             status = verification_index[kind][key]
             verification = (
@@ -116,6 +124,7 @@ def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrenc
                 "verification_status": verification,
                 "location_sha256": location,
                 "binding_agent": binding_agent,
+                "binding_placement": binding_placement,
             }
         )
 

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Agent hook gate: run one hook command only while its agent is active (prototype).
+"""Agent hook gate: run one hook command only while its agent is active.
+
+Written into settings.json by ``agent pull --hooks=settings`` (``observal_cli.agent_hooks``).
 
 Claude Code runs agent-frontmatter hooks only interactively. A settings-file
 hook runs in every session, headless included, so an agent's hook moved there

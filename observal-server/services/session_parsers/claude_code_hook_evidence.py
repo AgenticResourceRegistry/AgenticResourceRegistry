@@ -18,7 +18,10 @@ Observed in Claude Code 2.1.286 sessions (``tests/fixtures/component_insights/cl
 
 Session context: ``entrypoint`` is ``sdk-cli`` for headless ``-p`` runs and
 ``cli`` for interactive ones. ``agent-setting`` records name the active
-``--agent``.
+``--agent``. A subagent's own transcript has ``isSidechain: true`` and an
+``agentId`` on its records but no ``agent-setting`` and no agent name
+(``gate_session_headless_subagent.jsonl``), so it records that a subagent ran,
+not which one.
 
 Runs of Observal's own telemetry hooks (``-m observal_cli.hooks.*``) are not
 evidence: they are never a registry component, and counting them would report
@@ -100,11 +103,16 @@ class ClaudeCodeHookEvidenceExtractor:
         evidence: list[HookEvidence] = []
         entrypoints: set[str] = set()
         agents: set[str] = set()
+        sidechain: set[bool] = set()
+        subagent_ids = False
         for offset, record, row in records:
             kind = str_field(record, "type")
             entrypoint = str_field(record, "entrypoint")
             if entrypoint:
                 entrypoints.add(entrypoint)
+            if isinstance(record.get("isSidechain"), bool):
+                sidechain.add(record["isSidechain"])
+                subagent_ids = subagent_ids or (record["isSidechain"] and isinstance(record.get("agentId"), str))
             if kind == "agent-setting":
                 agent = record.get("agentSetting")
                 if isinstance(agent, str) and _AGENT.fullmatch(agent):
@@ -174,6 +182,13 @@ class ClaudeCodeHookEvidenceExtractor:
             status="supported",
             evidence=tuple(evidence),
             # Recorded: agent frontmatter hooks did not run under headless -p (fixtures).
-            session=HookSession(headless=headless, agents=frozenset(agents), agent_hooks_run_headless=False),
+            session=HookSession(
+                headless=headless,
+                agents=frozenset(agents),
+                agent_hooks_run_headless=False,
+                # Only when every record that declares isSidechain is one: older
+                # transcripts inlined sidechain records next to main-thread ones.
+                subagent=sidechain == {True} and subagent_ids,
+            ),
             malformed_source_records=malformed,
         )

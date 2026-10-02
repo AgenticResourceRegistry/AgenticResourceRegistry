@@ -210,6 +210,13 @@ def generate_hook_sections(summary: dict, coverage: dict) -> dict:
             f" In {count} {'session' if count == 1 else 'sessions'} the hook's agent ran headless, where agent "
             f"hooks do not run; {'it is' if count == 1 else 'they are'} excluded."
         )
+    if eligibility.get("agent_unknown_sessions"):
+        count = eligibility["agent_unknown_sessions"]
+        conclusion += (
+            f" {count} subagent {'session does' if count == 1 else 'sessions do'} not record which agent ran, "
+            "so whether the hook could run there is unknown; "
+            f"{'it is' if count == 1 else 'they are'} excluded."
+        )
     return {
         "summary": conclusion,
         "evidence": {

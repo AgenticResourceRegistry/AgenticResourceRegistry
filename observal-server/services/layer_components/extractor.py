@@ -145,7 +145,8 @@ async def ensure_layer_components(project_id: str, user_id: str, layer_hash: str
                 "(project_id, user_id, layer_hash, hash_schema_version, extractor_version, extraction_generation, "
                 "occurrence_key, component_type, source, harness, scope, parent_agent_id, parent_agent_version, "
                 "raw_listing_id, raw_name, raw_version, qualified_name, local_name, component_id, "
-                "component_version_id, identity_status, verification_status, location_sha256, binding_agent) "
+                "component_version_id, identity_status, verification_status, location_sha256, binding_agent, "
+                "binding_placement) "
                 "FORMAT JSONEachRow",
                 data="\n".join(json.dumps(row) for row in rows),
             )

@@ -312,6 +312,8 @@ observal agent pull alice/reviewer --harness kiro --no-prompt --output json
 
 Pull writes harness files, records the exact Agent and component versions in `observal.lock` and the local lockfile, and reports every file and setup action. Later pulls keep the locked version until `--upgrade` or `--version`. See the [Pull reference](/cli/pull) for pinning, strict mode, path, secret, merge, dry-run, and JSON behavior.
 
+Claude Code runs an Agent file's hooks only in interactive sessions. `--hooks=settings` moves them into `settings.json` behind a gate that runs them only while that Agent is active, headless included; preview with `--dry-run`, and restore with `--hooks=frontmatter`. See [Agent hooks in headless sessions](pull.md#agent-hooks-in-headless-sessions).
+
 ## Exit codes
 
 Common Agent failures use:

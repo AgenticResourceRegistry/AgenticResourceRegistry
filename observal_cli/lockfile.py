@@ -354,13 +354,19 @@ def upsert_agent(
     local_name: str | None = None,
     lock_digest: str | None = None,
     lock_status: str | None = None,
+    hook_placement: str | None = None,
+    hook_on_unknown: str | None = None,
+    hook_gate_agent: str | None = None,
 ) -> None:
     """Add or update an agent entry in the lock file.
 
     Matches on (harness, agent_id, directory) for project-scoped or
     (harness, agent_id) for user-scoped. ``components`` are the exact versions
     the server installed; ``lock_digest`` and ``lock_status`` describe the
-    agent version's lock they were installed from.
+    agent version's lock they were installed from. ``hook_placement``
+    (``settings`` when the agent's hooks are gated in settings.json),
+    ``hook_on_unknown`` and ``hook_gate_agent`` (the agent name its settings
+    groups are owned under) are remembered so a later pull keeps the choice.
     """
     optic.debug("upsert_agent: harness={}, name={}, version={}", harness, name, version)
     entry = {
@@ -386,6 +392,12 @@ def upsert_agent(
         entry["lock_digest"] = lock_digest
     if lock_status:
         entry["lock_status"] = lock_status
+    if hook_placement == "settings":
+        entry["hook_placement"] = hook_placement
+        if hook_on_unknown:
+            entry["hook_on_unknown"] = hook_on_unknown
+        if hook_gate_agent:
+            entry["hook_gate_agent"] = hook_gate_agent
 
     def update(data: dict) -> None:
         url = current_registry_url()
