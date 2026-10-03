@@ -130,6 +130,6 @@ def test_the_report_explains_unknown_subagent_sessions():
         "limitations": [],
     }
     text = generate_hook_sections(summary, coverage)["summary"]
-    assert "2 subagent sessions do not record which agent ran" in text
+    assert "In 2 subagent sessions neither the subagent nor its parent session recorded which agent ran" in text
     legacy = {**coverage, "eligibility": {k: v for k, v in eligibility.items() if k != "agent_unknown_sessions"}}
     assert "subagent" not in generate_hook_sections(summary, legacy)["summary"], "older stored coverage still renders"

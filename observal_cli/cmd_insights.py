@@ -557,7 +557,7 @@ def _render_hook_report(data: dict) -> None:
     if eligibility.get("agent_unknown_sessions"):
         rprint(
             f"  Not known whether it could run: {eligibility['agent_unknown_sessions']} subagent session(s) "
-            "did not record which agent ran"
+            "where neither the subagent nor its parent session recorded which agent ran"
         )
     for label, values in (
         ("Versions", metrics.get("version_distribution") or {}),

@@ -213,8 +213,8 @@ def generate_hook_sections(summary: dict, coverage: dict) -> dict:
     if eligibility.get("agent_unknown_sessions"):
         count = eligibility["agent_unknown_sessions"]
         conclusion += (
-            f" {count} subagent {'session does' if count == 1 else 'sessions do'} not record which agent ran, "
-            "so whether the hook could run there is unknown; "
+            f" In {count} subagent {'session' if count == 1 else 'sessions'} neither the subagent nor its parent "
+            "session recorded which agent ran, so whether the hook could run there is unknown; "
             f"{'it is' if count == 1 else 'they are'} excluded."
         )
     return {

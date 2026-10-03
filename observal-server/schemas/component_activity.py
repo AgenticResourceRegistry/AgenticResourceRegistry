@@ -318,7 +318,11 @@ class HookEligibility(BaseModel):
     agent_inactive_sessions: int = Field(0, description="Agent hooks whose agent did not run in the session")
     mode_unknown_sessions: int = 0
     agent_unknown_sessions: int = Field(
-        0, description="Gated agent hooks in a subagent's own transcript, which does not record which agent ran"
+        0,
+        description=(
+            "Gated agent hooks in a subagent's own transcript whose agent its parent session did not record "
+            "(not uploaded yet, unreadable, or disagreeing)"
+        ),
     )
 
 

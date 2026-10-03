@@ -12,16 +12,21 @@ from datetime import timedelta
 from loguru import logger as optic
 
 import services.clickhouse.client as clickhouse
+from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.component_activity import (
     project_session_activity,
     project_session_hook_evidence,
     project_session_skill_evidence,
     publication_version,
 )
+from services.component_activity.hook_projector import MAX_SUBAGENT_SESSIONS, subagent_sessions
 from services.component_activity.projector import ProjectionRaceError
 
 _MAX_RETRIES = 5
 _RETRY_STATUSES = frozenset({"pending_source", "pending_mapping"})
+# A parent's final push re-projects its subagent sessions after this delay, so the
+# subagents' own final pushes (sent right after the parent's) usually land first.
+_SUBAGENT_DELAY = timedelta(seconds=60)
 # The daily safety net replays recently active sessions (late snapshots, missed
 # enqueues). The revision-triggered job below runs a durable full replay.
 _DEFAULT_REPAIR_DAYS = 7
@@ -52,7 +57,8 @@ async def enqueue_activity_projection(
     """Queue a final canonical session best-effort, never failing its ingest.
 
     Repeated final deliveries of the same source coalesce onto one job id; a
-    repaired source (new digest) gets a fresh chain.
+    repaired source (new digest) gets a fresh chain. The job also re-projects
+    the session's subagent sessions, whose hook context reads this source.
     """
     from services.redis import _get_arq_pool
 
@@ -67,12 +73,46 @@ async def enqueue_activity_projection(
                 harness,
                 session_id,
                 chain=chain,
+                follow_subagents=True,
                 _job_id=f"activity:{chain}:0",
             )
         )
     except Exception as error:
         optic.warning("activity projection enqueue failed: {}", type(error).__name__)
         return False
+
+
+async def _enqueue_subagent_projections(
+    ctx: dict, project_id: str, user_id: str, harness: str, session_id: str, chain: str
+) -> int:
+    """Re-project a parent's subagent sessions: their hook context names the agent from this source.
+
+    Best-effort; the daily backfill repairs anything missed. Job ids derive from
+    the parent's chain, so a repaired parent source re-projects them again.
+    """
+    if ctx.get("redis") is None or not HARNESS_REGISTRY.get(harness, {}).get("hook_evidence_extractor"):
+        return 0
+    queued = 0
+    try:
+        children = await subagent_sessions(project_id, user_id, harness, session_id)
+        if len(children) >= MAX_SUBAGENT_SESSIONS:
+            optic.warning("subagent re-projection capped: sessions={}", len(children))
+        for child in children:
+            child_chain = _chain_id(project_id, user_id, harness, child, f"parent:{chain}")
+            job = await ctx["redis"].enqueue_job(
+                "project_component_activity",
+                project_id,
+                user_id,
+                harness,
+                child,
+                chain=child_chain,
+                _job_id=f"activity:{child_chain}:0",
+                _defer_by=_SUBAGENT_DELAY,
+            )
+            queued += job is not None
+    except Exception as error:
+        optic.warning("subagent re-projection enqueue failed: {}", type(error).__name__)
+    return queued
 
 
 async def project_component_activity(
@@ -84,12 +124,16 @@ async def project_component_activity(
     *,
     retry_count: int = 0,
     chain: str = "",
+    follow_subagents: bool = False,
 ) -> dict:
     """Process one fully scoped session; defer missing source/mapping a bounded number of times.
 
     The daily keyset backfill remains the repair path after retries expire, a
     snapshot arrives late, a source rewinds, or a matcher/publication version
     changes. A pending attempt is never published as a complete zero-call session.
+
+    ``follow_subagents`` (set by a final ingest, first attempt only) also queues
+    the session's subagent sessions, whose hook context reads this session.
     """
     if not 0 <= retry_count <= _MAX_RETRIES:
         raise ValueError("Activity retry count is out of bounds")
@@ -122,7 +166,13 @@ async def project_component_activity(
             scheduled = queued is not None
         except Exception as error:
             optic.warning("activity projection retry enqueue failed: {}", type(error).__name__)
-    return {**result, **extra, "retry_scheduled": scheduled}
+    outcome = {**result, **extra, "retry_scheduled": scheduled}
+    if follow_subagents and retry_count == 0:
+        parent_chain = chain or _chain_id(project_id, user_id, harness, session_id, "repair")
+        outcome["subagents_queued"] = await _enqueue_subagent_projections(
+            ctx, project_id, user_id, harness, session_id, parent_chain
+        )
+    return outcome
 
 
 async def _source_session_page(

@@ -31,7 +31,7 @@ from services.layer_components import CURRENT_EXTRACTOR_VERSION
 from services.projection_generation import next_projection_generation
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from .projector import (
     ProjectionRaceError,
@@ -62,6 +62,10 @@ class EvidenceSpec:
     match: Callable[[Any, Mapping[str, Sequence[dict]], Mapping[int, str]], Any]
     unknown_results: Callable[[Any], int]
     matcher_version: int
+    # Optional: complete the extracted session context from other scoped sessions
+    # (extraction, project, user, harness, session) -> extraction. It runs only once
+    # the session will be matched, and may only add context, never facts.
+    resolve: Callable[[Any, str, str, str, str], Awaitable[Any]] | None = None
 
 
 def _row_time(fact_time: datetime | None, source_row: dict) -> str:
@@ -121,6 +125,11 @@ async def project_session_evidence(
         candidates[layer_hash] = mapped
         generations[layer_hash] = generation
 
+    if spec.resolve is not None:
+        # Context from another session is not part of this session's source revision.
+        # A later change there re-projects this session (``jobs.activity``), and an
+        # unchanged-rows check below then decides whether anything is republished.
+        extracted = await spec.resolve(extracted, project_id, user_id, harness, session_id)
     by_offset = {int(row["line_offset"]): row for row in source}
     matched = spec.match(extracted, candidates, {int(row["line_offset"]): hashes[i] for i, row in enumerate(source)})
     rows = []
