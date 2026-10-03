@@ -14,14 +14,24 @@ hook in the session also gets one context row saying whether it could run:
 
 * ``eligible``: a standalone settings-file hook; an agent hook in the agent
   file whose agent was active in an interactive session; or an agent hook in
-  settings.json behind the agent gate whose agent was active in any mode. Any
-  attributed run also makes a hook eligible.
-* ``agent_inactive``: its agent did not run in this session, so it could not fire.
+  settings.json behind the agent gate whose agent was active in any mode,
+  including as the subagent whose own transcript this is. Any attributed run
+  also makes a hook eligible.
+* ``agent_inactive``: its agent did not run in this session, so it could not
+  fire. In a subagent's own transcript, a gated hook is inactive when the parent
+  session recorded that this subagent was another agent.
 * ``headless``: its agent ran headless, and the harness's extractor declares
   that agent-file hooks do not run headless (Claude Code's recorded behaviour).
 * ``mode_unknown``: the session did not record whether it was headless.
 * ``agent_unknown``: a gated hook in a subagent's own transcript, which records
-  that a subagent ran but not which agent it was.
+  that a subagent ran but not which agent it was, when the parent session's
+  record of the spawn could not resolve it (not uploaded yet, unreadable, or
+  disagreeing).
+
+The subagent's agent (``HookSession.subagent_agent``) is resolved only for
+gated hooks. Agent-file hooks in a subagent transcript keep their earlier
+behaviour, since whether Claude Code runs them there is not recorded for
+interactive sessions.
 
 Only ``eligible`` sessions enter the denominator.
 """
@@ -40,7 +50,9 @@ if TYPE_CHECKING:
 # 'gated_settings') can run in headless sessions, and are 'agent_unknown' in a
 # subagent's own transcript. Frontmatter and standalone hooks are unchanged, and
 # no gated placement existed before, so earlier publications stay correct.
-HOOK_MATCHER_VERSION = 2
+# 3: a gated hook in a subagent's own transcript is eligible or inactive when the
+# parent session recorded which agent the subagent was; 'agent_unknown' otherwise.
+HOOK_MATCHER_VERSION = 3
 _RESULT = {"ran_with_output": "success", "failed": "error", "blocked": "error"}
 
 
@@ -73,7 +85,11 @@ def _state(candidate: dict, session: HookSession) -> str:
         # The gate runs it whenever its agent is active, interactive or headless.
         if agent in session.agents:
             return "eligible"
-        return "agent_unknown" if session.subagent else "agent_inactive"
+        if not session.subagent:
+            return "agent_inactive"
+        if session.subagent_agent:
+            return "eligible" if session.subagent_agent == agent else "agent_inactive"
+        return "agent_unknown"
     if agent not in session.agents:
         return "agent_inactive"
     if session.agent_hooks_run_headless:

@@ -24,7 +24,14 @@ async def test_final_enqueue_is_scoped_and_redis_failure_cannot_fail_ingest(monk
     assert await activity.enqueue_activity_projection("p", "u", "claude-code", "s", source_digest="rev-1")
     chain = activity._chain_id("p", "u", "claude-code", "s", "rev-1")
     pool.enqueue_job.assert_awaited_once_with(
-        "project_component_activity", "p", "u", "claude-code", "s", chain=chain, _job_id=f"activity:{chain}:0"
+        "project_component_activity",
+        "p",
+        "u",
+        "claude-code",
+        "s",
+        chain=chain,
+        follow_subagents=True,
+        _job_id=f"activity:{chain}:0",
     )
     # Same scoped source -> same job id (arq coalesces); a repaired source -> a new chain.
     await activity.enqueue_activity_projection("p", "u", "claude-code", "s", source_digest="rev-1")
@@ -370,3 +377,98 @@ async def test_a_projection_race_is_logged_with_its_reason_and_other_errors_by_t
     ) in logged
     assert "hook evidence projection failed: ValueError" in logged
     assert not any("secret" in line for line in logged), "other exceptions are logged by type only"
+
+
+def _no_projection(monkeypatch, status: str = "complete") -> None:
+    monkeypatch.setattr(activity, "project_session_activity", AsyncMock(return_value={"status": status}))
+    monkeypatch.setattr(activity, "project_session_skill_evidence", AsyncMock(return_value={"status": "complete"}))
+    monkeypatch.setattr(activity, "project_session_hook_evidence", AsyncMock(return_value={"status": "complete"}))
+
+
+@pytest.mark.asyncio
+async def test_a_final_parent_re_projects_its_subagent_sessions_later(monkeypatch):
+    """A subagent's hook context reads its parent session, which may arrive after the subagent's projection."""
+    _no_projection(monkeypatch)
+    children = AsyncMock(return_value=["sub-a", "sub-b"])
+    monkeypatch.setattr(activity, "subagent_sessions", children)
+    redis = SimpleNamespace(enqueue_job=AsyncMock(side_effect=[object(), None]))
+    result = await activity.project_component_activity(
+        {"redis": redis}, "p", "u", "claude-code", "parent", chain="parent-rev-1", follow_subagents=True
+    )
+    assert result["subagents_queued"] == 1, "an already queued job id is not counted"
+    children.assert_awaited_once_with("p", "u", "claude-code", "parent")
+    first = redis.enqueue_job.await_args_list[0]
+    child_chain = activity._chain_id("p", "u", "claude-code", "sub-a", "parent:parent-rev-1")
+    assert first.args == ("project_component_activity", "p", "u", "claude-code", "sub-a")
+    assert first.kwargs == {
+        "chain": child_chain,
+        "_job_id": f"activity:{child_chain}:0",
+        "_defer_by": timedelta(seconds=60),
+    }, "children never follow their own subagents"
+    # A repaired parent source is a new chain, so its subagents are projected again.
+    assert activity._chain_id("p", "u", "claude-code", "sub-a", "parent:parent-rev-2") != child_chain
+
+
+@pytest.mark.asyncio
+async def test_subagents_are_followed_only_on_a_first_final_attempt_of_a_hook_harness(monkeypatch):
+    _no_projection(monkeypatch)
+    children = AsyncMock(return_value=["sub-a"])
+    monkeypatch.setattr(activity, "subagent_sessions", children)
+    redis = SimpleNamespace(enqueue_job=AsyncMock(return_value=object()))
+    plain = await activity.project_component_activity({"redis": redis}, "p", "u", "claude-code", "s", chain="c")
+    assert "subagents_queued" not in plain, "backfill and retries do not fan out"
+    retry = await activity.project_component_activity(
+        {"redis": redis}, "p", "u", "claude-code", "s", retry_count=1, chain="c", follow_subagents=True
+    )
+    assert "subagents_queued" not in retry
+    pi = await activity.project_component_activity({"redis": redis}, "p", "u", "pi", "s", follow_subagents=True)
+    assert pi["subagents_queued"] == 0, "no hook evidence for this harness"
+    assert children.await_count == 0 and redis.enqueue_job.await_count == 0
+    assert (await activity.project_component_activity({}, "p", "u", "claude-code", "s", follow_subagents=True))[
+        "subagents_queued"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_follow_up_failure_never_fails_the_parent(monkeypatch):
+    _no_projection(monkeypatch)
+    logged = []
+    monkeypatch.setattr(activity.optic, "warning", lambda message, *args: logged.append(message.format(*args)))
+    monkeypatch.setattr(activity, "subagent_sessions", AsyncMock(side_effect=ConnectionError("SELECT secret")))
+    redis = SimpleNamespace(enqueue_job=AsyncMock(return_value=object()))
+    result = await activity.project_component_activity(
+        {"redis": redis}, "p", "u", "claude-code", "s", chain="c", follow_subagents=True
+    )
+    assert result["status"] == "complete" and result["subagents_queued"] == 0
+    assert logged == ["subagent re-projection enqueue failed: ConnectionError"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_sessions_are_scoped_to_the_parents_project_user_and_harness(monkeypatch):
+    from services.component_activity import hook_projector
+
+    seen = []
+
+    async def fake_query(sql, params=None, *, data=None):
+        seen.append((sql, params))
+        return [{"session_id": "sub-a"}, {"session_id": ""}]
+
+    monkeypatch.setattr(hook_projector, "_query", fake_query)
+    assert await hook_projector.subagent_sessions("p", "u", "claude-code", "parent") == ["sub-a"]
+    sql, params = seen[0]
+    for clause in (
+        "project_id = {project_id:String}",
+        "user_id = {user_id:String}",
+        "harness = {harness:String}",
+        "parent_session_id = {session_id:String}",
+        "is_source_record = 1",
+        "LIMIT {limit:UInt16}",
+    ):
+        assert clause in sql
+    assert params == {
+        "param_project_id": "p",
+        "param_user_id": "u",
+        "param_harness": "claude-code",
+        "param_session_id": "parent",
+        "param_limit": hook_projector.MAX_SUBAGENT_SESSIONS,
+    }

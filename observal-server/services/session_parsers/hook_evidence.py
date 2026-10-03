@@ -24,10 +24,11 @@ leave the extractor.
 
 The extraction also reports the session context that decides whether an
 installed hook could run at all: whether the session was headless, which
-agents were active, whether the transcript is a subagent's own, and whether
-this harness runs agent-scoped hooks from the agent file in a headless session
-(Claude Code 2.1.286 does not, per the recorded fixtures; gated settings hooks
-run in every mode).
+agents were active, whether the transcript is a subagent's own (and its link to
+the parent session), and whether this harness runs agent-scoped hooks from the
+agent file in a headless session (Claude Code 2.1.286 does not, per the
+recorded fixtures; gated settings hooks run in every mode). Which agent a
+subagent was is resolved later from the parent session (``hook_projector``).
 
 This contract is not harness-agnostic. A harness opts in only with its own
 verified binding (``observal_cli`` adapter ``verify_hook_binding`` and a
@@ -141,6 +142,14 @@ class HookSession:
     # True for a subagent's own transcript. It records that a subagent ran, not
     # which agent it was, so ``agents`` is empty there without meaning "inactive".
     subagent: bool = False
+    # A subagent transcript's own link to the session that spawned it: the parent
+    # session id and the subagent id, both written by the harness on every record.
+    # Empty unless ``subagent`` and the transcript names exactly one of each.
+    parent_session_id: str = ""
+    subagent_id: str = ""
+    # The subagent's agent, resolved from the parent session's own record of the
+    # spawn (never from this transcript). Empty while unresolved.
+    subagent_agent: str = ""
 
 
 @dataclass(frozen=True)
