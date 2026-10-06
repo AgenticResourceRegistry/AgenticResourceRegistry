@@ -298,6 +298,26 @@ def test_legacy_component_analysis_is_removed_before_delivery():
     )
     assert _safe_component_narrative(current) == current.narrative
 
+    # Prompt v4 no longer samples user goals. It must not be hidden from the
+    # owner while older goal-bearing v2 analysis remains suppressed.
+    v4 = SimpleNamespace(
+        narrative={
+            "summary": "safe counts",
+            "component_analysis": {
+                "version": 4,
+                "state": "assessed",
+                "findings": [{"kind": "workflow", "insight": "The tool was invoked", "evidence_refs": ["s0-call0"]}],
+                "evidence": {"s0-call0": "mcp (result: unknown)"},
+            },
+        }
+    )
+    assert _safe_component_narrative(v4) == v4.narrative
+    for unreviewed_version in (1, 2, 5, True, "4", None):
+        report = SimpleNamespace(
+            narrative={"summary": "safe counts", "component_analysis": {"version": unreviewed_version}}
+        )
+        assert _safe_component_narrative(report) == {"summary": "safe counts"}
+
 
 @pytest.mark.asyncio
 async def test_component_report_history_uses_stable_scoped_keyset(monkeypatch):

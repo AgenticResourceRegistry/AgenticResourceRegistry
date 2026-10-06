@@ -462,12 +462,14 @@ async def list_reports(
 
 
 def _safe_component_narrative(report: InsightReport) -> dict | None:
-    """Never return v2 evidence containing another user's prompt, even before migration."""
+    """Deliver call-only evidence (v3/v4); suppress legacy prompt-bearing versions."""
+    # Explicit allowlist: a future prompt version needs its own privacy review.
+    safe_versions = (3, 4)
     narrative = report.narrative
     if not isinstance(narrative, dict):
         return None
     analysis = narrative.get("component_analysis")
-    if isinstance(analysis, dict) and analysis.get("version") == 3:
+    if isinstance(analysis, dict) and type(analysis.get("version")) is int and analysis["version"] in safe_versions:
         return narrative
     return {key: value for key, value in narrative.items() if key != "component_analysis"}
 
