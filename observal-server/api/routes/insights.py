@@ -450,6 +450,7 @@ async def generate_insight(
         subject_type="agent",
         agent_id=agent.id,
         triggered_by=current_user.id,
+        discovery_optimization_requested=bool(req and req.include_discovery_optimization),
         status=InsightReportStatus.pending,
         period_start=period_start,
         period_end=now,
@@ -499,8 +500,9 @@ async def list_reports(
 
 # Explicit allowlist per section: a future prompt or section version needs its own privacy review.
 # component_analysis v3/v4 is call-only evidence; outcomes v1 holds counts; analysis v1 is checked model text
-# written from counts and redacted friction notes (never prompts, arguments or transcripts).
-_SAFE_SECTION_VERSIONS = {"component_analysis": (3, 4), "outcomes": (1,), "analysis": (1,)}
+# written from counts and redacted friction notes (never prompts, arguments or transcripts); discovery v1 is
+# checked listing-description advice written from the listing's own metadata and a few aggregate counters.
+_SAFE_SECTION_VERSIONS = {"component_analysis": (3, 4), "outcomes": (1,), "analysis": (1,), "discovery": (1,)}
 
 
 def _safe_component_narrative(report: InsightReport) -> dict | None:
@@ -588,6 +590,7 @@ async def generate_component_insight(
         component_version=version_label,
         component_name=ref.qualified_name,
         coverage=coverage,
+        discovery_optimization_requested=request.include_discovery_optimization,
         triggered_by=current_user.id,
         status=InsightReportStatus.pending,
         period_start=start,

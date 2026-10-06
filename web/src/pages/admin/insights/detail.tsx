@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { useInsightReport } from "@/hooks/use-api";
 import { useApplyInsightSuggestions } from "@/hooks/use-insights-api";
+import { DiscoveryOptimizationSection } from "@/components/insights/discovery-optimization";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layouts/page-header";
 import { ErrorState } from "@/components/shared/error-state";
@@ -1826,6 +1827,7 @@ function ReportContent({ report }: { report: InsightReport }) {
 		<div className="space-y-6">
 			{/* At a Glance (4-panel executive summary) */}
 			<AtAGlance data={narrative?.at_a_glance} />
+			<DiscoveryOptimizationSection requested={report.discovery_optimization_requested} result={narrative?.discovery} />
 
 			{/* Stats Overview (matching pi /insights layout) */}
 			<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">

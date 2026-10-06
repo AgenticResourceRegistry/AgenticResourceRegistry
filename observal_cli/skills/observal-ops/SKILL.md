@@ -1,10 +1,11 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 name: observal-ops
 command: observal
 description: "Inspects Observal traces, sessions, rankings, feedback, telemetry health, logs, and Agent insight reports. Use when the user wants operational evidence, current activity, telemetry diagnosis, ratings, report generation, regression analysis, or recommendations grounded in Agent usage."
-version: 2.4.0
+version: 2.5.0
 owner: observal
 ---
 

@@ -14,11 +14,13 @@ class GenerateInsightRequest(BaseModel):
     agent_version: str | None = None
     comparison_agent_version: str | None = None
     version_scope: str | None = "canonical_and_dirty"
+    include_discovery_optimization: bool = False
 
 
 class GenerateComponentInsightRequest(BaseModel):
     period_days: int = 14
     component_version_id: uuid.UUID | None = None
+    include_discovery_optimization: bool = False
 
 
 class ApplySuggestionsRequest(BaseModel):
@@ -39,6 +41,7 @@ class InsightReportListItem(BaseModel):
     component_version_id: uuid.UUID | None = None
     component_version: str | None = None
     coverage: dict | None = None
+    discovery_optimization_requested: bool = False
     agent_version_id: uuid.UUID | None = None
     agent_version: str | None = None
     version_scope: str | None = None
@@ -78,6 +81,7 @@ class InsightReportResponse(BaseModel):
     period_end: datetime
     metrics: dict | None
     narrative: dict | None
+    discovery_optimization_requested: bool = False
     sessions_analyzed: int
     llm_model_used: str | None
     error_message: str | None

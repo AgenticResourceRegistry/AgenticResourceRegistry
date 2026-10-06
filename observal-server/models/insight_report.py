@@ -8,7 +8,7 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -79,6 +79,9 @@ class InsightReport(Base):
 
     # LLM-generated narrative sections
     narrative: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Whether the author asked for ARD discovery suggestions; the result is narrative["discovery"].
+    discovery_optimization_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     sessions_analyzed: Mapped[int] = mapped_column(Integer, default=0)
     llm_model_used: Mapped[str | None] = mapped_column(Text, nullable=True)

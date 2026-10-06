@@ -561,6 +561,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
   const { data: sessionCountData, isLoading: countLoading } = useInsightSessionCount(agentId, agentVersion, enabled);
   const { data: insightsStatus } = useInsightsStatus(enabled);
   const generateInsight = useGenerateInsight();
+  const [includeDiscoveryOptimization, setIncludeDiscoveryOptimization] = useState(false);
 
   const availableSessions = sessionCountData?.session_count ?? 0;
   const notConfigured = insightsStatus && !insightsStatus.available;
@@ -590,7 +591,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
             generateInsight.isPending ||
             hasRunning
           }
-          onClick={() => generateInsight.mutate({ agentId, agentVersion: agentVersion ?? undefined })}
+          onClick={() => generateInsight.mutate({ agentId, agentVersion: agentVersion ?? undefined, includeDiscoveryOptimization })}
         >
           {generateInsight.isPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -601,6 +602,11 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
         </Button>
       </div>
 
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={includeDiscoveryOptimization}
+          onChange={(event) => setIncludeDiscoveryOptimization(event.target.checked)} />
+        Include ARD discovery suggestions (uses the configured Insights model)
+      </label>
       {notConfigured && (
         <p className="text-xs text-muted-foreground">
           Insights are not configured on this server. Contact your admin.

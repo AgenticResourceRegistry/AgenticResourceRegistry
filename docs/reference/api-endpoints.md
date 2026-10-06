@@ -101,6 +101,29 @@ A component reference's `version` must name an approved (or archived) release. D
 | `POST` | `/review/{id}/approve` | Approve |
 | `POST` | `/review/{id}/reject` | Reject |
 
+## Optional discovery optimization in Insights
+
+When generating an Agent or MCP/skill/hook Insights report, send
+`"include_discovery_optimization": true` in the JSON body to request an
+additional ARD authoring section. The report response includes
+`discovery_optimization_requested`. The result is `narrative.discovery`
+(`version: 1`), absent for unrequested or older reports. Its `state` is
+`assessed` (description suggestions, possibly none), `unknown` (every model
+reply failed the accuracy checks) or `unavailable` (the model returned
+nothing, or the listing could not be read). The regular usage report still
+completes if this optional step fails. Web report generation offers the same
+opt-in. Component reports serve only reviewed section versions, so a future
+`discovery` version stays hidden until it is added to the allowlist.
+
+The model receives the selected listing/version and a small allowlist of
+aggregated, already-authorized session counts. It does **not** receive
+consumer prompts, transcripts, tool arguments or an Agent system prompt.
+Suggestions are not applied automatically; their example queries are invented
+for illustration, not recorded searches. Before/after figures come from ARD's
+current relevance algorithm, not from search traffic or an overall rank.
+A regular report still requires sessions; metadata-only reports without usage
+are not part of this option.
+
 ## Discovery (ARD)
 
 Agentic Resource Discovery endpoints. Authentication is optional: anonymous

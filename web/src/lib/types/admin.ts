@@ -218,6 +218,7 @@ export interface ComponentInterpretation {
 	outcomes?: ComponentOutcomes;
 	attention?: ComponentAttentionItem[];
 	analysis?: ComponentAnalysis;
+	discovery?: DiscoveryOptimization;
 }
 
 export interface ComponentInsightNarrative extends ComponentInterpretation {
@@ -331,6 +332,28 @@ export interface HookInsightCoverage {
 	limitations: string[];
 }
 
+/** Advice on a listing's own description, stored as `narrative.discovery`. Only `assessed` carries content. */
+export interface DiscoveryOptimization {
+	version: number;
+	state: "assessed" | "unknown" | "unavailable";
+	reason?: string;
+	kind?: string;
+	listing_version?: string;
+	metadata_version_scope?: "selected" | "current_listing";
+	session_signals?: Record<string, number>;
+	score_note?: string;
+	suggestions?: {
+		field: "description";
+		illustrative_query: string;
+		suggested_description: string;
+		rationale: string;
+		evidence_keys: string[];
+		listing_evidence_keys: string[];
+		relevance_before: number;
+		relevance_after: number;
+	}[];
+}
+
 export interface InsightReportListItem {
 	id: string;
 	agent_id: string | null;
@@ -439,6 +462,7 @@ export interface InsightMetrics {
 }
 
 export interface InsightNarrative {
+	discovery?: DiscoveryOptimization;
 	// V3 structured format: each section is a structured object
 	// V1 fallback: each section is string[] or string
 	// The frontend handles both formats gracefully
@@ -531,6 +555,7 @@ export interface InsightReport {
 	period_end: string;
 	metrics: InsightMetrics | null;
 	narrative: InsightNarrative | null;
+	discovery_optimization_requested?: boolean;
 	facets_summary: Record<string, unknown> | null;
 	sessions_analyzed: number;
 	llm_model_used: string | null;

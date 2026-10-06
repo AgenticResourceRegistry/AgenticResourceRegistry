@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal ops"
 ---
@@ -243,7 +244,11 @@ observal ops insights activity --component skill alice/review --version 1.2.3 --
 observal ops insights generate --component skill alice/review --version 1.2.3 --period 14 --wait --output json
 observal ops insights list --component skill alice/review --output json
 observal ops insights show --component skill alice/review latest --section coverage --output json
+observal ops insights generate --component skill alice/review --discovery --wait --output json
+observal ops insights show --component skill alice/review latest --section discovery
 ```
+
+**ARD discovery suggestions (`--discovery`).** Add `--discovery` to `insights generate` for an Agent or a component to also get suggested description edits that make the listing easier to find in Agentic Resource Discovery. It is opt-in and uses one more model call. The suggestions appear as `narrative.discovery` and are written only from the listing's own metadata and a few aggregate counters, never from other users' prompts or transcripts. Each example search is invented for illustration and each relevance figure comes from ARD's own ranker on that invented search, so neither is a recorded query, a search position or a promise of better ranking. Review every suggestion before you edit; nothing is applied automatically.
 
 Periods accept 1 through 90 days for components; session page size accepts 1 through 100. `--version` on activity, sessions and generate resolves an **exact** component semantic-version label through its version-history endpoint, then scopes the request by version ID. A missing or inaccessible version is an error, not a fallback to all versions. The server binds pagination cursors to the caller, component, version and period. Use `--output json` for complete `coverage` (presence, projection, evidence, attribution reasons and limitations), nullable counts, source references, and the opaque `next_cursor`; the table is a brief readout, not the complete evidence record. For a component report, `--section summary`, `--section metrics`, `--section coverage`, and (when available) `--section component_analysis` select just that section. Component reports count only sessions where the component was verified present. If there are none, generation exits with validation code 7; JSON error output on stderr contains `error.result.coverage` and the human error summarizes presence gaps. Check `activity` first. Legacy Agent pins without an installation snapshot do not prove presence, and incomplete/unavailable projections do not prove zero use. Unauthorized access exits with permission code 4; failed server requests are not silently returned as empty sessions.
 
