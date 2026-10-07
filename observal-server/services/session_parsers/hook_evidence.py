@@ -170,8 +170,9 @@ class HookEvidenceExtractor(Protocol):
 
 def _extractors() -> dict[str, HookEvidenceExtractor]:
     from .claude_code_hook_evidence import ClaudeCodeHookEvidenceExtractor
+    from .pi_hook_evidence import PiHookEvidenceExtractor
 
-    return {"claude-code": ClaudeCodeHookEvidenceExtractor()}
+    return {"claude-code": ClaudeCodeHookEvidenceExtractor(), "pi": PiHookEvidenceExtractor()}
 
 
 def hook_extractor(harness: str) -> HookEvidenceExtractor | None:

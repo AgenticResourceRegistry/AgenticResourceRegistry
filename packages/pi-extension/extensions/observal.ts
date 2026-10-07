@@ -19,6 +19,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -96,7 +97,7 @@ const OFFLINE_SWITCH_PATH = path.join(OBSERVAL_DIR, "pi_agent_switch_offline.jso
 const UNVERIFIED_SESSIONS_DIR = path.join(OBSERVAL_DIR, "pi_agent_switch_sessions");
 const PI_HOME = path.join(os.homedir(), ".pi", "agent");
 const AGENTS_DIR = path.join(PI_HOME, "agents");
-const ACTIVE_ITEMS = ["AGENTS.md", "SYSTEM.md", "mcp.json", "mcp-adapter.json", "skills", "sandboxes"];
+const ACTIVE_ITEMS = ["AGENTS.md", "SYSTEM.md", "mcp.json", "mcp-adapter.json", "skills", "sandboxes", "observal-hooks.json"];
 type McpRuntime = "adapter2" | "adapter3" | "builtin";
 interface AgentSwitch {
   phase: "activating" | "ready" | "rollback";
@@ -138,6 +139,84 @@ const PI_MCP_VERIFICATION_PATH = "observal:mcp-verification";
 const PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1";
 const PI_SKILL_VERIFICATION_PATH = "observal:skill-verification";
 const PI_SKILL_VERIFIER = "observal-pi-skill-verification-v1";
+// Registry command hooks this extension runs (docs/integrations/pi.md, "Registry hooks").
+// Mirrors observal_cli/pi_hooks.py and observal-server/services/harness/pi.py.
+const PI_HOOKS_SCHEMA = "observal-pi-hooks/v1";
+const PI_HOOKS_FILE = "observal-hooks.json";
+const PI_HOOKS_DISPLAY = `user:${PI_HOOKS_FILE}`;
+const PI_HOOK_VERIFICATION_PATH = "observal:hook-verification";
+const PI_HOOK_VERIFIER = "observal-pi-hook-verification-v1";
+const PI_HOOK_RECEIPT = "observal-hook-run";
+const PI_HOOK_EVENTS = new Set(["tool_call", "tool_result"]);
+const PI_HOOK_REGISTRY_EVENT: Record<string, string> = { tool_call: "PreToolUse", tool_result: "PostToolUse" };
+const MAX_PI_HOOKS = 64;
+const MAX_PI_HOOK_TIMEOUT = 600;
+const MAX_HOOK_STREAM_BYTES = 64 * 1024;
+const MAX_HOOK_REASON_CHARS = 1000;
+const HOOK_BLOCK_EXIT = 2;
+// One run per (event, tool call) across every copy of this extension loaded in
+// one Pi process (a local file and the npm package, say): the first copy claims it.
+const HOOK_CLAIMS_KEY = Symbol.for("observal.pi.hook-claims");
+const MAX_HOOK_CLAIMS = 4096;
+
+interface PiHookEntry { name: string; event: string; type: "command"; command: string; timeout: number }
+interface PiHooks { agent: string; entries: PiHookEntry[] }
+type HookOutcome = "ran" | "ran_with_output" | "failed" | "blocked";
+
+/**
+ * ``(agent, entries)`` of a hooks file, or null when no hook in it may run.
+ * Mirrors ``observal_cli.pi_hooks.parse_hooks``: one invalid entry invalidates the file.
+ */
+export function parsePiHooks(bytes: Buffer): PiHooks | null {
+  if (bytes.length > MAX_LAYER_FILE_SIZE) return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.schema !== PI_HOOKS_SCHEMA) return null;
+  const { agent, hooks } = parsed;
+  if (typeof agent !== "string" || !agent || !Array.isArray(hooks) || hooks.length > MAX_PI_HOOKS) return null;
+  const entries: PiHookEntry[] = [];
+  for (const hook of hooks) {
+    if (!hook || typeof hook !== "object" || Array.isArray(hook)) return null;
+    const { name, event, command, timeout } = hook;
+    if (typeof name !== "string" || !name || !PI_HOOK_EVENTS.has(event) || hook.type !== "command"
+      || typeof command !== "string" || !command.trim() || !Number.isInteger(timeout)
+      || timeout < 1 || timeout > MAX_PI_HOOK_TIMEOUT) return null;
+    entries.push({ name, event, type: "command", command, timeout });
+  }
+  return { agent, entries };
+}
+
+/** ``observal_cli.pi_hooks.entry_integrity``: fingerprint of one entry and its profile. */
+export function piHookIntegrity(agent: string, entry: PiHookEntry): string {
+  const fields = [PI_HOOKS_SCHEMA, agent, entry.name, entry.event, entry.type, entry.command, entry.timeout];
+  return `sha256-${crypto.createHash("sha256").update(Buffer.from(JSON.stringify(fields), "utf-8")).digest("hex")}`;
+}
+
+/** SHA-256 of ``event NUL command``: what a run receipt names (``hook_evidence.hook_binding_sha256``). */
+export function piHookBinding(event: string, command: string): string {
+  return crypto.createHash("sha256").update(Buffer.from(`${event}\0${command}`, "utf-8")).digest("hex");
+}
+
+/**
+ * ``verified``, ``drifted`` or ``unverified`` for a pinned hook against the active
+ * hooks file's bytes. Mirrors ``observal_cli.pi_hooks.hook_status``.
+ */
+export function piHookStatus(component: Record<string, any>, bytes: Buffer | null, platform: string = process.platform): string {
+  const { hook_event: event, hook_command: command, hook_profile: profile, hook_integrity: integrity } = component;
+  if (platform === "win32" || component.hook_config !== PI_HOOKS_DISPLAY
+    || ![event, command, profile, integrity].every((value) => typeof value === "string" && value) || !bytes) {
+    return "unverified";
+  }
+  const parsed = parsePiHooks(bytes);
+  if (!parsed || parsed.agent !== profile) return "unverified";
+  const matches = parsed.entries.filter((entry) => entry.event === event && entry.command === command);
+  if (matches.length !== 1) return "unverified";
+  return piHookIntegrity(parsed.agent, matches[0]) === integrity ? "verified" : "drifted";
+}
 // The alias alphabet the CLI installs and verifies.
 const SAFE_MCP_ALIAS = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -305,6 +384,168 @@ export default function (pi: ExtensionAPI) {
     if (!state?.config || !state.sessionFile) return;
     await pushNewLines(state, { final: true });
     state = null;
+  });
+
+  // ─── Registry hooks ─────────────────────────────────────────────────────
+  //
+  // Registry command hooks from the active observal-hooks.json, run on
+  // tool_call / tool_result (docs/integrations/pi.md, "Registry hooks"). Each
+  // run appends a receipt holding only the binding digest, event, tool-call id,
+  // outcome and exit code: never the command, its input, output or stderr.
+
+  let registryHooks: PiHooks | null = null;
+
+  /** The active hooks file, read with the same rules as the layer manifest (regular file, size, no escape). */
+  function readActiveHooksBytes(): Buffer | null {
+    const file = path.join(PI_HOME, PI_HOOKS_FILE);
+    try {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.size > MAX_LAYER_FILE_SIZE) return null;
+      if (!fs.realpathSync(file).startsWith(`${fs.realpathSync(PI_HOME)}${path.sep}`)) return null;
+      return fs.readFileSync(file);
+    } catch {
+      return null;
+    }
+  }
+
+  function loadRegistryHooks(bytes: Buffer | null, ctx: ExtensionContext): void {
+    registryHooks = null;
+    const present = bytes !== null || fs.existsSync(path.join(PI_HOME, PI_HOOKS_FILE));
+    if (!present) return;
+    const parsed = bytes ? parsePiHooks(bytes) : null;
+    if (!parsed) {
+      if (ctx.hasUI) ctx.ui.notify(`Observal: ${PI_HOOKS_FILE} is invalid or unreadable; its hooks will not run`, "warning");
+      return;
+    }
+    if (process.platform === "win32") {
+      if (parsed.entries.length && ctx.hasUI) ctx.ui.notify("Observal: registry hooks do not run on Windows", "warning");
+      return;
+    }
+    registryHooks = parsed;
+  }
+
+  function claimHookRun(event: string, toolCallId: string): boolean {
+    const store = globalThis as unknown as Record<symbol, Map<string, string> | undefined>;
+    const claims = store[HOOK_CLAIMS_KEY] ?? (store[HOOK_CLAIMS_KEY] = new Map<string, string>());
+    const key = `${event}\0${toolCallId}`;
+    const owner = claims.get(key);
+    if (owner !== undefined) return owner === runtimeId;
+    claims.set(key, runtimeId);
+    while (claims.size > MAX_HOOK_CLAIMS) claims.delete(claims.keys().next().value as string);
+    return true;
+  }
+
+  interface HookRun { code: number | null; stdout: boolean; stderr: string }
+
+  /** ``/bin/sh -c command`` with JSON on stdin; bounded output, killed with its process group on timeout. */
+  function runHookCommand(entry: PiHookEntry, input: string, cwd: string): Promise<HookRun> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let stdoutBytes = 0;
+      let stderr = "";
+      const finish = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ code, stdout: stdoutBytes > 0, stderr });
+      };
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn("/bin/sh", ["-c", entry.command], { cwd, env: process.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+      } catch {
+        resolve({ code: null, stdout: false, stderr: "" });
+        return;
+      }
+      const timer = setTimeout(() => {
+        try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ }
+        finish(null);
+      }, entry.timeout * 1000);
+      timer.unref();
+      child.stdout?.on("data", (chunk: Buffer) => { stdoutBytes += chunk.length; });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        if (stderr.length < MAX_HOOK_STREAM_BYTES) stderr += chunk.toString("utf-8").slice(0, MAX_HOOK_STREAM_BYTES - stderr.length);
+      });
+      child.on("error", () => finish(null));
+      child.on("close", (code) => finish(typeof code === "number" ? code : null));
+      child.stdin?.on("error", () => { /* the hook need not read its input */ });
+      child.stdin?.end(input);
+    });
+  }
+
+  function hookOutcome(event: string, run: HookRun): HookOutcome {
+    if (run.code === 0) return run.stdout ? "ran_with_output" : "ran";
+    if (run.code === HOOK_BLOCK_EXIT && event === "tool_call") return "blocked";
+    return "failed";
+  }
+
+  function recordHookRun(entry: PiHookEntry, toolCallId: string, outcome: HookOutcome, code: number | null): void {
+    try {
+      pi.appendEntry(PI_HOOK_RECEIPT, {
+        v: 1,
+        event: entry.event,
+        tool_call_id: toolCallId,
+        binding: piHookBinding(entry.event, entry.command),
+        outcome,
+        exit_code: code,
+      });
+    } catch { /* a receipt must never break the tool call */ }
+  }
+
+  function toolResultText(content: unknown): string {
+    if (!Array.isArray(content)) return "";
+    let out = "";
+    for (const block of content) {
+      if (block && typeof block === "object" && (block as any).type === "text" && typeof (block as any).text === "string") {
+        out += (block as any).text;
+        if (out.length >= MAX_HOOK_STREAM_BYTES) return out.slice(0, MAX_HOOK_STREAM_BYTES);
+      }
+    }
+    return out;
+  }
+
+  /** Run every hook for one event of one tool call; returns a block reason when one blocked. */
+  async function runRegistryHooks(event: "tool_call" | "tool_result", payload: Record<string, any>, ctx: ExtensionContext): Promise<string | null> {
+    const hooks = registryHooks;
+    const toolCallId = payload.toolCallId;
+    if (!hooks || typeof toolCallId !== "string" || !toolCallId) return null;
+    const entries = hooks.entries.filter((entry) => entry.event === event);
+    if (!entries.length || !claimHookRun(event, toolCallId)) return null;
+    const input: Record<string, unknown> = {
+      hook_event_name: PI_HOOK_REGISTRY_EVENT[event],
+      pi_event: event,
+      session_id: ctx.sessionManager.getSessionId(),
+      cwd: ctx.cwd,
+      tool_name: payload.toolName,
+      tool_call_id: toolCallId,
+      tool_input: payload.input ?? {},
+    };
+    if (event === "tool_result") input.tool_response = { is_error: payload.isError === true, content: toolResultText(payload.content) };
+    const serialized = JSON.stringify(input);
+    for (const entry of entries) {
+      const run = await runHookCommand(entry, serialized, ctx.cwd);
+      const outcome = hookOutcome(event, run);
+      recordHookRun(entry, toolCallId, outcome, run.code);
+      if (outcome === "blocked") {
+        const reason = run.stderr.trim().slice(0, MAX_HOOK_REASON_CHARS);
+        return reason || `Blocked by hook ${entry.name}`;
+      }
+    }
+    return null;
+  }
+
+  pi.on("tool_call", async (event, ctx) => {
+    try {
+      const reason = await runRegistryHooks("tool_call", event as Record<string, any>, ctx);
+      if (reason !== null) return { block: true, reason };
+    } catch { /* fail open: a runner fault never blocks a tool */ }
+    return undefined;
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    try {
+      await runRegistryHooks("tool_result", event as Record<string, any>, ctx);
+    } catch { /* fail open */ }
+    return undefined;
   });
 
   // ─── /agent command ────────────────────────────────────────────────────
@@ -679,7 +920,10 @@ export default function (pi: ExtensionAPI) {
     // after a later resume. Keep it unverified for its entire lifetime.
     const unverified = fs.existsSync(AGENT_SWITCH_PATH) || fs.existsSync(OFFLINE_SWITCH_PATH)
       || fs.existsSync(unverifiedSessionPath(sessionId));
-    const layerSnapshot = unverified ? null : buildPiLayerSnapshot(true, ctx.cwd);
+    // The runner loads exactly the hooks bytes the published layer verified.
+    const captured: { hooks: Buffer | null } = { hooks: null };
+    const layerSnapshot = unverified ? null : buildPiLayerSnapshot(true, ctx.cwd, captured);
+    loadRegistryHooks(unverified ? readActiveHooksBytes() : captured.hooks, ctx);
     const layerHash = layerSnapshot?.hash ?? null;
     if (unverified && config) {
       config.agent_id = undefined;
@@ -874,13 +1118,19 @@ export default function (pi: ExtensionAPI) {
     return name.replace(/[^a-zA-Z0-9_-]/g, "-");
   }
 
-  function buildPiLayerSnapshot(includeContent: boolean, cwd: string): LayerSnapshot {
+  /**
+   * ``captured.hooks`` receives the exact bytes of the active hooks file this
+   * snapshot hashed and verified (null when absent or unreadable), so the runner
+   * can load precisely what the published layer verified.
+   */
+  function buildPiLayerSnapshot(includeContent: boolean, cwd: string, captured?: { hooks: Buffer | null }): LayerSnapshot {
     const piHome = path.join(os.homedir(), ".pi", "agent");
     const registry = currentRegistryLockfile();
     const managed = piObservalManagedFiles(registry);
     const manifest: LayerFileEntry[] = [];
     // The exact bytes hashed for each MCP config source, reused for verification.
     const mcpSourceBytes = new Map<string, Buffer>();
+    let hooksBytes: Buffer | null = null;
     const files: Array<[string, string, string]> = [];
     for (const [scope, root] of [["user", piHome], ["project", cwd]] as const) {
       for (const file of discoverPiLayerFiles(root, scope)) files.push([scope, root, file]);
@@ -902,12 +1152,15 @@ export default function (pi: ExtensionAPI) {
         // the original bytes for v2 identity but never upload their contents.
         if (includeContent) entry.content = isSensitivePiConfig(display) ? "" : content.toString("utf-8");
         if (PI_MCP_SOURCES.includes(display)) mcpSourceBytes.set(display, content);
+        if (display === PI_HOOKS_DISPLAY) hooksBytes = content;
         manifest.push(entry);
       } catch {
         continue;
       }
     }
-    for (const verification of [piMcpVerificationEntry(registry, cwd), piSkillVerificationEntry(registry, cwd)]) {
+    if (captured) captured.hooks = hooksBytes;
+    for (const verification of [piMcpVerificationEntry(registry, cwd), piSkillVerificationEntry(registry, cwd),
+      piHookVerificationEntry(registry, cwd, hooksBytes)]) {
       if (!verification) continue;
       if (includeContent) verification.content = "";
       manifest.push(verification);
@@ -919,10 +1172,10 @@ export default function (pi: ExtensionAPI) {
       harnesses: { pi: manifest },
       lockfile_hash: computeLockfileHash(registry),
       pinned_versions: pins,
-      drift: withSkillVerifications(
+      drift: withHookVerifications(withSkillVerifications(
         computePiMcpDrift(registry, cwd, mcpSourceBytes, piHome),
         computePiSkillVerifications(registry, cwd, manifest),
-      ),
+      ), computePiHookVerifications(registry, cwd, hooksBytes)),
     };
   }
 
@@ -970,6 +1223,62 @@ export default function (pi: ExtensionAPI) {
         .join("|");
     };
     return piPinVerificationEntry(registry, cwd, "skill", "skill_integrity", PI_SKILL_VERIFIER, PI_SKILL_VERIFICATION_PATH, true, shadowState);
+  }
+
+  /**
+   * Mirrors ``observal_cli.layer.hook_verification_entry("pi", ...)``: each pinned,
+   * bound hook's binding digest, agent ('' on Pi), and current status.
+   */
+  function piHookVerificationEntry(registry: Record<string, any> | null, cwd: string, hooks: Buffer | null): LayerFileEntry | null {
+    const state = (component: Record<string, any>) => [hookBindingDigest(component), "", piHookStatus(component, hooks)].join("|");
+    return piPinVerificationEntry(registry, cwd, "hook", "hook_integrity", PI_HOOK_VERIFIER, PI_HOOK_VERIFICATION_PATH, true, state);
+  }
+
+  /** ``observal_cli.layer.hook_binding_sha256`` of a pinned component, or "". */
+  function hookBindingDigest(component: Record<string, any>): string {
+    const { hook_event: event, hook_command: command } = component;
+    return typeof event === "string" && event && typeof command === "string" && command ? piHookBinding(event, command) : "";
+  }
+
+  /** Mirrors the ``hook_verifications`` rows of ``observal_cli.layer._compute_drift`` for Pi. */
+  function computePiHookVerifications(registry: Record<string, any> | null, cwd: string, hooks: Buffer | null): Array<Record<string, string>> {
+    const section = registry?.harnesses?.pi;
+    if (!isPlainObject(section)) return [];
+    const directory = path.resolve(cwd);
+    const included = (item: Record<string, any>): boolean =>
+      item.scope === "user" || (typeof item.directory === "string" && path.resolve(item.directory) === directory);
+    const parents: Array<[Record<string, any> | null, unknown[]]> = [];
+    for (const agent of Array.isArray(section.agents) ? section.agents : []) {
+      if (isPlainObject(agent) && included(agent)) parents.push([agent, Array.isArray(agent.components) ? agent.components : []]);
+    }
+    parents.push([null, (Array.isArray(section.standalone) ? section.standalone : []).filter(
+      (item: unknown) => isPlainObject(item) && included(item))]);
+    const out: Array<Record<string, string>> = [];
+    for (const [parent, components] of parents) {
+      for (const component of components as Array<Record<string, any>>) {
+        if (!isPlainObject(component) || component.type !== "hook") continue;
+        out.push({
+          harness: "pi",
+          component_id: uuid(component.id),
+          alias: typeof component.local_name === "string" && SAFE_MCP_ALIAS.test(component.local_name) ? component.local_name : "",
+          scope: text(component.scope) || (parent ? text(parent.scope) : "") || "project",
+          parent_agent_id: parent ? uuid(parent.id) : "",
+          status: piHookStatus(component, hooks),
+          location_sha256: hookBindingDigest(component),
+          hook_agent: "",
+          hook_placement: "settings",
+        });
+      }
+    }
+    return out;
+  }
+
+  function withHookVerifications(drift: Record<string, any>, hooks: Array<Record<string, string>>): Record<string, unknown> {
+    const hookDrift = hooks.filter((item) => item.status === "drifted")
+      .map((item) => ({ harness: "pi", component: item.component_id, alias: item.alias, status: item.status }));
+    const drifted = [...(drift.drifted_files ?? []), ...hookDrift];
+    return { ...drift, is_canonical: drifted.length ? false : drift.is_canonical ?? null, drifted_files: drifted,
+      hook_verifications: hooks };
   }
 
   /**
@@ -1043,7 +1352,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   function isSensitivePiConfig(display: string): boolean {
-    return display === "user:settings.json" || display.endsWith("mcp.json") || display.endsWith("mcp-adapter.json");
+    // Hook commands, like MCP entries, can carry credentials.
+    return display === "user:settings.json" || display.endsWith("mcp.json") || display.endsWith("mcp-adapter.json")
+      || display.endsWith(PI_HOOKS_FILE);
   }
 
   /** User-global MCP files outside ~/.pi/agent that pi-mcp-adapter also loads. */
@@ -1334,6 +1645,8 @@ export default function (pi: ExtensionAPI) {
   function isPiLayerFile(rel: string, scope: "user" | "project"): boolean {
     const prefix = scope === "user" ? "" : ".pi/";
     if (scope === "user" && rel === "settings.json") return true;
+    // Registry hooks the runner loads, and each profile's copy (user scope only).
+    if (scope === "user" && (rel === PI_HOOKS_FILE || /^agents\/[^/]+\/observal-hooks\.json$/.test(rel))) return true;
     if (scope === "project" && rel === ".mcp.json") return true;
     if (["AGENTS.md", `${prefix}SYSTEM.md`, `${prefix}APPEND_SYSTEM.md`, `${prefix}mcp.json`,
       `${prefix}mcp-adapter.json`].includes(rel)) return true;

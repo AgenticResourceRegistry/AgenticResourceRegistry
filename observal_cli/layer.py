@@ -145,6 +145,9 @@ HARNESS_LAYER_CONFIGS: dict[str, dict[str, list[tuple[str, list[str]]]]] = {
                     "agents/*/sandboxes/**/*",
                     # pi-mcp-adapter 3.x config; hash-only, for MCP verification.
                     "mcp-adapter.json",
+                    # Registry hooks the Observal extension runs; hash-only, for hook verification.
+                    "observal-hooks.json",
+                    "agents/*/observal-hooks.json",
                 ],
             ),
             # User-global MCP sources pi-mcp-adapter also loads (hash-only).
@@ -524,7 +527,7 @@ SKILL_VERIFICATION_HARNESSES = frozenset({"pi", "claude-code"})
 
 HOOK_VERIFICATION_PATH = "observal:hook-verification"
 # Harnesses whose hook bindings are verified and bound into the layer identity.
-HOOK_VERIFICATION_HARNESSES = frozenset({"claude-code"})
+HOOK_VERIFICATION_HARNESSES = frozenset({"claude-code", "pi"})
 
 
 def hook_verification_entry(harness: str, registry_data: dict | None, project_dir: str | None) -> dict | None:

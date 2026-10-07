@@ -584,6 +584,7 @@ def _build_hook_configs(
             "name": local_names[comp.component_id],
             "script_filename": getattr(listing, "script_filename", None),
             "script_content": getattr(listing, "script_content", None),
+            "tool_filter": getattr(listing, "tool_filter", None),
         }
         hooks.append(entry)
 

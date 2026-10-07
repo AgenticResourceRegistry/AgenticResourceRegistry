@@ -167,6 +167,15 @@ class BaseAdapter:
         """``verified``, ``drifted`` or ``unverified`` for a pinned hook's recorded binding (fail closed)."""
         return "unverified"
 
+    def bind_pulled_hooks(
+        self, snippet: dict, lock_components: list[dict], target_dir: Path, is_user_scope: bool
+    ) -> list[str]:
+        """Record bindings for hooks a pull wrote outside an agent profile; returns warnings.
+
+        Claude Code's agent-file and gated hooks are bound by ``cmd_pull._record_hook_bindings``.
+        """
+        return []
+
     def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
         """Absolute path of the active skill file, as the harness records it in sessions."""
         return None

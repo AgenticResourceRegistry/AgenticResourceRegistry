@@ -422,7 +422,7 @@ async def test_subagents_are_followed_only_on_a_first_final_attempt_of_a_hook_ha
     )
     assert "subagents_queued" not in retry
     pi = await activity.project_component_activity({"redis": redis}, "p", "u", "pi", "s", follow_subagents=True)
-    assert pi["subagents_queued"] == 0, "no hook evidence for this harness"
+    assert pi["subagents_queued"] == 0, "Pi hook evidence cannot resolve subagents"
     assert children.await_count == 0 and redis.enqueue_job.await_count == 0
     assert (await activity.project_component_activity({}, "p", "u", "claude-code", "s", follow_subagents=True))[
         "subagents_queued"

@@ -48,3 +48,20 @@ Every line is kept in order. Paths were replaced with `/home/fixture/...`, entry
 Locations are absolute and recorded as Pi saw them, so the extractor emits a SHA-256 of each location and the server matches it against the path the verifier fingerprinted. Layout and alias alone do not identify this installation's skill.
 
 None of these shows that a skill achieved anything.
+
+## Registry hook fixtures
+
+`hook_session_print.jsonl` is a headless (`pi -p`) Pi 1.0.4 session recorded on 2026-10-07 in an isolated `HOME`, with the Observal extension from this repository loaded through `-e` (`--no-extensions`, `--no-mcp`, `--no-skills`, `--no-context-files`, offline). The model was a scripted local OpenAI-compatible endpoint, not a hosted model: it called `bash` with `echo hi`, then with `echo BLOCKME`, then answered `done`. Pi itself (tool dispatch, extension events, blocking, session writing) is the real runtime. The active `observal-hooks.json` it ran is `hook_session_print.hooks.json`:
+
+- `announce` (`tool_call`, prints output): `ran_with_output` for both calls.
+- `policy` (`tool_call`, exits 2 when its input contains `BLOCKME`): `ran` (silent) for the first call, `blocked` for the second.
+- `audit` (`tool_result`, exits 3): `failed`.
+- `quiet` (`tool_result`, silent): `ran`.
+
+Only the session `cwd` (replaced with `/home/fixture/project`) and the text of Pi's default system-prompt sections (placeholders) were changed. All other content was synthetic to begin with and is kept as recorded, including ids, timestamps and ordering.
+
+### Observed hook-run contract
+
+- Each receipt is a top-level `{"type":"custom","customType":"observal-hook-run","data":{…}}` record written by `pi.appendEntry()` between the assistant `toolCall` and its `toolResult`, with the tool-call id Pi assigned.
+- A blocked call gets a `toolResult` with `isError: true` whose text is the hook's stderr, so the transcript text alone cannot tell a hook block from any other error. Pi fires no `tool_result` event for a blocked call, so `tool_result` hooks do not run for it.
+- Receipts carry only the binding digest, event, tool-call id, outcome and exit code. Hook input, output, stderr and the command are not in them.

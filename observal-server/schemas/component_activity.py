@@ -290,8 +290,8 @@ HOOK_EFFECT_LIMITATION = (
     "effect_not_observed: a recorded run shows the hook executed, not what it changed or whether it helped"
 )
 HOOK_SILENT_LIMITATION = (
-    "silent_success_unrecorded: a hook that succeeds without printing output leaves no record, so recorded "
-    "runs are a lower bound and no recorded run is not proof the hook did not run"
+    "silent_success_unrecorded: a hook that succeeds without printing output is not counted as a recorded "
+    "run, so recorded runs are a lower bound and no recorded run is not proof the hook did not run"
 )
 
 

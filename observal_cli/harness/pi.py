@@ -74,8 +74,34 @@ class PiAdapter(BaseAdapter):
         return paths
 
     def redact_layer_content(self, display_path: str) -> bool:
-        """MCP and settings JSON can hold inline credentials; retain only their hashes."""
-        return display_path == "user:settings.json" or display_path.endswith(("mcp.json", "mcp-adapter.json"))
+        """MCP, settings and hooks JSON can hold inline credentials; retain only their hashes."""
+        return display_path == "user:settings.json" or display_path.endswith(
+            ("mcp.json", "mcp-adapter.json", "observal-hooks.json")
+        )
+
+    def bind_pulled_hooks(
+        self, snippet: dict, lock_components: list[dict], target_dir: Path, is_user_scope: bool
+    ) -> list[str]:
+        """Bind each pinned hook to the profile ``observal-hooks.json`` this pull wrote."""
+        from observal_cli.cmd_pull import _resolve_path
+        from observal_cli.pi_hooks import bind_pulled_hooks
+
+        hooks_cfg = snippet.get("hooks_config")
+        if not isinstance(hooks_cfg, dict) or not isinstance(hooks_cfg.get("path"), str):
+            for component in lock_components:
+                if component.get("type") == "hook":
+                    for key in [key for key in component if key.startswith("hook_")]:
+                        del component[key]
+            return []
+        return bind_pulled_hooks(
+            _resolve_path(hooks_cfg["path"], target_dir, allow_home=is_user_scope), lock_components
+        )
+
+    def verify_hook_binding(self, directory: str | None, component: dict) -> str:
+        """The pinned hook against the active ``~/.pi/agent/observal-hooks.json`` (``pi_hooks.hook_status``)."""
+        from observal_cli.pi_hooks import hook_status, read_active_hooks
+
+        return hook_status(component, read_active_hooks())
 
     def read_pulled_mcp(
         self, scope: str, directory: str | None, alias: str, written_config: Path
