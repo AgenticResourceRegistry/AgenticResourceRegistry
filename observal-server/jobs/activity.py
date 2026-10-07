@@ -12,7 +12,6 @@ from datetime import timedelta
 from loguru import logger as optic
 
 import services.clickhouse.client as clickhouse
-from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.component_activity import (
     project_session_activity,
     project_session_hook_evidence,
@@ -21,6 +20,7 @@ from services.component_activity import (
 )
 from services.component_activity.hook_projector import MAX_SUBAGENT_SESSIONS, subagent_sessions
 from services.component_activity.projector import ProjectionRaceError
+from services.session_parsers.hook_evidence import hook_extractor
 
 _MAX_RETRIES = 5
 _RETRY_STATUSES = frozenset({"pending_source", "pending_mapping"})
@@ -90,7 +90,8 @@ async def _enqueue_subagent_projections(
     Best-effort; the daily backfill repairs anything missed. Job ids derive from
     the parent's chain, so a repaired parent source re-projects them again.
     """
-    if ctx.get("redis") is None or not HARNESS_REGISTRY.get(harness, {}).get("hook_evidence_extractor"):
+    # Only an extractor that can name a subagent from its parent session needs this (Claude Code).
+    if ctx.get("redis") is None or not hasattr(hook_extractor(harness), "resolve_agent"):
         return 0
     queued = 0
     try:

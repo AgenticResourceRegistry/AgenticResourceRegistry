@@ -137,7 +137,7 @@ function HookReport({ report }: { report: InsightReport }) {
           <dl className="grid gap-4 sm:grid-cols-4">
             <div><dt className="text-sm text-muted-foreground">Present sessions</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.present_sessions ?? "—"}</dd></div>
             <div><dt className="text-sm text-muted-foreground">Sessions where it could run</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.eligible_sessions ?? "—"}</dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions with a recorded run</dt><dd className="text-xl font-semibold tabular-nums">{measured ? <>{metrics?.sessions_with_recorded_run}<span className="block text-xs font-normal text-muted-foreground">At least; silent runs are unrecorded</span></> : notMeasured}</dd></div>
+            <div><dt className="text-sm text-muted-foreground">Sessions with a recorded run</dt><dd className="text-xl font-semibold tabular-nums">{measured ? <>{metrics?.sessions_with_recorded_run}<span className="block text-xs font-normal text-muted-foreground">At least; silent runs are not counted</span></> : notMeasured}</dd></div>
             <div><dt className="text-sm text-muted-foreground">Failed or blocked runs</dt><dd className="text-xl font-semibold tabular-nums">{measured ? (metrics ? metrics.failures + metrics.blocks : "—") : notMeasured}</dd></div>
           </dl>
           {measured && metrics && <p className="text-sm text-muted-foreground">Recorded runs: {metrics.runs_with_output} succeeded with output, {metrics.failures} failed, {metrics.blocks} blocked an action.</p>}

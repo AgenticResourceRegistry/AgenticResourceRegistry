@@ -94,8 +94,8 @@ def test_facts_carry_no_commands_output_or_paths():
 
 
 def test_other_harnesses_are_unsupported_not_empty():
-    assert extract_hook_evidence("pi", []).status == "unsupported"
-    assert hook_extractor("pi") is None
+    assert extract_hook_evidence("codex", []).status == "unsupported"
+    assert hook_extractor("codex") is None
 
 
 def _hook_record(command: str, event: str = "UserPromptSubmit") -> str:

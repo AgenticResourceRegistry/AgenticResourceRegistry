@@ -467,6 +467,9 @@ HARNESS_REGISTRY: dict[str, dict] = {
         # Skill availability and model loads (session_parsers/pi_skill_evidence.py). Pi records no
         # distinguishable /skill:name origin, so it never reports invocations.
         "skill_evidence_extractor": "pi",
+        # Registry command hooks run by the Observal extension, from its run receipts
+        # (session_parsers/pi_hook_evidence.py; docs/integrations/pi.md "Registry hooks").
+        "hook_evidence_extractor": "pi",
         "scopes": ["project", "user"],
         "default_scope": "user",
         "scope_labels": ("project (.pi/)", "user (~/.pi/agent/)"),
@@ -490,7 +493,9 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "user": "~/.pi/agent/settings.json",
         },
         "hook_scripts_dir": None,
-        "hook_events_map": {},
+        # Registry command hooks run inside the Observal extension (``observal-hooks.json``,
+        # docs/integrations/pi.md "Registry hooks"). Other events are not installed on Pi.
+        "hook_events_map": {"PreToolUse": "tool_call", "PostToolUse": "tool_result"},
         "config_dir": ".pi",
         # Pi has no native MCP; ~/.pi/agent/mcp.json is read by the third-party
         # pi-mcp-adapter. A Pi extension's before_agent_start handler can

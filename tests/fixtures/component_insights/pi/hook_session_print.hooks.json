@@ -1,0 +1,34 @@
+{
+  "schema": "observal-pi-hooks/v1",
+  "agent": "reviewer",
+  "hooks": [
+    {
+      "name": "announce",
+      "event": "tool_call",
+      "type": "command",
+      "command": "echo checked",
+      "timeout": 10
+    },
+    {
+      "name": "policy",
+      "event": "tool_call",
+      "type": "command",
+      "command": "if grep -q BLOCKME; then echo 'blocked by policy' >&2; exit 2; fi",
+      "timeout": 10
+    },
+    {
+      "name": "audit",
+      "event": "tool_result",
+      "type": "command",
+      "command": "cat >/dev/null; exit 3",
+      "timeout": 10
+    },
+    {
+      "name": "quiet",
+      "event": "tool_result",
+      "type": "command",
+      "command": "cat >/dev/null",
+      "timeout": 10
+    }
+  ]
+}
