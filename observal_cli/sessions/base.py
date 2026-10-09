@@ -670,6 +670,10 @@ def drain_session_source(
     )
     session_hash, hashed_line_count = hash_session_source(source.path) if final else (None, None)
     lines, end_byte_offsets, bytes_read = read_new_records(source.path, byte_offset)
+    # Sources rebuilt from disk (recovery, reconcile) have no cwd. The payload's layer
+    # hash and the uploaded snapshot must both describe the project the transcript
+    # records; with none, build_payload sends no hash and nothing is uploaded.
+    cwd = source.cwd or (_recorded_cwd(lines, source.path) if hook_event in _DISK_EVENTS else "")
     if extra_records:
         lines.extend(extra_records)
         end_byte_offsets.extend([byte_offset + bytes_read] * len(extra_records))
@@ -684,7 +688,7 @@ def drain_session_source(
                 hook_event=hook_event,
                 line_count_before=line_count,
                 new_offset=byte_offset,
-                cwd=source.cwd,
+                cwd=cwd,
                 parent_session_id=source.parent_session_id,
                 session_jsonl=source.path,
                 harness=source.harness,
@@ -700,7 +704,7 @@ def drain_session_source(
                 payload["hashed_line_count"] = hashed_line_count
             if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
                 _maybe_upload_layer_snapshot(
-                    destination, str(config["access_token"]), payload["layer_hash"], source.harness, source.cwd, config
+                    destination, str(config["access_token"]), payload["layer_hash"], source.harness, cwd, config
                 )
             telemetry_buffer.enqueue(
                 payload,
@@ -760,7 +764,7 @@ def drain_session_source(
             hook_event=hook_event,
             line_count_before=line_count + chunk_start,
             new_offset=byte_offset + bytes_read if is_last else chunk_end_offsets[-1],
-            cwd=source.cwd,
+            cwd=cwd,
             parent_session_id=source.parent_session_id,
             session_jsonl=source.path,
             harness=source.harness,
@@ -781,7 +785,7 @@ def drain_session_source(
             payload.update({key: value for key, value in extra_fields.items() if key != "layer_hash"})
         if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
             _maybe_upload_layer_snapshot(
-                destination, str(config["access_token"]), payload["layer_hash"], source.harness, source.cwd, config
+                destination, str(config["access_token"]), payload["layer_hash"], source.harness, cwd, config
             )
         telemetry_buffer.enqueue(
             payload,
@@ -824,6 +828,10 @@ def drain_session_source(
 # ---------------------------------------------------------------------------
 # Payload construction
 # ---------------------------------------------------------------------------
+
+
+# Events whose sources are rebuilt from files on disk, without the live hook's cwd.
+_DISK_EVENTS = frozenset({"CrashRecovery", "Reconcile"})
 
 
 def _recorded_cwd(lines: list[str], session_jsonl: Path | None, scan_lines: int = 200) -> str:
@@ -869,10 +877,10 @@ def build_payload(
     Defaults harness telemetry to ``claude-code``; callers override ``payload["harness"]``
     for other harnesses.
     """
-    recovered_without_cwd = hook_event == "CrashRecovery" and not cwd
+    recovered_without_cwd = hook_event in _DISK_EVENTS and not cwd
     if recovered_without_cwd:
-        # Recovery rebuilds sources from disk with no cwd. Hashing "no project"
-        # would describe only user-scope components, so use the project the
+        # Recovery and reconcile rebuild sources from disk with no cwd. Hashing "no
+        # project" would describe only user-scope components, so use the project the
         # transcript records, or send no hash (unknown coverage) rather than a wrong one.
         cwd = _recorded_cwd(lines, session_jsonl)
     agent_id, agent_version = _resolve_agent(

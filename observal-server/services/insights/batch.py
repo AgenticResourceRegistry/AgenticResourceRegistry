@@ -25,6 +25,7 @@ from services.insight_version_filters import agent_version_filter
 from services.redis import _get_arq_pool
 from services.secrets_redactor import redact_secrets
 
+from ._deps import recording_models
 from .registry_match import RegistryScope
 
 logger = structlog.get_logger(__name__)
@@ -283,7 +284,8 @@ async def run_single_report(report_id: str) -> None:
                 from .component_report import generate_component_content
 
                 await _authorize_component_report_job(db, report)
-                content = await generate_component_content(report)
+                with recording_models() as models_used:
+                    content = await generate_component_content(report)
                 await _update_report_progress(db, report, "saving", 9, 9, "Saving component report")
                 report.metrics = content["metrics"]
                 report.narrative = content["narrative"]
@@ -291,6 +293,7 @@ async def run_single_report(report_id: str) -> None:
                 report.sessions_analyzed = content["sessions_analyzed"]
                 report.aggregated_data = {"metrics": content["metrics"], "coverage": content["coverage"]}
                 report.report_version = 4
+                report.llm_model_used = ", ".join(sorted(models_used)) or None
                 report.status = InsightReportStatus.completed
                 report.completed_at = datetime.now(UTC)
                 report.progress_phase = "completed"
@@ -329,20 +332,21 @@ async def run_single_report(report_id: str) -> None:
                 await _update_report_progress(db, report, phase, current, total, message)
 
             # Run the insights pipeline
-            content = await generate_report_content(
-                agent_name=agent_name,
-                agent_id=str(report.agent_id),
-                agent_version=report.agent_version,
-                comparison_agent_version=report.comparison_agent_version,
-                period_start=start_str,
-                period_end=end_str,
-                previous_metrics=previous_metrics,
-                agent_config=agent_config,
-                registry_scope=registry_scope,
-                db=db,
-                progress_callback=progress_callback,
-                scope=InsightScope(subject_type="agent", agent_id=str(report.agent_id)),
-            )
+            with recording_models() as models_used:
+                content = await generate_report_content(
+                    agent_name=agent_name,
+                    agent_id=str(report.agent_id),
+                    agent_version=report.agent_version,
+                    comparison_agent_version=report.comparison_agent_version,
+                    period_start=start_str,
+                    period_end=end_str,
+                    previous_metrics=previous_metrics,
+                    agent_config=agent_config,
+                    registry_scope=registry_scope,
+                    db=db,
+                    progress_callback=progress_callback,
+                    scope=InsightScope(subject_type="agent", agent_id=str(report.agent_id)),
+                )
 
             await _update_report_progress(db, report, "saving", 9, 9, "Saving report")
 
@@ -358,8 +362,7 @@ async def run_single_report(report_id: str) -> None:
             }
             report.report_version = 3
 
-            models_used = content.get("models_used", [])
-            report.llm_model_used = ", ".join(models_used) if models_used else None
+            report.llm_model_used = ", ".join(sorted(models_used)) or None
 
             report.status = InsightReportStatus.completed
             report.completed_at = datetime.now(UTC)

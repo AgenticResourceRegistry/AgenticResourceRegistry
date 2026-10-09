@@ -120,7 +120,7 @@ SPDX-FileCopyrightText = "2026 Naraen Rammoorthi"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["tests/fixtures/component_insights/pi/hook_session_print.jsonl", "tests/fixtures/component_insights/pi/hook_session_print.hooks.json"]
+path = ["tests/fixtures/component_insights/pi/hook_session_print.jsonl", "tests/fixtures/component_insights/pi/hook_session_print.hooks.json", "tests/fixtures/component_insights/pi/adapter4_direct_session.jsonl"]
 SPDX-FileCopyrightText = "2026 Observal Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 

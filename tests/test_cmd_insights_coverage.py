@@ -991,3 +991,17 @@ def test_hook_component_reports_show_lower_bounds_and_sessions_that_could_not_ru
     assert "1 headless (agent hooks do not run), 1 agent not active" in text
     for other in ("Observed calls", "confirmed load", "invocation"):
         assert other not in text
+
+
+def test_hook_reports_count_silent_runs_where_every_run_is_recorded(cli):
+    """Regression: Pi's silent runs were dropped, and every hook report claimed a lower bound."""
+    report = _hook_report(silent_runs=4, harness_distribution={"pi": 3})
+    report["coverage"] |= {"limitations": [], "reasons": []}
+    _returns(cli.resolve, "hook-id")
+    cli.client_get.side_effect = [[{"id": REPORT_ID, "status": "completed"}], report]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "hook", "team/lint"])
+    assert shown.exit_code == 0, shown.output
+    text = " ".join(cli.messages())
+    assert "Sessions with a recorded run: 1" in text
+    assert "(a lower bound)" not in text
+    assert "0 with output, 4 silent, 1 failed, 0 blocked" in text

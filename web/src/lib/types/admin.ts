@@ -213,9 +213,11 @@ export interface HookInsightMetrics {
 	present_users: number;
 	/** Processed present sessions where the hook could run. */
 	eligible_sessions: number;
-	/** A lower bound where silent successes leave no record. */
+	/** A lower bound where a harness in the cohort leaves silent successes unrecorded. */
 	sessions_with_recorded_run: number;
 	runs_with_output: number;
+	/** Successful runs without output; null when no harness in the cohort records them. Absent on older reports. */
+	silent_runs?: number | null;
 	failures: number;
 	blocks: number;
 	harness_distribution: Record<string, number>;
@@ -226,7 +228,7 @@ export interface HookInsightCoverage {
 	attribution_state: "observed" | "no_recorded_runs" | "attribution_not_possible";
 	presence: { present_sessions: number; present_users: number; eligible_sessions: number };
 	projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
-	eligibility: { eligible_sessions: number; headless_sessions: number; agent_inactive_sessions: number; mode_unknown_sessions: number; agent_unknown_sessions?: number };
+	eligibility: { eligible_sessions: number; headless_sessions: number; agent_inactive_sessions: number; mode_unknown_sessions: number; agent_unknown_sessions?: number; version_unverified_sessions?: number };
 	evidence: { candidate_runs: number; attributed_runs: number; collision_runs: number; unmatched_runs: number };
 	usage_rate_denominator_sessions: number;
 	observed_sessions: number;

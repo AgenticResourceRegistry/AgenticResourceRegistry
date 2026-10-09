@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from services.component_activity import evidence_projector, hook_projector, projector
-from services.component_activity.hook_matcher import match_hook_evidence
+from services.component_activity.hook_matcher import HOOK_MATCHER_VERSION, match_hook_evidence
 from services.session_parsers.claude_code_hook_evidence import ClaudeCodeHookEvidenceExtractor as Extractor
 from services.session_parsers.hook_evidence import (
     HookEvidenceExtraction,
@@ -318,7 +318,7 @@ async def test_a_subagent_session_republishes_once_its_parent_arrives(monkeypatc
     second, contexts = await project()
     assert second["status"] == "complete" and second["generation"] == 22
     assert contexts == {"hook-1": "eligible", "hook-2": "eligible"}
-    assert all(row["matcher_version"] == 3 for row in published[22])
+    assert all(row["matcher_version"] == HOOK_MATCHER_VERSION for row in published[22])
     markers = [json.loads(data) for sql, data in writes if "component_activity_publications" in sql]
     assert [(m["status"], m["projection_generation"]) for m in markers] == [("complete", 22)]
     assert "probe-agent" not in "".join(data or "" for _, data in writes), "the agent name is never stored"

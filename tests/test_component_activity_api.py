@@ -153,6 +153,7 @@ def _hook_summary(aggregate: dict | None = None) -> dict:
         "eligible_sessions": coverage.eligibility.eligible_sessions,
         "sessions_with_recorded_run": coverage.observed_sessions,
         "runs_with_output": 1,
+        "silent_runs": None,
         "failures": 1,
         "blocks": 0,
         "harness_distribution": {"claude-code": 3},

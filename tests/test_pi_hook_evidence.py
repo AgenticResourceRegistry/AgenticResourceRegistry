@@ -59,17 +59,22 @@ def test_receipts_digest_the_exact_event_and_command_the_extension_ran():
     assert {r["binding"] for r in receipts} == {_binding(name) for name in HOOKS}
 
 
-def test_recorded_session_yields_runs_failures_and_the_block():
+def test_recorded_session_yields_every_run_including_silent_ones():
     extraction = _extract()
     assert extraction.status == "supported"
     assert extraction.malformed_source_records == 0
     facts = [(fact.kind, fact.binding_sha256, fact.tool_use_id) for fact in extraction.evidence]
     assert facts == [
         ("ran_with_output", _binding("announce"), FIRST_CALL),
+        ("ran_silently", _binding("policy"), FIRST_CALL),
         ("failed", _binding("audit"), FIRST_CALL),
+        ("ran_silently", _binding("quiet"), FIRST_CALL),
         ("ran_with_output", _binding("announce"), SECOND_CALL),
         ("blocked", _binding("policy"), SECOND_CALL),
-    ], "silent successes are recorded but not an evidence kind yet"
+    ]
+    # Regression: silent successes were recorded but dropped, so a quiet hook read as "no recorded runs".
+    assert PiHookEvidenceExtractor.records_silent_success is True
+    assert "ran_silently" in PiHookEvidenceExtractor.observed_kinds
     assert all(fact.event_time is not None for fact in extraction.evidence)
     session = extraction.session
     assert session.agents == frozenset() and session.agent_hooks_run_headless is True
@@ -102,6 +107,7 @@ def test_text_that_mimics_a_receipt_is_never_evidence():
         _receipt(outcome="ran_with_output", exit_code=0, binding="ABC"),
         _receipt(outcome="ran_with_output", exit_code=1),
         _receipt(outcome="failed", exit_code=0),
+        _receipt(outcome="ran", exit_code=1),
         _receipt(outcome="blocked", exit_code=2, event="tool_result"),
         _receipt(outcome="blocked", exit_code=1),
         _receipt(outcome="exploded", exit_code=0),
@@ -117,6 +123,7 @@ def test_text_that_mimics_a_receipt_is_never_evidence():
         "bad-digest",
         "output-with-nonzero-exit",
         "failed-with-zero-exit",
+        "silent-with-nonzero-exit",
         "block-on-tool-result",
         "block-without-exit-2",
         "unknown-outcome",
@@ -192,13 +199,15 @@ def test_matcher_attributes_runs_and_counts_every_verified_hook_eligible():
     runs = [(row["component_id"], row["evidence_kind"]) for row in result.rows if "context" not in row["evidence_kind"]]
     assert runs == [
         ("announce-id", "hook_ran_with_output"),
+        ("policy-id", "hook_ran_silently"),
+        ("quiet-id", "hook_ran_silently"),
         ("announce-id", "hook_ran_with_output"),
         ("policy-id", "hook_blocked"),
     ]
+    assert {row["result_state"] for row in result.rows if row["evidence_kind"] == "hook_ran_silently"} == {"success"}
     # audit's receipt names a hook this layer did not verify: unmatched, never guessed.
     assert result.unmatched_count == 1
     context = {row["component_id"]: row["evidence_kind"] for row in result.rows if "context" in row["evidence_kind"]}
-    # quiet ran only silently, so it has no recorded run, but it could run: eligible, not excluded.
     assert context == {k: "hook_context_eligible" for k in ("announce-id", "policy-id", "quiet-id")}
 
 

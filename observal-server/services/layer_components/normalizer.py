@@ -48,13 +48,37 @@ def _text(value: object) -> str:
     return unicodedata.normalize("NFC", value) if isinstance(value, str) else ""
 
 
+def _drifted_components(drift: dict) -> set[tuple[str, str]] | None:
+    """``(harness, component)`` named by each drift entry, or None if any entry names none.
+
+    Verifier entries name the component by ID (``component``) and alias; file-integrity
+    entries by name. An entry that cannot be tied to a component, or a non-canonical
+    layer that lists none, leaves the whole layer drifted (fail closed).
+    """
+    entries = drift.get("drifted_files")
+    if not isinstance(entries, list) or not entries:
+        return None
+    named: set[tuple[str, str]] = set()
+    for entry in entries:
+        harness = _text(entry.get("harness")) if isinstance(entry, dict) else ""
+        refs = [_text(entry.get(key)) for key in ("component", "alias")] if harness else []
+        refs = [ref for ref in refs if ref]
+        if not refs:
+            return None
+        named.update((harness, ref) for ref in refs)
+    return named
+
+
 def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrence]:
     """Never inspect file contents; legacy pin claims remain diagnostic only."""
     if not isinstance(pinned_versions, dict):
         return []
     drift = drift if isinstance(drift, dict) else {}
     is_v2 = pinned_versions.get("schema_version") == 2
-    globally_drifted = drift.get("is_canonical") is False
+    # A non-canonical layer drifts only the components its drift entries name; a
+    # component another component's drift does not name keeps its own verification.
+    drifted_components = _drifted_components(drift) if drift.get("is_canonical") is False else set()
+    globally_drifted = drifted_components is None
     # Index once (first record wins) so normalization stays linear in input size.
     # MCP and skill results are kept apart: one kind never verifies the other.
     verification_index: dict[str, dict[tuple, object]] = {"mcp": {}, "skill": {}, "hook": {}}
@@ -101,12 +125,15 @@ def normalize_snapshot(pinned_versions: object, drift: object) -> list[Occurrenc
         location = locations.get((kind, key), "")
         binding_agent = hook_agents.get(key, "") if kind == "hook" else ""
         binding_placement = hook_placements.get(key, "frontmatter") if binding_agent else "frontmatter"
+        named_drifted = globally_drifted or any(
+            (harness, ref) in drifted_components for ref in (raw_id, alias, _text(pin.get("name"))) if ref
+        )
         if kind in verification_index and key in verification_index[kind]:
             status = verification_index[kind][key]
             verification = (
                 "verified"
-                if is_v2 and not globally_drifted and raw_id and alias and status == "verified"
-                else ("drifted" if status in {"drifted", "missing"} or globally_drifted else "unverified")
+                if is_v2 and not named_drifted and raw_id and alias and status == "verified"
+                else ("drifted" if status in {"drifted", "missing"} or named_drifted else "unverified")
             )
         records.append(
             {

@@ -19,8 +19,9 @@ custom record placed between the assistant ``toolCall`` and its ``toolResult``::
 * **blocked**: ``outcome: blocked``, ``event: tool_call``, exit code 2. Pi then
   records the blocked call's ``toolResult`` with ``isError: true`` and the hook's
   stderr as its text, which is not read here.
-* ``outcome: ran`` (silent success) is recorded but not yet an evidence kind, so
-  recorded runs stay a lower bound (``records_silent_success = False``).
+* **ran_silently**: ``outcome: ran``, exit code 0, no output. The extension
+  records every run, so Pi run counts are not a lower bound
+  (``records_silent_success = True``).
 
 Trust boundary: model output and user text cannot create a top-level custom
 record, so typed or pasted text never becomes evidence. Any other extension in
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
 
 RECEIPT_TYPE = "observal-hook-run"
 _EVENTS = frozenset({"tool_call", "tool_result"})
-_KINDS = {"ran_with_output": "ran_with_output", "failed": "failed", "blocked": "blocked"}
+_KINDS = {"ran": "ran_silently", "ran_with_output": "ran_with_output", "failed": "failed", "blocked": "blocked"}
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _TOOL_ID = re.compile(r"[\x21-\x7e]{1,256}\Z")
 _NESTED = re.compile(r"(?P<root>[^/]+)(?:/[0-9]{1,6})+\Z")
@@ -92,9 +93,9 @@ def _root_call(tool_call_id: str) -> str:
 
 
 class PiHookEvidenceExtractor:
-    observed_kinds: frozenset = frozenset({"ran_with_output", "failed", "blocked"})
-    # The extension records silent successes (``ran``), but no evidence kind carries them yet.
-    records_silent_success = False
+    observed_kinds: frozenset = frozenset({"ran_with_output", "ran_silently", "failed", "blocked"})
+    # The extension writes a receipt for every run, silent successes (``ran``) included.
+    records_silent_success = True
 
     def extract(self, rows: Sequence[Mapping[str, object]]) -> HookEvidenceExtraction:
         records: list[tuple[int, dict, Mapping[str, object]]] = []
@@ -165,9 +166,7 @@ class PiHookEvidenceExtractor:
             if key in seen:
                 continue
             seen.add(key)
-            kind = _KINDS.get(outcome)
-            if kind is None:
-                continue  # a silent success: recorded, not an evidence kind
+            kind = _KINDS[outcome]
             evidence.append(HookEvidence(kind, binding, offset, "hook-run:0", _event_time(record, row), call_id))  # type: ignore[arg-type]
 
         return HookEvidenceExtraction(

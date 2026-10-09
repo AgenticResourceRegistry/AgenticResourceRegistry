@@ -34,6 +34,12 @@ by ``tool_use_id`` to exactly one ``Agent`` call with the same
 ``subagent_results`` and ``agent_tool_calls`` read those records; any
 unreadable or disagreeing record leaves the subagent unresolved.
 
+Claude Code writes its version on each record (``version``). Records and hook
+inputs were proven only on the registry's ``hook_evidence_tested_versions``; a
+session recorded on any other version (or none) sets
+``harness_version_unverified``, so its hooks without a recorded run are
+``version_unverified`` rather than eligible with no runs.
+
 Runs of Observal's own telemetry hooks (``-m observal_cli.hooks.*``) are not
 evidence: they are never a registry component, and counting them would report
 an attribution gap where there is none.
@@ -44,6 +50,8 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+
+from observal_shared.harness_registry import HARNESS_REGISTRY
 
 from .base import load_line, str_field
 from .hook_evidence import (
@@ -68,6 +76,19 @@ _MAX_COMMAND = 4096
 _LINK_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 # An agent type is only compared, never stored; plugin agents are ``plugin:name``.
 _AGENT_TYPE = re.compile(r"[\x21-\x7e]{1,256}\Z")
+_VERSION = re.compile(r"(\d{1,4})\.(\d{1,4})\.(\d{1,6})\Z")
+_TESTED_MIN, _TESTED_MAX = HARNESS_REGISTRY["claude-code"]["hook_evidence_tested_versions"]
+
+
+def _version_verified(versions: set[str]) -> bool:
+    """Every Claude Code version the session recorded is inside the tested range (and one was recorded)."""
+    if not versions:
+        return False
+    for version in versions:
+        match = _VERSION.fullmatch(version)
+        if match is None or not _TESTED_MIN <= tuple(int(part) for part in match.groups()) <= _TESTED_MAX:
+            return False
+    return True
 
 
 def _event_time(record: dict, row: Mapping[str, object]) -> datetime | None:
@@ -117,6 +138,7 @@ class ClaudeCodeHookEvidenceExtractor:
         records.sort(key=lambda item: item[0])
 
         evidence: list[HookEvidence] = []
+        versions: set[str] = set()
         entrypoints: set[str] = set()
         agents: set[str] = set()
         sidechain: set[bool] = set()
@@ -125,6 +147,9 @@ class ClaudeCodeHookEvidenceExtractor:
         links: set[tuple[str, str] | None] = set()
         for offset, record, row in records:
             kind = str_field(record, "type")
+            version = record.get("version")
+            if isinstance(version, str):
+                versions.add(version)
             entrypoint = str_field(record, "entrypoint")
             if entrypoint:
                 entrypoints.add(entrypoint)
@@ -215,6 +240,7 @@ class ClaudeCodeHookEvidenceExtractor:
                 subagent=subagent,
                 parent_session_id=link[0] if link else "",
                 subagent_id=link[1] if link else "",
+                harness_version_unverified=not _version_verified(versions),
             ),
             malformed_source_records=malformed,
         )

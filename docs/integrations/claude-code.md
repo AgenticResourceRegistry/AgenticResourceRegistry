@@ -177,7 +177,7 @@ observal agent pull alice/reviewer --harness claude-code --hooks=settings
 observal agent pull alice/reviewer --harness claude-code --hooks=frontmatter   # move them back
 ```
 
-Each gated hook adds startup time on every matching event (about 40 ms on an Apple M1), even when the agent isn't active; the dry run measures it on your machine. Hook timeouts are not changed. The agent file no longer contains those hooks, so update any script that reads them there. The opt-in is POSIX-only and offered only on tested Claude Code versions (currently 2.1.286). See the [pull reference](../cli/pull.md#agent-hooks-in-headless-sessions) for ownership, conflicts and the `--on-unknown` policy.
+Each gated hook adds startup time on every matching event (about 40 ms on an Apple M1), even when the agent isn't active; the dry run measures it on your machine. Hook timeouts are not changed. The agent file no longer contains those hooks, so update any script that reads them there. The opt-in is POSIX-only. It was tested on Claude Code 2.1.286; other versions are allowed with a warning, and their sessions' hook evidence is reported as unverified rather than counted. See the [pull reference](../cli/pull.md#agent-hooks-in-headless-sessions) for ownership, conflicts and the `--on-unknown` policy.
 
 ---
 

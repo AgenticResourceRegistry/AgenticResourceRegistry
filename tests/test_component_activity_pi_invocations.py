@@ -103,6 +103,19 @@ def test_real_derived_adapter_4_proxy_calls_keep_the_same_identity_contract():
     ]
 
 
+def test_real_derived_adapter_4_direct_tools_keep_the_same_identity_contract():
+    """pi-mcp-adapter 4.0.0 direct tools (recorded 2026-10-09; previously checked against source only)."""
+    extracted = extract_invocations("pi", _rows("adapter4_direct_session.jsonl"))
+    assert extracted.status == "supported"
+    assert extracted.malformed_source_records == 0
+    assert [(call.mcp_server, call.tool_name, call.result_state) for call in extracted.invocations] == [
+        ("e2e-clock", "get_time", "success"),
+        # A failed direct call reports only {error, server}: the call name stands in.
+        ("e2e-clock", "e2e-clock_fail", "error"),
+    ]
+    assert [call.tool_use_id for call in extracted.invocations] == ["call_0_1791619417238", "call_1_1791619417936"]
+
+
 def test_real_derived_direct_tools_and_parallel_proxy_calls_keep_distinct_blocks():
     extracted = extract_invocations("pi", _rows("direct_session.jsonl"))
     assert _facts(extracted) == [

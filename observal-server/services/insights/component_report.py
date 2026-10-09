@@ -154,7 +154,7 @@ async def _generate_hook_content(report: InsightReport) -> dict:
     """Deterministic hook report: recorded runs, whether the hook could run, and coverage.
 
     No MCP figures and no model interpretation. A recorded run shows the hook
-    executed; silent successes may be unrecorded, so runs are a lower bound.
+    executed; where a harness leaves silent successes unrecorded, runs are a lower bound.
     """
     from services.component_activity.hook_queries import hook_activity_summary
 
@@ -175,6 +175,7 @@ async def _generate_hook_content(report: InsightReport) -> dict:
                 "eligible_sessions",
                 "sessions_with_recorded_run",
                 "runs_with_output",
+                "silent_runs",
                 "failures",
                 "blocks",
                 "harness_distribution",
@@ -198,10 +199,14 @@ def generate_hook_sections(summary: dict, coverage: dict) -> dict:
             "not what it changed or whether it helped."
         )
     elif state == "no_recorded_runs":
-        conclusion = (
-            "No recorded runs in sessions where the hook could run. Hooks that succeed without printing "
-            "output leave no record, so this does not show the hook never ran."
-        )
+        conclusion = "No recorded runs in sessions where the hook could run."
+        if summary.get("silent_runs") is None or "silent_runs_not_recorded_on_some_harnesses" in coverage["reasons"]:
+            conclusion += (
+                " A harness in this cohort leaves no record of hooks that succeed without printing output, "
+                "so this does not show the hook never ran."
+            )
+        else:
+            conclusion += " The harnesses here record silent runs too, and none was recorded."
     else:
         conclusion = "There were no processed sessions where this hook could run; no conclusion can be drawn."
     if eligibility["headless_sessions"]:
@@ -217,6 +222,13 @@ def generate_hook_sections(summary: dict, coverage: dict) -> dict:
             "session recorded which agent ran, so whether the hook could run there is unknown; "
             f"{'it is' if count == 1 else 'they are'} excluded."
         )
+    if eligibility.get("version_unverified_sessions"):
+        count = eligibility["version_unverified_sessions"]
+        conclusion += (
+            f" {count} {'session was' if count == 1 else 'sessions were'} recorded by a harness version whose hook "
+            f"records have not been verified yet, so whether the hook ran there is unknown; "
+            f"{'it is' if count == 1 else 'they are'} excluded."
+        )
     return {
         "summary": conclusion,
         "evidence": {
@@ -224,6 +236,7 @@ def generate_hook_sections(summary: dict, coverage: dict) -> dict:
             "eligible": summary["eligible_sessions"],
             "sessions_with_recorded_run": summary["sessions_with_recorded_run"],
             "runs_with_output": summary["runs_with_output"],
+            "silent_runs": summary.get("silent_runs"),
             "failures": summary["failures"],
             "blocks": summary["blocks"],
             "could_not_run": {key: eligibility[key] for key in ("headless_sessions", "agent_inactive_sessions")},

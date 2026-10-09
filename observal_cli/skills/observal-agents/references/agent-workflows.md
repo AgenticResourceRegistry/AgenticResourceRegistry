@@ -66,7 +66,7 @@ observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --hooks=settings 
 observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --hooks=frontmatter --no-prompt --output json
 ```
 
-The choice is remembered for later pulls; `--hooks=frontmatter` moves the hooks back. It is POSIX-only and refused on untested Claude Code versions (exit 7). Report the dry run's `agent_hooks.gate_startup_ms` and any hook with `can_block: true`: with the default `--on-unknown skip`, an unrecognized hook input skips the hook, so it cannot block; `--on-unknown run` runs it in every session instead. Let the user choose. A conflict (exit 6) means the user edited an Observal-owned hook group: never pass `--force-hooks` without the user's explicit agreement.
+The choice is remembered for later pulls; `--hooks=frontmatter` moves the hooks back. It is POSIX-only. On an untested Claude Code version it is allowed with a warning, and Component Insights reports that version's hook evidence as unverified. Report the dry run's `agent_hooks.gate_startup_ms` and any hook with `can_block: true`: with the default `--on-unknown skip`, an unrecognized hook input skips the hook, so it cannot block; `--on-unknown run` runs it in every session instead. Let the user choose. A warning that an Observal-owned hook group was edited locally means the pull left the user's edit in place and skipped updating it: never pass `--force-hooks` without the user's explicit agreement.
 
 For Pi, use the exact local profile name returned by pull with the harness profile command.
 
