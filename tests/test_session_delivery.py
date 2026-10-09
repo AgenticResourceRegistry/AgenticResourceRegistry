@@ -1251,3 +1251,30 @@ def test_recovered_sessions_hash_the_recorded_project_or_send_no_layer_hash(tmp_
 
     live = base.build_payload("s4", later_chunk, 0, "UserPromptSubmit", 0, cwd="")
     assert live["layer_hash"] == "hash-of:", "live hook paths are unchanged"
+
+
+@pytest.mark.parametrize("hook_event", ["Reconcile", "CrashRecovery"])
+def test_sessions_rebuilt_from_disk_hash_and_upload_the_recorded_project(tmp_path, monkeypatch, hook_event):
+    """Regression: `observal reconcile` (and recovery) rebuilt Claude Code sources with no cwd. Reconcile
+    hashed "no project", so project-scope components were never pinned; and both uploaded the snapshot
+    for no project, so a session the live hooks never saw had no snapshot for its hash at all."""
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(base, "_get_cached_layer_hash", lambda _session, cwd: f"hash-of:{cwd}")
+    monkeypatch.setattr(base, "_resolve_agent", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(base, "_capabilities_for_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(base, "drain_outbox", lambda *args, **kwargs: True)
+    uploads: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        base,
+        "_maybe_upload_layer_snapshot",
+        lambda _url, _token, layer_hash, _harness, cwd, _config: uploads.append((layer_hash, cwd)),
+    )
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "cwd": str(project), "message": {"content": "hi"}}) + "\n")
+    db = tmp_path / "outbox.db"
+    source = SessionSource("claude-code", "rebuilt", transcript)  # no cwd, as discovery builds it
+    assert base.drain_session_source(source, config(), hook_event=hook_event, home=tmp_path, db_path=db)
+    (item,) = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert item.payload["layer_hash"] == f"hash-of:{project}"
+    assert uploads == [(f"hash-of:{project}", str(project))], "the snapshot uploaded is the one the payload names"

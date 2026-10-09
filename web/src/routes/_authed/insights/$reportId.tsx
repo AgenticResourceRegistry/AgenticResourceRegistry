@@ -127,6 +127,9 @@ function HookReport({ report }: { report: InsightReport }) {
     eligibility?.mode_unknown_sessions ? `${eligibility.mode_unknown_sessions} did not record whether they were headless` : null,
   ].filter(Boolean);
   const notMeasured = <>Not measured</>;
+  // A lower bound only where some harness in the cohort leaves silent runs unrecorded.
+  const lowerBound = !!coverage?.limitations.some((note) => note.startsWith("silent_success_unrecorded"));
+  const silentRuns = metrics?.silent_runs ?? null;
   return (
     <main className="mx-auto max-w-4xl space-y-8 px-4 py-8 sm:px-6">
       <ReportHeader report={report} />
@@ -137,12 +140,13 @@ function HookReport({ report }: { report: InsightReport }) {
           <dl className="grid gap-4 sm:grid-cols-4">
             <div><dt className="text-sm text-muted-foreground">Present sessions</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.present_sessions ?? "—"}</dd></div>
             <div><dt className="text-sm text-muted-foreground">Sessions where it could run</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.eligible_sessions ?? "—"}</dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions with a recorded run</dt><dd className="text-xl font-semibold tabular-nums">{measured ? <>{metrics?.sessions_with_recorded_run}<span className="block text-xs font-normal text-muted-foreground">At least; silent runs are not counted</span></> : notMeasured}</dd></div>
+            <div><dt className="text-sm text-muted-foreground">Sessions with a recorded run</dt><dd className="text-xl font-semibold tabular-nums">{measured ? <>{metrics?.sessions_with_recorded_run}{lowerBound && <span className="block text-xs font-normal text-muted-foreground">At least; some harnesses do not record silent runs</span>}</> : notMeasured}</dd></div>
             <div><dt className="text-sm text-muted-foreground">Failed or blocked runs</dt><dd className="text-xl font-semibold tabular-nums">{measured ? (metrics ? metrics.failures + metrics.blocks : "—") : notMeasured}</dd></div>
           </dl>
-          {measured && metrics && <p className="text-sm text-muted-foreground">Recorded runs: {metrics.runs_with_output} succeeded with output, {metrics.failures} failed, {metrics.blocks} blocked an action.</p>}
+          {measured && metrics && <p className="text-sm text-muted-foreground">Recorded runs: {metrics.runs_with_output} succeeded with output, {silentRuns !== null && <>{silentRuns} succeeded silently, </>}{metrics.failures} failed, {metrics.blocks} blocked an action.</p>}
           {couldNotRun.length > 0 && <p className="text-sm text-muted-foreground">Excluded because the hook could not run: {couldNotRun.join("; ")}.</p>}
           {eligibility?.agent_unknown_sessions ? <p className="text-sm text-muted-foreground">Excluded because it is not known whether the hook could run: {eligibility.agent_unknown_sessions} subagent {eligibility.agent_unknown_sessions === 1 ? "session" : "sessions"} where neither the subagent nor its parent session recorded which agent ran.</p> : null}
+          {eligibility?.version_unverified_sessions ? <p className="text-sm text-muted-foreground">Excluded because it is not known whether the hook could run: {eligibility.version_unverified_sessions} {eligibility.version_unverified_sessions === 1 ? "session was" : "sessions were"} recorded by a harness version whose hook records are not verified yet.</p> : null}
           {!measured && <p className="text-sm text-muted-foreground">There were no processed sessions where this hook could run; missing measurements do not imply no use.</p>}
         </section>
         <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />

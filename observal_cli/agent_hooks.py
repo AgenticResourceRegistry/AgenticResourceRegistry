@@ -38,6 +38,7 @@ from pathlib import Path
 from statistics import median
 
 from observal_cli.shared.utils import OBSERVAL_METADATA_KEY, atomic_write
+from observal_shared.harness_registry import HARNESS_REGISTRY
 
 AGENT_HOOK_KIND = "agent-hook"
 PLACEMENTS = ("frontmatter", "settings")
@@ -47,11 +48,9 @@ GATED_PLACEMENT = "gated_settings"
 
 # Claude Code versions whose hook inputs were recorded and whose gated hooks were
 # run end to end (tests/fixtures/component_insights/claude_code/hook_inputs and
-# gate_session_*.jsonl). The gate's decision depends on that behaviour, so the
-# opt-in is offered only inside this range. Extend it only after re-running the
-# capture on a newer version.
-TESTED_CLAUDE_CODE_MIN = (2, 1, 286)
-TESTED_CLAUDE_CODE_MAX = (2, 1, 286)
+# gate_session_*.jsonl). Shared with the server, which reports hook evidence from
+# other versions as unverified; the opt-in only warns outside it.
+TESTED_CLAUDE_CODE_MIN, TESTED_CLAUDE_CODE_MAX = HARNESS_REGISTRY["claude-code"]["hook_evidence_tested_versions"]
 
 # Events where a hook's exit code 2 blocks what it guards. An unrecognized hook
 # input skips the hook by default (--on-unknown skip), which then cannot block.

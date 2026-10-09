@@ -20,6 +20,7 @@
 #     • test (3.13)
 #     • test (3.14)
 #     • web-lint
+#     • pi-extension
 #     • docker-build
 #     • dependency-audit
 #   Require a pull request before merging
@@ -56,6 +57,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       docker: ${{ steps.filter.outputs.docker }}
       helm: ${{ steps.filter.outputs.helm }}
+      pi_extension: ${{ steps.filter.outputs.pi_extension }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       # v4 compares merge-queue candidates using merge_group.base_sha/head_sha.
@@ -76,6 +78,14 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
+              - '.github/workflows/ci.yml'
+            # The extension's tests include Python/TypeScript parity checks against observal_cli.
+            pi_extension:
+              - 'packages/pi-extension/**'
+              - 'observal_cli/**'
+              - 'packages/observal-shared/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
               - '.github/workflows/ci.yml'
             helm:
               - 'infra/helm/**'
@@ -241,6 +251,48 @@ jobs:
       - name: TypeScript typecheck
         if: needs.changes.outputs.web == 'true'
         run: pnpm run typecheck
+
+# ── Job 4b: Pi extension tests ────────────────────────────────────────────────
+  pi-extension:
+    name: pi-extension
+    runs-on: ubuntu-latest
+    needs: changes
+    steps:
+      - name: Skip if no Pi extension changes
+        if: needs.changes.outputs.pi_extension != 'true'
+        run: |
+          echo "::notice::No Pi extension changes detected, skipping pi-extension"
+          echo "This job reports success to satisfy branch protection"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: needs.changes.outputs.pi_extension == 'true'
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: needs.changes.outputs.pi_extension == 'true'
+        with:
+          node-version: 24
+
+      # The parity tests run `uv run python` with a temporary HOME; keep uv's
+      # cache and managed Pythons where that cannot move them.
+      - name: Pin uv directories
+        if: needs.changes.outputs.pi_extension == 'true'
+        run: |
+          echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache" >> "$GITHUB_ENV"
+          echo "UV_PYTHON_INSTALL_DIR=$RUNNER_TEMP/uv-python" >> "$GITHUB_ENV"
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        if: needs.changes.outputs.pi_extension == 'true'
+
+      - name: Install the CLI for parity checks
+        if: needs.changes.outputs.pi_extension == 'true'
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13
+
+      - name: Run extension tests
+        if: needs.changes.outputs.pi_extension == 'true'
+        working-directory: packages/pi-extension
+        run: npm test
 
 # ── Job 5: Helm chart lint ───────────────────────────────────────────────────
   helm-lint:

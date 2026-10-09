@@ -9,12 +9,15 @@ An unsupported harness is not a supported session with no hook evidence.
 Evidence kinds, none of which shows what a hook achieved:
 
 * ``ran_with_output``: the hook ran, exited 0 and printed output.
+* ``ran_silently``: the hook ran and exited 0 without output; only harnesses
+  that record silent successes (``records_silent_success``) emit it.
 * ``failed``: the hook ran and exited non-zero without blocking.
 * ``blocked``: the hook ran and blocked the action it guarded.
 
 Harnesses can record only some runs. Claude Code records nothing for a hook
-that succeeds silently, so recorded runs are a lower bound and "no recorded
-runs" never means the hook did not run. Each extractor declares its
+that succeeds silently, so there recorded runs are a lower bound and "no
+recorded runs" never means the hook did not run. Pi's extension records every
+run. Each extractor declares its
 ``observed_kinds`` and whether silent successes are recorded.
 
 Facts identify a hook by ``binding_sha256``, the SHA-256 of ``event NUL
@@ -50,7 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from datetime import datetime
 
-HookEvidenceKind = Literal["ran_with_output", "failed", "blocked"]
+HookEvidenceKind = Literal["ran_with_output", "ran_silently", "failed", "blocked"]
 
 
 # Observal's own telemetry hooks are never a registry component, so a recorded run of
@@ -150,6 +153,10 @@ class HookSession:
     # The subagent's agent, resolved from the parent session's own record of the
     # spawn (never from this transcript). Empty while unresolved.
     subagent_agent: str = ""
+    # True when the harness version that wrote the session is outside the range whose
+    # hook records were recorded and proven (or not recorded): its evidence cannot be
+    # trusted to be complete, so hooks without a recorded run are not counted as eligible.
+    harness_version_unverified: bool = False
 
 
 @dataclass(frozen=True)

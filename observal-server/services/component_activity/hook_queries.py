@@ -8,7 +8,8 @@ denominator is processed present sessions where the hook could run
 (``eligible``): agent-scoped hooks whose agent did not run, ran headless (for
 agent-file hooks), or cannot be identified (gated hooks in a subagent's own
 transcript) are excluded rather than counted as no use. Recorded runs are a lower bound
-where silent successes leave no record.
+where the harness leaves no record of silent successes (Claude Code); Pi records
+them as ``hook_ran_silently``.
 """
 
 from __future__ import annotations
@@ -54,13 +55,15 @@ _SOURCE_STATE, _PROJECTION_STATE = projection_state_sql()
 _HOOK_EVIDENCE = (
     """SELECT a.user_id AS user_id, a.harness AS harness, a.session_id AS session_id,
            countIf(a.evidence_kind = 'hook_ran_with_output') AS runs_with_output,
+           countIf(a.evidence_kind = 'hook_ran_silently') AS silent_runs,
            countIf(a.evidence_kind = 'hook_failed') AS failures,
            countIf(a.evidence_kind = 'hook_blocked') AS blocks,
            countIf(a.evidence_kind = 'hook_context_eligible') AS ctx_eligible,
            countIf(a.evidence_kind = 'hook_context_headless') AS ctx_headless,
            countIf(a.evidence_kind = 'hook_context_agent_inactive') AS ctx_agent_inactive,
            countIf(a.evidence_kind = 'hook_context_mode_unknown') AS ctx_mode_unknown,
-           countIf(a.evidence_kind = 'hook_context_agent_unknown') AS ctx_agent_unknown
+           countIf(a.evidence_kind = 'hook_context_agent_unknown') AS ctx_agent_unknown,
+           countIf(a.evidence_kind = 'hook_context_version_unverified') AS ctx_version_unverified
     FROM component_activity AS a FINAL
     INNER JOIN ("""
     + _LATEST
@@ -86,8 +89,10 @@ _HOOK_SESSIONS = (
     + """ AS projection_state,
            p.candidate_count AS candidate_count, p.attributed_count AS attributed_count,
            p.collision_count AS collision_count, p.unmatched_count AS unmatched_count,
-           e.runs_with_output AS runs_with_output, e.failures AS failures, e.blocks AS blocks,
-           multiIf(e.ctx_eligible > 0 OR e.runs_with_output + e.failures + e.blocks > 0, 'eligible',
+           e.runs_with_output AS runs_with_output, e.silent_runs AS silent_runs,
+           e.failures AS failures, e.blocks AS blocks,
+           multiIf(e.ctx_eligible > 0 OR e.runs_with_output + e.silent_runs + e.failures + e.blocks > 0, 'eligible',
+                   e.ctx_version_unverified > 0, 'version_unverified',
                    e.ctx_headless > 0, 'headless',
                    e.ctx_mode_unknown > 0, 'mode_unknown',
                    e.ctx_agent_unknown > 0, 'agent_unknown',
@@ -130,8 +135,11 @@ _HOOK_SUMMARY = (
            countIf(projection_state = 'complete' AND eligibility = 'agent_inactive') AS agent_inactive_sessions,
            countIf(projection_state = 'complete' AND eligibility = 'mode_unknown') AS mode_unknown_sessions,
            countIf(projection_state = 'complete' AND eligibility = 'agent_unknown') AS agent_unknown_sessions,
-           countIf(projection_state = 'complete' AND runs_with_output + failures + blocks > 0) AS observed_sessions,
+           countIf(projection_state = 'complete' AND eligibility = 'version_unverified') AS version_unverified_sessions,
+           countIf(projection_state = 'complete' AND runs_with_output + silent_runs + failures + blocks > 0)
+               AS observed_sessions,
            sumIf(runs_with_output, projection_state = 'complete') AS total_runs_with_output,
+           sumIf(silent_runs, projection_state = 'complete') AS total_silent_runs,
            sumIf(failures, projection_state = 'complete') AS total_failures,
            sumIf(blocks, projection_state = 'complete') AS total_blocks
     FROM ("""
@@ -197,6 +205,8 @@ def build_hook_coverage(presence: dict, aggregate: dict, version: int) -> HookAc
         reasons.append("session_mode_unknown")
     if eligibility.agent_unknown_sessions:
         reasons.append("subagent_agent_unknown")
+    if eligibility.version_unverified_sessions:
+        reasons.append("harness_version_unverified")
     if evidence.collision_runs or evidence.unmatched_runs:
         reasons.append("unattributed_hook_runs")
     state = "observed" if observed else "no_recorded_runs" if denominator else "attribution_not_possible"
@@ -213,8 +223,8 @@ def build_hook_coverage(presence: dict, aggregate: dict, version: int) -> HookAc
     )
 
 
-def _silent_successes_unrecorded(harnesses) -> bool:
-    return any(not getattr(hook_extractor(harness), "records_silent_success", True) for harness in harnesses)
+def _records_silent_runs(harness: str) -> bool:
+    return bool(getattr(hook_extractor(harness), "records_silent_success", False))
 
 
 async def hook_activity_summary(
@@ -240,14 +250,21 @@ async def hook_activity_summary(
     activations = (activation_rows or [{}])[0]
     coverage = build_hook_coverage(presence, aggregate, params["param_projection_version"])
     distribution = {row["harness"]: int(row["sessions"]) for row in harnesses}
-    if _silent_successes_unrecorded(h for h in distribution if hook_extractor(h)):
+    # Silent runs are measurable only on harnesses that record them; elsewhere they
+    # are unknown, never a measured zero, and a mixed cohort's count is partial.
+    recording = [_records_silent_runs(harness) for harness in distribution if hook_extractor(harness)]
+    silent_recorded = any(recording)
+    if not all(recording):
         coverage.limitations.insert(1, HOOK_SILENT_LIMITATION)
+        if silent_recorded:
+            coverage.reasons.append("silent_runs_not_recorded_on_some_harnesses")
     return {
         "present_sessions": coverage.presence.present_sessions,
         "present_users": coverage.presence.present_users,
         "eligible_sessions": coverage.eligibility.eligible_sessions,
         "sessions_with_recorded_run": coverage.observed_sessions,
         "runs_with_output": _int(aggregate, "total_runs_with_output"),
+        "silent_runs": _int(aggregate, "total_silent_runs") if silent_recorded else None,
         "failures": _int(aggregate, "total_failures"),
         "blocks": _int(aggregate, "total_blocks"),
         "harness_distribution": distribution,
@@ -301,6 +318,9 @@ async def hook_activity_sessions(
                 "source_state": row["source_state"],
                 "eligibility": row["eligibility"] if complete else "not_processed",
                 "runs_with_output": _int(row, "runs_with_output") if complete else 0,
+                "silent_runs": (_int(row, "silent_runs") if complete else 0)
+                if _records_silent_runs(row["harness"])
+                else None,
                 "failures": _int(row, "failures") if complete else 0,
                 "blocks": _int(row, "blocks") if complete else 0,
             }

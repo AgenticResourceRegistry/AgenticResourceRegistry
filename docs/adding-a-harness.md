@@ -573,6 +573,23 @@ Component Insights count skill and hook evidence only where it is proven for the
 
 Without all four the cell stays `unsupported`.
 
+### Changing an evidence rule on existing data
+
+Sessions are projected once per publication version. Changing an extractor or matcher does not touch sessions that were already projected unless you bump a version, and each version does something different:
+
+| Constant | Where | What a bump does |
+|---|---|---|
+| `PROJECTION_VERSION`, `MATCHER_VERSION` | `services/component_activity/projector.py` | Changes the publication key. Every older publication is hidden (reported as stale) until `replay_activity_revision`, which runs every 5 minutes, has republished **all** historical sessions. |
+| `CURRENT_EXTRACTOR_VERSION` | `services/layer_components/__init__.py` | Every layer snapshot is re-extracted by `backfill_layer_components` (daily, resumable). Presence is reported as stale until it is. |
+| `HOOK_MATCHER_VERSION` and other per-evidence matcher versions | `services/component_activity/hook_matcher.py` and friends | Stamped on each row for auditing only. Triggers nothing. |
+
+Bump `PROJECTION_VERSION` (or `CURRENT_EXTRACTOR_VERSION` for layer rules) when the change would make **already published** numbers wrong in a way that matters, for example a rule that wrongly counted evidence (a false positive). The replay costs a scan of every stored session, and reports show stale coverage until it finishes, so do not bump for:
+
+* changes that only add evidence kinds or recognise more of it: older sessions keep their smaller, still-true numbers;
+* changes that only make older results more conservative than the new rule would.
+
+Say which case applies in the constant's comment either way. Sessions recorded with a legacy layer hash can never be attributed, so a replay does not help them.
+
 ---
 
 ## Architecture Notes

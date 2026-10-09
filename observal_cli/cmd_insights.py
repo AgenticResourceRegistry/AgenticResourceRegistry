@@ -539,10 +539,19 @@ def _render_hook_report(data: dict) -> None:
     rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}")
     rprint(f"  Sessions where it could run: {metrics.get('eligible_sessions', 0)}")
     if measured:
-        rprint(f"  Sessions with a recorded run: {metrics.get('sessions_with_recorded_run', 0)} (a lower bound)")
+        # A lower bound only where some harness in the cohort leaves silent runs unrecorded.
+        lower_bound = any(
+            str(item).startswith("silent_success_unrecorded") for item in coverage.get("limitations") or []
+        )
+        rprint(
+            f"  Sessions with a recorded run: {metrics.get('sessions_with_recorded_run', 0)}"
+            + (" (a lower bound)" if lower_bound else "")
+        )
+        silent = metrics.get("silent_runs")
         rprint(
             f"  Recorded runs: {metrics.get('runs_with_output', 0)} with output, "
-            f"{metrics.get('failures', 0)} failed, {metrics.get('blocks', 0)} blocked"
+            + (f"{silent} silent, " if silent is not None else "")
+            + f"{metrics.get('failures', 0)} failed, {metrics.get('blocks', 0)} blocked"
         )
     else:
         rprint("  Recorded runs: not measured (no processed session where it could run)")
@@ -558,6 +567,11 @@ def _render_hook_report(data: dict) -> None:
         rprint(
             f"  Not known whether it could run: {eligibility['agent_unknown_sessions']} subagent session(s) "
             "where neither the subagent nor its parent session recorded which agent ran"
+        )
+    if eligibility.get("version_unverified_sessions"):
+        rprint(
+            f"  Not known whether it could run: {eligibility['version_unverified_sessions']} session(s) recorded by "
+            "a harness version whose hook records are not verified yet"
         )
     for label, values in (
         ("Versions", metrics.get("version_distribution") or {}),

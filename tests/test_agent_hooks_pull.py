@@ -242,17 +242,19 @@ def test_the_choice_is_remembered_and_restore_removes_only_owned_groups(env):
     assert "restored to the agent file" in _shown(result)
 
 
-def test_a_locally_edited_owned_group_refuses_the_pull_until_forced(env):
+def test_a_locally_edited_owned_group_is_kept_and_skipped_without_failing_the_pull(env):
+    """Regression: one edited hook failed the whole pull (exit 6), blocking every other update."""
     assert _pull(env, "--hooks=settings").exit_code == 0
     edited = _settings(env)
     edited["hooks"]["PostToolUse"][0]["hooks"][0]["timeout"] = 5
     _settings_path(env).write_text(json.dumps(edited))
     _agent_file(env).unlink()
     result = _pull(env, "--hooks=settings", json_output=True)
-    assert result.exit_code != 0
-    assert "edited locally" in _error(result)["message"]
-    assert _settings(env) == edited, "the edited group is kept"
-    assert not _agent_file(env).exists(), "nothing was written"
+    assert result.exit_code == 0, result.stderr
+    (warning,) = [w for w in json.loads(result.stdout)["warnings"] if "edited locally" in w]
+    assert "left as they are" in warning and "does not count them" in warning and "--force-hooks" in warning
+    assert _settings(env) == edited, "the edited group is kept exactly as the user left it"
+    assert _agent_file(env).exists(), "the rest of the pull is written"
     preview = _pull(env, "--hooks=settings", "--dry-run")
     assert preview.exit_code == 0 and "edited locally" in _shown(preview), "a dry run reports the conflict"
     forced = _pull(env, "--hooks=settings", "--force-hooks")
@@ -278,11 +280,13 @@ def test_a_server_that_ignores_the_request_is_refused_before_writing(env):
     assert not (env.target / ".claude").exists()
 
 
-def test_untested_claude_code_refuses_a_new_opt_in_and_warns_on_a_remembered_one(env):
+def test_untested_claude_code_never_blocks_the_opt_in_and_says_evidence_is_unverified(env):
+    """Regression: a new opt-in on any untested version failed, and Claude Code ships several releases a week."""
     env.version.return_value = "2.1.300"
     result = _pull(env, "--hooks=settings", json_output=True)
-    assert result.exit_code != 0 and "tested Claude Code versions (2.1.286)" in _error(result)["message"]
-    env.post.assert_not_called()
+    assert result.exit_code == 0, result.stderr
+    (warning,) = [w for w in json.loads(result.stdout)["warnings"] if "tested only with Claude Code" in w]
+    assert "found Claude Code 2.1.300" in warning and "reported as unverified" in warning
     env.installed.return_value = {"hook_placement": "settings", "hook_gate_agent": "reviewer"}
     remembered = _pull(env, json_output=True)
     assert remembered.exit_code == 0, remembered.stderr

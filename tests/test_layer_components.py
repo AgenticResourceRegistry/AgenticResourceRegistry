@@ -534,3 +534,40 @@ def test_verification_lookup_is_indexed_first_match_and_tolerates_malformed_reco
     assert normalize_snapshot(pins, drift)[0].verification_status == "unverified"
     drift["mcp_verifications"] = [{**key, "status": "verified"}, {**key, "status": "drifted"}]
     assert normalize_snapshot(pins, drift)[0].verification_status == "verified"
+
+
+def _statuses(drift):
+    return {row.raw_listing_id: row.verification_status for row in normalize_snapshot(_pins(), drift)}
+
+
+def test_a_drifted_component_does_not_drift_the_rest_of_its_layer():
+    """Regression: any drift marked every component in the layer drifted, losing per-component detail."""
+    drift = _drift()
+    drift["is_canonical"] = False
+    drift["mcp_verifications"][1]["status"] = "drifted"
+    drift["drifted_files"] = [{"harness": "claude-code", "component": B, "alias": "bob-probe", "status": "drifted"}]
+    assert _statuses(drift) == {A: "verified", B: "drifted"}
+    # An entry for the same component ID under another harness names a different install.
+    drift["drifted_files"] = [{"harness": "pi", "component": A, "alias": "alice-probe", "status": "drifted"}]
+    drift["mcp_verifications"][1]["status"] = "verified"
+    assert _statuses(drift) == {A: "verified", B: "verified"}
+
+
+def test_file_integrity_drift_names_components_by_name_and_errs_closed():
+    drift = _drift()
+    drift["is_canonical"] = False
+    # Both pins are named "probe": a name-only entry cannot tell them apart, so both drift.
+    drift["drifted_files"] = [{"harness": "claude-code", "path": "project:.mcp.json", "component": "probe"}]
+    assert _statuses(drift) == {A: "drifted", B: "drifted"}
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [[], [{"path": "project:.mcp.json", "component": "probe"}], [{"harness": "claude-code", "path": "x"}], ["x"]],
+    ids=["none-listed", "no-harness", "no-component", "not-an-object"],
+)
+def test_drift_that_names_no_component_still_drifts_the_whole_layer(entries):
+    drift = _drift()
+    drift["is_canonical"] = False
+    drift["drifted_files"] = entries
+    assert _statuses(drift) == {A: "drifted", B: "drifted"}

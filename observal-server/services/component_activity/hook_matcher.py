@@ -23,6 +23,9 @@ hook in the session also gets one context row saying whether it could run:
 * ``headless``: its agent ran headless, and the harness's extractor declares
   that agent-file hooks do not run headless (Claude Code's recorded behaviour).
 * ``mode_unknown``: the session did not record whether it was headless.
+* ``version_unverified``: the harness version that wrote the session is outside
+  the range whose hook records were proven, so a missing run proves nothing.
+  Checked first: a format change could also hide the agent or mode records.
 * ``agent_unknown``: a gated hook in a subagent's own transcript, which records
   that a subagent ran but not which agent it was, when the parent session's
   record of the spawn could not resolve it (not uploaded yet, unreadable, or
@@ -52,8 +55,11 @@ if TYPE_CHECKING:
 # no gated placement existed before, so earlier publications stay correct.
 # 3: a gated hook in a subagent's own transcript is eligible or inactive when the
 # parent session recorded which agent the subagent was; 'agent_unknown' otherwise.
-HOOK_MATCHER_VERSION = 3
-_RESULT = {"ran_with_output": "success", "failed": "error", "blocked": "error"}
+# 4: silent successes (``ran_silently``) are attributed runs where the harness records
+# them (Pi); other harnesses never emit the kind, so their publications are unchanged.
+# 5: hooks in a session from an untested harness version are ``version_unverified``.
+HOOK_MATCHER_VERSION = 5
+_RESULT = {"ran_with_output": "success", "ran_silently": "success", "failed": "error", "blocked": "error"}
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,8 @@ def _verified(candidates: Sequence[dict]) -> list[dict]:
 
 
 def _state(candidate: dict, session: HookSession) -> str:
+    if session.harness_version_unverified:
+        return "version_unverified"
     agent = candidate.get("binding_agent") or ""
     if not agent:
         return "eligible"

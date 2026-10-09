@@ -147,7 +147,7 @@ class PiAdapter(BaseHarnessAdapter):
             result["skill_components"] = rewritten_skills
 
         # ── Hooks (run by the Observal Pi extension) ──
-        warnings: list[str] = []
+        warnings = list(ctx.compatibility_warnings)
         if ctx.hook_configs:
             entries, hook_warnings = pi_hook_entries(ctx.hook_configs, scope)
             warnings.extend(hook_warnings)

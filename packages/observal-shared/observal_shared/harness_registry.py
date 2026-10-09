@@ -150,6 +150,11 @@ HARNESS_REGISTRY: dict[str, dict] = {
         # Hook runs that printed output, failed, or blocked a tool; silent successes leave no
         # record (session_parsers/claude_code_hook_evidence.py, Claude Code 2.1.286).
         "hook_evidence_extractor": "claude-code",
+        # Claude Code versions whose hook records and hook inputs were recorded end to end
+        # (tests/fixtures/component_insights/claude_code). Hook evidence from a session on
+        # any other version is "version_unverified", and gated agent hooks warn there.
+        # Raise it only after re-recording those fixtures on the newer version.
+        "hook_evidence_tested_versions": ((2, 1, 286), (2, 1, 286)),
         "scopes": ["project", "user"],
         "default_scope": "project",
         "scope_labels": ("project (.claude/agents/)", "user (~/.claude/agents/)"),

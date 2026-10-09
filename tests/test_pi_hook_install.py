@@ -37,7 +37,7 @@ def _hook(name: str, event: str = "PreToolUse", **extra) -> dict:
     } | extra
 
 
-def _format(hooks: list[dict], scope: str = "user") -> dict:
+def _format(hooks: list[dict], scope: str = "user", compatibility_warnings: list[str] | None = None) -> dict:
     agent = SimpleNamespace(id=AGENT, description="", model_name="")
     ctx = ConfigContext(
         agent=agent,
@@ -47,6 +47,7 @@ def _format(hooks: list[dict], scope: str = "user") -> dict:
         rules_content="Review.",
         hook_configs=hooks,
         options={"scope": scope},
+        compatibility_warnings=compatibility_warnings or [],
     )
     return PiAdapter().format_config(ctx)
 
@@ -112,3 +113,12 @@ def test_mixed_hooks_write_the_supported_ones_and_warn_for_the_rest():
     result = _format([_hook("guard"), _hook("stop", "Stop")])
     assert [entry["name"] for entry in result["hooks_config"]["content"]["hooks"]] == ["guard"]
     assert len(result["_warnings"]) == 1
+
+
+def test_compatibility_warnings_reach_the_pull():
+    """Regression: the Pi adapter dropped the server's compatibility warnings, unlike every other adapter."""
+    required = "This agent requires 'Prompts' but pi does not support it. Some functionality may not work."
+    assert _format([], compatibility_warnings=[required])["_warnings"] == [required]
+    result = _format([_hook("stop", "Stop")], compatibility_warnings=[required])
+    assert result["_warnings"][0] == required
+    assert "Hook 'stop' was not installed for Pi" in result["_warnings"][1]

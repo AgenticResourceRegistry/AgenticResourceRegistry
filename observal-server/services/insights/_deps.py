@@ -9,10 +9,35 @@ Instead, the main app calls configure() which injects these dependencies.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
+
+# Models that answered while one report was generated. A set shared through the
+# context, so concurrent subtasks of the same report (asyncio.gather) add to it.
+_models_used: ContextVar[set[str] | None] = ContextVar("insights_models_used", default=None)
+
+
+@contextmanager
+def recording_models() -> Iterator[set[str]]:
+    """Collect the model IDs that produced output during the block (``llm_model_used``)."""
+    used: set[str] = set()
+    token = _models_used.set(used)
+    try:
+        yield used
+    finally:
+        _models_used.reset(token)
+
+
+def note_model_used(model: str) -> None:
+    """Record that ``model`` returned output, if a report is being generated."""
+    used = _models_used.get()
+    if used is not None and model:
+        used.add(model)
+
 
 # These are set by configure() at application startup
 settings: Any = None
