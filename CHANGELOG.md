@@ -26,6 +26,7 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - correct the live log viewer command to `observal ops logs`
+- correct stale Next.js references and the removed API URL env var after the Vite migration
 
 ### Maintenance
 

@@ -39,7 +39,7 @@ flowchart TB
 | Service               | Image                               | Ports      | Purpose                   |
 | --------------------- | ----------------------------------- | ---------- | ------------------------- |
 | `observal-api`        | built from `docker/Dockerfile.api`  | 8000       | FastAPI backend           |
-| `observal-web`        | built from `docker/Dockerfile.web`  | 3000       | Next.js web UI            |
+| `observal-web`        | built from `docker/Dockerfile.web`  | 3000       | Vite web UI               |
 | `observal-db`         | `postgres:16`                       | 5432       | Registry, users, config   |
 | `observal-clickhouse` | `clickhouse/clickhouse-server:26.3` | 8123       | Session and audit events |
 | `observal-redis`      | `redis:7-alpine`                    | 6379       | Job queue (arq) + pub/sub |
