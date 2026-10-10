@@ -16,7 +16,7 @@ A single `terraform apply` creates:
 * **Application Load Balancer** with HTTPS (ACM certificate, DNS-validated) when you supply a domain; HTTP-only otherwise. Path-based rules: `/api/*` → api service, optional `/grafana/*` → Grafana, default → web
 * **ECS Fargate cluster** running:
   * `api` (FastAPI): 2 tasks by default, autoscales 2–10 on CPU
-  * `web` (Next.js): 2 tasks by default, autoscales 2–6 on CPU
+  * `web` (Vite): 2 tasks by default, autoscales 2–6 on CPU
   * `worker` (arq background jobs): 1 task by default, autoscales 1–5 on CPU
   * `init` (one-shot migrations + seeds): runs as a Fargate `RunTask` whenever `image_tag` changes
 * **RDS Postgres 16**: Multi-AZ on `prod`, encrypted, automated daily backups, Performance Insights, Enhanced Monitoring, log exports

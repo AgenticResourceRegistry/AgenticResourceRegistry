@@ -150,7 +150,7 @@ Frontend is still building. Check:
 docker compose -f docker/docker-compose.yml logs -f observal-web
 ```
 
-For local dev (running Next.js outside Docker), verify `NEXT_PUBLIC_API_URL` in `web/.env.local` matches your backend.
+For local dev (running Vite outside Docker), the dev server proxies `/api` to `http://localhost:8000` (see `web/vite.config.ts`); confirm your backend is reachable there.
 
 ### Login redirects back to login immediately
 
