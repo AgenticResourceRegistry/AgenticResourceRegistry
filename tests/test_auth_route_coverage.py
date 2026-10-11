@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused route coverage for authentication lifecycle and security boundaries."""
@@ -102,9 +103,19 @@ class FakeRedis:
         self.get = AsyncMock(side_effect=self._get)
         self.getdel = AsyncMock(side_effect=self._getdel)
         self.delete = AsyncMock(side_effect=self._delete)
+        self.eval = AsyncMock(side_effect=self._eval)
 
     async def _setex(self, key, _ttl, value):
         self.values[key] = value
+
+    async def _eval(self, _script, _numkeys, key, value):
+        # Mirrors services.token_revocation._RAISE_MARKER: the marker only moves forward.
+        try:
+            current = int(self.values.get(key))
+        except (TypeError, ValueError):
+            current = 0
+        if int(value) > current:
+            self.values[key] = value
 
     async def _get(self, key):
         return self.values.get(key)
@@ -930,7 +941,8 @@ async def test_logout_revokes_access_refresh_and_emits_audit(monkeypatch):
     )
     assert response == {"detail": "Logged out"}
     setex_keys = [call.args[0] for call in redis.setex.await_args_list]
-    assert setex_keys == ["revoked_jti:access-jti", f"revoked_user:{USER_ID}"]
+    assert setex_keys == ["revoked_jti:access-jti"]
+    assert f"revoked_user:{USER_ID}" in redis.values  # logged out everywhere
     redis.delete.assert_awaited_once_with("refresh_jti:refresh-jti")
     event = emit.await_args.args[0]
     assert event.event_type == EventType.LOGOUT
@@ -947,7 +959,7 @@ async def test_logout_revokes_access_refresh_and_emits_audit(monkeypatch):
     response = await auth.logout(_request(headers={}), LogoutRequest(refresh_token="refresh"), _user())
     assert response == {"detail": "Logged out"}
 
-    redis.setex.side_effect = RedisError("unavailable")
+    redis.eval.side_effect = RedisError("unavailable")
     with pytest.raises(HTTPException) as exc:
         await auth.logout(_request(headers={}), LogoutRequest(), _user())
     assert exc.value.status_code == 503
@@ -1080,17 +1092,23 @@ async def test_change_password_checks_current_password_and_clears_gate(monkeypat
     user.verify_password.return_value = True
     db = _db()
     redis = FakeRedis()
+    issue = AsyncMock(return_value=("fresh-access", "fresh-refresh", 900))
     monkeypatch.setattr(auth, "get_redis", lambda: redis)
+    monkeypatch.setattr(auth, "_issue_tokens", issue)
     response = await auth.change_password(
         _request(),
         ChangePasswordRequest(current_password="current", new_password="Valid2!Password"),
         db,
         user,
     )
-    assert response == {"message": "Password changed"}
+    assert set(response) == {"message", "exchange_code"}  # the new pair never travels in this response
+    handed_over = json.loads(redis.values[f"oauth_code:{response['exchange_code']}"])
+    assert (handed_over["access_token"], handed_over["refresh_token"]) == ("fresh-access", "fresh-refresh")
     user.set_password.assert_called_once()
     db.commit.assert_awaited_once()
+    assert f"revoked_user:{USER_ID}" in redis.values  # every earlier session is signed out
     redis.delete.assert_awaited_once_with(f"must_change_password:{USER_ID}")
+    issue.assert_awaited_once()
 
     redis.delete.side_effect = RedisError("unavailable")
     response = await auth.change_password(
@@ -1099,7 +1117,20 @@ async def test_change_password_checks_current_password_and_clears_gate(monkeypat
         _db(),
         user,
     )
-    assert response == {"message": "Password changed"}
+    assert response["message"] == "Password changed"
+
+    # If sessions cannot be revoked, the password must not change.
+    redis.eval.side_effect = RedisError("unavailable")
+    db = _db()
+    with pytest.raises(HTTPException) as exc:
+        await auth.change_password(
+            _request(),
+            ChangePasswordRequest(current_password="current", new_password="Valid4!Password"),
+            db,
+            user,
+        )
+    assert exc.value.status_code == 503
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

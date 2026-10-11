@@ -443,7 +443,7 @@ export const auth = {
 	deviceConfirm: (userCode: string) =>
 		post<{ message: string }>("/auth/device/confirm", { user_code: userCode }),
 	changePassword: (body: { current_password: string; new_password: string }) =>
-		put<{ message: string }>("/auth/profile/password", body),
+		put<{ message: string; exchange_code: string }>("/auth/profile/password", body),
 	uploadAvatar: (body: { avatar_url: string }) =>
 		put<{ avatar_url: string | null }>("/auth/profile/avatar", body),
 	deleteAvatar: () => del<{ avatar_url: null }>("/auth/profile/avatar"),

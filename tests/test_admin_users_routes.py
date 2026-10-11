@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused coverage for deployment-wide admin user management routes."""
@@ -783,7 +784,10 @@ async def test_generated_password_reset_orders_commit_gate_and_exact_security_ev
     async def commit():
         order.append("commit")
 
-    redis = SimpleNamespace(setex=AsyncMock(side_effect=lambda *_args: order.append("gate")))
+    redis = SimpleNamespace(
+        eval=AsyncMock(side_effect=lambda *_args: order.append("revoke")),
+        setex=AsyncMock(side_effect=lambda *_args: order.append("gate")),
+    )
 
     async def emit(_event):
         order.append("event")
@@ -803,7 +807,7 @@ async def test_generated_password_reset_orders_commit_gate_and_exact_security_ev
         _actor(),
     )
 
-    assert order == ["lookup", "generate", "password", "commit", "gate", "event"]
+    assert order == ["lookup", "generate", "password", "revoke", "commit", "gate", "event"]
     assert response == {
         "message": "Password reset for member@example.test",
         "generated_password": "Temporary1!",
@@ -825,7 +829,7 @@ async def test_supplied_password_reset_skips_generation_but_still_sets_change_ga
     target = _target()
     database = _db(_one(target))
     generate = AsyncMock()
-    redis = SimpleNamespace(setex=AsyncMock())
+    redis = SimpleNamespace(eval=AsyncMock(), setex=AsyncMock())
     monkeypatch.setattr(users, "_generate_unique_password", generate)
     monkeypatch.setattr("services.redis.get_redis", lambda: redis)
     monkeypatch.setattr(users, "emit_security_event", AsyncMock())
@@ -840,6 +844,7 @@ async def test_supplied_password_reset_skips_generation_but_still_sets_change_ga
     generate.assert_not_awaited()
     target.set_password.assert_called_once_with("Chosen2!")
     database.commit.assert_awaited_once_with()
+    redis.eval.assert_awaited_once()  # every session revoked
     redis.setex.assert_awaited_once_with(f"must_change_password:{TARGET_ID}", 86400, "1")
     assert response == {"message": "Password reset for member@example.test"}
 
@@ -849,7 +854,7 @@ async def test_generate_flag_takes_precedence_over_supplied_reset_password(monke
     target = _target()
     database = _db(_one(target))
     monkeypatch.setattr(users, "_generate_unique_password", AsyncMock(return_value="Generated2!"))
-    monkeypatch.setattr("services.redis.get_redis", lambda: SimpleNamespace(setex=AsyncMock()))
+    monkeypatch.setattr("services.redis.get_redis", lambda: SimpleNamespace(eval=AsyncMock(), setex=AsyncMock()))
     monkeypatch.setattr(users, "emit_security_event", AsyncMock())
 
     response = await users.reset_user_password(
@@ -899,7 +904,7 @@ async def test_reset_password_commit_failure_prevents_gate_and_event(monkeypatch
     target = _target()
     database = _db(_one(target))
     database.commit.side_effect = RuntimeError("password commit failed")
-    redis = SimpleNamespace(setex=AsyncMock())
+    redis = SimpleNamespace(eval=AsyncMock(), setex=AsyncMock())
     emit = AsyncMock()
     monkeypatch.setattr("services.redis.get_redis", lambda: redis)
     monkeypatch.setattr(users, "emit_security_event", emit)
@@ -914,6 +919,8 @@ async def test_reset_password_commit_failure_prevents_gate_and_event(monkeypatch
 
     target.set_password.assert_called_once_with("Chosen2!")
     database.rollback.assert_not_awaited()
+    # Sessions were revoked before the commit failed; the change gate was never set.
+    redis.eval.assert_awaited_once()
     redis.setex.assert_not_awaited()
     emit.assert_not_awaited()
 
@@ -923,7 +930,8 @@ async def test_reset_password_commit_failure_prevents_gate_and_event(monkeypatch
 async def test_reset_password_swallows_password_gate_failures_but_still_emits(monkeypatch, failure):
     target = _target()
     database = _db(_one(target))
-    redis = SimpleNamespace(setex=AsyncMock(side_effect=failure))
+
+    redis = SimpleNamespace(eval=AsyncMock(), setex=AsyncMock(side_effect=failure))
     emit = AsyncMock()
     monkeypatch.setattr("services.redis.get_redis", lambda: redis)
     monkeypatch.setattr(users, "emit_security_event", emit)
@@ -944,7 +952,7 @@ async def test_reset_password_swallows_password_gate_failures_but_still_emits(mo
 async def test_reset_password_event_failure_is_after_password_persistence(monkeypatch):
     target = _target()
     database = _db(_one(target))
-    redis = SimpleNamespace(setex=AsyncMock())
+    redis = SimpleNamespace(eval=AsyncMock(), setex=AsyncMock())
     monkeypatch.setattr("services.redis.get_redis", lambda: redis)
     monkeypatch.setattr(users, "emit_security_event", AsyncMock(side_effect=RuntimeError("event failed")))
 
@@ -1139,3 +1147,25 @@ async def test_http_request_validation_is_exact_and_precedes_route_mutation(rout
     assert invalid_username.json()["detail"][0]["loc"] == ["body", "username"]
     database.execute.assert_not_awaited()
     _assert_no_write(database)
+
+
+@pytest.mark.asyncio
+async def test_reset_password_revocation_failure_aborts_before_commit(monkeypatch):
+    """A reset must not land unless every existing session for the user was revoked."""
+    target = _target()
+    database = _db(_one(target))
+    redis = SimpleNamespace(eval=AsyncMock(side_effect=RedisError("redis down")), setex=AsyncMock())
+    emit = AsyncMock()
+    monkeypatch.setattr("services.redis.get_redis", lambda: redis)
+    monkeypatch.setattr(users, "emit_security_event", emit)
+
+    with pytest.raises(RedisError):
+        await users.reset_user_password(
+            TARGET_ID,
+            AdminResetPasswordRequest(new_password="Chosen2!"),
+            database,
+            _actor(),
+        )
+
+    database.commit.assert_not_awaited()
+    emit.assert_not_awaited()

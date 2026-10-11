@@ -598,10 +598,11 @@ def logout(
         OutputMode, typer.Option("--output", "-o", help="Output format: table or json")
     ] = OutputMode.table,
 ):
-    """Clear saved credentials.
+    """Sign out everywhere and clear saved credentials.
 
-    Revokes the remote session when possible, then removes local access and
-    refresh tokens. Remote revocation failure never blocks local cleanup.
+    Revokes every session for this account when possible (CLI, hooks, web),
+    then removes local access and refresh tokens. Remote revocation failure
+    never blocks local cleanup.
 
     Examples:
         observal auth logout
@@ -774,7 +775,9 @@ def change_password(
         OutputMode, typer.Option("--output", "-o", help="Output format: table or json")
     ] = OutputMode.table,
 ):
-    """Change your password.
+    """Change your password and sign out every other session.
+
+    This CLI stays signed in with the fresh tokens the server returns.
 
     Both modes read OBSERVAL_CURRENT_PASSWORD and OBSERVAL_NEW_PASSWORD,
     including their FILE forms. Human mode prompts for missing values; JSON
@@ -834,6 +837,11 @@ def change_password(
             {"current_password": current, "new_password": new_password},
         )
     payload = result or {"changed": True}
+    if code := payload.pop("exchange_code", None):
+        # The server signed out every session, including the hooks token; keep this CLI on the fresh pair.
+        session = client.post("/api/v1/auth/exchange", {"code": code}, operation="Change password")
+        config.save({"access_token": session["access_token"], "refresh_token": session.get("refresh_token", "")})
+        config.remove("api_key")
     if _is_json(output):
         output_json(payload)
     else:
