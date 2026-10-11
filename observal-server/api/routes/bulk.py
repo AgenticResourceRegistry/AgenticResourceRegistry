@@ -12,8 +12,8 @@ from api.deps import get_db, registry_identity, require_role
 from models.agent import Agent, AgentStatus, AgentVersion
 from models.user import User, UserRole
 from schemas.bulk import BulkAgentItem, BulkAgentRequest, BulkResult, BulkResultItem
-from services.inbox import sources as inbox
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import submit_for_review
 
 router = APIRouter(prefix="/api/v1/bulk", tags=["bulk"])
 
@@ -36,8 +36,8 @@ async def _create_single_agent(
     item: BulkAgentItem,
     user: User,
     db: AsyncSession,
-) -> Agent:
-    """Create a single Agent + AgentVersion row (with components and goal template)."""
+) -> tuple[Agent, int]:
+    """Create a single Agent, version and review in one transaction."""
     optic.trace("name={}, user_id={}", item.name, user.id)
     namespace, slug = registry_identity(user, item.name)
     agent = Agent(
@@ -77,18 +77,8 @@ async def _create_single_agent(
     )
     await lock_agent_version(db, agent, version)
 
-    # Every bulk-created version lands in the review queue as pending, so the
-    # reviewers who own that queue are told — same as a one-at-a-time submit.
-    await inbox.on_publish(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=user.id,
-        auto_approved=False,
-        version=item.version,
-    )
-
-    return agent
+    review = await submit_for_review(db, "agent", agent, version, user.id)
+    return agent, review.number
 
 
 @router.post("/agents", response_model=BulkResult)
@@ -175,8 +165,10 @@ async def bulk_create_agents(
             # turns into a wholly failed batch. Rolling back to the savepoint
             # clears that state and lets the remaining items proceed.
             async with db.begin_nested():
-                agent = await _create_single_agent(item, current_user, db)
-            results.append(BulkResultItem(name=item.name, status="created", agent_id=agent.id))
+                agent, review_number = await _create_single_agent(item, current_user, db)
+            results.append(
+                BulkResultItem(name=item.name, status="created", agent_id=agent.id, review_number=review_number)
+            )
             created += 1
         except Exception as exc:
             optic.warning("bulk create failed for agent '{}': error_type={}", item.name, type(exc).__name__)

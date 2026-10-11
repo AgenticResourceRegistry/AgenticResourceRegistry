@@ -53,7 +53,7 @@ def _db():
         flush=AsyncMock(),
         refresh=AsyncMock(),
         execute=AsyncMock(),
-        scalar=AsyncMock(),
+        scalar=AsyncMock(return_value=None),
         commit=AsyncMock(),
         rollback=AsyncMock(),
     )
@@ -246,12 +246,17 @@ class TestSubmitSkill:
         target = _target(team_id=TEAM_ID, visibility="team")
         resolve_target = AsyncMock(return_value=target)
         identity_exists = AsyncMock(return_value=False)
-        publish = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
+
+        async def review_created(*_args, **_kwargs):
+            events.append("review")
+            return SimpleNamespace(number=42)
+
+        publish = AsyncMock(side_effect=review_created)
         commit = AsyncMock(side_effect=lambda *args, **kwargs: events.append("commit"))
         monkeypatch.setattr(skill, "datetime", FrozenDateTime)
         monkeypatch.setattr(skill, "resolve_publish_target", resolve_target)
         monkeypatch.setattr(skill, "identity_exists", identity_exists)
-        monkeypatch.setattr(skill.inbox, "on_publish", publish)
+        monkeypatch.setattr(skill, "submit_for_review", publish)
         monkeypatch.setattr(skill, "commit_or_name_conflict", commit)
         content = '---\nname: Frontmatter Name\ndescription: Frontmatter description\ncommand: "/review"\n---\nBody\n'
         request = _submit_request(
@@ -360,13 +365,15 @@ class TestSubmitSkill:
             "forked_from": None,
             "fork_count": 0,
             "warnings": [],
+            "review_number": 42,
+            "review_url": "/review/42",
         }
         assert events == [
             "add:SkillListing",
             "flush",
             "add:SkillVersion",
             "flush",
-            "inbox",
+            "review",
             "commit",
             "refresh",
         ]
@@ -378,14 +385,7 @@ class TestSubmitSkill:
             visibility="team",
         )
         identity_exists.assert_awaited_once_with(db, SkillListing, "platform", "review-skill")
-        publish.assert_awaited_once_with(
-            db,
-            listing,
-            subject_type="skill",
-            actor_id=USER_ID,
-            auto_approved=False,
-            version="1.0.0",
-        )
+        publish.assert_awaited_once_with(db, "skill", listing, version, USER_ID, message=None)
         commit.assert_awaited_once_with(db, "skill")
 
     @pytest.mark.asyncio
@@ -406,7 +406,7 @@ class TestSubmitSkill:
         monkeypatch.setattr(skill, "validate_skill_md", validate)
         monkeypatch.setattr(skill, "resolve_publish_target", AsyncMock(return_value=_target()))
         monkeypatch.setattr(skill, "identity_exists", AsyncMock(return_value=False))
-        monkeypatch.setattr(skill.inbox, "on_publish", AsyncMock(return_value=1))
+        monkeypatch.setattr(skill, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
         monkeypatch.setattr(skill, "commit_or_name_conflict", AsyncMock())
         request = _submit_request(
             name="",
@@ -522,11 +522,11 @@ class TestSubmitSkill:
         db.flush.side_effect = lambda: _prepare_new_rows(db)
         monkeypatch.setattr(skill, "resolve_publish_target", AsyncMock(return_value=_target()))
         monkeypatch.setattr(skill, "identity_exists", AsyncMock(return_value=False))
-        monkeypatch.setattr(skill.inbox, "on_publish", AsyncMock(side_effect=RuntimeError("inbox unavailable")))
+        monkeypatch.setattr(skill, "submit_for_review", AsyncMock(side_effect=RuntimeError("review unavailable")))
         commit = AsyncMock()
         monkeypatch.setattr(skill, "commit_or_name_conflict", commit)
 
-        with pytest.raises(RuntimeError, match="inbox unavailable"):
+        with pytest.raises(RuntimeError, match="review unavailable"):
             await skill.submit_skill(_submit_request(), db, _user())
 
         assert db.add.call_count == 2
@@ -1228,7 +1228,11 @@ class TestDraftCreationAndUpdates:
         [
             ("missing", ListingStatus.draft, "Listing not found"),
             ("nonowner", ListingStatus.draft, "Not the listing owner"),
-            ("approved", ListingStatus.approved, "Only draft, rejected, or pending listings can be edited"),
+            (
+                "approved",
+                ListingStatus.approved,
+                "Only draft, rejected, pending, or changes-requested listings can be edited",
+            ),
             ("noversion", ListingStatus.draft, "Listing has no version to update"),
         ],
     )
@@ -1409,8 +1413,7 @@ class TestEditingLocks:
 
 class TestSubmitDraftAndLifecycle:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("auto_approved", [False, True])
-    async def test_submit_draft_validates_content_notifies_and_sets_review_state(self, monkeypatch, auto_approved):
+    async def test_submit_draft_validates_content_opens_review_and_stays_pending(self, monkeypatch):
         db = _db()
         listing = _listing(
             status=ListingStatus.rejected,
@@ -1422,35 +1425,28 @@ class TestSubmitDraftAndLifecycle:
         _mock_skill_lock(monkeypatch, listing)
         monkeypatch.setattr(skill, "datetime", FrozenDateTime)
         monkeypatch.setattr(skill, "resolve_listing", AsyncMock(return_value=listing))
-        decide = AsyncMock(return_value=auto_approved)
-        publish = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
+
+        async def open_review(_db, _type, subject, version, _actor, **_kwargs):
+            subject.status = ListingStatus.pending
+            version.status = ListingStatus.pending
+            events.append("review")
+            return SimpleNamespace(number=42)
+
+        publish = AsyncMock(side_effect=open_review)
         commit = AsyncMock(side_effect=lambda *args: events.append("commit"))
-        monkeypatch.setattr(skill, "publish_auto_approves_for_entity", decide)
-        monkeypatch.setattr(skill.inbox, "on_publish", publish)
+        monkeypatch.setattr(skill, "submit_for_review", publish)
         monkeypatch.setattr(skill, "commit_or_name_conflict", commit)
         db.refresh.side_effect = lambda row, **kwargs: events.append("auth" if kwargs else "refresh")
 
-        response = await skill.submit_skill_draft("alice/review-skill", db, _user())
+        response = await skill.submit_skill_draft("alice/review-skill", db=db, current_user=_user())
 
-        expected_status = ListingStatus.approved if auto_approved else ListingStatus.pending
-        assert listing.status == expected_status
+        assert listing.status == ListingStatus.pending
         assert listing.latest_version.slash_command == "submit-review"
-        if auto_approved:
-            assert listing.latest_version.reviewed_by == USER_ID
-            assert listing.latest_version.reviewed_at == NOW
-        else:
-            assert listing.latest_version.reviewed_by is None
-        assert response.status == expected_status
-        assert events == ["auth", "inbox", "commit", "refresh"]
-        decide.assert_awaited_once_with(listing, _user(), db)
-        publish.assert_awaited_once_with(
-            db,
-            listing,
-            subject_type="skill",
-            actor_id=USER_ID,
-            auto_approved=auto_approved,
-            version="1.2.3",
-        )
+        assert listing.latest_version.reviewed_by is None
+        assert response.status == ListingStatus.pending
+        assert response.review_number == 42
+        assert events == ["auth", "review", "commit", "refresh"]
+        publish.assert_awaited_once_with(db, "skill", listing, listing.latest_version, USER_ID, message=None)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1458,7 +1454,7 @@ class TestSubmitDraftAndLifecycle:
         [
             ("missing", ListingStatus.draft, "Listing not found", 404),
             ("nonowner", ListingStatus.draft, "Not the listing owner", 403),
-            ("pending", ListingStatus.pending, "Listing is not a draft", 400),
+            ("archived", ListingStatus.archived, "Listing is not a draft", 400),
             ("noversion", ListingStatus.draft, "Listing has no version", 400),
             ("nodescription", ListingStatus.draft, "Description is required before submitting", 400),
         ],
@@ -1479,11 +1475,11 @@ class TestSubmitDraftAndLifecycle:
         )
         publish = AsyncMock()
         commit = AsyncMock()
-        monkeypatch.setattr(skill.inbox, "on_publish", publish)
+        monkeypatch.setattr(skill, "submit_for_review", publish)
         monkeypatch.setattr(skill, "commit_or_name_conflict", commit)
 
         with pytest.raises(HTTPException) as exc:
-            await skill.submit_skill_draft(str(LISTING_ID), db, _user())
+            await skill.submit_skill_draft(str(LISTING_ID), db=db, current_user=_user())
 
         _http_error(exc, code, detail)
         publish.assert_not_awaited()
@@ -1499,15 +1495,15 @@ class TestSubmitDraftAndLifecycle:
         )
         _mock_skill_lock(monkeypatch, listing)
         monkeypatch.setattr(skill, "resolve_listing", AsyncMock(return_value=listing))
-        decide = AsyncMock()
-        monkeypatch.setattr(skill, "publish_auto_approves_for_entity", decide)
+        submit = AsyncMock()
+        monkeypatch.setattr(skill, "submit_for_review", submit)
 
         with pytest.raises(HTTPException) as exc:
-            await skill.submit_skill_draft(str(LISTING_ID), db, _user())
+            await skill.submit_skill_draft(str(LISTING_ID), db=db, current_user=_user())
 
         _http_error(exc, 422, "Malformed SKILL.md frontmatter")
         assert listing.status == ListingStatus.rejected
-        decide.assert_not_awaited()
+        submit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_archive_and_unarchive_delegate_exact_boundaries(self, monkeypatch):
@@ -1588,4 +1584,5 @@ class TestRouteContracts:
             "changelog": None,
             "supported_harnesses": ["pi"],
             "extra": {"task_type": "code-review", "slash_command": "/review-v2"},
+            "message": None,
         }

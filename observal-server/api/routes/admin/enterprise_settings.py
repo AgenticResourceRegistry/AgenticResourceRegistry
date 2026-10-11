@@ -36,6 +36,11 @@ from ._router import router
 from .helpers import _validate_branding_app_name, _validate_branding_logo
 
 
+def _require_dedicated_review_policy_route(key: str) -> None:
+    if key == "review.policy" or key.startswith("review.policy.team."):
+        raise HTTPException(status_code=409, detail="Use the dedicated review-policy endpoint")
+
+
 def _require_usage_ping_super_admin(key: str, current_user: User) -> None:
     if key.startswith("usage_ping.") and current_user.role != UserRole.super_admin:
         raise HTTPException(status_code=403, detail="Usage reporting can only be changed by a super administrator")
@@ -206,6 +211,7 @@ async def get_setting(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.debug("admin setting get")
+    _require_dedicated_review_policy_route(key)
     if key in ds.FILE_ONLY_KEYS:
         raise HTTPException(status_code=404, detail="Setting not found")
     externally_managed = ds.is_externally_managed(key)
@@ -234,6 +240,7 @@ async def upsert_setting(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.trace("key={}", key)
+    _require_dedicated_review_policy_route(key)
     _require_usage_ping_super_admin(key, current_user)
     if key in ds.FILE_ONLY_KEYS:
         raise HTTPException(status_code=409, detail="Setting can only be managed through dedicated files")
@@ -333,6 +340,7 @@ async def delete_setting(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.trace("key={}", key)
+    _require_dedicated_review_policy_route(key)
     _require_usage_ping_super_admin(key, current_user)
     if ds.is_externally_managed(key):
         raise HTTPException(status_code=409, detail="Setting is externally managed by a secret file")

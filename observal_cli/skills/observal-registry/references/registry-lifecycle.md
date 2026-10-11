@@ -72,7 +72,7 @@ observal registry version publish sandbox NAMESPACE/SLUG --version 1.1.0 --descr
 observal registry version list mcp NAMESPACE/SLUG --output json
 ```
 
-Report review status separately from version creation.
+Version publication accepts `--message 'Why this revision changes'`. The response contains `review_number` and `review_url`; open it with `observal review show N`, inspect threads and the gate, then report review status separately from version creation.
 
 ## Skill folder version management
 

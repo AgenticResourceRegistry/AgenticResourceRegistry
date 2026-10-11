@@ -217,7 +217,7 @@ def test_parse_frontmatter_valid_invalid_and_missing_yaml(monkeypatch):
 
 
 def test_submit_existing_draft(monkeypatch):
-    post = Mock(return_value={"id": "skill-1"})
+    post = Mock(return_value={"id": "skill-1", "review_number": 42, "review_url": "/review/42"})
     resolve = Mock(return_value="resolved-draft")
     monkeypatch.setattr(skill.client, "post", post)
     monkeypatch.setattr(skill.client, "resolve_registry_reference", resolve)
@@ -227,6 +227,22 @@ def test_submit_existing_draft(monkeypatch):
     assert "Draft submitted for review" in submitted.output
     resolve.assert_called_once_with("skill", "alice/draft")
     post.assert_called_once_with("/api/v1/skills/resolved-draft/submit")
+    assert "Review #42: /review/42" in submitted.output
+    post.reset_mock()
+    resubmitted = runner.invoke(
+        app,
+        [
+            "registry",
+            "skill",
+            "submit",
+            "--submit",
+            "alice/draft",
+            "--message",
+            "Clarified & fixed",
+        ],
+    )
+    assert resubmitted.exit_code == 0, resubmitted.output
+    post.assert_called_once_with("/api/v1/skills/resolved-draft/submit?message=Clarified%20%26%20fixed")
 
 
 def test_submit_rejects_draft_and_existing_draft_together(monkeypatch):

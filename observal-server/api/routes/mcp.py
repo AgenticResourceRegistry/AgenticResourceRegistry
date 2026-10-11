@@ -46,10 +46,10 @@ from schemas.mcp import (
 )
 from services.config_generator import generate_config
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
-from services.inbox import sources as inbox
 from services.mcp_validator import analyze_repo, run_validation
 from services.registry_namespace import identity_exists
-from services.teamspace import publish_auto_approves_for_entity, resolve_publish_target
+from services.review.cutover import lock_review_for_edit, submit_for_review
+from services.teamspace import resolve_publish_target
 
 router = APIRouter(prefix="/api/v1/mcps", tags=["mcp"])
 
@@ -190,24 +190,15 @@ async def submit_mcp(
         setup_instructions=req.setup_instructions,
         changelog=req.changelog,
         source_url=req.git_url,
-        status=ListingStatus.approved if target.auto_approve else ListingStatus.pending,
+        status=ListingStatus.pending,
         released_by=current_user.id,
         released_at=datetime.now(UTC),
-        reviewed_by=current_user.id if target.auto_approve else None,
-        reviewed_at=datetime.now(UTC) if target.auto_approve else None,
     )
     db.add(version)
     await db.flush()
 
     listing.latest_version_id = version.id
-    await inbox.on_publish(
-        db,
-        listing,
-        subject_type="mcp",
-        actor_id=current_user.id,
-        auto_approved=target.auto_approve,
-        version=version.version,
-    )
+    review = await submit_for_review(db, "mcp", listing, version, current_user.id, message=req.message)
     await commit_or_name_conflict(db, "listing")
     await db.refresh(listing)
 
@@ -218,7 +209,8 @@ async def submit_mcp(
         # Only run background validation if we have a git URL to clone
         background_tasks.add_task(_run_validation_background, str(listing.id))
     # Direct config submissions (no git_url) skip validation - config is user-provided
-    return await component_response(listing, "mcp", current_user, db)
+    response = await component_response(listing, "mcp", current_user, db)
+    return response.model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 @router.get("", response_model=list[McpListingSummary])
@@ -478,13 +470,20 @@ async def update_mcp_draft(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    if listing.status not in (ListingStatus.draft, ListingStatus.rejected, ListingStatus.pending):
-        raise HTTPException(status_code=400, detail="Only draft, rejected, or pending listings can be edited")
-    _reject_visibility_edits(listing, req)
-
     ver = listing.latest_version
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version to update")
+    await lock_review_for_edit(db, "mcp", ver)
+    if listing.status not in (
+        ListingStatus.draft,
+        ListingStatus.rejected,
+        ListingStatus.pending,
+        ListingStatus.changes_requested,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Only draft, rejected, pending, or changes-requested listings can be edited"
+        )
+    _reject_visibility_edits(listing, req)
 
     for field in (
         "version",
@@ -545,7 +544,12 @@ async def start_edit_mcp(
     ver = listing.latest_version
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version")
-    if ver.status not in (ListingStatus.pending, ListingStatus.draft, ListingStatus.rejected):
+    if ver.status not in (
+        ListingStatus.pending,
+        ListingStatus.draft,
+        ListingStatus.rejected,
+        ListingStatus.changes_requested,
+    ):
         raise HTTPException(status_code=400, detail=f"Cannot edit: listing is '{ver.status.value}'")
     # Re-fetch with row-level lock to prevent TOCTOU race
     ver = (await db.execute(select(McpVersion).where(McpVersion.id == ver.id).with_for_update())).scalar_one()
@@ -577,6 +581,7 @@ async def cancel_edit_mcp(
 @router.post("/{listing_id}/submit", response_model=McpListingResponse)
 async def submit_mcp_draft(
     listing_id: str,
+    message: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
@@ -586,7 +591,12 @@ async def submit_mcp_draft(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    if listing.status not in (ListingStatus.draft, ListingStatus.rejected):
+    if listing.status not in (
+        ListingStatus.draft,
+        ListingStatus.rejected,
+        ListingStatus.pending,
+        ListingStatus.changes_requested,
+    ):
         raise HTTPException(status_code=400, detail="Listing is not a draft")
 
     if not listing.description:
@@ -594,24 +604,11 @@ async def submit_mcp_draft(
     if not listing.git_url and not listing.command and not listing.url:
         raise HTTPException(status_code=400, detail="At least one of git_url, command, or url is required")
 
-    auto_approved = await publish_auto_approves_for_entity(listing, current_user, db)
-    if auto_approved:
-        listing.status = ListingStatus.approved
-        listing.latest_version.reviewed_by = current_user.id
-        listing.latest_version.reviewed_at = datetime.now(UTC)
-    else:
-        listing.status = ListingStatus.pending
-    await inbox.on_publish(
-        db,
-        listing,
-        subject_type="mcp",
-        actor_id=current_user.id,
-        auto_approved=auto_approved,
-        version=getattr(listing.latest_version, "version", None),
-    )
+    review = await submit_for_review(db, "mcp", listing, listing.latest_version, current_user.id, message=message)
     await commit_or_name_conflict(db, "listing")
     await db.refresh(listing)
-    return await component_response(listing, "mcp", current_user, db)
+    response = await component_response(listing, "mcp", current_user, db)
+    return response.model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 @router.patch("/{listing_id}/archive")

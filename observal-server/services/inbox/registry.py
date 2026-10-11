@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """One declaration per inbox kind.
@@ -87,14 +88,20 @@ def _registry_url(subject: Subject) -> str | None:
 
 
 def _review_url(subject: Subject) -> str:
-    """Reviewers act in the queue, not on the public listing page.
+    """Fallback destination for older review notices without a review number."""
+    return "/review"
 
-    The tab is named explicitly. The review page opens on "agents" by default,
-    so a link that omitted it dropped a reviewer on a tab that does not contain
-    the component they were sent to look at.
-    """
-    tab = "agents" if subject.type == "agent" else "components"
-    return f"/review?tab={tab}"
+
+def review_action_url(kind: InboxKind, context: dict[str, Any]) -> str | None:
+    """Route numbered review events directly to their scoped conversation."""
+    number = context.get("review_number")
+    if (
+        isinstance(number, int)
+        and number > 0
+        and (kind.value.startswith("review_") or kind == InboxKind.change_requested)
+    ):
+        return f"/review/{number}"
+    return None
 
 
 def _no_command(subject: Subject, ctx: dict[str, Any]) -> str | None:
@@ -104,8 +111,7 @@ def _no_command(subject: Subject, ctx: dict[str, Any]) -> str | None:
 def _review_show_command(subject: Subject, ctx: dict[str, Any]) -> str | None:
     if subject.id is None:
         return None
-    suffix = " --agent" if subject.type == "agent" else ""
-    return f"observal admin review show {subject.id}{suffix}"
+    return f"observal review show {subject.id}"
 
 
 # An upgrade target is a namespace/slug pair or a UUID; a harness is a registry key.
@@ -182,36 +188,59 @@ SPECS: dict[InboxKind, KindSpec] = {
         kind=InboxKind.review_requested,
         action_required=True,
         title=lambda s, c: f"Review requested: {_versioned(s)}",
-        dedupe=lambda s, c: f"review_requested:{s.type}:{s.id}:v{s.version or '-'}",
+        dedupe=lambda s, c: (
+            f"review_requested:{s.type}:{s.id}:v{s.version or '-'}"
+            + (f":r{c['revision']}:{c.get('request_id', '-')}" if c.get("review_number") else "")
+        ),
         url=_review_url,
         command=_review_show_command,
     ),
     InboxKind.review_approved: KindSpec(
         kind=InboxKind.review_approved,
         action_required=False,
-        title=lambda s, c: f"Approved: {_versioned(s)}",
+        title=lambda s, c: f"{'Published' if c.get('review_event') == 'published' else 'Approved'}: {_versioned(s)}",
         dedupe=lambda s, c: f"review_approved:{s.type}:{s.id}:v{s.version or '-'}",
         recheck_visibility=False,
     ),
     InboxKind.review_rejected: KindSpec(
         kind=InboxKind.review_rejected,
         action_required=True,
-        title=lambda s, c: f"Changes needed: {_versioned(s)}",
+        title=lambda s, c: (
+            f"{'Superseded' if c.get('review_event') == 'superseded' else 'Changes needed'}: {_versioned(s)}"
+        ),
         dedupe=lambda s, c: f"review_rejected:{s.type}:{s.id}:v{s.version or '-'}",
         recheck_visibility=False,
     ),
     InboxKind.review_comment: KindSpec(
         kind=InboxKind.review_comment,
-        # RESERVED - waits on review conversations; no comment model exists yet.
-        reserved=True,
         action_required=False,
         title=lambda s, c: f"New comment on {_label(s)}",
         dedupe=lambda s, c: f"review_comment:{s.type}:{s.id}:{c.get('comment_id', '-')}",
     ),
+    InboxKind.review_approval: KindSpec(
+        kind=InboxKind.review_approval,
+        action_required=False,
+        title=lambda s, c: f"Approval recorded: {_versioned(s)}",
+        dedupe=lambda s, c: f"review_approval:{s.type}:{s.id}:{c.get('submission_id', '-')}",
+        recheck_visibility=False,
+    ),
+    InboxKind.review_dismissed: KindSpec(
+        kind=InboxKind.review_dismissed,
+        action_required=False,
+        title=lambda s, c: f"Review dismissed: {_versioned(s)}",
+        dedupe=lambda s, c: f"review_dismissed:{s.type}:{s.id}:{c.get('submission_id', '-')}",
+        recheck_visibility=False,
+    ),
+    InboxKind.review_ready: KindSpec(
+        kind=InboxKind.review_ready,
+        action_required=True,
+        title=lambda s, c: f"Ready to publish: {_versioned(s)}",
+        dedupe=lambda s, c: f"review_ready:{s.type}:{s.id}:v{s.version or '-'}:r{c.get('revision', '-')}",
+        url=_review_url,
+        command=_review_show_command,
+    ),
     InboxKind.change_requested: KindSpec(
         kind=InboxKind.change_requested,
-        # RESERVED - waits on review conversations; distinct from review_rejected.
-        reserved=True,
         action_required=True,
         title=lambda s, c: f"Changes requested on {_label(s)}",
         dedupe=lambda s, c: f"change_requested:{s.type}:{s.id}:{c.get('request_id', '-')}",

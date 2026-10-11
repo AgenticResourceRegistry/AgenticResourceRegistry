@@ -46,6 +46,7 @@ import { tagColorClasses } from "@/lib/tag-colors";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ReviewForm } from "@/components/registry/review-form";
+import { ActiveReviewBanner } from "@/components/review/active-review-banner";
 import { VersionDropdown } from "@/components/registry/version-dropdown";
 import { ComponentEditForm } from "@/components/registry/component-edit-form";
 import { SubmitComponentDialog } from "@/components/registry/submit-component-dialog";
@@ -411,6 +412,7 @@ export default function ComponentDetailPage({
           <ErrorState message="Component not found" />
         ) : (
           <div className="animate-in space-y-6">
+            <ActiveReviewBanner subjectId={item.id} enabled={canEdit || isAdmin} />
             {item.status === "archived" && (
               <ArchivedComponentBanner item={item} type={singularType} canRestore={canEdit} />
             )}

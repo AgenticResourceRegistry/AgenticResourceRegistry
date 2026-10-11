@@ -14,6 +14,7 @@ from schemas.skill_resources import SkillFolderSnapshot, SkillRevision
 
 
 class VersionPublishRequest(BaseModel):
+    message: str | None = None
     version: str
     description: str
     changelog: str | None = None

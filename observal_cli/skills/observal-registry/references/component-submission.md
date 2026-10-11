@@ -115,7 +115,7 @@ Submission commands support draft workflows where documented. Use local help for
 
 ```bash
 observal registry skill submit --skill-md ./SKILL.md --delivery-mode registry_direct --name my-skill --description 'What it does' --task-type general --draft --output json
-observal registry skill submit --submit NAMESPACE/SLUG --output json
+observal registry skill submit --submit NAMESPACE/SLUG --message 'Address reviewer feedback' --output json
 ```
 
-After any submit, report whether the item is draft, pending, approved, rejected, or archived. Never collapse pending into published.
+After submitting, use the returned `review_number` / `review_url` (or the Review #N link in human output) to open `observal review show N` and address threads. MCP, hook, prompt, sandbox, skill and agent draft resubmissions accept `--message` for the revision note. Report draft, pending, changes requested, approved, rejected, or archived accurately; a pending review is not a publication.

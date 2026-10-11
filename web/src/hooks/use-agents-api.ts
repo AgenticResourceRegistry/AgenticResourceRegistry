@@ -16,6 +16,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { reviewToast } from "@/lib/review-toast";
 import {
   dashboard,
   registry,
@@ -222,10 +223,10 @@ export function useSubmitDraft() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => registry.submitDraft(id),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      qc.invalidateQueries({ queryKey: ["review"] });
-      toast.success("Agent submitted for review");
+      qc.invalidateQueries({ queryKey: ["pr-reviews"] });
+      reviewToast("Agent submitted for review", result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to submit draft");
@@ -240,10 +241,10 @@ export function useCreateAgentVersion() {
   return useMutation({
     mutationFn: (vars: { agentId: string; body: unknown }) =>
       registry.createVersion(vars.agentId, vars.body),
-    onSuccess: (_data, vars) => {
+    onSuccess: (result, vars) => {
       qc.invalidateQueries({ queryKey: ["agent-versions", vars.agentId] });
       qc.invalidateQueries({ queryKey: ["registry", "agents", vars.agentId] });
-      toast.success("New version released successfully");
+      reviewToast("New version submitted for review", result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to release version");
@@ -267,7 +268,7 @@ export function useBulkCreateAgents() {
     mutationFn: bulk.createAgents,
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success(`Created ${data.created} agents`);
+      reviewToast(`Submitted ${data.created} agents for review`, data.results.find(item => item.review_number) ?? {});
     },
     onError: (err: Error) => {
       toast.error(err.message || "Bulk create failed");

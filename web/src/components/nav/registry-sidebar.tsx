@@ -88,7 +88,7 @@ const registryNav: NavItem[] = [
 ];
 
 const reviewNav: NavItem[] = [
-	{ title: "Review", href: "/review", icon: ShieldCheck, minRole: "reviewer" },
+	{ title: "Review", href: "/review", icon: ShieldCheck, minRole: "user" },
 ];
 
 const userNav: NavItem[] = [

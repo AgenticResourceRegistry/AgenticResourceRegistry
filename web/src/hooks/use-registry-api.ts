@@ -18,6 +18,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { SkillFolderDraftRequest, SkillResource, SkillSuccessorRequest } from "@/lib/types";
+import { reviewToast } from "@/lib/review-toast";
 import {
   registry,
   type RegistryType,
@@ -88,10 +89,11 @@ export function useComponentSubmit(type: RegistryType) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: unknown) => isSkillFolderDraft(type, body) ? await registry.folderDraft(body) : await registry.submit(type, body),
-    onSuccess: (_data, body) => {
+    onSuccess: (result, body) => {
       qc.invalidateQueries({ queryKey: ["registry", type] });
-      qc.invalidateQueries({ queryKey: ["review"] });
-      toast.success(isSkillFolderDraft(type, body) ? "Folder draft saved; submit after delivery is enabled" : "Submitted for review");
+      qc.invalidateQueries({ queryKey: ["pr-reviews"] });
+      if (isSkillFolderDraft(type, body)) toast.success("Folder draft saved; submit after delivery is enabled");
+      else reviewToast("Submitted for review", result as { review_number?: number | null });
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to submit");
@@ -132,14 +134,32 @@ export function useComponentSubmitDraft(type: RegistryType) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => registry.submitDraft(id, type),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["registry", type] });
-      qc.invalidateQueries({ queryKey: ["review"] });
-      toast.success("Submitted for review");
+      qc.invalidateQueries({ queryKey: ["pr-reviews"] });
+      reviewToast("Submitted for review", result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to submit");
     },
+  });
+}
+
+export function useComponentReviewRevision(type: RegistryType) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, body, message }: { id: string; body: Record<string, unknown>; message?: string }) => {
+      await registry.updateDraft(id, body, type);
+      return registry.submitDraft(id, type, message);
+    },
+    onSuccess: (result, variables) => {
+      qc.invalidateQueries({ queryKey: ["registry", type] });
+      qc.invalidateQueries({ queryKey: ["component-versions", type, variables.id] });
+      qc.invalidateQueries({ queryKey: ["pr-reviews"] });
+      qc.invalidateQueries({ queryKey: ["pr-review", "subject", variables.id] });
+      reviewToast("Revision submitted for review", result);
+    },
+    onError: (err: Error) => toast.error(err.message || "Could not submit revision; your draft may have been saved"),
   });
 }
 
@@ -228,10 +248,10 @@ export function usePublishComponentVersion() {
   return useMutation({
     mutationFn: ({ type, listingId, body }: { type: RegistryType; listingId: string; body: unknown }) =>
       registry.publishComponentVersion(type, listingId, body),
-    onSuccess: (_data, variables) => {
+    onSuccess: (result, variables) => {
       qc.invalidateQueries({ queryKey: ["component-versions", variables.type, variables.listingId] });
       qc.invalidateQueries({ queryKey: ["registry", variables.type, variables.listingId] });
-      toast.success("Version published successfully");
+      reviewToast("Version submitted for review", result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to publish version");

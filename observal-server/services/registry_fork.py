@@ -394,7 +394,6 @@ async def fork_component(
             is_private=target.visibility == "team",
             submitted_by=current_user.id,
             co_authors=[],
-            bundle_id=None,
             unique_agents=0,
             is_recommended=False,
             forked_from_id=source.id,

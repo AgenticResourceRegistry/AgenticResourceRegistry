@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.routes import co_authors, registry, skill_files
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership, TeamRole
 from models.user import User
@@ -43,7 +42,7 @@ async def test_tracked_visibility_and_manifest_lock_order(monkeypatch, writer_fi
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
             owner = await ds.user(db)

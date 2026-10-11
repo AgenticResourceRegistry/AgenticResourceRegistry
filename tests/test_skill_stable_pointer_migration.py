@@ -17,7 +17,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.mcp import ListingStatus
 from tests import discovery_support as ds
 
@@ -59,7 +58,7 @@ async def test_real_postgres_repairs_only_highest_cleared_stable_release():
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
         maker = async_sessionmaker(engine, expire_on_commit=False)
         async with maker() as db:
             author = await ds.user(db)

@@ -37,7 +37,6 @@ from models.skill import SkillListing, SkillVersion
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
 from services import dynamic_settings as _ds
-from services.inbox import sources as inbox
 from services.registry_namespace import identity_exists
 from services.skill_identity import rebind_skill_identity, snapshot_skill_identity
 from services.teamspace import review_publication_to_public, skill_transition_needs_rollout_gate, team_membership
@@ -337,17 +336,6 @@ async def update_registry_visibility(
     returned_to_review = await review_publication_to_public(listing, current_user, db, was_private=was_private)
     if identity_snapshot is not None:
         rebind_skill_identity(listing, identity_snapshot)
-    if returned_to_review and item_type != "skill":
-        # Skill transitions send one notice per marked pending version from the
-        # locked transition helper, rather than only for the listing pointer.
-        await inbox.on_review_requested(
-            db,
-            listing,
-            subject_type=item_type,
-            actor_id=current_user.id,
-            version=getattr(listing.latest_version, "version", None),
-        )
-
     request.state.audit_action = "registry.visibility.update"
     request.state.audit_resource_type = item_type
     request.state.audit_resource_id = str(listing.id)

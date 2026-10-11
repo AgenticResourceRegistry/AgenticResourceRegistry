@@ -15,12 +15,12 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from api.deps import get_current_user, get_db
-from api.routes import co_authors, registry, review, skill, skill_files
+from api.routes import co_authors, registry, skill, skill_files
 from models.mcp import ListingStatus
+from models.review import Review, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership, TeamRole
-from models.user import User, UserRole
-from schemas.component_version import VersionReviewRequest
+from models.user import User
 from schemas.skill import SkillFolderDraftRequest
 from schemas.skill_resources import SkillVersionRevisionRequest
 from services.skill_revisions import skill_content_revision
@@ -37,7 +37,6 @@ async def test_tracked_folder_visibility_rebinds_all_revisions_and_reversal_cann
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=0))
     monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", AsyncMock(return_value=0))
     try:
         async with maker() as db:
@@ -207,7 +206,6 @@ async def test_all_version_rebind_preserves_draft_base_and_private_review_proven
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=0))
     monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", AsyncMock(return_value=0))
     try:
         async with maker() as db:
@@ -281,66 +279,10 @@ async def test_all_version_rebind_preserves_draft_base_and_private_review_proven
 
 
 @pytest.mark.asyncio
-async def test_transferred_public_release_needs_fresh_global_exact_decision(monkeypatch):
-    engine = ds.make_engine()
-    maker = await ds.create_schema(engine)
-    monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=0))
-    monkeypatch.setattr("api.routes.component_versions.inbox.on_review_decided", AsyncMock(return_value=0))
-    try:
-        async with maker() as db:
-            owner = await ds.user(db)
-            successor = await ds.user(db)
-            reviewer = await ds.user(db, role=UserRole.reviewer)
-            listing = await ds.skill(db, owner, content=_MD)
-            release = await db.get(SkillVersion, listing.latest_version_id)
-            release.content_revision = skill_content_revision(listing, release)
-            previous = release.content_revision
-            listing_id, version_id, reviewer_id = listing.id, release.id, reviewer.id
-            await db.commit()
-            await co_authors.transfer_ownership(
-                "skills", str(listing_id), co_authors.TransferOwnershipRequest(username=successor.username), db, owner
-            )
-        async with maker() as db:
-            reviewer = await db.get(User, reviewer_id)
-            detail = await review.get_skill_version_review(str(listing_id), version_id, Response(), db, reviewer)
-            assert detail["revision"] != previous
-            with pytest.raises(HTTPException) as stale:
-                await review.decide_skill_version(
-                    str(listing_id),
-                    version_id,
-                    VersionReviewRequest(action="approve", observed_revision=previous),
-                    db,
-                    reviewer,
-                )
-            assert stale.value.status_code == 409
-            await db.rollback()
-        async with maker() as db:
-            reviewer = await db.get(User, reviewer_id)
-            decision = await review.decide_skill_version(
-                str(listing_id),
-                version_id,
-                VersionReviewRequest(action="approve", observed_revision=detail["revision"]),
-                db,
-                reviewer,
-            )
-            assert decision["new_status"] == "approved"
-        async with maker() as db:
-            version = await db.get(SkillVersion, version_id)
-            assert version.status == ListingStatus.approved
-            assert not version.requires_global_review
-            assert version.pre_public_status is None
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
 async def test_team_owned_tracked_release_transfer_reviews_final_public_identity(monkeypatch):
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-    requested = AsyncMock(return_value=0)
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", requested)
     try:
         async with maker() as db:
             owner = await ds.user(db)
@@ -366,7 +308,8 @@ async def test_team_owned_tracked_release_transfer_reviews_final_public_identity
             assert (version.status, version.pre_public_status) == (ListingStatus.pending, "approved")
             assert version.requires_global_review
             assert version.content_revision == skill_content_revision(listing, version)
-            assert requested.await_args.kwargs["global_only"] is True
+            review = (await db.execute(select(Review).where(Review.version_id == version_id))).scalar_one()
+            assert review.state == ReviewState.open and not review.is_private
     finally:
         await engine.dispose()
 
@@ -452,7 +395,6 @@ async def test_transfer_refuses_unresolved_old_team_approval_provenance(monkeypa
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=0))
     monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", AsyncMock(return_value=0))
     try:
         async with maker() as db:

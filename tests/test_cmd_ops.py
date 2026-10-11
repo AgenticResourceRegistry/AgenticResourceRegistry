@@ -91,164 +91,6 @@ def raises(error: BaseException):
     return fail
 
 
-def test_review_list_filters_caches_and_renders_rows(cli, monkeypatch):
-    calls = []
-    reviews = [
-        {
-            "id": "component-123456789",
-            "type": "mcp",
-            "name": "search",
-            "version": "1.2.3",
-            "submitted_by": "alice",
-            "created_at": "created",
-        },
-        {
-            "id": "agent-987654321",
-            "listing_type": "agent",
-            "name": "builder",
-            "submitted_at": "submitted",
-        },
-    ]
-
-    def fake_get(path, params=None):
-        calls.append((path, params))
-        return reviews
-
-    monkeypatch.setattr(ops.client, "get", fake_get)
-
-    ops.review_list("mcp", "components", "table")
-
-    assert calls == [("/api/v1/review", {"type": "mcp", "tab": "components"})]
-    assert cli.saved == [(reviews, "review")]
-    table = cli.console.renderables[0]
-    assert table.title == "Pending Reviews (2)"
-    assert table.columns[1]._cells == ["mcp", "agent"]
-    assert table.columns[2]._cells == ["search", "builder"]
-    assert table.columns[5]._cells == ["relative:created", "relative:submitted"]
-    assert table.columns[6]._cells == ["component-12", "agent-987654"]
-
-
-def test_review_list_supports_json_and_empty_results(cli, monkeypatch):
-    responses = iter([[{"id": "one"}], []])
-    calls = []
-
-    def fake_get(path, params=None):
-        calls.append((path, params))
-        return next(responses)
-
-    monkeypatch.setattr(ops.client, "get", fake_get)
-
-    ops.review_list(None, None, "json")
-    ops.review_list(None, None, "table")
-
-    assert calls == [("/api/v1/review", None), ("/api/v1/review", None)]
-    assert cli.json == [[{"id": "one"}]]
-    assert cli.saved == [([{"id": "one"}], "review"), ([], "review")]
-    assert "No pending reviews" in cli.text()
-
-
-def test_review_show_resolves_and_renders_validation_details(cli, monkeypatch):
-    item = {
-        "id": "review-id",
-        "name": "filesystem",
-        "type": "mcp",
-        "status": "rejected",
-        "version": "2.0",
-        "owner": "team",
-        "submitted_by": "alice",
-        "created_at": "created",
-        "git_url": "https://example.test/repo",
-        "description": "",
-        "rejection_reason": "unsafe",
-        "mcp_validated": False,
-        "validation_results": [
-            {"stage": "clone", "passed": True},
-            {"stage": "scan", "passed": False},
-        ],
-    }
-    calls = []
-    monkeypatch.setattr(ops.config, "resolve_alias", lambda value, expected_type=None: f"resolved-{value}")
-    monkeypatch.setattr(ops.client, "get", lambda path: calls.append(path) or item)
-
-    ops.review_show("1", "table")
-
-    assert calls == ["/api/v1/review/resolved-1"]
-    output = render(cli.console.renderables[0])
-    assert "filesystem" in output
-    assert "Rejection Reason" in output
-    assert "Not validated" in output
-    assert "clone" in output and "pass" in output
-    assert "scan" in output and "fail" in output
-
-
-def test_review_show_supports_json(cli, monkeypatch):
-    item = {"id": "review-id"}
-    monkeypatch.setattr(ops.client, "get", lambda path: item)
-
-    ops.review_show("review-id", "json")
-
-    assert cli.json == [item]
-    assert cli.console.renderables == []
-
-
-@pytest.mark.parametrize(
-    ("agent", "bundle", "path", "result", "message"),
-    [
-        (False, False, "/api/v1/review/item/approve", {"name": "component"}, "Approved: component"),
-        (True, False, "/api/v1/review/agents/item/approve", {}, "Approved: item"),
-        (
-            False,
-            True,
-            "/api/v1/review/bundles/item/approve",
-            {"name": "bundle", "approved_count": 3},
-            "Bundle approved: bundle (3 components)",
-        ),
-    ],
-)
-def test_review_approve_selects_the_expected_endpoint(cli, monkeypatch, agent, bundle, path, result, message):
-    calls = []
-    monkeypatch.setattr(ops.client, "get", lambda path: {"type": "mcp"})  # not a skill: listing endpoint applies
-    monkeypatch.setattr(ops.client, "post", lambda actual: calls.append(actual) or result)
-
-    ops.review_approve("item", agent, bundle)
-
-    assert calls == [path]
-    assert message in cli.text()
-
-
-def test_review_reject_rejects_blank_reasons(cli):
-    with pytest.raises(typer.Exit) as exc_info:
-        ops.review_reject("item", "   ", False, False)
-
-    assert exc_info.value.exit_code == 7
-    assert "1 to 5,000 characters" in cli.text()
-
-
-@pytest.mark.parametrize(
-    ("agent", "bundle", "path", "result", "message"),
-    [
-        (False, False, "/api/v1/review/item/reject", {"name": "component"}, "Rejected: component"),
-        (True, False, "/api/v1/review/agents/item/reject", {}, "Rejected: item"),
-        (
-            False,
-            True,
-            "/api/v1/review/bundles/item/reject",
-            {"name": "bundle", "rejected_count": 2},
-            "Bundle rejected: bundle (2 components)",
-        ),
-    ],
-)
-def test_review_reject_posts_the_reason(cli, monkeypatch, agent, bundle, path, result, message):
-    calls = []
-    monkeypatch.setattr(ops.client, "get", lambda path: {"type": "mcp"})  # not a skill: listing endpoint applies
-    monkeypatch.setattr(ops.client, "post", lambda actual, body: calls.append((actual, body)) or result)
-
-    ops.review_reject("item", "policy violation", agent, bundle)
-
-    assert calls == [(path, {"reason": "policy violation"})]
-    assert message in cli.text()
-
-
 def test_telemetry_status_reports_server_and_outbox_state(cli, monkeypatch):
     from observal_cli import telemetry_buffer
 
@@ -1679,7 +1521,7 @@ def test_every_admin_workflow_has_output_contract():
                 yield name, child
 
     rows = list(leaves(command))
-    assert len(rows) == 25
+    assert len(rows) == 21
     assert all(any(parameter.name == "output" for parameter in leaf.params) for _name, leaf in rows)
 
 
@@ -1750,7 +1592,6 @@ def test_admin_mutations_return_json_without_human_output(cli, monkeypatch):
     ops.admin_trace_privacy_set(True, "json")
     ops.admin_cache_clear("json")
     ops.admin_set_role("alice@example.test", "admin", "json")
-    ops.review_approve("review-id", False, False, "json")
 
     assert cli.json == [
         {"key": "secret", "value": "<redacted>", "is_sensitive": True},
@@ -1759,7 +1600,6 @@ def test_admin_mutations_return_json_without_human_output(cli, monkeypatch):
         {"trace_privacy": True},
         {"cleared": 2},
         {"id": "user-id", "email": "alice@example.test", "role": "admin"},
-        {"id": "review-id", "name": "component", "status": "approved"},
     ]
     assert "never-echo" not in cli.text()
     assert cli.lines == []
@@ -1823,8 +1663,6 @@ def test_admin_audit_json_export_stdout_and_atomic_file(cli, monkeypatch, tmp_pa
             "json",
         ],
         ["admin", "create-user", "a@example.test", "Alice", "--role", "unknown", "--output", "json"],
-        ["admin", "review", "approve", "item", "--agent", "--bundle", "--output", "json"],
-        ["admin", "review", "list", "--type", "unknown", "--output", "json"],
         ["admin", "saml-config-set", "--output", "json"],
         ["admin", "audit-log", "--source", "unknown", "--output", "json"],
     ],
@@ -1875,144 +1713,3 @@ def _folder_review_api(monkeypatch, version, *, base_files=None, detail=None):
         lambda path, body=None: calls.posts.append((path, body)) or {"version": "1.1.0", "new_status": "x"},
     )
     return calls
-
-
-def test_folder_skill_approval_is_bound_to_the_observed_revision(cli, monkeypatch):
-    calls = _folder_review_api(monkeypatch, _folder_version())
-
-    ops.review_approve("pdf-kit", False, False, "table", None, "r" * 64, False, False)
-
-    assert calls.posts == [
-        (
-            "/api/v1/review/skills/listing-1/versions/ver-2/decision",
-            {"action": "approve", "observed_revision": "r" * 64},
-        )
-    ]
-    assert "/api/v1/skills/listing-1/versions/ver-1/manifest" in calls.gets  # reviewer sees what changed
-    assert "Approved: pdf-kit" in cli.text()
-
-
-def test_folder_skill_approval_refuses_to_rubber_stamp_without_revision_or_yes(cli, monkeypatch):
-    calls = _folder_review_api(monkeypatch, _folder_version())
-    seen, real_fail = [], ops.fail
-    monkeypatch.setattr(ops, "fail", lambda *args, **kwargs: seen.append(kwargs) or real_fail(*args, **kwargs))
-
-    with pytest.raises(typer.Exit) as exc_info:
-        ops.review_approve("pdf-kit", False, False, "table", None, None, False, False)
-
-    assert exc_info.value.exit_code == 7
-    assert "--revision " + "r" * 64 in seen[0]["remediation"]  # tells the reviewer exactly how to proceed
-    assert calls.posts == []
-
-
-def test_folder_skill_yes_accepts_the_listed_files(cli, monkeypatch):
-    calls = _folder_review_api(monkeypatch, _folder_version())
-
-    ops.review_approve("pdf-kit", False, False, "table", None, None, True, False)
-
-    assert calls.posts[0][1] == {"action": "approve", "observed_revision": "r" * 64}
-
-
-def test_folder_skill_refuses_a_stale_revision_before_posting(cli, monkeypatch):
-    calls = _folder_review_api(monkeypatch, _folder_version())
-
-    with pytest.raises(typer.Exit):
-        ops.review_approve("pdf-kit", False, False, "table", None, "z" * 64, False, False)
-
-    assert "changed" in cli.text() and calls.posts == []
-
-
-def test_git_to_folder_conversion_needs_explicit_acknowledgement(cli, monkeypatch):
-    version = _folder_version(base_delivery_mode="git_fetch", base_git_url="https://git.example/x", base_git_ref="main")
-    calls = _folder_review_api(monkeypatch, version)
-
-    with pytest.raises(typer.Exit) as exc_info:
-        ops.review_approve("pdf-kit", False, False, "table", None, "r" * 64, False, False)
-    assert exc_info.value.exit_code == 7 and calls.posts == []
-
-    ops.review_approve("pdf-kit", False, False, "table", None, "r" * 64, False, True)
-    assert calls.posts[0][1] == {"action": "approve", "observed_revision": "r" * 64, "git_base_acknowledged": True}
-    assert not any(path.endswith("/manifest") for path in calls.gets)  # no stored Git files to compare
-
-
-def test_folder_skill_rejection_sends_reason_and_revision(cli, monkeypatch):
-    calls = _folder_review_api(monkeypatch, _folder_version())
-
-    ops.review_reject("pdf-kit", "unsafe script", False, False, "table", None)
-
-    assert calls.posts == [
-        (
-            "/api/v1/review/skills/listing-1/versions/ver-2/decision",
-            {"action": "reject", "observed_revision": "r" * 64, "reason": "unsafe script"},
-        )
-    ]
-
-
-def test_explicit_version_id_reviews_that_version_without_listing_lookup(cli, monkeypatch):
-    calls = _folder_review_api(monkeypatch, _folder_version())
-
-    ops.review_approve("pdf-kit", False, False, "table", "ver-2", "r" * 64, False, False)
-
-    assert calls.gets[0] == "/api/v1/review/skills/pdf-kit/versions/ver-2"
-    assert calls.posts[0][0] == "/api/v1/review/skills/pdf-kit/versions/ver-2/decision"
-
-
-def test_legacy_skill_without_a_pending_version_keeps_the_listing_endpoint(cli, monkeypatch):
-    calls = _folder_review_api(
-        monkeypatch, _folder_version(), detail={"type": "skill", "id": "listing-1", "name": "git-skill"}
-    )
-    monkeypatch.setattr(ops.client, "post", lambda path, body=None: calls.posts.append(path) or {"name": "git-skill"})
-
-    ops.review_approve("git-skill", False, False)
-
-    assert calls.posts == ["/api/v1/review/git-skill/approve"]  # no version row to bind a revision to
-
-
-def test_resubmitted_git_skill_is_reviewed_by_revision_even_without_files(cli, monkeypatch):
-    # The server refuses the listing endpoint once review_epoch > 0, so a file-less Git version still needs this.
-    version = {"name": "git-skill", "version_id": "ver-3", "revision": "r" * 64, "files": []}
-    calls = _folder_review_api(monkeypatch, version)
-
-    ops.review_approve("git-skill", False, False)  # no --revision/--yes: nothing to inspect, so no gate
-
-    assert calls.posts == [
-        (
-            "/api/v1/review/skills/listing-1/versions/ver-2/decision",
-            {"action": "approve", "observed_revision": "r" * 64},
-        )
-    ]
-    assert not any(path.endswith("/manifest") for path in calls.gets)
-    ops.review_reject("git-skill", "still broken", False, False, "table", "ver-3")
-    assert calls.posts[-1][0].endswith("/versions/ver-3/decision") and calls.posts[-1][1]["action"] == "reject"
-
-
-def test_review_show_lists_folder_revision_and_files(cli, monkeypatch):
-    _folder_review_api(
-        monkeypatch,
-        _folder_version(),
-        detail={"type": "skill", "id": "listing-1", "name": "pdf-kit", "status": "pending", "version_id": "ver-2"},
-    )
-
-    ops.review_show("pdf-kit", "json")
-
-    shown = cli.json[0]
-    assert shown["revision"] == "r" * 64 and [f["path"] for f in shown["files"]] == ["SKILL.md", "scripts/run.sh"]
-
-
-def test_folder_changes_reports_every_kind_of_difference():
-    base = [
-        {"path": "a", "sha256": "1", "mode": "0644"},
-        {"path": "b", "sha256": "2", "mode": "0644"},
-        {"path": "c", "sha256": "3", "mode": "0644"},
-    ]
-    new = [
-        {"path": "a", "sha256": "9", "mode": "0644"},
-        {"path": "c", "sha256": "3", "mode": "0755"},
-        {"path": "d", "sha256": "4", "mode": "0644"},
-    ]
-    assert ops._folder_changes(new, base) == {
-        "added": ["d"],
-        "removed": ["b"],
-        "modified": ["a"],
-        "mode_changed": ["c"],
-    }

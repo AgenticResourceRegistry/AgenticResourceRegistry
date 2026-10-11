@@ -128,6 +128,14 @@ class AgentCreateRequest(BaseModel):
 
     _validate_name = field_validator("name")(make_name_validator("name"))
 
+    @field_validator("components")
+    @classmethod
+    def _reject_duplicate_components(cls, v: list[ComponentRef]) -> list[ComponentRef]:
+        keys = [(c.component_type, c.component_id) for c in v]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Each component may be listed only once")
+        return v
+
     @field_validator("version")
     @classmethod
     def _validate_version(cls, v: str) -> str:
@@ -210,6 +218,8 @@ class ComponentLinkResponse(BaseModel):
 
 
 class AgentResponse(BaseModel):
+    review_number: int | None = None
+    review_url: str | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -339,6 +349,7 @@ class AgentInstallResponse(BaseModel):
 
 
 class AgentVersionCreateRequest(BaseModel):
+    message: str | None = None
     version: str
     description: str = ""
     prompt: str = ""

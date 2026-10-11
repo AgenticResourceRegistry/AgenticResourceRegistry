@@ -103,6 +103,7 @@ class SkillVersionRevisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     observed_revision: SkillRevision
+    message: str | None = Field(default=None, max_length=5000)
 
 
 class SkillDraftRebaseRequest(BaseModel):

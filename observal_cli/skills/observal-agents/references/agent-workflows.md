@@ -114,7 +114,7 @@ observal agent build --dir ./my-agent --output json
 observal agent publish --dir ./my-agent --output json
 ```
 
-Use `--draft` to save without review and `--submit AGENT_UUID` to submit an existing draft. Team publication uses an explicit target:
+Use `--draft` to save without review and `--submit AGENT_UUID --message 'Address feedback'` to submit an existing draft or push a revision. The response contains `review_number` and `review_url`: open `observal review show N`, read `observal review threads N`, address feedback and resubmit; approval and publication are separate decisions. Team publication uses an explicit target:
 
 ```bash
 observal agent publish --dir ./my-agent --team platform-tools --visibility team --output json
@@ -123,7 +123,7 @@ observal agent publish --dir ./my-agent --team platform-tools --visibility publi
 
 ## Update in place
 
-Use only when the user wants to change the current listing without a reviewed version, and only while its latest version is a draft, pending, or rejected. An approved version is immutable; the update fails with a conflict that points to `agent release`. Use [Release a version](#release-a-version) instead.
+Use only when the user wants to change the current listing without a reviewed version, and only while its latest version is a draft, pending, changes requested, or rejected. An approved version is immutable; the update fails with a conflict that points to `agent release`. Use [Release a version](#release-a-version) instead.
 
 1. Read current state with `agent show`.
 2. Preserve required fields in `observal-agent.yaml`, including `model_config_json: {}` and `external_mcps: []`.
@@ -133,6 +133,7 @@ Use only when the user wants to change the current listing without a reviewed ve
 ```bash
 observal agent build --dir ./my-agent --output json
 observal agent publish --update --dir ./my-agent --output json
+observal agent publish --submit NAMESPACE/AGENT_SLUG --message 'Clarified agent behavior' --output json
 observal agent show NAMESPACE/AGENT_SLUG --output json
 ```
 
@@ -145,7 +146,7 @@ observal agent release NAMESPACE/AGENT_SLUG --bump patch --dir ./my-agent --outp
 observal agent versions NAMESPACE/AGENT_SLUG --output json
 ```
 
-The YAML must include all required fields. Report the returned review status and version. A submitted release is not approved until review says so.
+The YAML must include all required fields. Report the returned review status and version. A submitted release is not approved until review says so. `agent release` accepts `--message` for a review revision note; check the returned `review_number` and gate before claiming publication.
 
 A release pins every component to an exact version and keeps the pins of the current release, so components do not change unless asked. To see what is behind, and to move components forward:
 

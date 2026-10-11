@@ -105,6 +105,9 @@ const KIND_META: Record<InboxKind, { icon: LucideIcon; tone: InsightTone }> = {
 	review_approved: { icon: CircleCheck, tone: "success" },
 	review_rejected: { icon: CircleX, tone: "destructive" },
 	review_comment: { icon: MessageSquare, tone: "info" },
+	review_approval: { icon: CircleCheck, tone: "success" },
+	review_dismissed: { icon: CircleX, tone: "warning" },
+	review_ready: { icon: GitPullRequest, tone: "primary" },
 	change_requested: { icon: FileDiff, tone: "warning" },
 	team_join_requested: { icon: UserPlus, tone: "primary" },
 	team_join_decided: { icon: Users, tone: "info" },
@@ -432,8 +435,8 @@ function InboxRail({
 				{presentKinds.map((k) => (
 					<RailRow
 						key={k}
-						icon={KIND_META[k].icon}
-						label={INBOX_KIND_LABELS[k]}
+						icon={KIND_META[k]?.icon ?? Megaphone}
+						label={INBOX_KIND_LABELS[k] ?? k.replaceAll("_", " ")}
 						count={byKind[k]}
 						active={kind === k}
 						onClick={() => onKind(kind === k ? undefined : k)}

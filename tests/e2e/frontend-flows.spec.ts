@@ -5,60 +5,59 @@ import { test, expect } from "@playwright/test";
 import { loginToWebUI, API_BASE, getAccessToken } from "./helpers";
 
 /**
- * Frontend E2E tests — browser-level tests that drive the Next.js UI
+ * Frontend E2E tests — browser-level tests that drive the registry UI
  * and verify real user flows.
  */
 test.describe("Frontend Flows", () => {
-  // Use an existing approved agent for search/detail tests
   let agentName: string;
 
   test.beforeAll(async () => {
     const token = await getAccessToken();
-    // Find an existing approved agent
-    const res = await fetch(`${API_BASE}/api/v1/agents`, {
+    const list = await fetch(`${API_BASE}/api/v1/agents`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const agents = await res.json();
-    if (Array.isArray(agents) && agents.length > 0) {
+    if (!list.ok) throw new Error(`List agents failed (${list.status}): ${await list.text()}`);
+    const agents = await list.json();
+    if (agents.length > 0) {
       agentName = agents[0].name;
-    } else {
-      // Create and approve one for fresh instances
-      agentName = `e2e-agent-${Date.now()}`;
-      const createRes = await fetch(`${API_BASE}/api/v1/agents`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: agentName,
-          description: "Agent for frontend e2e tests",
-          version: "1.0.0",
-          owner: "admin",
-          model_name: "claude-sonnet-4-20250514",
-          prompt: "You are a test agent.",
-          goal_template: { description: "e2e test", sections: [{ name: "default" }] },
-        }),
-      });
-      const created = await createRes.json();
-      const agentId = created.id;
-      if (agentId) {
-        await fetch(`${API_BASE}/api/v1/review/agents/${agentId}/approve`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ notes: "e2e auto-approve" }),
-        });
-        // Wait for approval to propagate
-        await new Promise((r) => setTimeout(r, 1000));
-      } else {
-        // Creation failed (e.g. schema mismatch) — fall back to any existing agent
-        const fallback = await fetch(`${API_BASE}/api/v1/agents`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const all = await fallback.json();
-        if (Array.isArray(all) && all.length > 0) agentName = all[0].name;
-      }
+      return;
     }
+
+    // Fresh stack: create a review, then explicitly publish its submitted
+    // snapshot. The removed /review/agents/{id}/approve route cannot do this.
+    const login = await fetch(`${API_BASE}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: process.env.DEMO_SUPER_ADMIN_EMAIL ?? "super@demo.example",
+        password: process.env.DEMO_SUPER_ADMIN_PASSWORD ?? "super-changeme",
+      }),
+    });
+    if (!login.ok) throw new Error(`Super admin login failed (${login.status}): ${await login.text()}`);
+    const superToken = (await login.json()).access_token;
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${superToken}` };
+    agentName = `e2e-agent-${Date.now()}`;
+    const create = await fetch(`${API_BASE}/api/v1/agents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: agentName,
+        description: "Agent for frontend e2e tests",
+        version: "1.0.0",
+        owner: "admin",
+        model_name: "claude-sonnet-4-20250514",
+        prompt: "You are a test agent.",
+      }),
+    });
+    if (!create.ok) throw new Error(`Create agent failed (${create.status}): ${await create.text()}`);
+    const { review_number: reviewNumber } = await create.json();
+    expect(reviewNumber).toBeGreaterThan(0);
+    const publish = await fetch(`${API_BASE}/api/v1/reviews/${reviewNumber}/publish`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ override_reason: "Publish a fixture for the frontend E2E flow" }),
+    });
+    if (!publish.ok) throw new Error(`Publish agent failed (${publish.status}): ${await publish.text()}`);
   });
 
   /**

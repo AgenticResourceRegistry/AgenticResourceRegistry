@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.routes._skill_lock import lock_skill_version
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from services.teamspace import review_publication_to_public, skill_transition_needs_rollout_gate
@@ -39,7 +38,7 @@ async def test_publication_serializes_with_skill_review_status(monkeypatch, publ
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
             owner = await ds.user(db)

@@ -3,17 +3,15 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 import { lazy } from "react";
-const ReviewPage = lazy(() => import("@/pages/admin/review"));
+const ReviewPage = lazy(() => import("@/pages/review/queue"));
 
 export type ReviewSearch = {
   tab?: "agents" | "components" | "teamspaces";
 };
 
-export const Route = createFileRoute("/_authed/_admin/review")({
+export const Route = createFileRoute("/_authed/review")({
   component: ReviewPage,
-  // Inbox items deep-link to the tab holding the item they name. Without this
-  // a component review always opened on the agents tab, which does not contain
-  // it, and the link read as broken.
+  // Queue links may select the relevant subject tab.
   validateSearch: (search: Record<string, unknown>): ReviewSearch => ({
     tab:
       search.tab === "components"

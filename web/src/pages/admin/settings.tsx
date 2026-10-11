@@ -5,6 +5,7 @@
 
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { Link } from "@tanstack/react-router";
 import {
 	Settings,
 	Plus,
@@ -723,6 +724,7 @@ export default function SettingsPage() {
 				}
 			/>
 			<div className="page-body w-full mx-auto space-y-5">
+				{getUserRole() === "super_admin" && <Link to="/review-policy" className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"><span className="flex items-center gap-2"><Shield className="size-4" /> Review policy</span><span className="text-xs font-normal text-muted-foreground">Approval counts and publication rules →</span></Link>}
 				{/* Security warnings */}
 				{systemWarnings && systemWarnings.length > 0 && (
 					<section className="animate-in">
