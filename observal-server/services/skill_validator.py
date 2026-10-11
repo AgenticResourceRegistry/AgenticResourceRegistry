@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Lightweight SKILL.md validator.
@@ -13,6 +14,7 @@ Port of vercel-labs/agent-skills parseFrontmatter logic to Python.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import httpx
@@ -20,7 +22,9 @@ import yaml
 from loguru import logger as optic
 from pydantic import BaseModel, Field
 
+import services.dynamic_settings as ds
 from schemas.skill_commands import normalize_slash_command
+from services.ssrf_guard import is_private_url
 
 _FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)", re.DOTALL)
 
@@ -232,8 +236,17 @@ async def validate_skill_md(
     skill_path = _normalize_skill_path(skill_path) or "/"
     raw_url = _build_raw_url(git_url, skill_path, git_ref)
 
+    async def _block_private_hosts(request: httpx.Request) -> None:
+        # Runs for every request, including each redirect hop.
+        if not ds.get_sync_bool("security.allow_internal_git_urls") and await asyncio.to_thread(
+            is_private_url, str(request.url)
+        ):
+            raise SkillValidationError("git_url must not point to a private or internal address")
+
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=15.0, event_hooks={"request": [_block_private_hosts]}
+        ) as client:
             resp = await client.get(raw_url)
 
             # If 404 on a GitHub repo with default skill_path, try auto-discovery
