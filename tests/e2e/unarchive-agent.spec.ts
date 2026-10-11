@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
-import { API_BASE, getAccessToken, loginToWebUI } from "./helpers";
+import { API_BASE, getAccessToken, loginToWebUI, publishSubject } from "./helpers";
 
 let agentId: string;
 let token: string;
@@ -39,14 +39,7 @@ test.describe("Agent unarchive", () => {
       body: "{}",
     });
 
-    await fetch(`${API_BASE}/api/v1/review/agents/${agentId}/approve`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: "{}",
-    });
+    await publishSubject("agent", agentId);
 
     await fetch(`${API_BASE}/api/v1/agents/${agentId}/archive`, {
       method: "PATCH",

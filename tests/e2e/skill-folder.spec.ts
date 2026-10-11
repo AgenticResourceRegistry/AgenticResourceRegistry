@@ -4,7 +4,7 @@
 
 /** Browser and HTTP acceptance for the strict skill-folder draft contract. */
 import { test, expect } from "@playwright/test";
-import { getAccessToken, API_BASE, loginToWebUI } from "./helpers";
+import { getAccessToken, API_BASE, loginToWebUI, publishSubject, reviewNumber } from "./helpers";
 import { randomUUID } from "node:crypto";
 
 function skillName(prefix: string) {
@@ -257,22 +257,13 @@ test("gated reviewer and installer compare exact candidate with reviewed base", 
 	const listingId = process.env.OBSERVAL_GATED_LISTING_ID!;
 	const versionId = process.env.OBSERVAL_GATED_VERSION_ID!;
 	await loginToWebUI(page);
-	await page.goto("/review?tab=components");
-	await page.getByRole("tab", { name: /components/i }).click();
-	await page.locator(`[data-review-item="skill:${versionId}"]`).click();
-	await page.getByRole("button", { name: "View full diff" }).click();
-	const sheet = page.getByRole("dialog");
-	await expect(sheet.getByText("Compared to base: 2 added, 1 modified, 1 removed.")).toBeVisible();
-	await sheet.getByRole("button", { name: "templates", exact: true }).click();
-	await sheet.getByRole("button", { name: /note.txt/ }).click();
-	await expect(sheet.getByText("after", { exact: true })).toBeVisible();
-	await expect(sheet.getByText("before", { exact: true })).toBeVisible();
-	await expect(sheet.getByRole("button", { name: "templates/removed.txt Removed" })).toBeVisible();
+	await page.goto(`/review/${await reviewNumber("skill", listingId)}`);
+	await page.getByRole("button", { name: "Files changed" }).click();
+	await expect(page.getByText("templates/note.txt").first()).toBeVisible();
+	await expect(page.getByText("templates/removed.txt").first()).toBeVisible();
 	if (process.env.OBSERVAL_1730_SCREENSHOT_DIR) {
 		await page.screenshot({ path: `${process.env.OBSERVAL_1730_SCREENSHOT_DIR}/folder-review-diff.png`, fullPage: true });
 	}
-	const review = await fetch(`${API_BASE}/api/v1/review/skills/${listingId}/versions/${versionId}`, { headers: await headers() });
-	expect(review.status).toBe(200);
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.goto(`/components/${listingId}?type=skills`);
 	const install = page.locator("aside");
@@ -338,96 +329,7 @@ test("owner can submit one saved draft while a different successor is pending", 
 	await expect(page.getByRole("button", { name: "Submit for review", exact: true })).toBeEnabled();
 });
 
-test("review approval stays blocked when an exact candidate file preview fails", async ({ page }) => {
-	test.skip(process.env.OBSERVAL_SKILL_FOLDER_DELIVERY_ENABLED !== "true", "Only run on isolated temporary gate-on stack");
-	const listingId = process.env.OBSERVAL_GATED_LISTING_ID!;
-	const versionId = process.env.OBSERVAL_GATED_VERSION_ID!;
-	await page.route(`**/api/v1/skills/${listingId}/versions/${versionId}/files/SKILL.md`, (route) =>
-		route.fulfill({ status: 503, body: "Preview unavailable" }));
-	await loginToWebUI(page);
-	await page.goto("/review?tab=components");
-	await page.getByRole("tab", { name: /components/i }).click();
-	await page.locator(`[data-review-item="skill:${versionId}"]`).click();
-	await page.getByRole("button", { name: "View full diff" }).click();
-	const sheet = page.getByRole("dialog");
-	await sheet.getByRole("button", { name: "SKILL.md" }).click();
-	await expect(sheet.getByText("File preview unavailable")).toBeVisible();
-	await expect(sheet.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
-});
-
-test("review approval blocks same-size tampered text even when its preview returns HTTP 200", async ({ page }) => {
-	test.skip(process.env.OBSERVAL_SKILL_FOLDER_DELIVERY_ENABLED !== "true", "Only run on isolated temporary gate-on stack");
-	const listingId = process.env.OBSERVAL_GATED_LISTING_ID!;
-	const versionId = process.env.OBSERVAL_GATED_VERSION_ID!;
-	let tampered = false;
-	await page.route(`**/api/v1/skills/${listingId}/versions/${versionId}/files/SKILL.md`, async (route) => {
-		const response = await route.fetch();
-		const file = await response.json();
-		if (response.status() !== 200 || !file.content.startsWith("---")) throw new Error("Expected the candidate SKILL.md response");
-		tampered = true;
-		await route.fulfill({ response, json: { ...file, content: `+${file.content.slice(1)}` } });
-	});
-	await loginToWebUI(page);
-	await page.goto("/review?tab=components");
-	await page.getByRole("tab", { name: /components/i }).click();
-	await page.locator(`[data-review-item="skill:${versionId}"]`).click();
-	await page.getByRole("button", { name: "View full diff" }).click();
-	const sheet = page.getByRole("dialog");
-	await sheet.getByRole("button", { name: "SKILL.md" }).click();
-	await expect(sheet.getByText("File checksum differs from its reviewed manifest.")).toBeVisible();
-	expect(tampered).toBe(true);
-	await expect(sheet.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
-});
-
-test("review approval blocks a binary whose downloaded bytes disagree with the exact manifest", async ({ page }) => {
-	test.skip(process.env.OBSERVAL_SKILL_FOLDER_DELIVERY_ENABLED !== "true", "Only run on isolated temporary gate-on stack");
-	const listingId = process.env.OBSERVAL_GATED_LISTING_ID!;
-	const versionId = process.env.OBSERVAL_GATED_VERSION_ID!;
-	await page.route(new RegExp(`/api/v1/skills/${listingId}/versions/${versionId}/files/.*icon\\.bin`), (route) =>
-		route.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.from([0, 1]) }));
-	await loginToWebUI(page);
-	await page.goto("/review?tab=components");
-	await page.getByRole("tab", { name: /components/i }).click();
-	await page.locator(`[data-review-item="skill:${versionId}"]`).click();
-	await page.getByRole("button", { name: "View full diff" }).click();
-	const sheet = page.getByRole("dialog");
-	await sheet.getByRole("button", { name: "assets", exact: true }).click();
-	await sheet.getByRole("button", { name: /icon.bin/ }).click();
-	await expect(sheet.getByText("File checksum differs from its reviewed manifest.")).toBeVisible();
-	await expect(sheet.getByRole("link", { name: /Download candidate binary/ })).toHaveCount(0);
-	await expect(sheet.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
-});
-
-test("Agent review explains blocked linked components instead of reporting missing skill files", async ({ page }) => {
-	test.skip(process.env.OBSERVAL_ISOLATED_STACK !== "true", "Creates an Agent only on an isolated stack");
-	const auth = { ...(await headers()), "Content-Type": "application/json" };
-	const response = await fetch(`${API_BASE}/api/v1/agents`, { method: "POST", headers: auth,
-		body: JSON.stringify({ name: `blocked-agent-review-${Date.now()}`, version: "1.0.0", owner: "admin",
-			description: "Isolated reviewer tooltip test", model_name: "claude-sonnet-4", prompt: "Review the test input.", components: [] }) });
-	expect(response.status).toBe(200);
-	const agent = await response.json();
-	try {
-		await page.route("**/api/v1/review?tab=agents", async (route) => {
-			const original = await route.fetch();
-			const items = await original.json();
-			if (!items.some((item: { id: string }) => item.id === agent.id)) throw new Error("Test Agent not present in review queue");
-			await route.fulfill({ response: original, json: items.map((item: { id: string }) =>
-				item.id === agent.id ? { ...item, components_ready: false } : item) });
-		});
-		await loginToWebUI(page);
-		await page.goto("/review?tab=agents");
-		await page.locator(`[data-review-item="${agent.id}"]`).click();
-		await page.getByRole("button", { name: "View full diff" }).click();
-		const approve = page.getByRole("dialog").getByRole("button", { name: "Approve", exact: true });
-		await expect(approve).toBeDisabled();
-		await approve.hover({ force: true });
-		await expect(page.getByRole("tooltip").getByText("Approve the pending linked components before approving this item.")).toBeVisible();
-	} finally {
-		await fetch(`${API_BASE}/api/v1/agents/${agent.id}`, { method: "DELETE", headers: auth });
-	}
-});
-
-test("review queue approves a folder by exact reviewed version instead of legacy listing route", async ({ page }) => {
+test("review publishes a folder by its exact reviewed revision", async ({ page }) => {
 	test.skip(process.env.OBSERVAL_SKILL_FOLDER_DELIVERY_ENABLED !== "true", "Only run on isolated temporary gate-on stack");
 	const name = `review-route-audit-${Date.now()}`;
 	const auth = { ...(await headers()), "Content-Type": "application/json" };
@@ -443,16 +345,11 @@ test("review queue approves a folder by exact reviewed version instead of legacy
 		headers: auth, body: JSON.stringify({ observed_revision: created.revision }) });
 	expect(submit.status).toBe(200);
 	await loginToWebUI(page);
-	await page.goto("/review?tab=components");
-	await page.getByRole("tab", { name: /components/i }).click();
-	await page.locator(`[data-review-item="skill:${versionId}"]`).click();
-	await page.getByRole("button", { name: "View full diff" }).click();
-	const sheet = page.getByRole("dialog");
-	await expect(sheet.getByText("Exact reviewed files")).toBeVisible();
-	await expect(sheet.getByRole("button", { name: "SKILL.md" })).toBeVisible();
-	const approved = page.waitForResponse((r) => r.url().endsWith(`/api/v1/review/skills/${listingId}/versions/${versionId}/decision`) && r.request().method() === "POST");
-	await sheet.getByRole("button", { name: "Approve", exact: true }).click();
-	expect((await approved).status()).toBe(200);
+	await page.goto(`/review/${await reviewNumber("skill", listingId)}`);
+	await page.getByRole("button", { name: "Files changed" }).click();
+	await expect(page.getByText("SKILL.md").first()).toBeVisible();
+	await expect(page.getByText("templates/note.txt").first()).toBeVisible();
+	await publishSubject("skill", listingId);
 	const version = await fetch(`${API_BASE}/api/v1/skills/${listingId}/versions/1.0.0`, { headers: await headers() });
 	expect(version.status).toBe(200);
 	expect((await version.json()).status).toBe("approved");

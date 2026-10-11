@@ -20,6 +20,7 @@ test("review queue shows pinned dependencies in the Observal shell", async ({ pa
     localStorage.setItem("observal_user_role", "reviewer");
   });
   await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0, by_kind: {}, by_subject_type: {} } }));
+  await page.route("**/api/v1/config/public", route => route.fulfill({ json: { experimental_review_checks: true } }));
   await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id, username: "reviewer", name: "Review Tester", role: "reviewer" } }));
   const queueRequests: string[] = [];
   await page.route("**/api/v1/reviews?*", route => { queueRequests.push(route.request().url()); return route.fulfill({ json: {
@@ -64,7 +65,7 @@ test("review queue shows pinned dependencies in the Observal shell", async ({ pa
   await expect.poll(() => queueRequests.some(url => url.includes("q=verify+source"))).toBe(true);
 });
 
-test("review queue distinguishes failures, warnings, skipped, and absent checks", async ({ page }) => {
+for (const checksEnabled of [true, false]) test(`review queue ${checksEnabled ? "distinguishes failures, warnings, skipped, and absent checks" : "hides checks while the experiment is off"}`, async ({ page }) => {
   const cases = [
     { title: "Failed checks", checks: { pass: 2, fail: 1, warn: 1, skipped: 0 }, label: "Checks failing" },
     { title: "Warnings", checks: { pass: 2, fail: 0, warn: 1, skipped: 0 }, label: "Checks have warnings" },
@@ -78,6 +79,7 @@ test("review queue distinguishes failures, warnings, skipped, and absent checks"
     localStorage.setItem("observal_user_role", "reviewer");
   });
   await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
+  await page.route("**/api/v1/config/public", route => route.fulfill({ json: { experimental_review_checks: checksEnabled } }));
   await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id, username: "reviewer", role: "reviewer" } }));
   await page.route("**/api/v1/reviews?*", route => route.fulfill({ json: {
     items: new URL(route.request().url()).searchParams.get("type") === "component" ? []
@@ -85,6 +87,13 @@ test("review queue distinguishes failures, warnings, skipped, and absent checks"
     next_cursor: null,
   } }));
   await page.goto("/review");
+  if (!checksEnabled) {
+    // Experimental feature off: nothing about checks appears in the queue.
+    for (const item of cases) await expect(page.getByRole("link", { name: new RegExp(item.title) })).toBeVisible();
+    await expect(page.getByText(/^Checks /)).toHaveCount(0);
+    await expect(page.getByText("No checks recorded")).toHaveCount(0);
+    return;
+  }
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     for (const item of cases) {
