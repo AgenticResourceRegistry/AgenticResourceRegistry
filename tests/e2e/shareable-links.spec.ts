@@ -186,7 +186,7 @@ test.describe("shareable teamspace links", () => {
     await loginAs(page, owner);
     await page.goto(`/teamspaces/${visibilityReviewTeam.handle}`);
     await expect(page.getByText(/public visibility review pending/i)).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Agents", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Agent Files", exact: true })).toHaveCount(0);
 
     await loginAs(page, globalReviewer);
     await page.goto("/review?tab=teamspaces");
@@ -215,7 +215,7 @@ test.describe("shareable teamspace links", () => {
     await loginAs(page, owner);
     await page.goto(`/teamspaces/${visibilityReviewTeam.handle}`);
     await expect(page.getByText("Public approved", { exact: true })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Agent Files", exact: true })).toBeVisible();
 
     await loginAs(page, outsider);
     await page.goto("/teamspaces");

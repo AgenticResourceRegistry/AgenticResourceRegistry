@@ -406,12 +406,12 @@ export default function ComponentDetailPage({
         title={isLoading ? "Component" : componentName}
         breadcrumbs={[
           { label: "Registry", href: "/" },
-          { label: "Components", href: "/components" },
+          { label: "Agentic Resources", href: `/resources/${type}` },
           { label: isLoading ? "..." : componentName },
         ]}
         actionButtonsLeft={
           <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-muted-foreground" asChild>
-            <Link to="/components">
+            <Link to="/resources/$type" params={{ type }}>
               <ArrowLeft className="h-3.5 w-3.5" />
               <span className="text-xs">Back</span>
             </Link>
@@ -545,7 +545,7 @@ export default function ComponentDetailPage({
                     : existingSuccessorDraft ? "Resume the existing draft, or create a different next version."
                     : "Fork the reviewed folder or import a complete local folder for a Git or historical direct skill."}</p>
                 </div>
-                {existingSuccessorDraft && <Button asChild><Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                {existingSuccessorDraft && <Button asChild><Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                   folderVersionId: existingSuccessorDraft.id, folderVersion: existingSuccessorDraft.version }}>
                   Edit saved draft v{existingSuccessorDraft.version}
                 </Link></Button>}
@@ -556,8 +556,8 @@ export default function ComponentDetailPage({
               <SkillSuccessorDialog open={successorOpen} onOpenChange={setSuccessorOpen} listingId={String(item.id)}
                 onCreated={(manifest, draftVersion) => {
                   setSuccessorOpen(false);
-                  navigate({ to: "/components", search: {
-                    type: "skills", folderListingId: String(item.id), folderVersionId: manifest.version_id,
+                  navigate({ to: "/resources/$type", params: { type: "skills" }, search: {
+                    folderListingId: String(item.id), folderVersionId: manifest.version_id,
                     folderVersion: draftVersion,
                   } });
                 }} />
@@ -715,7 +715,7 @@ export default function ComponentDetailPage({
                           </div>
                           {canEdit && singularType === "skill" && ["draft", "rejected"].includes(v.status) && (
                             <div className="flex flex-wrap items-center gap-3">
-                              <Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                              <Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                                 folderVersionId: v.id, folderVersion: v.version }} className="text-xs underline underline-offset-2">
                                 Edit exact draft
                               </Link>
@@ -761,7 +761,7 @@ export default function ComponentDetailPage({
                         <p className="text-sm text-muted-foreground">The approved release stays available. {existingSuccessorDraft
                           ? "Continue editing your saved successor, or create a different version."
                           : "Create a new folder version to change its files or metadata."}</p>
-                        {existingSuccessorDraft && <Button asChild><Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                        {existingSuccessorDraft && <Button asChild><Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                           folderVersionId: existingSuccessorDraft.id, folderVersion: existingSuccessorDraft.version }}>
                           Edit saved draft v{existingSuccessorDraft.version}
                         </Link></Button>}
@@ -771,7 +771,7 @@ export default function ComponentDetailPage({
                       <div className="rounded-md border border-border bg-card p-5 space-y-3">
                         <h2 className="font-semibold">Edit the exact folder draft</h2>
                         <p className="text-sm text-muted-foreground">This skill has a saved file tree. Open its version-bound editor to update the folder and its metadata together.</p>
-                        <Button asChild><Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                        <Button asChild><Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                           folderVersionId: editableSkillFolderDraft.id, folderVersion: editableSkillFolderDraft.version }}>
                           Edit draft v{editableSkillFolderDraft.version}
                         </Link></Button>
@@ -1059,7 +1059,7 @@ function ComponentArchiveButton({
           <p className="text-sm text-muted-foreground">
             {isArchived
               ? "This makes the component discoverable again and removes archived install warnings."
-              : "Archived components stop appearing in registry lists and insight suggestions. Direct installs and agent pulls still work, but users will see a warning."}
+              : "Archived components stop appearing in registry lists and insight suggestions. Direct installs and Agent File pulls still work, but users will see a warning."}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>

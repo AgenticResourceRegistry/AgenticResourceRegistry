@@ -28,7 +28,6 @@ import { useInboxCounts } from "@/hooks/use-inbox-api";
 import {
 	Home,
 	Search,
-	Bot,
 	Blocks,
 	Hammer,
 	Trophy,
@@ -64,14 +63,20 @@ type NavItem = {
 	icon: typeof Home;
 	requiresAuth?: boolean;
 	minRole?: Role;
+	/** Extra path prefixes (e.g. detail pages) that should also highlight this item. */
+	alsoActive?: string[];
 };
 
 const registryNav: NavItem[] = [
 	{ title: "Home", href: "/", icon: Home },
 	{ title: "Discover", href: "/discover", icon: Search },
-	{ title: "Agents", href: "/agents", icon: Bot },
+	{
+		title: "Agentic Resources",
+		href: "/resources",
+		icon: Blocks,
+		alsoActive: ["/agents", "/components"],
+	},
 	{ title: "Leaderboard", href: "/leaderboard", icon: Trophy },
-	{ title: "Components", href: "/components", icon: Blocks },
 	{
 		title: "Teamspaces",
 		href: "/teamspaces",
@@ -170,7 +175,7 @@ export function RegistrySidebar() {
 		leaderboardEnabled,
 	} = useDeploymentConfig();
 
-	function isActive(href: string) {
+	function isActive({ href, alsoActive = [] }: NavItem) {
 		if (href === "/") return pathname === "/";
 		if (pathname === href) return true;
 		// Only treat as active if no *more-specific* sibling nav item matches.
@@ -181,11 +186,13 @@ export function RegistrySidebar() {
 			...userNav,
 			...adminNav,
 		].map((n) => n.href);
-		const moreSpecific = allHrefs.some(
-			(h) => h !== href && h.startsWith(href + "/") && pathname.startsWith(h),
+		return [href, ...alsoActive].some(
+			(prefix) =>
+				pathname.startsWith(prefix) &&
+				!allHrefs.some(
+					(h) => h !== href && h.startsWith(prefix + "/") && pathname.startsWith(h),
+				),
 		);
-		if (moreSpecific) return false;
-		return pathname.startsWith(href);
 	}
 
 	const visibleRegistryNav = registryNav.filter(
@@ -268,7 +275,7 @@ export function RegistrySidebar() {
 						<SidebarMenu>
 							{visibleRegistryNav.map((item) => (
 								<SidebarMenuItem key={item.href}>
-									<SidebarMenuButton asChild isActive={isActive(item.href)}>
+									<SidebarMenuButton asChild isActive={isActive(item)}>
 										<Link to={item.href}>
 											<item.icon className="h-4 w-4" />
 											<span>{item.title}</span>
@@ -289,7 +296,7 @@ export function RegistrySidebar() {
 							<SidebarMenu>
 								{visibleReviewNav.map((item) => (
 									<SidebarMenuItem key={item.href}>
-										<SidebarMenuButton asChild isActive={isActive(item.href)}>
+										<SidebarMenuButton asChild isActive={isActive(item)}>
 											<Link to={item.href}>
 												<item.icon className="h-4 w-4" />
 												<span>{item.title}</span>
@@ -311,7 +318,7 @@ export function RegistrySidebar() {
 							<SidebarMenu>
 								{visibleUserNav.map((item) => (
 									<SidebarMenuItem key={item.href}>
-										<SidebarMenuButton asChild isActive={isActive(item.href)}>
+										<SidebarMenuButton asChild isActive={isActive(item)}>
 											<Link to={item.href}>
 												<item.icon className="h-4 w-4" />
 												<span>{item.title}</span>
@@ -342,7 +349,7 @@ export function RegistrySidebar() {
 							<SidebarMenu>
 								{visibleAdminNav.map((item) => (
 									<SidebarMenuItem key={item.href}>
-										<SidebarMenuButton asChild isActive={isActive(item.href)}>
+										<SidebarMenuButton asChild isActive={isActive(item)}>
 											<Link to={item.href}>
 												<item.icon className="h-4 w-4" />
 												<span>{item.title}</span>

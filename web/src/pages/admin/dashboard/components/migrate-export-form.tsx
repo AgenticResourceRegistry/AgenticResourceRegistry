@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from "react";
@@ -16,7 +17,7 @@ const EXPORT_SCOPE_OPTIONS = [
 	{
 		value: "postgres" as const,
 		title: "Registry data",
-		description: "Users, agents, components, settings, reviews, and metadata.",
+		description: "Users, Agent Files, components, settings, reviews, and metadata.",
 	},
 	{
 		value: "both" as const,

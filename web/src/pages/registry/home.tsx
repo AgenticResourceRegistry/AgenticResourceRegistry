@@ -137,11 +137,11 @@ export default function RegistryHome() {
     ? myAgentsLoading || sessionsLoading
       ? "Loading your registry activity."
       : `${workInProgress.length} registry item${workInProgress.length === 1 ? "" : "s"} need attention · ${(sessions ?? []).length} recent session${(sessions ?? []).length === 1 ? "" : "s"} captured.`
-    : "Browse and install approved public agents and components without an account. Sign in when you are ready to publish or manage your own work.";
+    : "Browse and install approved public Agent Files and components without an account. Sign in when you are ready to publish or manage your own work.";
 
   function handleSearch() {
     const query = search.trim();
-    if (query) router.navigate({ to: "/agents", search: { search: query } });
+    if (query) router.navigate({ to: "/resources/$type", params: { type: "agents" }, search: { search: query } });
   }
 
   return (
@@ -182,7 +182,7 @@ export default function RegistryHome() {
                 </code>
               </li>
               <li className="min-w-0">
-                <p className="mb-1.5 font-medium text-foreground">2. Find an agent</p>
+                <p className="mb-1.5 font-medium text-foreground">2. Find an Agent File</p>
                 <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-background px-3 py-2 font-mono text-xs text-foreground">
                   observal agent list
                 </code>
@@ -203,7 +203,7 @@ export default function RegistryHome() {
             What are you working on?
           </h2>
           <p className="mt-2 max-w-[600px] text-sm text-muted-foreground">
-            Find an approved agent for the work you need to do.
+            Find an approved Agent File for the work you need to do.
           </p>
 
           <IntentSearch
@@ -218,7 +218,7 @@ export default function RegistryHome() {
             aria-label="Quick actions"
             className="mt-[14px] flex flex-wrap gap-[7px]"
           >
-            <IntentChip href="/agents">Browse agents</IntentChip>
+            <IntentChip href="/resources/agents">Browse Agent Files</IntentChip>
             <IntentChip href="/agents/builder">Build from components</IntentChip>
             {isAuthenticated && (
               <IntentChip href="/traces">Inspect a trace</IntentChip>
@@ -261,14 +261,14 @@ export default function RegistryHome() {
                       description={
                         typeof agent.description === "string"
                           ? agent.description
-                          : "Approved agent"
+                          : "Approved Agent File"
                       }
                       href={registryItemPath(agent, "agents", agent.id)}
                     />
                   ))
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Approved agents will appear here when the registry starts publishing.
+                    Approved Agent Files will appear here when the registry starts publishing.
                   </p>
                 )}
               </Panel>
@@ -282,7 +282,8 @@ export default function RegistryHome() {
             action={
               isAuthenticated ? (
                 <Link
-                  to="/agents"
+                  to="/resources/$type"
+                  params={{ type: "agents" }}
                   className="text-2xs font-medium text-muted-foreground hover:text-foreground"
                 >
                   View all →
@@ -300,23 +301,23 @@ export default function RegistryHome() {
                     ? "Loading your work…"
                     : workInProgress.length > 0
                       ? `${workInProgress.length} item${workInProgress.length === 1 ? "" : "s"} need attention`
-                      : "Your agents are up to date"
-                  : "Browse public agents"
+                      : "Your Agent Files are up to date"
+                  : "Browse public Agent Files"
               }
               description={
                 isAuthenticated
                   ? workInProgress.length > 0
                     ? "Open drafts, pending reviews, and rejected submissions."
-                    : "Review published agents or start a new release."
-                  : "Find an approved agent and pull it into your harness."
+                    : "Review published Agent Files or start a new release."
+                  : "Find an approved Agent File and pull it into your harness."
               }
-              href="/agents"
+              href="/resources/agents"
             />
             {isAuthenticated && (
               <CompactRow
                 icon={<EntityGlyph type="agent" size="sm" labelled={false} />}
-                title="Build an agent"
-                description="Bundle components into a portable agent."
+                title="Build an Agent File"
+                description="Bundle components into a portable Agent File."
                 href="/agents/builder"
               />
             )}
@@ -324,7 +325,7 @@ export default function RegistryHome() {
               icon={<EntityGlyph type="mcp" size="sm" labelled={false} />}
               title="Browse components"
               description="Find approved reusable building blocks."
-              href="/components"
+              href="/resources/mcps"
             />
           </Panel>
 
@@ -333,13 +334,13 @@ export default function RegistryHome() {
           <Panel
             title={
               topAgents?.length
-                ? "Agents gaining adoption"
-                : "Trusted agents"
+                ? "Agent Files gaining adoption"
+                : "Trusted Agent Files"
             }
             subtitle={
               topAgents?.length
-                ? "Frequently installed agents from across the registry"
-                : "Approved agents available to install now."
+                ? "Frequently installed Agent Files from across the registry"
+                : "Approved Agent Files available to install now."
             }
             action={
               leaderboardEnabled ? (
@@ -396,14 +397,14 @@ export default function RegistryHome() {
                   description={
                     typeof agent.description === "string"
                       ? agent.description
-                      : "Approved agent"
+                      : "Approved Agent File"
                   }
                   href={registryItemPath(agent, "agents", agent.id)}
                 />
               ))
             ) : (
               <p className="text-xs text-muted-foreground">
-                Approved agents will appear here when your registry starts
+                Approved Agent Files will appear here when your registry starts
                 publishing.
               </p>
             )}
@@ -412,14 +413,14 @@ export default function RegistryHome() {
 
           {/* Recent execution / More public agents */}
           <Panel
-            title={isAuthenticated ? "Recent execution" : "More public agents"}
-            subtitle={isAuthenticated ? "Your latest captured coding sessions" : "Recently approved agents from the public registry."}
+            title={isAuthenticated ? "Recent execution" : "More public Agent Files"}
+            subtitle={isAuthenticated ? "Your latest captured coding sessions" : "Recently approved Agent Files from the public registry."}
             action={
               <Link
-                to={isAuthenticated ? "/traces" : "/agents"}
+                {...(isAuthenticated ? { to: "/traces" } : { to: "/resources/$type", params: { type: "agents" } })}
                 className="text-2xs font-medium text-muted-foreground hover:text-foreground"
               >
-                {isAuthenticated ? "All traces →" : "All agents →"}
+                {isAuthenticated ? "All traces →" : "All Agent Files →"}
               </Link>
             }
           >
@@ -471,7 +472,7 @@ export default function RegistryHome() {
                   description={
                     typeof agent.description === "string"
                       ? agent.description
-                      : "Approved agent"
+                      : "Approved Agent File"
                   }
                   href={registryItemPath(agent, "agents", agent.id)}
                 />

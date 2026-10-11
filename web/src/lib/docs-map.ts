@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -116,6 +117,7 @@ export const SETTING_DOCS: Record<string, DocRef> = {
 export const SECTION_DOCS: Record<string, DocRef> = {
 	"Authentication": { file: "self-hosting/authentication.md", label: "Authentication Settings" },
 	"Agent Insights": { file: "insights-config.md", label: "Agent Insights Configuration" },
+	"Agent File Insights": { file: "insights-config.md", label: "Agent File Insights Configuration" },
 	"Deployment": { file: "self-hosting/deployment-settings.md", label: "Deployment Settings" },
 	"Security": { file: "self-hosting/trusted-proxies.md", label: "Trusted Proxies & Network Security" },
 	"SSO": { file: "self-hosting/authentication.md", label: "SSO Configuration" },
@@ -126,7 +128,7 @@ export const SECTION_DOCS: Record<string, DocRef> = {
 	"Data Migration": { file: "self-hosting/data-migration.md", label: "Data Migration" },
 	"Appearance": { file: "self-hosting/miscellaneous.md", anchor: "appearance", label: "Appearance" },
 	"Trace Privacy": { file: "self-hosting/miscellaneous.md", anchor: "trace-privacy", label: "Trace Privacy" },
-	"Registered Agents Only": { file: "self-hosting/miscellaneous.md", anchor: "registered-agents-only", label: "Registered Agents Only" },
+	"Registered Agent Files Only": { file: "self-hosting/miscellaneous.md", anchor: "registered-agents-only", label: "Registered Agent Files Only" },
 	"Telemetry Purge": { file: "self-hosting/data-retention.md", anchor: "purge-traces-and-insights", label: "Purge Traces & Insights" },
 	"Observability": { file: "self-hosting/observability-settings.md", label: "Observability Settings" },
 	"Miscellaneous": { file: "self-hosting/miscellaneous.md", label: "Miscellaneous Settings" },

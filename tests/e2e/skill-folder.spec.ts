@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 // SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /** Browser and HTTP acceptance for the strict skill-folder draft contract. */
@@ -64,8 +65,7 @@ test("API preserves executable, empty and binary files in a versioned draft", as
 test("browser creates a complete draft without submitting it for review", async ({ page }) => {
 	const name = skillName("e2e-browser-folder");
 	await loginToWebUI(page);
-	await page.goto("/components");
-	await page.getByRole("button", { name: "Skills", exact: true }).click();
+	await page.goto("/resources/skills");
 	await page.getByRole("button", { name: "Create", exact: true }).click();
 	const dialog = page.getByRole("dialog");
 	await dialog.getByRole("tab", { name: "Upload" }).click();
@@ -151,8 +151,7 @@ test("browser resumes and saves the exact existing folder version", async ({ pag
 	expect(response.status).toBe(200);
 	const draft = await response.json();
 	await loginToWebUI(page);
-	await page.goto("/components?type=skills");
-	await page.getByRole("button", { name: /My submissions/ }).first().click();
+	await page.goto("/resources/skills?view=my");
 	const row = page.locator("section .divide-y > div").filter({ hasText: name });
 	await expect(row).toBeVisible();
 	await row.getByRole("button", { name: "Edit" }).click();
@@ -215,8 +214,7 @@ test("owner submits the selected folder draft for review in the browser", async 
 	expect(response.status).toBe(200);
 	const draft = await response.json();
 	await loginToWebUI(page);
-	await page.goto("/components?type=skills");
-	await page.getByRole("button", { name: /My submissions/ }).first().click();
+	await page.goto("/resources/skills?view=my");
 	const row = page.locator("section .divide-y > div").filter({ hasText: name });
 	await expect(row).toBeVisible();
 	await row.getByRole("button", { name: "Submit", exact: true }).click();

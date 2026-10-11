@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,13 +85,13 @@ export function CommandMenu() {
         <CommandGroup heading="Quick Actions">
           <CommandItem onSelect={() => onSelect("/agents/builder")}>
             <span className="mr-2 text-sm">+</span>
-            New Agent
+            New Agent File
           </CommandItem>
-          <CommandItem onSelect={() => onSelect("/agents?search=")}>
+          <CommandItem onSelect={() => onSelect("/resources/agents")}>
             <span className="mr-2 text-sm">?</span>
-            Search Agents
+            Search Agent Files
           </CommandItem>
-          <CommandItem onSelect={() => onSelect("/components?search=")}>
+          <CommandItem onSelect={() => onSelect("/resources/mcps")}>
             <span className="mr-2 text-sm">?</span>
             Search Components
           </CommandItem>
