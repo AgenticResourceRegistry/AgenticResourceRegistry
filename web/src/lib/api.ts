@@ -1089,6 +1089,8 @@ export type PublicConfig = {
 	self_registration_enabled: boolean;
 	/** Public rollout hint; server install and review endpoints remain authoritative. */
 	skill_folder_delivery_enabled?: boolean;
+	/** Present only while the experimental review-checks feature is on. */
+	experimental_review_checks?: boolean;
 	saml_enabled: boolean;
 	exec_dashboard_available: boolean;
 	enabled_features: string[];

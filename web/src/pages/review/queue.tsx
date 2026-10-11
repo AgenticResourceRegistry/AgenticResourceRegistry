@@ -9,6 +9,7 @@ import { auth, getUserRole, prReviews, teams } from "@/lib/api";
 import type { ReviewSummary } from "@/lib/types";
 import { useAuthGuard } from "@/hooks/use-auth";
 import { useReviewSubscription } from "@/hooks/use-review-api";
+import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { CheckSettingsDialog } from "@/components/review/check-settings";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,7 +37,8 @@ function checkStatusLabel(checks: ReviewSummary["checks"]): string {
 function ReviewRow({ item, nested = false }: { item: ReviewSummary; nested?: boolean }) {
   const approvals = item.gate.approvals;
   const required = item.gate.required;
-  const checksLabel = checkStatusLabel(item.checks);
+  const { experimentalReviewChecks } = useDeploymentConfig();
+  const checksLabel = experimentalReviewChecks ? checkStatusLabel(item.checks) : null;
   return <Link to="/review/$number" params={{ number: String(item.number) }}
     className={`group grid grid-cols-[28px_minmax(0,1fr)] items-start gap-3 border-b border-border px-4 py-3.5 transition-colors last:border-0 hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring sm:grid-cols-[28px_minmax(0,1fr)_auto] ${nested ? "sm:pl-12" : ""}`}>
     <ReviewTypeGlyph type={item.subject_type} />
@@ -56,19 +58,20 @@ function ReviewRow({ item, nested = false }: { item: ReviewSummary; nested?: boo
       {item.depends_on.length > 0 && <p className="text-xs text-muted-foreground">Waits on {item.depends_on.map(n => `#${n}`).join(", ")}</p>}
       {item.state === "approved" && <p className="text-xs font-medium text-success">Gate is green · awaiting publication</p>}
       {item.state === "changes_requested" && <p className="text-xs font-medium text-foreground">Changes requested · waiting for the author</p>}
-      <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:hidden"><span>{approvals}/{required} approvals</span><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1" aria-label={`${item.threads.unresolved} unresolved conversations`}><MessageSquare className="size-3.5" aria-hidden="true" />{item.threads.unresolved}</span><span aria-hidden="true">·</span><span>{checksLabel}</span></p>
+      <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:hidden"><span>{approvals}/{required} approvals</span><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1" aria-label={`${item.threads.unresolved} unresolved conversations`}><MessageSquare className="size-3.5" aria-hidden="true" />{item.threads.unresolved}</span>{checksLabel && <><span aria-hidden="true">·</span><span>{checksLabel}</span></>}</p>
     </div>
     <div className="hidden min-w-36 flex-col items-end gap-1.5 text-xs text-muted-foreground sm:flex">
       <span className="flex items-center gap-2" aria-label={`${approvals} of ${required} approvals`}>
         {required > 0 && required <= 5 && <span className="flex gap-1" aria-hidden="true">{Array.from({ length: required }, (_, index) => <span key={index} className={`h-1.5 w-3.5 rounded-full ${index < approvals ? "bg-success" : "bg-border"}`} />)}</span>}
         {approvals}/{required} approvals
       </span>
-      <span className="flex items-center gap-2"><span className="inline-flex items-center gap-1" aria-label={`${item.threads.unresolved} unresolved conversations`}><MessageSquare className="size-3.5" aria-hidden="true" />{item.threads.unresolved}</span><span aria-hidden="true">·</span><span>{checksLabel}</span></span>
+      <span className="flex items-center gap-2"><span className="inline-flex items-center gap-1" aria-label={`${item.threads.unresolved} unresolved conversations`}><MessageSquare className="size-3.5" aria-hidden="true" />{item.threads.unresolved}</span>{checksLabel && <><span aria-hidden="true">·</span><span>{checksLabel}</span></>}</span>
     </div>
   </Link>;
 }
 
 export default function ReviewQueue() {
+  const { experimentalReviewChecks } = useDeploymentConfig();
   useAuthGuard();
   useReviewSubscription();
   const { tab: tabFromUrl } = useSearch({ from: "/_authed/review" });
@@ -120,7 +123,7 @@ export default function ReviewQueue() {
   const tabs = canReviewTeamspaces ? ["agents", "components", "teamspaces"] as const : ["agents", "components"] as const;
   return <div className="w-full space-y-5 px-4 py-6 sm:px-6">
     <h1 className="sr-only">Review</h1>
-    {["admin", "super_admin"].includes(getUserRole() ?? "") && <div className="flex justify-end"><CheckSettingsDialog /></div>}
+    {experimentalReviewChecks && ["admin", "super_admin"].includes(getUserRole() ?? "") && <div className="flex justify-end"><CheckSettingsDialog /></div>}
     <nav aria-label="Review type" className="flex gap-1 border-b border-border">{tabs.map(name => <button key={name} type="button" onClick={() => { setTab(name); setSelection(0); }} aria-current={tab === name ? "page" : undefined} className={`border-b-2 px-3 py-2.5 text-sm capitalize transition-colors focus-visible:outline-2 focus-visible:outline-ring ${tab === name ? "border-foreground font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{name}</button>)}</nav>
     {tab !== "teamspaces" && <div className="flex flex-wrap items-center gap-2">
       {filters.map(([key, label]) => <button type="button" key={key} onClick={() => { setFilter(key); setSelection(0); }} aria-pressed={filter === key} className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring ${filter === key ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{label}</button>)}

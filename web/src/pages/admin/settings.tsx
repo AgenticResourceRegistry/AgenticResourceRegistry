@@ -20,6 +20,7 @@ import {
 	Shield,
 	HelpCircle,
 	Eye,
+	FlaskConical,
 	Upload,
 	RotateCcw,
 	Palette,
@@ -217,6 +218,7 @@ export default function SettingsPage() {
 		ssoEnabled,
 		samlEnabled,
 		publicRegistryEnabled,
+		experimentalReviewChecks,
 		brandingLogo,
 		brandingAppName,
 		brandingWordmark,
@@ -231,6 +233,7 @@ export default function SettingsPage() {
 	const [tracePrivacyLoading, setTracePrivacyLoading] = useState(true);
 	const [tracePrivacyToggling, setTracePrivacyToggling] = useState(false);
 	const [publicRegistryToggling, setPublicRegistryToggling] = useState(false);
+	const [reviewChecksToggling, setReviewChecksToggling] = useState(false);
 	const [registeredAgentsOnly, setRegisteredAgentsOnly] = useState(false);
 	const [registeredAgentsOnlyLoading, setRegisteredAgentsOnlyLoading] =
 		useState(() => hasMinRole(getUserRole(), "super_admin"));
@@ -355,6 +358,20 @@ export default function SettingsPage() {
 			setTracePrivacyToggling(false);
 		}
 	}, []);
+
+	const handleReviewChecksToggle = useCallback(async (checked: boolean) => {
+		setReviewChecksToggling(true);
+		try {
+			await admin.updateSetting("experimental.review_checks", { value: checked ? "true" : "false" });
+			await queryClient.invalidateQueries({ queryKey: ["config", "public"] });
+			await refetch();
+			toast.success(`Review checks ${checked ? "enabled" : "disabled"}`);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : "Failed to update review checks");
+		} finally {
+			setReviewChecksToggling(false);
+		}
+	}, [queryClient, refetch]);
 
 	const handlePublicRegistryToggle = useCallback(async (checked: boolean) => {
 		setPublicRegistryToggling(true);
@@ -602,7 +619,7 @@ export default function SettingsPage() {
 				}))
 	).filter((e) => !e.key.startsWith("branding."));
 
-	const settingSections = settingsSchema.filter((section) => section.id !== "sso" && section.id !== "usage_ping");
+	const settingSections = settingsSchema.filter((section) => section.id !== "sso" && section.id !== "usage_ping" && section.id !== "experimental");
 	const settingByKey = useMemo(() => {
 		const map = new Map<string, AdminSettingDef>();
 		for (const section of settingSections) {
@@ -1005,6 +1022,31 @@ export default function SettingsPage() {
 									</Button>
 								)}
 							</div>
+						</div>
+					</div>
+				</section>
+
+				{/* Experimental features */}
+				<section className="animate-in">
+					<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
+						<FlaskConical className="h-3.5 w-3.5" />
+						Experimental
+					</h3>
+					<p className="text-xs text-muted-foreground mb-3">Features that are not ready for general use. Off by default, and hidden everywhere while off.</p>
+					<div className="rounded-md border border-border bg-card px-4 py-3">
+						<div className="flex items-center justify-between gap-4">
+							<div className="flex-1">
+								<p className="text-sm font-medium">Review checks</p>
+								<p className="text-xs text-muted-foreground mt-0.5">
+									Automated checks on review revisions, with per-organization and per-teamspace settings. Behavior and APIs may change or be removed.
+								</p>
+							</div>
+							<Switch
+								checked={experimentalReviewChecks}
+								onCheckedChange={handleReviewChecksToggle}
+								disabled={reviewChecksToggling}
+								aria-label="Enable experimental review checks"
+							/>
 						</div>
 					</div>
 				</section>

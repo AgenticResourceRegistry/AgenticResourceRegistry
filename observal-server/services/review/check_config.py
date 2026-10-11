@@ -15,6 +15,14 @@ import services.dynamic_settings as ds
 ORG_KEY = "review.checks"
 
 
+EXPERIMENTAL_KEY = "experimental.review_checks"
+
+
+async def enabled() -> bool:
+    """Automated and external checks are experimental and off by default. While off they do not exist."""
+    return await ds.get_bool(EXPERIMENTAL_KEY, False)
+
+
 def team_key(team_id) -> str:
     return f"review.checks.team.{team_id}"
 

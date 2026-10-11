@@ -14,7 +14,7 @@ from models.review import Review, ReviewReviewerRequest, ReviewSubscription
 from models.user import User
 from schemas.review import PublishRequest, Reason, ReviewerRequest, SubscriptionUpdate
 from services.audit import audit_detail
-from services.review import ci, notifications
+from services.review import check_config, ci, notifications
 from services.review.decisions import _event, _lock_review, _target, close, publish, withdraw
 from services.teamspace import can_review, review_scope
 
@@ -164,6 +164,8 @@ async def rerun_checks(
     user: User = Depends(get_current_user),
 ):
     """Queue the head revision's automated checks again under the current settings."""
+    if not await check_config.enabled():
+        raise HTTPException(404, "Not Found")
     require_open(review)
     await _lock_review(db, review)
     queued = await ci.requeue(db, review, user.id)

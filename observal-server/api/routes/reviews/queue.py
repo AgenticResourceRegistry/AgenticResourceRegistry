@@ -15,6 +15,7 @@ from models.agent_component import AgentComponent
 from models.review import Review, ReviewComment, ReviewReviewerRequest, ReviewState, ReviewSubmission, ReviewThread
 from models.user import User
 from services.agent_lock import LISTING_MODELS, VERSION_MODELS
+from services.review import check_config, ci
 from services.review.decisions import gate
 from services.teamspace import review_scope
 
@@ -95,8 +96,9 @@ async def summary(db, review, user):
     visible_threads = {
         tid: resolved for tid, resolved, state, author in thread_rows if state != "draft" or author == user.id
     }
+    shown = ci.visible(latest.checks, await check_config.enabled())
     checks = {
-        status: sum(c.get("status") == status for c in latest.checks)
+        status: sum(c.get("status") == status for c in shown)
         for status in ("pass", "fail", "warn", "skipped", "queued", "running", "error")
     }
     dependencies = []

@@ -22,6 +22,7 @@ from models.review import (
 from models.user import User
 from schemas.review import ReviewEdit
 from services.registry_fork import provenance_for
+from services.review import check_config, ci
 from services.review.decisions import _own_work, _target, gate
 from services.review.diff import diff_files
 from services.review.policy import policy_for
@@ -183,7 +184,9 @@ async def revision_file(
 @router.get("/{ref}/checks")
 async def checks(review: Review = Depends(get_review), db: AsyncSession = Depends(get_db)):
     revision = await head(db, review)
-    return [{**check, "revision": revision.number} for check in revision.checks]
+    return [
+        {**check, "revision": revision.number} for check in ci.visible(revision.checks, await check_config.enabled())
+    ]
 
 
 @router.get("/{ref}/gate")

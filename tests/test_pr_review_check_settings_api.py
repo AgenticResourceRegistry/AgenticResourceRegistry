@@ -54,8 +54,18 @@ async def test_check_settings_permissions_validation_and_persistence(monkeypatch
     app.dependency_overrides[get_current_user] = lambda: selected[0]
     monkeypatch.setattr("services.dynamic_settings.invalidate", noop)
     monkeypatch.setattr("services.dynamic_settings.get", noop)
+    flag = [False]
+
+    async def experiment():
+        return flag[0]
+
+    monkeypatch.setattr("services.review.check_config.enabled", experiment)
     org, team_url = "/api/v1/admin/review-checks", f"/api/v1/teams/{team_id}/review-checks"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        selected[0] = users["admin"]  # Experimental and off by default: the endpoints do not exist.
+        assert (await client.get(org)).status_code == 404 and (await client.put(org, json={})).status_code == 404
+        assert (await client.get(team_url)).status_code == 404
+        flag[0] = True
         for who in ("stranger", "reviewer"):
             selected[0] = users[who]
             assert (await client.get(org)).status_code == 403 and (await client.put(org, json={})).status_code == 403

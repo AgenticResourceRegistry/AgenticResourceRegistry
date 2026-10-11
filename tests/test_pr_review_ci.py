@@ -173,6 +173,10 @@ def test_rpc_payload_reads_json_and_event_streams():
 # ── queued to finished, and the gate ──
 
 
+async def enabled():
+    return True
+
+
 @pytest.fixture
 async def world(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -180,6 +184,7 @@ async def world(monkeypatch):
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(ci, "_session", factory)
+    monkeypatch.setattr(check_config, "enabled", enabled)
     async with factory() as db:
         yield db, factory
     await engine.dispose()
@@ -284,3 +289,16 @@ async def test_system_changes_after_submission_become_a_new_revision(world, monk
     assert await resubmit_if_changed(db, "prompt", listing, version, "system") is not None
     head = await db.get(ReviewRevision, review.head_revision_id)
     assert head.number == 2 and head.message == "system"
+
+
+@pytest.mark.asyncio
+async def test_automated_checks_do_nothing_and_never_block_while_experiment_is_off(world, monkeypatch):
+    db, _ = world
+    review, _ = await make_prompt_review(db, {"prompt_template": {"enabled": True, "required": True}}, monkeypatch)
+    revision = await db.get(__import__("models").ReviewRevision, review.head_revision_id)
+    assert revision.checks_pending
+    monkeypatch.setattr(check_config, "enabled", AsyncMock(return_value=False))
+    assert await ci.run_pending() == 0  # the worker leaves them alone
+    assert ci.visible(revision.checks, False) == [c for c in revision.checks if c.get("kind") != "automated"]
+    policy = ApprovalPolicy(required_approvals=dict.fromkeys(ApprovalPolicy().required_approvals, 0))
+    assert "required_checks" not in (await gate(db, review, policy=policy)).requirements

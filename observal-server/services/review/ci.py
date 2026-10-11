@@ -58,6 +58,11 @@ def _now() -> str:
 # ── Queueing ────────────────────────────────────────────────────────────
 
 
+def visible(checks: list | None, enabled: bool) -> list:
+    """Automated checks are experimental: while the feature is off they are hidden everywhere and never block."""
+    return [c for c in (checks or []) if enabled or c.get("kind") != "automated"]
+
+
 def queued_entries(subject_type: str, config: dict) -> list[dict]:
     """Placeholder entries for every enabled automated check that applies to this subject."""
     return [
@@ -77,6 +82,10 @@ def queued_entries(subject_type: str, config: dict) -> list[dict]:
 
 async def attach_queued(revision, subject, subject_type: str) -> None:
     """Add this revision's automated checks as queued. The caller owns the commit."""
+    if not await check_config.enabled():
+        revision.checks = visible(revision.checks, False)
+        revision.checks_pending = False
+        return
     config = await check_config.effective(subject.team_id, is_private=bool(subject.is_private))
     entries = queued_entries(subject_type, config)
     revision.checks = [c for c in (revision.checks or []) if c.get("kind") != "automated"] + entries
@@ -731,6 +740,8 @@ async def _run_revision(revision_id, check_ids: list[str]) -> None:
 
 async def run_pending(batch: int = 5) -> int:
     """Run every queued check once. Returns the number of revisions processed."""
+    if not await check_config.enabled():
+        return 0
     claims = await _claim(batch)
     for revision_id, ids in claims:
         try:
