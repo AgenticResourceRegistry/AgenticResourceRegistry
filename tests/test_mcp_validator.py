@@ -44,6 +44,7 @@ def _listing(**overrides):
         "setup_instructions": None,
         "command": None,
         "args": None,
+        "latest_version": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)

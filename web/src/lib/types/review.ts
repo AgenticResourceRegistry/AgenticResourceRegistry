@@ -28,7 +28,7 @@ export interface ReviewSummary {
   updated_at: string;
   gate: ReviewGate;
   threads: { total: number; unresolved: number };
-  checks: Record<"pass" | "fail" | "warn" | "skipped", number>;
+  checks: Record<CheckStatus, number>;
   depends_on: number[];
   requested_from_me: boolean;
   my_last_submission: { verdict: ReviewVerdict; revision_id: string } | null;
@@ -87,13 +87,34 @@ export interface ReviewTimelineEntry {
   state?: string;
 }
 
+export type CheckStatus = "pass" | "fail" | "warn" | "skipped" | "queued" | "running" | "error";
+
 export interface ReviewCheck {
   id: string;
   name: string;
-  status: "pass" | "fail" | "warn" | "skipped";
+  status: CheckStatus;
   required: boolean;
-  details?: string;
+  details?: string[] | string;
+  kind?: "automated";
+  network?: boolean;
   revision: number;
+}
+
+/** One configurable (or built-in) automated review check, with its effective settings for a scope. */
+export interface CheckSetting {
+  id: string;
+  name: string;
+  description: string;
+  subjects: string[];
+  network: boolean;
+  locked: boolean;
+  enabled: boolean;
+  required: boolean;
+}
+
+export interface CheckSettings {
+  scope: "organization" | "teamspace";
+  checks: CheckSetting[];
 }
 
 export interface PublicReviewPolicy {

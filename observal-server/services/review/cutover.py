@@ -40,3 +40,22 @@ async def submit_for_review(db, subject_type, subject, version, actor_id, *, mes
     event = "published" if review.state == ReviewState.published else "opened" if revision.number == 1 else "revision"
     await deliver_event(db, review, event, actor_id, revision=revision.number)
     return review
+
+
+async def resubmit_if_changed(db, subject_type, subject, version, message):
+    """Push a new revision when system-derived fields changed the version after submission.
+
+    Returns the review, or None when there is no live review or nothing changed.
+    """
+    from services.review.decisions import _hash
+    from services.review.files import render_files
+
+    review = await db.scalar(
+        select(Review).where(Review.subject_type == subject_type, Review.version_id == version.id).with_for_update()
+    )
+    if review is None or review.state in (ReviewState.closed, ReviewState.published):
+        return None
+    head = await _head(db, review)
+    if _hash(await render_files(subject_type, version, db)) == head.content_hash:
+        return None
+    return await submit_for_review(db, subject_type, subject, version, version.released_by, message=message)

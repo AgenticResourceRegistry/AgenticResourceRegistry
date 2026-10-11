@@ -85,6 +85,8 @@ class ReviewRevision(Base):
     files: Mapped[dict] = mapped_column(_JSON, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     checks: Mapped[list] = mapped_column(_JSON, nullable=False, default=list)
+    # True while any automated check is queued or running; the worker polls this flag.
+    checks_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     message: Mapped[str | None] = mapped_column(Text)
     pruned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))

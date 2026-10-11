@@ -96,7 +96,8 @@ async def summary(db, review, user):
         tid: resolved for tid, resolved, state, author in thread_rows if state != "draft" or author == user.id
     }
     checks = {
-        status: sum(c.get("status") == status for c in latest.checks) for status in ("pass", "fail", "warn", "skipped")
+        status: sum(c.get("status") == status for c in latest.checks)
+        for status in ("pass", "fail", "warn", "skipped", "queued", "running", "error")
     }
     dependencies = []
     if review.subject_type == "agent":

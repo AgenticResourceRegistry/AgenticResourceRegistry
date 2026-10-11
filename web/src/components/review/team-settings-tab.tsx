@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { ErrorState } from "@/components/shared/error-state";
 import { TableSkeleton } from "@/components/shared/skeleton-layouts";
 import { PolicyFields, defaultPolicy } from "@/components/review/policy-form";
+import { CheckSettingsPanel } from "@/components/review/check-settings";
 
 /** Teamspace settings: review rules for private and public items, plus the danger zone. */
 export function TeamSettingsTab({ teamId, teamName, canDelete, deleting, onRequestDelete }: {
@@ -85,6 +86,12 @@ export function TeamSettingsTab({ teamId, teamName, canDelete, deleting, onReque
           <Button type="submit" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save settings"}</Button>
         </div>
       </form>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <h2 className="text-base font-semibold">Automated checks</h2>
+        <p className="mt-1 mb-3 text-xs text-muted-foreground">Which checks run on team-visible items, and which must pass before publishing. Public items use the organization's settings.</p>
+        <CheckSettingsPanel teamId={teamId} />
+      </section>
 
       {canDelete && (
         <section className="rounded-xl border border-destructive/40 bg-destructive/5 p-5">
