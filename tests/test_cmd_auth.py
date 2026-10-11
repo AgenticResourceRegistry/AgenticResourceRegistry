@@ -266,6 +266,23 @@ def test_version_check_blocks_mismatch_with_correct_remediation(
         upgrade.assert_called_once_with(server_version)
 
 
+def test_version_check_prerelease_mismatch_points_to_matching_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    import observal_cli.install_detector as install_detector
+    import observal_cli.version_check as version_check
+
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.13.1")
+    monkeypatch.setattr(auth.httpx, "get", lambda *_args, **_kwargs: _response(200, {"server_version": "1.15.0-dev.0"}))
+    upgrade = MagicMock()
+    monkeypatch.setattr(install_detector, "upgrade_command", upgrade)
+
+    with pytest.raises(CliError) as exc_info:
+        auth._ensure_cli_matches_server(SERVER_URL)
+
+    assert exc_info.value.category is ErrorCategory.VERSION
+    assert "same source revision" in (exc_info.value.remediation or "")
+    upgrade.assert_not_called()
+
+
 def _prepare_login(
     monkeypatch: pytest.MonkeyPatch,
     *,

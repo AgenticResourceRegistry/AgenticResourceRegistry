@@ -1313,6 +1313,43 @@ def test_check_version_compatibility_skips_invalid_cli_version(
     assert version_check.check_version_compatibility("https://registry.example.test") is None
 
 
+def test_check_version_compatibility_requires_matching_prerelease_cli(
+    messages: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from observal_cli import install_detector
+
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.13.1")
+    monkeypatch.setattr(version_check, "_read_cache", lambda: None)
+    monkeypatch.setattr(
+        version_check.httpx,
+        "get",
+        MagicMock(return_value=response(data={"server_version": "1.15.0-dev.0"})),
+    )
+    upgrade = MagicMock()
+    monkeypatch.setattr(install_detector, "upgrade_command", upgrade)
+
+    with pytest.raises(typer.Exit) as error:
+        version_check.check_version_compatibility("https://registry.example.test")
+
+    assert error.value.exit_code == 1
+    assert "same source revision" in messages[0]
+    assert "uv tool install --force --editable /path/to/checkout" in messages[0]
+    upgrade.assert_not_called()
+
+
+def test_check_version_compatibility_accepts_matching_prerelease_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.15.0-dev.0")
+    monkeypatch.setattr(version_check, "_read_cache", lambda: None)
+    monkeypatch.setattr(
+        version_check.httpx,
+        "get",
+        MagicMock(return_value=response(data={"server_version": "1.15.0-dev.0"})),
+    )
+
+    assert version_check.check_version_compatibility("https://registry.example.test") is None
+
+
 def test_check_version_compatibility_prints_exact_upgrade_guidance_and_exits(
     messages: list[str],
     monkeypatch: pytest.MonkeyPatch,
