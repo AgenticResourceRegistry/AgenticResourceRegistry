@@ -68,6 +68,7 @@ import { SubmitComponentDialog } from "@/components/registry/submit-component-di
 import { ValidationPanel } from "@/components/builder/validation-panel";
 import { PreviewPanel } from "@/components/builder/preview-panel";
 import { ModelPicker } from "@/components/builder/model-picker";
+import { ObservalSkillBanner } from "@/components/builder/observal-skill-banner";
 import { COMPONENT_TYPES, REVERSE_TYPE_MAP, TYPE_MAP } from "@/components/registry/agent-component-constants";
 import { ComponentPicker } from "@/components/registry/component-picker";
 import { VersionBumpDialog } from "@/components/registry/version-bump-dialog";
@@ -605,6 +606,7 @@ function AgentBuilderInner() {
       />
 
       <div className="page-body w-full mx-auto">
+        <ObservalSkillBanner />
         {/* Restore draft banner */}
         {showRestoreBanner && (
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-info/20 bg-info/5 px-4 py-3">

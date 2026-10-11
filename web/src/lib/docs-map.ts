@@ -143,6 +143,7 @@ export const PAGE_DOCS: Record<string, DocRef> = {
 	// Registry
 	"agents": { file: "core-concepts/README.md", label: "Core Concepts" },
 	"agents.builder": { file: "core-concepts/README.md", label: "Core Concepts" },
+	"agents.skill": { file: "getting-started/observal-skill.md", label: "Create Agents with the Observal Skill" },
 	"agents.install": { file: "getting-started/quickstart.md", label: "Quickstart" },
 	"components": { file: "core-concepts/README.md", label: "Core Concepts" },
 
