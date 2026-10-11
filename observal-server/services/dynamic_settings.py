@@ -349,6 +349,8 @@ DEFAULTS: dict[str, str] = {
     # complete-folder installers have been deployed. A new worker cannot make
     # an old worker enforce skill review and delivery markers.
     "registry.skill_folder_delivery_enabled": "false",
+    # Experimental features. Off by default; when off they are hidden everywhere, not just disabled.
+    "experimental.review_checks": "false",
     # Registry forking: kill switch and per-user hourly creation limit.
     "registry.fork.enabled": "true",
     "registry.fork.max_per_user_per_hour": "30",
@@ -433,6 +435,10 @@ SETTING_SUBTITLES: dict[str, str] = {
         "migrating a restored database through the current head, and confirming supported CLI clients. "
         "Keep off during mixed-version rollout; see docs/skill-folder-rollout.md."
     ),
+    "experimental.review_checks": (
+        "Automated and external checks on review revisions. Experimental: behavior, settings and APIs may change "
+        "or be removed. When off, none of it appears in the UI or API."
+    ),
     "deployment.public_registry_enabled": (
         "Allow signed-out visitors to browse and install approved public registry content. "
         "Publishing, private data, telemetry, and administration still require authentication."
@@ -503,6 +509,13 @@ def settings_schema() -> list[dict[str, Any]]:
 
 
 SECTIONS: list[dict[str, Any]] = [
+    {
+        "id": "experimental",
+        "title": "Experimental",
+        "description": "Features that are not ready for general use. They are off by default and hidden while off.",
+        "icon": "flask",
+        "keys": [k for k in DEFAULTS if k.startswith("experimental.")],
+    },
     {
         "id": "auth",
         "title": "Authentication",

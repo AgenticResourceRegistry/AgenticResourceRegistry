@@ -150,6 +150,7 @@ async def get_public_config(response: Response, db=Depends(get_db)):
     public_registry_enabled = await ds.get_bool("deployment.public_registry_enabled")
     self_registration_enabled = await ds.get_bool("auth.self_registration_enabled")
     skill_folder_delivery_enabled = await ds.get_bool("registry.skill_folder_delivery_enabled", False)
+    review_checks_enabled = await ds.get_bool("experimental.review_checks", False)
     response.headers["Cache-Control"] = "no-store"
 
     from api.routes.auth import is_github_oauth_configured, is_google_oauth_configured, is_oidc_configured
@@ -165,6 +166,8 @@ async def get_public_config(response: Response, db=Depends(get_db)):
         "public_registry_enabled": public_registry_enabled,
         "self_registration_enabled": self_registration_enabled,
         "skill_folder_delivery_enabled": skill_folder_delivery_enabled,
+        # Experimental flags are only present when on, so nothing hints at the feature while it is off.
+        **({"experimental_review_checks": True} if review_checks_enabled else {}),
         "saml_enabled": saml_enabled,
         "exec_dashboard_available": exec_dashboard_available,
         "enabled_features": enabled_features,

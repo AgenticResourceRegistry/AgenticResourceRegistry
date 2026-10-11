@@ -18,7 +18,14 @@ from models.user import User, UserRole
 from services.audit import audit_detail
 from services.review import check_config
 
-router = APIRouter(tags=["reviews"])
+
+async def _require_experiment() -> None:
+    """Experimental: while off the endpoints do not exist as far as any caller can tell."""
+    if not await check_config.enabled():
+        raise HTTPException(404, "Not Found")
+
+
+router = APIRouter(tags=["reviews"], dependencies=[Depends(_require_experiment)])
 
 
 class CheckSettingsUpdate(BaseModel):

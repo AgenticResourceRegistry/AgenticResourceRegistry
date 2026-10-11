@@ -74,6 +74,10 @@ async def api(monkeypatch):
     async def silent(*args, **kwargs):
         return []
 
+    async def checks_off():
+        return False
+
+    monkeypatch.setattr("services.review.check_config.enabled", checks_off)
     monkeypatch.setattr("services.review.notifications.deliver", silent)
     monkeypatch.setattr("api.routes.reviews.threads.notify_update", silent)
     monkeypatch.setattr("api.routes.reviews.submissions.notify_update", silent)

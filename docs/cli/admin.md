@@ -231,7 +231,9 @@ observal review policy set required_approvals.mcp 2 --output json
 
 Use `observal review --help` for threads, comments, reviewer requests, dismissal, and watch/mute.
 
-### Automated checks
+### Automated checks (experimental)
+
+Experimental and off by default. A super admin or admin turns it on under Settings, Experimental (`experimental.review_checks`). While off, the checks tab, queue labels, settings and endpoints below are hidden, and automated checks neither run nor block publishing; the built-in secret, schema and skill folder checks still apply.
 
 Each revision runs built-in checks (secret scan, required fields, skill folder validity) plus configurable automated checks on the worker, within about 15 seconds of submission:
 

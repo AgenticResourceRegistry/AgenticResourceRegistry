@@ -28,6 +28,7 @@ export function useDeploymentConfig() {
 		publicRegistryEnabled: data?.public_registry_enabled ?? false,
 		selfRegistrationEnabled: data?.self_registration_enabled ?? false,
 		skillFolderDeliveryEnabled: data?.skill_folder_delivery_enabled === true && !isError,
+		experimentalReviewChecks: data?.experimental_review_checks === true && !isError,
 		samlEnabled: data?.saml_enabled ?? false,
 		enabledFeatures: data?.enabled_features ?? [],
 		brandingLogo: data?.branding_logo ?? null,
