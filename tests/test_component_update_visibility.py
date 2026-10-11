@@ -96,6 +96,8 @@ def _listing_mock(submitted_by, *, is_private=False, team_id=None):
     m.is_fork = False
     m.submitted_by = submitted_by
     m.co_authors = []
+    m.review_number = None
+    m.review_url = None
     # Visibility is the axis under test: set both halves explicitly. A bare MagicMock
     # attribute is truthy, which would make every listing look team-private.
     m.is_private = is_private

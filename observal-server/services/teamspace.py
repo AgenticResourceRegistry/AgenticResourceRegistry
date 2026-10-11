@@ -7,19 +7,19 @@
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
 from services.registry_namespace import namespace_for_user, slugify, validate_namespace
 
 if TYPE_CHECKING:
-    import uuid
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 _HANDLE_STRIP_RE = re.compile(r"[^a-z0-9-]+")
@@ -269,6 +269,54 @@ async def skill_transition_needs_rollout_gate(db: AsyncSession, listing_id: uuid
     )
 
 
+async def _rescope_review(db: AsyncSession, review, entity, actor_id: uuid.UUID) -> None:
+    """Move an open review to the audience of its listing's new visibility and re-notify that audience."""
+    from models.inbox import InboxKind
+    from services.review.decisions import _head
+    from services.review.notifications import deliver_event, resolve_review_work
+
+    await resolve_review_work(db, review, actor_id, kinds=(InboxKind.review_requested, InboxKind.review_ready))
+    review.is_private = entity.is_private
+    review.team_id = entity.team_id
+    await deliver_event(db, review, "opened", actor_id, revision=(await _head(db, review)).number)
+
+
+async def _dismiss_team_approvals(db: AsyncSession, review, actor_id: uuid.UUID) -> None:
+    from models.review import ReviewSubmission
+
+    await db.execute(
+        update(ReviewSubmission)
+        .where(ReviewSubmission.review_id == review.id, ReviewSubmission.state == "submitted")
+        .values(
+            state="dismissed",
+            dismissed_by=actor_id,
+            dismissed_at=datetime.now(UTC),
+            dismissed_reason="Visibility changed to public",
+        )
+    )
+
+
+async def _restore_published_review(db: AsyncSession, version, actor_id: uuid.UUID) -> None:
+    """A reversed public publication returns the prior team review to its published state."""
+    from models.review import Review, ReviewState
+    from services.review.decisions import _event
+
+    review = await db.scalar(
+        select(Review).where(Review.subject_type == "skill", Review.version_id == version.id).with_for_update()
+    )
+    if review is None or review.state == ReviewState.published:
+        return
+    from models.inbox import InboxKind
+    from services.review.notifications import resolve_review_work
+
+    await resolve_review_work(db, review, actor_id, kinds=(InboxKind.review_requested, InboxKind.review_ready))
+    review.is_private = True
+    review.state = ReviewState.published
+    review.published_at = datetime.now(UTC)
+    review.published_by = version.pre_public_reviewed_by
+    _event(db, review, "visibility_reverted", actor_id)
+
+
 async def _review_skill_visibility(
     entity, user: User, db: AsyncSession, *, was_private: bool, identity_transfer: bool = False
 ) -> bool:
@@ -280,7 +328,6 @@ async def _review_skill_visibility(
     """
     from models.mcp import ListingStatus
     from models.skill import SkillVersion
-    from services.inbox import sources as inbox
     from services.versioning import parse_semver
 
     if was_private == entity.is_private and not identity_transfer:
@@ -299,14 +346,15 @@ async def _review_skill_visibility(
         .all()
     )
     if was_private or identity_transfer:
+        from models.review import Review, ReviewState
+        from services.review.decisions import _head, open_or_push
+        from services.review.notifications import deliver_event
+
         requeued = False
         for row in rows:
-            # Close prior notices before re-delivery: dedupe reopens them for
-            # new recipients, otherwise former reviewers see the old work.
-            if row.status == ListingStatus.pending:
-                await inbox.on_review_withdrawn(db, entity, subject_type="skill", actor_id=user.id, version=row.version)
+            was_approved = row.status in (ListingStatus.approved, ListingStatus.archived)
             row.requires_global_review = True
-            if row.status in (ListingStatus.approved, ListingStatus.archived):
+            if was_approved:
                 row.pre_public_status = row.status.value
                 row.pre_public_reviewed_by = row.reviewed_by
                 row.pre_public_reviewed_at = row.reviewed_at
@@ -314,21 +362,33 @@ async def _review_skill_visibility(
                 row.reviewed_by = None
                 row.reviewed_at = None
                 requeued = True
-            if row.status == ListingStatus.pending:
-                await inbox.on_review_requested(
-                    db, entity, subject_type="skill", actor_id=user.id, version=row.version, global_only=True
-                )
+            if row.status != ListingStatus.pending:
+                continue
+            existing = await db.scalar(
+                select(Review).where(Review.subject_type == "skill", Review.version_id == row.id).with_for_update()
+            )
+            if existing is not None and existing.state != ReviewState.published:
+                # Already under review: approvals given for the team audience must
+                # not count toward the global decision.
+                await _dismiss_team_approvals(db, existing, user.id)
+                await _rescope_review(db, existing, entity, user.id)
+                continue
+            review = await open_or_push(
+                db, "skill", entity, row, user.id, message="Re-review for public visibility", visibility_requeue=True
+            )
+            await deliver_event(db, review, "opened", user.id, revision=(await _head(db, review)).number)
         return requeued
 
     # A public approval is a genuine new review and survives the return to team
     # visibility. A rejected publication is not a rejection of the older team
     # approval: restore its immutable bytes and original archived/approved state.
+    from models.review import Review
+
     for row in rows:
         if not row.requires_global_review:
             continue
-        if row.status == ListingStatus.pending:
-            await inbox.on_review_withdrawn(db, entity, subject_type="skill", actor_id=user.id, version=row.version)
         if row.pre_public_status is not None:
+            await _restore_published_review(db, row, user.id)
             row.status = ListingStatus(row.pre_public_status)
             row.rejection_reason = None
             row.reviewed_by = row.pre_public_reviewed_by
@@ -337,8 +397,17 @@ async def _review_skill_visibility(
             row.pre_public_reviewed_by = None
             row.pre_public_reviewed_at = None
         row.requires_global_review = False
-        if row.status == ListingStatus.pending:
-            await inbox.on_review_requested(db, entity, subject_type="skill", actor_id=user.id, version=row.version)
+        # Reviews that stay open belong to the team audience again.
+        for open_review in (
+            await db.scalars(
+                select(Review).where(
+                    Review.subject_type == "skill",
+                    Review.version_id == row.id,
+                    Review.state.in_(("open", "changes_requested", "approved")),
+                )
+            )
+        ).all():
+            await _rescope_review(db, open_review, entity, user.id)
 
     # A former pointer can still point at a pending candidate. Never demote an
     # already-cleared newer release when choosing the private default.
@@ -385,30 +454,113 @@ async def review_publication_to_public(entity, user: User, db: AsyncSession, *, 
 
     if isinstance(entity, SkillListing):
         return await _review_skill_visibility(entity, user, db, was_private=was_private)
+    if not was_private and entity.is_private:
+        await _restore_requeued_reviews(entity, user, db)  # Public back to team: the team approval stands again.
+        return False
     if not was_private or entity.is_private or is_global_reviewer(user):
         return False
 
-    version = getattr(entity, "latest_version", None)
-    if version is None:
+    if getattr(entity, "latest_version", None) is None:
         raise RuntimeError(f"{type(entity).__name__} has no latest_version; cannot re-enter review")
-    if version.status != _approved_status(entity):
+
+    # An older approved release remains installable even when the latest release
+    # is pending. Requeue every approved release, not just the latest version.
+    version_model, listing_column = _version_model_for(entity)
+    rows = (
+        (
+            await db.execute(
+                select(version_model).where(
+                    listing_column == entity.id, version_model.status == _approved_status(entity)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
         return False
 
-    version_model, listing_column = _version_model_for(entity)
-    approved = _approved_status(entity)
-    pending = _pending_status(entity)
-    rows = (
-        await db.execute(select(version_model).where(listing_column == entity.id, version_model.status == approved))
-    ).scalars()
+    from models.agent import Agent
+    from services.agent_lock import LISTING_MODELS
+    from services.review.decisions import _event, _head, open_or_push
+    from services.review.notifications import deliver_event
+
+    subject_type = (
+        "agent"
+        if isinstance(entity, Agent)
+        else next(kind for kind, model in LISTING_MODELS.items() if isinstance(entity, model))
+    )
     for row in rows:
-        row.status = pending
+        prior_reviewer, prior_reviewed_at = row.reviewed_by, row.reviewed_at
+        row.status = _pending_status(entity)
         row.reviewed_by = None
         row.reviewed_at = None
-
-    entity.status = pending
-    version.reviewed_by = None
-    version.reviewed_at = None
+        review = await open_or_push(
+            db,
+            subject_type,
+            entity,
+            row,
+            user.id,
+            message="Re-review for public visibility",
+            visibility_requeue=True,
+        )
+        _event(
+            db,
+            review,
+            "visibility_prior",
+            user.id,
+            reviewed_by=str(prior_reviewer) if prior_reviewer else None,
+            reviewed_at=prior_reviewed_at.isoformat() if prior_reviewed_at else None,
+        )
+        await deliver_event(db, review, "opened", user.id, revision=(await _head(db, review)).number)
     return True
+
+
+async def _restore_requeued_reviews(entity, user: User, db: AsyncSession) -> None:
+    """Undo a public re-review that never completed: the earlier team approval is back in force."""
+    from models.agent import Agent
+    from models.inbox import InboxKind
+    from models.review import Review, ReviewEvent, ReviewState
+    from services.agent_lock import LISTING_MODELS
+    from services.review.decisions import _event, _target
+    from services.review.notifications import resolve_review_work
+
+    subject_type = (
+        "agent"
+        if isinstance(entity, Agent)
+        else next(kind for kind, model in LISTING_MODELS.items() if isinstance(entity, model))
+    )
+    reviews = (
+        await db.scalars(
+            select(Review)
+            .where(
+                Review.subject_type == subject_type,
+                Review.subject_id == entity.id,
+                Review.state.in_((ReviewState.open, ReviewState.changes_requested, ReviewState.approved)),
+            )
+            .with_for_update()
+        )
+    ).all()
+    for review in reviews:
+        prior = await db.scalar(
+            select(ReviewEvent)
+            .where(ReviewEvent.review_id == review.id, ReviewEvent.kind == "visibility_prior")
+            .order_by(ReviewEvent.created_at.desc())
+            .limit(1)
+        )
+        if prior is None:
+            continue  # Opened as an ordinary review; it keeps waiting for its decision.
+        _, version = await _target(db, review)
+        version.status = _approved_status(entity)
+        version.reviewed_by = uuid.UUID(prior.payload["reviewed_by"]) if prior.payload.get("reviewed_by") else None
+        version.reviewed_at = (
+            datetime.fromisoformat(prior.payload["reviewed_at"]) if prior.payload.get("reviewed_at") else None
+        )
+        await resolve_review_work(db, review, user.id, kinds=(InboxKind.review_requested, InboxKind.review_ready))
+        review.is_private = True
+        review.state = ReviewState.published
+        review.published_at = datetime.now(UTC)
+        _event(db, review, "visibility_reverted", user.id)
 
 
 def _version_model_for(entity):

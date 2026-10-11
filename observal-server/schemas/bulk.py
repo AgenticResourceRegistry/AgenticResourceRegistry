@@ -39,6 +39,7 @@ class BulkResultItem(BaseModel):
     name: str
     status: str  # "created", "skipped", "error"
     agent_id: uuid.UUID | None = None
+    review_number: int | None = None
     error: str | None = None
 
 

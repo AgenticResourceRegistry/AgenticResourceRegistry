@@ -283,13 +283,7 @@ See [Insights LLM Setup](docs/insights-setup.md) for configuration.
 
 ## Review and Governance
 
-**Admin review queue with full prompt inspection and approve/reject:**
-
-![Review queue with agent detail](docs/img/review.png)
-
-**Side-by-side version diffs before approving a new release:**
-
-![Side-by-side diff of v1.0.0 vs v2.0.0](docs/img/review-diff.png)
+Authors submit agent and component versions for review. Participants can inspect the submitted revision's redacted files and diffs, discuss changes in conversations, and submit approvals or change requests. Publishing is separate from approval: once the review policy and required checks are satisfied, a reviewer can publish the version, or policy can publish it automatically.
 
 ---
 

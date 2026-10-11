@@ -15,10 +15,6 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger as optic
@@ -26,7 +22,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 from sqlalchemy.orm import defaultload, defer
 
-import services.dynamic_settings as _ds
 from api.deps import (
     check_listing_visibility_async,
     get_db,
@@ -36,22 +31,20 @@ from api.deps import (
     require_role,
     resolve_visible_listing,
 )
-from api.routes._skill_lock import approved_skill_base_id, lock_skill_version, should_promote_skill_version
+from api.routes._skill_lock import approved_skill_base_id, lock_skill_version
 from api.routes.skill_files import _BODY_FREE_LISTING, _authorized_version
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
-from schemas.component_version import VersionPublishRequest, VersionReviewRequest  # noqa: TC001
+from schemas.component_version import VersionPublishRequest  # noqa: TC001
 from services.agent_lock import INSTALLABLE_STATUSES
 from services.component_version_extras import ALLOWED_FIELDS, REQUIRED_FIELDS, validate_and_extract
-from services.editing_lock import is_actively_editing
-from services.inbox import sources as inbox
 from services.registry_fork import VERSION_MANAGED_FIELDS as _VERSION_MANAGED_FIELDS
 from services.registry_fork import _copy_version_columns
-from services.skill_bundle import declared_skill_folder_name, needs_bundle_delivery, validate_skill_bundle
+from services.review.cutover import submit_for_review
+from services.skill_bundle import needs_bundle_delivery, validate_skill_bundle
 from services.skill_revisions import skill_content_revision, verified_skill_revision
 from services.skill_validator import SkillValidationError
-from services.teamspace import can_review, review_scope
 from services.versioning import parse_semver
 
 # Semver pattern: X.Y.Z or X.Y.Z-prerelease
@@ -60,13 +53,6 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")
 
 async def audit(*_args, **_kwargs):
     return None
-
-
-def _parse_semver(v: str) -> tuple[int, ...]:
-    """Parse 'X.Y.Z' or 'X.Y.Z-pre' into (X, Y, Z) for comparison."""
-    optic.trace("v={}", v)
-    base = v.split("-", 1)[0]
-    return tuple(int(p) for p in base.split("."))
 
 
 def _version_to_dict(v, component_type: str, *, summary: bool = False) -> dict:
@@ -382,18 +368,14 @@ async def _publish_version(
             ver.content_revision = skill_content_revision(listing, ver)
         except SkillValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # This route always creates a pending version, so a review is always owed.
-    await inbox.on_publish(
-        db,
-        listing,
-        subject_type=component_type,
-        actor_id=current_user.id,
-        auto_approved=False,
-        version=ver.version,
-    )
+    review = await submit_for_review(db, component_type, listing, ver, current_user.id, message=req.message)
     await db.commit()
 
-    return _version_to_dict(ver, component_type)
+    return {
+        **_version_to_dict(ver, component_type),
+        "review_number": review.number,
+        "review_url": f"/review/{review.number}",
+    }
 
 
 async def _version_suggestions(
@@ -408,7 +390,7 @@ async def _version_suggestions(
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found")
 
-    from services.versioning import parse_semver, suggest_versions
+    from services.versioning import suggest_versions
 
     # Use the highest existing version (including pending) to avoid duplicate suggestions
     all_ver_stmt = (
@@ -428,222 +410,6 @@ async def _version_suggestions(
     return {"current": highest, "suggestions": suggest_versions(highest)}
 
 
-async def _review_version(
-    listing_id: str,
-    version: str,
-    req: VersionReviewRequest,
-    listing_model,
-    version_model,
-    component_type: str,
-    db: AsyncSession,
-    current_user: User,
-    *,
-    selected_id: uuid.UUID | None = None,
-) -> dict:
-    optic.trace("listing_id={}, version={}", listing_id, version)
-    listing = await resolve_visible_listing(
-        listing_model,
-        listing_id,
-        db,
-        current_user,
-        **({"load_options": _BODY_FREE_LISTING} if component_type == "skill" else {}),
-    )
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
-
-    latest_id = None
-    if component_type == "skill":
-        if not can_review(listing, await review_scope(db, current_user)):
-            raise HTTPException(status_code=404, detail="Version not found")
-        version_id = selected_id
-        if version_id is None:
-            version_id = (
-                await db.execute(
-                    select(SkillVersion.id).where(
-                        SkillVersion.listing_id == listing.id, SkillVersion.version == version
-                    )
-                )
-            ).scalar_one_or_none()
-        if version_id is None:
-            raise HTTPException(status_code=404, detail="Version not found")
-        latest_id, ver = await lock_skill_version(db, listing.id, version_id)
-        await db.refresh(
-            listing,
-            attribute_names=[
-                "submitted_by",
-                "co_authors",
-                "team_id",
-                "is_private",
-                "name",
-                "namespace",
-                "slug",
-                "owner",
-            ],
-        )
-        scope = await review_scope(db, current_user)
-        if (
-            not await check_listing_visibility_async(listing, current_user, db)
-            or not can_review(listing, scope)
-            or (ver.requires_global_review and not scope.is_global_reviewer)
-        ):
-            raise HTTPException(status_code=404, detail="Version not found")
-    else:
-        version_filters = [version_model.listing_id == listing.id, version_model.version == version]
-        if not may_view_unapproved(get_effective_component_permission(listing, current_user), current_user):
-            version_filters.append(version_model.status == ListingStatus.approved)
-        ver = (await db.execute(select(version_model).where(*version_filters))).scalar_one_or_none()
-        if not ver:
-            raise HTTPException(status_code=404, detail="Version not found")
-    if ver.status != ListingStatus.pending:
-        raise HTTPException(
-            status_code=422, detail=f"Version is {ver.status.value!r}, only pending versions can be reviewed"
-        )
-
-    if component_type == "skill":
-        if is_actively_editing(ver):
-            raise HTTPException(status_code=409, detail="Cannot review: the owner is editing this skill version")
-        if ver.requires_global_review and (selected_id is None or req.observed_revision is None):
-            raise HTTPException(status_code=409, detail="Review the marked skill UUID with its observed revision")
-        if needs_bundle_delivery(ver):
-            if selected_id is None or req.observed_revision is None:
-                raise HTTPException(status_code=409, detail="Review the bundled skill UUID with its observed revision")
-            if not await _ds.get_bool("registry.skill_folder_delivery_enabled", False):
-                raise HTTPException(status_code=409, detail="Skill folder review is disabled until fleet rollout")
-            if req.action == "approve":
-                try:  # Whatever route created this version, never approve a folder that cannot install.
-                    declared_skill_folder_name(ver.skill_md_content)
-                except SkillValidationError as exc:
-                    raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if (ver.base_version_id is not None or ver.content_revision is not None or (ver.review_epoch or 0) > 0) and (
-            req.observed_revision is None
-        ):
-            raise HTTPException(status_code=409, detail="Review this exact draft with its observed revision")
-        if req.observed_revision is not None or ver.content_revision is not None:
-            try:
-                revision = verified_skill_revision(listing, ver)
-            except SkillValidationError as exc:
-                raise HTTPException(status_code=409, detail="Skill version is not a valid release") from exc
-            if (ver.content_revision is not None and ver.content_revision != revision) or (
-                req.observed_revision is not None and req.observed_revision != revision
-            ):
-                raise HTTPException(status_code=409, detail="Skill version changed; refresh before review")
-
-    promote_skill = None
-    marked = component_type == "skill" and ver.requires_global_review
-    re_review = marked and ver.pre_public_status is not None
-    if req.action == "approve" and component_type == "skill" and not re_review:
-        if ver.base_version_id is not None:
-            if latest_id != ver.base_version_id:
-                raise HTTPException(status_code=409, detail="Approved base changed; rebase this draft before review")
-            base = (
-                await db.execute(
-                    select(SkillVersion)
-                    .where(SkillVersion.id == ver.base_version_id, SkillVersion.listing_id == listing.id)
-                    .execution_options(populate_existing=True)
-                )
-            ).scalar_one_or_none()
-            if base is None or base.status not in INSTALLABLE_STATUSES:
-                raise HTTPException(status_code=409, detail="Approved base changed; rebase this draft before review")
-            try:
-                base_revision = verified_skill_revision(listing, base)
-            except SkillValidationError as exc:
-                raise HTTPException(status_code=409, detail="Approved base is not a valid release") from exc
-            if ver.base_revision != base_revision:
-                raise HTTPException(status_code=409, detail="Approved base changed; rebase this draft before review")
-            if (
-                base.delivery_mode == "git_fetch"
-                and ver.delivery_mode == "registry_direct"
-                and not req.git_base_acknowledged
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Git base files are not stored; explicitly acknowledge the limited comparison before approval",
-                )
-        promote_skill = await should_promote_skill_version(db, latest_id, ver)
-        # Historical pending prereleases may still clear review and be pinned
-        # explicitly; they never replace a newer stable default release.
-        if not promote_skill and ("-" not in ver.version or not SEMVER_RE.fullmatch(ver.version)):
-            raise HTTPException(status_code=409, detail="Newer approved skill release exists; refresh before review")
-    if req.action == "approve":
-        ver.status = (
-            ListingStatus(ver.pre_public_status)
-            if re_review and ver.pre_public_status is not None
-            else ListingStatus.approved
-        )
-        ver.rejection_reason = None
-        if re_review:
-            ver.requires_global_review = False
-            ver.pre_public_status = None
-            ver.pre_public_reviewed_by = None
-            ver.pre_public_reviewed_at = None
-            await db.flush()
-            # Historical re-review is not a new-release approval: older rows
-            # can clear out of order. Repair a still-pending pointer to the
-            # highest cleared stable release, without demoting a newer one.
-            cleared = (
-                await db.execute(
-                    select(SkillVersion.id, SkillVersion.version, SkillVersion.status).where(
-                        SkillVersion.listing_id == listing.id,
-                        SkillVersion.status.in_(INSTALLABLE_STATUSES),
-                        SkillVersion.requires_global_review.is_(False),
-                    )
-                )
-            ).all()
-            current = next((row for row in cleared if row.id == latest_id), None)
-            approved = [row for row in cleared if row.status == ListingStatus.approved]
-            stable = [(row, parse_semver(row.version)) for row in (approved or cleared)]
-            stable = [(row, number) for row, number in stable if number is not None]
-            if current is not None and current.status == ListingStatus.archived:
-                pass  # Preserve an intentionally archived pointer.
-            elif stable:
-                best, best_number = max(stable, key=lambda pair: (pair[1], str(pair[0].id)))
-                current_number = parse_semver(current.version) if current is not None else None
-                if current is None or (current_number is not None and best_number > current_number):
-                    listing.latest_version_id = best.id
-            elif current is None and len(cleared) == 1:
-                listing.latest_version_id = cleared[0].id
-            elif current is None:
-                raise HTTPException(status_code=409, detail="Cannot select a default from historical skill versions")
-        # Only update latest if this version is newer than current latest
-        elif component_type == "skill":
-            if marked:
-                ver.requires_global_review = False
-            if promote_skill:
-                listing.latest_version_id = ver.id
-        else:
-            current_latest = listing.latest_version
-            if not current_latest or _parse_semver(ver.version) >= _parse_semver(current_latest.version):
-                listing.latest_version_id = ver.id
-    else:
-        ver.status = ListingStatus.rejected
-        ver.rejection_reason = req.reason
-
-    ver.reviewed_by = current_user.id
-    ver.reviewed_at = datetime.now(UTC)
-
-    # Same fact as a decision made through api/routes/review.py: the version's
-    # author hears the outcome, and every reviewer's open request item for this
-    # version is cleared. Delivered before the commit, in this transaction.
-    await inbox.on_review_decided(
-        db,
-        listing,
-        subject_type=component_type,
-        approved=req.action == "approve",
-        actor_id=current_user.id,
-        version=ver.version,
-        reason=req.reason if req.action != "approve" else None,
-        submitter_id=ver.released_by,
-    )
-
-    await db.commit()
-
-    return {
-        "version": ver.version,
-        "new_status": ver.status.value,
-        "reason": ver.rejection_reason,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -654,7 +420,7 @@ def create_version_router(
     listing_model,
     version_model,
 ) -> APIRouter:
-    """Return an APIRouter with 4 version endpoints for the given component type."""
+    """Return the version listing, publishing and suggestions endpoints."""
 
     optic.trace("component_type={}, listing_model={}", component_type, listing_model)
     router = APIRouter(tags=[f"{component_type}-versions"])
@@ -707,26 +473,6 @@ def create_version_router(
         optic.trace("listing_id={}", listing_id)
         return await _publish_version(
             listing_id=listing_id,
-            req=req,
-            listing_model=listing_model,
-            version_model=version_model,
-            component_type=component_type,
-            db=db,
-            current_user=current_user,
-        )
-
-    @router.post("/{listing_id}/versions/{version}/review")
-    async def review_version(
-        listing_id: str,
-        version: str,
-        req: VersionReviewRequest,
-        db: AsyncSession = Depends(get_db),
-        current_user: User = Depends(require_role(UserRole.reviewer)),
-    ):
-        optic.trace("listing_id={}, version={}", listing_id, version)
-        return await _review_version(
-            listing_id=listing_id,
-            version=version,
             req=req,
             listing_model=listing_model,
             version_model=version_model,

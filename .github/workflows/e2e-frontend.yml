@@ -99,6 +99,10 @@ jobs:
           OBSERVAL_ISOLATED_STACK: 'true'
         run: pnpm exec playwright test frontend-flows skill-folder
 
+      - name: Show API errors on failure
+        if: failure()
+        run: cd docker && docker compose logs --tail 150 observal-api observal-init || true
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

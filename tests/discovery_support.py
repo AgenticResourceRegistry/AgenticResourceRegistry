@@ -15,8 +15,19 @@ from models.agent_component import AgentComponent
 from models.base import Base
 from models.discovery_entry import DiscoveryEntry
 from models.hook import HookListing, HookVersion
+from models.inbox import InboxItem, InboxItemEvent
 from models.mcp import ListingStatus, McpListing, McpValidationResult, McpVersion
 from models.prompt import PromptListing, PromptVersion
+from models.review import (
+    Review,
+    ReviewComment,
+    ReviewEvent,
+    ReviewReviewerRequest,
+    ReviewRevision,
+    ReviewSubmission,
+    ReviewSubscription,
+    ReviewThread,
+)
 from models.sandbox import SandboxListing, SandboxVersion
 from models.skill import SkillListing, SkillVersion
 from models.team import Team, TeamMembership, TeamRole
@@ -42,6 +53,16 @@ TABLES = [
     AgentVersion.__table__,
     AgentComponent.__table__,
     DiscoveryEntry.__table__,
+    InboxItem.__table__,
+    InboxItemEvent.__table__,
+    Review.__table__,
+    ReviewRevision.__table__,
+    ReviewThread.__table__,
+    ReviewSubmission.__table__,
+    ReviewComment.__table__,
+    ReviewReviewerRequest.__table__,
+    ReviewSubscription.__table__,
+    ReviewEvent.__table__,
 ]
 
 CTX = ProjectionContext.from_public_url("https://observal.example.com")

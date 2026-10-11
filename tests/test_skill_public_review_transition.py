@@ -5,21 +5,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from models.base import Base
-from models.component_bundle import ComponentBundle
-from models.inbox import InboxItem, InboxItemEvent, InboxKind, InboxState
+from models.inbox import InboxItem, InboxKind, InboxState
 from models.mcp import ListingStatus
+from models.review import Review, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership, TeamRole
 from models.user import UserRole
 from services import teamspace
-from services.inbox.sources import on_review_requested
+from services.review.cutover import submit_for_review
 from tests import discovery_support as ds
 
 
@@ -56,10 +54,6 @@ async def test_publication_marks_every_version_even_for_global_actor(monkeypatch
     engine = ds.make_engine()
     try:
         sessions = await ds.create_schema(engine)
-        requested = AsyncMock(return_value=1)
-        withdrawn = AsyncMock(return_value=1)
-        monkeypatch.setattr("services.inbox.sources.on_review_requested", requested)
-        monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", withdrawn)
         async with sessions() as db:
             owner = await ds.user(db, role=actor_role)
             team = await ds.team_with_member(db, owner)
@@ -99,10 +93,11 @@ async def test_publication_marks_every_version_even_for_global_actor(monkeypatch
             assert versions["draft"].status == ListingStatus.draft
             assert versions["rejected"].status == ListingStatus.rejected
             assert (await db.get(SkillListing, listing_id)).latest_version_id == approved_id
-        assert requested.await_count == 3
-        assert all(call.kwargs["global_only"] for call in requested.await_args_list)
-        assert {call.kwargs["version"] for call in requested.await_args_list} == {"0.9.0", "1.0.0", "1.1.0"}
-        assert withdrawn.await_count == 1  # Only the previously pending team request.
+        async with sessions() as db:
+            reviews = (await db.execute(select(Review).where(Review.subject_id == listing_id))).scalars().all()
+            # Every pending (or requeued) release has an open global review; drafts and rejections have none.
+            assert {r.version for r in reviews} == {"0.9.0", "1.0.0", "1.1.0"}
+            assert all(r.state == ReviewState.open and not r.is_private for r in reviews)
     finally:
         await engine.dispose()
 
@@ -114,7 +109,7 @@ async def test_flip_resolves_team_notice_and_routes_each_round_to_correct_audien
         async with engine.begin() as conn:
             await conn.run_sync(
                 Base.metadata.create_all,
-                tables=[*ds.TABLES, ComponentBundle.__table__, InboxItem.__table__, InboxItemEvent.__table__],
+                tables=[*ds.TABLES],
             )
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
@@ -130,7 +125,9 @@ async def test_flip_resolves_team_notice_and_routes_each_round_to_correct_audien
             ).scalar_one()
             membership.role = TeamRole.owner
             listing = await ds.skill(db, owner, is_private=True, team_id=team.id, status=ListingStatus.pending)
-            await on_review_requested(db, listing, subject_type="skill", actor_id=owner.id, version="1.2.0")
+            await submit_for_review(
+                db, "skill", listing, await db.get(SkillVersion, listing.latest_version_id), owner.id
+            )
             await db.flush()
             listing.is_private = False
             await teamspace.review_publication_to_public(listing, owner, db, was_private=True)
@@ -158,11 +155,9 @@ async def test_flip_resolves_team_notice_and_routes_each_round_to_correct_audien
 async def test_reversal_restores_old_approvals_but_keeps_cleared_new_release(monkeypatch):
     engine = ds.make_engine()
     try:
-        sessions = await ds.create_schema(engine)
-        requested = AsyncMock(return_value=1)
-        withdrawn = AsyncMock(return_value=1)
-        monkeypatch.setattr("services.inbox.sources.on_review_requested", requested)
-        monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", withdrawn)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
             owner = await ds.user(db)
             team = await ds.team_with_member(db, owner)
@@ -201,7 +196,10 @@ async def test_reversal_restores_old_approvals_but_keeps_cleared_new_release(mon
             assert not any(row.requires_global_review or row.pre_public_status for row in by_version.values())
             assert (await db.get(SkillListing, listing_id)).latest_version_id == candidate_id
             assert by_version["0.9.0"].id == old_id
-        assert withdrawn.await_count == 2  # Old and current requests are closed on reversal.
-        assert requested.await_count == 3  # Publication only: the surviving candidate was globally approved.
+        async with sessions() as db:
+            reviews = {r.version: r for r in (await db.execute(select(Review))).scalars().all()}
+            # A reversed publication restores the team approval's published review.
+            assert reviews["0.9.0"].state == ReviewState.published
+            assert reviews["0.9.0"].is_private
     finally:
         await engine.dispose()

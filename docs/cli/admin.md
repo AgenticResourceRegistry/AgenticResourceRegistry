@@ -200,44 +200,36 @@ Existing files prompt in human mode. JSON mode fails with a conflict unless `--f
 
 ## Review queue
 
-List pending submissions:
+Reviews are revision-based and use the `observal review` command group. Content is visible only to participants and authorized reviewers.
 
 ```bash
-observal admin review list --output json
-observal admin review list --type mcp --output json
-observal admin review list --tab agents --output json
-observal admin review list --team-id 11111111-1111-1111-1111-111111111111 --output json
+observal review list --output json
+observal review list --type mcp --output json
+observal review list --team-id 11111111-1111-1111-1111-111111111111 --output json
+observal review show 123 --output json
+observal review files 123 --output json
+observal review diff 123 --file SKILL.md --output json
+observal review checks 123 --output json
 ```
 
-Component types are `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. Tabs are `agents` and `components`. A component type cannot be combined with the Agents tab.
+Review data can include submitted configuration. Handle it as potentially sensitive. Credentials are redacted in snapshots.
 
-The list refreshes the `review` row cache, including when empty. Row numbers can then be used by other review commands.
-
-Show a submission:
+Submit a verdict and publish. Approval never publishes by itself unless the effective policy sets automatic publishing:
 
 ```bash
-observal admin review show 1 --output json
+observal review approve 123 --output json
+observal review request-changes 123 --body 'Please document the required variables' --output json
+observal review publish 123 --output json
 ```
 
-The JSON detail may include submitted configuration, headers, or environment-variable declarations. Handle review data as potentially sensitive.
-
-Approve:
+Review policy sets required approvals (0 to 5 per type), self-approval, and automatic publishing. A teamspace may set one policy for team-visible items and another for its public namespace; neither can be looser than the organization policy for public items. Zero approvals with automatic publishing is the "auto approve" setting.
 
 ```bash
-observal admin review approve 1 --output json
-observal admin review approve AGENT_UUID --agent --output json
-observal admin review approve BUNDLE_UUID --bundle --output json
+observal review policy show --output json
+observal review policy set required_approvals.mcp 2 --output json
 ```
 
-Reject with a reason containing 1 through 5,000 characters:
-
-```bash
-observal admin review reject 1 --reason 'Missing environment variable documentation' --output json
-observal admin review reject AGENT_UUID --agent --reason 'Unsafe prompt' --output json
-observal admin review reject BUNDLE_UUID --bundle --reason 'License conflict' --output json
-```
-
-`--agent` and `--bundle` are mutually exclusive. Approval and rejection return the direct server decision object.
+Use `observal review --help` for threads, comments, reviewer requests, dismissal, and watch/mute.
 
 ## Exit codes
 

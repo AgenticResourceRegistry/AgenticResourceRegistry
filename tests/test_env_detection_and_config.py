@@ -10,7 +10,8 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -601,7 +602,9 @@ class TestAgentConfigDockerMcp:
 
 class TestMcpSubmitAutoReplace:
     @pytest.mark.asyncio
-    async def test_replace_pending_on_resubmit(self):
+    @patch("api.routes.mcp.submit_for_review", new_callable=AsyncMock)
+    async def test_replace_pending_on_resubmit(self, mock_submit):
+        mock_submit.return_value = SimpleNamespace(number=42)
         from api.routes.mcp import router
 
         user = _user()
@@ -707,7 +710,9 @@ class TestMcpSubmitAutoReplace:
         assert "approved" in r.json()["detail"].lower()
 
     @pytest.mark.asyncio
-    async def test_no_existing_submits_normally(self):
+    @patch("api.routes.mcp.submit_for_review", new_callable=AsyncMock)
+    async def test_no_existing_submits_normally(self, mock_submit):
+        mock_submit.return_value = SimpleNamespace(number=42)
         from api.routes.mcp import router
 
         user = _user()

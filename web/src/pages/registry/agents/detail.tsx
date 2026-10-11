@@ -92,6 +92,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/layouts/page-header";
+import { ActiveReviewBanner } from "@/components/review/active-review-banner";
 import { DetailSkeleton } from "@/components/shared/skeleton-layouts";
 import { ErrorState } from "@/components/shared/error-state";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -782,7 +783,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   const showVisibilityControl = canChangeVisibility && Boolean(a?.team_id || personalTeam);
   const canManageLifecycle = isAdmin || isOwner;
   const agentStatus = a?.status as string | undefined;
-  const canEdit = (isAdmin || a?.user_permission === "owner" || a?.user_permission === "edit") && ["approved", "pending", "draft", "rejected"].includes(agentStatus ?? "");
+  const canEdit = (isAdmin || a?.user_permission === "owner" || a?.user_permission === "edit") && ["approved", "pending", "changes_requested", "draft", "rejected"].includes(agentStatus ?? "");
   // Header/breadcrumb show the bare name; the pull command needs the canonical
   // `namespace/slug` the CLI resolves.
   const agentIdentity = registryIdentity(a as QualifiedIdentity | undefined, id.slice(0, 8));
@@ -881,6 +882,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-8 items-start">
             {/* Main content */}
             <div className="space-y-6 min-w-0 animate-in">
+              <ActiveReviewBanner subjectId={id} enabled={canEdit} />
               {canEdit && archivedComponents.length > 0 && (
                 <ArchivedComponentsBanner components={archivedComponents} />
               )}

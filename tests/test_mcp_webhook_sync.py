@@ -26,7 +26,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.mcp import ListingStatus, McpListing, McpValidationResult, McpVersion
 from models.mcp_webhook_sync import McpWebhookSync
 from models.team import Team, TeamMembership
@@ -41,7 +40,6 @@ _TABLES = [
     User.__table__,
     Team.__table__,
     TeamMembership.__table__,
-    ComponentBundle.__table__,
     McpListing.__table__,
     McpVersion.__table__,
     McpValidationResult.__table__,

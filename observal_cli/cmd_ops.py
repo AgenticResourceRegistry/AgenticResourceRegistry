@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -32,12 +31,10 @@ from observal_cli.render import (
     OutputMode,
     console,
     esc,
-    kv_panel,
     output_json,
     relative_time,
     spinner,
     star_rating,
-    status_badge,
 )
 
 # ═══════════════════════════════════════════════════════════
@@ -47,8 +44,6 @@ from observal_cli.render import (
 _RANKING_TYPES = ("mcp", "agent")
 _FEEDBACK_TYPES = ("mcp", "agent", "skill", "hook", "prompt", "sandbox")
 _ADMIN_ROLES = ("super_admin", "admin", "reviewer", "user")
-_REVIEW_TYPES = ("mcp", "skill", "hook", "prompt", "sandbox")
-_REVIEW_TABS = ("agents", "components")
 _SECURITY_SEVERITIES = ("info", "warning", "critical")
 _AUDIT_SOURCES = ("server", "cli")
 
@@ -135,368 +130,6 @@ ops_app = typer.Typer(
     ),
     no_args_is_help=True,
 )
-
-
-# ── Review ───────────────────────────────────────────────
-
-review_app = typer.Typer(
-    help=(
-        "Submission review commands\n\n"
-        "Examples:\n"
-        "  observal admin review list\n"
-        "  observal admin review show 1\n"
-        "  observal admin review approve 1"
-    )
-)
-
-
-@review_app.command(name="list")
-def review_list(
-    type_filter: str | None = typer.Option(
-        None, "--type", "-t", help="Filter by component type (mcp, skill, hook, prompt, sandbox)"
-    ),
-    tab: str | None = typer.Option(None, "--tab", help="Filter tab (agents, components)"),
-    output: OutputMode = typer.Option("table", "--output", "-o"),
-    team_id: str | None = typer.Option(None, "--team-id", help="Filter by teamspace UUID"),
-):
-    """List pending submissions awaiting review.
-
-    Row numbers from this output can be used by show, approve, and reject.
-
-    Examples:
-
-        observal admin review list
-
-        observal admin review list --type mcp
-
-        observal admin review list --tab agents --output json
-    """
-    team_id = _command_value(team_id)
-    params = {}
-    if tab:
-        tab = _command_choice(tab, _REVIEW_TABS, "review tab", "List pending reviews")
-    if type_filter:
-        type_filter = _command_choice(type_filter, _REVIEW_TYPES, "review type", "List pending reviews")
-        if tab == "agents":
-            fail(
-                ErrorCategory.VALIDATION,
-                "A component type cannot be combined with the agents tab.",
-                operation="List pending reviews",
-                resource="review filters",
-                remediation="Remove --type or use --tab components.",
-            )
-        params["type"] = type_filter
-        tab = tab or "components"
-    if tab:
-        params["tab"] = tab
-    if team_id:
-        params["team_id"] = _uuid(team_id, "teamspace ID", "List pending reviews")
-    with _command_progress(output, "Fetching reviews..."):
-        data = client.get("/api/v1/review", params=params or None)
-    config.save_last_results(data, "review")
-    if output == "json":
-        output_json(data)
-        return
-    if not data:
-        rprint("[dim]No pending reviews.[/dim]")
-        return
-    table = Table(title=f"Pending Reviews ({len(data)})", show_lines=False, padding=(0, 1))
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Type", style="cyan", width=8)
-    table.add_column("Name", style="bold")
-    table.add_column("Version", style="dim")
-    table.add_column("Submitted By")
-    table.add_column("Submitted", style="dim")
-    table.add_column("ID", style="dim", no_wrap=True, max_width=12)
-    for i, item in enumerate(data, 1):
-        table.add_row(
-            str(i),
-            esc(item.get("type", item.get("listing_type", ""))),
-            esc(item.get("name", "")),
-            esc(item.get("version", "")),
-            esc(item.get("submitted_by", "")),
-            relative_time(item.get("created_at") or item.get("submitted_at")),
-            esc(str(item.get("id", ""))[:12]),
-        )
-    console.print(table)
-
-
-@review_app.command(name="show")
-def review_show(
-    review_id: str = typer.Argument(..., help="Name, row number, @alias, or UUID"),
-    output: OutputMode = typer.Option("table", "--output", "-o"),
-):
-    """Show review details for a component or Agent.
-
-    Examples:
-
-        observal admin review show 1
-
-        observal admin review show my-mcp-server --output json
-    """
-    resolved = config.resolve_alias(review_id, expected_type="review")
-    with _command_progress(output):
-        item = client.get(f"/api/v1/review/{quote(resolved, safe='')}")
-        candidate = None
-        if item.get("type") == "skill" and item.get("version_id"):
-            candidate = client.get(
-                f"/api/v1/review/skills/{quote(str(item['id']), safe='')}/versions/{item['version_id']}"
-            )
-    if output == "json":
-        if candidate is not None and _is_folder_review(candidate):
-            item = {**item, "revision": candidate["revision"], "files": candidate["files"]}
-        output_json(item)
-        return
-    fields = [
-        ("Type", esc(item.get("type", "N/A"))),
-        ("Status", status_badge(item.get("status", ""))),
-        ("Version", esc(item.get("version", "N/A"))),
-        ("Owner", esc(item.get("owner", "N/A"))),
-        ("Submitted By", esc(item.get("submitted_by", "N/A"))),
-        ("Created", relative_time(item.get("created_at"))),
-        ("Git URL", esc(item.get("git_url", "N/A"))),
-        ("Description", esc(item.get("description")) if item.get("description") else "[dim]none[/dim]"),
-        ("ID", f"[dim]{esc(item.get('id', ''))}[/dim]"),
-    ]
-    if item.get("rejection_reason"):
-        fields.append(("Rejection Reason", f"[red]{esc(item['rejection_reason'])}[/red]"))
-    if candidate is not None and _is_folder_review(candidate):
-        fields.append(("Version ID", f"[dim]{esc(item['version_id'])}[/dim]"))
-        fields.append(("Revision", f"[dim]{esc(candidate['revision'])}[/dim]"))
-    if item.get("mcp_validated") is not None:
-        badge = "[green]✓ Validated[/green]" if item["mcp_validated"] else "[red]✗ Not validated[/red]"
-        fields.append(("MCP Validation", badge))
-    for validation in item.get("validation_results") or []:
-        passed = "[green]pass[/green]" if validation.get("passed") else "[red]fail[/red]"
-        fields.append((f"  {esc(validation.get('stage', '?'))}", passed))
-    console.print(kv_panel(esc(item.get("name", "Review")), fields))
-    if candidate is not None and _is_folder_review(candidate):
-        _print_folder_candidate(str(item["id"]), candidate)
-
-
-def _review_action_path(review_id: str, action: str, agent: bool, bundle: bool) -> str:
-    if agent and bundle:
-        fail(
-            ErrorCategory.VALIDATION,
-            "A review cannot be both an Agent and a bundle.",
-            operation=f"{action.title()} review",
-            resource="review type",
-            remediation="Choose only --agent or --bundle.",
-        )
-    resolved = quote(config.resolve_alias(review_id, expected_type="review"), safe="")
-    if agent:
-        return f"/api/v1/review/agents/{resolved}/{action}"
-    if bundle:
-        return f"/api/v1/review/bundles/{resolved}/{action}"
-    return f"/api/v1/review/{resolved}/{action}"
-
-
-def _is_folder_review(version: dict) -> bool:
-    """Complete-folder skills (and conversions) are reviewed per exact version, never per listing."""
-    return bool(version.get("files") or version.get("base_version_id"))
-
-
-def _folder_changes(files: list[dict], base_files: list[dict]) -> dict[str, list[str]]:
-    before, after = {f["path"]: f for f in base_files}, {f["path"]: f for f in files}
-    common = sorted(before.keys() & after.keys())
-    return {
-        "added": sorted(after.keys() - before.keys()),
-        "removed": sorted(before.keys() - after.keys()),
-        "modified": [p for p in common if before[p]["sha256"] != after[p]["sha256"]],
-        "mode_changed": [p for p in common if before[p]["mode"] != after[p]["mode"]],
-    }
-
-
-def _print_folder_candidate(listing_id: str, version: dict) -> None:
-    table = Table(title=f"Candidate files (revision {version['revision'][:12]}...)")
-    for column in ("Path", "Bytes", "Mode", "SHA-256"):
-        table.add_column(column)
-    for file in version["files"]:
-        table.add_row(esc(file["path"]), str(file["size"]), file["mode"], file["sha256"][:12])
-    console.print(table)
-    if version.get("base_delivery_mode") == "registry_direct":
-        base = client.get(f"/api/v1/skills/{listing_id}/versions/{version['base_version_id']}/manifest")
-        changes = _folder_changes(version["files"], base["files"])
-        label = f"Changes from base v{esc(str(version.get('base_version')))}"
-        rprint(f"[bold]{label}[/bold]")
-        for kind, paths in changes.items():
-            rprint(f"  {kind}: {esc(', '.join(paths)) if paths else '[dim]none[/dim]'}")
-    elif version.get("base_delivery_mode") == "git_fetch":
-        rprint(
-            "[yellow]Base is a Git release; Observal stores no files to compare. Old source: "
-            f"{esc(str(version.get('base_git_url')))} @ {esc(str(version.get('base_git_ref')))}[/yellow]"
-        )
-
-
-def _exact_skill_review(
-    review_id: str,
-    action: str,
-    *,
-    reason: str | None = None,
-    version_id: str | None = None,
-    revision: str | None = None,
-    yes: bool = False,
-    ack_git_base: bool = False,
-    output: OutputMode | str = "table",
-) -> dict | None:
-    """Review one exact skill version bound to its observed revision.
-
-    Any skill with a pending version row can be demanded by the server in this form (folders, conversions and
-    resubmitted Git releases alike). Returns None only for a legacy submission with no pending version, which
-    the listing endpoint still handles.
-    """
-    resolved = quote(config.resolve_alias(review_id, expected_type="review"), safe="")
-    vid = version_id
-    if vid is None:
-        detail = client.get(f"/api/v1/review/{resolved}")
-        if detail.get("type") != "skill" or not detail.get("version_id"):
-            return None
-        resolved, vid = quote(str(detail["id"]), safe=""), detail["version_id"]
-    version = client.get(f"/api/v1/review/skills/{resolved}/versions/{quote(vid, safe='')}")
-    folder = _is_folder_review(version)
-    if revision and revision != version["revision"]:
-        fail(
-            ErrorCategory.CONFLICT,
-            "The candidate changed since the revision you supplied.",
-            operation=f"{action.title()} review",
-            resource=review_id,
-            remediation="Run 'observal admin review show' again and review the current files.",
-        )
-    if folder and output != "json":
-        _print_folder_candidate(resolved, version)
-    body: dict = {"action": action, "observed_revision": version["revision"]}
-    if reason:
-        body["reason"] = reason
-    if action == "approve":
-        if version.get("base_delivery_mode") == "git_fetch" and not ack_git_base:
-            fail(
-                ErrorCategory.VALIDATION,
-                "This replaces a Git release with a stored folder that cannot be compared file by file.",
-                operation="Approve review",
-                resource=review_id,
-                remediation="Read the old source shown above, then re-run with --ack-git-base.",
-            )
-        if ack_git_base:
-            body["git_base_acknowledged"] = True
-        if folder and not revision and not yes:
-            if output == "json" or not sys.stdin.isatty():
-                fail(
-                    ErrorCategory.VALIDATION,
-                    "Approving a complete skill folder requires reviewing its exact revision.",
-                    operation="Approve review",
-                    resource=review_id,
-                    remediation=(
-                        f"Re-run with --revision {version['revision']} to approve exactly what you inspected, "
-                        "or --yes to accept the files listed for this run."
-                    ),
-                )
-            if not typer.confirm("Approve exactly these files?"):
-                raise typer.Exit(1)
-    result = client.post(f"/api/v1/review/skills/{resolved}/versions/{quote(vid, safe='')}/decision", body)
-    return {**result, "name": version.get("name") or review_id}
-
-
-@review_app.command(name="approve")
-def review_approve(
-    review_id: str = typer.Argument(..., help="Name, row number, @alias, or UUID"),
-    agent: bool = typer.Option(False, "--agent", "-a", help="Approve an Agent"),
-    bundle: bool = typer.Option(False, "--bundle", "-b", help="Approve an entire bundle atomically"),
-    output: OutputMode = typer.Option("table", "--output", "-o"),
-    version_id: str | None = typer.Option(None, "--version-id", help="Exact skill version UUID to review"),
-    revision: str | None = typer.Option(None, "--revision", help="Observed content revision of a skill folder"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Approve the skill folder files listed for this run"),
-    ack_git_base: bool = typer.Option(
-        False, "--ack-git-base", help="Acknowledge replacing a Git release that cannot be compared file by file"
-    ),
-):
-    """Approve a component, Agent, or bundle submission.
-
-    Complete skill folders are approved per exact version: the files are listed
-    and the decision is bound to their revision. Pass --revision to approve
-    precisely what you inspected, or --yes to accept the files shown.
-
-    Examples:
-
-        observal admin review approve 1
-
-        observal admin review approve my-agent --agent --output json
-
-        observal admin review approve my-skill --revision REVISION
-    """
-    path = _review_action_path(review_id, "approve", agent, bundle)
-    version_id, revision = _command_value(version_id), _command_value(revision)
-    yes, ack_git_base = _command_value(yes), _command_value(ack_git_base)
-    result = None
-    if not (agent or bundle):
-        result = _exact_skill_review(
-            review_id,
-            "approve",
-            version_id=version_id,
-            revision=revision,
-            yes=yes,
-            ack_git_base=ack_git_base,
-            output=_command_value(output),
-        )
-    if result is None:
-        with _command_progress(output, "Approving..."):
-            result = client.post(path)
-    if output == "json":
-        output_json(result)
-        return
-    name = esc(result.get("name", review_id))
-    if bundle:
-        rprint(f"[green]✓ Bundle approved: {name} ({result.get('approved_count', '?')} components)[/green]")
-    else:
-        rprint(f"[green]✓ Approved: {name}[/green]")
-
-
-@review_app.command(name="reject")
-def review_reject(
-    review_id: str = typer.Argument(..., help="Name, row number, @alias, or UUID"),
-    reason: str = typer.Option(..., "--reason", "-r", help="Rejection reason"),
-    agent: bool = typer.Option(False, "--agent", "-a", help="Reject an Agent"),
-    bundle: bool = typer.Option(False, "--bundle", "-b", help="Reject an entire bundle atomically"),
-    output: OutputMode = typer.Option("table", "--output", "-o"),
-    version_id: str | None = typer.Option(None, "--version-id", help="Exact skill version UUID to review"),
-):
-    """Reject a component, Agent, or bundle submission.
-
-    Examples:
-
-        observal admin review reject 2 --reason "Missing README"
-
-        observal admin review reject my-agent --agent --reason "Unsafe prompt" --output json
-    """
-    reason = reason.strip()
-    if not reason or len(reason) > 5000:
-        fail(
-            ErrorCategory.VALIDATION,
-            "Rejection reason must contain 1 to 5,000 characters.",
-            operation="Reject review",
-            resource="rejection reason",
-            remediation="Provide a concise, non-empty reason.",
-        )
-    path = _review_action_path(review_id, "reject", agent, bundle)
-    result = None
-    if not (agent or bundle):
-        result = _exact_skill_review(
-            review_id,
-            "reject",
-            reason=reason,
-            version_id=_command_value(version_id),
-            output=_command_value(output),
-        )
-    if result is None:
-        with _command_progress(output, "Rejecting..."):
-            result = client.post(path, {"reason": reason})
-    if output == "json":
-        output_json(result)
-        return
-    name = esc(result.get("name", review_id))
-    if bundle:
-        rprint(f"[yellow]✗ Bundle rejected: {name} ({result.get('rejected_count', '?')} components)[/yellow]")
-    else:
-        rprint(f"[yellow]✗ Rejected: {name}[/yellow]")
 
 
 # ── Telemetry ────────────────────────────────────────────
@@ -821,11 +454,11 @@ def _feedback_impl(listing_id, listing_type, output):
 
 admin_app = typer.Typer(
     help=(
-        "Core administration and submission review commands\n\n"
+        "Core administration commands (use 'observal review' for submission reviews)\n\n"
         "Examples:\n"
         "  observal admin diagnostics\n"
         "  observal admin users\n"
-        "  observal admin review list"
+        "  observal admin settings"
     )
 )
 
@@ -2431,6 +2064,3 @@ def status(
 
 # telemetry is a subgroup of ops
 ops_app.add_typer(telemetry_app, name="telemetry")
-
-# review is a subgroup of admin
-admin_app.add_typer(review_app, name="review")

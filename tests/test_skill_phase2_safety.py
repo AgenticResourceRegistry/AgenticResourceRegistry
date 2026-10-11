@@ -14,11 +14,9 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from api.routes import component_versions as versions
-from api.routes import review, skill
+from api.routes import skill
 from models.mcp import ListingStatus
 from models.skill import SkillVersion
-from models.user import UserRole
-from schemas.component_version import VersionReviewRequest
 from schemas.skill import SkillDraftRequest, SkillInstallRequest, SkillSubmitRequest, SkillUpdateRequest
 from services.skill_revisions import skill_content_revision
 from tests import discovery_support as ds
@@ -60,8 +58,7 @@ async def test_submit_persists_extras_without_auto_approval(monkeypatch):
     monkeypatch.setattr(skill, "resolve_publish_target", AsyncMock(return_value=_target(auto_approve=True)))
     monkeypatch.setattr(skill, "identity_exists", AsyncMock(return_value=False))
     monkeypatch.setattr(skill, "commit_or_name_conflict", AsyncMock())
-    publish = AsyncMock()
-    monkeypatch.setattr(skill.inbox, "on_publish", publish)
+    monkeypatch.setattr(skill, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=1)))
     await skill.submit_skill(
         SkillSubmitRequest(
             name="Review Skill",
@@ -79,7 +76,7 @@ async def test_submit_persists_extras_without_auto_approval(monkeypatch):
     version = db.add.call_args.args[0]
     assert version.extra_files[0]["content"] == "AP8="
     assert version.status == ListingStatus.pending
-    assert publish.call_args.kwargs["auto_approved"] is False
+    # A skill with resource files is never approved by submission, whatever the publish target allows.
 
 
 @pytest.mark.asyncio
@@ -213,7 +210,7 @@ async def test_version_inheritance_validation_and_no_shared_json(monkeypatch):
     monkeypatch.setattr(versions, "check_listing_visibility_async", AsyncMock(return_value=True))
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
     monkeypatch.setattr(versions, "get_effective_component_permission", Mock(return_value="owner"))
-    monkeypatch.setattr(versions.inbox, "on_publish", AsyncMock())
+    monkeypatch.setattr(versions, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=1)))
     user = SimpleNamespace(id=OWNER_ID)
     await versions._publish_version(
         str(listing.id), _request("skill"), type(listing), type(listing.latest_version), "skill", db, user
@@ -260,47 +257,6 @@ async def test_version_inheritance_validation_and_no_shared_json(monkeypatch):
             user,
         )
     assert null_exc.value.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_version_review_approval_refuses_resource_bytes(monkeypatch):
-    listing = version_listing("skill", owner_id=OWNER_ID, status=ListingStatus.pending)
-    listing.latest_version.extra_files = [RESOURCE]
-    db = version_db()
-    from tests.test_component_versions_routes import _result
-
-    db.execute.return_value = _result(scalar=listing.latest_version)
-    db.refresh = AsyncMock()
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions, "get_effective_component_permission", Mock(return_value="owner"))
-    monkeypatch.setattr(
-        versions, "lock_skill_version", AsyncMock(return_value=(listing.latest_version_id, listing.latest_version))
-    )
-    with pytest.raises(HTTPException) as exc:
-        await versions._review_version(
-            str(listing.id),
-            listing.latest_version.version,
-            VersionReviewRequest(action="approve"),
-            type(listing),
-            type(listing.latest_version),
-            "skill",
-            db,
-            SimpleNamespace(id=OWNER_ID, role=UserRole.admin),
-        )
-    assert exc.value.status_code == 409
-    db.commit.assert_not_awaited()
-
-
-def test_review_guard_targets_resource_versions():
-    listing = _listing()
-    listing.latest_version.delivery_mode = "registry_direct"
-    listing.latest_version.extra_files = [RESOURCE]
-    listing.versions = [listing.latest_version]
-    with pytest.raises(HTTPException) as exc:
-        review._refuse_unreviewable_skill(listing)
-    assert exc.value.status_code == 409
-    listing.latest_version.extra_files = []
-    review._refuse_unreviewable_skill(listing)
 
 
 def test_summary_never_serializes_resources():

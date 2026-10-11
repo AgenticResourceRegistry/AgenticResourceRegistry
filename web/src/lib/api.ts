@@ -31,13 +31,20 @@ import type {
 	SessionsSummary,
 	SessionErrorEvent,
 	TelemetryStatus,
-	ReviewItem,
 	SkillFolderDraftRequest,
 	SkillVersionManifest,
 	SkillApprovedBase,
 	SkillSuccessorRequest,
 	SkillFileContents,
 	SkillBinaryContents,
+	ReviewSummary,
+	ReviewDetail,
+	ReviewGate,
+	ReviewFile,
+	ReviewThread,
+	ReviewCheck,
+	ReviewTimelineEntry,
+	ReviewPolicy,
 	RegistryItem,
 	ForkRequest,
 	ForkDiff,
@@ -541,8 +548,8 @@ export const registry = {
 		put<RegistryItem>(`/${type ?? "agents"}/${id}/draft`, body),
 	updateAgent: (id: string, body: unknown) =>
 		put<RegistryItem>(`/agents/${id}`, body),
-	submitDraft: (id: string, type?: RegistryType) =>
-		post(`/${type ?? "agents"}/${id}/submit`),
+	submitDraft: (id: string, type?: RegistryType, message?: string) =>
+		post<RegistryItem>(`/${type ?? "agents"}/${id}/submit${message ? `?message=${encodeURIComponent(message)}` : ""}`),
 	submit: (type: RegistryType, body: unknown) =>
 		post<RegistryItem>(`/${type}/submit`, body),
 	updateVisibility: (type: RegistryType, id: string, visibility: "public" | "team") =>
@@ -559,7 +566,7 @@ export const registry = {
 	getVersion: (agentId: string, version: string) =>
 		get<AgentVersionDetail>(`/agents/${agentId}/versions/${version}`),
 	createVersion: (agentId: string, body: unknown) =>
-		post<unknown>(`/agents/${agentId}/versions`, body),
+		post<{ review_number?: number | null; review_url?: string | null }>(`/agents/${agentId}/versions`, body),
 	getVersionDiff: (agentId: string, v1: string, v2: string) =>
 		get<VersionDiff>(`/agents/${agentId}/versions/${v1}/diff/${v2}`),
 	getVersionOutdated: (agentId: string, version: string) =>
@@ -619,40 +626,50 @@ export const registry = {
 		post<{ status: string }>(`/${type ?? "agents"}/${id}/cancel-edit`),
 };
 
-// ── Review ──────────────────────────────────────────────────────────
-export const review = {
-	list: (params?: Record<string, string>) => {
-		const qs = params ? `?${new URLSearchParams(params)}` : "";
-		return get<ReviewItem[]>(`/review${qs}`);
-	},
-	listAgents: () => get<ReviewItem[]>("/review?tab=agents"),
-	/**
-	 * Pending queue narrowed to one teamspace. The server answers 403 when the
-	 * caller does not review for that teamspace, so callers must gate on the
-	 * team role before asking.
-	 */
-	listForTeam: (teamId: string, params?: Record<string, string>) =>
-		get<ReviewItem[]>(`/review?${new URLSearchParams({ ...params, team_id: teamId })}`),
-	get: (id: string) => get<ReviewItem>(`/review/${id}`),
-	getSkillVersion: (id: string, versionId: string) => get<ReviewItem>(`/review/skills/${id}/versions/${versionId}`),
-	decideSkillVersion: (id: string, versionId: string, action: "approve" | "reject", observedRevision: string, reason?: string, gitBaseAcknowledged = false) =>
-		post(`/review/skills/${id}/versions/${versionId}/decision`, {
-			action, observed_revision: observedRevision, reason, git_base_acknowledged: gitBaseAcknowledged,
-		}),
-	approve: (id: string) => post(`/review/${id}/approve`),
-	reject: (id: string, body: { reason: string }) =>
-		post(`/review/${id}/reject`, body),
-	approveAgent: (id: string, body?: { category?: string }) =>
-		post(`/review/agents/${id}/approve`, body),
-	rejectAgent: (id: string, body: { reason: string }) =>
-		post(`/review/agents/${id}/reject`, body),
-	approveBundle: (id: string) => post(`/review/bundles/${id}/approve`),
-	rejectBundle: (id: string, body: { reason: string }) =>
-		post(`/review/bundles/${id}/reject`, body),
-	relatedSkills: (id: string) =>
-		get<{ skills: ReviewItem[] }>(`/review/${id}/related-skills`),
-	approveWithSkills: (id: string, body: { skill_ids: string[] }) =>
-		post(`/review/${id}/approve-with-skills`, body),
+// ── PR reviews ──────────────────────────────────────────────────────
+export const prReviews = {
+  list: (filters: Record<string, string>) => get<{ items: ReviewSummary[]; next_cursor: number | null }>(
+    `/reviews?${new URLSearchParams(filters)}`,
+  ),
+  detail: (ref: string) => get<ReviewDetail>(`/reviews/${encodeURIComponent(ref)}`),
+  files: (ref: string) => get<ReviewFile[]>(`/reviews/${encodeURIComponent(ref)}/files`),
+  diff: (ref: string, params: Record<string, string>) => get<ReviewFile[]>(
+    `/reviews/${encodeURIComponent(ref)}/diff?${new URLSearchParams(params)}`,
+  ),
+  gate: (ref: string) => get<ReviewGate>(`/reviews/${encodeURIComponent(ref)}/gate`),
+  checks: (ref: string) => get<ReviewCheck[]>(`/reviews/${encodeURIComponent(ref)}/checks`),
+  threads: (ref: string) => get<ReviewThread[]>(`/reviews/${encodeURIComponent(ref)}/threads`),
+  timeline: (ref: string) => get<{ items: ReviewTimelineEntry[]; next_cursor: string | null }>(
+    `/reviews/${encodeURIComponent(ref)}/timeline`,
+  ),
+  submit: (ref: string, verdict: string, body: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/submissions`, { verdict, body },
+  ),
+  comment: (ref: string, body: string, path?: string, line?: number, asDraft = false) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads`,
+    path ? { path, side: "head", start_line: line, body, as_draft: asDraft } : { body, as_draft: asDraft },
+  ),
+  reply: (ref: string, threadId: string, body: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/comments`, { body },
+  ),
+  resolve: (ref: string, threadId: string, resolved: boolean) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/${resolved ? "resolve" : "unresolve"}`,
+  ),
+  publish: (ref: string, category?: string, overrideReason?: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/publish`, { category, override_reason: overrideReason },
+  ),
+  close: (ref: string, reason: string) => post(`/reviews/${encodeURIComponent(ref)}/close`, { reason }),
+  withdraw: (ref: string) => post(`/reviews/${encodeURIComponent(ref)}/withdraw`),
+  subscribe: (ref: string, mode: "watching" | "muted") => put(
+    `/reviews/${encodeURIComponent(ref)}/subscription`, { mode },
+  ),
+  requestReviewer: (ref: string, userId: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/reviewers`, { user_id: userId },
+  ),
+  orgPolicy: () => get<ReviewPolicy>("/admin/review-policy"),
+  setOrgPolicy: (value: ReviewPolicy) => put<ReviewPolicy>("/admin/review-policy", value),
+  teamPolicy: (id: string) => get<ReviewPolicy | null>(`/teams/${id}/review-policy`),
+  setTeamPolicy: (id: string, value: ReviewPolicy) => put<ReviewPolicy>(`/teams/${id}/review-policy`, value),
 };
 
 // ── Telemetry ───────────────────────────────────────────────────────

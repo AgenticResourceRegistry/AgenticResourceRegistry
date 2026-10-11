@@ -1211,7 +1211,7 @@ class TestAgentPublish:
         assert "new-agent-uuid" in result.output
         assert "observal agent pull tester/test-agent" in result.output
         # A public publish stays in the review queue, so the CLI must say so.
-        assert "an admin must approve it" in result.output
+        assert "review is required before publication" in result.output
 
         # Verify the POST payload
         call_args = mock_post_fn.call_args

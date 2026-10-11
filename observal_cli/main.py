@@ -219,6 +219,7 @@ from observal_cli.cmd_outdated import register_outdated
 from observal_cli.cmd_prompt import prompt_app
 from observal_cli.cmd_pull import register_pull
 from observal_cli.cmd_recommend import recommend_app
+from observal_cli.cmd_review import review_app
 from observal_cli.cmd_sandbox import sandbox_app
 from observal_cli.cmd_scan import register_scan
 from observal_cli.cmd_share import share_app
@@ -303,6 +304,7 @@ app.add_typer(inbox_app, name="inbox")
 app.add_typer(agent_app, name="agent")
 app.add_typer(share_app, name="share")
 app.add_typer(team_app, name="team")
+app.add_typer(review_app, name="review")
 app.add_typer(ops_app, name="ops")
 app.add_typer(admin_app, name="admin")
 app.add_typer(self_app, name="self")

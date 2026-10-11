@@ -25,6 +25,7 @@ from api.deps import (
 )
 from api.routes._skill_lock import approved_skill_base_id, lock_skill_version, should_promote_skill_version
 from models.mcp import ListingStatus
+from models.review import Review, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
 from schemas.skill import SkillCandidateDraftRequest, SkillFolderImportDraftRequest, SkillUpdateRequest
@@ -39,7 +40,9 @@ from schemas.skill_resources import (
 from services import dynamic_settings as _ds
 from services.agent_lock import INSTALLABLE_STATUSES, release_key
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
-from services.inbox import sources as inbox
+from services.review.cutover import submit_for_review
+from services.review.decisions import withdraw as withdraw_review
+from services.review.notifications import deliver_event
 from services.skill_bundle import (
     MAX_BUNDLE_BYTES,
     MAX_EXTRA_FILES,
@@ -170,7 +173,10 @@ async def _editable_version(
         raise HTTPException(status_code=403, detail="Not the listing owner")
     if version.status == ListingStatus.pending:
         raise HTTPException(status_code=409, detail="Withdraw this pending version before editing its files")
-    if version.status not in (ListingStatus.draft, ListingStatus.rejected) or version.pre_public_status is not None:
+    if (
+        version.status not in (ListingStatus.draft, ListingStatus.rejected, ListingStatus.changes_requested)
+        or version.pre_public_status is not None
+    ):
         raise HTTPException(status_code=409, detail="Historical skill releases are immutable; create a new draft")
     if version.is_editing and version.editing_by != current_user.id and not _is_lock_expired(version.editing_since):
         raise HTTPException(status_code=409, detail="This skill version is being edited by another author")
@@ -694,7 +700,10 @@ async def withdraw_skill_version(
         get_effective_component_permission(listing, current_user) != "owner"
     ):
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    if version.status != ListingStatus.pending or version.pre_public_status is not None:
+    if (
+        version.status not in (ListingStatus.pending, ListingStatus.changes_requested)
+        or version.pre_public_status is not None
+    ):
         raise HTTPException(status_code=409, detail="Only an ordinary pending author version can be withdrawn")
     if version.is_editing and version.editing_by != current_user.id and not _is_lock_expired(version.editing_since):
         raise HTTPException(status_code=409, detail="This skill version is being edited by another author")
@@ -712,16 +721,20 @@ async def withdraw_skill_version(
         )
     except SkillValidationError as exc:
         raise HTTPException(status_code=409, detail="Saved skill version is not a valid folder") from exc
-    version.review_epoch = (version.review_epoch or 0) + 1
+    review = await db.scalar(
+        select(Review).where(Review.subject_type == "skill", Review.version_id == version.id).with_for_update()
+    )
+    if review is not None and review.state not in (ReviewState.closed, ReviewState.published):
+        await withdraw_review(db, review, current_user)
+        await deliver_event(db, review, "withdrawn", current_user.id)
+    if review is None or review.state in (ReviewState.closed, ReviewState.published):
+        version.review_epoch = (version.review_epoch or 0) + 1  # decisions.withdraw bumps it for a live review
     version.status = ListingStatus.draft
     version.rejection_reason = None
     version.reviewed_by = None
     version.reviewed_at = None
     release_edit_lock(version, current_user.id, force=True)
     version.content_revision = skill_content_revision(listing, version)
-    await inbox.on_review_withdrawn(
-        db, listing, subject_type="skill", actor_id=current_user.id, version=version.version
-    )
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -797,7 +810,7 @@ async def submit_skill_version_draft(
                 version.slash_command = analysis.slash_command
     except SkillValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if version.status == ListingStatus.rejected:
+    if version.status in (ListingStatus.rejected, ListingStatus.changes_requested):
         # A previous reviewer observation belongs to the rejected round, even
         # when the owner resubmits unchanged bytes. Do not reuse its token.
         version.review_epoch = (version.review_epoch or 0) + 1
@@ -808,9 +821,7 @@ async def submit_skill_version_draft(
     release_edit_lock(version, current_user.id, force=True)
     await db.flush()
     version.content_revision = skill_content_revision(listing, version)
-    await inbox.on_review_requested(
-        db, listing, subject_type="skill", actor_id=current_user.id, version=version.version
-    )
+    await submit_for_review(db, "skill", listing, version, current_user.id, message=req.message)
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"

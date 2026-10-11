@@ -33,7 +33,7 @@ from schemas.inbox import (
     OutdatedReportResponse,
 )
 from services.inbox import delivery, visibility
-from services.inbox.registry import Subject
+from services.inbox.registry import Subject, review_action_url
 
 router = APIRouter(prefix="/api/v1/inbox", tags=["inbox"])
 
@@ -57,7 +57,7 @@ def _to_response(item: InboxItem) -> InboxItemResponse:
         subject_id=item.subject_id,
         subject_namespace=item.subject_namespace,
         subject_slug=item.subject_slug,
-        action_url=item.action_url,
+        action_url=review_action_url(item.kind, item.payload or {}) or item.action_url,
         action_command=item.action_command,
         actor_id=item.actor_id,
         team_id=item.team_id,

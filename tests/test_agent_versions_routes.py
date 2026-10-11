@@ -25,7 +25,6 @@ from models.agent_component import AgentComponent
 from models.user import UserRole
 from schemas.agent import (
     AgentVersionCreateRequest,
-    AgentVersionReviewRequest,
     ComponentRef,
     ExternalMcp,
     SuccessCriteria,
@@ -253,8 +252,7 @@ def boundaries(monkeypatch):
     generate = MagicMock(return_value={"files": {}})
     build_snapshot = AsyncMock(return_value="snapshot: generated\n")
     resolve_model = AsyncMock(return_value=("resolved-model", []))
-    publish = AsyncMock(return_value=1)
-    review = AsyncMock(return_value=1)
+    publish = AsyncMock(return_value=SimpleNamespace(number=42))
     legacy_audit = AsyncMock()
     clickhouse_insert = AsyncMock()
     names = AsyncMock(return_value={})
@@ -272,8 +270,7 @@ def boundaries(monkeypatch):
     monkeypatch.setattr(routes, "audit", legacy_audit)
     monkeypatch.setattr(snapshot, "build_yaml_snapshot", build_snapshot)
     monkeypatch.setattr(model_resolver, "resolve_model_for_harness", resolve_model)
-    monkeypatch.setattr(routes.inbox, "on_publish", publish)
-    monkeypatch.setattr(routes.inbox, "on_review_decided", review)
+    monkeypatch.setattr(routes, "submit_for_review", publish)
     monkeypatch.setattr(clickhouse, "insert_audit_log", clickhouse_insert)
     monkeypatch.setattr(agent_routes, "_resolve_component_names", names)
     monkeypatch.setattr(agent_routes, "_resolve_component_statuses", statuses)
@@ -291,7 +288,6 @@ def boundaries(monkeypatch):
         build_snapshot=build_snapshot,
         resolve_model=resolve_model,
         publish=publish,
-        review=review,
         legacy_audit=legacy_audit,
         clickhouse_insert=clickhouse_insert,
         names=names,
@@ -656,14 +652,8 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
         "_resolved_model": "claude-haiku-4",
         "_model_warnings": ["normalized alias"],
     }
-    boundaries.publish.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=USER_ID,
-        auto_approved=False,
-        version="2.0.0",
-    )
+    boundaries.publish.assert_awaited_once_with(db, "agent", agent, version, USER_ID, message=None)
+    assert response["review_number"] == 42 and response["review_url"] == "/review/42"
     db.commit.assert_awaited_once()
     assert response["id"] == str(VERSION_ID)
     assert response["status"] == "pending"
@@ -702,14 +692,7 @@ async def test_create_draft_skips_queue_and_has_no_warning(boundaries):
         db, VERSION_ID, [], previous=[], refresh=False, require_approved=True, current_user=_user()
     )
     boundaries.generate.assert_not_called()
-    boundaries.publish.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=USER_ID,
-        auto_approved=True,
-        version="2.0.0",
-    )
+    boundaries.publish.assert_not_awaited()
     assert len(db.statements) == 2
 
 
@@ -735,179 +718,6 @@ async def test_create_commit_failure_propagates_without_audit(boundaries):
         await routes._create_agent_version(str(AGENT_ID), _request(), db, _user())
 
     boundaries.publish.assert_awaited_once()
-    boundaries.legacy_audit.assert_not_awaited()
-    boundaries.clickhouse_insert.assert_not_awaited()
-
-
-async def test_review_guards_missing_version_and_nonpending_state(boundaries):
-    request = AgentVersionReviewRequest(action="approve")
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-    boundaries.load.return_value = None
-    with pytest.raises(HTTPException) as missing_agent:
-        await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, _db(), reviewer)
-    assert (missing_agent.value.status_code, missing_agent.value.detail) == (404, "Agent not found")
-
-    boundaries.load.return_value = _agent(created_by=OTHER_USER_ID)
-    missing_db = _db(_result(one=None))
-    with pytest.raises(HTTPException) as missing_version:
-        await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, missing_db, reviewer)
-    assert (missing_version.value.status_code, missing_version.value.detail) == (404, "Version not found")
-
-    approved = _version(version="2.0.0", status=AgentStatus.approved)
-    state_db = _db(_result(one=approved))
-    with pytest.raises(HTTPException) as wrong_state:
-        await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, state_db, reviewer)
-    assert wrong_state.value.status_code == 422
-    assert wrong_state.value.detail == "Version is 'approved', only pending versions can be reviewed"
-    boundaries.review.assert_not_awaited()
-
-
-async def test_review_query_hides_pending_version_from_plain_user(boundaries):
-    boundaries.load.return_value = _agent(created_by=OTHER_USER_ID)
-    db = _db(_result(one=None))
-
-    with pytest.raises(HTTPException) as caught:
-        await routes._review_agent_version(
-            str(AGENT_ID),
-            "2.0.0",
-            AgentVersionReviewRequest(action="approve"),
-            db,
-            _user(),
-        )
-
-    assert caught.value.status_code == 404
-    assert "agent_versions.status = 'approved'" in _sql(db.statements[0])
-
-
-@pytest.mark.parametrize(
-    ("current_version", "candidate_version", "promoted"),
-    [
-        (None, "1.0.0", True),
-        ("1.0.0", "2.0.0", True),
-        ("2.0.0", "2.0.0", True),
-        ("3.0.0", "2.0.0", False),
-        ("legacy", "2.0.0", False),
-        ("1.0.0", "legacy", False),
-    ],
-)
-async def test_approve_promotes_only_latest_semver_and_ignores_edit_lock(
-    current_version,
-    candidate_version,
-    promoted,
-    boundaries,
-):
-    current = (
-        _version(current_version, version_id=LATEST_VERSION_ID, status=AgentStatus.approved)
-        if current_version is not None
-        else None
-    )
-    agent = _agent(created_by=OTHER_USER_ID, latest=current)
-    candidate = _version(candidate_version)
-    candidate.rejection_reason = "old rejection"
-    candidate.is_editing = True
-    candidate.editing_by = OTHER_USER_ID
-    candidate.editing_since = NOW
-    boundaries.load.return_value = agent
-    events = []
-    db = _db(_result(one=candidate))
-    db.flush.side_effect = lambda: events.append("flush")
-
-    async def notify(*args, **kwargs):
-        events.append("notify")
-        return 1
-
-    async def commit():
-        events.append("commit")
-
-    boundaries.review.side_effect = notify
-    db.commit.side_effect = commit
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-
-    response = await routes._review_agent_version(
-        str(AGENT_ID),
-        candidate_version,
-        AgentVersionReviewRequest(action="approve"),
-        db,
-        reviewer,
-    )
-
-    assert response == {"version": candidate_version, "new_status": "approved", "reason": None}
-    assert candidate.status == AgentStatus.approved
-    assert candidate.rejection_reason is None
-    assert candidate.reviewed_by == REVIEWER_ID
-    assert candidate.reviewed_at == NOW
-    assert candidate.is_editing is True
-    assert candidate.editing_by == OTHER_USER_ID
-    expected_latest = VERSION_ID if promoted else LATEST_VERSION_ID
-    assert agent.latest_version_id == expected_latest
-    assert events == ["flush", "notify", "commit"]
-    boundaries.review.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        approved=True,
-        actor_id=REVIEWER_ID,
-        version=candidate_version,
-        reason=None,
-        submitter_id=USER_ID,
-    )
-    assert "agent_versions.status = 'approved'" not in _sql(db.statements[0])
-    boundaries.legacy_audit.assert_not_awaited()
-
-
-async def test_reject_records_reason_without_changing_latest_version(boundaries):
-    current = _version("1.0.0", version_id=LATEST_VERSION_ID, status=AgentStatus.approved)
-    agent = _agent(created_by=OTHER_USER_ID, latest=current)
-    candidate = _version("2.0.0")
-    boundaries.load.return_value = agent
-    db = _db(_result(one=candidate))
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-    request = AgentVersionReviewRequest(action="reject", reason="Needs safer defaults")
-
-    response = await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, db, reviewer)
-
-    assert response == {
-        "version": "2.0.0",
-        "new_status": "rejected",
-        "reason": "Needs safer defaults",
-    }
-    assert candidate.status == AgentStatus.rejected
-    assert candidate.rejection_reason == "Needs safer defaults"
-    assert candidate.reviewed_by == REVIEWER_ID
-    assert candidate.reviewed_at == NOW
-    assert agent.latest_version_id == LATEST_VERSION_ID
-    db.flush.assert_not_awaited()
-    boundaries.review.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        approved=False,
-        actor_id=REVIEWER_ID,
-        version="2.0.0",
-        reason="Needs safer defaults",
-        submitter_id=USER_ID,
-    )
-    db.commit.assert_awaited_once()
-
-
-async def test_review_commit_failure_propagates_after_transactional_notification(boundaries):
-    candidate = _version("2.0.0")
-    boundaries.load.return_value = _agent(created_by=OTHER_USER_ID)
-    db = _db(_result(one=candidate))
-    db.commit.side_effect = RuntimeError("database unavailable")
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        await routes._review_agent_version(
-            str(AGENT_ID),
-            "2.0.0",
-            AgentVersionReviewRequest(action="approve"),
-            db,
-            reviewer,
-        )
-
-    db.flush.assert_awaited_once()
-    boundaries.review.assert_awaited_once()
     boundaries.legacy_audit.assert_not_awaited()
     boundaries.clickhouse_insert.assert_not_awaited()
 
@@ -1025,13 +835,11 @@ async def test_route_handlers_delegate_and_json_serialize_owned_responses(monkey
     list_versions = AsyncMock(return_value=payload)
     get_version = AsyncMock(return_value=payload)
     create_version = AsyncMock(return_value=payload)
-    review_version = AsyncMock(return_value=payload)
     get_config = AsyncMock(return_value=payload)
     get_diff = AsyncMock(return_value=payload)
     monkeypatch.setattr(routes, "_list_agent_versions", list_versions)
     monkeypatch.setattr(routes, "_get_agent_version", get_version)
     monkeypatch.setattr(routes, "_create_agent_version", create_version)
-    monkeypatch.setattr(routes, "_review_agent_version", review_version)
     monkeypatch.setattr(routes, "_get_agent_harness_config", get_config)
     monkeypatch.setattr(routes, "_get_version_diff", get_diff)
     app = _route_app(user, db)
@@ -1044,15 +852,11 @@ async def test_route_handlers_delegate_and_json_serialize_owned_responses(monkey
                 f"/api/v1/agents/{AGENT_ID}/versions",
                 json={"version": "2.0.0", "model_name": "claude-sonnet-4"},
             ),
-            await client.post(
-                f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/review",
-                json={"action": "approve"},
-            ),
             await client.get(f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/harness/kiro"),
             await client.get(f"/api/v1/agents/{AGENT_ID}/versions/1.0.0/diff/2.0.0"),
         ]
 
-    assert [response.status_code for response in responses] == [200] * 6
+    assert [response.status_code for response in responses] == [200] * 5
     for response in responses:
         assert response.json()["id"] == str(VERSION_ID)
         assert response.json()["at"].startswith("2026-04-21T12:00:00")
@@ -1069,34 +873,14 @@ async def test_route_handlers_delegate_and_json_serialize_owned_responses(monkey
     assert create_call["req"].version == "2.0.0"
     assert create_call["db"] is db
     assert create_call["current_user"] is user
-    review_call = review_version.await_args.kwargs
-    assert review_call["agent_id"] == str(AGENT_ID)
-    assert review_call["version"] == "2.0.0"
-    assert review_call["req"].action == "approve"
     get_config.assert_awaited_once_with(
         agent_id=str(AGENT_ID), version="2.0.0", harness="kiro", db=db, current_user=user
     )
     get_diff.assert_awaited_once_with(agent_id=str(AGENT_ID), v1="1.0.0", v2="2.0.0", db=db, current_user=user)
 
 
-async def test_review_route_requires_reviewer_before_business_logic(monkeypatch):
-    import api.deps as deps
-
-    user = _user()
-    db = _db()
-    review = AsyncMock()
-    security_event = AsyncMock()
-    monkeypatch.setattr(routes, "_review_agent_version", review)
-    monkeypatch.setattr(deps, "emit_security_event", security_event)
-    app = _route_app(user, db)
-
+async def test_old_agent_review_action_is_removed():
+    app = _route_app(_user(), _db())
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/review",
-            json={"action": "approve"},
-        )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Insufficient permissions"
-    review.assert_not_awaited()
-    security_event.assert_awaited_once()
+        response = await client.post(f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/review", json={"action": "approve"})
+    assert response.status_code == 404

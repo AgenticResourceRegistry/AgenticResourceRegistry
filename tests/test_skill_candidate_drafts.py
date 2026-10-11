@@ -6,14 +6,13 @@
 import json
 from datetime import timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException, Response
 from sqlalchemy import select
 
 from api.routes import component_versions, skill_files
-from models.inbox import InboxItem, InboxItemEvent
+from models.inbox import InboxItem
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
@@ -160,8 +159,6 @@ async def test_atomic_folder_import_preserves_old_release_and_refuses_stale_base
 async def test_one_shot_publish_never_inherits_uncleared_or_ambiguous_history(monkeypatch, case):
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
-    notify = AsyncMock()
-    monkeypatch.setattr(component_versions.inbox, "on_publish", notify)
     try:
         async with maker() as db:
             owner = await ds.user(db)
@@ -198,7 +195,6 @@ async def test_one_shot_publish_never_inherits_uncleared_or_ambiguous_history(mo
                 )
                 is None
             )
-            notify.assert_not_awaited()
     finally:
         await engine.dispose()
 
@@ -207,7 +203,6 @@ async def test_one_shot_publish_never_inherits_uncleared_or_ambiguous_history(mo
 async def test_draft_and_one_shot_publish_inherit_highest_stable_not_later_backfill(monkeypatch):
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
-    monkeypatch.setattr(component_versions.inbox, "on_publish", AsyncMock())
     try:
         async with maker() as db:
             owner = await ds.user(db)
@@ -279,9 +274,6 @@ async def test_draft_and_one_shot_publish_inherit_highest_stable_not_later_backf
 async def test_rejected_git_version_is_editable_and_resubmittable_behind_approved_pointer():
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
-    async with engine.begin() as conn:
-        await conn.run_sync(InboxItem.__table__.create)
-        await conn.run_sync(InboxItemEvent.__table__.create)
     try:
         async with maker() as db:
             owner = await ds.user(db)
@@ -335,7 +327,7 @@ async def test_rejected_git_version_is_editable_and_resubmittable_behind_approve
             assert version.status == ListingStatus.pending
             notices = (await db.execute(select(InboxItem).where(InboxItem.subject_id == listing_id))).scalars().all()
             assert len(notices) == 1
-            assert notices[0].dedupe_key.endswith(":v1.3.0")
+            assert notices[0].dedupe_key.startswith("review_requested:skill:") and ":v1.3.0" in notices[0].dedupe_key
             with pytest.raises(HTTPException) as pending:
                 await skill_files.update_skill_version_draft(
                     str(listing_id),

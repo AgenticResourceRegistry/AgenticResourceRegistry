@@ -42,13 +42,12 @@ from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.agent import (  # noqa: TC001
     AgentVersionCreateRequest,
-    AgentVersionReviewRequest,
 )
 from services.agent_resolver import validate_component_ids
 from services.harness import generate_agent_config
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
-from services.inbox import sources as inbox
-from services.versioning import parse_semver, validate_semver
+from services.review.cutover import submit_for_review
+from services.versioning import validate_semver
 
 agent_version_router = APIRouter()
 
@@ -385,17 +384,11 @@ async def _create_agent_version(
             failed_harnesses.append(harness)
     ver.harness_configs = harness_configs or {}
 
-    # A draft is not in anyone's queue; only a pending release is.
-    await inbox.on_publish(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=current_user.id,
-        auto_approved=initial_status != AgentStatus.pending,
-        version=ver.version,
-    )
+    review = None
+    if initial_status == AgentStatus.pending:
+        review = await submit_for_review(db, "agent", agent, ver, current_user.id, message=req.message)
 
-    # Do NOT update latest_version_id - that happens on approval
+    # Do NOT update latest_version_id - that happens on publication
     await db.commit()
 
     warnings: list[str] = []
@@ -420,101 +413,9 @@ async def _create_agent_version(
     }
     if warnings:
         result["warnings"] = warnings
+    if review:
+        result.update(review_number=review.number, review_url=f"/review/{review.number}")
     return result
-
-
-async def _review_agent_version(
-    agent_id: str,
-    version: str,
-    req: AgentVersionReviewRequest,
-    db: AsyncSession,
-    current_user: User,
-) -> dict:
-    optic.trace("agent_id={}, version={}", agent_id, version)
-    agent = await _load_agent(db, agent_id, current_user)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    perm = get_effective_agent_permission(agent, current_user)
-
-    # A version carries the agent's prompt and generated harness config. Seeing the
-    # agent is not enough to read a version nobody has approved: making a
-    # team-private agent public returns its versions to the queue, and without this
-    # an ordinary caller reads them before a reviewer does.
-    version_filters = [AgentVersion.agent_id == agent.id]
-    if not may_view_unapproved(perm, current_user):
-        version_filters.append(AgentVersion.status == AgentStatus.approved)
-
-    stmt = select(AgentVersion).where(*version_filters, AgentVersion.version == version)
-    ver = (await db.execute(stmt)).scalar_one_or_none()
-    if not ver:
-        raise HTTPException(status_code=404, detail="Version not found")
-
-    if ver.status != AgentStatus.pending:
-        raise HTTPException(
-            status_code=422, detail=f"Version is {ver.status.value!r}, only pending versions can be reviewed"
-        )
-
-    if req.action == "approve":
-        # Same gate as the review queue: the component releases this version pins
-        # must themselves be approved, and approval freezes the lock.
-        from api.routes.review import _check_agent_components_ready
-        from services.agent_lock import lock_agent_version
-
-        _ready, blocking = await _check_agent_components_ready(
-            ver.components or [], db, require_public_skills=not agent.is_private
-        )
-        if blocking:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "Cannot approve: some components are not approved yet",
-                    "blocking_components": blocking,
-                },
-            )
-        ver.status = AgentStatus.approved
-        ver.rejection_reason = None
-        ver.reviewed_by = current_user.id
-        ver.reviewed_at = datetime.now(UTC)
-        # Flush version status change first to avoid CircularDependencyError
-        # between Agent.latest_version (ManyToOne) and Agent.versions (OneToMany)
-        await db.flush()
-        await lock_agent_version(db, agent, ver)
-        # Update latest_version_id if this version is newer than (or equal to) the current latest
-        current_latest = agent.latest_version
-        new_parsed = parse_semver(ver.version)
-        current_parsed = parse_semver(current_latest.version) if current_latest else None
-        if not current_latest or (
-            new_parsed is not None and current_parsed is not None and new_parsed >= current_parsed
-        ):
-            agent.latest_version_id = ver.id
-    else:
-        ver.status = AgentStatus.rejected
-        ver.rejection_reason = req.reason
-        ver.reviewed_by = current_user.id
-        ver.reviewed_at = datetime.now(UTC)
-
-    # Same fact as a decision made through api/routes/review.py: the version's
-    # author hears the outcome, and every reviewer's open request item for this
-    # version is cleared. Delivered before the commit, in this transaction.
-    await inbox.on_review_decided(
-        db,
-        agent,
-        subject_type="agent",
-        approved=req.action == "approve",
-        actor_id=current_user.id,
-        version=ver.version,
-        reason=req.reason if req.action != "approve" else None,
-        submitter_id=ver.released_by,
-    )
-
-    await db.commit()
-
-    return {
-        "version": version,
-        "new_status": ver.status.value,
-        "reason": ver.rejection_reason,
-    }
 
 
 async def _get_agent_harness_config(
@@ -758,24 +659,6 @@ async def create_agent_version(
     optic.trace("agent_id={}", agent_id)
     return await _create_agent_version(
         agent_id=agent_id,
-        req=req,
-        db=db,
-        current_user=current_user,
-    )
-
-
-@agent_version_router.post("/{agent_id}/versions/{version}/review")
-async def review_agent_version(
-    agent_id: str,
-    version: str,
-    req: AgentVersionReviewRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.reviewer)),
-):
-    optic.trace("agent_id={}, version={}", agent_id, version)
-    return await _review_agent_version(
-        agent_id=agent_id,
-        version=version,
         req=req,
         db=db,
         current_user=current_user,

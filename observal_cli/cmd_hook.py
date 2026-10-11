@@ -12,6 +12,7 @@ import tempfile
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -43,6 +44,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_review_link
 
 hook_app = typer.Typer(
     help=(
@@ -100,6 +102,7 @@ def hook_submit(
     from_file: str | None = typer.Option(None, "--from-file", "-f", help="Create from JSON file"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
     submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (hook ID)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     script: str | None = typer.Option(None, "--script", help="Path to hook script file (content stored in registry)"),
     source_url: str | None = typer.Option(None, "--source-url", help="Git repo containing hook scripts"),
     source_ref: str | None = typer.Option(None, "--source-ref", help="Branch/tag to track (default: main)"),
@@ -144,11 +147,12 @@ def hook_submit(
         resolved = client.resolve_registry_reference("hook", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/hooks/{resolved}/submit")
+            result = client.post(f"/api/v1/hooks/{resolved}/submit" + (f"?message={quote(message)}" if message else ""))
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+            print_review_link(result)
         return
 
     if from_file:
@@ -338,9 +342,11 @@ def hook_submit(
     if output == "json":
         output_json(result)
         return
-    message = "Draft saved" if draft else "Hook submitted"
-    rprint(f"[green]✓ {message}![/green] ID: [bold]{esc(result['id'])}[/bold]")
+    label = "Draft saved" if draft else "Hook submitted"
+    rprint(f"[green]✓ {label}![/green] ID: [bold]{esc(result['id'])}[/bold]")
     rprint(f"  Install: [cyan]observal registry hook install {esc(client.canonical_name(result))}[/cyan]")
+    if not draft:
+        print_review_link(result)
 
 
 @hook_app.command(name="list")

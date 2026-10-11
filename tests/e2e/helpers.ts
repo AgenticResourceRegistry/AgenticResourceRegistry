@@ -19,16 +19,17 @@ export async function getAccessToken(): Promise<string> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      continue;
+    }
+    if (!res.ok) throw new Error(`Login failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
     const data = await res.json();
     if (data.access_token) {
       _cachedToken = data.access_token;
       return data.access_token as string;
     }
-    if (res.status === 429) {
-      await new Promise((r) => setTimeout(r, 15_000));
-      continue;
-    }
-    throw new Error(`Login failed: ${JSON.stringify(data)}`);
+    throw new Error(`Login response missing access token (${res.status})`);
   }
   throw new Error("Login failed after retries");
 }

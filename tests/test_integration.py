@@ -123,8 +123,22 @@ class TestAuth:
 # ── MCP CRUD Lifecycle ───────────────────────────────────────────────────────
 
 
+async def _publish_own_review(client, headers, number):
+    """A single-account integration fixture requires the audited super-admin exception."""
+    me = await client.get("/api/v1/auth/whoami", headers=headers)
+    if me.json()["role"] != "super_admin":
+        pytest.skip("Own-work publishing requires a super-admin override or an independent reviewer")
+    result = await client.post(
+        f"/api/v1/reviews/{number}/publish",
+        headers=headers,
+        json={"override_reason": "Single-account integration verification"},
+    )
+    assert result.status_code == 200, result.text
+    return result
+
+
 class TestMcpCrud:
-    """MCP lifecycle: submit → get → list → approve → delete."""
+    """MCP lifecycle: submit → review → publish → list."""
 
     @pytest.fixture(autouse=True)
     def _mcp_name(self):
@@ -153,6 +167,7 @@ class TestMcpCrud:
         data = r.json()
         assert data["name"] == self.mcp_name
         assert data["status"] == "pending"
+        assert data["review_number"] and data["review_url"] == f"/review/{data['review_number']}"
 
     @pytest.mark.asyncio
     async def test_get_mcp_by_name(self, client, admin_headers):
@@ -178,7 +193,7 @@ class TestMcpCrud:
     @pytest.mark.asyncio
     async def test_approve_mcp(self, client, admin_headers):
         # Submit
-        await client.post(
+        created = await client.post(
             "/api/v1/mcps/submit",
             headers=admin_headers,
             json={
@@ -192,10 +207,13 @@ class TestMcpCrud:
                 "args": ["index.js"],
             },
         )
-        # Approve
-        r = await client.post(f"/api/v1/review/{self.mcp_name}/approve", headers=admin_headers)
-        assert r.status_code == 200, f"Approve failed: {r.text}"
-        assert r.json()["status"] == "approved"
+        # Verdict and publication are separate operations; a single-account
+        # integration test can publish only through the audited exception.
+        number = created.json()["review_number"]
+        detail = await client.get(f"/api/v1/reviews/{number}", headers=admin_headers)
+        assert detail.status_code == 200 and detail.json()["state"] == "open"
+        r = await _publish_own_review(client, admin_headers, number)
+        assert r.json()["state"] == "published"
 
         # Verify status changed
         r2 = await client.get(f"/api/v1/mcps/{self.mcp_name}", headers=admin_headers)
@@ -249,9 +267,8 @@ class TestAgentLifecycle:
         assert r.json()["name"] == self.agent_name
         agent_id = r.json()["id"]
 
-        # Approve
-        r2 = await client.post(f"/api/v1/review/agents/{agent_id}/approve", headers=admin_headers)
-        assert r2.status_code == 200, f"Approve failed: {r2.text}"
+        assert r.json()["review_number"]
+        await _publish_own_review(client, admin_headers, r.json()["review_number"])
 
         # Verify in list
         r3 = await client.get("/api/v1/agents", headers=admin_headers)
@@ -395,7 +412,7 @@ class TestListAndSort:
     async def test_list_mcps_with_search(self, client, admin_headers):
         # Create a uniquely named MCP
         name = f"searchable-{uuid.uuid4().hex[:8]}"
-        await client.post(
+        created = await client.post(
             "/api/v1/mcps/submit",
             headers=admin_headers,
             json={
@@ -409,8 +426,8 @@ class TestListAndSort:
                 "args": ["index.js"],
             },
         )
-        # Approve so it shows in public list
-        await client.post(f"/api/v1/review/{name}/approve", headers=admin_headers)
+        # Publish so it shows in the public list.
+        await _publish_own_review(client, admin_headers, created.json()["review_number"])
 
         r = await client.get("/api/v1/mcps", headers=admin_headers, params={"search": name})
         assert r.status_code == 200
@@ -443,7 +460,7 @@ class TestRbac:
 
     @pytest.mark.asyncio
     async def test_unauthenticated_cannot_approve(self, client):
-        r = await client.post("/api/v1/review/anything/approve")
+        r = await client.post("/api/v1/reviews/42/submissions", json={"verdict": "approve"})
         assert r.status_code in (401, 403)
 
 
@@ -465,5 +482,7 @@ class TestErrorCases:
 
     @pytest.mark.asyncio
     async def test_approve_nonexistent(self, client, admin_headers):
-        r = await client.post(f"/api/v1/review/{uuid.uuid4()}/approve", headers=admin_headers)
+        r = await client.post(
+            f"/api/v1/reviews/{uuid.uuid4()}/submissions", headers=admin_headers, json={"verdict": "approve"}
+        )
         assert r.status_code == 404

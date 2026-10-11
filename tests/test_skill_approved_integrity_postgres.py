@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.routes import skill_files
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.skill import SkillVersion
 from schemas.skill import SkillCandidateDraftRequest
 from services.agent_lock import content_digest, load_pinned_listings, pinned_component_blockers
@@ -38,7 +37,7 @@ async def test_approved_folder_cannot_be_reviewed_or_pinned_after_corruption(cor
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
             owner = await ds.user(db)

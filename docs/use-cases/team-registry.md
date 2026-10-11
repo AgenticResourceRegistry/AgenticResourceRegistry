@@ -86,10 +86,11 @@ observal doctor patch --all-harnesses        # instrument everything
 Authors submit. Reviewers approve. Approved items appear in the public listing.
 
 ```bash
-observal admin review list --output json
-observal admin review show <id> --output json
-observal admin review approve <id> --output json
-observal admin review reject <id> --reason "missing env var docs" --output json
+observal review list --output json
+observal review show <number> --output json
+observal review approve <number> --output json
+observal review request-changes <number> --body "missing env var docs" --output json
+observal review publish <number> --output json
 ```
 
 What reviewers look for:

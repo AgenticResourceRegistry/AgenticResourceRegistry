@@ -12,16 +12,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.deps import get_current_user, get_db, get_registry_user
-from api.routes import component_forks, hook, mcp, prompt, review, sandbox, skill
+from api.routes import component_forks, hook, mcp, prompt, sandbox, skill
+from api.routes.reviews import detail as review_detail_routes
 from models.base import Base
 from models.mcp import ListingStatus
+from models.review import Review
 from models.user import UserRole
 from services import registry_fork
 from services.agent_lock import content_digest
-from services.teamspace import ReviewScope
 
 CONTENT = {
     "mcp": {"transport": "stdio", "command": "npx", "args": ["example"], "mcp_validated": True},
@@ -147,8 +149,6 @@ async def test_five_component_forks_from_approved_releases(monkeypatch):
                         changed = await client.get(f"/api/v1/skills/{fork.id}/fork-diff?version=2.0.0")
                         assert changed.status_code == 200 and changed.json()["unchanged"] is False
                         assert "Fork customized" in changed.json()["diff"]
-                        monkeypatch.setattr(skill, "publish_auto_approves_for_entity", AsyncMock(return_value=False))
-                        monkeypatch.setattr(skill.inbox, "on_publish", AsyncMock())
                         submitted = await client.post(f"/api/v1/skills/{fork.id}/submit")
                         assert submitted.status_code == 200, submitted.text
                         assert submitted.json()["status"] == "pending"
@@ -175,18 +175,18 @@ async def test_five_component_forks_from_approved_releases(monkeypatch):
                         )
                         assert edited.status_code == 200, edited.text
                         assert edited.json()["forked_from"]["id"] == str(source.id)
-                        monkeypatch.setattr(mcp, "publish_auto_approves_for_entity", AsyncMock(return_value=False))
-                        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock())
                         submitted = await client.post(f"/api/v1/mcps/{fork.id}/submit")
                         assert submitted.status_code == 200, submitted.text
                         assert submitted.json()["status"] == "pending"
                         assert submitted.json()["forked_from"]["id"] == str(source.id)
                     if kind in {"skill", "mcp"}:
                         reviewer = SimpleNamespace(id=uuid.uuid4(), role=UserRole.admin)
-                        scope = ReviewScope(is_admin=True, is_global_reviewer=True, team_ids=frozenset())
-                        queue = await review._query_pending_components(db, scope, kind, current_user=reviewer)
-                        assert next(row for row in queue if row["id"] == str(fork.id))["forked_from"]["id"] == source.id
-                        review_detail = await review.get_review(str(fork.id), db, reviewer)
+                        review_row = (
+                            await db.execute(
+                                select(Review).where(Review.subject_type == kind, Review.subject_id == fork.id)
+                            )
+                        ).scalar_one()
+                        review_detail = await review_detail_routes.detail(review_row, db, reviewer)
                         assert review_detail["forked_from"]["id"] == source.id
                     before = await client.get(url + "/forks")
                     assert before.status_code == 200 and before.json()["total"] == 0

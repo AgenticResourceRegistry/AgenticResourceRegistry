@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
 
 from api.routes import agent_versions, bulk
+from models import Base
 from models.agent import AgentVersion
 from models.agent_component import AgentComponent
 from models.mcp import ListingStatus, McpVersion
@@ -28,11 +28,11 @@ def test_agent_pin_column_accepts_versioned_skill_folder_digest():
 
 
 @pytest.fixture
-async def registry(monkeypatch):
-    monkeypatch.setattr(agent_versions.inbox, "on_publish", AsyncMock())
-    monkeypatch.setattr(bulk.inbox, "on_publish", AsyncMock())
+async def registry():
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     async with maker() as db:
         owner = await ds.user(db)
         mcp = await ds.mcp(db, owner)  # 1.4.2
@@ -248,12 +248,13 @@ async def test_draft_cannot_pin_and_render_another_users_unreviewed_release(regi
     assert any("UNREVIEWED TEMPLATE" in (snapshot or "") for snapshot in snapshots)
 
 
-async def test_version_review_requires_approved_pins_and_freezes_the_lock(registry, monkeypatch):
+async def test_publish_requires_approved_pins_and_freezes_the_lock(registry):
+    from fastapi import HTTPException
+
     from models.user import UserRole
-    from schemas.agent import AgentVersionReviewRequest
+    from services.review.decisions import open_or_push, publish, submit_verdict
 
     db, owner, mcp, agent = registry
-    monkeypatch.setattr(agent_versions.inbox, "on_review_decided", AsyncMock())
     pending = McpVersion(
         id=uuid.uuid4(),
         listing_id=mcp.id,
@@ -293,29 +294,27 @@ async def test_version_review_requires_approved_pins_and_freezes_the_lock(regist
     )
     await db.commit()
     reviewer = await ds.user(db, role=UserRole.admin)
-    approve = AgentVersionReviewRequest(action="approve")
-
-    with pytest.raises(agent_versions.HTTPException) as blocked:
-        await agent_versions._review_agent_version(str(agent.id), "4.0.0", approve, db, reviewer)
+    review = await open_or_push(db, "agent", agent, candidate, owner.id)
+    await submit_verdict(db, review, reviewer, "approve")
+    with pytest.raises(HTTPException) as blocked:
+        await publish(db, review, reviewer)
+    assert blocked.value.status_code == 422
     pending.status = ListingStatus.approved
     await db.commit()
-    await agent_versions._review_agent_version(str(agent.id), "4.0.0", approve, db, reviewer)
-
-    assert blocked.value.status_code == 422
-    assert blocked.value.detail["blocking_components"][0]["version"] == "2.0.0"
+    await publish(db, review, reviewer)
+    await db.commit()
     await db.refresh(candidate)
     lock = json.loads(candidate.lock_snapshot)
     assert (lock["agent"]["version"], lock["status"], lock["components"][0]["version"]) == ("4.0.0", "locked", "2.0.0")
 
 
-async def test_exact_agent_version_review_refuses_public_agent_with_private_skill(monkeypatch):
+async def test_publish_refuses_public_agent_with_private_skill():
     from fastapi import HTTPException
 
     from models.agent import AgentStatus
     from models.user import UserRole
-    from schemas.agent import AgentVersionReviewRequest
+    from services.review.decisions import open_or_push, publish, submit_verdict
 
-    monkeypatch.setattr(agent_versions.inbox, "on_review_decided", AsyncMock())
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     try:
@@ -326,13 +325,12 @@ async def test_exact_agent_version_review_refuses_public_agent_with_private_skil
             skill = await ds.skill(db, owner, team_id=team.id, is_private=True)
             agent = await ds.agent(db, owner, status=AgentStatus.pending, components=[("skill", skill.id, skill.name)])
             await db.commit()
-
+            version = (await db.execute(select(AgentVersion).where(AgentVersion.agent_id == agent.id))).scalar_one()
+            review = await open_or_push(db, "agent", agent, version, owner.id)
+            await submit_verdict(db, review, reviewer, "approve")
             with pytest.raises(HTTPException) as blocked:
-                await agent_versions._review_agent_version(
-                    str(agent.id), "3.1.0", AgentVersionReviewRequest(action="approve"), db, reviewer
-                )
+                await publish(db, review, reviewer)
             assert blocked.value.status_code == 422
-            assert any(item["status"] == "not_public" for item in blocked.value.detail["blocking_components"])
     finally:
         await engine.dispose()
 

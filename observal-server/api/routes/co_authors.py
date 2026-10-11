@@ -34,7 +34,6 @@ from models.skill import SkillListing, SkillVersion
 from models.team import TeamRole
 from models.user import User
 from services import dynamic_settings as _ds
-from services.inbox import sources as inbox
 from services.ownership import transfer_entity_owner
 from services.registry_namespace import identity_exists
 from services.skill_identity import rebind_skill_identity, snapshot_skill_identity
@@ -56,18 +55,6 @@ ENTITY_MODELS: dict[str, type] = {
     "sandboxes": SandboxListing,
     "prompts": PromptListing,
     "skills": SkillListing,
-}
-
-# Singular subject names, spelled out rather than derived. Trimming the trailing
-# "s" turns "sandboxes" into "sandboxe", which would be stored on inbox items and
-# break their links.
-ENTITY_SINGULAR: dict[str, str] = {
-    "agents": "agent",
-    "mcps": "mcp",
-    "hooks": "hook",
-    "sandboxes": "sandbox",
-    "prompts": "prompt",
-    "skills": "skill",
 }
 
 # Map entity type to version model class
@@ -259,12 +246,11 @@ async def transfer_ownership(
                 raise HTTPException(
                     status_code=409, detail="Resolve the prior team's public re-review before transferring"
                 )
-    returned_to_review = False
     if team_id is not None:
         entity.team_id = None
         entity.is_private = False
         if entity_type != "skills":
-            returned_to_review = await review_publication_to_public(entity, current_user, db, was_private=was_private)
+            await review_publication_to_public(entity, current_user, db, was_private=was_private)
 
     model = ENTITY_MODELS[entity_type]
     if await identity_exists(db, model, target_user.username, entity.slug, exclude_id=entity.id):
@@ -275,23 +261,11 @@ async def transfer_ownership(
 
     previous_owner, previous_owner_id = transfer_entity_owner(entity, entity_type, current_user, target_user)
     if entity_type == "skills" and team_id is not None:
-        returned_to_review = await review_publication_to_public(entity, current_user, db, was_private=was_private)
+        await review_publication_to_public(entity, current_user, db, was_private=was_private)
     if identity_snapshot is not None:
         if not was_private:
             await review_skill_identity_transfer(entity, current_user, db)
         rebind_skill_identity(entity, identity_snapshot)
-    if returned_to_review and entity_type != "skills":
-        # Skill transition notices are per version and sent by the helper.
-        # Delivered here rather than beside review_publication_to_public: the
-        # name-collision check above can still 409 out of this request, and
-        # resolving recipients for a transfer that never happens is wasted work.
-        await inbox.on_review_requested(
-            db,
-            entity,
-            subject_type=ENTITY_SINGULAR.get(entity_type, entity_type),
-            actor_id=current_user.id,
-            version=getattr(getattr(entity, "latest_version", None), "version", None),
-        )
     await commit_or_name_conflict(db, entity_type[:-1])
     await db.refresh(entity)
     return TransferOwnershipResponse(

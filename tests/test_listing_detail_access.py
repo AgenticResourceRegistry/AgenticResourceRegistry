@@ -81,6 +81,8 @@ def _listing_mock(status=ListingStatus.approved, submitted_by=None, is_private=F
     m.is_fork = False
     m.submitted_by = submitted_by or uuid.uuid4()
     m.co_authors = []
+    m.review_number = None
+    m.review_url = None
     # Privacy is a separate axis from status: set it explicitly so these tests
     # exercise status gating only. A bare MagicMock attribute is truthy, which
     # would silently make every listing look team-private.

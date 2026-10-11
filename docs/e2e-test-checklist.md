@@ -63,9 +63,9 @@
 
 ## 4. Reviewer A - Review Components via CLI
 - [ ] Log in as Reviewer A via CLI (`observal auth login`)
-- [ ] List pending submissions (`observal admin review list`)
-- [ ] Approve some components via CLI (`observal admin review approve`)
-- [ ] Reject some components via CLI with reasons (`observal admin review reject`)
+- [ ] List pending submissions (`observal review list`)
+- [ ] Approve some components via CLI (`observal review approve` then `observal review publish`)
+- [ ] Reject some components via CLI with reasons (`observal review request-changes`)
 
 ## 5. Reviewer B - Review Components via UI
 - [ ] Log in as Reviewer B via UI
@@ -94,9 +94,9 @@
 
 ## 8. Reviewer A - Review Agents via CLI
 - [ ] Log in as Reviewer A via CLI
-- [ ] List pending agent submissions (`observal admin review list`)
-- [ ] Approve some agents via CLI (`observal admin review approve`)
-- [ ] Reject some agents via CLI with reasons (`observal admin review reject`)
+- [ ] List pending agent submissions (`observal review list`)
+- [ ] Approve some agents via CLI (`observal review approve` then `observal review publish`)
+- [ ] Reject some agents via CLI with reasons (`observal review request-changes`)
 
 ## 9. Reviewer B - Review Agents via UI
 - [ ] Log in as Reviewer B via UI
@@ -244,8 +244,8 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 ## 24. Reviewer A - Review Agent Versions via CLI
 
 - [ ] Log in as Reviewer A via CLI
-- [ ] Run `observal admin review list` → see pending agent version from Section 23
-- [ ] Run `observal admin review approve <id>` → approve the new agent version
+- [ ] Run `observal review list` → see pending agent version from Section 23
+- [ ] Run `observal review approve <number>` → approve the new agent version
 
 ---
 
@@ -307,9 +307,9 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 - [ ] Log in as User A
 - [ ] Navigate to a pending agent → open agent builder / edit page
 - [ ] Verify edit lock is acquired on mount
-- [ ] Switch to Reviewer A → run `observal admin review list` → verify agent is NOT listed
+- [ ] Switch to Reviewer A → run `observal review list` → verify agent is NOT listed
 - [ ] Switch back to User A → save edits
-- [ ] Switch to Reviewer A → run `observal admin review list` → verify agent reappears
+- [ ] Switch to Reviewer A → run `observal review list` → verify agent reappears
 
 ### Edit pending items via CLI
 - [ ] Log in as User A via CLI

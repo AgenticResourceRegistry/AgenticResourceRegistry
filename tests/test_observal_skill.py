@@ -396,9 +396,10 @@ class TestAgentBehaviorContracts:
         assert "only when it contains a validated `component_ref`" in text
         assert "do not invent a matching identity" in text
 
-    def test_admin_reviews_use_uuids_and_redact_secrets(self):
+    def test_admin_reviews_use_review_numbers_and_redact_secrets(self):
         text = (SKILLS_DIR / "observal-admin/references/governance-and-identity.md").read_text(encoding="utf-8")
-        assert "List and select by UUID" in text
+        assert "List open reviews by number" in text
+        assert "observal review publish 123" in text
         assert "Treat the entire response as secret" in text
 
     def test_local_fallback_requires_an_explicit_failure(self):

@@ -19,6 +19,17 @@ from api.deps import get_current_user, get_db, get_registry_user
 from models.mcp import ListingStatus
 from models.user import User, UserRole
 
+
+@pytest.fixture(autouse=True)
+def _isolate_submission_review_boundary(monkeypatch):
+    """These route serialization tests mock the database; review lifecycle is tested with a real session."""
+    for component in ("skill", "hook", "prompt", "sandbox"):
+        monkeypatch.setattr(
+            f"api.routes.{component}.submit_for_review",
+            AsyncMock(return_value=SimpleNamespace(number=1)),
+        )
+
+
 # ── Helpers ──────────────────────────────────────────────
 
 
@@ -164,11 +175,6 @@ class TestModels:
         for model in (McpVersion, SkillVersion, HookVersion, PromptVersion, SandboxVersion):
             col = model.__table__.columns["status"]
             assert col.type.enum_class is Canonical
-
-    def test_submission_model_tablename(self):
-        from models.submission import Submission
-
-        assert Submission.__tablename__ == "submissions"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -603,92 +609,6 @@ class TestSandboxRoutes:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(f"/api/v1/sandboxes/{listing.id}/install", json={"harness": "cursor"})
         assert r.status_code == 404
-
-
-# ═══════════════════════════════════════════════════════════
-# 4. TestUnifiedReview
-# ═══════════════════════════════════════════════════════════
-
-
-class TestUnifiedReview:
-    @pytest.mark.asyncio
-    async def test_list_pending_returns_empty(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        empty = MagicMock()
-        empty.scalars.return_value.all.return_value = []
-        db.execute = AsyncMock(return_value=empty)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.get("/api/v1/review")
-        assert r.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_list_pending_requires_admin(self):
-        from api.routes.review import router
-
-        user = _user(role=UserRole.user)
-        app, db, _ = _app_with(router, user=user)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.get("/api/v1/review")
-        assert r.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_approve_not_found(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        db.execute = AsyncMock(return_value=_scalar_result(None))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{uuid.uuid4()}/approve")
-        assert r.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_reject_not_found(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        db.execute = AsyncMock(return_value=_scalar_result(None))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{uuid.uuid4()}/reject", json={"reason": "bad"})
-        assert r.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_approve_changes_status(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        listing = _listing_mock(None, status=ListingStatus.pending)
-        # First query finds the listing; everything after — including the inbox
-        # queries a decision now runs — answers empty rather than exhausting.
-        script = iter([_scalar_result(listing)])
-        db.execute = AsyncMock(side_effect=lambda *a, **k: next(script, _scalar_result(None)))
-        db.refresh = AsyncMock(side_effect=lambda obj: None)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{listing.id}/approve")
-        assert r.status_code == 200
-        assert listing.status == ListingStatus.approved
-
-    @pytest.mark.asyncio
-    async def test_reject_sets_reason(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        listing = _listing_mock(None, status=ListingStatus.pending)
-        script = iter([_scalar_result(listing)])
-        db.execute = AsyncMock(side_effect=lambda *a, **k: next(script, _scalar_result(None)))
-        db.refresh = AsyncMock(side_effect=lambda obj: None)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{listing.id}/reject", json={"reason": "incomplete"})
-        assert r.status_code == 200
-        assert listing.status == ListingStatus.rejected
-        assert listing.rejection_reason == "incomplete"
-
-    def test_listing_models_dict_has_all_types(self):
-        from api.routes.review import LISTING_MODELS
-
-        for t in ("mcp", "skill", "hook", "prompt", "sandbox"):
-            assert t in LISTING_MODELS
 
 
 # ═══════════════════════════════════════════════════════════

@@ -6,6 +6,9 @@ export type InboxKind =
 	| "review_approved"
 	| "review_rejected"
 	| "review_comment"
+	| "review_approval"
+	| "review_dismissed"
+	| "review_ready"
 	| "change_requested"
 	| "team_join_requested"
 	| "team_join_decided"
@@ -98,6 +101,9 @@ export const INBOX_KIND_REASONS: Record<InboxKind, string> = {
 	review_approved: "approved",
 	review_rejected: "changes needed",
 	review_comment: "commented",
+	review_approval: "review approved",
+	review_dismissed: "submission dismissed",
+	review_ready: "ready to publish",
 	change_requested: "changes requested",
 	team_join_requested: "join request",
 	team_join_decided: "join decided",
@@ -130,6 +136,9 @@ export const INBOX_KIND_LABELS: Record<InboxKind, string> = {
 	review_approved: "Approved",
 	review_rejected: "Changes needed",
 	review_comment: "Comment",
+	review_approval: "Review approval",
+	review_dismissed: "Dismissed submission",
+	review_ready: "Ready to publish",
 	change_requested: "Changes requested",
 	team_join_requested: "Join request",
 	team_join_decided: "Join decision",

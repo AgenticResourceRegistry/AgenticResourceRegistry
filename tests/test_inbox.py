@@ -967,12 +967,8 @@ async def test_registry_actions_keep_uuid_fallback_for_legacy_namespaces(session
 
 
 @pytest.mark.asyncio
-async def test_review_links_open_the_tab_holding_the_item(sessions):
-    """The review queue opens on the agents tab by default.
-
-    A component review that linked to a bare /review dropped the reviewer on a
-    tab that does not contain the submission they were sent to look at.
-    """
+async def test_legacy_review_links_open_the_review_queue(sessions):
+    """Existing inbox items still link to the review queue after cutover."""
     async with sessions() as db:
         user = await _user(db)
         agent_item = await delivery.deliver_one(
@@ -988,8 +984,8 @@ async def test_review_links_open_the_tab_holding_the_item(sessions):
             subject=_subject(type="mcp", id=uuid.uuid4()),
         )
         await db.commit()
-        assert agent_item.action_url == "/review?tab=agents"
-        assert mcp_item.action_url == "/review?tab=components"
+        assert agent_item.action_url == "/review"
+        assert mcp_item.action_url == "/review"
 
 
 @pytest.mark.asyncio

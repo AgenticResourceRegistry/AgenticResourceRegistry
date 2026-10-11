@@ -31,6 +31,7 @@ import {
   Check,
 } from "lucide-react";
 import { toast } from "sonner";
+import { reviewToast } from "@/lib/review-toast";
 import { useHelp } from "@/components/wiki/help-context";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -522,15 +523,12 @@ function AgentBuilderInner() {
       const body = buildRequestBody();
       if (draftId) {
         await updateDraft.mutateAsync({ id: draftId, body });
-        const agentStatus = existingAgent?.status;
-        if (agentStatus && agentStatus !== "pending") {
-          await registry.submitDraft(draftId);
-        }
-        toast.success(!agentStatus || agentStatus === "pending" ? "Changes saved." : "Agent resubmitted for review.");
+        const review = await registry.submitDraft(draftId);
+        reviewToast("Agent revision submitted for review", review);
         router.navigate({ to: "/agents/$agentId", params: { agentId: draftId } });
       } else {
         const created = await registry.create("agents", body);
-        toast.success("Agent submitted for review. An admin must approve it before it becomes visible.");
+        reviewToast("Agent submitted for review", created);
         router.navigate({ to: "/agents/$agentId", params: { agentId: created.id } });
       }
     } catch (e) {
@@ -550,9 +548,10 @@ function AgentBuilderInner() {
     try {
       const body = buildRequestBody(selectedVersion);
       await registry.updateDraft(editId, body);
+      const review = await registry.submitDraft(editId);
       setVersion(selectedVersion);
       setShowVersionDialog(false);
-      toast.success("Agent updated and submitted for review.");
+      reviewToast("Agent revision submitted for review", review);
       router.navigate({ to: "/agents/$agentId", params: { agentId: editId } });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to update agent";
@@ -1319,7 +1318,7 @@ function BuilderFooter({
           </Button>
           <Button size="sm" onClick={onPublish} disabled={publishing}>
             {publishing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
-            {isEditMode ? "Update Agent" : existingStatus === "pending" ? "Save Changes" : "Submit for review"}
+            {isEditMode || existingStatus === "pending" ? "Submit revision" : "Submit for review"}
           </Button>
         </div>
       )}

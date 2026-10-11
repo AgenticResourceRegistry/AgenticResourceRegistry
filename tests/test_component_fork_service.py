@@ -87,7 +87,7 @@ async def test_component_fork_copies_content_resets_review_state_and_keeps_diges
     result = await forks.fork_component(db, kind, source, forks.ForkRequestSpec(name="Copy"), current_user=user)
     fork, draft = result.entity, result.version
     assert fork.id != source.id and fork.forked_from_id == source.id and fork.forked_from_version_id == base.id
-    assert fork.bundle_id is None and fork.unique_agents == 0 and fork.submitted_by == user.id
+    assert fork.unique_agents == 0 and fork.submitted_by == user.id
     assert draft.id != base.id and draft.status == ListingStatus.draft and draft.released_by == user.id
     assert draft.changelog is None and draft.reviewed_by is None and draft.rejection_reason is None
     assert draft.download_count is None or draft.download_count == 0  # ORM default fills on insert

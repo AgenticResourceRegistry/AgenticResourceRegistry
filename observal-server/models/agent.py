@@ -5,6 +5,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import enum
@@ -21,6 +22,7 @@ from models.base import Base
 class AgentStatus(str, enum.Enum):
     draft = "draft"
     pending = "pending"
+    changes_requested = "changes_requested"
     approved = "approved"
     rejected = "rejected"
     archived = "archived"

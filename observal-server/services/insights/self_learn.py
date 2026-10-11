@@ -41,7 +41,6 @@ from models.mcp import ListingStatus
 from models.prompt import PromptListing, PromptVersion
 from models.skill import SkillListing, SkillVersion
 from models.user import User
-from services.inbox import sources as inbox
 from services.registry_namespace import slugify
 from services.registry_recommender import (
     ALL_COMPONENT_TYPES,
@@ -51,6 +50,7 @@ from services.registry_recommender import (
     resolve_component_any_type,
     visibility_clause,
 )
+from services.review.cutover import submit_for_review
 from services.versioning import bump_version
 
 
@@ -614,7 +614,7 @@ async def _create_agent_version_with_additions(
 
     # A pending self-learned version sits in the same queue as a hand-released
     # one; the reviewers who will clear it are told the same way.
-    await inbox.on_review_requested(db, agent, subject_type="agent", actor_id=actor_id, version=new_ver)
+    await submit_for_review(db, "agent", agent, new_version, actor_id)
 
     return {
         "id": str(new_version.id),
@@ -996,7 +996,7 @@ async def _create_skill_listing(
 
     # Self-learned components enter the same review queue as hand-submitted
     # ones, so the reviewers who own that queue hear about them the same way.
-    await inbox.on_review_requested(db, listing, subject_type="skill", actor_id=actor_id, version=version.version)
+    await submit_for_review(db, "skill", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1132,7 +1132,7 @@ async def _create_hook_listing(
     listing.latest_version_id = version.id
 
     # Same review queue as a hand-submitted hook, so the same notification.
-    await inbox.on_review_requested(db, listing, subject_type="hook", actor_id=actor_id, version=version.version)
+    await submit_for_review(db, "hook", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1312,7 +1312,7 @@ async def _create_prompt_listing(
     listing.latest_version_id = version.id
 
     # Same review queue as a hand-submitted prompt, so the same notification.
-    await inbox.on_review_requested(db, listing, subject_type="prompt", actor_id=actor_id, version=version.version)
+    await submit_for_review(db, "prompt", listing, version, actor_id)
 
     return {
         "id": str(listing.id),

@@ -19,13 +19,8 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal reconcile`: Backfill local session records missed by automatic hook delivery
 - `observal scan`: Show a read-only inventory of your local harness setup.
 
-**`observal admin`**: Core administration and submission review commands
+**`observal admin`**: Core administration commands (use 'observal review' for submission reviews)
 
-- `observal admin review`: Submission review commands
-  - `observal admin review approve`: Approve a component, Agent, or bundle submission.
-  - `observal admin review list`: List pending submissions awaiting review.
-  - `observal admin review reject`: Reject a component, Agent, or bundle submission.
-  - `observal admin review show`: Show review details for a component or Agent.
 - `observal admin audit-log`: Query the compliance audit log.
 - `observal admin audit-log-export`: Export the compliance audit log as CSV or JSON.
 - `observal admin cache-clear`: Clear all server caches.
@@ -248,6 +243,34 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal registry version`: Manage component versions
   - `observal registry version list`: List version history for a registry component.
   - `observal registry version publish`: Publish a new version for a registry component.
+
+**`observal review`**: Review versions, conversations, checks, and publication gates
+
+- `observal review policy`: Organization and teamspace review policy
+  - `observal review policy set`: Set a policy key; use required_approvals.TYPE and a count for per-type gates.
+  - `observal review policy show`: Show organization or teamspace review policy.
+- `observal review approve`: Submit an approval, without publishing the version.
+- `observal review checks`: Show validation and advisory checks.
+- `observal review close`: Close and reject a review.
+- `observal review comment`: Add a general or line-anchored comment, optionally to a pending review.
+- `observal review diff`: Show numbered unified diff hunks (server redaction applies).
+- `observal review dismiss`: Dismiss a verdict (admin or team owner, reason required).
+- `observal review draft`: View or discard your pending review comments.
+- `observal review files`: List changed virtual files.
+- `observal review gate`: Show publication requirements.
+- `observal review list`: List reviews visible to you; row numbers work with other review commands.
+- `observal review mute`: Mute review activity except final outcomes.
+- `observal review publish`: Publish once the gate is ready (super admins can override with a reason).
+- `observal review reply`: Reply to a conversation.
+- `observal review request-changes`: Request changes on a review.
+- `observal review request-reviewer`: Request a reviewer by user UUID.
+- `observal review resolve`: Resolve a conversation.
+- `observal review show`: Show a review and its publication gate.
+- `observal review submit`: Submit pending comments with a verdict; publishing is a separate action.
+- `observal review threads`: List inline and general conversations.
+- `observal review unresolve`: Reopen a conversation.
+- `observal review watch`: Watch review activity.
+- `observal review withdraw`: Withdraw your own review.
 
 **`observal self`**: CLI self-management commands (upgrade, downgrade, rollback, status)
 

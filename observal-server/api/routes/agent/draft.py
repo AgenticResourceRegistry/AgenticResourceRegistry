@@ -4,8 +4,6 @@
 
 """Agent draft workflow routes: save, update, start/cancel edit, submit."""
 
-from datetime import UTC, datetime
-
 from fastapi import Depends, HTTPException
 from loguru import logger as optic
 from sqlalchemy import select
@@ -24,9 +22,9 @@ from services.harness_capability_inference import compute_supported_harnesses, i
 from services.inbox import sources as inbox
 from services.registry_fork import provenance_for
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import lock_review_for_edit, submit_for_review
 from services.teamspace import (
     is_admin,
-    publish_auto_approves_for_entity,
     resolve_publish_target,
     review_publication_to_public,
     team_membership,
@@ -229,12 +227,19 @@ async def update_draft(
     perm = get_effective_agent_permission(agent, current_user)
     if perm not in ("owner", "edit"):
         raise HTTPException(status_code=403, detail="Not the agent owner or editor")
-    if agent.status not in (AgentStatus.draft, AgentStatus.rejected, AgentStatus.pending):
-        raise HTTPException(status_code=400, detail="Only draft, rejected, or pending agents can be edited")
-
     version = agent.latest_version
     if not version:
         raise HTTPException(status_code=400, detail="Agent has no version to update")
+    await lock_review_for_edit(db, "agent", version)
+    if agent.status not in (
+        AgentStatus.draft,
+        AgentStatus.rejected,
+        AgentStatus.pending,
+        AgentStatus.changes_requested,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Only draft, rejected, pending, or changes-requested agents can be edited"
+        )
 
     # Moving an item between teamspaces is a separate operation and must never
     # ride along on a draft save.
@@ -414,7 +419,12 @@ async def start_edit_agent(
     version = agent.latest_version
     if not version:
         raise HTTPException(status_code=400, detail="Agent has no version")
-    if version.status not in (AgentStatus.pending, AgentStatus.draft, AgentStatus.rejected):
+    if version.status not in (
+        AgentStatus.pending,
+        AgentStatus.draft,
+        AgentStatus.rejected,
+        AgentStatus.changes_requested,
+    ):
         raise HTTPException(status_code=400, detail=f"Cannot edit: agent version is '{version.status.value}'")
     # Re-fetch with row-level lock to prevent TOCTOU race
     version = (
@@ -449,6 +459,7 @@ async def cancel_edit_agent(
 @router.post("/{agent_id}/submit", response_model=AgentResponse)
 async def submit_draft(
     agent_id: str,
+    message: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
@@ -460,7 +471,12 @@ async def submit_draft(
     perm = get_effective_agent_permission(agent, current_user)
     if perm not in ("owner", "edit"):
         raise HTTPException(status_code=403, detail="Not the agent owner or editor")
-    if agent.status not in (AgentStatus.draft, AgentStatus.rejected):
+    if agent.status not in (
+        AgentStatus.draft,
+        AgentStatus.rejected,
+        AgentStatus.pending,
+        AgentStatus.changes_requested,
+    ):
         raise HTTPException(status_code=400, detail="Agent is not a draft")
     if not agent.description:
         raise HTTPException(status_code=400, detail="Description is required before submitting")
@@ -498,17 +514,12 @@ async def submit_draft(
 
         agent.latest_version.yaml_snapshot = await build_yaml_snapshot(agent.latest_version, db)
 
-    if await publish_auto_approves_for_entity(agent, current_user, db):
-        agent.status = AgentStatus.approved
-        agent.latest_version.reviewed_by = current_user.id
-        agent.latest_version.reviewed_at = datetime.now(UTC)
-    else:
-        agent.status = AgentStatus.pending
-    if agent.latest_version:
-        # Refresh the lock on submit; an auto-approved submit freezes it here.
-        from services.agent_lock import lock_agent_version
+    if agent.latest_version is None:
+        raise HTTPException(status_code=400, detail="Agent has no version")
+    from services.agent_lock import lock_agent_version
 
-        await lock_agent_version(db, agent, agent.latest_version)
+    await lock_agent_version(db, agent, agent.latest_version)
+    review = await submit_for_review(db, "agent", agent, agent.latest_version, current_user.id, message=message)
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
     name_map = await _resolve_component_names(agent.components, db)
@@ -528,7 +539,7 @@ async def submit_draft(
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
-    )
+    ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 from api.routes.agent_versions import agent_version_router  # noqa: E402
