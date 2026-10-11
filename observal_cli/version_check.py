@@ -589,6 +589,15 @@ def check_version_compatibility(server_url: str) -> None:
     if cli_v == srv_v:
         return
 
+    if srv_v.is_prerelease:
+        rprint(
+            f"\n[bold red]✖ CLI version {cli_ver_str} does not match prerelease server {server_ver}.[/bold red]\n"
+            "  Install the CLI from the same source revision as this server\n"
+            "  (uv tool install --force --editable /path/to/checkout).\n"
+            "  Ask the server operator for the matching revision.\n"
+        )
+        raise typer.Exit(1)
+
     from observal_cli.install_detector import upgrade_command
 
     if cli_v > srv_v:
