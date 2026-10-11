@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import secrets
@@ -24,6 +25,7 @@ from schemas.alert import (
     WebhookSecretRotateResponse,
     WebhookTestResponse,
 )
+from services.alert_evaluator import watchable_target_id
 from services.ssrf_guard import is_private_url
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
@@ -62,13 +64,17 @@ async def create_alert(
 ):
     optic.debug("alert create")
     _validate_webhook_url(body.webhook_url)
+    target_id = await watchable_target_id(db, current_user, body.target_type, body.target_id)
+    if target_id is None:
+        # Same answer whether or not the agent exists, so this does not reveal hidden agents.
+        raise HTTPException(403, "You can only create alerts for agents you own or co-author")
     rule = AlertRule(
         name=body.name,
         metric=body.metric,
         threshold=body.threshold,
         condition=body.condition,
         target_type=body.target_type,
-        target_id=body.target_id if body.target_type != "all" else "",
+        target_id=target_id if body.target_type != "all" else "",
         webhook_url=body.webhook_url,
         webhook_secret=secrets.token_hex(32),
         created_by=current_user.id,
