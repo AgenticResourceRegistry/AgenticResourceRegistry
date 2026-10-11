@@ -220,7 +220,10 @@ function LoginContent() {
     }
     setLoading(true);
     try {
-      await auth.changePassword({ current_password: password, new_password: newPassword });
+      // Changing the password signs out every session; keep this one on the fresh pair it hands back.
+      const { exchange_code } = await auth.changePassword({ current_password: password, new_password: newPassword });
+      const session = await auth.exchangeCode({ code: exchange_code });
+      setTokens(session.access_token, session.refresh_token);
       toast.success("Password changed successfully");
       const res = await auth.whoami();
       setUserRole(res.role);

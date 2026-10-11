@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for SAML service layer."""
@@ -879,7 +880,7 @@ class TestSamlEndpoints:
                     )
                 # Should succeed (redirect) and store the assertion ID
                 assert r.status_code == 302
-                mock_redis.get.assert_called_with("saml_assertion:saml-response-id-12345")
+                mock_redis.get.assert_any_call("saml_assertion:saml-response-id-12345")
                 mock_redis.setex.assert_any_call("saml_assertion:saml-response-id-12345", 300, "1")
         finally:
             saml_app.dependency_overrides.clear()

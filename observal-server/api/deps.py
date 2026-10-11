@@ -33,6 +33,7 @@ from services.security_events import (
     Severity,
     emit_security_event,
 )
+from services.token_revocation import get_revocation_marker, is_revoked, token_issued_us
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -64,14 +65,14 @@ async def _authenticate_via_jwt(token: str, db: AsyncSession) -> User | None:
         if jti:
             checks.append(redis.get(f"revoked_jti:{jti}"))
         if user_id_str:
-            checks.append(redis.get(f"revoked_user:{user_id_str}"))
+            checks.append(get_revocation_marker(redis, user_id_str))
         results = await asyncio.gather(*checks) if checks else []
         idx = 0
         if jti:
             if results[idx]:
                 return None
             idx += 1
-        if user_id_str and results[idx]:
+        if user_id_str and is_revoked(results[idx], token_issued_us(payload)):
             return None  # SEC-001: account-wide revocation (e.g. logout all)
     except RedisError as e:
         # Redis is down: block all token-based auth to prevent revoked tokens
