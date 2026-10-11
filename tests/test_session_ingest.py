@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral coverage for canonical session ingestion."""
@@ -866,6 +867,9 @@ class _FakeResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        return SimpleNamespace(all=lambda: [] if self.value is None else [self.value])
+
 
 class _FakeSession:
     def __init__(self, value=None, error: Exception | None = None):
@@ -1120,3 +1124,46 @@ async def test_integrity_rewinds_to_zero_for_content_hash_mismatch(external_call
     assert result.repair_offset == 0
     assert result.expected_line == 0
     assert result.expected_offset == 11
+
+
+async def test_agent_name_resolves_only_when_one_live_agent_has_it(monkeypatch):
+    """Two namespaces may share a name; guessing would credit sessions to the wrong team's agent."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from models.agent import Agent
+    from models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    def agent(name, namespace, *, deleted=False):
+        return Agent(
+            id=uuid.uuid4(),
+            name=name,
+            namespace=namespace,
+            slug=name,
+            owner=namespace,
+            created_by=uuid.uuid4(),
+            deleted_at=datetime.now(UTC) if deleted else None,
+        )
+
+    shared_a, shared_b = agent("reviewer", "team-a"), agent("reviewer", "team-b")
+    recreated, replaced = agent("linter", "team-a"), agent("linter", "team-a-old", deleted=True)
+    unique = agent("planner", "team-a")
+    async with sessions() as db:
+        db.add_all([shared_a, shared_b, recreated, replaced, unique])
+        await db.commit()
+
+    redis = SimpleNamespace(get=AsyncMock(return_value=None), setex=AsyncMock())
+    monkeypatch.setattr("services.redis.get_redis", lambda: redis)
+    monkeypatch.setattr("database.async_session", sessions)
+    try:
+        assert await session_ingest._resolve_agent_id("reviewer") == "reviewer"  # ambiguous: left as the name
+        assert await session_ingest._resolve_agent_id("linter") == str(recreated.id)  # deleted twin ignored
+        assert await session_ingest._resolve_agent_id("planner") == str(unique.id)
+    finally:
+        await engine.dispose()

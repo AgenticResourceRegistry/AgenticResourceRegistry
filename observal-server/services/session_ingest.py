@@ -268,7 +268,7 @@ async def _resolve_agent_id(agent_id: str | None) -> str | None:
     ~500 Postgres queries/sec.
 
     Returns the original value unchanged if it is already a UUID, None,
-    or if the name cannot be resolved.
+    or if the name matches no live agent or more than one.
     """
     if not agent_id:
         return agent_id
@@ -297,12 +297,15 @@ async def _resolve_agent_id(agent_id: str | None) -> str | None:
     resolved = None
     try:
         async with async_session() as db:
-            stmt = select(Agent.id).where(Agent.name == agent_id).limit(1)
+            # Names are not unique across namespaces: only an unambiguous live match is safe to attribute.
+            stmt = select(Agent.id).where(Agent.name == agent_id, Agent.deleted_at.is_(None)).limit(2)
             result = await db.execute(stmt)
-            row = result.scalar_one_or_none()
-            if row:
-                resolved = str(row)
+            rows = result.scalars().all()
+            if len(rows) == 1:
+                resolved = str(rows[0])
                 optic.debug("resolved agent name '{}' to UUID {}", agent_id, resolved)
+            elif rows:
+                optic.warning("agent name '{}' matches several agents; leaving the session unattributed", agent_id)
     except Exception as e:
         optic.warning("agent_id resolution failed: {}", e)
 
