@@ -231,6 +231,26 @@ observal review policy set required_approvals.mcp 2 --output json
 
 Use `observal review --help` for threads, comments, reviewer requests, dismissal, and watch/mute.
 
+### Automated checks
+
+Each revision runs built-in checks (secret scan, required fields, skill folder validity) plus configurable automated checks on the worker, within about 15 seconds of submission:
+
+| Check | Applies to | Reads or contacts |
+| --- | --- | --- |
+| Harness config generation | agent | nothing external |
+| Script syntax and risky patterns | hook, skill | nothing external; never executes scripts |
+| Prompt template variables | prompt | nothing external |
+| High-entropy secret heuristic | all | nothing external |
+| Sandbox image pinned by digest | sandbox | nothing external |
+| Git source resolves | mcp, skill, hook, sandbox | the Git host |
+| Remote MCP server responds | mcp | the MCP URL (anonymous, public addresses only) |
+| Sandbox image exists | sandbox | the image registry (anonymous) |
+| Known-vulnerable dependencies | mcp, skill, hook, sandbox | Git host and osv.dev (package names and versions) |
+
+Checks that contact external hosts, other than the Git source check, are off by default. Every check is advisory by default; an admin or team owner can mark one as blocking. A blocking check that is queued, running, failed or errored holds publication, including automatic publication. A check that could not run reports `skipped` or `error`, never `pass`.
+
+Settings are scoped. Admins edit the organization settings (used for public items) with the gear button on the review queue, or `PUT /api/v1/admin/review-checks`. Team owners and admins edit their teamspace's settings (used for team-visible items) on the teamspace Settings tab, or `PUT /api/v1/teams/{id}/review-checks`. Changes apply to new revisions; `POST /api/v1/reviews/{number}/checks/rerun` re-queues an open review under the current settings. These checks are static and network lookups: they do not prove a component is safe or that it works.
+
 ## Exit codes
 
 | Code | Meaning |

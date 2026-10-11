@@ -4,9 +4,10 @@
 
 from fastapi import APIRouter
 
-from . import actions, detail, policy, submissions, threads
+from . import actions, check_settings, detail, policy, submissions, threads
 
 router = APIRouter(prefix="/api/v1/reviews", tags=["reviews"])
 for part in (detail, threads, submissions, actions):
     router.include_router(part.router)
 policy_router = policy.router
+check_settings_router = check_settings.router

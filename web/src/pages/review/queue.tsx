@@ -9,6 +9,7 @@ import { auth, getUserRole, prReviews, teams } from "@/lib/api";
 import type { ReviewSummary } from "@/lib/types";
 import { useAuthGuard } from "@/hooks/use-auth";
 import { useReviewSubscription } from "@/hooks/use-review-api";
+import { CheckSettingsDialog } from "@/components/review/check-settings";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReviewStatePill, ReviewTypeGlyph, reviewDate, reviewPerson } from "@/components/review/review-primitives";
@@ -24,7 +25,9 @@ const filters = [
 const componentTypes = new Set(["mcp", "skill", "hook", "prompt", "sandbox"]);
 
 function checkStatusLabel(checks: ReviewSummary["checks"]): string {
+  if (checks.error > 0) return "Checks errored";
   if (checks.fail > 0) return "Checks failing";
+  if (checks.queued + checks.running > 0) return "Checks running";
   if (checks.warn > 0) return "Checks have warnings";
   if (checks.skipped > 0) return checks.pass > 0 ? `Checks passed · ${checks.skipped} skipped` : "Checks skipped";
   return checks.pass > 0 ? "Checks passed" : "No checks recorded";
@@ -117,6 +120,7 @@ export default function ReviewQueue() {
   const tabs = canReviewTeamspaces ? ["agents", "components", "teamspaces"] as const : ["agents", "components"] as const;
   return <div className="w-full space-y-5 px-4 py-6 sm:px-6">
     <h1 className="sr-only">Review</h1>
+    {["admin", "super_admin"].includes(getUserRole() ?? "") && <div className="flex justify-end"><CheckSettingsDialog /></div>}
     <nav aria-label="Review type" className="flex gap-1 border-b border-border">{tabs.map(name => <button key={name} type="button" onClick={() => { setTab(name); setSelection(0); }} aria-current={tab === name ? "page" : undefined} className={`border-b-2 px-3 py-2.5 text-sm capitalize transition-colors focus-visible:outline-2 focus-visible:outline-ring ${tab === name ? "border-foreground font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{name}</button>)}</nav>
     {tab !== "teamspaces" && <div className="flex flex-wrap items-center gap-2">
       {filters.map(([key, label]) => <button type="button" key={key} onClick={() => { setFilter(key); setSelection(0); }} aria-pressed={filter === key} className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring ${filter === key ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{label}</button>)}

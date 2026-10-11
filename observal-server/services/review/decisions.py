@@ -37,6 +37,7 @@ from services.agent_lock import (
     lock_agent_version,
 )
 from services.editing_lock import is_actively_editing
+from services.review import ci
 from services.review.anchors import reanchor
 from services.review.checks import pinned_component_blockers, snapshot_checks
 from services.review.files import render_files
@@ -268,6 +269,8 @@ async def open_or_push(
         message=message,
         created_by=actor_id,
     )
+    if not backfill:
+        await ci.attach_queued(revision, subject, subject_type)
     db.add(revision)
     await db.flush()
     review.head_revision_id = revision.id
@@ -358,7 +361,7 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
         blockers.append("required_approvals")
     if requests:
         blockers.append("changes_requested")
-    if any(check.get("required") and check.get("status") != "pass" for check in head.checks):
+    if any(check.get("required") and check.get("status") in ci.BLOCKING for check in head.checks):
         blockers.append("required_checks")
     _, version = await _target(db, review)
     # Saving a draft does not create a revision. Never approve/publish mutable

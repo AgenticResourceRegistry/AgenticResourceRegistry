@@ -129,6 +129,23 @@ async def run_validation(listing: McpListing, db: AsyncSession):
         await _manifest_validation(listing, db, entry_point, tmp_dir)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        await _refresh_review_snapshot(listing, db)
+
+
+async def _refresh_review_snapshot(listing: McpListing, db: AsyncSession) -> None:
+    """Validation fills in derived fields (framework, command, image). Reviewers must see them, so a changed
+    version becomes a new review revision instead of leaving the review permanently out of date."""
+    from services.review.cutover import resubmit_if_changed
+
+    version = listing.latest_version
+    if version is None:
+        return
+    try:
+        if await resubmit_if_changed(db, "mcp", listing, version, "Updated by MCP validation"):
+            await db.commit()
+    except Exception:
+        await db.rollback()
+        optic.opt(exception=True).error("could not refresh review snapshot for MCP listing {}", listing.id)
 
 
 async def _clone_and_inspect(listing: McpListing, db: AsyncSession, tmp_dir: str) -> Path | None:

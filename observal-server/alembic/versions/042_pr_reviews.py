@@ -99,12 +99,14 @@ def upgrade():
         col("files", J),
         col("content_hash", sa.String(64)),
         col("checks", J),
+        col("checks_pending", sa.Boolean()),
         col("message", sa.Text(), nullable=True),
         col("pruned", sa.Boolean()),
         uid("created_by", "users.id"),
         col("created_at", D),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("review_id", "number", name="uq_review_revision_number"),
+        indexes=(("ix_review_revisions_checks_pending", ["checks_pending"], {}),),
     )
     create(
         "review_threads",

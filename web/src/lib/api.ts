@@ -45,6 +45,7 @@ import type {
 	ReviewCheck,
 	ReviewTimelineEntry,
 	ReviewPolicy,
+	CheckSettings,
 	RegistryItem,
 	ForkRequest,
 	ForkDiff,
@@ -668,6 +669,10 @@ export const prReviews = {
   ),
   orgPolicy: () => get<ReviewPolicy>("/admin/review-policy"),
   setOrgPolicy: (value: ReviewPolicy) => put<ReviewPolicy>("/admin/review-policy", value),
+  checkSettings: (teamId?: string) => get<CheckSettings>(teamId ? `/teams/${teamId}/review-checks` : "/admin/review-checks"),
+  setCheckSettings: (checks: Record<string, { enabled: boolean; required: boolean }>, teamId?: string) =>
+    put<CheckSettings>(teamId ? `/teams/${teamId}/review-checks` : "/admin/review-checks", { checks }),
+  rerunChecks: (ref: string) => post<{ queued: number }>(`/reviews/${encodeURIComponent(ref)}/checks/rerun`),
   teamPolicy: (id: string) => get<ReviewPolicy | null>(`/teams/${id}/review-policy`),
   setTeamPolicy: (id: string, value: ReviewPolicy) => put<ReviewPolicy>(`/teams/${id}/review-policy`, value),
 };

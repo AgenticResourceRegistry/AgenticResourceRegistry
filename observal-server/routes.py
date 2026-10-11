@@ -41,6 +41,7 @@ from api.routes.preview import router as preview_router
 from api.routes.prompt import router as prompt_router
 from api.routes.recommendations import router as recommendations_router
 from api.routes.registry import router as registry_router
+from api.routes.reviews import check_settings_router as review_check_settings_router
 from api.routes.reviews import policy_router as review_policy_router
 from api.routes.reviews import router as reviews_router
 from api.routes.reviews.queue import router as review_queue_router
@@ -67,6 +68,7 @@ REST_ROUTERS = (
     review_queue_router,
     reviews_router,
     review_policy_router,
+    review_check_settings_router,
     agent_router,
     agent_shares_router,
     preview_router,

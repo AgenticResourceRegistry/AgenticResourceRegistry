@@ -45,6 +45,7 @@ from schemas.agent import (  # noqa: TC001
 )
 from services.agent_resolver import validate_component_ids
 from services.harness import generate_agent_config
+from services.harness.proxy import AgentVersionConfigProxy
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
 from services.review.cutover import submit_for_review
 from services.versioning import validate_semver
@@ -54,24 +55,6 @@ agent_version_router = APIRouter()
 
 async def audit(*_args, **_kwargs):
     return None
-
-
-class _AgentVersionConfigProxy:
-    """Expose one immutable version with its parent agent identity."""
-
-    def __init__(self, agent: Agent, version: AgentVersion, components: list) -> None:
-        self._agent = agent
-        self._version = version
-        self.components = components
-        self.id = agent.id
-        self.name = agent.name
-        self.namespace = agent.namespace
-        self.slug = agent.slug
-        self.team_id = agent.team_id
-        self.is_private = agent.is_private
-
-    def __getattr__(self, name: str):
-        return getattr(self._version, name)
 
 
 # Import _load_agent from agent.py to avoid duplication.
@@ -362,7 +345,7 @@ async def _create_agent_version(
     failed_harnesses: list[str] = []
     from services.model_resolver import resolve_model_for_harness
 
-    config_agent = _AgentVersionConfigProxy(agent, ver, version_components)
+    config_agent = AgentVersionConfigProxy(agent, ver, version_components)
     for harness in ver.supported_harnesses or []:
         try:
             resolved_model, model_warnings = await resolve_model_for_harness(
