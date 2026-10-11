@@ -170,6 +170,27 @@ function HarnessAllowlistEditor({
 	);
 }
 
+function BoolSettingCard({ def, value, onToggle, helpClass, openHelp }: { def: AdminSettingDef; value: boolean; onToggle: (checked: boolean) => Promise<void>; helpClass: string; openHelp: (key?: string) => boolean }) {
+	const [busy, setBusy] = useState(false);
+	return (
+		<div className={`rounded-md border-2 border-border bg-card p-3 relative ${helpClass}`}>
+			<SettingHelpIcon settingKey={def.key} openHelp={openHelp} />
+			<div className="flex items-start justify-between gap-3 pr-6">
+				<div className="min-w-0">
+					<div className="flex items-center gap-2"><span className="text-sm font-semibold text-foreground">{def.label}</span>{def.restart_required && <RestartRequiredMark />}</div>
+					{def.subtitle && <p className="mt-1 text-xs text-foreground/60">{def.subtitle}</p>}
+				</div>
+				<Switch
+					checked={value}
+					disabled={busy}
+					aria-label={def.label}
+					onCheckedChange={async (checked) => { setBusy(true); try { await onToggle(checked); } finally { setBusy(false); } }}
+				/>
+			</div>
+		</div>
+	);
+}
+
 function RestartRequiredMark() {
 	return (
 		<span
@@ -1438,6 +1459,10 @@ export default function SettingsPage() {
 									{visibleSettings.map((d) => {
 										const existing = entries.find((e) => e.key === d.key);
 										const isEditing = editingKey === d.key;
+										const isBool = d.default === "true" || d.default === "false";
+										if (isBool && !isEditing) {
+											return <BoolSettingCard key={d.key} def={d} value={(existing?.value || d.default) === "true"} helpClass={helpTargetClass(d.key)} openHelp={openHelp} onToggle={async (checked) => { try { await admin.updateSetting(d.key, { value: checked ? "true" : "false" }); await queryClient.invalidateQueries({ queryKey: ["config", "public"] }); await refetch(); refetchRestartStatus(); toast.success(`${d.label} ${checked ? "enabled" : "disabled"}`); } catch (e) { toast.error(e instanceof Error ? e.message : `Failed to update ${d.label}`); } }} />;
+										}
 										if (isEditing) {
 											return (
 												<div key={d.key} className={`rounded-md border-2 border-primary/50 bg-card p-3 ${helpTargetClass(d.key)}`} onClick={(e) => { if ((e.ctrlKey || e.metaKey) && openHelp(d.key)) { e.preventDefault(); e.stopPropagation(); } }}>
@@ -1533,6 +1558,10 @@ export default function SettingsPage() {
 														}
 														const existing = entries.find((e) => e.key === d.key);
 														const isEditing = editingKey === d.key;
+														const isBool = d.default === "true" || d.default === "false";
+										if (isBool && !isEditing) {
+											return <BoolSettingCard key={d.key} def={d} value={(existing?.value || d.default) === "true"} helpClass={helpTargetClass(d.key)} openHelp={openHelp} onToggle={async (checked) => { try { await admin.updateSetting(d.key, { value: checked ? "true" : "false" }); await queryClient.invalidateQueries({ queryKey: ["config", "public"] }); await refetch(); refetchRestartStatus(); toast.success(`${d.label} ${checked ? "enabled" : "disabled"}`); } catch (e) { toast.error(e instanceof Error ? e.message : `Failed to update ${d.label}`); } }} />;
+										}
 														if (isEditing) {
 															return (
 																<div key={d.key} className="rounded-md border-2 border-primary/50 bg-card p-3">
