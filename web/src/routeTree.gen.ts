@@ -21,11 +21,13 @@ import { Route as authRegisterRouteImport } from './routes/(auth)/register'
 import { Route as authLoginRouteImport } from './routes/(auth)/login'
 import { Route as authDeviceRouteImport } from './routes/(auth)/device'
 import { Route as AuthedWikiIndexRouteImport } from './routes/_authed/wiki/index'
+import { Route as AuthedResourcesIndexRouteImport } from './routes/_authed/resources/index'
 import { Route as AuthedComponentsIndexRouteImport } from './routes/_authed/components/index'
 import { Route as AuthedAgentsIndexRouteImport } from './routes/_authed/agents/index'
 import { Route as AuthedTeamspacesHandleRouteImport } from './routes/_authed/teamspaces.$handle'
 import { Route as AuthedTeamInvitesTokenRouteImport } from './routes/_authed/team-invites.$token'
 import { Route as AuthedReviewNumberRouteImport } from './routes/_authed/review_.$number'
+import { Route as AuthedResourcesTypeRouteImport } from './routes/_authed/resources/$type'
 import { Route as AuthedInsightsReportIdRouteImport } from './routes/_authed/insights/$reportId'
 import { Route as AuthedComponentsComponentIdRouteImport } from './routes/_authed/components/$componentId'
 import { Route as AuthedAgentsBuilderRouteImport } from './routes/_authed/agents/builder'
@@ -104,6 +106,11 @@ const AuthedWikiIndexRoute = AuthedWikiIndexRouteImport.update({
   path: '/wiki/',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedResourcesIndexRoute = AuthedResourcesIndexRouteImport.update({
+  id: '/resources/',
+  path: '/resources/',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedComponentsIndexRoute = AuthedComponentsIndexRouteImport.update({
   id: '/components/',
   path: '/components/',
@@ -127,6 +134,11 @@ const AuthedTeamInvitesTokenRoute = AuthedTeamInvitesTokenRouteImport.update({
 const AuthedReviewNumberRoute = AuthedReviewNumberRouteImport.update({
   id: '/review_/$number',
   path: '/review/$number',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedResourcesTypeRoute = AuthedResourcesTypeRouteImport.update({
+  id: '/resources/$type',
+  path: '/resources/$type',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedInsightsReportIdRoute = AuthedInsightsReportIdRouteImport.update({
@@ -259,11 +271,13 @@ export interface FileRoutesByFullPath {
   '/agents/builder': typeof AuthedAgentsBuilderRoute
   '/components/$componentId': typeof AuthedComponentsComponentIdRoute
   '/insights/$reportId': typeof AuthedInsightsReportIdRoute
+  '/resources/$type': typeof AuthedResourcesTypeRoute
   '/review/$number': typeof AuthedReviewNumberRoute
   '/team-invites/$token': typeof AuthedTeamInvitesTokenRoute
   '/teamspaces/$handle': typeof AuthedTeamspacesHandleRoute
   '/agents/': typeof AuthedAgentsIndexRoute
   '/components/': typeof AuthedComponentsIndexRoute
+  '/resources/': typeof AuthedResourcesIndexRoute
   '/wiki/': typeof AuthedWikiIndexRoute
   '/traces/$traceId': typeof AuthedUserTracesTraceIdRoute
   '/agents/$namespace/$slug': typeof AuthedAgentsNamespaceSlugRoute
@@ -295,11 +309,13 @@ export interface FileRoutesByTo {
   '/agents/builder': typeof AuthedAgentsBuilderRoute
   '/components/$componentId': typeof AuthedComponentsComponentIdRoute
   '/insights/$reportId': typeof AuthedInsightsReportIdRoute
+  '/resources/$type': typeof AuthedResourcesTypeRoute
   '/review/$number': typeof AuthedReviewNumberRoute
   '/team-invites/$token': typeof AuthedTeamInvitesTokenRoute
   '/teamspaces/$handle': typeof AuthedTeamspacesHandleRoute
   '/agents': typeof AuthedAgentsIndexRoute
   '/components': typeof AuthedComponentsIndexRoute
+  '/resources': typeof AuthedResourcesIndexRoute
   '/wiki': typeof AuthedWikiIndexRoute
   '/traces/$traceId': typeof AuthedUserTracesTraceIdRoute
   '/agents/$namespace/$slug': typeof AuthedAgentsNamespaceSlugRoute
@@ -335,11 +351,13 @@ export interface FileRoutesById {
   '/_authed/agents/builder': typeof AuthedAgentsBuilderRoute
   '/_authed/components/$componentId': typeof AuthedComponentsComponentIdRoute
   '/_authed/insights/$reportId': typeof AuthedInsightsReportIdRoute
+  '/_authed/resources/$type': typeof AuthedResourcesTypeRoute
   '/_authed/review_/$number': typeof AuthedReviewNumberRoute
   '/_authed/team-invites/$token': typeof AuthedTeamInvitesTokenRoute
   '/_authed/teamspaces/$handle': typeof AuthedTeamspacesHandleRoute
   '/_authed/agents/': typeof AuthedAgentsIndexRoute
   '/_authed/components/': typeof AuthedComponentsIndexRoute
+  '/_authed/resources/': typeof AuthedResourcesIndexRoute
   '/_authed/wiki/': typeof AuthedWikiIndexRoute
   '/_authed/_user/traces/$traceId': typeof AuthedUserTracesTraceIdRoute
   '/_authed/agents/$namespace/$slug': typeof AuthedAgentsNamespaceSlugRoute
@@ -373,11 +391,13 @@ export interface FileRouteTypes {
     | '/agents/builder'
     | '/components/$componentId'
     | '/insights/$reportId'
+    | '/resources/$type'
     | '/review/$number'
     | '/team-invites/$token'
     | '/teamspaces/$handle'
     | '/agents/'
     | '/components/'
+    | '/resources/'
     | '/wiki/'
     | '/traces/$traceId'
     | '/agents/$namespace/$slug'
@@ -409,11 +429,13 @@ export interface FileRouteTypes {
     | '/agents/builder'
     | '/components/$componentId'
     | '/insights/$reportId'
+    | '/resources/$type'
     | '/review/$number'
     | '/team-invites/$token'
     | '/teamspaces/$handle'
     | '/agents'
     | '/components'
+    | '/resources'
     | '/wiki'
     | '/traces/$traceId'
     | '/agents/$namespace/$slug'
@@ -448,11 +470,13 @@ export interface FileRouteTypes {
     | '/_authed/agents/builder'
     | '/_authed/components/$componentId'
     | '/_authed/insights/$reportId'
+    | '/_authed/resources/$type'
     | '/_authed/review_/$number'
     | '/_authed/team-invites/$token'
     | '/_authed/teamspaces/$handle'
     | '/_authed/agents/'
     | '/_authed/components/'
+    | '/_authed/resources/'
     | '/_authed/wiki/'
     | '/_authed/_user/traces/$traceId'
     | '/_authed/agents/$namespace/$slug'
@@ -555,6 +579,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedWikiIndexRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/resources/': {
+      id: '/_authed/resources/'
+      path: '/resources'
+      fullPath: '/resources/'
+      preLoaderRoute: typeof AuthedResourcesIndexRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/components/': {
       id: '/_authed/components/'
       path: '/components'
@@ -588,6 +619,13 @@ declare module '@tanstack/react-router' {
       path: '/review/$number'
       fullPath: '/review/$number'
       preLoaderRoute: typeof AuthedReviewNumberRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/resources/$type': {
+      id: '/_authed/resources/$type'
+      path: '/resources/$type'
+      fullPath: '/resources/$type'
+      preLoaderRoute: typeof AuthedResourcesTypeRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/insights/$reportId': {
@@ -814,10 +852,12 @@ interface AuthedRouteChildren {
   AuthedAgentsBuilderRoute: typeof AuthedAgentsBuilderRoute
   AuthedComponentsComponentIdRoute: typeof AuthedComponentsComponentIdRoute
   AuthedInsightsReportIdRoute: typeof AuthedInsightsReportIdRoute
+  AuthedResourcesTypeRoute: typeof AuthedResourcesTypeRoute
   AuthedReviewNumberRoute: typeof AuthedReviewNumberRoute
   AuthedTeamInvitesTokenRoute: typeof AuthedTeamInvitesTokenRoute
   AuthedAgentsIndexRoute: typeof AuthedAgentsIndexRoute
   AuthedComponentsIndexRoute: typeof AuthedComponentsIndexRoute
+  AuthedResourcesIndexRoute: typeof AuthedResourcesIndexRoute
   AuthedWikiIndexRoute: typeof AuthedWikiIndexRoute
   AuthedAgentsNamespaceSlugRoute: typeof AuthedAgentsNamespaceSlugRoute
   AuthedComponentsTypeNamespaceSlugRoute: typeof AuthedComponentsTypeNamespaceSlugRoute
@@ -835,10 +875,12 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAgentsBuilderRoute: AuthedAgentsBuilderRoute,
   AuthedComponentsComponentIdRoute: AuthedComponentsComponentIdRoute,
   AuthedInsightsReportIdRoute: AuthedInsightsReportIdRoute,
+  AuthedResourcesTypeRoute: AuthedResourcesTypeRoute,
   AuthedReviewNumberRoute: AuthedReviewNumberRoute,
   AuthedTeamInvitesTokenRoute: AuthedTeamInvitesTokenRoute,
   AuthedAgentsIndexRoute: AuthedAgentsIndexRoute,
   AuthedComponentsIndexRoute: AuthedComponentsIndexRoute,
+  AuthedResourcesIndexRoute: AuthedResourcesIndexRoute,
   AuthedWikiIndexRoute: AuthedWikiIndexRoute,
   AuthedAgentsNamespaceSlugRoute: AuthedAgentsNamespaceSlugRoute,
   AuthedComponentsTypeNamespaceSlugRoute:

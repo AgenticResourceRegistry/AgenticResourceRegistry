@@ -91,12 +91,12 @@ test.describe("teamspace review tab", () => {
     await expect(page.getByRole("tab", { name: /review/i })).toHaveCount(0);
   });
 
-  test("the Agents and Components tabs are reachable from the teamspace", async ({ page }) => {
+  test("the Agent Files and Components tabs are reachable from the teamspace", async ({ page }) => {
     // The teamspace card used to link only to /components, leaving team-published
     // agents findable only by setting a filter on the agents page by hand.
     await loginAs(page, OWNER);
     await openTeamspace(page);
-    for (const name of [/agents/i, /components/i]) {
+    for (const name of [/agent files/i, /components/i]) {
       const tab = page.getByRole("tab", { name });
       await expect(tab).toBeVisible();
       await tab.click();

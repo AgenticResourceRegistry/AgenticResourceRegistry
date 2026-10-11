@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from "react";
@@ -116,14 +117,14 @@ export function SuccessCriteriaSection({ value, onChange }: SuccessCriteriaSecti
             </Label>
             <Textarea
               id="intended-purpose"
-              placeholder="What problem does this agent solve? What task does it handle?"
+              placeholder="What problem does this Agent File solve? What task does it handle?"
               value={value?.intended_purpose ?? ""}
               onChange={(e) => update({ intended_purpose: e.target.value })}
               rows={2}
               className="resize-y"
             />
             <p className="text-xs text-muted-foreground">
-              Required if you define success criteria. Describe the agent&apos;s core purpose.
+              Required if you define success criteria. Describe the Agent File&apos;s core purpose.
             </p>
           </div>
 
@@ -192,7 +193,7 @@ export function SuccessCriteriaSection({ value, onChange }: SuccessCriteriaSecti
             </Label>
             <Textarea
               id="evaluation-notes"
-              placeholder="Any context on how to judge whether this agent is working well..."
+              placeholder="Any context on how to judge whether this Agent File is working well..."
               value={value?.evaluation_notes ?? ""}
               onChange={(e) => update({ evaluation_notes: e.target.value })}
               rows={2}

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Tanvi Reddy <tanvi.reddy330@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
@@ -77,7 +78,7 @@ test("logout clears account-scoped query data without a reload", async ({ page }
   };
 
   await login();
-  await page.goto("/agents");
+  await page.goto("/resources/agents");
   await expect.poll(() => myAgentsRequests).toBeGreaterThan(0);
   const requestsBeforeLogout = myAgentsRequests;
 
@@ -86,6 +87,6 @@ test("logout clears account-scoped query data without a reload", async ({ page }
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 
   await login();
-  await page.goto("/agents");
+  await page.goto("/resources/agents");
   await expect.poll(() => myAgentsRequests).toBeGreaterThan(requestsBeforeLogout);
 });

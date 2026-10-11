@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -127,7 +128,7 @@ const COMPONENT_HELP_DOCS = {
 	hooks: { file: "registry-hook-helper.md", label: "Hook helper" },
 	sandboxes: { file: "registry-sandbox-helper.md", label: "Sandbox helper" },
 	prompts: { file: "cli/prompt.md", label: "Prompt helper" },
-	agents: { file: "core-concepts/README.md", label: "Agent helper" },
+	agents: { file: "core-concepts/README.md", label: "Agent File helper" },
 } as const;
 
 const MAX_SKILL_UPLOAD_BYTES = 2 * 1024 * 1024;
@@ -785,7 +786,7 @@ export function SubmitComponentDialog({
 	const busy = isSubmitting || isSavingDraft;
 	const typeLabel =
 		type === "mcps"
-			? "MCP Server"
+			? "MCP Client"
 			: type === "sandboxes"
 				? "Sandbox"
 				: type.charAt(0).toUpperCase() + type.slice(1, -1);
@@ -1159,7 +1160,7 @@ export function SubmitComponentDialog({
 											id="mcp-setup"
 											value={setupInstructions}
 											onChange={(e) => setSetupInstructions(e.target.value)}
-											placeholder="Steps to configure this MCP server..."
+											placeholder="Steps to configure this MCP Client..."
 											rows={3}
 											className="text-sm"
 										/>

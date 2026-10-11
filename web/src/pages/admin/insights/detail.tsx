@@ -231,7 +231,7 @@ function UsagePatterns({ data }: { data: unknown }) {
 			<div className="flex items-center gap-2 px-5 py-3 border-b border-border">
 				<TrendingUp className="h-4 w-4 text-primary-accent" />
 				<h3 className="font-[family-name:var(--font-display)] text-sm font-semibold">
-					How the Agent Is Used
+					How the Agent File Is Used
 				</h3>
 			</div>
 			<div className="px-5 py-4 space-y-4">
@@ -607,7 +607,7 @@ const COMPONENT_TYPE_LABELS: Record<string, string> = {
 	skill: "Skill",
 	hook: "Hook",
 	prompt: "Prompt",
-	mcp: "MCP server",
+	mcp: "MCP Client",
 	sandbox: "Sandbox",
 };
 
@@ -678,9 +678,9 @@ function RegistryMatchNote({ summary }: { summary?: RegistryMatchSummary }) {
 	} else if (summary.registry_has_components === false) {
 		message = `No components have been published to ${registryName} yet, so there was nothing to reuse. Publish skills, hooks or prompts and future reports will point at them.`;
 	} else if ((summary.offered ?? 0) === 0) {
-		message = `Nothing in ${registryName} looked close enough to this agent's work to recommend. More sessions give the match more to go on.`;
+		message = `Nothing in ${registryName} looked close enough to this Agent File's work to recommend. More sessions give the match more to go on.`;
 	} else {
-		message = `Checked ${summary.offered} component${summary.offered === 1 ? "" : "s"} already in ${registryName}; none fit this agent's problems closely enough to recommend.`;
+		message = `Checked ${summary.offered} component${summary.offered === 1 ? "" : "s"} already in ${registryName}; none fit this Agent File's problems closely enough to recommend.`;
 	}
 
 	return (
@@ -866,7 +866,7 @@ function SuggestionsSection({
 				{configAdditions && configAdditions.length > 0 && (
 					<div>
 						<h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Config Additions</h4>
-						<p className="text-xs text-muted-foreground mb-3">Add these to your agent&apos;s system prompt or AGENTS.md.</p>
+						<p className="text-xs text-muted-foreground mb-3">Add these to your Agent File&apos;s system prompt or AGENTS.md.</p>
 						<div className="space-y-2">
 							{configAdditions.map((c, i) => (
 								<div
@@ -1987,7 +1987,7 @@ export default function InsightReportPage() {
 			<PageHeader
 				title="Insight Report"
 				breadcrumbs={[
-					{ label: "Agents", href: "/agents" },
+					{ label: "Agentic Resources", href: "/resources/agents" },
 					{ label: `Insight report · ${agentId}` },
 				]}
 				actionButtonsRight={

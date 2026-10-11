@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { toast } from "sonner";
@@ -148,8 +149,8 @@ function AgentsTab({ team }: { team: Team }) {
 		return (
 			<EmptyState
 				icon={Bot}
-				title="No agents in this teamspace"
-				description={`Agents published under ${team.handle}/ appear here, both public and team-private.`}
+				title="No Agent Files in this teamspace"
+				description={`Agent Files published under ${team.handle}/ appear here, both public and team-private.`}
 			/>
 		);
 	}
@@ -937,7 +938,7 @@ export default function TeamspaceDetailPage() {
 	const pendingJoinCount = joinRequests.filter((request) => request.status === "pending").length;
 
 	const tabs = [
-		{ value: "agents", label: "Agents" },
+		{ value: "agents", label: "Agent Files" },
 		{ value: "components", label: "Components" },
 		{ value: "members", label: "Members" },
 		...(canReview ? [{ value: "review", label: "Review" }] : []),
@@ -1125,7 +1126,7 @@ export default function TeamspaceDetailPage() {
 							{canPublish && activeTab === "agents" && (
 								<Button asChild size="sm">
 									<Link to="/agents/builder" search={{ team: team.id }}>
-										<Bot /> Build agent
+										<Bot /> Build Agent File
 									</Link>
 								</Button>
 							)}
@@ -1194,7 +1195,7 @@ export default function TeamspaceDetailPage() {
 							<div>
 								<p className="text-xs font-medium text-foreground">Publishing namespace</p>
 								<p className="mt-1 text-xs text-muted-foreground">
-									Use this identity when installing an agent or component from the team.
+									Use this identity when installing an Agent File or component from the team.
 								</p>
 							</div>
 						</div>

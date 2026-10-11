@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2025 Shreem Seth <shreemseth26@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +67,7 @@ test.describe("Frontend Flows", () => {
    */
   test("search for agent and open detail", async ({ page }) => {
     await loginToWebUI(page);
-    await page.goto("/agents");
+    await page.goto("/resources/agents");
     await page.waitForLoadState("networkidle");
 
     // Use the search input on the agents page
@@ -115,17 +116,17 @@ test.describe("Frontend Flows", () => {
    */
   test("component browser filter by type", async ({ page }) => {
     await loginToWebUI(page);
-    await page.goto("/components");
+    await page.goto("/resources/mcps");
     await page.waitForLoadState("networkidle");
 
     // The component page has custom tab buttons for each type
-    const mcpTab = page.locator('button:has-text("MCP servers")');
+    const mcpTab = page.locator('button:has-text("MCP Clients")');
     const skillsTab = page.locator('button:has-text("Skills")');
     const hooksTab = page.locator('button:has-text("Hooks")');
 
     await expect(mcpTab).toBeVisible();
 
-    // MCP servers tab should be active by default (gets border-foreground)
+    // MCP Clients tab should be active by default (gets border-foreground)
     await expect(mcpTab).toHaveClass(/border-foreground/);
 
     // Click Skills tab — should become active
@@ -157,11 +158,11 @@ test.describe("Leaderboard visibility", () => {
     await setLeaderboard(page, false);
     await loginToWebUI(page);
     await page.goto("/");
-    await expect(page.getByRole("link", { name: "Agents", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("link", { name: "Agentic Resources", exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('a[href="/leaderboard"]')).toHaveCount(0);
 
     await page.getByRole("button", { name: "Navigate" }).click();
-    await expect(page.getByRole("option", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "Agentic Resources", exact: true })).toBeVisible();
     await expect(page.getByRole("option", { name: "Leaderboard" })).toHaveCount(0);
     await page.keyboard.press("Escape");
 

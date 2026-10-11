@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
@@ -130,7 +131,7 @@ test.describe("Agent unarchive", () => {
     page,
   }) => {
     await loginToWebUI(page);
-    await page.goto("/agents");
+    await page.goto("/resources/agents");
     await page.waitForLoadState("networkidle");
 
     const agentRow = page.locator("tr", {

@@ -105,7 +105,7 @@ const FEATURE_LABELS: Record<string, string> = {
   skills: "Slash-command skills",
   superpowers: "Kiro superpowers",
   hook_bridge: "Hook bridge",
-  mcp_servers: "MCP servers",
+  mcp_servers: "MCP Clients",
   rules: "Rules / system prompt",
   steering_files: "Steering files",
   otlp_telemetry: "OTLP telemetry",
@@ -251,10 +251,10 @@ function ArchivedComponentsBanner({ components }: { components: ComponentLink[] 
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="space-y-1 text-sm">
         <p className="font-medium">
-          This agent includes archived components: {names}{extra}.
+          This Agent File includes archived components: {names}{extra}.
         </p>
         <p className="text-xs text-dark-yellow/80">
-          Users can still pull the agent, but installs will show archived component warnings.
+          Users can still pull the Agent File, but installs will show archived component warnings.
         </p>
       </div>
     </div>
@@ -278,7 +278,7 @@ function PinFreshnessBadge({ pin }: { pin?: ComponentPinFreshness }) {
   return (
     <span
       className="shrink-0 rounded bg-light-yellow px-1.5 py-0.5 text-[10px] text-dark-yellow"
-      title="Installs keep the pinned version until the author releases a new agent version."
+      title="Installs keep the pinned version until the author releases a new Agent File version."
     >
       v{pin.latest_version} available
     </span>
@@ -292,7 +292,7 @@ function PromptSection({ prompt }: { prompt: string }) {
 
   return (
     <div className="space-y-2">
-      <h3 className="text-sm font-semibold font-display">Agent Prompt</h3>
+      <h3 className="text-sm font-semibold font-display">Agent File Prompt</h3>
       <div className="relative">
         <pre
           className={`select-text rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-mono whitespace-pre-wrap break-words leading-relaxed text-foreground ${isLong && !expanded ? "max-h-[280px] overflow-hidden" : ""}`}
@@ -340,7 +340,7 @@ function AgentVersionContents({
         <div>
           <h3 className="text-sm font-medium font-display">Components</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            MCPs, skills, hooks, prompts, and sandboxes linked to this agent version.
+            MCPs, skills, hooks, prompts, and sandboxes linked to this Agent File version.
           </p>
         </div>
 
@@ -348,7 +348,7 @@ function AgentVersionContents({
           <EmptyState
             icon={Puzzle}
             title="No components linked"
-            description="This version does not have any linked MCP servers or components."
+            description="This version does not have any linked MCP Clients or components."
           />
         ) : (
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ComponentGroupKey)}>
@@ -455,7 +455,7 @@ function AgentDeleteButton({ agentId, agentName, onSuccess }: { agentId: string;
             <DialogTitle>Delete {agentName}?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This soft deletes the agent, hides it from registry lists, and frees the name for reuse.
+            This soft deletes the Agent File, hides it from registry lists, and frees the name for reuse.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
@@ -506,8 +506,8 @@ function AgentArchiveButton({ agentId, agentName, status, onSuccess }: { agentId
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             {isArchived
-              ? "This makes the agent discoverable again."
-              : "Archived agents stop appearing in registry lists. Direct pulls still work by ID."}
+              ? "This makes the Agent File discoverable again."
+              : "Archived Agent Files stop appearing in registry lists. Direct pulls still work by ID."}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
@@ -573,7 +573,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
         <div className="space-y-1">
           <h3 className="text-sm font-semibold font-display flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            Agent Insights
+            Agent File Insights
           </h3>
           <p className="text-xs text-muted-foreground">
             {countLoading
@@ -616,7 +616,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
         <EmptyState
           icon={Sparkles}
           title="No insights yet"
-          description="Generate your first insight report to see how this agent is performing."
+          description="Generate your first insight report to see how this Agent File is performing."
         />
       ) : (
         <div className="space-y-3">
@@ -855,10 +855,10 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   return (
     <>
       <PageHeader
-        title={isLoading ? "Agent" : agentName}
+        title={isLoading ? "Agent File" : agentName}
         breadcrumbs={[
           { label: "Registry", href: "/" },
-          { label: "Agents", href: "/agents" },
+          { label: "Agentic Resources", href: "/resources/agents" },
           { label: isLoading ? "..." : agentName },
         ]}
         actionButtonsRight={
@@ -877,7 +877,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
         ) : isError ? (
           <ErrorState message={error?.message} onRetry={() => refetch()} />
         ) : !a ? (
-          <ErrorState message="Agent not found" />
+          <ErrorState message="Agent File not found" />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-8 items-start">
             {/* Main content */}
@@ -913,7 +913,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                         applyVisibility("team");
                       }}
                       options={visibilityOptions}
-                      ariaLabel="Agent visibility"
+                      ariaLabel="Agent File visibility"
                       className="w-40"
                       inputClassName="h-7 px-2 text-xs"
                       disabled={
@@ -1078,7 +1078,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
 
                   {!versionDescription && !versionPrompt && !versionSuccessCriteria?.intended_purpose && (
                     <p className="text-sm text-muted-foreground">
-                      No additional details provided for this agent.
+                      No additional details provided for this Agent File.
                     </p>
                   )}
                 </TabsContent>
@@ -1117,7 +1117,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                       title="No reviews yet"
                       description={
                         isAuthenticated
-                          ? "Be the first to review this agent."
+                          ? "Be the first to review this Agent File."
                           : "Log in to leave a review."
                       }
                     />
@@ -1321,7 +1321,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                       <div className="flex flex-wrap gap-2">
                         <AgentArchiveButton agentId={id} agentName={agentName} status={agentStatus} onSuccess={() => refetch()} />
                         {agentStatus === "approved" && (
-                          <AgentDeleteButton agentId={id} agentName={agentName} onSuccess={() => navigate({ to: "/agents" })} />
+                          <AgentDeleteButton agentId={id} agentName={agentName} onSuccess={() => navigate({ to: "/resources/$type", params: { type: "agents" } })} />
                         )}
                       </div>
                     </div>
@@ -1356,7 +1356,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
           <AlertDialogHeader>
             <AlertDialogTitle>Make {agentName} public?</AlertDialogTitle>
             <AlertDialogDescription>
-              Everyone who can reach this registry will be able to find and pull this agent, not just the members of
+              Everyone who can reach this registry will be able to find and pull this Agent File, not just the members of
               its teamspace. Publishing publicly also returns it to the review queue, so it leaves the catalog until a
               reviewer approves it. Approval is manual, so it will not be immediate.
             </AlertDialogDescription>

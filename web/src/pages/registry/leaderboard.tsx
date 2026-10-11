@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
@@ -178,7 +179,7 @@ export default function LeaderboardPage() {
   }, [componentLeaderboard, leaderboard, topTab]);
 
   const featuredItem = rankings[0];
-  const entityLabel = isAgents ? "Agent" : "Component";
+  const entityLabel = isAgents ? "Agent File" : "Component";
 
   return (
     <>
@@ -201,7 +202,7 @@ export default function LeaderboardPage() {
         <div className="mb-4 flex flex-wrap items-center gap-2.5">
           <SegmentedControl
             options={[
-              { value: "agents", label: "Agents" },
+              { value: "agents", label: "Agent Files" },
               { value: "components", label: "Components" },
             ]}
             value={topTab}

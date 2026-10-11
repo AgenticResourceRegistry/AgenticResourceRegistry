@@ -172,7 +172,7 @@ function ChangeUsernameSection() {
 							<AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 							<p className="text-xs">
 								<span className="font-medium">@{currentUsername}</span> cannot be used as a
-								registry namespace, so publishing agents and components is blocked. Choose a
+								registry namespace, so publishing Agent Files and components is blocked. Choose a
 								valid username below — anything you already published moves with you.
 							</p>
 						</div>

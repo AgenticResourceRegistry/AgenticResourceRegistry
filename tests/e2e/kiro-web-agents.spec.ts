@@ -11,7 +11,7 @@ test.describe("Kiro Agent Compatibility in Web UI", () => {
   });
 
   test("agents page loads and lists agents", async ({ page }) => {
-    await page.goto("/agents");
+    await page.goto("/resources/agents");
     await page.waitForLoadState("networkidle");
 
     await expect(page.locator("body")).not.toContainText("Something went wrong");
@@ -38,7 +38,7 @@ test.describe("Kiro Agent Compatibility in Web UI", () => {
   });
 
   test("components page loads and shows component types", async ({ page }) => {
-    await page.goto("/components");
+    await page.goto("/resources/mcps");
     await page.waitForLoadState("networkidle");
 
     await expect(page.locator("body")).not.toContainText("Something went wrong");

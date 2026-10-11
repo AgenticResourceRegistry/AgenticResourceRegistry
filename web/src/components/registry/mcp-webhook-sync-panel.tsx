@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useState } from "react";
@@ -145,7 +146,7 @@ export function McpWebhookSyncPanel({ listingId, gitUrl }: { listingId: string; 
   if (!gitUrl) {
     return (
       <div className="rounded-md border border-border p-6 text-sm text-muted-foreground">
-        Add a git repository URL to this MCP server in the Edit tab to sync it from GitHub or GitLab.
+        Add a git repository URL to this MCP Client in the Edit tab to sync it from GitHub or GitLab.
       </div>
     );
   }
@@ -183,7 +184,7 @@ export function McpWebhookSyncPanel({ listingId, gitUrl }: { listingId: string; 
           Publish a new version automatically when{" "}
           <span className="font-mono text-xs text-foreground break-all">{gitUrl}</span> changes. Synced versions are
           approved right away, so anyone who can push to the tracked branch or publish a release can change what this
-          MCP server installs.
+          MCP Client installs.
         </p>
       </div>
 

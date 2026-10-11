@@ -449,7 +449,7 @@ export default function SettingsPage() {
 				const res = await admin.setRegisteredAgentsOnly(checked);
 				setRegisteredAgentsOnly(res.registered_agents_only);
 				toast.success(
-					`Registered agents only ${res.registered_agents_only ? "enabled" : "disabled"}`,
+					`Registered Agent Files only ${res.registered_agents_only ? "enabled" : "disabled"}`,
 				);
 			} catch (e) {
 				toast.error(
@@ -1113,7 +1113,7 @@ export default function SettingsPage() {
 							<div className="flex-1">
 								<p className="text-sm font-medium">Allow public browsing and installs</p>
 								<p className="text-xs text-muted-foreground mt-0.5">
-									Signed-out visitors can browse and install approved public agents and components. Publishing, private content, telemetry, and administration still require sign-in.
+									Signed-out visitors can browse and install approved public Agent Files and components. Publishing, private content, telemetry, and administration still require sign-in.
 								</p>
 							</div>
 							<Switch
@@ -1214,10 +1214,10 @@ export default function SettingsPage() {
 				{/* Registered Agents Only, super_admin only */}
 				{hasMinRole(getUserRole(), "super_admin") && (
 					<section className="animate-in">
-						<h3 className={`text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5 ${sectionHelpHeadingClass("Registered Agents Only")}`} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && openHelp(undefined, "Registered Agents Only")) event.preventDefault(); }}>
+						<h3 className={`text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5 ${sectionHelpHeadingClass("Registered Agent Files Only")}`} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && openHelp(undefined, "Registered Agent Files Only")) event.preventDefault(); }}>
 							<Shield className="h-3.5 w-3.5" />
-							Registered Agents Only
-							<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); openHelp(undefined, "Registered Agents Only"); }} aria-label="Open Registered Agents Only documentation">
+							Registered Agent Files Only
+							<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); openHelp(undefined, "Registered Agent Files Only"); }} aria-label="Open Registered Agent Files Only documentation">
 								<HelpCircle className="h-3.5 w-3.5" />
 							</button>
 						</h3>
@@ -1225,11 +1225,11 @@ export default function SettingsPage() {
 							<div className="flex items-center justify-between">
 								<div className="flex-1">
 									<p className="text-sm font-medium">
-										Only trace registered agents
+										Only trace registered Agent Files
 									</p>
 									<p className="text-xs text-muted-foreground mt-0.5">
-										Unstable. When enabled, only registered agents are traced.
-										Unregistered agent activity may be missing from traces.
+										Unstable. When enabled, only registered Agent Files are traced.
+										Unregistered Agent File activity may be missing from traces.
 									</p>
 								</div>
 								<Switch
