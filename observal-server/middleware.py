@@ -168,11 +168,12 @@ class CacheControlMiddleware:
                 headers = dict(message.get("headers", []))
                 cache_header = headers.get(b"x-fastapi-cache", b"").decode()
                 if cache_header == "HIT" or (scope["method"] == "GET" and cache_header == "MISS"):
-                    extra = [
-                        (b"cache-control", f"public, max-age={ds.get_sync_int('data.cache_ttl_default', 30)}".encode())
+                    msg_headers = [
+                        (key, value) for key, value in message.get("headers", []) if key.lower() != b"cache-control"
                     ]
-                    msg_headers = list(message.get("headers", []))
-                    msg_headers.extend(extra)
+                    msg_headers.append(
+                        (b"cache-control", f"private, max-age={ds.get_sync_int('data.cache_ttl_default', 30)}".encode())
+                    )
                     message = {**message, "headers": msg_headers}
             await send(message)
 
