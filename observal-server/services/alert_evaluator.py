@@ -5,7 +5,7 @@
 """Alert evaluation engine: periodic metric checks and webhook delivery."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from loguru import logger as optic
 from sqlalchemy import select
@@ -156,6 +156,13 @@ async def evaluate_alerts(ctx: dict) -> None:
                     continue
 
                 now = datetime.now(UTC)
+                last_triggered = rule.last_triggered
+                if last_triggered is not None:
+                    if last_triggered.tzinfo is None:
+                        last_triggered = last_triggered.replace(tzinfo=UTC)
+                    if now - last_triggered < timedelta(minutes=LOOKBACK_MINUTES):
+                        continue
+
                 status_code: int | None = None
                 error: str | None = None
                 delivery_status = "pending"
