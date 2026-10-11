@@ -174,7 +174,7 @@ Final session requests can include `session_hash` and `hashed_line_count`. The r
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/alerts` | List alert rules |
-| `POST` | `/alerts` | Create alert rule |
+| `POST` | `/alerts` | Create alert rule. Non-admins may only target an agent they own or co-author |
 | `PATCH` | `/alerts/{id}` | Update alert rule |
 | `DELETE` | `/alerts/{id}` | Delete alert rule |
 | `GET` | `/alerts/{id}/history` | Alert firing history |

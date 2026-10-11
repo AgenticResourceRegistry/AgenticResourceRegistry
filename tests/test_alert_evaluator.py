@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for alert evaluation engine, SSRF protection, and webhook delivery."""
@@ -260,6 +261,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=0.25,
@@ -308,6 +314,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=0.05,
@@ -351,6 +362,11 @@ class TestEvaluateAlerts:
             patch(
                 "services.alert_evaluator.async_session",
                 return_value=mock_session_ctx,
+            ),
+            patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
             ),
             patch(
                 "services.alert_evaluator._query_metric",

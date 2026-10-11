@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Alert evaluation engine: periodic metric checks and webhook delivery."""
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from database import async_session
 from models.alert import AlertRule
 from models.alert_history import AlertHistory
+from models.user import User
 from services.clickhouse import _query
 from services.ssrf_guard import is_private_url  # noqa: F401 -- re-exported for callers
 
@@ -121,6 +123,29 @@ async def _deliver_webhook_signed(
     return result.status_code, result.error
 
 
+async def watchable_target_id(db, user: User | None, target_type: str, target_id: str) -> str | None:
+    """Return the canonical target id ``user`` may alert on, or None.
+
+    Alert metrics aggregate every user's sessions for the target, so the gate matches
+    agent insights: admins may watch anything, everyone else only an agent they can
+    see and own or co-author.
+    """
+    from api.deps import ROLE_HIERARCHY, get_effective_agent_permission, resolve_visible_listing
+    from models.agent import Agent
+    from models.user import UserRole
+
+    if user is None:
+        return None
+    if ROLE_HIERARCHY.get(user.role, 999) <= ROLE_HIERARCHY[UserRole.admin]:
+        return target_id
+    if target_type != "agent" or not target_id:
+        return None
+    agent = await resolve_visible_listing(Agent, target_id, db, user)
+    if agent is None or get_effective_agent_permission(agent, user) not in ("owner", "edit"):
+        return None
+    return str(agent.id)
+
+
 def _condition_met(condition: str, value: float, threshold: float) -> bool:
     """Check if the alert condition is met."""
     optic.trace("checking condition {} against value={}", condition, value)
@@ -144,10 +169,16 @@ async def evaluate_alerts(ctx: dict) -> None:
 
         for rule in rules:
             try:
+                # Re-checked every cycle: covers rules created before this gate and creators who lost access.
+                creator = await db.get(User, rule.created_by)
+                target_id = await watchable_target_id(db, creator, rule.target_type, rule.target_id)
+                if target_id is None:
+                    optic.warning("alert rule {} skipped: its creator may not watch this target", rule.id)
+                    continue
                 value = await _query_metric(
                     rule.metric,
                     rule.target_type,
-                    rule.target_id,
+                    target_id,
                     LOOKBACK_MINUTES,
                 )
                 if value is None:
