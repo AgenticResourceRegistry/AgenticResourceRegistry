@@ -770,11 +770,19 @@ async def close(db, review, user, reason):
 async def withdraw(db, review, user):
     await _lock_review(db, review)
     subject, version = await _target(db, review)
-    if user.id not in (
-        version.released_by,
-        getattr(subject, "created_by", None),
-        getattr(subject, "submitted_by", None),
-    ):
+    if review.subject_type == "skill":
+        # Version-bound skill withdrawal grants owner access to co-authors and
+        # admins as well; keep the shared decision path consistent with the route.
+        from api.deps import get_effective_component_permission
+
+        allowed = get_effective_component_permission(subject, user) == "owner"
+    else:
+        allowed = user.id in (
+            version.released_by,
+            getattr(subject, "created_by", None),
+            getattr(subject, "submitted_by", None),
+        )
+    if not allowed:
         raise HTTPException(403, "Not the author or owner")
     if review.state in (ReviewState.closed, ReviewState.published):
         raise HTTPException(409, "Review is closed")

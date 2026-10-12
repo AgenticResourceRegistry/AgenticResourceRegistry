@@ -486,7 +486,7 @@ async def check_git_source(ctx: Ctx) -> Outcome:
     status = "pass" if recorded else "warn"
     if ctx.subject_type == "skill" and ctx.version.skill_md_content:
         repo = await ctx.repo()
-        path = repo / (ctx.version.skill_path or "") / "SKILL.md"
+        path = repo / (ctx.version.skill_path or "").lstrip("/") / "SKILL.md"
         if not path.resolve().is_relative_to(repo.resolve()):
             return Outcome("fail", ["skill_path points outside the repository"])
         if not path.is_file():
