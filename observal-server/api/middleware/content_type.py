@@ -128,16 +128,16 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
                 body = await request.body()
                 if body:
                     parsed = json.loads(body)
-                    if _has_nul(parsed):
-                        return JSONResponse(
-                            status_code=422,
-                            content={"detail": "Text fields must not contain NUL characters"},
-                        )
                     if _check_depth(parsed):
                         optic.warning("Rejected {} {}: JSON nesting exceeds {} levels", method, path, MAX_JSON_DEPTH)
                         return JSONResponse(
                             status_code=400,
                             content={"detail": f"JSON payload exceeds maximum nesting depth of {MAX_JSON_DEPTH}"},
+                        )
+                    if _has_nul(parsed):
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": "Text fields must not contain NUL characters"},
                         )
             except json.JSONDecodeError:
                 return JSONResponse(

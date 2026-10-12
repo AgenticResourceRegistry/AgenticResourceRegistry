@@ -151,6 +151,22 @@ async def test_remote_mcp_skips_stdio_servers():
     assert (await ci.check_remote_mcp(ctx("mcp", url=None, transport="stdio"))).status == "skipped"
 
 
+@pytest.mark.asyncio
+async def test_git_source_check_accepts_repo_root_skill_and_rejects_traversal(tmp_path):
+    (tmp_path / "SKILL.md").write_text("# Skill\n")
+    version = dict(
+        git_url="https://github.com/example/skill.git",
+        git_ref="a" * 40,
+        delivery_mode="git_fetch",
+        skill_md_content="# Skill",
+    )
+    source = ctx("skill", **version, skill_path="/")
+    source.repo = AsyncMock(return_value=tmp_path)
+    assert (await ci.check_git_source(source)).status == "warn"
+    source.version.skill_path = "../outside"
+    assert (await ci.check_git_source(source)).status == "fail"
+
+
 def test_lockfile_parsing(tmp_path):
     (tmp_path / "package-lock.json").write_text(
         json.dumps({"packages": {"": {}, "node_modules/left-pad": {"version": "1.3.0"}}})

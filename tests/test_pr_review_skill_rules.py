@@ -4,10 +4,12 @@
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models import Base, ReviewState
@@ -311,6 +313,53 @@ def test_agent_create_rejects_duplicate_components_and_review_text_rejects_nul()
     AgentCreateRequest(**base, components=[ref])
     with pytest.raises(ValidationError):
         VerdictCreate(verdict="comment", body="a\x00b")
+
+
+@pytest.mark.asyncio
+async def test_deep_json_is_rejected_before_recursive_nul_scan():
+    from api.middleware.content_type import ContentTypeMiddleware
+
+    app = FastAPI()
+    app.add_middleware(ContentTypeMiddleware)
+
+    @app.post("/echo")
+    async def echo():
+        return {"ok": True}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        deep = await client.post(
+            "/echo", content="[" * 350 + "0" + "]" * 350, headers={"Content-Type": "application/json"}
+        )
+        nul = await client.post("/echo", json={"field": "a\u0000b"})
+    assert deep.status_code == 400
+    assert "maximum nesting depth" in deep.json()["detail"]
+    assert nul.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_skill_review_withdrawal_accepts_owner_level_coauthors_and_admins(monkeypatch):
+    import services.review.decisions as decisions
+
+    author = User(id=uuid.uuid4(), role=UserRole.user)
+    coauthor = User(id=uuid.uuid4(), role=UserRole.user)
+    admin = User(id=uuid.uuid4(), role=UserRole.admin)
+    stranger = User(id=uuid.uuid4(), role=UserRole.user)
+    subject = SimpleNamespace(submitted_by=author.id, co_authors=[str(coauthor.id)])
+    version = SimpleNamespace(
+        released_by=author.id, status=ListingStatus.pending, content_revision=None, pre_public_status=None
+    )
+    review = SimpleNamespace(subject_type="skill", state=ReviewState.open, id=uuid.uuid4())
+    monkeypatch.setattr(decisions, "_lock_review", AsyncMock())
+    monkeypatch.setattr(decisions, "_target", AsyncMock(return_value=(subject, version)))
+    for user in (coauthor, admin):
+        review.state = ReviewState.open
+        version.status = ListingStatus.pending
+        await withdraw(MagicMock(), review, user)
+        assert review.state == ReviewState.closed and version.status == ListingStatus.draft
+    review.state = ReviewState.open
+    with pytest.raises(HTTPException) as denied:
+        await withdraw(MagicMock(), review, stranger)
+    assert denied.value.status_code == 403
 
 
 def test_json_nul_detection_covers_nested_values_and_keys():
