@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for env var detection (analyzer + validator), config generation with docker,
-and MCP submit auto-replace logic."""
+and MCP submit identity handling."""
 
 import json
 import tempfile
@@ -596,15 +596,14 @@ class TestAgentConfigDockerMcp:
 
 
 # ═══════════════════════════════════════════════════════════
-# 8. MCP Submit: Auto-replace pending/rejected listings
+# 8. MCP Submit: Preserve reviews on pending/rejected listings
 # ═══════════════════════════════════════════════════════════
 
 
-class TestMcpSubmitAutoReplace:
+class TestMcpSubmitIdentity:
     @pytest.mark.asyncio
     @patch("api.routes.mcp.submit_for_review", new_callable=AsyncMock)
-    async def test_replace_pending_on_resubmit(self, mock_submit):
-        mock_submit.return_value = SimpleNamespace(number=42)
+    async def test_reviewed_pending_listing_cannot_be_replaced(self, mock_submit):
         from api.routes.mcp import router
 
         user = _user()
@@ -614,45 +613,12 @@ class TestMcpSubmitAutoReplace:
         app.dependency_overrides[get_current_user] = lambda: user
         app.dependency_overrides[get_db] = lambda: db
 
-        # Existing pending listing with same name
         existing = MagicMock()
         existing.id = uuid.uuid4()
-        existing.name = "github-mcp-server"
         existing.status = ListingStatus.pending
         existing.submitted_by = user.id
-
-        # First execute returns existing, second returns results for any other queries
-        db.execute = AsyncMock(return_value=_scalar_result(existing))
-
-        def _refresh(obj):
-            obj.id = uuid.uuid4()
-            obj.created_at = datetime.now(UTC)
-            obj.updated_at = datetime.now(UTC)
-            # Simulate relationship loading after refresh
-            version_mock = MagicMock()
-            version_mock.version = "1.0.0"
-            version_mock.description = "GitHub MCP server"
-            version_mock.status = ListingStatus.pending
-            version_mock.mcp_validated = False
-            version_mock.framework = None
-            version_mock.rejection_reason = None
-            version_mock.supported_harnesses = []
-            version_mock.environment_variables = []
-            version_mock.setup_instructions = None
-            version_mock.changelog = None
-            version_mock.source_url = "https://github.com/github/github-mcp-server"
-            version_mock.docker_image = None
-            version_mock.command = None
-            version_mock.args = None
-            version_mock.url = None
-            version_mock.headers = None
-            version_mock.auto_approve = None
-            version_mock.download_count = 0
-            version_mock.transport = None
-            version_mock.tools_schema = None
-            obj.latest_version = version_mock
-
-        db.refresh = AsyncMock(side_effect=_refresh)
+        db.execute.return_value = _scalar_result(existing)
+        db.scalar.return_value = uuid.uuid4()  # The pending listing already has a review.
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(
@@ -668,10 +634,11 @@ class TestMcpSubmitAutoReplace:
                 },
             )
 
-        assert r.status_code == 200
-        # The old listing should have been deleted
-        db.delete.assert_called_once_with(existing)
-        assert db.flush.call_count >= 1  # flush for delete + listing + version
+        assert r.status_code == 409
+        assert "edit and resubmit its draft" in r.json()["detail"]
+        db.delete.assert_not_awaited()
+        db.flush.assert_not_awaited()
+        mock_submit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reject_resubmit_of_approved(self):
