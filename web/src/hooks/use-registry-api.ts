@@ -148,16 +148,30 @@ export function useComponentSubmitDraft(type: RegistryType) {
 export function useComponentReviewRevision(type: RegistryType) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, body, message }: { id: string; body: Record<string, unknown>; message?: string }) => {
+    mutationFn: async ({ id, body, message, versionId }: { id: string; body: Record<string, unknown>; message?: string; versionId?: string }) => {
+      if (type === "skills") {
+        if (!versionId) throw new Error("Skill version is still loading; refresh before submitting");
+        const manifest = await registry.getSkillVersionManifest(id, versionId);
+        // This metadata-only editor has no stored file bytes. Never turn a
+        // multi-file folder into a partial snapshot through this form.
+        if (manifest.files.some((file) => file.path !== "SKILL.md" && file.path !== body.script_filename)) {
+          throw new Error("Edit this skill's saved folder using its version-bound file editor");
+        }
+        const { version: _version, changelog: _changelog, ...fields } = body;
+        if (fields.skill_path === "/") delete fields.skill_path;
+        const saved = await registry.updateSkillVersionDraft(id, versionId, { ...fields, observed_revision: manifest.revision });
+        return registry.submitSkillVersionDraft(id, versionId, saved.revision, message);
+      }
       await registry.updateDraft(id, body, type);
       return registry.submitDraft(id, type, message);
     },
     onSuccess: (result, variables) => {
       qc.invalidateQueries({ queryKey: ["registry", type] });
+      qc.invalidateQueries({ queryKey: ["skill-version-manifest", variables.id] });
       qc.invalidateQueries({ queryKey: ["component-versions", type, variables.id] });
       qc.invalidateQueries({ queryKey: ["pr-reviews"] });
       qc.invalidateQueries({ queryKey: ["pr-review", "subject", variables.id] });
-      reviewToast("Revision submitted for review", result);
+      reviewToast("Revision submitted for review", "review_number" in result ? result : {});
     },
     onError: (err: Error) => toast.error(err.message || "Could not submit revision; your draft may have been saved"),
   });

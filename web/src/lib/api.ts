@@ -613,8 +613,8 @@ export const registry = {
 		get<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/manifest`),
 	updateSkillVersionDraft: (listingId: string, versionId: string, body: unknown) =>
 		put<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/draft`, body),
-	submitSkillVersionDraft: (listingId: string, versionId: string, observedRevision: string) =>
-		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/submit`, { observed_revision: observedRevision }),
+	submitSkillVersionDraft: (listingId: string, versionId: string, observedRevision: string, message?: string) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/submit`, { observed_revision: observedRevision, message }),
 	withdrawSkillVersion: (listingId: string, versionId: string, observedRevision: string) =>
 		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/withdraw`, { observed_revision: observedRevision }),
 	getSkillFileContent: (listingId: string, versionId: string, filePath: string) =>
