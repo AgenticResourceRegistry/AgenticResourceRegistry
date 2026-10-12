@@ -33,7 +33,7 @@ import {
   useComponentUpdateDraft,
   useComponentSubmitDraft,
 } from "@/hooks/use-api";
-import { getUserRole } from "@/lib/api";
+import { getUserRole, registry } from "@/lib/api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -204,6 +204,29 @@ export default function ComponentDetailPage({
   // Only owners can read sync status, so only their open page follows GitHub syncs.
   useMcpSyncWatcher(item ? String(item.id) : undefined, canEdit && type === "mcps" && !!item?.git_url);
   const isEditableDraft = item?.status === "draft" || item?.status === "rejected";
+  // Legacy draft dialogs also edit saved skill revisions. They must observe
+  // the exact version, not silently retry a stale listing-level update.
+  const skillDraftVersionId = type === "skills" && isEditableDraft
+    ? versionsData?.items.find((v) => v.version === item?.version && ["draft", "rejected"].includes(v.status))?.id
+    : undefined;
+  async function saveDialogDraft(body: Record<string, unknown>): Promise<string | undefined> {
+    if (type !== "skills") {
+      await updateDraft.mutateAsync({ id, body });
+      return undefined;
+    }
+    if (!skillDraftVersionId) {
+      toast.error("Skill version is still loading; refresh before saving");
+      throw new Error("Skill version is still loading");
+    }
+    const manifest = await registry.getSkillVersionManifest(id, skillDraftVersionId);
+    if ((Array.isArray(body.extra_files) && body.extra_files.length > 0) ||
+        manifest.files.some((file) => file.path !== "SKILL.md" && file.path !== body.script_filename)) {
+      toast.error("Edit this skill's saved folder using its version-bound file editor");
+      throw new Error("Saved folder needs the file editor");
+    }
+    await updateDraft.mutateAsync({ id, body: { ...body, observed_revision: manifest.revision } });
+    return (await registry.getSkillVersionManifest(id, skillDraftVersionId)).revision;
+  }
   useEffect(() => {
     if (search.tab === "edit" && isEditableDraft) setDraftEditOpen(true);
   }, [id, search.tab, isEditableDraft]);
@@ -915,20 +938,28 @@ export default function ComponentDetailPage({
           onSubmit={(body) => {
             void (async () => {
               try {
-                await updateDraft.mutateAsync({ id, body });
-                await submitDraft.mutateAsync(id);
+                const revision = await saveDialogDraft(body);
+                if (type === "skills") {
+                  await submitFolderDraft.mutateAsync({ listingId: id, versionId: skillDraftVersionId!, observedRevision: revision! });
+                } else {
+                  await submitDraft.mutateAsync(id);
+                }
                 setDraftEditOpen(false);
                 await refetch();
               } catch { /* mutation hooks show the error; keep the draft open */ }
             })();
           }}
           onSaveDraft={(body) => {
-            updateDraft.mutate({ id, body }, { onSuccess: () => { setDraftEditOpen(false); void refetch(); } });
+            void saveDialogDraft(body).then(() => { setDraftEditOpen(false); void refetch(); }).catch(() => {});
           }}
           onUpdateDraft={(draftId, body) => {
-            updateDraft.mutate({ id: draftId, body }, { onSuccess: () => { setDraftEditOpen(false); void refetch(); } });
+            if (type !== "skills") {
+              updateDraft.mutate({ id: draftId, body }, { onSuccess: () => { setDraftEditOpen(false); void refetch(); } });
+            } else {
+              void saveDialogDraft(body).then(() => { setDraftEditOpen(false); void refetch(); }).catch(() => {});
+            }
           }}
-          isSubmitting={updateDraft.isPending || submitDraft.isPending}
+          isSubmitting={updateDraft.isPending || submitDraft.isPending || submitFolderDraft.isPending}
           isSavingDraft={updateDraft.isPending}
         />
       )}
