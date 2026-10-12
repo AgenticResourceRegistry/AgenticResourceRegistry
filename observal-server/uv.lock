@@ -2062,6 +2062,7 @@ dependencies = [
     { name = "litellm" },
     { name = "loguru" },
     { name = "observal-shared" },
+    { name = "opentelemetry-proto" },
     { name = "orjson" },
     { name = "packaging" },
     { name = "prometheus-fastapi-instrumentator" },
@@ -2116,6 +2117,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.88.6,<1.90.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "observal-shared", directory = "../packages/observal-shared" },
+    { name = "opentelemetry-proto", specifier = ">=1.27" },
     { name = "orjson", specifier = ">=3.10.0" },
     { name = "packaging", specifier = ">=21.0" },
     { name = "prometheus-fastapi-instrumentator", specifier = ">=7.0.0" },
@@ -2186,6 +2188,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8f/12/cfa322c5f5dd8fa21aab9a7a8e979e7a11123800f86ca8d82eb68a83d213/openai-2.38.0.tar.gz", hash = "sha256:798694c6cf74145541fda94325b6f8f72d8e1fd0262cc137c8d728177a6a4ce3", size = 772764, upload-time = "2026-05-21T21:23:42.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/bf/ccff9be562e24207716d04ef9dc931c76aff0c89a7265da43e2104d7fe06/openai-2.38.0-py3-none-any.whl", hash = "sha256:ec6661c57b2dcc47414a767e6e3335c7ed3d19c9696999283a3c82e95c756a3c", size = 1344910, upload-time = "2026-05-21T21:23:39.636Z" },
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "1.45.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/72/28/67c38cfb7e2bdfdd0cde7dcdd0424aed0291fbd64aa4ea3e7e913734711a/opentelemetry_proto-1.45.0.tar.gz", hash = "sha256:96ee414f24bc3f61ea8e17dc56b4348d4049d73db3eb17c6b3edf75b5b403300", size = 46489, upload-time = "2026-09-25T12:32:41.409Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/45/814d55714507c7ce9c9cd86a4f83ceb5a74ab0bffcc63ff493943f138de2/opentelemetry_proto-1.45.0-py3-none-any.whl", hash = "sha256:9731566359d7b8e1ee1e149d8e4ad6865bab965e657ad3387ec2784d16927666", size = 72486, upload-time = "2026-09-25T12:32:23.36Z" },
 ]
 
 [[package]]

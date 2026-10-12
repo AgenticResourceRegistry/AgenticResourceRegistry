@@ -57,6 +57,7 @@ dependencies = [
     "pyarrow>=15.0.0",
     "observal-shared",
     "joserfc>=1.6.7",
+    "opentelemetry-proto>=1.27",
 ]
 
 [tool.uv.sources]

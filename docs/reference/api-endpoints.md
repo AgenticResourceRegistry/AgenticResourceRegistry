@@ -2,6 +2,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # API endpoints
@@ -194,6 +195,7 @@ Requires `admin` or `super_admin` role.
 | --- | --- | --- |
 | `GET` | `/admin/settings` | List settings |
 | `PUT` | `/admin/settings/{key}` | Set a value |
+| `GET` | `/admin/otlp-forwarding` | OTLP forwarding status: lag, pauses and last delivery per destination |
 | `GET` | `/admin/users` | List users |
 | `POST` | `/admin/users` | Create user |
 | `PUT` | `/admin/users/{id}/role` | Change role |

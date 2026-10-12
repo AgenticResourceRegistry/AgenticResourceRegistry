@@ -5,6 +5,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """arq background worker: startup/shutdown hooks, job registration, and cron scheduling."""
@@ -23,6 +24,7 @@ from jobs.maintenance import (
 from jobs.mcp_sync import MAX_TRIES as MCP_SYNC_MAX_TRIES
 from jobs.mcp_sync import sync_mcp_webhook
 from jobs.migration import MAX_MIGRATION_JOB_TIMEOUT_SECONDS, purge_migration_artifacts, run_migration_job
+from jobs.otel_forward import forward_session, sweep_otlp_forwarding
 from jobs.usage_ping import submit_usage_ping
 from logging_config import setup_logging
 from services.alert_evaluator import evaluate_alerts
@@ -68,6 +70,8 @@ class WorkerSettings:
         purge_inbox_items,
         submit_usage_ping,
         reproject_discovery_entries,
+        # keep_result=0: a kept result blocks re-queueing the same job ID until it expires.
+        func(forward_session, keep_result=0, timeout=120),
     ]
     cron_jobs = [
         cron(sync_component_sources, hour={0, 6, 12, 18}),  # Every 6 hours
@@ -84,6 +88,8 @@ class WorkerSettings:
         cron(submit_usage_ping, hour={0, 6, 12, 18}, minute={30}, timeout=90, unique=True),
         # Safety net under the per-change reprojection hook.
         cron(reproject_discovery_entries, hour={1, 7, 13, 19}, minute={5}, timeout=600, unique=True),
+        # Safety net under ingest's per-push queueing of OTLP forward jobs.
+        cron(sweep_otlp_forwarding, second={30}, timeout=55, unique=True),  # Every minute
     ]
     on_startup = startup
     on_shutdown = shutdown

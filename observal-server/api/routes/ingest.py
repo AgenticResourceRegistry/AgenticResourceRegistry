@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest endpoint."""
+
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger as optic
@@ -18,6 +21,26 @@ MAX_SHORT_STRING_LENGTH = 512
 MAX_TEXT_LENGTH = 1_048_576
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
+
+# Strong references to fire-and-forget tasks, so they are not garbage-collected mid-flight.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _queue_forwarding(key) -> None:
+    """Queue OTLP forward jobs for a session without holding up the response."""
+
+    async def queue() -> None:
+        from services.otel.forwarder import enqueue_forwarding
+
+        try:
+            await enqueue_forwarding(key)
+        except Exception as exc:
+            optic.warning("otlp forward queueing failed for session {}: {}", key.session_id, exc)
+
+    task = asyncio.create_task(queue())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 MAX_SESSION_LINES = 1000
 MAX_SESSION_TOTAL_LINES = 10_000_000
@@ -213,6 +236,7 @@ async def ingest_session(
         )
 
     integrity_ok = None
+    repaired = False
     if req.final and req.total_line_count is not None:
         integrity = await check_session_integrity(
             session_id=req.session_id,
@@ -240,6 +264,7 @@ async def ingest_session(
                 acknowledged_line,
                 acknowledged_offset,
             )
+            repaired = True
         if not integrity_ok:
             optic.warning(
                 "session integrity check failed: session={}, expected={}, actual offset={}",
@@ -247,6 +272,15 @@ async def ingest_session(
                 req.total_line_count,
                 req.total_offset,
             )
+
+    # Queue OTLP forwarding from stored rows. Fire-and-forget: a Redis blip
+    # never fails ingest, and the forwarding sweep catches up on anything missed.
+    if req.lines or repaired:
+        from services.otel.types import SessionKey
+
+        _queue_forwarding(
+            SessionKey(project_id=project_id, user_id=user_id, harness=req.harness, session_id=req.session_id)
+        )
 
     # Notify WebSocket subscribers so the frontend gets instant turn updates.
     # Publish to both a session-specific channel (for detail viewers, O(1) fan-out)

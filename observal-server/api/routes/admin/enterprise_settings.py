@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Admin settings, diagnostics, and resource tuning routes."""
@@ -29,11 +30,43 @@ from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 from schemas.admin import EnterpriseConfigResponse, EnterpriseConfigUpdate, SettingRevokedResponse
 from services.config_validator import validate_runtime_config_async
 from services.insights import _normalize_model_id
+from services.otel.destinations import SETTING_KEY as OTLP_DESTINATIONS_KEY
 from services.secrets_redactor import REDACTED
 from services.security_events import EventType, SecurityEvent, Severity, emit_security_event
 
 from ._router import router
 from .helpers import _validate_branding_app_name, _validate_branding_logo
+
+
+async def _prepare_otlp_destinations(value: str) -> str:
+    """Validate OTLP destinations and return the value to store, with ``added_at`` stamped.
+
+    The 422 detail names the destination and field, never a header value.
+    """
+    import asyncio
+
+    from services.otel.destinations import DestinationError, load_destinations, prepare_setting_value
+
+    previous = await load_destinations()
+    try:
+        # The SSRF check resolves each host, so keep DNS off the event loop.
+        stored, _destinations = await asyncio.to_thread(
+            prepare_setting_value, value, previous=previous, now=datetime.now(UTC)
+        )
+    except DestinationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return stored
+
+
+async def _lift_otlp_pauses(stored: str) -> None:
+    """A save may carry the fix for a paused destination (a new URL or credential), so retry it now."""
+    from services.otel.destinations import parse_destinations
+    from services.otel.forwarder import clear_pauses
+
+    try:
+        await clear_pauses([destination.id for destination in parse_destinations(stored)])
+    except Exception as exc:
+        optic.warning("could not lift otlp destination pauses: {}", exc)
 
 
 def _require_usage_ping_super_admin(key: str, current_user: User) -> None:
@@ -268,6 +301,8 @@ async def upsert_setting(
                     status_code=422,
                     detail="Company name and deployment public URL are required before enabling usage reporting",
                 )
+    elif key == OTLP_DESTINATIONS_KEY:
+        value = await _prepare_otlp_destinations(value)
 
     sensitive = key in ds.SENSITIVE_KEYS
     store_value = ds.encrypt_value(value) if sensitive else value
@@ -286,6 +321,9 @@ async def upsert_setting(
     await db.refresh(cfg)
     await ds.invalidate(key)
     await ds.refresh_sync_cache()
+
+    if key == OTLP_DESTINATIONS_KEY:
+        await _lift_otlp_pauses(value)
 
     # Auto-clean deprecated AWS/legacy settings when new API key is configured
     if key == "insights.api_key" and value:

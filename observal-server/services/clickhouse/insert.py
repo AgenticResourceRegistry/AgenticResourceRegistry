@@ -1,13 +1,20 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """ClickHouse insert functions for live tables."""
 
+from __future__ import annotations
+
 import time
+from typing import TYPE_CHECKING
 
 import orjson
 from loguru import logger as optic
 
 import services.clickhouse.client as _client
+
+if TYPE_CHECKING:
+    from services.otel.types import SessionKey
 
 
 def _dumps(obj: dict) -> str:
@@ -141,6 +148,66 @@ async def insert_session_checkpoint(
         data=_dumps(row),
     )
     r.raise_for_status()
+
+
+async def insert_forward_state(
+    destination_id: str,
+    signal: str,
+    key: SessionKey,
+    forwarded_line: int,
+    *,
+    replay_through: int = -1,
+    session_closed: bool = False,
+) -> None:
+    """Record how far a destination has acknowledged a session; the newest row wins, rewinds included."""
+    row = {
+        "destination_id": destination_id,
+        "signal": signal,
+        "project_id": key.project_id,
+        "user_id": key.user_id,
+        "harness": key.harness,
+        "session_id": key.session_id,
+        "forwarded_line": forwarded_line,
+        "replay_through": replay_through,
+        "session_closed": 1 if session_closed else 0,
+        "version": time.time_ns(),
+    }
+    r = await _client._query(
+        "INSERT INTO otlp_forward_state (destination_id, signal, project_id, user_id, harness, session_id, "
+        "forwarded_line, replay_through, session_closed, version) FORMAT JSONEachRow",
+        {"wait_for_async_insert": "1"},
+        data=_dumps(row),
+    )
+    r.raise_for_status()
+
+
+async def insert_forward_deliveries(records: list[dict]) -> None:
+    """Record OTLP delivery attempts. Best effort: a failure here never fails a delivery."""
+    if not records:
+        return
+    columns = (
+        "delivery_id",
+        "destination_id",
+        "signal",
+        "session_id",
+        "attempt",
+        "status_code",
+        "status",
+        "records",
+        "rejected",
+        "payload_bytes",
+        "duration_ms",
+        "error",
+        "timestamp",
+    )
+    data = "\n".join(_dumps({column: record.get(column) for column in columns}) for record in records)
+    try:
+        r = await _client._query(
+            f"INSERT INTO otlp_forward_deliveries ({', '.join(columns)}) FORMAT JSONEachRow", data=data
+        )
+        r.raise_for_status()
+    except Exception as exc:
+        optic.error("failed to record {} otlp delivery attempts in ClickHouse: {}", len(records), exc)
 
 
 async def refresh_session_summary(session_id: str, project_id: str, user_id: str, harness: str) -> None:
