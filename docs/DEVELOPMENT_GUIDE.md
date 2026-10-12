@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Development Guide
@@ -342,15 +343,7 @@ Conflicts arise when the same file was changed in both `main` and your branch. D
 CONFLICT (content): Merge conflict in some/file.py
 ```
 
-Open the file and look for conflict markers:
-
-```python
-<<<<<<< HEAD
-# this is what's on main
-=======
-# this is what's in your branch
->>>>>>> feature/my-feature
-```
+Open the file and look for the three Git conflict-marker lines: seven less-than signs followed by `HEAD`, seven equals signs, and seven greater-than signs followed by the other branch name. The text between them contains the competing changes.
 
 Edit the file to the correct final state (keeping whichever changes are right, or combining them), then:
 

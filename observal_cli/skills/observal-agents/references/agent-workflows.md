@@ -9,6 +9,7 @@
 - Discover and inspect
 - Pull and verify
 - Direct create
+- Fork and edit
 - Local authoring
 - Update in place
 - Release a version
@@ -72,6 +73,20 @@ Name, description, and prompt keep creation noninteractive. Use `--prompt-file` 
 ```bash
 observal agent show NAMESPACE/REVIEWER --output json
 ```
+
+## Fork and edit
+
+Fork only when the user wants a new independently owned Agent, rather than a release of the source. Read the approved source with `agent show --output json`, choose a new name/target, and fork once. Never retry blindly after an uncertain mutation failure: check `agent my --output json` for the new draft first.
+
+```bash
+observal agent fork NAMESPACE/SOURCE --name my-copy --dir ./my-copy --output json
+observal agent build --dir ./my-copy --output json
+observal agent publish --update --dir ./my-copy --output json
+observal agent publish --submit FORK_UUID --output json
+observal agent show FORK_UUID --output json
+```
+
+Use the fork response's `id` as `FORK_UUID`. Edit `observal-agent.yaml` before `publish --update`; its `agent_id` directs the update to the draft (public search does not include drafts). `--version X.Y.Z` selects one approved source release, and `--new-version X.Y.Z` sets the new draft version. `--team HANDLE --visibility team` puts a public source's copy into an authorized private teamspace. A private source must stay within the same teamspace. Components retain their approved pins, without forking the components. Report `warnings` for re-pinned components and the actual review status. If `forked_from.available` is false, describe the original only as **Source unavailable**; never expose saved source references. A private or unpublished fork does not add to the public fork count.
 
 ## Local authoring
 

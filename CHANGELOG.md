@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - add opt-in, local-only harness inventory to `observal scan`
+- Fork approved agents and registry components into independently owned drafts with visibility-safe provenance, public fork lists, CLI and web workflows.
+- Compare fork versions against their approved upstream in the detail and review UI; expose public-only ARD fork links and an `obs:forksOf` search facet.
 
 ### Documentation
 

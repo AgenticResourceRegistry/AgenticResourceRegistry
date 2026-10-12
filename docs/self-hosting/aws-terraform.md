@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # AWS deployment with Terraform
@@ -196,6 +197,37 @@ The ALB SG must allow inbound TCP 80/443 from your desired CIDRs. The ECS SG mus
 
 A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/Observal/Observal/blob/main/infra/terraform/aws/examples/byovpc/README.md).
 
+### Git webhooks on a private install
+
+[MCP repository sync](../use-cases/mcp-repo-sync.md) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Observal, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
+
+```hcl
+alb_scheme             = "internal"
+enable_webhook_ingress = true
+webhook_providers      = ["github", "gitlab"]   # default ["github"]
+```
+
+Terraform then adds an API Gateway HTTP API in front of the existing ALB:
+
+* One route per provider, `POST /api/v1/webhooks/<provider>/mcp/{sync_id}`. Everything else, including other methods, other paths and `..` segments, gets `404` from API Gateway and never reaches the VPC, so the UI, API and login stay private.
+* A VPC link in the private subnets that connects API Gateway to the ALB's listener, so there are no public subnets, internet gateway or second load balancer. With `enable_tls`, API Gateway connects over HTTPS and checks the ALB certificate against `domain_name`.
+* A security group rule that lets the VPC link, and nothing else new, reach the ALB.
+* Throttling (`webhook_throttle_rate_limit`, `webhook_throttle_burst_limit`), access logs in CloudWatch, and `WEBHOOK_PUBLIC_URL` on the API so the MCP **Sync** tab shows the public webhook URL.
+
+The webhook URL is the API's `https://<id>.execute-api.<region>.amazonaws.com` address, shown by the `webhook_public_url` output. To use your own hostname instead, set `webhook_domain_name` (and `webhook_route53_zone_id` if the public zone differs from `route53_zone_id`); Terraform adds the certificate, custom domain and DNS record, and turns off the `execute-api` address.
+
+The receiver rejects any delivery that is not authenticated for that listing (a GitHub HMAC signature or the GitLab secret token), and limits each webhook URL to 60 deliveries a minute.
+
+Things to know:
+
+* The ALB must be internal. API Gateway connects to the addresses the ALB's DNS name resolves to, and an internet-facing ALB resolves to public addresses the VPC link cannot reach; Terraform stops with an error in that case. An internet-facing ALB that is open to the internet does not need this.
+* There is no source IP allowlist. GitHub and GitLab do not sign their source addresses, and the providers' ranges change, while every delivery is already authenticated. If you need one, put a REST API with a resource policy, or AWS WAF, in front instead.
+* A VPC link with no traffic for 60 days goes inactive, and the next delivery fails while AWS reprovisions it, which takes a few minutes. GitHub does not retry failed deliveries automatically; use **Redeliver** on the hook, or run the sync by hand from the **Sync** tab.
+* API Gateway throttling is approximate and meant as a backstop. Requests over the limit get `429` and show as failed in the provider's delivery log.
+* VPC links are not available in every Availability Zone (for example `use1-az3`). If `terraform apply` reports an unsupported zone, use private subnets in other zones.
+* Turning it on adds `WEBHOOK_PUBLIC_URL` to the API task definition, which rolls the API tasks once.
+* Cost: about $1 per million deliveries; the VPC link itself is free.
+
 ## Required IAM permissions
 
 The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](aws-terraform.md#hardened-iam-policy).
@@ -332,6 +364,7 @@ Rough monthly baseline in `us-east-1` at on-demand rates (May 2026):
 | RDS `db.t4g.small` Multi-AZ         | $50          |
 | ElastiCache (2× `cache.t4g.micro`)  | $25          |
 | ALB                                 | $20          |
+| Webhook API Gateway (only with `enable_webhook_ingress`) | \<$1 |
 | NAT Gateway                         | $33 + egress |
 | EBS gp3 100 GB                      | $8           |
 | S3 backups (1 GB cold)              | $0.10        |

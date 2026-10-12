@@ -516,6 +516,7 @@ async def test_list_agents_builds_scoped_search_queries_and_maps_batch_data(boun
         _result(scalar=1),
         _result(scalar_rows=[agent]),
         _result(rows=[(AGENT_ID, 4.126)]),
+        _result(rows=[]),  # public fork counts
         _result(rows=[(USER_ID, "creator@example.com", "creator")]),
     )
     response = Response()
@@ -582,7 +583,7 @@ async def test_list_agents_empty_page_skips_batch_queries(boundaries):
 
 async def test_my_agents_filters_owner_and_maps_rating(boundaries):
     agent = _agent()
-    db = _db(_result(scalar_rows=[agent]), _result(rows=[(AGENT_ID, 3.555)]))
+    db = _db(_result(scalar_rows=[agent]), _result(rows=[(AGENT_ID, 3.555)]), _result(rows=[]))
 
     result = await crud.my_agents(db=db, current_user=_user())
 
@@ -668,7 +669,7 @@ async def test_get_agent_resolves_qualified_name_and_maps_components(boundaries,
     boundaries.names.return_value = {str(MCP_ID): "GitHub"}
     boundaries.identities.return_value = {str(MCP_ID): ("acme", "github")}
     boundaries.statuses.return_value = {str(MCP_ID): "archived"}
-    db = _db(_result(first=("creator@example.com", "creator")))
+    db = _db(_result(first=("creator@example.com", "creator")), _result(rows=[]))
 
     result = await crud.get_agent("alice/review-agent", db=db, current_user=_user())
 
@@ -688,7 +689,7 @@ async def test_get_agent_resolves_qualified_name_and_maps_components(boundaries,
     assert result.component_links[0].qualified_name == "acme/github"
     assert result.component_links[0].status == "archived"
     assert result.mcp_links[0].mcp_name == "GitHub"
-    assert "users.id" in _sql(db.execute.await_args.args[0])
+    assert "users.id" in _sql(db.execute.await_args_list[0].args[0])
 
 
 @pytest.mark.parametrize(("loaded", "permission", "status_code"), [(None, "view", 404), (_agent(), "none", 403)])

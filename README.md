@@ -22,7 +22,12 @@
  ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚══════╝
 </pre>
 
-**Observal is the control plane and system of record for internal AI components**
+**Observal is the control plane and system of record for internal coding agent resources**
+  ---
+  
+  _Set up once, and let your coding agent use Observal through observal-cli._
+  
+  ---
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
@@ -44,25 +49,25 @@
 
 ## What is Observal and what does it solve?
 
-Observal is the control plane and system of record for internal AI components. Every tech-forward organization today creates internal Skills, Agents, MCP servers and other AI components to boost productivity. Though the creation of these components has been prolific, the adoption and usage of such components is sparse. Developer/AI users today end up creating their own version of AI components without reusing existing packages.
+Observal is the control plane and system of record for internal internal coding agent resources. Every tech-forward organization today creates internal Skills, Agents files, MCP clients. Though the creation of these coding agent resources has been prolific, peer adoption and usage is sparse. Coding agent users today end up creating their own version of such resouces without reusing existing packages.
 
 The cause is largely due to two problems:
 
 1. **Lack of a discoverability layer**
 
-   Organizations store their AI components and agents in siloed github repositories with little to no documentation. Users are not able to locate similar components and this results in multiple developers creating the same/similar components again.
+   Organizations store their coding agent resources in siloed git repositories with little to no documentation. Users are not able to locate existing coding agent resources and this results in multiple developers creating the same/similar resources again.
 
 2. **Missing feedback loop**
 
-   Any software where usage patterns are not understood and the principle of user-centric development is violated tends to fade out. Such is the problem with development of MCPs, Skills and Agents. Developers publish and maintain these components with little visibility into how they're actually used. Additionally, AI failures don't trigger static error codes: they hallucinate or provide subtly incorrect answers. This leaves users clueless about what went wrong compounding the feedback problem.
+   Any software where usage patterns are not understood and the principle of user-centric development is violated tends to fade out. Such is the problem with development of MCP clients, Skills and Agent files. Authors publish and maintain these resources with little visibility into how they're actually used. Additionally, Coding agent failures don't trigger static error codes: they hallucinate or provide subtly incorrect answers. This leaves users clueless about what went wrong compounding the feedback problem.
 
-Observal solves this by providing a centralized discovery layer for AI components alongside useful insights into AI usage patterns. It turns silent failures into actionable feedback, ensuring internal AI tools are continuously optimized for the people using them.
+Observal solves this by providing a centralized discovery layer for coding agent resources alongside useful insights into usage patterns. It turns silent failures into actionable feedback, ensuring internal resources are continuously optimized for the people using them.
 
 Observal supports Claude Code, Cursor, Kiro, Pi, Copilot, Codex, OpenCode, and other tools.
 
 ### Why teams use Observal
 
-- **Package components into reusable agents:** Bundle Skills, MCP servers, hooks, prompts, and sandboxes into one versioned unit.
+- **Centralize resources into one platform:** Store Skills, MCP clients, hooks, prompts, agent files and sandboxes in one registry.
 - **Run a governed registry:** Review submissions, approve internal agents, inspect version diffs, and give developers one trusted place to install from.
 - **Render across multiple Coding IDE/CLI:** Generate the correct config for each supported harness instead of maintaining separate setup instructions for every harness.
 - **Let agents use each other:** Every approved resource is discoverable over the open [ARD](https://github.com/ards-project/ard-spec) standard, and a running agent can hand part of its task to another approved agent, whether it lives in the registry or is a remote [A2A](https://a2a-protocol.org) service.
@@ -73,22 +78,25 @@ Observal supports Claude Code, Cursor, Kiro, Pi, Copilot, Codex, OpenCode, and o
 
 ## Supported harnesses
 
-| harness |
-|-----|
-| Claude Code |
-| Kiro |
-| Cursor |
-| Pi |
-| Copilot (CLI & VS Code Extension) |
-| Codex |
-| OpenCode |
-| Antigravity CLI |
-| Goose |
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?style=flat-square&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
+[![Codex](https://img.shields.io/badge/Codex-412991?style=flat-square&logo=openai&logoColor=white)](https://github.com/openai/codex)
+[![Cursor](https://img.shields.io/badge/Cursor-000000?style=flat-square&logo=cursor&logoColor=white)](https://cursor.com)
+[![Copilot](https://img.shields.io/badge/GitHub%20Copilot-000000?style=flat-square&logo=githubcopilot&logoColor=white)](https://github.com/features/copilot)
+![Kiro](https://img.shields.io/badge/Kiro-5A3FFF?style=flat-square)
+![Pi](https://img.shields.io/badge/Pi-00897B?style=flat-square)
+![OpenCode](https://img.shields.io/badge/OpenCode-333333?style=flat-square)
+![Antigravity](https://img.shields.io/badge/Antigravity%20CLI-4285F4?style=flat-square)
+![Goose](https://img.shields.io/badge/Goose-6E56CF?style=flat-square)
 
 One command to install any agent into any supported harness. The config files are generated per-harness automatically.
 
 ---
+### Where does observal fit in your modern enterprise infrastructure?
 
+<img width="1920" height="1080" alt="Observal (3)" src="https://github.com/user-attachments/assets/008f8a68-1269-46de-a9cf-ddfad37b0caa" />
+
+
+---
 ## Quick Start
 
 Observal has two parts: a **server** (API + web UI + databases) you self-host, and a **CLI** you install on each developer machine.
@@ -153,7 +161,7 @@ observal doctor --patch
 
 This authenticates with your server, detects your harness, installs telemetry hooks, starts capturing sessions automatically, and prepares it for agent installs and registry commands.
 
-Once logged in, run `/observal` inside your harness and it takes the wheel. Pull agents, submit components, browse the registry, run diagnostics:
+Once logged in, run `/observal` inside your harness and it takes the wheel. Pull agents, submit resources, browse the registry, run diagnostics:
 
 ```
 /observal pull security-auditor
@@ -167,14 +175,6 @@ Or just tell your agent what you want and it figures out the right commands.
 
 ## How Observal works
 
-### Agents are portable context packages
-
-An agent bundles 5 component types into a single installable package: **MCP servers**, **skills**, **hooks**, **prompts**, and **sandboxes**. You define the agent once, publish it to the registry, and Observal generates the right config files for whichever supported harness the user runs.
-
-```bash
-observal pull security-auditor --harness pi
-```
-
 ### The registry is the distribution layer
 
 The registry is where agents live. Admins review submissions, version diffs keep changes auditable, and one command installs an agent into any supported harness.
@@ -185,25 +185,34 @@ Real usage data flows back as reports: what's helping, what's getting in the way
 
 ---
 
-## Agent Registry
+## Coding agent resource registry
 
-**Browse, search, and install agents with harness compatibility badges:**
+**Browse, search, and install resources with harness compatibility badges:**
 
 ![Agent registry with grid view](docs/img/registry.png)
 
-**Build agents visually with live config preview for every harness:**
+**Build agent files visually with live config preview for every harness:**
 
 ![Agent Builder with preview panel](docs/img/builder.png)
 
-**Components library: MCPs, Skills, Hooks, Prompts, Sandboxes:**
+**Supported resources: Agent files, MCP clients, Skills, Hooks, Prompts, Sandboxes:**
 
 ![Component registry showing MCP servers](docs/img/component_registry.png)
+
+### Fork an approved release
+
+Fork an agent or component into an independent draft in your personal namespace or an eligible teamspace. The source stays unchanged; agent forks retain pinned component references rather than copying components. Reviewers can compare the draft with its approved upstream using **Diff vs upstream**. Public approved direct forks appear on the source's **Forks** tab; private forks and unpublished drafts do not. [Fork and customize guide](docs/use-cases/fork-and-customize.md).
+
+| Registry fork API | Action |
+| --- | --- |
+| `POST /api/v1/agents/{id}/fork` | Create an agent draft from an approved release |
+| `POST /api/v1/{type}/{id}/fork` | Create a component draft (`type`: `mcps`, `skills`, `hooks`, `prompts`, `sandboxes`) |
+| `GET /api/v1/agents/{id}/forks`, `GET /api/v1/{type}/{id}/forks` | List public approved direct forks |
+| `GET /api/v1/agents/{id}/fork-diff?version=…`, `GET /api/v1/{type}/{id}/fork-diff?version=…` | Compare a visible fork version to its approved, accessible base |
 
 ---
 
 ## Discovery and Delegation (ARD + A2A)
-
-Installing an agent ahead of time only helps with the tasks you planned for. Observal also lets a running agent find what the organization already has, mid-task, and hand work to other agents.
 
 **ARD: one search across everything approved.** Observal implements [Agentic Resource Discovery](https://github.com/ards-project/ard-spec) (v0.91). Every approved agent, MCP server, skill, hook, prompt and sandbox is published as an ARD entry with a permanent `urn:air:` identifier, a public manifest at `/.well-known/ard.json`, and the spec's search API at `/api/v1/ard/search`. Results are ranked by relevance only; approval, visibility, harness support and whether the resource can be used right now are separate fields. The same visibility rules as the registry apply, so a team-private agent is only found by that team.
 
@@ -246,7 +255,7 @@ Design decisions: [ADR 0001 (ARD)](docs/adr/0001-agentic-resource-discovery.md),
 
 ---
 
-## Agent Insights
+## Coding Agent Insights
 
 **AI-powered insight reports** analyze usage patterns across all sessions, what's working, what's hindering, and quick wins. Powered by [LiteLLM](https://docs.litellm.ai/docs/providers), works with any provider (Anthropic, OpenAI, Bedrock, Gemini, Azure, Ollama).
 
@@ -281,10 +290,6 @@ See [Insights LLM Setup](docs/insights-setup.md) for configuration.
 **Side-by-side version diffs before approving a new release:**
 
 ![Side-by-side diff of v1.0.0 vs v2.0.0](docs/img/review-diff.png)
-
-**Leaderboard tracks top agents and components by downloads:**
-
-![Leaderboard with rankings](docs/img/leaderboard.png)
 
 ---
 

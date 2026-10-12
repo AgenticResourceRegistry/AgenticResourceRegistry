@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import type { ReactElement } from "react";
 import { Link } from "@tanstack/react-router";
 import {
 	CheckCircle2,
@@ -10,6 +12,10 @@ import {
 	ExternalLink,
 	GitBranch,
 	AlertCircle,
+	File,
+	Folder,
+	ChevronRight,
+	ChevronDown,
 } from "lucide-react";
 import {
 	Sheet,
@@ -20,6 +26,8 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ForkedFromChip } from "@/components/registry/fork-provenance";
+import { ForkDiffPanel } from "@/components/registry/fork-diff-panel";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DetailSkeleton, TableSkeleton } from "@/components/shared/skeleton-layouts";
@@ -36,11 +44,15 @@ import {
 } from "./validation-badges";
 import {
 	useReviewDetail,
+	useSkillVersionReview,
+	useSkillVersionDecision,
 	useRelatedSkills,
 	useApproveWithSkills,
+	useSkillVersionManifest,
+	useSkillFileContent,
 } from "@/hooks/use-api";
 import yaml from "js-yaml";
-import type { ReviewItem } from "@/lib/types";
+import type { ReviewItem, SkillManifestFile } from "@/lib/types";
 
 function toYaml(value: unknown): string {
 	try {
@@ -106,17 +118,271 @@ function McpConfigSection({ detail }: { detail: ReviewItem }) {
 	);
 }
 
-function SkillConfigSection({ detail }: { detail: ReviewItem }) {
+function useVerifiedReviewBytes(blob: Blob | null, file: SkillManifestFile | undefined, onPreviewError?: () => void) {
+	const [result, setResult] = useState<{ source: Blob; sha256: string; verified: Blob | null; error: string } | null>(null);
+	useEffect(() => {
+		if (!blob || !file) return;
+		let active = true;
+		void (async () => {
+			try {
+				if (!globalThis.crypto?.subtle) throw new Error("Verified file review requires HTTPS or localhost.");
+				const bytes = await blob.arrayBuffer();
+				if (bytes.byteLength !== file.size) throw new Error("File size differs from its reviewed manifest.");
+				const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) =>
+					byte.toString(16).padStart(2, "0")).join("");
+				if (hash !== file.sha256) throw new Error("File checksum differs from its reviewed manifest.");
+				if (active) setResult({ source: blob, sha256: file.sha256, verified: blob, error: "" });
+			} catch (error) {
+				if (active) {
+					setResult({ source: blob, sha256: file.sha256, verified: null,
+						error: error instanceof Error ? error.message : "File verification failed." });
+					onPreviewError?.();
+				}
+			}
+		})();
+		return () => { active = false; };
+	}, [blob, file?.sha256, file?.size, onPreviewError]);
+	return result?.source === blob && result?.sha256 === file?.sha256 ? result : null;
+}
+
+export function SkillFilesSection({ listingId, versionId, baseVersionId, baseDeliveryMode, onPreviewError, onPreviewPendingChange }: {
+	listingId: string; versionId: string; baseVersionId?: string | null; baseDeliveryMode?: string | null;
+	onPreviewError?: () => void; onPreviewPendingChange?: (pending: boolean) => void;
+}) {
+	const { data: manifest, isLoading } = useSkillVersionManifest(listingId, versionId);
+	const { data: baseManifest, isLoading: isLoadingBase, isError: baseError } = useSkillVersionManifest(
+		listingId, baseDeliveryMode === "git_fetch" ? undefined : baseVersionId ?? undefined,
+	);
+	const [selectedFile, setSelectedFile] = useState<string | null>(null);
+	const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+	const candidateFiles = new Map(manifest?.files.map((file) => [file.path, file]) ?? []);
+	const baseFiles = new Map(baseManifest?.files.map((file) => [file.path, file]) ?? []);
+	const { data: fileContent, isLoading: isLoadingContent, isError: fileContentError } = useSkillFileContent(
+		listingId,
+		versionId,
+		selectedFile && candidateFiles.has(selectedFile) ? selectedFile : null,
+	);
+	const { data: baseContent, isLoading: isLoadingBaseContent, isError: baseContentError } = useSkillFileContent(
+		listingId,
+		baseVersionId ?? undefined,
+		selectedFile && baseFiles.has(selectedFile) ? selectedFile : null,
+	);
+	const candidateMeta = selectedFile ? candidateFiles.get(selectedFile) : undefined;
+	const baseMeta = selectedFile ? baseFiles.get(selectedFile) : undefined;
+	const candidateBlob = fileContent?.encoding === "binary" ? fileContent.content : null;
+	const baseBlob = baseContent?.encoding === "binary" ? baseContent.content : null;
+	const candidateTextBlob = useMemo(() => fileContent?.encoding === "utf-8" && typeof fileContent.content === "string"
+		? new Blob([fileContent.content]) : null, [fileContent]);
+	const baseTextBlob = useMemo(() => baseContent?.encoding === "utf-8" && typeof baseContent.content === "string"
+		? new Blob([baseContent.content]) : null, [baseContent]);
+	const candidateBinary = useVerifiedReviewBytes(candidateBlob, candidateMeta, onPreviewError);
+	const baseBinary = useVerifiedReviewBytes(baseBlob, baseMeta, onPreviewError);
+	const candidateText = useVerifiedReviewBytes(candidateTextBlob, candidateMeta, onPreviewError);
+	const baseText = useVerifiedReviewBytes(baseTextBlob, baseMeta, onPreviewError);
+	const binaryUrl = useMemo(() => candidateBinary?.verified ? URL.createObjectURL(candidateBinary.verified) : null, [candidateBinary]);
+	useEffect(() => () => { if (binaryUrl) URL.revokeObjectURL(binaryUrl); }, [binaryUrl]);
+	const baseUrl = useMemo(() => baseBinary?.verified ? URL.createObjectURL(baseBinary.verified) : null, [baseBinary]);
+	useEffect(() => () => { if (baseUrl) URL.revokeObjectURL(baseUrl); }, [baseUrl]);
+	const candidateMismatch = !!fileContent && !!candidateMeta && (fileContent.encoding !== "binary" && (
+		fileContent.encoding !== "utf-8" || typeof fileContent.content !== "string" || fileContent.version_id !== versionId ||
+		fileContent.revision !== manifest?.revision || fileContent.file?.path !== selectedFile ||
+		fileContent.file?.sha256 !== candidateMeta.sha256
+	));
+	const baseMismatch = !!baseContent && !!baseMeta && (baseContent.encoding !== "binary" && (
+		baseContent.encoding !== "utf-8" || typeof baseContent.content !== "string" || baseContent.version_id !== baseVersionId ||
+		baseContent.revision !== baseManifest?.revision || baseContent.file?.path !== selectedFile ||
+		baseContent.file?.sha256 !== baseMeta.sha256
+	));
+	useEffect(() => {
+		if (selectedFile && (fileContentError || baseContentError || candidateMismatch || baseMismatch ||
+			(!!candidateMeta && !isLoadingContent && !fileContent) ||
+			(!!baseMeta && !isLoadingBaseContent && !baseContent))) onPreviewError?.();
+	}, [selectedFile, candidateMeta, baseMeta, isLoadingContent, isLoadingBaseContent,
+		fileContent, baseContent, fileContentError, baseContentError, candidateMismatch, baseMismatch, onPreviewError]);
+	useEffect(() => {
+		const candidatePending = !!candidateMeta && !(fileContent?.encoding === "binary" ? candidateBinary?.verified : candidateText?.verified);
+		const basePending = !!baseMeta && !(baseContent?.encoding === "binary" ? baseBinary?.verified : baseText?.verified);
+		onPreviewPendingChange?.(!!selectedFile && (candidatePending || basePending));
+	}, [selectedFile, candidateMeta, baseMeta, fileContent, baseContent, candidateBinary, baseBinary,
+		candidateText, baseText, onPreviewPendingChange]);
+	if (isLoading) {
+		return <div className="text-sm text-muted-foreground">Loading files...</div>;
+	}
+
+	if (!manifest?.files?.length) {
+		return null;
+	}
+
+	// Compare manifest hashes and modes, not file names alone. Deleted paths are shown below the candidate tree.
+	const added = manifest.files.filter((file) => !baseFiles.has(file.path));
+	const modified = manifest.files.filter((file) => {
+		const old = baseFiles.get(file.path);
+		return old && (old.sha256 !== file.sha256 || old.mode !== file.mode);
+	});
+	const removed = (baseManifest?.files ?? []).filter((file) => !candidateFiles.has(file.path));
+
+	// Build tree structure from flat file paths
+	type TreeNode = { name: string; path: string; isDir: boolean; size?: number; mode?: string; children: TreeNode[] };
+	const root: TreeNode = { name: "", path: "", isDir: true, children: [] };
+
+	for (const file of manifest.files) {
+		const parts = file.path.split("/");
+		let current = root;
+		let pathSoFar = "";
+		for (let i = 0; i < parts.length; i++) {
+			const part = parts[i];
+			pathSoFar = pathSoFar ? `${pathSoFar}/${part}` : part;
+			const isLast = i === parts.length - 1;
+			let child = current.children.find((c) => c.name === part);
+			if (!child) {
+				child = {
+					name: part,
+					path: pathSoFar,
+					isDir: !isLast,
+					size: isLast ? file.size : undefined,
+					mode: isLast ? file.mode : undefined,
+					children: [],
+				};
+				current.children.push(child);
+			}
+			current = child;
+		}
+	}
+
+	const toggleDir = (path: string) => {
+		setExpandedDirs((prev) => {
+			const next = new Set(prev);
+			if (next.has(path)) next.delete(path);
+			else next.add(path);
+			return next;
+		});
+	};
+
+	const renderNode = (node: TreeNode, depth: number): ReactElement | null => {
+		if (!node.name) {
+			return <>{node.children.map((c) => renderNode(c, 0))}</>;
+		}
+		const isExpanded = expandedDirs.has(node.path);
+		const isSelected = selectedFile === node.path;
+		const change = !node.isDir && baseManifest
+			? added.some((file) => file.path === node.path) ? "Added"
+				: modified.some((file) => file.path === node.path) ? "Modified" : null
+			: null;
+
+		return (
+			<div key={node.path}>
+				<button
+					type="button"
+					className={`flex w-full items-center gap-1 py-0.5 px-1 rounded text-left text-sm cursor-pointer hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isSelected ? "bg-primary/10" : ""}`}
+					style={{ paddingLeft: `${depth * 12 + 4}px` }}
+					onClick={() => node.isDir ? toggleDir(node.path) : setSelectedFile(node.path)}
+					aria-expanded={node.isDir ? isExpanded : undefined}
+					aria-pressed={node.isDir ? undefined : isSelected}
+				>
+					{node.isDir ? (
+						isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
+					) : (
+						<File className="h-3 w-3 text-muted-foreground" />
+					)}
+					{node.isDir && <Folder className="h-3 w-3 text-warning" />}
+					<span className="truncate">{node.name}</span>
+					{node.mode === "0755" && <span className="text-[10px] text-muted-foreground ml-1">exec</span>}
+					{change && <span className="ml-1 text-[10px] font-medium text-primary">{change}</span>}
+					{node.size !== undefined && <span className="text-[10px] text-muted-foreground ml-auto">{formatBytes(node.size)}</span>}
+				</button>
+				{node.isDir && isExpanded && node.children.map((c) => renderNode(c, depth + 1))}
+			</div>
+		);
+	};
+
+	const formatBytes = (bytes: number) => {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	};
+
 	return (
-		<dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-			<DetailField label="Task Type" value={detail.task_type} />
-			<DetailField label="Slash Command" value={detail.slash_command} />
-			<DetailField label="Skill Path" value={detail.skill_path} />
-			<DetailField label="Git URL" value={detail.git_url} />
-			<DetailField label="Git Ref" value={detail.git_ref} />
-			<DetailField label="Validated" value={detail.validated} />
-			<DetailField label="Target Agents" value={detail.target_agents} />
-		</dl>
+		<div className="space-y-2">
+			<div className="text-xs font-medium text-muted-foreground">Files ({manifest.files.length})</div>
+			{baseDeliveryMode === "git_fetch" && <p className="text-xs text-warning">The reviewed Git source has no stored file tree. Inspect the complete candidate below; no file-by-file comparison is possible.</p>}
+			{baseVersionId && baseDeliveryMode !== "git_fetch" && isLoadingBase && <p className="text-xs text-muted-foreground">Loading base version comparison…</p>}
+			{baseVersionId && baseDeliveryMode !== "git_fetch" && baseError && <p role="alert" className="text-xs text-destructive">Base version unavailable; file changes cannot be verified here.</p>}
+			{baseManifest && <p className="text-xs text-muted-foreground">
+				Compared to base: {added.length} added, {modified.length} modified, {removed.length} removed.
+			</p>}
+			<div className="border rounded-md p-2 max-h-48 overflow-auto">
+				{renderNode(root, 0)}
+				{removed.map((file) => (
+					<button key={file.path} type="button" onClick={() => setSelectedFile(file.path)}
+						aria-pressed={selectedFile === file.path}
+						className="flex w-full items-center gap-2 rounded px-1 text-left text-sm text-destructive hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+						<File className="h-3 w-3" />{file.path} <span className="text-[10px]">Removed</span>
+					</button>
+				))}
+			</div>
+			{selectedFile && (
+				<div className="space-y-1">
+					<div className="flex items-center justify-between">
+						<span className="text-xs font-mono text-muted-foreground">{selectedFile}</span>
+						<Button variant="ghost" size="sm" className="h-5 px-1" onClick={() => setSelectedFile(null)}>
+							<X className="h-3 w-3" />
+						</Button>
+					</div>
+					{candidateFiles.has(selectedFile) && (
+						<div>
+							<p className="text-xs font-medium">Candidate</p>
+							{isLoadingContent ? <p className="text-xs">Loading...</p> : candidateBinary?.error || candidateText?.error ? (
+								<p role="alert" className="text-xs text-destructive">{candidateBinary?.error || candidateText?.error}</p>
+							) : candidateBlob && !binaryUrl ? <p className="text-xs">Verifying binary…</p> : candidateMismatch ? (
+								<p role="alert" className="text-xs text-destructive">Candidate file changed; refresh before review.</p>
+							) : binaryUrl ? (
+								<a href={binaryUrl} download={selectedFile.split("/").at(-1)} className="text-sm underline">Download candidate binary ({candidateBlob?.size} bytes)</a>
+							) : candidateTextBlob && !candidateText?.verified ? <p className="text-xs">Verifying text…</p> : candidateText?.verified ? (
+								<pre className="max-h-60 overflow-auto rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap">{fileContent?.encoding === "utf-8" ? fileContent.content : null}</pre>
+							) : <p role="alert" className="text-xs text-destructive">File preview unavailable</p>}
+						</div>
+					)}
+					{baseFiles.has(selectedFile) && (
+						<div>
+							<p className="text-xs font-medium">Reviewed base</p>
+							{isLoadingBaseContent ? <p className="text-xs">Loading...</p> : baseBinary?.error || baseText?.error ? (
+								<p role="alert" className="text-xs text-destructive">{baseBinary?.error || baseText?.error}</p>
+							) : baseBlob && !baseUrl ? <p className="text-xs">Verifying binary…</p> : baseMismatch ? (
+								<p role="alert" className="text-xs text-destructive">Reviewed base file changed; refresh before review.</p>
+							) : baseUrl ? (
+								<a href={baseUrl} download={selectedFile.split("/").at(-1)} className="text-sm underline">Download base binary ({baseBlob?.size} bytes)</a>
+							) : baseTextBlob && !baseText?.verified ? <p className="text-xs">Verifying text…</p> : baseText?.verified ? (
+								<pre className="max-h-60 overflow-auto rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap">{baseContent?.encoding === "utf-8" ? baseContent.content : null}</pre>
+							) : <p role="alert" className="text-xs text-destructive">Base preview unavailable</p>}
+						</div>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function SkillConfigSection({ detail, onPreviewError }: { detail: ReviewItem; onPreviewError?: () => void }) {
+	// Check if this skill has a pending version with files
+	const hasVersionFiles = detail.version_id && detail.files && detail.files.length > 0;
+
+	return (
+		<div className="space-y-4">
+			<dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+				<DetailField label="Task Type" value={detail.task_type} />
+				<DetailField label="Slash Command" value={detail.slash_command} />
+				<DetailField label="Skill Path" value={detail.skill_path} />
+				<DetailField label="Git URL" value={detail.git_url} />
+				<DetailField label="Git Ref" value={detail.git_ref} />
+				<DetailField label="Validated" value={detail.validated} />
+				<DetailField label="Target Agents" value={detail.target_agents} />
+			</dl>
+			{hasVersionFiles && (
+				<SkillFilesSection listingId={detail.id} versionId={detail.version_id!}
+					baseVersionId={detail.base_version_id} baseDeliveryMode={detail.base_delivery_mode}
+					onPreviewError={onPreviewError} />
+			)}
+		</div>
 	);
 }
 
@@ -269,12 +535,12 @@ function AgentConfigSection({ detail }: { detail: ReviewItem }) {
 	);
 }
 
-function ConfigSection({ detail }: { detail: ReviewItem }) {
+function ConfigSection({ detail, onSkillPreviewError }: { detail: ReviewItem; onSkillPreviewError?: () => void }) {
 	switch (detail.type) {
 		case "mcp":
 			return <McpConfigSection detail={detail} />;
 		case "skill":
-			return <SkillConfigSection detail={detail} />;
+			return <SkillConfigSection detail={detail} onPreviewError={onSkillPreviewError} />;
 		case "hook":
 			return <HookConfigSection detail={detail} />;
 		case "prompt":
@@ -383,7 +649,7 @@ export function ReviewDetailSheet({
 			<SheetContent side="right" className="sm:max-w-2xl overflow-y-auto">
 				{item ? (
 					<SheetBody
-						key={item.id}
+						key={item.review_key ?? item.id}
 						item={item}
 						open={open}
 						onOpenChange={onOpenChange}
@@ -413,17 +679,35 @@ function SheetBody({
 	onApprove: (id: string, type?: string, category?: string) => void;
 	onReject: (id: string, reason: string, type?: string) => void;
 }) {
+	const versionId = item.type === "skill" ? item.version_id : undefined;
 	const { data: detail, isLoading } = useReviewDetail(
-		open ? item.id : undefined,
+		open && !versionId ? item.id : undefined,
 	);
+	const { data: selectedReview, isLoading: isLoadingVersion } = useSkillVersionReview(
+		open && versionId ? item.id : undefined, versionId,
+	);
+	const skillDecision = useSkillVersionDecision();
 	const approveWithSkills = useApproveWithSkills();
 	const [showRejectInput, setShowRejectInput] = useState(false);
 	const [rejectReason, setRejectReason] = useState("");
+	const [gitBaseAcknowledged, setGitBaseAcknowledged] = useState(false);
+	const [previewFailed, setPreviewFailed] = useState(false);
+	const reportPreviewError = useCallback(() => setPreviewFailed(true), []);
+	useEffect(() => { setGitBaseAcknowledged(false); setPreviewFailed(false); }, [versionId]);
+	const { data: reviewedManifest, isPending: manifestPending, isError: manifestError } = useSkillVersionManifest(
+		selectedReview?.files?.length ? item.id : undefined,
+		selectedReview?.files?.length ? versionId : undefined,
+	);
+	const { data: reviewedBaseManifest, isPending: basePending, isError: baseError } = useSkillVersionManifest(
+		selectedReview?.base_delivery_mode === "registry_direct" ? item.id : undefined,
+		selectedReview?.base_delivery_mode === "registry_direct" ? selectedReview.base_version_id ?? undefined : undefined,
+	);
 
 	const merged = useMemo<ReviewItem>(() => {
+		if (selectedReview) return { ...item, ...selectedReview };
 		if (detail) return { ...item, ...detail };
 		return item;
-	}, [item, detail]);
+	}, [item, detail, selectedReview]);
 
 	const handleReject = useCallback(() => {
 		if (!showRejectInput) {
@@ -431,20 +715,28 @@ function SheetBody({
 			return;
 		}
 		if (!rejectReason.trim()) return;
-		if (merged) {
-			onReject(merged.id, rejectReason, merged.type);
-			setShowRejectInput(false);
-			setRejectReason("");
-			onOpenChange(false);
+		if (versionId) {
+			if (!selectedReview?.revision) return;
+			skillDecision.mutate({ id: item.id, versionId, revision: selectedReview.revision, action: "reject", reason: rejectReason },
+				{ onSuccess: () => onOpenChange(false) });
+			return;
 		}
-	}, [showRejectInput, rejectReason, merged, onReject, onOpenChange]);
+		onReject(merged.id, rejectReason, merged.type);
+		setShowRejectInput(false);
+		setRejectReason("");
+		onOpenChange(false);
+	}, [showRejectInput, rejectReason, merged, onReject, onOpenChange, versionId, selectedReview, skillDecision, item.id]);
 
 	const handleApprove = useCallback(() => {
-		if (merged) {
-			onApprove(merged.id, merged.type);
-			onOpenChange(false);
+		if (versionId) {
+			if (!selectedReview?.revision) return;
+			skillDecision.mutate({ id: item.id, versionId, revision: selectedReview.revision, action: "approve", gitBaseAcknowledged },
+				{ onSuccess: () => onOpenChange(false) });
+			return;
 		}
-	}, [merged, onApprove, onOpenChange]);
+		onApprove(merged.id, merged.type);
+		onOpenChange(false);
+	}, [merged, onApprove, onOpenChange, versionId, selectedReview, skillDecision, item.id, gitBaseAcknowledged]);
 
 	const handleApproveWithSkills = useCallback(
 		(mcpId: string, skillIds: string[]) => {
@@ -457,7 +749,11 @@ function SheetBody({
 	);
 
 	const disableApprove =
-		merged.type === "agent" && merged.components_ready === false;
+		(merged.type === "agent" && merged.components_ready === false) ||
+		(merged.type === "skill" && (!!versionId && (isLoadingVersion || !selectedReview?.revision ||
+			previewFailed || (selectedReview.base_delivery_mode === "git_fetch" && !gitBaseAcknowledged) ||
+			(!!selectedReview.files?.length && (manifestPending || manifestError || reviewedManifest?.revision !== selectedReview.revision)) ||
+			(selectedReview.base_delivery_mode === "registry_direct" && (basePending || baseError || !reviewedBaseManifest)))));
 
 	return (
 		<div className="flex flex-col gap-6">
@@ -479,6 +775,10 @@ function SheetBody({
 				<SheetTitle className="text-lg font-[family-name:var(--font-display)]">
 					{merged.name ?? "Unnamed"}
 				</SheetTitle>
+				<ForkedFromChip provenance={merged.forked_from} />
+				{merged.forked_from?.available && merged.version && merged.type && (
+					<ForkDiffPanel type={(merged.type === "agent" ? "agents" : `${merged.type}s`) as import("@/lib/api").RegistryType} id={merged.id} version={merged.version} />
+				)}
 				{merged.description && (
 					<SheetDescription>{merged.description}</SheetDescription>
 				)}
@@ -548,7 +848,7 @@ function SheetBody({
 					<h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
 						Configuration
 					</h4>
-					<ConfigSection detail={merged} />
+					<ConfigSection detail={merged} onSkillPreviewError={reportPreviewError} />
 				</div>
 			)}
 
@@ -616,6 +916,15 @@ function SheetBody({
 				/>
 			)}
 
+			{selectedReview?.base_delivery_mode === "git_fetch" && (
+				<label className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
+					<input type="checkbox" checked={gitBaseAcknowledged}
+						onChange={(event) => setGitBaseAcknowledged(event.target.checked)} className="mt-1" />
+					<span>I inspected this exact candidate folder. The old Git release's file contents are not stored, so they cannot be compared to it.
+						{selectedReview.base_git_url && <span className="block mt-1 text-xs break-all text-muted-foreground">Old source: {selectedReview.base_git_url} {selectedReview.base_git_ref ? `(${selectedReview.base_git_ref})` : ""}</span>}
+					</span>
+				</label>
+			)}
 			{/* Actions */}
 			<div className="space-y-3 border-t border-border pt-4">
 				<div className="flex items-center justify-between">
@@ -674,7 +983,9 @@ function SheetBody({
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>
-									<p>Cannot approve until all required components are ready</p>
+									<p>{selectedReview?.base_delivery_mode === "git_fetch" && !gitBaseAcknowledged
+										? "Inspect the full candidate and acknowledge that Git base files cannot be compared."
+										: "The exact candidate or reviewed base is unavailable; refresh before approving."}</p>
 								</TooltipContent>
 							</Tooltip>
 						</TooltipProvider>

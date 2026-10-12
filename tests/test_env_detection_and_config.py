@@ -851,10 +851,20 @@ class TestGenerateConfigSSE:
         from services.config_generator import generate_config
 
         listing = self._make_listing()
-        cfg = generate_config(listing, "claude-code")
+        cfg = generate_config(listing, "claude-code", header_values={"Authorization": "Bearer tok123"})
         assert cfg["type"] == "shell_command"
-        # Should have a command to add the MCP with --url
-        assert "--url" in cfg["command"]
+        # `claude mcp add` has no --url option: transport flag, then name and URL
+        assert cfg["command"] == [
+            "claude",
+            "mcp",
+            "add",
+            "--transport",
+            "sse",
+            "my-sse-server",
+            "https://example.com/mcp",
+            "-H",
+            "Authorization: Bearer tok123",
+        ]
         # mcpServers should also be present
         server = cfg["mcpServers"]["my-sse-server"]
         assert server["type"] == "sse"

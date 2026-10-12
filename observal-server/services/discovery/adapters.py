@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Per-kind projection adapters.
@@ -30,6 +31,7 @@ from models.mcp import McpListing, McpVersion
 from models.prompt import PromptListing, PromptVersion
 from models.sandbox import SandboxListing, SandboxVersion
 from models.skill import SkillListing, SkillVersion
+from services.skill_bundle import needs_bundle_delivery
 
 MAX_QUERIES = 5
 MAX_CAPABILITIES = 24
@@ -159,7 +161,12 @@ def project_skill(listing: SkillListing, version: SkillVersion) -> Projected:
         tags=_dedupe(["skill", task, listing.namespace], 12),
         supported_harnesses=list(version.supported_harnesses or []),
         artifact=Artifact(body.encode("utf-8"), "text/markdown; charset=utf-8"),
-        extra={"obs:taskType": version.task_type, "obs:deliveryMode": version.delivery_mode},
+        activatable=not needs_bundle_delivery(version),
+        extra={
+            "obs:taskType": version.task_type,
+            "obs:deliveryMode": version.delivery_mode,
+            "obs:artifactScope": "preview" if needs_bundle_delivery(version) else "complete",
+        },
     )
 
 

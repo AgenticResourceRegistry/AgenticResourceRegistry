@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -401,5 +402,39 @@ def test_server_config_emits_plugin_manifest_and_telemetry_hooks():
     assert json.loads(manifest["content"])["name"] == "observal"
 
 
+@pytest.mark.parametrize(("scope", "plugin_dir"), [("user", "~/.agents"), ("project", ".agents")])
+def test_server_config_runs_hook_scripts_from_the_plugin_root(scope: str, plugin_dir: str):
+    from services.harness import generate_agent_config
+
+    hook_id = uuid.uuid4()
+    agent = _agent()
+    agent.components = [SimpleNamespace(component_type="hook", component_id=hook_id)]
+    hook = SimpleNamespace(
+        name="nudge",
+        slug="nudge",
+        namespace="acme",
+        event="Stop",
+        handler_type="command",
+        handler_config={"command": "nudge.sh"},
+        script_filename="nudge.sh",
+        script_content="#!/bin/sh\n",
+    )
+    result = generate_agent_config(agent, "goose", options={"scope": scope}, hook_listings={hook_id: hook})
+
+    # The plugin's hooks.json and the script it runs land in the same plugin directory.
+    script = next(f for f in result["hook_files"] if f["path"].endswith("nudge.sh"))
+    assert script["path"] == f"{plugin_dir}/plugins/observal/scripts/nudge.sh"
+    assert result["hooks_config"]["path"] == f"{plugin_dir}/plugins/observal/hooks/hooks.json"
+    commands = [h["command"] for rule in result["hooks_config"]["content"]["hooks"]["Stop"] for h in rule["hooks"]]
+    assert '"${PLUGIN_ROOT}/scripts/nudge.sh"' in commands
+
+
 def test_server_config_omits_mcp_section_when_agent_has_no_servers():
     assert "mcp_config" not in _generate(scope="user")
+
+
+def test_hook_script_filename_with_path_segments_is_rejected():
+    from services.harness.helpers import _collect_hook_script_files
+
+    with pytest.raises(ValueError):
+        _collect_hook_script_files([{"script_content": "x", "script_filename": "../../.ssh/k"}], None, "goose")

@@ -45,6 +45,7 @@ import { ErrorState } from "@/components/shared/error-state";
 import { EmptyState } from "@/components/shared/empty-state";
 import { StatusBadge } from "@/components/registry/status-badge";
 import { RecommendedBadge } from "@/components/registry/recommended-badge";
+import { ForkMarkers } from "@/components/registry/fork-provenance";
 import { EntityGlyph } from "@/components/registry/entity-glyph";
 import { RegistryName } from "@/components/registry/registry-name";
 import { HarnessBadges } from "@/components/registry/harness-badges";
@@ -317,6 +318,7 @@ function AgentCatalogCard({
         <EntityGlyph type="agent" size="sm" labelled={false} />
         <div className="flex items-center gap-1.5">
           {agent.is_recommended && <RecommendedBadge />}
+          <ForkMarkers provenance={agent.forked_from} count={agent.fork_count} />
           <StatusBadge status={status} />
         </div>
       </div>
@@ -407,6 +409,7 @@ function AgentListRow({ agent, onClick }: { agent: RegistryItem; onClick: () => 
       {/* Status */}
       <div className="flex items-center gap-1.5">
         {agent.is_recommended && <RecommendedBadge />}
+        <ForkMarkers provenance={agent.forked_from} count={agent.fork_count} />
         <StatusBadge status={status} />
       </div>
 

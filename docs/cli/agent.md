@@ -18,7 +18,8 @@ Canonical identities use `namespace/slug`. Commands also accept UUIDs, unambiguo
 | `bulk-create` | Validate or create multiple agents from JSON |
 | `list` | List approved visible agents |
 | `my` | List agents owned or co-authored by the user |
-| `show` | Show an agent and its composition |
+| `show` | Show an agent and its composition, including visible fork provenance and public fork count |
+| `fork` | Copy an approved agent release into an independent draft |
 | `install` | Generate an installation config without writing files |
 | `pull` | Generate and write a complete harness installation |
 | `archive` | Archive an agent |
@@ -115,6 +116,26 @@ The most recent `list` or `my` result is cached for row-number references. Empty
 `my` returns the standard `items`, `total`, `page`, and `page_size` envelope, including pending, approved, rejected, and archived agents. Empty results use `items: []`.
 
 `show` returns the direct Agent object, including component links and success criteria.
+
+## Fork an approved agent
+
+```bash
+observal agent fork acme/pr-reviewer --name my-reviewer --output json
+observal agent fork acme/pr-reviewer --version 2.0.0 --new-version 0.1.0 --team payments --visibility team --output json
+observal agent fork acme/pr-reviewer --dir ./my-reviewer --output json
+```
+
+`SOURCE` accepts a UUID, `namespace/slug`, an alias, or a cached row number. Only a currently approved listing and an approved source version can be forked. The default is the newest stable approved version. A fork begins as **your draft** in a personal or permitted team namespace; it keeps approved component references, not copies of the components. A private source may be forked only into the same private teamspace. A name collision returns conflict rather than changing an existing agent. A disabled fork setting returns permission denied; per-user rate limiting returns exit code 8.
+
+`--dir` creates a new `observal-agent.yaml` containing the fork ID and editable fields, including exact component pins, `model_config_json`, and `external_mcps`. It refuses to overwrite an existing file *before* sending the fork request. JSON returns the direct draft object, plus `yaml_path` when provided. To edit this fork without creating a second listing:
+
+```bash
+observal agent build --dir ./my-reviewer --output json
+observal agent publish --update --dir ./my-reviewer --output json
+observal agent publish --submit AGENT_UUID --output json
+```
+
+`--update` uses the scaffold's `agent_id` to target the draft exactly, even though drafts do not appear in the public search. The submit command uses the ID returned by fork. A draft requires review before appearing in public fork counts or lists. `show` displays **Source unavailable** instead of saved source identity when access to the original has been lost; never infer provenance from a cached reference.
 
 ## Generate installation config
 

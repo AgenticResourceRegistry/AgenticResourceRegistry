@@ -345,6 +345,13 @@ DEFAULTS: dict[str, str] = {
     "security.trace_privacy": "false",
     # Registry policy
     "registry.registered_agents_only": "false",
+    # Must be enabled only after all old API/worker processes are drained and
+    # complete-folder installers have been deployed. A new worker cannot make
+    # an old worker enforce skill review and delivery markers.
+    "registry.skill_folder_delivery_enabled": "false",
+    # Registry forking: kill switch and per-user hourly creation limit.
+    "registry.fork.enabled": "true",
+    "registry.fork.max_per_user_per_hour": "30",
     # Application retention policy, separate from the ClickHouse TTL below
     "retention.enabled": "false",
     "retention.trace_days": "",
@@ -426,6 +433,11 @@ SENSITIVE_KEYS: set[str] = {
 SETTING_FEATURES: dict[str, str] = {}
 
 SETTING_SUBTITLES: dict[str, str] = {
+    "registry.skill_folder_delivery_enabled": (
+        "Enable complete-folder skill review and installation only after upgrading and draining all API/worker processes, "
+        "migrating a restored database through the current head, and confirming supported CLI clients. "
+        "Keep off during mixed-version rollout; see docs/skill-folder-rollout.md."
+    ),
     "deployment.public_registry_enabled": (
         "Allow signed-out visitors to browse and install approved public registry content. "
         "Publishing, private data, telemetry, and administration still require authentication."

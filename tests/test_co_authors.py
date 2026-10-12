@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for ownership transfer of personal and teamspace listings."""
@@ -14,6 +15,7 @@ from fastapi import HTTPException
 
 from api.routes.co_authors import TransferOwnershipRequest, _get_entity_for_transfer, transfer_ownership
 from models.team import TeamRole
+from models.user import UserRole
 
 ENTITY_TYPES = ["agents", "mcps", "skills", "hooks", "prompts", "sandboxes"]
 
@@ -33,6 +35,7 @@ def _stub_db():
         commit=AsyncMock(),
         refresh=AsyncMock(),
         execute=AsyncMock(return_value=result),
+        scalar=AsyncMock(return_value=None),
     )
 
 
@@ -71,6 +74,10 @@ async def _transfer(entity_type, listing, current_user, target_user, db):
         patch("api.routes.co_authors._resolve_target_user", new=AsyncMock(return_value=target_user)),
         patch("api.routes.co_authors.identity_exists", new=AsyncMock(return_value=False)),
         patch("api.routes.co_authors.review_publication_to_public", new=AsyncMock(return_value=True)),
+        patch(
+            "api.routes.co_authors.team_membership",
+            new=AsyncMock(return_value=SimpleNamespace(role=TeamRole.owner)),
+        ),
     ):
         return await transfer_ownership(
             entity_type,
@@ -121,7 +128,7 @@ async def test_teamspace_owner_transfer_detaches_the_listing(entity_type, is_pri
     team-owned listing. Leaving the teamspace also drops team visibility, because
     team-private requires a teamspace.
     """
-    current_user = SimpleNamespace(id=uuid.uuid4())
+    current_user = SimpleNamespace(id=uuid.uuid4(), role=UserRole.user)
     listing = _listing(entity_type, current_user.id, team_id=uuid.uuid4(), is_private=is_private)
     db = _stub_db()
 
@@ -148,6 +155,21 @@ async def test_transfer_of_personal_listing_still_works(entity_type):
     owner_field = "created_by" if entity_type == "agents" else "submitted_by"
     assert getattr(listing, owner_field) == target_user.id
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_owned", [False, True])
+async def test_transfer_refuses_tracked_skill_identity_change(team_owned):
+    actor = SimpleNamespace(id=uuid.uuid4(), role=UserRole.user)
+    listing = _listing("skills", actor.id, team_id=uuid.uuid4() if team_owned else None, is_private=team_owned)
+    original = (listing.team_id, listing.namespace, listing.is_private)
+    db = _stub_db()
+    db.scalar.return_value = uuid.uuid4()
+    with pytest.raises(HTTPException) as exc:
+        await _transfer("skills", listing, actor, _target_user(), db)
+    assert exc.value.status_code == 409
+    assert (listing.team_id, listing.namespace, listing.is_private) == original
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

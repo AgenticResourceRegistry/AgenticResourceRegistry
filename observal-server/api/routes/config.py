@@ -105,7 +105,7 @@ async def get_favicon(db=Depends(get_db)):
 
 
 @router.get("/public")
-async def get_public_config(db=Depends(get_db)):
+async def get_public_config(response: Response, db=Depends(get_db)):
     """Public configuration for frontend. No auth required."""
     optic.debug("config.get_public_config called")
     import services.dynamic_settings as ds
@@ -149,6 +149,8 @@ async def get_public_config(db=Depends(get_db)):
     sso_only = await ds.get_bool("deployment.sso_only")
     public_registry_enabled = await ds.get_bool("deployment.public_registry_enabled")
     self_registration_enabled = await ds.get_bool("auth.self_registration_enabled")
+    skill_folder_delivery_enabled = await ds.get_bool("registry.skill_folder_delivery_enabled", False)
+    response.headers["Cache-Control"] = "no-store"
 
     from api.routes.auth import is_github_oauth_configured, is_google_oauth_configured, is_oidc_configured
 
@@ -162,6 +164,7 @@ async def get_public_config(db=Depends(get_db)):
         "sso_only": sso_only,
         "public_registry_enabled": public_registry_enabled,
         "self_registration_enabled": self_registration_enabled,
+        "skill_folder_delivery_enabled": skill_folder_delivery_enabled,
         "saml_enabled": saml_enabled,
         "exec_dashboard_available": exec_dashboard_available,
         "enabled_features": enabled_features,

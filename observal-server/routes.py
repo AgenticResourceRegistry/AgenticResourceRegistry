@@ -35,6 +35,8 @@ from api.routes.jwks import router as jwks_router
 from api.routes.layer_snapshot import router as layer_snapshot_router
 from api.routes.logs_stream import router as logs_stream_router
 from api.routes.mcp import router as mcp_router
+from api.routes.mcp_webhook_sync import router as mcp_webhook_sync_router
+from api.routes.mcp_webhook_sync import webhook_router as mcp_webhook_receiver_router
 from api.routes.preview import router as preview_router
 from api.routes.prompt import router as prompt_router
 from api.routes.recommendations import router as recommendations_router
@@ -57,6 +59,8 @@ REST_ROUTERS = (
     device_auth_router,
     jwks_router,
     mcp_router,
+    mcp_webhook_sync_router,
+    mcp_webhook_receiver_router,
     registry_router,
     review_router,
     agent_router,

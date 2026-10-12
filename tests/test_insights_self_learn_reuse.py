@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the self-learn apply path when reusing existing registry components.
@@ -28,6 +29,7 @@ from models.mcp import ListingStatus, McpListing, McpVersion
 from models.skill import SkillListing, SkillVersion
 from models.user import User
 from services.insights.self_learn import apply_insight_suggestions
+from services.skill_revisions import skill_content_revision
 
 
 @pytest.fixture()
@@ -106,6 +108,7 @@ async def _skill(
         status=status,
         task_type="general",
         delivery_mode="registry_direct",
+        skill_md_content=f"---\nname: {name}\ndescription: {name} skill\n---\n",
         slash_command=slash_command,
         released_by=submitter.id,
         released_at=datetime.now(UTC),
@@ -113,6 +116,7 @@ async def _skill(
     db.add(ver)
     await db.flush()
     listing.latest_version_id = ver.id
+    ver.content_revision = skill_content_revision(listing, ver)
     await db.flush()
     return listing
 

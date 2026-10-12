@@ -21,6 +21,8 @@ from jobs.maintenance import (
     reproject_discovery_entries,
     sync_component_sources,
 )
+from jobs.mcp_sync import MAX_TRIES as MCP_SYNC_MAX_TRIES
+from jobs.mcp_sync import sync_mcp_webhook
 from jobs.migration import MAX_MIGRATION_JOB_TIMEOUT_SECONDS, purge_migration_artifacts, run_migration_job
 from jobs.otel_forward import forward_session, sweep_otlp_forwarding
 from jobs.usage_ping import submit_usage_ping
@@ -57,6 +59,7 @@ class WorkerSettings:
 
     functions = [
         sync_component_sources,
+        func(sync_mcp_webhook, max_tries=MCP_SYNC_MAX_TRIES),
         evaluate_alerts,
         maintain_clickhouse,
         generate_insight_report,

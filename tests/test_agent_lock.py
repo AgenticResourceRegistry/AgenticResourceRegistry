@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """The agent lock service: digests, pin resolution, pinned content, and lock documents."""
@@ -19,6 +20,7 @@ from models.mcp import ListingStatus, McpVersion
 from models.skill import SkillVersion
 from models.user import UserRole
 from services import agent_lock
+from services.skill_revisions import skill_content_revision
 from tests import discovery_support as ds
 
 
@@ -87,6 +89,38 @@ def test_digest_changes_with_install_content():
 
     assert agent_lock.content_digest("mcp", _mcp_row(args=["-y", "pkg@2"])) != base
     assert agent_lock.content_digest("mcp", _mcp_row(environment_variables=[{"name": "OTHER"}])) != base
+
+
+def test_resource_skill_v2_digest_binds_all_v1_fields_and_decoded_file_modes():
+    row = SimpleNamespace(
+        delivery_mode="registry_direct",
+        description="Description",
+        supported_harnesses=["pi"],
+        git_url=None,
+        git_ref=None,
+        skill_path="/",
+        slash_command=None,
+        task_type="general",
+        target_agents=[],
+        script_content=None,
+        script_filename=None,
+        skill_md_content="---\nname: example\ndescription: Example\n---\n# Example\n",
+        extra_files=[{"path": "scripts/run.sh", "content": "echo test", "executable": True}],
+    )
+    original = agent_lock.content_digest("skill", row)
+    assert original.startswith("observal-content-v2:sha256:")
+    row.extra_files = [{"path": "scripts/run.sh", "content": "ZWNobyB0ZXN0", "encoding": "base64", "executable": True}]
+    assert agent_lock.content_digest("skill", row) == original  # Same decoded bytes.
+    row.extra_files[0]["executable"] = False
+    assert agent_lock.content_digest("skill", row) != original
+    row.extra_files[0]["executable"] = True
+    row.description = "Changed installation metadata"
+    assert agent_lock.content_digest("skill", row) != original
+    row.description = "Description"
+    row.extra_files = []
+    assert agent_lock.content_digest("skill", row).startswith("sha256:")  # Legacy v1 unchanged.
+    row.script_filename, row.script_content = "empty.sh", ""
+    assert agent_lock.content_digest("skill", row).startswith("observal-content-v2:sha256:")
 
 
 # ── Latest release ───────────────────────────────────────────────────────
@@ -275,6 +309,71 @@ async def test_load_reports_fallbacks_digest_mismatches_and_unapproved_pins(sess
     assert loaded.listings["mcp"][locked.id].version == "0.9.0"
     assert loaded.listings["mcp"][legacy.id].version == "1.4.2"
     assert loaded.problems == ["mcp 'Legacy' is not locked", "mcp 'Tampered' 1.4.2 changed after it was locked"]
+
+
+async def test_resource_skill_requires_exact_v2_pin_even_in_non_strict_mode(session):
+    owner = await ds.user(session)
+    listing = await ds.skill(session, owner)
+    row = (await session.execute(select(SkillVersion))).scalar_one()
+    original_v1 = agent_lock.content_digest("skill", row)
+    row.extra_files = [{"path": "templates/new.txt", "content": "new"}]
+    component = SimpleNamespace(
+        component_type="skill",
+        component_id=listing.id,
+        resolved_version=row.version,
+        resolved_version_id=row.id,
+        resolved_digest=original_v1,
+    )
+    with pytest.raises(HTTPException, match="pinned folder differs") as refused:
+        await agent_lock.load_pinned_listings(session, [component], {"skill": {listing.id: listing}})
+    assert refused.value.status_code == 409
+    row.content_revision = skill_content_revision(listing, row)
+    component.resolved_digest = agent_lock.content_digest("skill", row)
+    loaded = await agent_lock.load_pinned_listings(session, [component], {"skill": {listing.id: listing}})
+    assert loaded.entries[0]["digest"] == component.resolved_digest
+    assert loaded.problems == []
+    component.resolved_version_id = None
+    with pytest.raises(HTTPException, match="exact v2 version pin"):
+        await agent_lock.load_pinned_listings(session, [component], {"skill": {listing.id: listing}})
+
+
+async def test_agent_review_blockers_reject_resource_bundle_with_old_digest(session):
+    owner = await ds.user(session)
+    listing = await ds.skill(session, owner)
+    row = (await session.execute(select(SkillVersion))).scalar_one()
+    v1 = agent_lock.content_digest("skill", row)
+    row.extra_files = [{"path": "templates/new.txt", "content": "new"}]
+    component = SimpleNamespace(
+        component_type="skill",
+        component_id=listing.id,
+        component_name="example",
+        resolved_version=row.version,
+        resolved_version_id=row.id,
+        resolved_digest=v1,
+    )
+    blockers = await agent_lock.pinned_component_blockers(session, [component])
+    assert blockers[0]["status"] == "invalid_bundle_pin"
+    row.content_revision = skill_content_revision(listing, row)
+    component.resolved_digest = agent_lock.content_digest("skill", row)
+    assert await agent_lock.pinned_component_blockers(session, [component]) == []
+
+
+async def test_agent_review_blocks_v2_skill_pin_after_stored_files_are_stripped(session):
+    owner = await ds.user(session)
+    listing = await ds.skill(session, owner)
+    row = (await session.execute(select(SkillVersion))).scalar_one()
+    row.extra_files = [{"path": "templates/new.txt", "content": "new"}]
+    component = SimpleNamespace(
+        component_type="skill",
+        component_id=listing.id,
+        component_name="example",
+        resolved_version=row.version,
+        resolved_version_id=row.id,
+        resolved_digest=agent_lock.content_digest("skill", row),
+    )
+    row.extra_files = []
+    blockers = await agent_lock.pinned_component_blockers(session, [component])
+    assert [item["status"] for item in blockers] == ["invalid_bundle_pin"]
 
 
 async def test_lock_document_is_persisted_and_digest_is_stable(session):

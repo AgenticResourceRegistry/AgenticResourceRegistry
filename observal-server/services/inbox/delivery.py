@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Writing inbox items and moving them through their lifecycle.
@@ -135,7 +136,20 @@ def _refresh_content(existing: InboxItem, fresh: InboxItem) -> bool:
     a decision that is no longer the one on record.
     """
     changed = False
-    for attr in ("title", "body", "action_url", "action_command", "payload"):
+    # Visibility and ownership can change between review rounds. Reopening a
+    # private team request for a global reviewer must not retain the old private
+    # snapshot (or stale namespace/team link) from the previous delivery.
+    for attr in (
+        "title",
+        "body",
+        "action_url",
+        "action_command",
+        "payload",
+        "subject_namespace",
+        "subject_slug",
+        "team_id",
+        "is_private_subject",
+    ):
         new_value = getattr(fresh, attr)
         if getattr(existing, attr) != new_value:
             setattr(existing, attr, new_value)

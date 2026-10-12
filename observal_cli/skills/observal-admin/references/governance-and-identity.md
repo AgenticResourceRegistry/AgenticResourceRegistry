@@ -58,6 +58,13 @@ observal admin review approve BUNDLE_UUID --bundle --output json
 observal admin review reject REVIEW_UUID --reason 'Not reproducible' --output json
 ```
 
+Complete skill folders are reviewed per exact version. `review show` prints the version UUID, revision and files; `approve` lists the files and binds the decision to that revision, so pass `--revision REVISION` to approve exactly what was inspected (or `--yes` to accept the files listed for the run). A Git-to-folder conversion also needs `--ack-git-base`. Use `--version-id UUID` when several versions are pending. `reject` takes `--reason` as usual.
+
+```bash
+observal admin review show NAMESPACE/SLUG --output json
+observal admin review approve NAMESPACE/SLUG --revision REVISION --output json
+```
+
 Component types include `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. Agent and bundle selectors are mutually exclusive. Verify returned status and do not act on unrelated queue items.
 
 ## Recommendations

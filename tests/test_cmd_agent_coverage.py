@@ -374,6 +374,8 @@ def test_bulk_create_rejects_server_limit_and_canonical_duplicates_before_http(t
     [
         {"name": "___"},
         {"name": "install"},
+        {"name": "fork"},
+        {"name": "forks"},
         {"name": "valid", "components": "not-a-list"},
         {"name": "valid", "components": ["not-an-object"]},
         {"name": "valid", "components": [{"component_type": "skill"}]},

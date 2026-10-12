@@ -17,6 +17,7 @@ from schemas.constants import (
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,499}$")
 
@@ -125,6 +126,9 @@ class SandboxUpdateRequest(BaseModel):
 
 
 class SandboxListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
     id: uuid.UUID
     name: str
     namespace: str
@@ -171,6 +175,8 @@ class SandboxListingResponse(BaseModel):
 
 
 class SandboxListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str

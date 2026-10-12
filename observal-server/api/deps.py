@@ -336,7 +336,9 @@ async def require_password_auth() -> None:
 MAX_BARE_NAME_MATCHES = 6
 
 
-async def resolve_listing(model, identifier: str, db: AsyncSession, *, require_status=None, current_user=None):
+async def resolve_listing(
+    model, identifier: str, db: AsyncSession, *, require_status=None, current_user=None, load_options=()
+):
     """Resolve a listing by UUID, canonical name, or unambiguous legacy bare name.
 
     ``current_user`` decides what the caller may see, and a listing they may not
@@ -379,7 +381,9 @@ async def resolve_listing(model, identifier: str, db: AsyncSession, *, require_s
         stmt = stmt.join(version_model, model.latest_version_id == version_model.id).where(
             version_model.status == require_status
         )
-    result = await db.execute(stmt.limit(MAX_BARE_NAME_MATCHES if ambiguous_label is not None else 2))
+    result = await db.execute(
+        stmt.options(*load_options).limit(MAX_BARE_NAME_MATCHES if ambiguous_label is not None else 2)
+    )
     scalars = result.scalars()
     matches = scalars.all()
     if not isinstance(matches, (list, tuple)):
@@ -568,18 +572,24 @@ async def check_listing_visibility_async(listing, current_user, db: AsyncSession
         return creator_id == current_user.id
     return (
         await db.scalar(
-            select(TeamMembership.id).where(
+            select(TeamMembership.id)
+            .where(
                 TeamMembership.team_id == team_id,
                 TeamMembership.user_id == current_user.id,
             )
+            .with_for_update(read=True)
         )
         is not None
     )
 
 
-async def resolve_visible_listing(model, identifier: str, db: AsyncSession, current_user, *, require_status=None):
+async def resolve_visible_listing(
+    model, identifier: str, db: AsyncSession, current_user, *, require_status=None, load_options=()
+):
     """Resolve a listing and hide it when the caller cannot see it."""
-    listing = await resolve_listing(model, identifier, db, require_status=require_status, current_user=current_user)
+    listing = await resolve_listing(
+        model, identifier, db, require_status=require_status, current_user=current_user, load_options=load_options
+    )
     if listing is None or not await check_listing_visibility_async(listing, current_user, db):
         return None
     return listing

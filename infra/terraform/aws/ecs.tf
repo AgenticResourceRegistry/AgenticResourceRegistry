@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ECS Fargate stack: api, web, worker, init.
@@ -48,6 +49,8 @@ locals {
     { name = "DEMO_REVIEWER_PASSWORD", value = var.demo_reviewer_password },
     { name = "DEMO_USER_EMAIL", value = var.demo_user_email },
     { name = "DEMO_USER_PASSWORD", value = var.demo_user_password },
+    ] : [], local.webhook_ingress_enabled ? [
+    { name = "WEBHOOK_PUBLIC_URL", value = local.webhook_public_url },
   ] : [])
 
   # Secrets injected by ECS at task start. Reference SSM Parameter Store ARNs.

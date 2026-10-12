@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Permanent, versioned artifact URLs.
@@ -23,13 +24,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import services.dynamic_settings as ds
-from api.deps import get_db, get_effective_agent_permission, get_effective_component_permission
+from api.deps import (
+    check_listing_visibility_async,
+    get_db,
+    get_effective_agent_permission,
+    get_effective_component_permission,
+)
 from api.routes.ard import PUBLIC_SEARCH_SETTING, discovery_user
 from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle
 from models.mcp import ListingStatus
 from models.user import User
 from services.discovery.adapters import ADAPTERS, NATIVE_MODELS
 from services.discovery.visibility import visible_entries_predicate
+from services.skill_bundle import needs_bundle_delivery
 
 router = APIRouter(prefix="/api/v1/artifacts", tags=["ard"])
 
@@ -71,12 +78,29 @@ async def get_artifact(
         return _error(404, "NOT_FOUND", "Artifact not found")
 
     listing_model, version_model, fk = NATIVE_MODELS[discovery_kind]
-    listing = (await db.execute(select(listing_model).where(listing_model.id == entity_id))).scalar_one_or_none()
-    if listing is None:
+    if discovery_kind == DiscoveryKind.skill:
+        # Projection is eventually consistent. The indexed entry may still say
+        # public after privatization or membership removal: serialize access
+        # with the authoritative listing and membership before loading bytes.
+        locked_id = (
+            await db.execute(select(listing_model.id).where(listing_model.id == entity_id).with_for_update(read=True))
+        ).scalar_one_or_none()
+        if locked_id is None:
+            return _error(404, "NOT_FOUND", "Artifact not found")
+    listing = (
+        await db.execute(
+            select(listing_model).where(listing_model.id == entity_id).execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if listing is None or (
+        discovery_kind == DiscoveryKind.skill and not await check_listing_visibility_async(listing, current_user, db)
+    ):
         return _error(404, "NOT_FOUND", "Artifact not found")
     version_stmt = select(version_model).where(
         getattr(version_model, fk) == entity_id, version_model.version == version
     )
+    if discovery_kind == DiscoveryKind.skill:
+        version_stmt = version_stmt.with_for_update(read=True).execution_options(populate_existing=True)
     if discovery_kind == DiscoveryKind.agent:
         from sqlalchemy.orm import selectinload
 
@@ -90,14 +114,21 @@ async def get_artifact(
     # A non-approved version is only for people who could open it in the registry.
     status = getattr(row, "status", None)
     approved = getattr(status, "value", status) in (ListingStatus.approved.value, "approved")
-    if not approved:
-        permission = (
-            get_effective_agent_permission(listing, current_user)
-            if discovery_kind == DiscoveryKind.agent
-            else get_effective_component_permission(listing, current_user)
+    permission = (
+        get_effective_agent_permission(listing, current_user)
+        if discovery_kind == DiscoveryKind.agent
+        else get_effective_component_permission(listing, current_user)
+    )
+    if (
+        not approved or (discovery_kind == DiscoveryKind.skill and row.requires_global_review)
+    ) and permission != "owner":
+        return _error(404, "NOT_FOUND", "Version not found")
+    if discovery_kind == DiscoveryKind.skill and needs_bundle_delivery(row):
+        return _error(
+            409,
+            "COMPLETE_FOLDER_REQUIRED",
+            "SKILL.md is only a preview of this version; install the exact skill release with skill_extra_files_v1",
         )
-        if permission != "owner":
-            return _error(404, "NOT_FOUND", "Version not found")
 
     projected = ADAPTERS[discovery_kind](listing, row)
     artifact = projected.artifact
@@ -109,10 +140,15 @@ async def get_artifact(
             "Digest": artifact.digest_header,
             "X-Artifact-Digest": artifact.digest,
             "X-Observal-Identifier": entry.ard_identifier,
-            # Only anonymous, publicly readable artifacts may be cached by shared proxies.
+            # Only anonymous, genuinely public and cleared artifacts may be cached by shared proxies.
             "Cache-Control": (
                 _IMMUTABLE
-                if current_user is None and public_registry_enabled and approved and entry.visibility.value == "public"
+                if current_user is None
+                and public_registry_enabled
+                and approved
+                and entry.visibility.value == "public"
+                and not getattr(listing, "is_private", False)
+                and not getattr(row, "requires_global_review", False)
                 else _PRIVATE
             ),
         },

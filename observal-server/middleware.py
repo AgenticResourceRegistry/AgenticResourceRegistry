@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -25,7 +26,9 @@ from services.audit import AUDIT_ENABLED
 
 DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:3000"
 DEFAULT_MAX_REQUEST_SIZE_MB = "10"
+DEFAULT_MAX_SKILL_REQUEST_SIZE_MB = "10"
 DEFAULT_MAX_MIGRATION_REQUEST_SIZE_MB = "6144"
+SKILL_AUTHORING_PATHS = frozenset({"/api/v1/skills/submit", "/api/v1/skills/draft", "/api/v1/skills/folder-drafts"})
 MIGRATION_UPLOAD_PATHS = frozenset(
     {
         "/api/v1/admin/migrate/import",
@@ -64,10 +67,17 @@ class RequestBodyTooLargeError(Exception):
 class RequestSizeLimitMiddleware:
     """Reject declared or streamed request bodies that exceed route limits."""
 
-    def __init__(self, app, max_request_size_bytes: int, max_migration_request_size_bytes: int):
+    def __init__(
+        self,
+        app,
+        max_request_size_bytes: int,
+        max_migration_request_size_bytes: int,
+        max_skill_request_size_bytes: int | None = None,
+    ):
         self.app = app
         self.max_request_size_bytes = max_request_size_bytes
         self.max_migration_request_size_bytes = max_migration_request_size_bytes
+        self.max_skill_request_size_bytes = max_skill_request_size_bytes or max_request_size_bytes
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -79,6 +89,15 @@ class RequestSizeLimitMiddleware:
         request_limit = (
             self.max_migration_request_size_bytes
             if request_path in MIGRATION_UPLOAD_PATHS
+            else self.max_skill_request_size_bytes
+            if request_path in SKILL_AUTHORING_PATHS
+            or (request_path.startswith("/api/v1/skills/") and request_path.endswith("/draft"))
+            or (request_path.startswith("/api/v1/skills/") and request_path.endswith("/versions"))
+            or (
+                request_path.startswith("/api/v1/skills/")
+                and "/versions/" in request_path
+                and request_path.endswith("/files")
+            )
             else self.max_request_size_bytes
         )
         if content_length:
@@ -322,6 +341,9 @@ def configure_middleware(app: FastAPI) -> None:
     app.add_middleware(
         RequestSizeLimitMiddleware,
         max_request_size_bytes=get_max_request_size_bytes(),
+        max_skill_request_size_bytes=int(os.environ.get("MAX_SKILL_REQUEST_SIZE_MB", DEFAULT_MAX_SKILL_REQUEST_SIZE_MB))
+        * 1024
+        * 1024,
         max_migration_request_size_bytes=get_max_migration_request_size_bytes(),
     )
     app.add_middleware(SecurityHeadersMiddleware, security_headers=build_security_headers(cors_allowed_origins))

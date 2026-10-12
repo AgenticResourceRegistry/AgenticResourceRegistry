@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2025 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 name: E2E Frontend
@@ -9,6 +10,9 @@ on:
     paths:
       - 'web/**'
       - 'tests/e2e/**'
+      - 'observal-server/api/routes/skill_files.py'
+      - 'observal-server/api/routes/component_versions.py'
+      - 'observal-server/api/routes/config.py'
       - '.github/workflows/e2e-frontend.yml'
 
 concurrency:
@@ -87,9 +91,13 @@ jobs:
         working-directory: web
         run: pnpm exec playwright install chromium --with-deps
 
-      - name: Run frontend e2e
+      - name: Run frontend and gate-off folder e2e
         working-directory: web
-        run: pnpm exec playwright test frontend-flows
+        env:
+          # This runner builds a fresh disposable stack; never point this job
+          # at a long-lived server when enabling the draft-creating tests.
+          OBSERVAL_ISOLATED_STACK: 'true'
+        run: pnpm exec playwright test frontend-flows skill-folder
 
       - name: Upload test results
         if: always()
@@ -98,3 +106,54 @@ jobs:
           name: e2e-frontend-results
           path: web/test-results/
           retention-days: 7
+
+  skill-folder-gated:
+    name: gated-skill-folders-disposable
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Build fresh disposable Compose project
+        env:
+          COMPOSE_PROJECT_NAME: observal-skill-folder-ci
+          DOCKER_BUILDKIT: 1
+        run: |
+          cp .env.example .env
+          make rebuild
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost/health > /dev/null 2>&1 && curl -fsS http://localhost/ > /dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          echo 'Disposable stack did not become healthy' >&2
+          exit 1
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies and Chromium
+        run: |
+          pnpm install --frozen-lockfile
+          cd web && pnpm exec playwright install chromium --with-deps
+      - name: Review exact folder successor on isolated gated stack
+        working-directory: web
+        env:
+          OBSERVAL_ISOLATED_STACK: 'true'
+          OBSERVAL_RUN_GATE_ON: 'true'
+        run: pnpm exec playwright test skill-folder-gated.spec.ts --workers=1
+      - name: Upload gated screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gated-skill-folder-results
+          path: web/test-results/
+          retention-days: 7
+      - name: Destroy disposable project and all volumes
+        if: always()
+        run: docker compose -p observal-skill-folder-ci -f docker/docker-compose.yml down --volumes --remove-orphans

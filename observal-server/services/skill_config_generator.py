@@ -44,15 +44,16 @@ def _short_description(desc: str, max_len: int = 200) -> str:
     return sentence.strip()
 
 
-def _generate_skill(skill_source, harness: str, scope: str = "project") -> dict | None:
+def _generate_skill(skill_source, harness: str, scope: str = "project", *, name: str | None = None) -> dict | None:
     """Generate an harness-specific skill file dict with path and content.
 
     skill_source can be a SkillListing or SkillVersion (both have skill_md_content).
     Returns None for monolithic harnesses (gemini, codex, copilot) that inline
     skills into their rules markdown.
     """
-    name_attr = getattr(skill_source, "name", None)
-    # SkillVersion doesn't have .name, get it from the listing relationship
+    name_attr = name or getattr(skill_source, "name", None)
+    # Direct callers may pass a SkillVersion. Installs pass an explicit
+    # destination name to avoid lazy-loading the selected version's listing.
     if not name_attr and hasattr(skill_source, "listing"):
         name_attr = getattr(skill_source.listing, "name", "skill")
     if not name_attr:
@@ -139,29 +140,28 @@ def generate_skill_config(
         "listing_id": skill_id,
     }
 
-    # Always include git coordinates - they are the install-time source of truth.
-    # When a specific version is requested, use its content over the listing's.
-    source = version_override if version_override else skill_listing
+    # The selected row is authoritative. A deliberately empty/cleared value
+    # must never inherit coordinates or scripts from the listing's pointer.
+    source = version_override if version_override is not None else skill_listing
 
-    git_url = getattr(source, "git_url", None) or getattr(skill_listing, "git_url", None)
-    if git_url:
-        config["skill"]["git_url"] = git_url
-    skill_path = getattr(source, "skill_path", None) or getattr(skill_listing, "skill_path", None)
+    delivery_mode = getattr(source, "delivery_mode", "git_fetch")
+    if delivery_mode == "git_fetch":
+        git_url = getattr(source, "git_url", None)
+        if git_url:
+            config["skill"]["git_url"] = git_url
+        git_ref = getattr(source, "git_ref", None)
+        if git_ref:
+            config["skill"]["git_ref"] = git_ref
+    skill_path = getattr(source, "skill_path", None)
     if skill_path:
         config["skill"]["skill_path"] = skill_path
-    git_ref = getattr(source, "git_ref", None) or getattr(skill_listing, "git_ref", None)
-    if git_ref:
-        config["skill"]["git_ref"] = git_ref
     # Cache skill_md_content as a fast-path fallback (no git needed at install time).
     skill_md_content = getattr(source, "skill_md_content", None)
     if skill_md_content:
-        validate_skill_md_content_frontmatter(
-            skill_md_content, slash_command=getattr(skill_listing, "slash_command", None)
-        )
+        validate_skill_md_content_frontmatter(skill_md_content, slash_command=getattr(source, "slash_command", None))
         config["skill"]["skill_md_content"] = skill_md_content
 
     # Delivery mode and registry-direct script
-    delivery_mode = getattr(source, "delivery_mode", None) or getattr(skill_listing, "delivery_mode", "git_fetch")
     config["skill"]["delivery_mode"] = delivery_mode
     if delivery_mode == "registry_direct":
         script_content = getattr(source, "script_content", None)
@@ -177,7 +177,7 @@ def generate_skill_config(
         config["skill"]["latest_version"] = getattr(skill_listing, "version", None)
 
     # Generate harness-specific skill file
-    skill = _generate_skill(source, harness, scope)
+    skill = _generate_skill(source, harness, scope, name=skill_name)
     if skill:
         config["skills"] = skill
 

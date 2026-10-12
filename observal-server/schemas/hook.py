@@ -19,6 +19,7 @@ from schemas.constants import (
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 
 class HookSubmitRequest(BaseModel):
@@ -106,6 +107,9 @@ class HookUpdateRequest(BaseModel):
 
 
 class HookListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
     id: uuid.UUID
     name: str
     namespace: str
@@ -144,6 +148,8 @@ class HookListingResponse(BaseModel):
 
 
 class HookListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str

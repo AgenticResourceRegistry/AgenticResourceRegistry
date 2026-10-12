@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Create and consume scoped, expiring Agent share manifests."""
@@ -26,7 +27,7 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 share_app = typer.Typer(
     name="share",
-    help="Share version-pinned Agents installed in the current repository.",
+    help="Share version-pinned Agents installed in the current repository.\n\nExamples:\n  observal share candidates",
     invoke_without_command=True,
     no_args_is_help=False,
 )
@@ -148,7 +149,11 @@ def candidates(
     directory: str = typer.Option(".", "--dir", help="Repository directory."),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ) -> None:
-    """List shareable Agent versions tracked in the current repository."""
+    """List shareable Agent versions tracked in the current repository.
+
+    Examples:
+      observal share candidates
+    """
     try:
         root, items = discover_repository_agents(directory)
     except (OSError, RuntimeError, ValueError) as error:
@@ -182,7 +187,11 @@ def create_share(
     title: str | None = typer.Option(None, "--title", help="Optional share title."),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ) -> None:
-    """Select repository Agents and create an opaque, expiring share link."""
+    """Select repository Agents and create an opaque, expiring share link.
+
+    Examples:
+      observal share create --agent namespace/slug
+    """
     if all_agents and agent:
         fail(
             ErrorCategory.VALIDATION,
@@ -290,7 +299,11 @@ def open_share(
     yes: bool = typer.Option(False, "--yes", "-y", help="Pull all accessible Agents without confirmation."),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ) -> None:
-    """Open a share and, after confirmation, pull its accessible Agents."""
+    """Open a share and, after confirmation, pull its accessible Agents.
+
+    Examples:
+      observal share open YOUR_SHARE_TOKEN --no-pull
+    """
     try:
         token = parse_share_token(share)
     except ValueError as error:
@@ -373,7 +386,11 @@ def revoke_share(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ) -> None:
-    """Revoke a share link immediately."""
+    """Revoke a share link immediately.
+
+    Examples:
+      observal share revoke YOUR_SHARE_TOKEN
+    """
     try:
         token = parse_share_token(share)
     except ValueError as error:

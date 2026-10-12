@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
-# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ── Build stage: install pnpm, deps, and build the Next.js app ──────────────
@@ -12,10 +11,9 @@ ARG TARGETARCH
 ARG PNPM_VERSION=10.34.4
 ARG PNPM_SHA256_AMD64=15092b4d71f1192f67501116dd87dd20be8c4238434371959820255a374219c1
 ARG PNPM_SHA256_ARM64=9513a31bc1e166f5f6e6dbaadca91fa05b44e919ea53685c754ab0acd5501514
-# pipefail: a failed command on the left of a pipe fails the RUN instead of being ignored.
-SHELL ["/bin/ash", "-o", "pipefail", "-c"]
-RUN apk add --no-cache wget && \
-    case "$TARGETARCH" in \
+# Alpine provides BusyBox wget; the downloaded pnpm binary is SHA-256 pinned.
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+RUN case "$TARGETARCH" in \
         amd64) PNPM_ARCH=x64; PNPM_SHA256="$PNPM_SHA256_AMD64" ;; \
         arm64) PNPM_ARCH=arm64; PNPM_SHA256="$PNPM_SHA256_ARM64" ;; \
         *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \

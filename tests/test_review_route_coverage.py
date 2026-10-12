@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused contracts and failure coverage for the review routes."""
@@ -94,6 +95,11 @@ def _result(*, scalar=_UNSET, scalars=(), rows=()):
 
 def _sql(statement) -> str:
     return " ".join(str(statement).split())
+
+
+def _pending_skill_ids(statement) -> bool:
+    sql = _sql(statement)
+    return "FROM skill_versions" in sql and "skill_versions.status" in sql
 
 
 def _params(statement) -> dict:
@@ -349,7 +355,8 @@ async def test_find_listing_resolves_unique_prefix_and_reports_cross_type_ambigu
     mcp = SimpleNamespace(id=uuid.UUID(int=10))
     skill = SimpleNamespace(id=uuid.UUID(int=11))
 
-    async def resolve(model, identifier, database):
+    async def resolve(model, identifier, database, *, load_options=None):
+        assert load_options == (review._SKILL_REVIEW_LOOKUP_OPTIONS if model is review.SkillListing else None)
         assert identifier == "abcd"
         assert database is db
         if model is review.LISTING_MODELS["mcp"]:
@@ -409,7 +416,7 @@ async def test_find_listing_falls_back_to_exact_name_with_exact_queries(monkeypa
 async def test_find_listing_short_canonical_and_malformed_identifiers_use_name_fallback(monkeypatch, identifier):
     db = _db()
 
-    async def too_short_or_missing(model, value, database):
+    async def too_short_or_missing(model, value, database, *, load_options=None):
         detail = "Prefix is too short" if value == "x" else "missing"
         status = 400 if value == "x" else 404
         raise HTTPException(status_code=status, detail=detail)
@@ -429,7 +436,7 @@ async def test_find_listing_returns_unique_uuid_hit_and_propagates_database_fail
     listing = SimpleNamespace(id=uuid.UUID(int=13))
     calls = []
 
-    async def resolve(model, identifier, database):
+    async def resolve(model, identifier, database, *, load_options=None):
         calls.append(model)
         if model is review.LISTING_MODELS["hook"]:
             return listing
@@ -497,15 +504,17 @@ async def test_component_readiness_reads_the_pinned_release_not_the_latest():
 
     await engine.dispose()
     assert ready_flag is False
-    assert blockers == [
-        {
-            "component_type": "skill",
-            "component_id": str(waiting.id),
-            "name": "Waiting",
-            "version": "1.0.0",
-            "status": "pending",
-        }
-    ]
+    assert blockers[0] == {
+        "component_type": "skill",
+        "component_id": str(waiting.id),
+        "name": "Waiting",
+        "version": "1.0.0",
+        "status": "pending",
+    }
+    assert {(item["component_type"], item["status"]) for item in blockers[1:]} == {
+        ("unknown", "missing_listing"),
+        ("hook", "missing_listing"),
+    }
 
 
 @pytest.mark.asyncio
@@ -568,8 +577,12 @@ async def test_pending_component_queue_serializes_bundle_validation_submitter_an
         raise AssertionError(sql)
 
     db.execute.side_effect = execute
-
-    items = await review._query_pending_components(db, GLOBAL_SCOPE, "mcp")
+    listing.is_fork = True
+    provenance = AsyncMock(return_value={listing.id: {"available": True, "id": uuid.UUID(int=90)}})
+    monkeypatch.setattr(review, "provenance_for_many", provenance)
+    actor = _actor()
+    items = await review._query_pending_components(db, GLOBAL_SCOPE, "mcp", current_user=actor)
+    provenance.assert_awaited_once_with([listing], actor, db)
 
     assert items == [
         {
@@ -586,6 +599,7 @@ async def test_pending_component_queue_serializes_bundle_validation_submitter_an
             "mcp_validated": True,
             "validation_results": [{"stage": "manifest", "passed": True, "details": "ok", "run_at": NOW.isoformat()}],
             "bundle_name": "review bundle",
+            "forked_from": {"available": True, "id": uuid.UUID(int=90)},
         }
     ]
     assert "ORDER BY mcp_versions.released_at DESC" in _sql(statements[0])
@@ -697,6 +711,7 @@ async def test_pending_agent_queue_groups_newest_hides_locks_and_resolves_author
             "components_ready": False,
             "blocking_components": [{"name": "waiting"}],
             "gaming_flags": {"score": 1},
+            "forked_from": None,
         }
     ]
     readiness.assert_awaited_once_with([component], db)
@@ -730,21 +745,21 @@ async def test_list_pending_tabs_default_order_and_team_denial(monkeypatch):
     assert await review.list_pending(type="skill", tab="agents", team_id=None, db=db, current_user=actor) == [
         {"name": "agent", "created_at": "2026-03-01T10:00:00+00:00"}
     ]
-    agents.assert_awaited_once_with(db, ADMIN_SCOPE, None)
+    agents.assert_awaited_once_with(db, ADMIN_SCOPE, None, actor)
     components.assert_not_awaited()
 
     agents.reset_mock()
     assert await review.list_pending(type="skill", tab="components", team_id=TEAM_ID, db=db, current_user=actor) == [
         {"name": "component", "created_at": "2026-03-01T11:00:00+00:00"}
     ]
-    components.assert_awaited_once_with(db, ADMIN_SCOPE, "skill", TEAM_ID)
+    components.assert_awaited_once_with(db, ADMIN_SCOPE, "skill", TEAM_ID, actor)
     agents.assert_not_awaited()
 
     components.reset_mock()
     result = await review.list_pending(type=None, tab="unexpected", team_id=None, db=db, current_user=actor)
     assert [item["name"] for item in result] == ["component", "agent"]
-    agents.assert_awaited_once_with(db, ADMIN_SCOPE, None)
-    components.assert_awaited_once_with(db, ADMIN_SCOPE, None, None)
+    agents.assert_awaited_once_with(db, ADMIN_SCOPE, None, actor)
+    components.assert_awaited_once_with(db, ADMIN_SCOPE, None, None, actor)
 
     scope.return_value = TEAM_SCOPE
     agents.reset_mock()
@@ -860,6 +875,8 @@ async def test_get_review_component_authorizes_serializes_and_resolves_submitter
     )
     monkeypatch.setattr(review, "_require_review_scope", AsyncMock(return_value=GLOBAL_SCOPE))
     monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=("mcp", listing)))
+    provenance = AsyncMock(return_value={"available": False})
+    monkeypatch.setattr(review, "provenance_for", provenance)
     db.execute.return_value = _result(
         scalar=SimpleNamespace(id=SUBMITTER_ID, username="component-author", email="author@example.test")
     )
@@ -867,6 +884,8 @@ async def test_get_review_component_authorizes_serializes_and_resolves_submitter
     result = await review.get_review(str(listing.id), db, actor)
 
     assert result["name"] == "component detail"
+    assert result["forked_from"] == {"available": False}
+    provenance.assert_awaited_once_with(listing, actor, db)
     assert result["submitted_by"] == "component-author"
     statement = db.execute.await_args.args[0]
     assert "FROM users" in _sql(statement)
@@ -954,6 +973,7 @@ async def test_get_review_agent_serializes_pending_release_and_expands_component
         "component_blockers": [{"name": "blocked"}],
         "gaming_flags": {"score": 1},
         "success_criteria": {"purpose": "review"},
+        "forked_from": None,
         "components": [
             {
                 "component_type": "mcp",
@@ -1040,14 +1060,26 @@ async def test_approve_each_component_type_updates_version_then_notifies_and_com
     db = _db()
     actor = _actor(user_id=SUBMITTER_ID)
     listing, version = _orm_listing(listing_type, team_id=TEAM_ID)
+    if listing_type == "skill":
+        monkeypatch.setattr(review, "lock_skill_version", AsyncMock(return_value=(version.id, version)))
+        # Real-DB tests cover release ordering; this fixture verifies the
+        # notification and commit sequence without mocking SQL query results.
+        monkeypatch.setattr(review, "should_promote_skill_version", AsyncMock(return_value=True))
     events = []
     decision_boundaries.scope.return_value = PUBLIC_TEAM_SCOPE
     monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=(listing_type, listing)))
     db.flush.side_effect = lambda: events.append("flush")
-    db.execute.side_effect = lambda statement: events.append("update") or _result()
+
+    def record_execute(statement):
+        if listing_type == "skill" and _pending_skill_ids(statement):
+            return _result(scalars=[version.id])
+        events.append("update")
+        return _result()
+
+    db.execute.side_effect = record_execute
     decision_boundaries.decide.side_effect = lambda *args, **kwargs: events.append("inbox")
     db.commit.side_effect = lambda: events.append("commit")
-    db.refresh.side_effect = lambda row: events.append("refresh")
+    db.refresh.side_effect = lambda row, **kwargs: events.append("auth" if kwargs else "refresh")
     decision_boundaries.invalidate.side_effect = lambda namespace: events.append("cache")
     decision_boundaries.create_task.side_effect = lambda awaitable: events.append("publish")
 
@@ -1063,7 +1095,15 @@ async def test_approve_each_component_type_updates_version_then_notifies_and_com
     assert version.rejection_reason is None
     assert version.reviewed_by == actor.id
     assert version.reviewed_at == NOW
-    assert events == ["flush", "update", "inbox", "commit", "refresh", "cache", "publish"]
+    assert events == (["auth"] if listing_type == "skill" else []) + [
+        "flush",
+        "update",
+        "inbox",
+        "commit",
+        "refresh",
+        "cache",
+        "publish",
+    ]
     statement = db.execute.await_args.args[0]
     assert f"UPDATE {review.LISTING_MODELS[listing_type].__tablename__}" in _sql(statement)
     assert _params(statement) == {
@@ -1190,6 +1230,8 @@ async def test_reject_each_component_type_records_reason_notifies_and_cascades(
     db = _db()
     actor = _actor(user_id=SUBMITTER_ID)
     listing, version = _orm_listing(listing_type, team_id=TEAM_ID)
+    if listing_type == "skill":
+        monkeypatch.setattr(review, "lock_skill_version", AsyncMock(return_value=(version.id, version)))
     events = []
     decision_boundaries.scope.return_value = PUBLIC_TEAM_SCOPE
     monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=(listing_type, listing)))
@@ -1197,10 +1239,14 @@ async def test_reject_each_component_type_records_reason_notifies_and_cascades(
     db.commit.side_effect = lambda: events.append("commit")
     cascade = AsyncMock(side_effect=lambda *args: events.append("cascade"))
     monkeypatch.setattr("services.insights.self_learn.handle_component_rejection", cascade)
-    db.refresh.side_effect = lambda row: events.append("refresh")
+    db.refresh.side_effect = lambda row, **kwargs: events.append("auth" if kwargs else "refresh")
     decision_boundaries.invalidate.side_effect = lambda namespace: events.append("cache")
     decision_boundaries.create_task.side_effect = lambda awaitable: events.append("publish")
     request = ReviewActionRequest(reason="needs changes")
+    if listing_type == "skill":
+        db.execute.side_effect = lambda statement: (
+            _result(scalars=[version.id]) if _pending_skill_ids(statement) else _result()
+        )
 
     result = await review.reject(str(listing.id), request, db, actor)
 
@@ -1214,7 +1260,15 @@ async def test_reject_each_component_type_records_reason_notifies_and_cascades(
     assert version.rejection_reason == "needs changes"
     assert version.reviewed_by == actor.id
     assert version.reviewed_at == NOW
-    assert events == ["inbox", "commit", "cascade", "commit", "refresh", "cache", "publish"]
+    assert events == (["auth"] if listing_type == "skill" else []) + [
+        "inbox",
+        "commit",
+        "cascade",
+        "commit",
+        "refresh",
+        "cache",
+        "publish",
+    ]
     decision_boundaries.decide.assert_awaited_once_with(
         db,
         listing,
@@ -1340,7 +1394,7 @@ async def test_approve_agent_newest_release_supersedes_older_and_notifies_each_a
     assert agent.latest_version_id == newest.id
     assert agent.category == "testing"
     assert events == ["flush", "inbox", "inbox", "commit", "cache", "publish"]
-    readiness.assert_awaited_once_with(newest.components, db)
+    readiness.assert_awaited_once_with(newest.components, db, require_public_skills=True)
     assert decision_boundaries.decide.await_args_list == [
         call(
             db,
@@ -1572,6 +1626,19 @@ async def test_bundle_loader_scope_failure_stops_before_any_endpoint_mutation():
 
 
 @pytest.mark.asyncio
+async def test_bundle_skill_listing_order_is_canonical():
+    db = _db()
+    first, _ = _orm_listing("skill", index=1)
+    second, _ = _orm_listing("skill", index=2)
+    db.execute.side_effect = [
+        _result(scalars=[second, first]) if model is review.SkillListing else _result()
+        for model in review.LISTING_MODELS.values()
+    ]
+    listings = await review._bundle_listings(uuid.UUID(int=999), db, ADMIN_SCOPE)
+    assert [row.id for row in listings] == sorted((first.id, second.id))
+
+
+@pytest.mark.asyncio
 async def test_approve_bundle_decides_every_listing_type_in_one_commit(
     monkeypatch,
     decision_boundaries,
@@ -1586,6 +1653,15 @@ async def test_approve_bundle_decides_every_listing_type_in_one_commit(
     ]
     db.execute.return_value = _result(scalar=bundle)
     monkeypatch.setattr(review, "_bundle_listings", AsyncMock(return_value=listings))
+    skill_listing = next(row for row in listings if isinstance(row, review.SkillListing))
+    db.execute.side_effect = lambda statement: (
+        _result(scalars=[skill_listing.latest_version_id]) if _pending_skill_ids(statement) else _result(scalar=bundle)
+    )
+    monkeypatch.setattr(
+        review,
+        "lock_skill_version",
+        AsyncMock(return_value=(skill_listing.latest_version_id, skill_listing.latest_version)),
+    )
 
     result = await review.approve_bundle(bundle_id, db, actor)
 
@@ -1608,6 +1684,30 @@ async def test_approve_bundle_decides_every_listing_type_in_one_commit(
 
 
 @pytest.mark.asyncio
+async def test_batch_routes_refuse_mcp_pending_update_behind_approved_pointer(monkeypatch, decision_boundaries):
+    db = _db()
+    actor = _actor()
+    mcp, approved = _orm_listing("mcp", status=ListingStatus.approved)
+    pending = type(approved)(id=uuid.uuid4(), listing_id=mcp.id, version="3.0.0", status=ListingStatus.pending)
+    mcp.versions = [approved, pending]
+    bundle_id = uuid.UUID(int=625)
+    db.execute.return_value = _result(scalar=SimpleNamespace(id=bundle_id, name="stale MCP"))
+    monkeypatch.setattr(review, "_bundle_listings", AsyncMock(return_value=[mcp]))
+    monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=("mcp", mcp)))
+
+    for action in (
+        lambda: review.approve_bundle(bundle_id, db, actor),
+        lambda: review.approve_mcp_with_skills(str(mcp.id), review.McpBulkApproveRequest(skill_ids=[]), db, actor),
+    ):
+        with pytest.raises(HTTPException) as blocked:
+            await action()
+        assert blocked.value.status_code == 409
+    assert pending.status == ListingStatus.pending
+    db.commit.assert_not_awaited()
+    decision_boundaries.decide.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_reject_bundle_decides_every_listing_type_with_shared_reason(
     monkeypatch,
     decision_boundaries,
@@ -1623,6 +1723,15 @@ async def test_reject_bundle_decides_every_listing_type_with_shared_reason(
     db.execute.return_value = _result(scalar=bundle)
     monkeypatch.setattr(review, "_bundle_listings", AsyncMock(return_value=listings))
 
+    skill_listing = next(row for row in listings if isinstance(row, review.SkillListing))
+    db.execute.side_effect = lambda statement: (
+        _result(scalars=[skill_listing.latest_version_id]) if _pending_skill_ids(statement) else _result(scalar=bundle)
+    )
+    monkeypatch.setattr(
+        review,
+        "lock_skill_version",
+        AsyncMock(return_value=(skill_listing.latest_version_id, skill_listing.latest_version)),
+    )
     result = await review.reject_bundle(
         bundle_id,
         ReviewActionRequest(reason="bundle policy"),
@@ -1805,57 +1914,61 @@ async def test_related_skills_missing_wrong_type_hidden_and_database_failure(mon
 
 
 @pytest.mark.asyncio
-async def test_bulk_approve_mcp_skips_malformed_missing_and_nonpending_skills(
-    monkeypatch,
-    decision_boundaries,
-):
+async def test_bulk_approve_refuses_malformed_missing_duplicate_and_nonpending_skills(monkeypatch, decision_boundaries):
     db = _db()
     actor = _actor()
-    mcp, _mcp_version = _orm_listing("mcp")
-    pending, _pending = _orm_listing("skill", index=1)
-    approved, _approved = _orm_listing("skill", status=ListingStatus.approved, index=2)
-    missing_id = uuid.UUID(int=720)
+    mcp, _ = _orm_listing("mcp")
+    pending, _ = _orm_listing("skill", index=1)
+    approved, _ = _orm_listing("skill", status=ListingStatus.approved, index=2)
     monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=("mcp", mcp)))
-    db.execute.side_effect = [
-        _result(scalar=pending),
-        _result(),
-        _result(scalar=approved),
+    cases = [
+        (["malformed"], None, 400),
+        ([str(uuid.UUID(int=720))], None, 404),
+        ([str(pending.id), str(pending.id)], None, 400),
+        ([str(approved.id)], approved, 409),
     ]
-    request = review.McpBulkApproveRequest(skill_ids=["malformed", str(pending.id), str(missing_id), str(approved.id)])
+    for ids, selected, code in cases:
+        db.execute.return_value = _result(scalar=selected)
+        with pytest.raises(HTTPException) as refused:
+            await review.approve_mcp_with_skills(str(mcp.id), review.McpBulkApproveRequest(skill_ids=ids), db, actor)
+        assert refused.value.status_code == code
+        assert mcp.status is ListingStatus.pending
+        assert pending.status is ListingStatus.pending
+        assert approved.status is ListingStatus.approved
+        decision_boundaries.decide.assert_not_awaited()
+        db.commit.assert_not_awaited()
 
-    result = await review.approve_mcp_with_skills(str(mcp.id), request, db, actor)
 
-    assert result == {
-        "mcp": {"id": str(mcp.id), "name": mcp.name, "status": "approved"},
-        "approved_skills": 1,
-        "skill_ids": [str(pending.id)],
-    }
-    assert mcp.status is ListingStatus.approved
-    assert pending.status is ListingStatus.approved
-    assert approved.status is ListingStatus.approved
-    assert db.execute.await_count == 3
-    assert decision_boundaries.decide.await_args_list == [
-        call(
-            db,
-            mcp,
-            subject_type="mcp",
-            approved=True,
-            actor_id=actor.id,
-            version="2.0.0",
-            submitter_id=SUBMITTER_ID,
-        ),
-        call(
-            db,
-            pending,
-            subject_type="skill",
-            approved=True,
-            actor_id=actor.id,
-            version="2.0.0",
-            submitter_id=SUBMITTER_ID,
-        ),
-    ]
-    db.commit.assert_awaited_once()
-    db.refresh.assert_awaited_once_with(mcp)
+@pytest.mark.asyncio
+async def test_bulk_skill_locks_use_canonical_order(monkeypatch, decision_boundaries):
+    db = _db()
+    mcp, _ = _orm_listing("mcp")
+    first, _ = _orm_listing("skill", index=1)
+    second, _ = _orm_listing("skill", index=2)
+    by_id = {str(row.id): row for row in (first, second)}
+    ordered = sorted((first.id, second.id))
+    listing_results = iter(_result(scalar=by_id[str(uid)]) for uid in ordered)
+    db.execute.side_effect = lambda statement: (
+        _result(
+            scalars=[
+                by_id[
+                    str(next(value for value in _bound_values(statement) if isinstance(value, uuid.UUID)))
+                ].latest_version_id
+            ]
+        )
+        if _pending_skill_ids(statement)
+        else next(listing_results)
+    )
+    monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=("mcp", mcp)))
+    lock = AsyncMock(
+        side_effect=lambda _db, _listing_id, version_id: (version_id, by_id[str(_listing_id)].latest_version)
+    )
+    monkeypatch.setattr(review, "lock_skill_version", lock)
+
+    await review.approve_mcp_with_skills(
+        str(mcp.id), review.McpBulkApproveRequest(skill_ids=[str(ordered[1]), str(ordered[0])]), db, _actor()
+    )
+    assert [call.args[1] for call in lock.await_args_list] == ordered
 
 
 @pytest.mark.asyncio
@@ -1960,5 +2073,5 @@ async def test_review_scope_dependency_runs_before_queue_database_failure(monkey
         await review.list_pending(type=None, tab=None, team_id=None, db=db, current_user=actor)
 
     scope.assert_awaited_once_with(db, actor)
-    agents.assert_awaited_once_with(db, ADMIN_SCOPE, None)
+    agents.assert_awaited_once_with(db, ADMIN_SCOPE, None, actor)
     components.assert_not_awaited()

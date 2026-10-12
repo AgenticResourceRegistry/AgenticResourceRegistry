@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Discovery read model.
@@ -69,6 +70,12 @@ class DiscoveryEntry(Base):
         Index("ix_discovery_entries_visibility", "visibility", "team_id"),
         Index("ix_discovery_entries_owner", "owner_user_id"),
         Index("ix_discovery_entries_tombstoned", "tombstoned_at"),
+        Index(
+            "ix_discovery_entries_search_trgm",
+            "search_document",
+            postgresql_using="gin",
+            postgresql_ops={"search_document": "gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

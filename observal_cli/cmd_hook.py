@@ -19,6 +19,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from observal_cli import client, config
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import (
     HARNESS_CAPABILITIES,
     VALID_HARNESSES,
@@ -447,6 +448,7 @@ def hook_show(
         ("Namespace", esc(handle(item) or "N/A")),
         ("Description", esc(item.get("description", ""))),
         ("Created", esc(relative_time(item.get("created_at")))),
+        *fork_detail_rows(item),
         ("ID", f"[dim]{esc(item['id'])}[/dim]"),
     ]
     if item.get("script_filename"):

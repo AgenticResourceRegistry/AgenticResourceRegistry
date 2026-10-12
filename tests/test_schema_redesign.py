@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Harishankar <harishankar0301@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the agent-centric schema redesign."""
@@ -570,7 +571,7 @@ class TestMcpValidationField:
 
         listing = MagicMock()
         listing.id = uuid.uuid4()
-        listing.name = "test-skill"
+        listing.name = "test-hook"
         listing.status = ListingStatus.pending
 
         mock_db = _review_db()
@@ -580,7 +581,7 @@ class TestMcpValidationField:
         import api.routes.review as review_mod
 
         original_find = review_mod._find_listing
-        review_mod._find_listing = AsyncMock(return_value=("skill", listing))
+        review_mod._find_listing = AsyncMock(return_value=("hook", listing))
 
         try:
             result = await approve(str(listing.id), mock_db, mock_user)

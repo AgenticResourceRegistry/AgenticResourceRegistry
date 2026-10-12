@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Teamspace membership and handle reservation helpers."""
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
@@ -240,24 +241,150 @@ async def publish_auto_approves_for_entity(entity, user: User, db: AsyncSession)
     return False
 
 
-async def review_publication_to_public(entity, user: User, db: AsyncSession, *, was_private: bool) -> bool:
-    """Send a listing back to the review queue when it becomes publicly visible.
+async def skill_transition_needs_rollout_gate(db: AsyncSession, listing_id: uuid.UUID) -> bool:
+    """Old workers do not understand tracked reviews, extras, or empty script files."""
+    from models.skill import SkillVersion
 
-    Turning a team-private listing public publishes it into the global registry, so
-    it has to clear global review. Without this, team review is trivially
-    bypassed in two steps: publish as team visibility, which a team owner or
-    team reviewer approves for themselves because only their own teamspace can
-    see it, then flip the same approved row to public and reach every user
-    without a global reviewer ever seeing it.
+    return (
+        await db.scalar(
+            select(SkillVersion.id)
+            .where(
+                SkillVersion.listing_id == listing_id,
+                or_(
+                    SkillVersion.content_revision.is_not(None),
+                    SkillVersion.base_revision.is_not(None),
+                    SkillVersion.base_version_id.is_not(None),
+                    SkillVersion.review_epoch != 0,
+                    func.json_array_length(SkillVersion.extra_files) > 0,
+                    and_(
+                        SkillVersion.delivery_mode == "registry_direct",
+                        SkillVersion.script_filename.is_not(None),
+                        SkillVersion.script_content == "",
+                    ),
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
-    Only a global reviewer, admin, or super_admin keeps an approved status through
-    the transition, because they already hold the authority the queue represents.
 
-    Restricting a public listing back to team visibility is not a publication and
-    needs no review, so this returns False for that direction.
+async def _review_skill_visibility(
+    entity, user: User, db: AsyncSession, *, was_private: bool, identity_transfer: bool = False
+) -> bool:
+    """Serialize every release's review provenance with publication and reversal.
 
-    Returns True when the entity was moved back to pending.
+    The caller holds the listing FOR UPDATE before changing visibility; version
+    locks follow the same listing-then-version order as review and installation.
+    Notifications are version-specific, and are part of the same transaction.
     """
+    from models.mcp import ListingStatus
+    from models.skill import SkillVersion
+    from services.inbox import sources as inbox
+    from services.versioning import parse_semver
+
+    if was_private == entity.is_private and not identity_transfer:
+        return False
+    rows = (
+        (
+            await db.execute(
+                select(SkillVersion)
+                .where(SkillVersion.listing_id == entity.id)
+                .order_by(SkillVersion.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if was_private or identity_transfer:
+        requeued = False
+        for row in rows:
+            # Close prior notices before re-delivery: dedupe reopens them for
+            # new recipients, otherwise former reviewers see the old work.
+            if row.status == ListingStatus.pending:
+                await inbox.on_review_withdrawn(db, entity, subject_type="skill", actor_id=user.id, version=row.version)
+            row.requires_global_review = True
+            if row.status in (ListingStatus.approved, ListingStatus.archived):
+                row.pre_public_status = row.status.value
+                row.pre_public_reviewed_by = row.reviewed_by
+                row.pre_public_reviewed_at = row.reviewed_at
+                row.status = ListingStatus.pending
+                row.reviewed_by = None
+                row.reviewed_at = None
+                requeued = True
+            if row.status == ListingStatus.pending:
+                await inbox.on_review_requested(
+                    db, entity, subject_type="skill", actor_id=user.id, version=row.version, global_only=True
+                )
+        return requeued
+
+    # A public approval is a genuine new review and survives the return to team
+    # visibility. A rejected publication is not a rejection of the older team
+    # approval: restore its immutable bytes and original archived/approved state.
+    for row in rows:
+        if not row.requires_global_review:
+            continue
+        if row.status == ListingStatus.pending:
+            await inbox.on_review_withdrawn(db, entity, subject_type="skill", actor_id=user.id, version=row.version)
+        if row.pre_public_status is not None:
+            row.status = ListingStatus(row.pre_public_status)
+            row.rejection_reason = None
+            row.reviewed_by = row.pre_public_reviewed_by
+            row.reviewed_at = row.pre_public_reviewed_at
+            row.pre_public_status = None
+            row.pre_public_reviewed_by = None
+            row.pre_public_reviewed_at = None
+        row.requires_global_review = False
+        if row.status == ListingStatus.pending:
+            await inbox.on_review_requested(db, entity, subject_type="skill", actor_id=user.id, version=row.version)
+
+    # A former pointer can still point at a pending candidate. Never demote an
+    # already-cleared newer release when choosing the private default.
+    candidates = [
+        row
+        for row in rows
+        if row.status in (ListingStatus.approved, ListingStatus.archived) and not row.requires_global_review
+    ]
+    if candidates:
+        stable = [row for row in candidates if parse_semver(row.version) is not None]
+        if stable:
+            chosen = max(stable, key=lambda row: (parse_semver(row.version), str(row.id)))
+        elif len(candidates) == 1:
+            chosen = candidates[0]
+        else:
+            raise HTTPException(status_code=409, detail="Cannot select a default from historical skill versions")
+        current = next((row for row in candidates if row.id == entity.latest_version_id), None)
+        if current is None or (
+            parse_semver(chosen.version)
+            and parse_semver(current.version)
+            and parse_semver(chosen.version) > parse_semver(current.version)
+        ):
+            entity.latest_version_id = chosen.id
+    return False
+
+
+async def review_skill_identity_transfer(entity, user: User, db: AsyncSession) -> bool:
+    """Re-review every public release after its owner and namespace change.
+
+    This is not a new release: retain historical approval/archival provenance
+    for exact UUID decisions, while installs exclude every marked row.
+    """
+    return await _review_skill_visibility(entity, user, db, was_private=False, identity_transfer=True)
+
+
+async def review_publication_to_public(entity, user: User, db: AsyncSession, *, was_private: bool) -> bool:
+    """Requeue team-reviewed releases when published; restore skill provenance on reversal.
+
+    Skill publication always requires a new global decision for *every* team-
+    reviewed release, regardless of the visibility actor's role. Other component
+    types retain their historical transition behavior.
+    """
+    from models.skill import SkillListing
+
+    if isinstance(entity, SkillListing):
+        return await _review_skill_visibility(entity, user, db, was_private=was_private)
     if not was_private or entity.is_private or is_global_reviewer(user):
         return False
 
@@ -265,14 +392,8 @@ async def review_publication_to_public(entity, user: User, db: AsyncSession, *, 
     if version is None:
         raise RuntimeError(f"{type(entity).__name__} has no latest_version; cannot re-enter review")
     if version.status != _approved_status(entity):
-        # A draft, pending, or rejected listing has not been approved for anything
-        # yet, so becoming public changes nothing about its review state.
         return False
 
-    # EVERY approved version returns to the queue, not just the latest. Older
-    # versions were approved by a team role for a team-only audience, and installs
-    # can pin any approved version, so leaving them approved would publish content
-    # no global reviewer ever saw.
     version_model, listing_column = _version_model_for(entity)
     approved = _approved_status(entity)
     pending = _pending_status(entity)
@@ -284,8 +405,6 @@ async def review_publication_to_public(entity, user: User, db: AsyncSession, *, 
         row.reviewed_by = None
         row.reviewed_at = None
 
-    # The listing's own status mirrors its latest version, so set it explicitly in
-    # case the latest version was not among the rows above.
     entity.status = pending
     version.reviewed_by = None
     version.reviewed_at = None

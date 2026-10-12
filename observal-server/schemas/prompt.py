@@ -15,6 +15,7 @@ from schemas.constants import (
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 
 class PromptSubmitRequest(BaseModel):
@@ -68,6 +69,9 @@ class PromptUpdateRequest(BaseModel):
 
 
 class PromptListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
     id: uuid.UUID
     name: str
     namespace: str
@@ -102,6 +106,8 @@ class PromptListingResponse(BaseModel):
 
 
 class PromptListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str

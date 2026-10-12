@@ -26,7 +26,9 @@
 * [Share agent configs across harnesses](use-cases/share-agent-configs.md)
 * [Debug agent failures](use-cases/debug-agent-failures.md)
 * [Run a team-wide agent registry](use-cases/team-registry.md)
+* [Fork and customize](use-cases/fork-and-customize.md)
 * [Teamspaces](use-cases/teamspaces.md)
+* [Sync an MCP server from GitHub or GitLab](use-cases/mcp-repo-sync.md)
 
 ## CLI Reference
 
@@ -57,6 +59,8 @@
 * [observal server](cli/server.md)
   * [observal server migrate](cli/migrate.md)
 * [observal registry skill](cli/skill.md)
+  * [Complete skill folder developer workflow](skill-folder-workflow.md)
+  * [Complete skill folder rollout (operators)](skill-folder-rollout.md)
 
 ## Self-Hosting
 

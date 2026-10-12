@@ -26,6 +26,7 @@ from api.deps import (
     resolve_visible_listing,
 )
 from api.routes._component_archive import archive_listing, unarchive_listing
+from api.routes.component_forks import component_response, component_responses, create_fork_router
 from api.routes.component_versions import create_version_router
 from api.search import keyword_search
 from models.mcp import ListingStatus
@@ -108,7 +109,7 @@ async def submit_prompt(
     )
     await commit_or_name_conflict(db, "prompt")
     await db.refresh(listing)
-    return PromptListingResponse.model_validate(listing)
+    return await component_response(listing, "prompt", current_user, db)
 
 
 @router.get("", response_model=list[PromptListingSummary])
@@ -167,7 +168,7 @@ async def list_prompts(
     if search_rank is not None:
         order_by.insert(0, search_rank.desc())
     result = await db.execute(stmt.order_by(*order_by).limit(limit).offset(offset))
-    listings = [PromptListingSummary.model_validate(r) for r in result.scalars().all()]
+    listings = await component_responses(result.scalars().all(), "prompt", current_user, db)
     response.headers["X-Total-Count"] = str(total or 0)
     return listings
 
@@ -188,7 +189,7 @@ async def my_prompts(
     stmt = apply_visibility_filter(stmt, PromptListing, current_user)
 
     result = await db.execute(stmt)
-    listings = [PromptListingSummary.model_validate(r) for r in result.scalars().all()]
+    listings = await component_responses(result.scalars().all(), "prompt", current_user, db)
     return listings
 
 
@@ -209,7 +210,7 @@ async def get_prompt(
         )
         if not may_view:
             raise HTTPException(status_code=404, detail="Listing not found")
-    resp = PromptListingResponse.model_validate(listing)
+    resp = (await component_responses([listing], "prompt", current_user, db, summary=False))[0]
     resp.user_permission = get_effective_component_permission(listing, current_user)
     return resp
 
@@ -294,7 +295,7 @@ async def save_prompt_draft(
     listing.latest_version_id = version.id
     await commit_or_name_conflict(db, "prompt")
     await db.refresh(listing)
-    return PromptListingResponse.model_validate(listing)
+    return await component_response(listing, "prompt", current_user, db)
 
 
 def _reject_visibility_edits(listing, req) -> None:
@@ -369,7 +370,7 @@ async def update_prompt_draft(
 
     await commit_or_name_conflict(db, "prompt")
     await db.refresh(listing)
-    return PromptListingResponse.model_validate(listing)
+    return await component_response(listing, "prompt", current_user, db)
 
 
 @router.post("/{listing_id}/start-edit")
@@ -453,7 +454,7 @@ async def submit_prompt_draft(
     )
     await commit_or_name_conflict(db, "prompt")
     await db.refresh(listing)
-    return PromptListingResponse.model_validate(listing)
+    return await component_response(listing, "prompt", current_user, db)
 
 
 @router.patch("/{listing_id}/archive")
@@ -476,3 +477,4 @@ async def unarchive_prompt(
 
 # --- Version sub-routes ---
 router.include_router(create_version_router("prompt", PromptListing, PromptVersion))
+router.include_router(create_fork_router("prompt", PromptListing, PromptVersion))

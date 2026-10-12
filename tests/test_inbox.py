@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Inbox delivery, lifecycle, idempotency, and read-time visibility.
@@ -292,6 +293,36 @@ async def test_redelivery_reopens_a_resolved_item(sessions):
 
 
 @pytest.mark.asyncio
+async def test_reopened_review_updates_visibility_and_namespace_snapshot(sessions):
+    async with sessions() as db:
+        reviewer = await _user(db, role=UserRole.reviewer)
+        team_id = uuid.uuid4()
+        subject = _subject(is_private=True, team_id=team_id, namespace="old-team", slug="draft")
+        initial = await delivery.deliver_one(db, kind=InboxKind.review_requested, user_id=reviewer.id, subject=subject)
+        delivery.resolve(db, initial, state=InboxState.done, actor_id=reviewer.id)
+        await db.commit()
+
+        published = _subject(
+            type=subject.type,
+            id=subject.id,
+            name=subject.name,
+            version=subject.version,
+            is_private=False,
+            team_id=None,
+            namespace="new-owner",
+            slug="draft",
+        )
+        again = await delivery.deliver_one(db, kind=InboxKind.review_requested, user_id=reviewer.id, subject=published)
+        await db.commit()
+
+        assert again.id == initial.id
+        assert again.state == InboxState.open
+        assert again.is_private_subject is False
+        assert again.team_id is None
+        assert again.subject_namespace == "new-owner"
+
+
+@pytest.mark.asyncio
 async def test_dismissed_update_notice_stays_dismissed_on_redelivery(sessions):
     """``observal outdated`` re-reports the same fact on every run.
 
@@ -441,6 +472,37 @@ async def test_decision_clears_every_reviewers_request_item(sessions):
             )
         ).scalar_one()
         assert approval.state == InboxState.open
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_closes_all_reviewers_without_faking_an_outcome(sessions):
+    from services.inbox import sources
+
+    async with sessions() as db:
+        reviewers = [await _user(db, UserRole.reviewer) for _ in range(2)]
+        author = await _user(db)
+
+        class _Entity:
+            id = uuid.uuid4()
+            name = "withdrawn-skill"
+            namespace = None
+            slug = None
+            team_id = None
+            is_private = False
+
+        entity = _Entity()
+        await sources.on_review_requested(db, entity, subject_type="skill", actor_id=author.id, version="1.2.0")
+        await db.commit()
+        assert (
+            await sources.on_review_withdrawn(db, entity, subject_type="skill", actor_id=author.id, version="1.2.0")
+            >= 2
+        )
+        await db.commit()
+        for reviewer in reviewers:
+            items = (await db.execute(select(InboxItem).where(InboxItem.user_id == reviewer.id))).scalars().all()
+            assert len(items) == 1 and items[0].kind == InboxKind.review_requested
+            assert items[0].state == InboxState.done
+        assert (await db.execute(select(InboxItem).where(InboxItem.user_id == author.id))).scalars().all() == []
 
 
 @pytest.mark.asyncio

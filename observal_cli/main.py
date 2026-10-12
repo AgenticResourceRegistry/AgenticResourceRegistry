@@ -201,11 +201,13 @@ from observal_cli.cmd_component import version_app
 from observal_cli.cmd_delegate import delegate_app
 from observal_cli.cmd_discover import discover_app
 from observal_cli.cmd_doctor import doctor_app
+from observal_cli.cmd_fork import add_fork_command
 from observal_cli.cmd_hook import hook_app
 from observal_cli.cmd_inbox import inbox_app
 from observal_cli.cmd_insights import insights_app
 from observal_cli.cmd_logs import logs_app
 from observal_cli.cmd_mcp import mcp_app
+from observal_cli.cmd_mcp_sync import mcp_sync_app
 from observal_cli.cmd_migrate import migrate_app
 from observal_cli.cmd_models import models_app
 from observal_cli.cmd_ops import (
@@ -242,6 +244,7 @@ registry_app = typer.Typer(
 )
 
 registry_app.add_typer(mcp_app, name="mcp")
+mcp_app.add_typer(mcp_sync_app, name="sync")
 registry_app.add_typer(skill_app, name="skill")
 registry_app.add_typer(hook_app, name="hook")
 registry_app.add_typer(prompt_app, name="prompt")
@@ -265,6 +268,14 @@ add_transfer_owner_command(hook_app, "hooks")
 add_transfer_owner_command(prompt_app, "prompts")
 add_transfer_owner_command(sandbox_app, "sandboxes")
 add_transfer_owner_command(agent_app, "agents")
+for _kind, _app in (
+    ("mcp", mcp_app),
+    ("skill", skill_app),
+    ("hook", hook_app),
+    ("prompt", prompt_app),
+    ("sandbox", sandbox_app),
+):
+    add_fork_command(_app, _kind)
 add_archive_commands(mcp_app, "mcps")
 add_archive_commands(skill_app, "skills")
 add_archive_commands(hook_app, "hooks")

@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
@@ -375,57 +376,62 @@ async def analyze_repo(git_url: str) -> dict:
                 return {**_empty, "error": "Repository not found. Check the URL."}
             return {**_empty, "error": "Failed to clone repository. Check the URL and try again."}
 
-        entry_point = find_python_entry(tmp_dir)
-        env_vars = detect_env_vars(tmp_dir)
-
-        if not entry_point:
-            # Try non-Python detection; return repo name as fallback
-            non_python = detect_non_python_mcp(tmp_dir)
-            name = extract_repo_name(git_url, tmp_dir)
-            docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, name)
-            cmd, cmd_args = infer_command_args(non_python, docker_image, name)
-            base: dict = {
-                "name": name,
-                "description": "",
-                "version": "0.1.0",
-                "tools": [],
-                "environment_variables": env_vars,
-            }
-            if non_python:
-                base["framework"] = non_python
-            if docker_image:
-                base["docker_image"] = docker_image
-                base["docker_image_suggested"] = docker_suggested
-            if setup_commands:
-                base["setup_instructions"] = "\n".join(setup_commands)
-            if cmd:
-                base["command"] = cmd
-                base["args"] = cmd_args
-            return base
-
-        tree = ast.parse(entry_point.read_text(errors="ignore"))
-        server_name, server_desc, tools, issues = analyze_python_entry(tree, git_url, tmp_dir)
-        relative_entry = str(entry_point.relative_to(tmp_dir))
-        docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, server_name)
-        cmd, cmd_args = infer_command_args("python", docker_image, server_name, relative_entry)
-        result: dict = {
-            "name": server_name,
-            "description": server_desc,
-            "version": "0.1.0",
-            "tools": tools,
-            "issues": issues,
-            "environment_variables": env_vars,
-        }
-        if docker_image:
-            result["docker_image"] = docker_image
-            result["docker_image_suggested"] = docker_suggested
-        if setup_commands:
-            result["setup_instructions"] = "\n".join(setup_commands)
-        if cmd:
-            result["command"] = cmd
-            result["args"] = cmd_args
-        return result
+        return analyze_checkout(tmp_dir, git_url)
     except Exception:
         return {"name": "", "description": "", "version": "0.1.0", "tools": []}
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def analyze_checkout(tmp_dir: str, git_url: str) -> dict:
+    """Extract MCP metadata from a repository that is already checked out at ``tmp_dir``."""
+    entry_point = find_python_entry(tmp_dir)
+    env_vars = detect_env_vars(tmp_dir)
+
+    if not entry_point:
+        # Try non-Python detection; return repo name as fallback
+        non_python = detect_non_python_mcp(tmp_dir)
+        name = extract_repo_name(git_url, tmp_dir)
+        docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, name)
+        cmd, cmd_args = infer_command_args(non_python, docker_image, name)
+        base: dict = {
+            "name": name,
+            "description": "",
+            "version": "0.1.0",
+            "tools": [],
+            "environment_variables": env_vars,
+        }
+        if non_python:
+            base["framework"] = non_python
+        if docker_image:
+            base["docker_image"] = docker_image
+            base["docker_image_suggested"] = docker_suggested
+        if setup_commands:
+            base["setup_instructions"] = "\n".join(setup_commands)
+        if cmd:
+            base["command"] = cmd
+            base["args"] = cmd_args
+        return base
+
+    tree = ast.parse(entry_point.read_text(errors="ignore"))
+    server_name, server_desc, tools, issues = analyze_python_entry(tree, git_url, tmp_dir)
+    relative_entry = str(entry_point.relative_to(tmp_dir))
+    docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, server_name)
+    cmd, cmd_args = infer_command_args("python", docker_image, server_name, relative_entry)
+    result: dict = {
+        "name": server_name,
+        "description": server_desc,
+        "version": "0.1.0",
+        "tools": tools,
+        "issues": issues,
+        "environment_variables": env_vars,
+    }
+    if docker_image:
+        result["docker_image"] = docker_image
+        result["docker_image_suggested"] = docker_suggested
+    if setup_commands:
+        result["setup_instructions"] = "\n".join(setup_commands)
+    if cmd:
+        result["command"] = cmd
+        result["args"] = cmd_args
+    return result

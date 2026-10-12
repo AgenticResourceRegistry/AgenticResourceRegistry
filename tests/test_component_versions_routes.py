@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused contracts and failure coverage for generic component versions."""
@@ -24,6 +25,7 @@ from models.sandbox import SandboxListing, SandboxVersion
 from models.skill import SkillListing, SkillVersion
 from models.user import UserRole
 from schemas.component_version import VersionPublishRequest, VersionReviewRequest
+from services.skill_revisions import skill_content_revision
 
 NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 LISTING_ID = uuid.UUID(int=1001)
@@ -240,6 +242,7 @@ def _db():
     return SimpleNamespace(
         add=Mock(),
         execute=AsyncMock(),
+        refresh=AsyncMock(),
         flush=AsyncMock(),
         commit=AsyncMock(),
         rollback=AsyncMock(),
@@ -467,8 +470,9 @@ async def test_list_version_visibility_matches_effective_permissions(monkeypatch
 
     assert result == {"items": [], "total": 0, "page": 1, "page_size": 20}
     for awaited in db.execute.await_args_list:
-        has_status_filter = "skill_versions.status =" in _sql(awaited.args[0])
-        assert has_status_filter is expects_status_filter
+        statement = _sql(awaited.args[0])
+        assert ("skill_versions.status IN" in statement) is expects_status_filter
+        assert ("skill_versions.requires_global_review IS false" in statement) is expects_status_filter
 
 
 @pytest.mark.asyncio
@@ -632,6 +636,13 @@ async def test_publish_uses_real_model_pair_snapshots_content_and_orders_transac
     monkeypatch.setattr(versions, "resolve_visible_listing", resolve)
     monkeypatch.setattr(versions.inbox, "on_publish", notify)
     monkeypatch.setattr(versions, "datetime", FrozenDateTime)
+    if component_type == "skill":
+        listing.latest_version.review_epoch = 3  # Successors must not inherit withdrawn review cycles.
+        listing.latest_version.content_revision = skill_content_revision(listing, listing.latest_version)
+        monkeypatch.setattr(
+            versions, "lock_skill_version", AsyncMock(return_value=(OLD_VERSION_ID, listing.latest_version))
+        )
+        monkeypatch.setattr(versions, "check_listing_visibility_async", AsyncMock(return_value=True))
 
     result = await versions._publish_version(
         "Alice/Review-Item",
@@ -670,10 +681,15 @@ async def test_publish_uses_real_model_pair_snapshots_content_and_orders_transac
         assert created.args == ["-m", "review"]
         assert created.transport == "stdio"
     elif component_type == "skill":
+        assert created.review_epoch is None  # Database supplies the new generation's default 0.
         assert created.skill_md_content == "# Review\n"
         assert created.script_content == "print('review')"
         assert created.git_url == "https://github.com/acme/skills"
         assert created.slash_command == "review-v2"
+        assert created.base_version_id == listing.latest_version.id
+        assert created.base_revision == skill_content_revision(listing, listing.latest_version)
+        assert created.content_revision == skill_content_revision(listing, created)
+        assert created.content_revision != created.base_revision
     elif component_type == "hook":
         assert created.script_content == "print('guard')"
     elif component_type == "sandbox":
@@ -709,6 +725,11 @@ async def test_publish_snapshots_complete_metadata_when_optional_fields_are_omit
     db.flush.side_effect = lambda: _set_generated_defaults(db, component_type)
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
     monkeypatch.setattr(versions.inbox, "on_publish", AsyncMock())
+    if component_type == "skill":
+        monkeypatch.setattr(
+            versions, "lock_skill_version", AsyncMock(return_value=(OLD_VERSION_ID, listing.latest_version))
+        )
+        monkeypatch.setattr(versions, "check_listing_visibility_async", AsyncMock(return_value=True))
     request = VersionPublishRequest(version="2.0.0", description="Second release")
 
     await versions._publish_version(
@@ -724,7 +745,10 @@ async def test_publish_snapshots_complete_metadata_when_optional_fields_are_omit
     created = db.add.call_args.args[0]
     for column in version_model.__table__.columns:
         if column.name not in versions._VERSION_MANAGED_FIELDS:
-            assert getattr(created, column.name) == getattr(listing.latest_version, column.name)
+            expected = getattr(listing.latest_version, column.name)
+            if component_type == "skill" and column.name == "extra_files" and expected is None:
+                expected = []  # Transient fixtures lack the database's non-null JSON default.
+            assert getattr(created, column.name) == expected
 
 
 @pytest.mark.asyncio
@@ -1283,7 +1307,12 @@ async def test_factory_handlers_delegate_every_argument_and_return_exact_payload
         "db": db,
         "current_user": actor,
     }
-    assert review_kwargs["req"].model_dump() == {"action": "reject", "reason": "policy"}
+    assert review_kwargs["req"].model_dump() == {
+        "action": "reject",
+        "reason": "policy",
+        "observed_revision": None,
+        "git_base_acknowledged": False,
+    }
     suggestions_call.assert_awaited_once_with(
         listing_id=str(LISTING_ID),
         listing_model=McpListing,

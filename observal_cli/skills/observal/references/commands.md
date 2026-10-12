@@ -2,6 +2,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Observal CLI Command Reference
@@ -59,6 +60,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal agent bulk-create`: Bulk-create agents from a JSON file.
 - `observal agent create`: Create a new agent (interactive wizard, from file, or via flags).
 - `observal agent delete`: Archive an agent. Prefer the archive command.
+- `observal agent fork`: Fork an approved agent release into your own editable draft.
 - `observal agent init`: Scaffold an observal-agent.yaml definition file.
 - `observal agent install`: Get install config for an agent.
 - `observal agent list`: List active agents (paginated).
@@ -157,6 +159,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry hook co-authors remove`: Remove a co-author.
   - `observal registry hook archive`: Archive this component.
   - `observal registry hook edit`: Edit a draft, rejected, or pending hook submission.
+  - `observal registry hook fork`: Fork an approved hook release into your own editable draft.
   - `observal registry hook install`: Install a hook for a specific harness.
   - `observal registry hook list`: List approved hooks from the registry.
   - `observal registry hook show`: Show detailed information for a single hook.
@@ -168,11 +171,18 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry mcp co-authors add`: Add a co-author.
     - `observal registry mcp co-authors list`: List co-authors.
     - `observal registry mcp co-authors remove`: Remove a co-author.
+  - `observal registry mcp sync`: Publish a new MCP version automatically when its GitHub or GitLab repository changes
+    - `observal registry mcp sync disable`: Turn off webhook sync. Published versions are kept.
+    - `observal registry mcp sync enable`: Turn on GitHub or GitLab webhook sync, or change which events trigger it.
+    - `observal registry mcp sync rotate-secret`: Issue a new webhook secret. Update it in GitHub or GitLab, or deliveries will be rejected.
+    - `observal registry mcp sync run`: Sync the tracked branch now, without waiting for a push.
+    - `observal registry mcp sync status`: Show webhook sync settings and the result of the last sync.
   - `observal registry mcp submit`: Submit an MCP server to the registry.
   - `observal registry mcp show`: Show full details of an MCP server.
   - `observal registry mcp install`: Generate an install config snippet for an MCP server.
   - `observal registry mcp archive`: Archive this component.
   - `observal registry mcp edit`: Edit an MCP server submission.
+  - `observal registry mcp fork`: Fork an approved mcp release into your own editable draft.
   - `observal registry mcp list`: List approved MCP servers in the registry.
   - `observal registry mcp my`: List your own MCP servers across all statuses.
   - `observal registry mcp transfer-owner`: Transfer ownership to another username.
@@ -186,6 +196,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry prompt co-authors remove`: Remove a co-author.
   - `observal registry prompt archive`: Archive this component.
   - `observal registry prompt edit`: Edit a draft, rejected, or pending prompt submission.
+  - `observal registry prompt fork`: Fork an approved prompt release into your own editable draft.
   - `observal registry prompt list`: List approved prompts in the registry.
   - `observal registry prompt my`: List your own prompts across all statuses.
   - `observal registry prompt render`: Render a prompt template with variable substitution.
@@ -203,25 +214,37 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry sandbox co-authors remove`: Remove a co-author.
   - `observal registry sandbox archive`: Archive this component.
   - `observal registry sandbox edit`: Edit a draft, rejected, or pending sandbox submission.
+  - `observal registry sandbox fork`: Fork an approved sandbox release into your own editable draft.
   - `observal registry sandbox list`: List approved sandboxes in the registry.
   - `observal registry sandbox show`: Show detailed information about a sandbox.
   - `observal registry sandbox submit`: Submit a new sandbox environment for review.
   - `observal registry sandbox transfer-owner`: Transfer ownership to another username.
   - `observal registry sandbox unarchive`: Restore an archived component.
 - `observal registry skill`: Skill registry commands
+  - `observal registry skill backups`: List, restore or explicitly prune verified skill folder backups.
+    - `observal registry skill backups list`: List retained verified backups and their ages.
+    - `observal registry skill backups prune`: Explicitly remove one old backup after verifying its active successor.
+    - `observal registry skill backups restore`: Restore only a byte-verified unmodified active installation.
   - `observal registry skill co-authors`: Manage co-authors for skills
     - `observal registry skill co-authors add`: Add a co-author.
     - `observal registry skill co-authors list`: List co-authors.
     - `observal registry skill co-authors remove`: Remove a co-author.
   - `observal registry skill archive`: Archive this component.
   - `observal registry skill edit`: Edit a draft, rejected, or pending skill submission.
-  - `observal registry skill install`: Install a skill by fetching the full skill directory from git.
+  - `observal registry skill export`: Export a skill version to a local directory.
+  - `observal registry skill fork`: Create an editable successor to the currently reviewed direct release.
+  - `observal registry skill fork-listing`: Fork an approved skill release into your own editable draft.
+  - `observal registry skill import-folder`: Create one complete direct-folder draft under a reviewed Git or legacy listing.
+  - `observal registry skill install`: Install an approved skill from Git or a complete reviewed registry folder.
   - `observal registry skill list`: List approved skills in the registry.
   - `observal registry skill my`: List your own skills across all statuses.
+  - `observal registry skill rebase`: Rebase a draft skill version on the current approved version.
+  - `observal registry skill replace-files`: Replace all files in a skill version with contents from a directory.
   - `observal registry skill show`: Show detailed information about a skill.
   - `observal registry skill submit`: Submit a new skill for review.
   - `observal registry skill transfer-owner`: Transfer ownership to another username.
   - `observal registry skill unarchive`: Restore an archived component.
+  - `observal registry skill withdraw`: Withdraw a pending skill version from review.
 - `observal registry version`: Manage component versions
   - `observal registry version list`: List version history for a registry component.
   - `observal registry version publish`: Publish a new version for a registry component.

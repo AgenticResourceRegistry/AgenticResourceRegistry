@@ -23,9 +23,30 @@ import {
   bulk,
   admin,
 } from "@/lib/api";
-import type { LeaderboardWindow, SetRecommendedRequest } from "@/lib/types";
+import type { ForkRequest, LeaderboardWindow, SetRecommendedRequest } from "@/lib/types";
 
 // ── Agent-specific ──────────────────────────────────────────────────
+
+export function useForkAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ForkRequest }) => registry.fork("agents", id, body),
+    onSuccess: (_fork, { id }) => {
+      qc.invalidateQueries({ queryKey: ["registry", "agents"] });
+      qc.invalidateQueries({ queryKey: ["registry", "agents", "my"] });
+      qc.invalidateQueries({ queryKey: ["registry", "agents", id] });
+      toast.success("Agent fork created as a draft");
+    },
+  });
+}
+
+export function useAgentForks(id: string, page: number, enabled = true) {
+  return useQuery({
+    queryKey: ["registry", "agents", id, "forks", page],
+    queryFn: () => registry.forks("agents", id, page),
+    enabled: enabled && !!id,
+  });
+}
 
 export function useMyAgents(enabled = true) {
   return useQuery({

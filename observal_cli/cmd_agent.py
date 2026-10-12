@@ -27,6 +27,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from observal_cli import client, config
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import AGENT_NAME_REGEX, VALID_HARNESSES
 from observal_cli.errors import CliError, ErrorCategory, exit_partial, fail
 from observal_cli.prompts import fuzzy_select, select_many, select_one, text_input
@@ -49,7 +50,18 @@ from observal_cli.render import (
 # ── Agent authoring constants ──────────────────────────────
 YAML_FILE = "observal-agent.yaml"
 VALID_COMPONENT_TYPES = {"mcp", "skill", "hook", "prompt", "sandbox"}
-_RESERVED_AGENT_SLUGS = {"archive", "draft", "install", "resolve", "restore", "submit", "unarchive", "versions"}
+_RESERVED_AGENT_SLUGS = {
+    "archive",
+    "draft",
+    "fork",
+    "forks",
+    "install",
+    "resolve",
+    "restore",
+    "submit",
+    "unarchive",
+    "versions",
+}
 
 # Common model choices for the interactive wizard
 _MODEL_CHOICES = [
@@ -289,7 +301,9 @@ def _validate_agent_definition(data: dict, *, operation: str) -> dict:
     return data
 
 
-def _save_agent_yaml(directory: Path, data: dict, *, operation: str = "Write agent definition") -> Path:
+def _save_agent_yaml(
+    directory: Path, data: dict, *, operation: str = "Write agent definition", overwrite: bool = True
+) -> Path:
     path = directory / YAML_FILE
     temporary: Path | None = None
     try:
@@ -297,7 +311,13 @@ def _save_agent_yaml(directory: Path, data: dict, *, operation: str = "Write age
         with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as file:
             temporary = Path(file.name)
             file.write(_dump_agent_yaml(data))
-        temporary.replace(path)
+        if overwrite:
+            temporary.replace(path)
+        else:
+            # Exclusive, atomic creation: an intervening writer cannot lose
+            # its file between fork's preflight and this local scaffold write.
+            path.hardlink_to(temporary)
+            temporary.unlink()
     except OSError as error:
         if temporary:
             temporary.unlink(missing_ok=True)
@@ -1067,6 +1087,7 @@ def agent_show(
                 ("Description", esc(item.get("description", ""))),
                 ("harnesses", ide_tags([esc(value) for value in item.get("supported_harnesses", [])])),
                 ("Created", relative_time(item.get("created_at"))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{item['id']}[/dim]"),
             ],
             border_style="magenta",
@@ -1093,6 +1114,108 @@ def agent_show(
                 rprint(f"    • {esc(m['name'])} : target {esc(m['target'])} (via {esc(m['measurement'])})")
         if sc.get("evaluation_notes"):
             rprint(f"  [cyan]Notes:[/cyan] {esc(sc['evaluation_notes'])}")
+
+
+def _fork_agent_yaml(item: dict) -> dict:
+    """Build editable authoring YAML from the fork response, not its install snapshot."""
+    components = []
+    for link in item.get("component_links") or []:
+        ref = {"component_type": link["component_type"], "component_id": link["component_id"]}
+        if link.get("version_ref"):
+            ref["version"] = link["version_ref"]
+        if link.get("config_override") is not None:
+            ref["config_override"] = link["config_override"]
+        components.append(ref)
+    return {
+        "agent_id": item["id"],
+        "name": item["slug"],
+        "version": item["version"],
+        "description": item.get("description") or "",
+        "owner": item.get("owner") or "",
+        "category": item.get("category"),
+        "model_name": item.get("model_name") or "claude-sonnet-4",
+        "model_config_json": item.get("model_config_json") or {},
+        "models_by_harness": item.get("models_by_harness") or {},
+        "prompt": item.get("prompt") or "",
+        "supported_harnesses": item.get("supported_harnesses") or [],
+        "components": components,
+        "external_mcps": item.get("external_mcps") or [],
+        "success_criteria": item.get("success_criteria"),
+    }
+
+
+@agent_app.command(name="fork")
+def agent_fork(
+    source: str = typer.Argument(..., help="UUID, namespace/slug, list row, or @alias"),
+    name: str | None = typer.Option(None, "--name", help="New draft name (defaults to the source name)"),
+    version: str | None = typer.Option(None, "--version", help="Approved source version to copy"),
+    new_version: str | None = typer.Option(None, "--new-version", help="Version of the new draft"),
+    team: str | None = typer.Option(None, "--team", help="Target teamspace handle or UUID"),
+    visibility: str | None = typer.Option(None, "--visibility", help="public or team"),
+    directory: str | None = typer.Option(None, "--dir", "-d", help="Create an editable observal-agent.yaml here"),
+    output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+):
+    """Fork an approved agent release into your own editable draft.
+
+    Examples:
+      observal agent fork acme/pr-reviewer
+      observal agent fork acme/pr-reviewer --name my-reviewer --team payments --visibility team
+      observal agent fork acme/pr-reviewer --dir ./my-reviewer --output json
+    """
+    target_path = Path(directory) / YAML_FILE if directory is not None else None
+    if target_path is not None and (target_path.exists() or target_path.is_symlink()):
+        fail(
+            ErrorCategory.CONFLICT,
+            f"Agent definition already exists: {target_path}.",
+            operation="Fork agent",
+            resource=str(target_path),
+            remediation="Choose an empty directory with --dir; existing files are not overwritten.",
+        )
+    payload = {
+        key: value
+        for key, value in {
+            "name": name,
+            "version": version,
+            "new_version": new_version,
+        }.items()
+        if value is not None
+    }
+    if team is not None or visibility is not None:
+        client.add_publish_target(payload, team, visibility)
+    resolved = client.resolve_registry_reference("agent", source)
+    with _progress(output, "Forking agent..."):
+        result = client.post(f"/api/v1/agents/{resolved}/fork", json_data=payload)
+    if directory is not None:
+        try:
+            saved = _save_agent_yaml(
+                Path(directory), _fork_agent_yaml(result), operation="Scaffold forked agent", overwrite=False
+            )
+        except CliError as error:
+            fail(
+                error.category,
+                "The fork was created, but its local YAML could not be written.",
+                operation="Scaffold forked agent",
+                resource=str(target_path),
+                remediation=f"Inspect the existing draft with `observal agent show {result['id']}`; do not fork again.",
+                detail=error.detail,
+                result={"id": result["id"], "qualified_name": result.get("qualified_name"), "partial": True},
+            )
+        result = {**result, "yaml_path": str(saved)}
+    if output == "json":
+        output_json(result)
+        return
+    console.print(
+        kv_panel(
+            f"Forked agent: {esc(result.get('qualified_name') or result.get('name', ''))}",
+            [("Status", esc(result.get("status", "draft"))), *fork_detail_rows(result), ("ID", esc(result["id"]))],
+            border_style="magenta",
+        )
+    )
+    if directory is not None:
+        rprint(f"[dim]Next:[/dim] observal agent publish --update --dir {esc(directory)}")
+    rprint(f"[dim]Submit:[/dim] observal agent publish --submit {esc(result['id'])}")
+    for warning in result.get("warnings") or []:
+        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
 
 
 @agent_app.command(name="install")
@@ -1767,6 +1890,11 @@ def agent_publish(
         "components": data.get("components", []),
         "success_criteria": data.get("success_criteria"),
     }
+    # Preserve legacy YAML that omits these optional fields; a fork scaffold
+    # includes them explicitly and therefore round-trips their exact values.
+    for field in ("model_config_json", "external_mcps", "category"):
+        if field in data:
+            payload[field] = data[field]
 
     if update:
         # The update endpoint refuses both fields by design: visibility has its own
@@ -1805,19 +1933,33 @@ def agent_publish(
         return
 
     if update:
-        # Find existing agent by name
-        with _progress(output, "Looking up existing agent..."):
-            results = client.get("/api/v1/agents", params={"search": data["name"]})
-        match = next((agent for agent in results if agent.get("name") == data["name"]), None)
-        if not match:
-            fail(
-                ErrorCategory.NOT_FOUND,
-                f"No existing agent has the name {data['name']}.",
-                operation="Publish agent",
-                resource="agent registry",
-                remediation="Check the name or publish without --update.",
-            )
-        agent_id = match["id"]
+        # Fork scaffolds carry the exact new draft ID: an unapproved draft does
+        # not appear in the public search and must not update a namesake instead.
+        draft_id = data.get("agent_id")
+        if draft_id is not None:
+            try:
+                agent_id = str(UUID(str(draft_id)))
+            except ValueError:
+                fail(
+                    ErrorCategory.VALIDATION,
+                    "Agent YAML has an invalid agent_id.",
+                    operation="Publish agent",
+                    resource=str(dir_path / YAML_FILE),
+                    remediation="Use the ID returned by `observal agent fork` or remove agent_id.",
+                )
+        else:
+            with _progress(output, "Looking up existing agent..."):
+                results = client.get("/api/v1/agents", params={"search": data["name"]})
+            match = next((agent for agent in results if agent.get("name") == data["name"]), None)
+            if not match:
+                fail(
+                    ErrorCategory.NOT_FOUND,
+                    f"No existing agent has the name {data['name']}.",
+                    operation="Publish agent",
+                    resource="agent registry",
+                    remediation="Check the name or publish without --update.",
+                )
+            agent_id = match["id"]
 
         # Version bump selection (interactive only when --bump not provided)
         import sys
@@ -1825,7 +1967,7 @@ def agent_publish(
         if bump and bump in ("patch", "minor", "major"):
             payload["version_bump_type"] = bump
             payload.pop("version", None)
-        elif sys.stdin.isatty():
+        elif sys.stdin.isatty() and draft_id is None:
             current_version = match.get("version", "1.0.0")
             suggestions = client.get(f"/api/v1/agents/{agent_id}/version-suggestions")
             sug = suggestions.get("suggestions", {})

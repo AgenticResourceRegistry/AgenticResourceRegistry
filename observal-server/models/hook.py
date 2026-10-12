@@ -22,6 +22,7 @@ class HookListing(Base):
         Index("ix_hook_listings_namespace", "namespace"),
         Index("ix_hook_listings_submitted_by", "submitted_by"),
         Index("ix_hook_listings_team_id", "team_id"),
+        Index("ix_hook_listings_forked_from_id", "forked_from_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -46,6 +47,14 @@ class HookListing(Base):
         onupdate=lambda: datetime.now(UTC),
     )
     is_recommended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    forked_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hook_listings.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hook_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    forked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     latest_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("hook_versions.id", use_alter=True, ondelete="SET NULL"),
@@ -61,6 +70,10 @@ class HookListing(Base):
     latest_version: Mapped[HookVersion | None] = relationship(
         foreign_keys=[latest_version_id], lazy="selectin", uselist=False, post_update=True
     )
+
+    @property
+    def is_fork(self) -> bool:
+        return self.forked_from_id is not None or self.forked_from_ref is not None
 
     @property
     def qualified_name(self) -> str:

@@ -564,6 +564,9 @@ class TestSubmitMcp:
             "download_count": 0,
             "user_permission": None,
             "is_recommended": False,
+            "forked_from": None,
+            "fork_count": 0,
+            "warnings": [],
         }
         assert events == [
             "add:McpListing",
@@ -779,6 +782,18 @@ class TestSubmitMcp:
 
 
 class TestListAndDetail:
+    @pytest.fixture(autouse=True)
+    def _stub_fork_enrichment(self, monkeypatch):
+        # These tests assert the existing list/detail query shapes. Fork metadata
+        # and the additional grouped count query are covered by the HTTP fork tests.
+        from api.routes.component_forks import RESPONSE_MODELS, SUMMARY_MODELS
+
+        async def serialize(items, kind, _user, _db, *, summary=True):
+            schema = SUMMARY_MODELS[kind] if summary else RESPONSE_MODELS[kind]
+            return [schema.model_validate(item) for item in items]
+
+        monkeypatch.setattr(mcp, "component_responses", serialize)
+
     @pytest.mark.asyncio
     async def test_list_builds_filters_count_rank_scope_and_pagination(self, monkeypatch):
         db = _db()

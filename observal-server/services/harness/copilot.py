@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Copilot (VS Code) harness adapter for agent config generation.
@@ -13,7 +14,7 @@ from __future__ import annotations
 
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.harness import BaseHarnessAdapter, ConfigContext, McpConfigContext, register_adapter
-from services.harness.helpers import _generate_prompt_files
+from services.harness.helpers import _generate_prompt_files, _generate_skill
 
 
 class CopilotAdapter(BaseHarnessAdapter):
@@ -71,6 +72,14 @@ class CopilotAdapter(BaseHarnessAdapter):
             },
             "scope": copilot_spec["default_scope"],
         }
+        # Direct skills must be emitted so complete-folder preflight can bind
+        # the adapter's destination to the selected, reviewed release.
+        direct_skills = [skill for skill in ctx.skill_configs if skill.get("delivery_mode") == "registry_direct"]
+        skills = [_generate_skill(skill, "copilot", "project") for skill in direct_skills]
+        skills = [file for file in skills if file]
+        if skills:
+            result["skills"] = skills
+            result["skill_components"] = direct_skills
         # Native Copilot prompt files (.github/prompts/*.prompt.md)
         prompt_files = _generate_prompt_files(ctx.prompt_listings, ctx.agent, ctx.component_names)
         if prompt_files:

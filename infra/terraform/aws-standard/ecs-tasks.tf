@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Observal
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ECS task definitions: api, web, worker, init.
@@ -8,7 +9,7 @@
 
 locals {
   # Non-secret env vars passed to api/worker/init.
-  app_environment = [
+  app_environment = concat([
     { name = "NEXT_PUBLIC_API_URL", value = local.app_url },
     { name = "JWT_KEY_DIR", value = "/tmp/keys" },
     { name = "DEMO_SUPER_ADMIN_EMAIL", value = "super@demo.example" },
@@ -19,7 +20,9 @@ locals {
     { name = "DEMO_REVIEWER_PASSWORD", value = "reviewer-changeme" },
     { name = "DEMO_USER_EMAIL", value = "user@demo.example" },
     { name = "DEMO_USER_PASSWORD", value = "user-changeme" },
-  ]
+    ], local.webhook_ingress_enabled ? [
+    { name = "WEBHOOK_PUBLIC_URL", value = local.webhook_public_url },
+  ] : [])
 
   # Secrets injected by ECS at task start via SSM Parameter Store ARNs.
   app_secrets = [

@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useCallback, useMemo, useEffect } from "react";
@@ -34,6 +35,7 @@ import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import yaml from "js-yaml";
 import { componentBlockers } from "./validation-badges";
+import { SkillFilesSection } from "./review-detail-sheet";
 import { YamlDiffView, YamlSnapshot } from "./yaml-diff-view";
 import {
 	useAgentVersions,
@@ -41,6 +43,9 @@ import {
 	useComponentVersions,
 	useComponentVersionDetail,
 	useRegistryItem,
+	useSkillVersionReview,
+	useSkillVersionDecision,
+	useSkillVersionManifest,
 } from "@/hooks/use-api";
 import { registry } from "@/lib/api";
 import type { RegistryType } from "@/lib/api";
@@ -266,10 +271,15 @@ const COMPONENT_SNAPSHOT_META = new Set([
 ]);
 
 function buildComponentYaml(detail: Record<string, unknown>): string {
+	// Version-bound file previews carry exact bytes; a second multi-megabyte YAML
+	// dump of every base64 asset is both misleading and expensive to render.
+	const hasFolderResources = detail.delivery_mode === "registry_direct" &&
+		Array.isArray(detail.extra_files) && detail.extra_files.length > 0;
 	const obj = Object.fromEntries(
 		Object.entries(detail).filter(
 			([k, v]) =>
 				!COMPONENT_SNAPSHOT_META.has(k) &&
+				!(hasFolderResources && ["extra_files", "skill_md_content", "script_content"].includes(k)) &&
 				v !== null &&
 				v !== undefined &&
 				v !== "" &&
@@ -501,8 +511,18 @@ function DiffDialogBody({
 	const [showRejectDialog, setShowRejectDialog] = useState(false);
 	const [rejectReason, setRejectReason] = useState("");
 	const [approveCategory, setApproveCategory] = useState("");
+	const [gitBaseAcknowledged, setGitBaseAcknowledged] = useState(false);
+	const [previewFailed, setPreviewFailed] = useState(false);
+	const [previewPending, setPreviewPending] = useState(false);
+	const reportPreviewError = useCallback(() => setPreviewFailed(true), []);
+	const skillDecision = useSkillVersionDecision();
+	useEffect(() => { setGitBaseAcknowledged(false); setPreviewFailed(false); setPreviewPending(false); }, [item.version_id]);
 
 	const isAgent = item.type === "agent";
+	const { data: skillReview, isLoading: skillReviewLoading, isError: skillReviewError } = useSkillVersionReview(
+		item.type === "skill" ? item.id : undefined,
+		item.type === "skill" ? item.version_id : undefined,
+	);
 	const registryType =
 		!isAgent && item.type
 			? (pluralizeType(item.type) as RegistryType)
@@ -546,18 +566,18 @@ function DiffDialogBody({
 	const { data: compDetail, isLoading: compDetailLoading } =
 		useComponentVersionDetail(
 			registryType,
-			!isAgent ? item.id : undefined,
-			!isAgent ? (item.version ?? null) : null,
+			!isAgent && item.type !== "skill" ? item.id : undefined,
+			!isAgent && item.type !== "skill" ? (item.version ?? null) : null,
 		);
 
 	// Also fetch previous approved version detail for component diff
 	const { data: compPrevDetail } = useComponentVersionDetail(
 		registryType,
-		!isAgent ? item.id : undefined,
-		!isAgent ? (previousVersion ?? null) : null,
+		!isAgent && item.type !== "skill" ? item.id : undefined,
+		!isAgent && item.type !== "skill" ? (previousVersion ?? null) : null,
 	);
 
-	const detailLoading = isAgent ? agentDetailLoading : compDetailLoading;
+	const detailLoading = isAgent ? agentDetailLoading : item.type === "skill" ? skillReviewLoading : compDetailLoading;
 
 	const bumpType = useMemo(() => {
 		if (!previousVersion || !item.version) return null;
@@ -601,23 +621,51 @@ function DiffDialogBody({
 	}, [isAgent, compDetail, compPrevDetail, previousVersion, item.version]);
 
 	const handleApprove = useCallback(() => {
+		if (item.type === "skill" && item.version_id) {
+			if (!skillReview?.revision) return;
+			skillDecision.mutate({ id: item.id, versionId: item.version_id, revision: skillReview.revision,
+				action: "approve", gitBaseAcknowledged }, { onSuccess: () => onOpenChange(false) });
+			return;
+		}
 		onApprove(item.id, item.type, approveCategory || undefined);
 		onOpenChange(false);
-	}, [item, onApprove, onOpenChange, approveCategory]);
+	}, [item, onApprove, onOpenChange, approveCategory, skillReview, skillDecision, gitBaseAcknowledged]);
 
 	const handleRejectConfirm = useCallback(() => {
 		if (!rejectReason.trim()) return;
+		if (item.type === "skill" && item.version_id) {
+			if (!skillReview?.revision) return;
+			skillDecision.mutate({ id: item.id, versionId: item.version_id, revision: skillReview.revision,
+				action: "reject", reason: rejectReason }, { onSuccess: () => onOpenChange(false) });
+			return;
+		}
 		onReject(item.id, rejectReason, item.type);
 		setShowRejectDialog(false);
 		setRejectReason("");
 		onOpenChange(false);
-	}, [rejectReason, item, onReject, onOpenChange]);
+	}, [rejectReason, item, onReject, onOpenChange, skillReview, skillDecision]);
 
-	const disableApprove = item.components_ready === false;
+	const { data: candidateManifest, isPending: candidatePending, isError: candidateError } = useSkillVersionManifest(
+		item.type === "skill" && item.version_id ? item.id : undefined,
+		skillReview?.files?.length ? item.version_id : undefined,
+	);
+	const { data: directBaseManifest, isPending: basePending, isError: baseError } = useSkillVersionManifest(
+		item.type === "skill" && skillReview?.base_delivery_mode === "registry_direct" ? item.id : undefined,
+		skillReview?.base_delivery_mode === "registry_direct" ? skillReview.base_version_id ?? undefined : undefined,
+	);
+	const disableApprove = item.components_ready === false ||
+		(item.type === "skill" && !!item.version_id && (
+			skillReviewLoading || skillReviewError || !skillReview ||
+			!skillReview.revision || skillDecision.isPending || previewFailed || previewPending ||
+			(skillReview.base_delivery_mode === "git_fetch" && !gitBaseAcknowledged) ||
+			(!!skillReview.files?.length && (candidatePending || candidateError || candidateManifest?.revision !== skillReview.revision)) ||
+			(skillReview.base_delivery_mode === "registry_direct" &&
+				(basePending || baseError || !directBaseManifest))
+		));
 
 	const isLoading = versionsLoading || detailLoading;
 
-	const detail = (isAgent ? agentDetail : compDetail) as
+	const detail = (isAgent ? agentDetail : item.type === "skill" ? skillReview : compDetail) as
 		| Record<string, unknown>
 		| undefined;
 	// Prefer version detail fields over the sparse review item fields
@@ -796,6 +844,7 @@ function DiffDialogBody({
 								)}
 							</dl>
 						</div>
+
 
 						{/* Model */}
 						{(modelName || modelsByHarnessEntries.length > 0) && (
@@ -1021,9 +1070,20 @@ function DiffDialogBody({
 					</div>
 				</ScrollArea>
 
-				{/* Right pane: diff or YAML snapshot (~60%) */}
+				{/* Primary pane: exact skill file comparison or other component YAML diff. */}
 				<div className="flex-1 min-w-0 flex flex-col min-h-0">
-					{isLoading ? (
+					{item.type === "skill" && item.version_id ? (
+						<div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+							<h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Exact reviewed files</h4>
+							{skillReviewLoading ? <p className="text-xs text-muted-foreground">Loading verified files…</p>
+								: skillReviewError || !skillReview ? <p role="alert" className="text-xs text-destructive">Exact skill version unavailable; approval is blocked.</p>
+								: skillReview.files?.length ? (
+									<SkillFilesSection listingId={item.id} versionId={item.version_id}
+										baseVersionId={skillReview.base_version_id} baseDeliveryMode={skillReview.base_delivery_mode}
+									onPreviewError={reportPreviewError} onPreviewPendingChange={setPreviewPending} />
+								) : <p className="text-xs text-muted-foreground">No reviewed folder files for this version.</p>}
+						</div>
+					) : isLoading ? (
 						<div className="flex-1 p-4 space-y-2">
 							<Skeleton className="h-4 w-full" />
 							<Skeleton className="h-4 w-5/6" />
@@ -1093,6 +1153,15 @@ function DiffDialogBody({
 
 			{/* Footer actions */}
 			<div className="shrink-0 border-t border-border px-5 py-4 space-y-3">
+				{skillReview?.base_delivery_mode === "git_fetch" && (
+					<label className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
+						<input type="checkbox" checked={gitBaseAcknowledged}
+							onChange={(event) => setGitBaseAcknowledged(event.target.checked)} className="mt-0.5" />
+						<span>I inspected this exact candidate folder. The old Git release's files are not stored for comparison.
+							{skillReview.base_git_url && <span className="block mt-1 break-all text-muted-foreground">Old source: {skillReview.base_git_url}</span>}
+						</span>
+					</label>
+				)}
 				{isAgent && (
 					<div className="flex items-center gap-2">
 						<span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -1137,7 +1206,12 @@ function DiffDialogBody({
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>
-									<p>Cannot approve until all required components are ready</p>
+									<p>{item.components_ready === false ? "Approve the pending linked components before approving this item."
+									: previewFailed ? "A file preview failed or changed. Refresh and inspect the exact files before approval."
+									: previewPending ? "Wait for selected file verification before approving."
+									: skillReview?.base_delivery_mode === "git_fetch"
+									? "Acknowledge the missing Git base files above before approval."
+									: "Cannot approve until the exact candidate and base files are available and reviewed."}</p>
 								</TooltipContent>
 							</Tooltip>
 						</TooltipProvider>
@@ -1153,6 +1227,7 @@ function DiffDialogBody({
 					<Button
 						size="sm"
 						className="h-8 text-xs flex-1 bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/25 shadow-none"
+						disabled={skillDecision.isPending || (item.type === "skill" && !!item.version_id && !skillReview?.revision)}
 						onClick={() => setShowRejectDialog(true)}
 					>
 						Reject
@@ -1189,7 +1264,7 @@ function DiffDialogBody({
 						<Button
 							size="sm"
 							className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-							disabled={!rejectReason.trim()}
+							disabled={!rejectReason.trim() || skillDecision.isPending}
 							onClick={handleRejectConfirm}
 						>
 							Reject

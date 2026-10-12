@@ -1,0 +1,88 @@
+{
+  "note": "Server-side complete-folder payload, disabled in production until registry.skill_folder_delivery_enabled is enabled on a homogeneous compatible fleet. An installer must verify every base64 byte, SHA-256, path, size and mode before replacing any destination. The same bundle is `bundle` on standalone and one element of `skill_bundles` on an agent response; neither is a filesystem install by itself.",
+  "standalone": {
+    "method": "POST",
+    "path": "/api/v1/skills/11111111-1111-4111-8111-111111111111/install",
+    "request": {"harness": "pi", "scope": "project", "version": "1.1.0", "supported_features": ["skill_extra_files_v1"]},
+    "response_bundle": {
+      "listing_id": "11111111-1111-4111-8111-111111111111",
+      "version_id": "44444444-4444-4444-8444-444444444444",
+      "digest": "observal-content-v2:sha256:2c2805068187596dc3f927d927861d5177f70611c62ed9beb639a3a6c63ad274",
+      "skill_file_path": ".pi/skills/example/SKILL.md",
+      "files": [
+        {"path": "SKILL.md", "size": 59, "sha256": "ef7e4a89a7e6a6d7a2a7eb90751e77641a549234bd6a092ebe98033af5a2bd7b", "mode": "0644", "version_id": "44444444-4444-4444-8444-444444444444", "content": "LS0tCm5hbWU6IGV4YW1wbGUKZGVzY3JpcHRpb246IEV4YW1wbGUgc2tpbGwKLS0tCiMgRXhhbXBsZQo=", "encoding": "base64"},
+        {"path": "assets/icon.bin", "size": 2, "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8", "mode": "0644", "version_id": "44444444-4444-4444-8444-444444444444", "content": "AP8=", "encoding": "base64"},
+        {"path": "scripts/run.sh", "size": 8, "sha256": "4726de74e6ad02ddb5decee701960c06c6fd91a871f95238350941eed7dbb22a", "mode": "0755", "version_id": "44444444-4444-4444-8444-444444444444", "content": "ZWNobyBvawo=", "encoding": "base64"}
+      ]
+    },
+    "response": {
+      "listing_id": "11111111-1111-4111-8111-111111111111",
+      "harness": "pi",
+      "config_snippet": {
+        "hooks": {
+          "SessionStart": [{"matcher": "*", "hooks": [{"type": "http", "url": "https://api.example.test/api/v1/telemetry/hooks", "headers": {"Authorization": "Bearer $OBSERVAL_ACCESS_TOKEN", "X-Observal-Skill-Id": "11111111-1111-4111-8111-111111111111"}, "timeout": 10}]}],
+          "SessionEnd": [{"matcher": "*", "hooks": [{"type": "http", "url": "https://api.example.test/api/v1/telemetry/hooks", "headers": {"Authorization": "Bearer $OBSERVAL_ACCESS_TOKEN", "X-Observal-Skill-Id": "11111111-1111-4111-8111-111111111111"}, "timeout": 10}]}]
+        },
+        "skill": {"name": "example", "id": "11111111-1111-4111-8111-111111111111", "skill_path": "/", "delivery_mode": "registry_direct", "version": "1.1.0", "latest_version": "1.1.0", "bundle_version_id": "44444444-4444-4444-8444-444444444444"},
+        "harness": "pi", "ide": "pi", "listing_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "warnings": [],
+      "version": "1.1.0",
+      "version_id": "44444444-4444-4444-8444-444444444444",
+      "digest": "observal-content-v2:sha256:2c2805068187596dc3f927d927861d5177f70611c62ed9beb639a3a6c63ad274",
+      "bundle": {
+        "listing_id": "11111111-1111-4111-8111-111111111111",
+        "version_id": "44444444-4444-4444-8444-444444444444",
+        "digest": "observal-content-v2:sha256:2c2805068187596dc3f927d927861d5177f70611c62ed9beb639a3a6c63ad274",
+        "skill_file_path": ".pi/skills/example/SKILL.md",
+        "files": [
+          {"path": "SKILL.md", "size": 59, "sha256": "ef7e4a89a7e6a6d7a2a7eb90751e77641a549234bd6a092ebe98033af5a2bd7b", "mode": "0644", "version_id": "44444444-4444-4444-8444-444444444444", "content": "LS0tCm5hbWU6IGV4YW1wbGUKZGVzY3JpcHRpb246IEV4YW1wbGUgc2tpbGwKLS0tCiMgRXhhbXBsZQo=", "encoding": "base64"},
+          {"path": "assets/icon.bin", "size": 2, "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8", "mode": "0644", "version_id": "44444444-4444-4444-8444-444444444444", "content": "AP8=", "encoding": "base64"},
+          {"path": "scripts/run.sh", "size": 8, "sha256": "4726de74e6ad02ddb5decee701960c06c6fd91a871f95238350941eed7dbb22a", "mode": "0755", "version_id": "44444444-4444-4444-8444-444444444444", "content": "ZWNobyBvawo=", "encoding": "base64"}
+        ]
+      }
+    }
+  },
+  "agent": {
+    "method": "POST",
+    "path": "/api/v1/agents/22222222-2222-4222-8222-222222222222/install",
+    "request": {"harness": "pi", "version": "1.0.0", "options": {"scope": "project"}, "strict": true, "supported_features": ["skill_extra_files_v1"]},
+    "response": {
+      "agent_id": "22222222-2222-4222-8222-222222222222",
+      "harness": "pi",
+      "version": "1.0.0",
+      "config_snippet": {
+        "agent_profile": {"path": "AGENTS.md", "content": "## Skills\n\n- **Example**"},
+        "skill_components": [{"name": "example", "description": "Example skill", "slash_command": null, "task_type": "general", "delivery_mode": "registry_direct", "git_url": null, "git_ref": null, "skill_path": "/", "path": ".pi/agents/example-agent/skills/example/SKILL.md", "bundle_version_id": "44444444-4444-4444-8444-444444444444"}]
+      },
+      "warnings": [],
+      "lock": {
+        "lock_version": 1,
+        "status": "locked",
+        "digest": "sha256:ad52fd6e4c72c00e80be53f475d97575151a4204e23f42210be95fbd0c6d2616",
+        "components": [{"type": "skill", "id": "11111111-1111-4111-8111-111111111111", "qualified_name": "acme/example", "version": "1.1.0", "version_id": "44444444-4444-4444-8444-444444444444", "digest": "observal-content-v2:sha256:2c2805068187596dc3f927d927861d5177f70611c62ed9beb639a3a6c63ad274", "source": "lock"}],
+        "problems": []
+      },
+      "skill_bundles": [{
+        "listing_id": "11111111-1111-4111-8111-111111111111",
+        "version_id": "44444444-4444-4444-8444-444444444444",
+        "digest": "observal-content-v2:sha256:2c2805068187596dc3f927d927861d5177f70611c62ed9beb639a3a6c63ad274",
+        "skill_file_path": ".pi/agents/example-agent/skills/example/SKILL.md",
+        "files": [
+          {"path": "SKILL.md", "size": 59, "sha256": "ef7e4a89a7e6a6d7a2a7eb90751e77641a549234bd6a092ebe98033af5a2bd7b", "mode": "0644", "version_id": "44444444-4444-4444-8444-444444444444", "content": "LS0tCm5hbWU6IGV4YW1wbGUKZGVzY3JpcHRpb246IEV4YW1wbGUgc2tpbGwKLS0tCiMgRXhhbXBsZQo=", "encoding": "base64"},
+          {"path": "assets/icon.bin", "size": 2, "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8", "mode": "0644", "version_id": "44444444-4444-4444-8444-444444444444", "content": "AP8=", "encoding": "base64"},
+          {"path": "scripts/run.sh", "size": 8, "sha256": "4726de74e6ad02ddb5decee701960c06c6fd91a871f95238350941eed7dbb22a", "mode": "0755", "version_id": "44444444-4444-4444-8444-444444444444", "content": "ZWNobyBvawo=", "encoding": "base64"}
+        ]
+      }]
+    }
+  },
+  "refusals": {
+    "old_client_standalone": {"status": 409, "detail": "Client must support skill_extra_files_v1 to install this skill version"},
+    "old_client_agent": {"status": 409, "detail": "Client must support skill_extra_files_v1 to install this agent"},
+    "not_rolled_out_standalone": {"status": 409, "detail": "Skill folder delivery is disabled until fleet rollout"},
+    "not_rolled_out_agent": {"status": 409, "detail": "Skill folder delivery is disabled until fleet rollout"},
+    "unsupported_skills_harness": {"status": 409, "detail": "Harness does not support complete skill folders"},
+    "unsupported_skills_harness_agent": {"status": 409, "detail": "Cannot deliver complete agent skill folders: Harness does not support complete skill folders"},
+    "stale_v2_pin_agent": {"status": 409, "detail": "skill 'Example' pinned folder differs from its v2 digest"}
+  }
+}

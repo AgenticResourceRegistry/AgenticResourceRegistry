@@ -25,6 +25,7 @@ from rich.table import Table
 
 from observal_cli import client, config
 from observal_cli.analyzer import analyze_local
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_MCP_CATEGORIES
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import fuzzy_select, select_one, text_input
@@ -1061,6 +1062,7 @@ def _show_impl(mcp_id, output):
                 ("Setup", esc(item.get("setup_instructions") or "none")),
                 ("Changelog", esc(item.get("changelog") or "none")),
                 ("Created", esc(relative_time(item.get("created_at")))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{esc(item['id'])}[/dim]"),
             ],
             border_style="cyan",

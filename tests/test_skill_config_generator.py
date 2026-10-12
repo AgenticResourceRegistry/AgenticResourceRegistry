@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for skill_config_generator — harness-specific skill file generation."""
@@ -8,6 +9,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,10 +43,66 @@ def _make_skill_listing(
     listing.description = description
     listing.slash_command = slash_command
     listing.git_url = git_url
+    listing.delivery_mode = "git_fetch"
     listing.skill_path = skill_path
     listing.git_ref = git_ref
     listing.skill_md_content = skill_md_content
     return listing
+
+
+def test_selected_direct_version_never_inherits_git_coordinates_or_script_from_latest():
+    listing = _make_skill_listing()
+    listing.delivery_mode = "git_fetch"
+    listing.script_content = "latest script"
+    listing.version = "2.0.0"
+    selected = SimpleNamespace(
+        delivery_mode="registry_direct",
+        git_url=None,
+        git_ref=None,
+        skill_path="/",
+        skill_md_content="---\nname: code-review\ndescription: Older skill\n---\nOld body\n",
+        script_content="",
+        script_filename="empty.sh",
+        slash_command=None,
+        version="1.0.0",
+        description="Older skill",
+    )
+
+    config = generate_skill_config(listing, "claude-code", version_override=selected)
+
+    assert config["skill"]["delivery_mode"] == "registry_direct"
+    assert "git_url" not in config["skill"]
+    assert "git_ref" not in config["skill"]
+    assert "script_content" not in config["skill"]  # Old-client gate until empty scripts can be declared.
+    assert config["skill"]["script_filename"] == "empty.sh"
+    assert config["skill"]["version"] == "1.0.0"
+    assert config["skills"]["content"] == selected.skill_md_content
+    assert config["skills"]["path"] == ".claude/skills/code-review/SKILL.md"
+
+
+def test_selected_direct_uses_declared_destination_even_with_old_git_and_different_display_name():
+    listing = _make_skill_listing(name="Security Review")
+    listing.slug = "security-review"
+    listing.delivery_mode = "git_fetch"
+    selected = SimpleNamespace(
+        delivery_mode="registry_direct",
+        git_url="https://example.test/obsolete.git",
+        git_ref="main",
+        skill_path="/",
+        skill_md_content="---\nname: security-review\ndescription: Secure review\n---\n",
+        script_content=None,
+        script_filename=None,
+        slash_command=None,
+        version="1.0.0",
+        description="Secure review",
+    )
+
+    for local_name, expected in ((None, "security-review"), ("my-review", "my-review")):
+        config = generate_skill_config(listing, "claude-code", version_override=selected, local_name=local_name)
+        assert config["skill"]["name"] == expected
+        assert config["skills"]["path"] == f".claude/skills/{expected}/SKILL.md"
+        assert "git_url" not in config["skill"]
+        assert "git_ref" not in config["skill"]
 
 
 class TestSanitizeName:

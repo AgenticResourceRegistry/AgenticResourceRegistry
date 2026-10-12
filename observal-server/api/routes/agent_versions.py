@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Version-specific endpoints for agents.
@@ -457,9 +458,12 @@ async def _review_agent_version(
     if req.action == "approve":
         # Same gate as the review queue: the component releases this version pins
         # must themselves be approved, and approval freezes the lock.
-        from services.agent_lock import lock_agent_version, pinned_component_blockers
+        from api.routes.review import _check_agent_components_ready
+        from services.agent_lock import lock_agent_version
 
-        blocking = await pinned_component_blockers(db, ver.components or [])
+        _ready, blocking = await _check_agent_components_ready(
+            ver.components or [], db, require_public_skills=not agent.is_private
+        )
         if blocking:
             raise HTTPException(
                 status_code=422,

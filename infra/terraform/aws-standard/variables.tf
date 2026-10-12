@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Observal
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 variable "region" {
@@ -210,6 +211,52 @@ variable "alb_scheme" {
     condition     = contains(["internet-facing", "internal"], var.alb_scheme)
     error_message = "alb_scheme must be 'internet-facing' or 'internal'."
   }
+}
+
+# ── Git webhook ingress (optional) ─────────────────────────────────────────
+# For private installs (alb_scheme = "internal") that use MCP repository sync.
+# Adds an API Gateway HTTP API that forwards only GitHub and/or GitLab webhook
+# deliveries to the ALB through a VPC link. See webhook-ingress.tf.
+
+variable "enable_webhook_ingress" {
+  description = "Create a public API Gateway endpoint that forwards only git provider webhook deliveries (POST /api/v1/webhooks/<provider>/mcp/{sync_id}) to the ALB through a VPC link, so MCP repository sync works on a private install. Requires alb_scheme = \"internal\"."
+  type        = bool
+  default     = false
+}
+
+variable "webhook_providers" {
+  description = "Providers whose webhooks the endpoint accepts: github, gitlab, or both. Each adds one route."
+  type        = list(string)
+  default     = ["github"]
+
+  validation {
+    condition     = length(var.webhook_providers) > 0 && alltrue([for p in var.webhook_providers : contains(["github", "gitlab"], p)])
+    error_message = "webhook_providers must list github, gitlab, or both."
+  }
+}
+
+variable "webhook_domain_name" {
+  description = "Optional custom hostname for the webhook endpoint (e.g. hooks.observal.example.com). Empty uses the API Gateway execute-api URL, which already has a valid certificate."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_route53_zone_id" {
+  description = "Public Route 53 hosted zone for webhook_domain_name (DNS record and certificate validation). Defaults to route53_zone_id."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_throttle_rate_limit" {
+  description = "Steady-state webhook requests per second API Gateway lets through to the VPC (best effort, a coarse backstop; the API also limits each webhook URL to 60 deliveries a minute). Excess deliveries get 429 and show as failed in the provider's delivery log."
+  type        = number
+  default     = 10
+}
+
+variable "webhook_throttle_burst_limit" {
+  description = "Webhook request burst API Gateway allows above webhook_throttle_rate_limit."
+  type        = number
+  default     = 50
 }
 
 # ── Application ───────────────────────────────────────────────────────────────

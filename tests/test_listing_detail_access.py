@@ -47,6 +47,8 @@ def _mock_db(membership=None):
     # A bare AsyncMock returns a truthy sentinel, which would make every caller
     # look like a team member, so the membership row is always explicit here.
     db.scalar = AsyncMock(return_value=membership)
+    # Fork-count reads use a grouped execute; this fixture has no fork rows.
+    db.execute.return_value.all = MagicMock(return_value=[])
     return db
 
 
@@ -65,6 +67,7 @@ def _app_with(router, user=None, membership=None):
 def _listing_mock(status=ListingStatus.approved, submitted_by=None, is_private=False, team_id=None):
     m = MagicMock()
     m.id = uuid.uuid4()
+    m.latest_version_id = uuid.uuid4()
     m.name = "test-listing"
     m.namespace = "testowner"
     m.slug = "test-listing"
@@ -74,6 +77,8 @@ def _listing_mock(status=ListingStatus.approved, submitted_by=None, is_private=F
     m.owner = "testowner"
     m.status = status
     m.rejection_reason = None
+    m.forked_from = None
+    m.is_fork = False
     m.submitted_by = submitted_by or uuid.uuid4()
     m.co_authors = []
     # Privacy is a separate axis from status: set it explicitly so these tests
@@ -136,6 +141,27 @@ def _listing_mock(status=ListingStatus.approved, submitted_by=None, is_private=F
     m.env_vars = []
     m.entrypoint = None
     return m
+
+
+@pytest.fixture(autouse=True)
+def mock_selected_skill_version(monkeypatch):
+    """These listing-scope tests mock the listing lookup, not version-row locks.
+
+    Exact-version authorization is exercised with a real DB in
+    test_skill_file_access; this fixture keeps older listing-only mocks focused
+    on their intended access boundary.
+    """
+    from api.routes import skill
+
+    async def selected(_listing_id, version_id, _db, _user):
+        row = MagicMock()
+        row.id = version_id
+        listing = await skill.resolve_visible_listing(
+            skill.SkillListing, _listing_id, _db, _user, load_options=skill._BODY_FREE_LISTING
+        )
+        return listing, row
+
+    monkeypatch.setattr(skill, "_authorized_version", selected)
 
 
 # ── Endpoint configs for parametrization ─────────────────
@@ -234,7 +260,10 @@ class TestOwnerAccess:
         app = _app_with(router, user=owner)
 
         with patch(RESOLVE_SEAM, new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.side_effect = [None, listing]
+            if route_type == "skill":
+                mock_resolve.return_value = listing
+            else:
+                mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
             assert r.status_code == 200
@@ -287,7 +316,10 @@ class TestPrivilegedAccess:
         app = _app_with(router, user=reviewer)
 
         with patch(RESOLVE_SEAM, new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.side_effect = [None, listing]
+            if route_type == "skill":
+                mock_resolve.return_value = listing
+            else:
+                mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
             assert r.status_code == 200
@@ -300,7 +332,10 @@ class TestPrivilegedAccess:
         app = _app_with(router, user=admin)
 
         with patch(RESOLVE_SEAM, new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.side_effect = [None, listing]
+            if route_type == "skill":
+                mock_resolve.return_value = listing
+            else:
+                mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
             assert r.status_code == 200
@@ -382,7 +417,10 @@ class TestTeamPrivateAccess:
         app = _app_with(router, user=reviewer, membership=None)
 
         with patch(RESOLVE_SEAM, new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.side_effect = [None, listing]
+            if route_type == "skill":
+                mock_resolve.return_value = listing
+            else:
+                mock_resolve.side_effect = [None, listing]
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.get(f"{base_path}/{listing.id}")
 

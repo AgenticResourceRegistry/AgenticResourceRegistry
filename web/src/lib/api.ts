@@ -32,7 +32,16 @@ import type {
 	SessionErrorEvent,
 	TelemetryStatus,
 	ReviewItem,
+	SkillFolderDraftRequest,
+	SkillVersionManifest,
+	SkillApprovedBase,
+	SkillSuccessorRequest,
+	SkillFileContents,
+	SkillBinaryContents,
 	RegistryItem,
+	ForkRequest,
+	ForkDiff,
+	ForksResponse,
 	LeaderboardItem,
 	LeaderboardWindow,
 	ValidationResult,
@@ -40,6 +49,8 @@ import type {
 	AgentVersionDetail,
 	AgentVersionsResponse,
 	ComponentVersionsResponse,
+	McpWebhookSync,
+	McpWebhookSyncRequest,
 	ComponentVersionDetail,
 	VersionDiff,
 	AgentVersionOutdated,
@@ -232,10 +243,18 @@ export async function refreshAccessTokenWithReason(): Promise<RefreshResult> {
 	return _tryRefreshToken();
 }
 
+async function decodeResponse<T>(response: Response, fileResponse: boolean): Promise<T> {
+	if (fileResponse && response.headers.get("content-type")?.includes("application/octet-stream")) {
+		return { encoding: "binary", content: await response.blob() } as T;
+	}
+	return response.json() as Promise<T>;
+}
+
 async function request<T = unknown>(
 	method: string,
 	path: string,
 	body?: unknown,
+	fileResponse = false,
 ): Promise<T> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
@@ -280,7 +299,7 @@ async function request<T = unknown>(
 				});
 				if (retryRes.ok) {
 					if (retryRes.status === 204) return undefined as T;
-					return retryRes.json() as Promise<T>;
+					return decodeResponse<T>(retryRes, fileResponse);
 				}
 				const retryText = await retryRes.text().catch(() => "Request failed");
 				const retryErr = new Error(retryText);
@@ -345,7 +364,7 @@ async function request<T = unknown>(
 
 	if (response.status === 204) return undefined as T;
 
-	return response.json() as Promise<T>;
+	return decodeResponse<T>(response, fileResponse);
 }
 
 function get<T = unknown>(path: string) {
@@ -451,6 +470,14 @@ export const registry = {
 		return get<RegistryItem[]>(`/${type}${qs}`);
 	},
 	get: (type: RegistryType, id: string) => get<RegistryItem>(`/${type}/${id}`),
+	forkDiff: (type: RegistryType, id: string, version: string) =>
+		get<ForkDiff>(`/${type}/${id}/fork-diff?${new URLSearchParams({ version })}`),
+	fork: (type: RegistryType, id: string, body: ForkRequest) =>
+		post<RegistryItem>(`/${type}/${encodeURIComponent(id)}/fork`, body),
+	forks: (type: RegistryType, id: string, page = 1, pageSize = 12) =>
+		get<ForksResponse<RegistryItem>>(
+			`/${type}/${encodeURIComponent(id)}/forks?limit=${pageSize}&offset=${(page - 1) * pageSize}`,
+		),
 	create: (type: RegistryType, body: unknown) =>
 		post<RegistryItem>(`/${type}`, body),
 	install: (type: RegistryType, id: string, body?: unknown) =>
@@ -497,6 +524,19 @@ export const registry = {
 	unarchiveComponent: (type: RegistryType, id: string) => patch(`/${type}/${id}/unarchive`),
 	draft: (body: unknown, type?: RegistryType) =>
 		post<RegistryItem>(`/${type ?? "agents"}/draft`, body),
+	folderDraft: (body: SkillFolderDraftRequest) =>
+		post<SkillVersionManifest>("/skills/folder-drafts", {
+			name: body.name,
+			version: body.version,
+			description: body.description,
+			owner: body.owner,
+			task_type: body.task_type,
+			skill_md_content: body.skill_md_content,
+			extra_files: body.extra_files,
+			team_id: body.team_id,
+			visibility: body.visibility,
+			supported_harnesses: body.supported_harnesses,
+		}),
 	updateDraft: (id: string, body: unknown, type?: RegistryType) =>
 		put<RegistryItem>(`/${type ?? "agents"}/${id}/draft`, body),
 	updateAgent: (id: string, body: unknown) =>
@@ -526,6 +566,13 @@ export const registry = {
 		get<AgentVersionOutdated>(`/agents/${agentId}/versions/${version}/outdated`),
 
 	// Component versions
+	mcpWebhookSync: (listingId: string) => get<McpWebhookSync>(`/mcps/${listingId}/webhook-sync`),
+	configureMcpWebhookSync: (listingId: string, body: McpWebhookSyncRequest) =>
+		put<McpWebhookSync>(`/mcps/${listingId}/webhook-sync`, body),
+	rotateMcpWebhookSecret: (listingId: string) =>
+		post<McpWebhookSync>(`/mcps/${listingId}/webhook-sync/rotate-secret`),
+	runMcpWebhookSync: (listingId: string) => post<McpWebhookSync>(`/mcps/${listingId}/webhook-sync/run`),
+	disableMcpWebhookSync: (listingId: string) => del(`/mcps/${listingId}/webhook-sync`),
 	listComponentVersions: (
 		type: RegistryType,
 		listingId: string,
@@ -547,6 +594,25 @@ export const registry = {
 	) => post<ComponentVersionDetail>(`/${type}/${listingId}/versions`, body),
 	componentVersionSuggestions: (type: RegistryType, listingId: string) =>
 		get<VersionSuggestions>(`/${type}/${listingId}/version-suggestions`),
+	getSkillApprovedBase: (listingId: string) =>
+		get<SkillApprovedBase>(`/skills/${listingId}/approved-base`),
+	forkSkillVersion: (listingId: string, body: SkillSuccessorRequest) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/drafts`, body),
+	importSkillFolder: (listingId: string, body: SkillSuccessorRequest & {
+		skill_md_content: string; extra_files: SkillFolderDraftRequest["extra_files"];
+	}) => post<SkillVersionManifest>(`/skills/${listingId}/folder-import-drafts`, body),
+	getSkillVersionManifest: (listingId: string, versionId: string) =>
+		get<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/manifest`),
+	updateSkillVersionDraft: (listingId: string, versionId: string, body: unknown) =>
+		put<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/draft`, body),
+	submitSkillVersionDraft: (listingId: string, versionId: string, observedRevision: string) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/submit`, { observed_revision: observedRevision }),
+	withdrawSkillVersion: (listingId: string, versionId: string, observedRevision: string) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/withdraw`, { observed_revision: observedRevision }),
+	getSkillFileContent: (listingId: string, versionId: string, filePath: string) =>
+		request<SkillFileContents | SkillBinaryContents>(
+			"GET", `/skills/${listingId}/versions/${versionId}/files/${encodeURIComponent(filePath)}`, undefined, true
+		),
 	startEdit: (id: string, type?: RegistryType) =>
 		post<{ status: string }>(`/${type ?? "agents"}/${id}/start-edit`),
 	cancelEdit: (id: string, type?: RegistryType) =>
@@ -568,6 +634,11 @@ export const review = {
 	listForTeam: (teamId: string, params?: Record<string, string>) =>
 		get<ReviewItem[]>(`/review?${new URLSearchParams({ ...params, team_id: teamId })}`),
 	get: (id: string) => get<ReviewItem>(`/review/${id}`),
+	getSkillVersion: (id: string, versionId: string) => get<ReviewItem>(`/review/skills/${id}/versions/${versionId}`),
+	decideSkillVersion: (id: string, versionId: string, action: "approve" | "reject", observedRevision: string, reason?: string, gitBaseAcknowledged = false) =>
+		post(`/review/skills/${id}/versions/${versionId}/decision`, {
+			action, observed_revision: observedRevision, reason, git_base_acknowledged: gitBaseAcknowledged,
+		}),
 	approve: (id: string) => post(`/review/${id}/approve`),
 	reject: (id: string, body: { reason: string }) =>
 		post(`/review/${id}/reject`, body),
@@ -994,6 +1065,8 @@ export type PublicConfig = {
 	sso_only: boolean;
 	public_registry_enabled: boolean;
 	self_registration_enabled: boolean;
+	/** Public rollout hint; server install and review endpoints remain authoritative. */
+	skill_folder_delivery_enabled?: boolean;
 	saml_enabled: boolean;
 	exec_dashboard_available: boolean;
 	enabled_features: string[];

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent routes pin components through the lock service against a real registry."""
@@ -19,6 +20,11 @@ from models.mcp import ListingStatus, McpVersion
 from schemas.agent import AgentVersionCreateRequest, ComponentRef
 from schemas.bulk import BulkAgentItem, BulkAgentRequest
 from tests import discovery_support as ds
+
+
+def test_agent_pin_column_accepts_versioned_skill_folder_digest():
+    digest = "observal-content-v2:sha256:" + "0" * 64
+    assert AgentComponent.__table__.columns.resolved_digest.type.length >= len(digest)
 
 
 @pytest.fixture
@@ -300,6 +306,35 @@ async def test_version_review_requires_approved_pins_and_freezes_the_lock(regist
     await db.refresh(candidate)
     lock = json.loads(candidate.lock_snapshot)
     assert (lock["agent"]["version"], lock["status"], lock["components"][0]["version"]) == ("4.0.0", "locked", "2.0.0")
+
+
+async def test_exact_agent_version_review_refuses_public_agent_with_private_skill(monkeypatch):
+    from fastapi import HTTPException
+
+    from models.agent import AgentStatus
+    from models.user import UserRole
+    from schemas.agent import AgentVersionReviewRequest
+
+    monkeypatch.setattr(agent_versions.inbox, "on_review_decided", AsyncMock())
+    engine = ds.make_engine()
+    maker = await ds.create_schema(engine)
+    try:
+        async with maker() as db:
+            owner = await ds.user(db)
+            reviewer = await ds.user(db, role=UserRole.admin)
+            team = await ds.team_with_member(db, owner)
+            skill = await ds.skill(db, owner, team_id=team.id, is_private=True)
+            agent = await ds.agent(db, owner, status=AgentStatus.pending, components=[("skill", skill.id, skill.name)])
+            await db.commit()
+
+            with pytest.raises(HTTPException) as blocked:
+                await agent_versions._review_agent_version(
+                    str(agent.id), "3.1.0", AgentVersionReviewRequest(action="approve"), db, reviewer
+                )
+            assert blocked.value.status_code == 422
+            assert any(item["status"] == "not_public" for item in blocked.value.detail["blocking_components"])
+    finally:
+        await engine.dispose()
 
 
 async def test_lock_endpoint_serves_the_frozen_snapshot_and_builds_one_for_legacy_versions(registry):

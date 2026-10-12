@@ -312,7 +312,6 @@ def login(
     Examples:
         observal auth login
         observal auth login --server https://observal.example.com --email alice --output json --no-setup
-        observal auth login --sso --output json
         observal auth login --sso --provider google
     """
     json_mode = _is_json(output)

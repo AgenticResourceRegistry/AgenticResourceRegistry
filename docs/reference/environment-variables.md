@@ -1,5 +1,6 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Environment variables
@@ -76,6 +77,7 @@ These environment variables are **not required** if you use Bedrock API keys (re
 | `GIT_CLONE_TOKEN`      | -                | Auth token for private repos. Supports `GIT_CLONE_TOKEN_FILE`.                                                    |
 | `GIT_CLONE_TOKEN_USER` | `x-access-token` | Token username: `x-access-token` (GitHub), `oauth2` or `private-token` (GitLab) |
 | `GIT_CLONE_TIMEOUT`    | `120`            | Clone timeout, seconds                                                          |
+| `WEBHOOK_PUBLIC_URL`   | -                | Public base URL GitHub and GitLab use for webhook deliveries when the rest of Observal is private. Shown as the webhook URL in the MCP **Sync** tab. Unset means the deployment's normal public URL. See [Sync an MCP server from GitHub or GitLab](../use-cases/mcp-repo-sync.md#private-deployments) |
 
 ### Demo accounts (seeded on first startup if no users exist)
 

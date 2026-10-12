@@ -147,17 +147,17 @@ observal
 ├── auth                     # login, logout, whoami, status, change-password, set-username
 ├── config                   # show, set, path, alias, aliases
 ├── registry                 # component parent group
-│   ├── mcp                  #   submit, list, show, install, edit, delete, co-authors
-│   ├── skill                #   submit, list, show, install, edit, delete, co-authors
-│   ├── hook                 #   submit, list, show, install, edit, delete, co-authors
-│   ├── prompt               #   submit, list, show, edit, render, delete, co-authors
-│   ├── sandbox              #   submit, list, show, edit, delete, co-authors
+│   ├── mcp                  #   submit, list, show, fork, install, edit, delete, co-authors, sync
+│   ├── skill                #   submit, list, show, fork, fork-listing, install, edit, delete, co-authors
+│   ├── hook                 #   submit, list, show, fork, install, edit, delete, co-authors
+│   ├── prompt               #   submit, list, show, fork, edit, render, delete, co-authors
+│   ├── sandbox              #   submit, list, show, fork, edit, delete, co-authors
 │   ├── models               #   inspect registry-backed harness model data
 │   ├── version              #   component version commands
 │   ├── recommend            #   components recommended from your own sessions
 │   ├── bulk                 #   mixed component submission from one JSON file
 │   └── a2a                  #   submit, list, review, remove remote A2A agents
-├── agent                    # create, bulk-create, list, my, show, install, archive,
+├── agent                    # create, bulk-create, list, my, show, fork, install, archive,
 │                            # unarchive, delete, init, add, build, publish, release,
 │                            # versions, transfer-owner, co-authors
 │   └── pull                 #   install agent into harness (primary workflow)

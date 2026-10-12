@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
@@ -82,6 +83,8 @@ if [ -f "$ENV_FILE" ]; then
     read -r confirm || confirm=""
     if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
         info "Kept the existing configuration and bind address $previous_bind"
+        warn "Package files were staged, but running services were NOT upgraded or migrated."
+        warn "Follow https://github.com/Observal/Observal/blob/main/docs/skill-folder-rollout.md before starting the new stack."
         exit 0
     fi
 fi

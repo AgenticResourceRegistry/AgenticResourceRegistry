@@ -22,6 +22,7 @@ from services.config_generator import validate_mcp_command
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
 from services.inbox import sources as inbox
+from services.registry_fork import provenance_for
 from services.registry_telemetry import emit_registry_event
 from services.teamspace import (
     is_admin,
@@ -205,7 +206,12 @@ async def save_draft(
 
     await commit_or_name_conflict(db, "agent")
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
-    return _agent_to_response(agent, created_by_email=current_user.email, created_by_username=current_user.username)
+    return _agent_to_response(
+        agent,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
+    )
 
 
 @router.put("/{agent_id}/draft", response_model=AgentResponse)
@@ -384,7 +390,12 @@ async def update_draft(
 
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
-    return _agent_to_response(agent, created_by_email=current_user.email, created_by_username=current_user.username)
+    return _agent_to_response(
+        agent,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
+    )
 
 
 @router.post("/{agent_id}/start-edit")
@@ -512,7 +523,11 @@ async def submit_draft(
     )
 
     return _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
     )
 
 

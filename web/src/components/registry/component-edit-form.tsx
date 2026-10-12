@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { ArrowRight, Loader2, RotateCcw, Construction } from "lucide-react";
+import { toast } from "sonner";
+import { ArrowRight, Loader2, RotateCcw, Construction, Upload, FolderUp, File, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -80,6 +82,12 @@ interface HookFieldState {
 	script_filename: string;
 }
 
+interface SkillExtraFile {
+	path: string;
+	content: string;
+	executable?: boolean;
+}
+
 interface SkillFieldState {
 	task_type: string;
 	skill_path: string;
@@ -89,6 +97,7 @@ interface SkillFieldState {
 	skill_md_content: string;
 	script_content: string;
 	script_filename: string;
+	extra_files: SkillExtraFile[];
 }
 
 interface PromptFieldState {
@@ -789,10 +798,16 @@ function SkillFields({
 				</div>
 			</div>
 
+			{state.extra_files.length > 0 && (
+				<p role="status" className="text-sm text-muted-foreground">
+					This release contains folder files. This editor cannot save changes to them; use a version-bound folder draft instead.
+				</p>
+			)}
 			<Tabs defaultValue={defaultTab} className="w-full">
-				<TabsList>
-					<TabsTrigger value="git">Git source</TabsTrigger>
-					<TabsTrigger value="paste">Pasted files</TabsTrigger>
+				<TabsList className="grid w-full grid-cols-3">
+					<TabsTrigger value="git">Git</TabsTrigger>
+					<TabsTrigger value="paste">Paste</TabsTrigger>
+					<TabsTrigger value="upload" disabled title="Folder uploads require a version-bound draft editor">Upload (unavailable)</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="git" className="space-y-4 pt-4">
@@ -879,6 +894,7 @@ function SkillFields({
 						</p>
 					</div>
 				</TabsContent>
+
 			</Tabs>
 		</div>
 	);
@@ -1038,6 +1054,7 @@ function EditFormInner({
 		skill_md_content: (item.skill_md_content as string) ?? "",
 		script_content: (item.script_content as string) ?? "",
 		script_filename: (item.script_filename as string) ?? "",
+		extra_files: (item.extra_files as SkillExtraFile[]) ?? [],
 	};
 	const initialPrompt: PromptFieldState = {
 		category: (item.category as string) ?? "",
@@ -1154,6 +1171,10 @@ function EditFormInner({
 	// ── Handlers ─────────────────────────────────────────────────
 
 	async function handleRelease(selectedVersion: string) {
+		if (singularType === "skill" && skillState.extra_files.length > 0) {
+			toast.error("Folder files require the version-bound editor; this release form cannot save them. Use CLI replace-files.");
+			return;
+		}
 		setPublishing(true);
 		try {
 			const body = buildBody(selectedVersion);

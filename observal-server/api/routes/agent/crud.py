@@ -40,6 +40,7 @@ from schemas.agent import (
 from services.cache import invalidate_namespace
 from services.config_generator import validate_mcp_command
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.registry_fork import agent_fork_counts, provenance_for, provenance_for_many
 from services.registry_namespace import identity_exists, slugify
 from services.registry_telemetry import emit_registry_event
 from services.teamspace import resolve_publish_target
@@ -329,6 +330,9 @@ async def list_agents(
         )
         rating_map = {r[0]: round(float(r[1]), 2) for r in rows.all()}
 
+    fork_counts = await agent_fork_counts(db, agent_ids)
+    provenance = await provenance_for_many(agents, current_user, db)
+
     # Batch-fetch creator emails and usernames
     user_ids = {a.created_by for a in agents}
     email_map: dict[uuid.UUID, str] = {}
@@ -365,6 +369,8 @@ async def list_agents(
             created_at=a.created_at,
             updated_at=a.updated_at,
             is_recommended=a.is_recommended,
+            forked_from=provenance.get(a.id),
+            fork_count=fork_counts.get(a.id, 0),
         )
         for a in agents
     ]
@@ -396,6 +402,8 @@ async def my_agents(
         )
         rating_map = {r[0]: round(float(r[1]), 2) for r in rows.all()}
 
+    fork_counts = await agent_fork_counts(db, agent_ids)
+    provenance = await provenance_for_many(agents, current_user, db)
     return [
         AgentSummary(
             id=a.id,
@@ -422,6 +430,8 @@ async def my_agents(
             created_at=a.created_at,
             updated_at=a.updated_at,
             is_recommended=a.is_recommended,
+            forked_from=provenance.get(a.id),
+            fork_count=fork_counts.get(a.id, 0),
         )
         for a in agents
     ]
@@ -589,6 +599,8 @@ async def get_agent(
         user_permission=perm,
         status_map=status_map,
         identity_map=identity_map,
+        forked_from=await provenance_for(agent, current_user, db),
+        fork_count=(await agent_fork_counts(db, [agent.id])).get(agent.id, 0),
     )
 
 

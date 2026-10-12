@@ -23,6 +23,7 @@ import {
   Clock,
   Sparkles,
   AlertTriangle,
+  GitFork,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
@@ -46,6 +47,8 @@ import {
   useArchiveAgent,
   useDeleteAgent,
   useUnarchiveAgent,
+  useForkAgent,
+  useAgentForks,
 } from "@/hooks/use-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -53,6 +56,7 @@ import type {
   AgentComponentLink,
   AgentComponentReference,
   AgentVersionSummary,
+  ForkProvenance,
   ComponentPinFreshness,
   FeedbackItem,
   InsightReportListItem,
@@ -61,6 +65,10 @@ import type {
 import { PullCommand } from "@/components/registry/pull-command";
 import { RegistryName } from "@/components/registry/registry-name";
 import { ShareLinkButton } from "@/components/registry/share-link-button";
+import { ForkDialog } from "@/components/registry/fork-dialog";
+import { ForkedFromChip } from "@/components/registry/fork-provenance";
+import { ForkDiffPanel } from "@/components/registry/fork-diff-panel";
+import { ForksList } from "@/components/registry/forks-list";
 import { canonicalRouteParts, registryIdentity, registryItemPath, type QualifiedIdentity } from "@/lib/registry-name";
 import { VersionDropdown } from "@/components/registry/version-dropdown";
 import { StatusBadge } from "@/components/registry/status-badge";
@@ -205,6 +213,8 @@ interface AgentDetail {
   required_capabilities?: string[];
   inferred_supported_harnesses?: string[];
   is_recommended?: boolean;
+  forked_from?: ForkProvenance | null;
+  fork_count?: number;
   [key: string]: unknown;
 }
 
@@ -688,6 +698,11 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   const latestApprovedVersion = useMemo(() => getLatestApprovedVersion(versions), [versions]);
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
+  const [forkOpen, setForkOpen] = useState(false);
+  const [forkPage, setForkPage] = useState(1);
+  const [activeTab, setActiveTab] = useState("overview");
+  const forkAgent = useForkAgent();
+  const { data: publicForks, isLoading: forksLoading, error: forksError } = useAgentForks(id, forkPage, activeTab === "forks");
   const { data: versionDetail, isLoading: isVersionDetailLoading } = useAgentVersionDetail(id, selectedVersion);
   const effectiveVersionForDetail = selectedVersion ?? latestApprovedVersion ?? (agent as unknown as AgentDetail | undefined)?.version ?? null;
   const { data: effectiveVersionDetail } = useAgentVersionDetail(id, effectiveVersionForDetail);
@@ -846,7 +861,12 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
           { label: isLoading ? "..." : agentName },
         ]}
         actionButtonsRight={
-          a ? <ShareLinkButton path={canonicalAgentPath ?? `/agents/${id}`} /> : undefined
+          a ? <div className="flex items-center gap-2">
+            {isAuthenticated && a.status === "approved" && latestApprovedVersion && (
+              <Button size="sm" variant="outline" onClick={() => setForkOpen(true)}><GitFork className="h-4 w-4" /> Fork</Button>
+            )}
+            <ShareLinkButton path={canonicalAgentPath ?? `/agents/${id}`} />
+          </div> : undefined
         }
       />
 
@@ -876,6 +896,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                   />
                   {a.status && <StatusBadge status={a.status} />}
                   {a.is_recommended && <RecommendedBadge />}
+                  {!!a.fork_count && a.fork_count > 0 && <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><GitFork className="h-3.5 w-3.5" />{a.fork_count} public forks</span>}
                   {showVisibilityControl && (
                     <PickerSelect
                       value={currentVisibility}
@@ -912,6 +933,10 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                   ) : null}
                 </div>
 
+                <ForkedFromChip provenance={a.forked_from} />
+                {a.forked_from?.available && (selectedVersion ?? a.version) && (
+                  <ForkDiffPanel type="agents" id={id} version={String(selectedVersion ?? a.version)} />
+                )}
                 {a.owner && (
                   <p className="text-sm text-muted-foreground">{a.owner}</p>
                 )}
@@ -963,7 +988,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
               )}
 
               {/* Tabs */}
-              <Tabs defaultValue="overview">
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="overview">Overview</TabsTrigger>
                   <TabsTrigger value="components">
@@ -982,6 +1007,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                       </span>
                     )}
                   </TabsTrigger>
+                  <TabsTrigger value="forks">Forks{a.fork_count ? ` (${a.fork_count})` : ""}</TabsTrigger>
                   {canEdit && <TabsTrigger value="edit">Edit</TabsTrigger>}
                   {canEdit && <TabsTrigger value="insights">Insights</TabsTrigger>}
 
@@ -1132,6 +1158,9 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                   )}
                 </TabsContent>
 
+                <TabsContent value="forks" className="mt-6">
+                  <ForksList type="agents" result={publicForks} page={forkPage} onPage={setForkPage} isLoading={forksLoading} error={forksError} />
+                </TabsContent>
                 {canEdit && (
                   <TabsContent value="edit" className="mt-6">
                     {isVersionContentLoading ? (
@@ -1302,6 +1331,24 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
         )}
       </div>
 
+      {forkOpen && a && (
+        <ForkDialog
+          open={forkOpen}
+          onOpenChange={setForkOpen}
+          kind="agent"
+          sourceName={a.name}
+          sourceIsPrivate={!!a.is_private}
+          sourceTeamId={a.team_id}
+          versions={versions}
+          initialVersion={selectedVersionSummary?.status === "approved" ? selectedVersionSummary.version : latestApprovedVersion}
+          teams={teams}
+          username={whoami?.username}
+          onFork={async (body) => {
+            const fork = await forkAgent.mutateAsync({ id, body });
+            await navigate({ to: "/agents/builder", search: { draft: fork.id } });
+          }}
+        />
+      )}
       <AlertDialog open={confirmPublicOpen} onOpenChange={setConfirmPublicOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # Copy to terraform.tfvars and fill in.
@@ -36,6 +37,12 @@ image_tag = "latest"
 # ── Access ────────────────────────────────────────────────────────────
 # Restrict ALB ingress for private installs (e.g. office VPN, corporate egress).
 # alb_ingress_cidrs = ["203.0.113.0/24"]
+
+# Private install using MCP repository sync: an API Gateway endpoint that forwards
+# only GitHub and/or GitLab webhook deliveries to the ALB through a VPC link.
+# enable_webhook_ingress = true
+# webhook_providers      = ["github", "gitlab"]
+# webhook_domain_name    = "hooks.observal.example.com"   # optional; defaults to the execute-api URL
 
 # ── App config ────────────────────────────────────────────────────────
 log_retention_days  = 30

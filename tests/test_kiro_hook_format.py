@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro hook-format selection.
@@ -157,7 +158,9 @@ class TestSurfaceDetection:
 
 
 class TestDetectHooks:
-    def test_standalone_file_counts_as_installed(self, tmp_path: Path) -> None:
+    def test_standalone_file_counts_as_installed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A CLI 2.x-only machine cannot read this file; explicitly model IDE 1.x.
+        monkeypatch.setenv("OBSERVAL_KIRO_IDE", "1")
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
         (hooks_dir / KIRO_V1_HOOK_FILENAME).write_text(json.dumps(build_kiro_hooks_file()))

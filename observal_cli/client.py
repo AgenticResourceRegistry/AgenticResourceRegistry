@@ -561,6 +561,36 @@ def get_text(
     return response.text
 
 
+def get_bytes_with_headers(
+    path: str,
+    params: _QueryParams | None = None,
+    *,
+    operation: str | None = None,
+    resource: str | None = None,
+) -> tuple[bytes, dict[str, str]]:
+    """Read an authenticated file response without assuming it is JSON.
+
+    Used by skill-folder previews: UTF-8 files are JSON, binary files are raw
+    octet-stream attachments. The ordinary ``get`` API intentionally rejects
+    non-JSON responses.
+    """
+    operation, resource = _error_context(
+        operation,
+        resource,
+        default_operation=f"Fetch {path}",
+        default_resource=path,
+    )
+    response = _request(
+        "get",
+        path,
+        operation=operation,
+        resource=resource,
+        params=params,
+        auth_required=False,
+    )
+    return response.content, {key.lower(): value for key, value in response.headers.items()}
+
+
 def get_with_headers(
     path: str,
     params: _QueryParams | None = None,
