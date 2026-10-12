@@ -24,9 +24,9 @@
 
 **Observal is the control plane and system of record for internal coding agent resources**
   ---
-  
+
   _Set up once, and let your coding agent use Observal through observal-cli._
-  
+
   ---
 
 <p>
@@ -187,15 +187,15 @@ Real usage data flows back as reports: what's helping, what's getting in the way
 
 ## Coding agent resource registry
 
-**Browse, search, and install resources with harness compatibility badges:**
+**Browse and search by teamspace, publisher, category, or harness; each card shows its supported harnesses and pull count:**
 
 ![Agent registry with grid view](docs/img/registry.png)
 
-**Build agent files visually with live config preview for every harness:**
+**Build agent files in four steps (identity, behavior, components, review) with a live summary and draft readiness checks:**
 
 ![Agent Builder with preview panel](docs/img/builder.png)
 
-**Supported resources: Agent files, MCP clients, Skills, Hooks, Prompts, Sandboxes:**
+**Component library with tabs for MCP servers, skills, hooks, prompts, and sandboxes:**
 
 ![Component registry showing MCP servers](docs/img/component_registry.png)
 
@@ -291,9 +291,9 @@ Authors submit agent and component versions for review. Participants can inspect
 
 Audit logs, SAML SSO, SCIM provisioning, and the executive dashboard are included in the Apache-2.0 distribution.
 
-**Audit log with parameterized search:**
+**Audit log with filter syntax (`actor:`, `action:`, `outcome:`, `sensitivity:`) and CSV export:**
 
-![Audit log with PHI sensitivity badges and chain hashes](docs/img/audit_logging.png)
+![Audit log with filter syntax and sensitivity levels](docs/img/audit_logging.png)
 
 ---
 
