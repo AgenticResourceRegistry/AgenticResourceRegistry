@@ -763,6 +763,7 @@ export default function ComponentDetailPage({
                       listingId={id}
                       type={type}
                       currentVersion={effectiveVersion ?? "1.0.0"}
+                      skillVersionId={singularType === "skill" ? versions.find((version) => version.version === effectiveVersion && ["draft", "rejected", "changes_requested"].includes(version.status))?.id : undefined}
                       item={effectiveItem ?? item}
                       onSuccess={() => refetch()}
                     />}

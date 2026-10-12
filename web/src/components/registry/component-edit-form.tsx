@@ -73,6 +73,7 @@ interface ComponentEditFormProps {
 	listingId: string;
 	type: RegistryType;
 	currentVersion: string;
+	skillVersionId?: string;
 	item: RegistryItem;
 	onSuccess?: () => void;
 }
@@ -1039,6 +1040,7 @@ function EditFormInner({
 	type,
 	singularType,
 	currentVersion,
+	skillVersionId,
 	item,
 	onSuccess,
 }: {
@@ -1046,6 +1048,7 @@ function EditFormInner({
 	type: RegistryType;
 	singularType: string;
 	currentVersion: string;
+	skillVersionId?: string;
 	item: RegistryItem;
 	onSuccess?: () => void;
 }) {
@@ -1216,10 +1219,15 @@ function EditFormInner({
 	// ── Handlers ─────────────────────────────────────────────────
 
 	async function handleRevision() {
+		if (singularType === "skill" && skillState.extra_files.length > 0) {
+			toast.error("Folder files require the version-bound editor; this form cannot submit them.");
+			return;
+		}
 		setPublishing(true);
 		try {
 			await reviewRevision.mutateAsync({
 				id: listingId, body: revisionBody(buildBody(currentVersion)), message: changelog.trim() || undefined,
+				versionId: skillVersionId,
 			});
 			initialRef.current = {
 				description, changelog: "", hook: hookState, skill: skillState, prompt: promptState,
@@ -1444,6 +1452,7 @@ export function ComponentEditForm({
 	listingId,
 	type,
 	currentVersion,
+	skillVersionId,
 	item,
 	onSuccess,
 }: ComponentEditFormProps) {
@@ -1480,6 +1489,7 @@ export function ComponentEditForm({
 			type={type}
 			singularType={singularType}
 			currentVersion={currentVersion}
+			skillVersionId={skillVersionId}
 			item={item}
 			onSuccess={onSuccess}
 		/>
