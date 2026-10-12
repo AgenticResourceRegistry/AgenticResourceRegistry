@@ -762,9 +762,10 @@ export default function ComponentDetailPage({
                     ) : <ComponentEditForm
                       listingId={id}
                       type={type}
-                      currentVersion={effectiveVersion ?? "1.0.0"}
-                      skillVersionId={singularType === "skill" ? versions.find((version) => version.version === effectiveVersion && ["draft", "rejected", "changes_requested"].includes(version.status))?.id : undefined}
-                      item={effectiveItem ?? item}
+                      currentVersion={isEditableDraft || item.status === "changes_requested" || item.status === "pending"
+                        ? String(item.version) : (effectiveVersion ?? "1.0.0")}
+                      skillVersionId={singularType === "skill" ? versions.find((version) => version.version === item.version && ["draft", "rejected", "changes_requested"].includes(version.status))?.id : undefined}
+                      item={isEditableDraft || item.status === "changes_requested" || item.status === "pending" ? item : (effectiveItem ?? item)}
                       onSuccess={() => refetch()}
                     />}
                   </div>
