@@ -695,10 +695,28 @@ class TestSubmitMcp:
         assert db.flush.await_count == 3
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [ListingStatus.pending, ListingStatus.rejected])
+    async def test_submit_does_not_delete_an_existing_reviewed_mcp(self, monkeypatch, status):
+        db = _db()
+        existing = _listing(status=status, submitted_by=USER_ID)
+        db.execute.return_value = _result(existing)
+        db.scalar.return_value = uuid.uuid4()  # An old live or closed review still refers to this listing.
+        monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
+
+        with pytest.raises(HTTPException) as exc:
+            await mcp.submit_mcp(_submit_request(), Mock(), db, _user())
+
+        _http_error(exc, 409, "MCP server already has a review; edit and resubmit its draft instead")
+        db.delete.assert_not_awaited()
+        db.add.assert_not_called()
+        db.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("status", "submitted_by"),
         [
             (ListingStatus.approved, USER_ID),
+            (ListingStatus.archived, USER_ID),
             (ListingStatus.pending, OTHER_USER_ID),
         ],
     )

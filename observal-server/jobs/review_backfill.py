@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Idempotent pending-version backfill, run after migrations before API traffic.
 
-Batches commit atomically; retrying skips versions with an existing review.
+Each version is isolated; committed batches skip reviews that already exist.
 """
 
 from loguru import logger as optic
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from database import async_session
 from models.agent import Agent, AgentStatus, AgentVersion
@@ -36,36 +37,51 @@ async def backfill_pending(*, batch_size: int = 100) -> int:
                 )
                 if last_id:
                     query = query.where(version_model.id > last_id)
+                # Serialize check-and-insert across API replicas. A row lock on a
+                # missing review cannot prevent a competing INSERT.
+                if db.get_bind().dialect.name == "postgresql":
+                    await db.execute(text("SELECT pg_advisory_xact_lock(1813001)"))
                 versions = (await db.execute(query)).scalars().all()
                 if not versions:
                     break
                 for version in versions:
-                    subject_id = version.agent_id if kind == "agent" else version.listing_id
-                    subject = await db.get(listing_model, subject_id)
-                    if not subject:
-                        continue
-                    from models.review import Review
+                    try:
+                        async with db.begin_nested():
+                            subject_id = version.agent_id if kind == "agent" else version.listing_id
+                            subject = await db.get(listing_model, subject_id)
+                            if not subject:
+                                continue
+                            from models.review import Review
 
-                    existing = await db.scalar(
-                        select(Review.id).where(Review.subject_type == kind, Review.version_id == version.id)
-                    )
-                    if existing:
-                        continue
-                    actor = version.released_by
-                    message = None
-                    if actor is None or await db.get(User, actor) is None:
-                        original = actor
-                        owner = getattr(subject, "created_by", None) or getattr(subject, "submitted_by", None)
-                        actor = owner if owner and await db.get(User, owner) is not None else None
-                        message = f"Historical review: original submitter {original} no longer exists."
+                            existing = await db.scalar(
+                                select(Review.id).where(Review.subject_type == kind, Review.version_id == version.id)
+                            )
+                            if existing:
+                                continue
+                            actor = version.released_by
+                            message = None
+                            if actor is None or await db.get(User, actor) is None:
+                                original = actor
+                                owner = getattr(subject, "created_by", None) or getattr(subject, "submitted_by", None)
+                                actor = owner if owner and await db.get(User, owner) is not None else None
+                                message = f"Historical review: original submitter {original} no longer exists."
+                                optic.warning(
+                                    "Review backfill: missing submitter for {} version {}; attributed to {}",
+                                    kind,
+                                    version.id,
+                                    actor,
+                                )
+                            await open_or_push(db, kind, subject, version, actor, backfill=True, message=message)
+                        created += 1
+                    except OperationalError:
+                        # A database outage is not a malformed version.
+                        raise
+                    except Exception as exc:
+                        # A malformed historical version must not crash every
+                        # API restart. Leave it pending for diagnosis/retry.
                         optic.warning(
-                            "Review backfill: missing submitter for {} version {}; attributed to {}",
-                            kind,
-                            version.id,
-                            actor,
+                            "Review backfill skipped {} version {} ({})", kind, version.id, type(exc).__name__
                         )
-                    await open_or_push(db, kind, subject, version, actor, backfill=True, message=message)
-                    created += 1
                 last_id = versions[-1].id
                 await db.commit()
     return created
