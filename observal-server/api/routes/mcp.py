@@ -31,6 +31,7 @@ from api.routes.component_versions import create_version_router
 from api.search import keyword_search
 from database import async_session
 from models.mcp import ListingStatus, McpDownload, McpListing, McpValidationResult, McpVersion
+from models.review import Review
 from models.user import User, UserRole
 from schemas.mcp import (
     ClientAnalysis,
@@ -141,17 +142,30 @@ async def submit_mcp(
     existing = (
         (
             await db.execute(
-                select(McpListing).where(
+                select(McpListing)
+                .where(
                     McpListing.namespace == target.namespace,
                     McpListing.slug == target.slug,
                 )
+                .with_for_update()
             )
         )
         .scalars()
         .first()
     )
     if existing:
-        if existing.submitted_by == current_user.id and existing.status != ListingStatus.approved:
+        if existing.submitted_by == current_user.id and existing.status not in (
+            ListingStatus.approved,
+            ListingStatus.archived,
+        ):
+            # Reviews retain a snapshot of the old listing/version. Deleting a
+            # reviewed listing leaves an open review and inbox links pointing
+            # at a missing subject. Keep that history; use its draft route.
+            reviewed = await db.scalar(
+                select(Review.id).where(Review.subject_type == "mcp", Review.subject_id == existing.id)
+            )
+            if reviewed is not None:
+                raise HTTPException(409, "MCP server already has a review; edit and resubmit its draft instead")
             await db.delete(existing)
             await db.flush()
         else:

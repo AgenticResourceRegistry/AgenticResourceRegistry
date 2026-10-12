@@ -333,6 +333,41 @@ async def test_backfill_idempotent_and_does_not_change_legacy_status(db, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_backfill_skips_bad_historical_version_without_losing_the_batch(db, monkeypatch):
+    author, _, _, listing, _, _ = await fixture_review(db)
+    versions = [
+        SkillVersion(
+            listing_id=listing.id,
+            version=f"1.{number}.0",
+            description="pending historical release",
+            released_by=author.id,
+            released_at=datetime.now(UTC),
+            task_type="other",
+            skill_md_content="# Skill\n",
+            status=ListingStatus.pending,
+        )
+        for number in (2, 3)
+    ]
+    db.add_all(versions)
+    await db.commit()
+    bad, good = sorted(versions, key=lambda row: row.id)
+    monkeypatch.setattr(review_backfill, "async_session", async_sessionmaker(db.bind, expire_on_commit=False))
+    original = review_backfill.open_or_push
+
+    async def fail_one(session, kind, subject, version, actor, **kwargs):
+        result = await original(session, kind, subject, version, actor, **kwargs)
+        if version.id == bad.id:
+            raise ValueError("malformed historical version")
+        return result
+
+    monkeypatch.setattr(review_backfill, "open_or_push", fail_one)
+    assert await review_backfill.backfill_pending(batch_size=100) == 1
+    assert await db.scalar(select(Review.id).where(Review.version_id == bad.id)) is None
+    assert await db.scalar(select(Review.id).where(Review.version_id == good.id)) is not None
+    assert bad.status == ListingStatus.pending
+
+
+@pytest.mark.asyncio
 async def test_backfill_preserves_orphaned_versions_with_attribution_note(db, monkeypatch):
     author, _, _, listing, _, existing = await fixture_review(db)
     await db.commit()
