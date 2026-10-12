@@ -6,6 +6,7 @@
 <!-- SPDX-FileCopyrightText: 2026 DoomsCoder <vedantkakade05@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -20,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - add opt-in, local-only harness inventory to `observal scan`
 - Fork approved agents and registry components into independently owned drafts with visibility-safe provenance, public fork lists, CLI and web workflows.
 - Compare fork versions against their approved upstream in the detail and review UI; expose public-only ARD fork links and an `obs:forksOf` search facet.
+- Deprecate the Leaderboard and turn it off by default. While off, the tab, page, and leaderboard API are unavailable; super admins can turn it back on under Settings > Interface.
 
 ### Documentation
 

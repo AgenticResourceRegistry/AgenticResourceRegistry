@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -28,6 +29,7 @@ import {
 	ShieldAlert,
 	ArrowLeftRight,
 	Power,
+	PanelLeft,
 } from "lucide-react";
 import { InsightsSection } from "./settings/insights-section";
 import { UsagePingSection } from "./settings/usage-ping-section";
@@ -39,6 +41,7 @@ import { SETTING_DOCS, SECTION_DOCS } from "@/lib/docs-map";
 import { useAdminSettings, useAdminSettingsSchema, useRestartApi, useRestartStatus, useSystemWarnings } from "@/hooks/use-api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { LEADERBOARD_DEPRECATION_NOTICE } from "@/lib/leaderboard";
 import { useRoleGuard, hasMinRole } from "@/hooks/use-role-guard";
 import type { AdminSetting, AdminSettingDef, AdminSettingSection, SystemWarning } from "@/lib/types";
 import { admin, getUserRole } from "@/lib/api";
@@ -70,6 +73,12 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 const REDACTED_VALUE = "**REDACTED**";
+
+// Settings with their own switch above; keep them out of the generic editors.
+const DEDICATED_TOGGLE_KEYS = new Set([
+	"deployment.public_registry_enabled",
+	"deployment.leaderboard_enabled",
+]);
 
 const ALLOWED_LOGO_TYPES = [
 	"image/png",
@@ -240,6 +249,7 @@ export default function SettingsPage() {
 		samlEnabled,
 		publicRegistryEnabled,
 		experimentalReviewChecks,
+		leaderboardEnabled,
 		brandingLogo,
 		brandingAppName,
 		brandingWordmark,
@@ -255,6 +265,8 @@ export default function SettingsPage() {
 	const [tracePrivacyToggling, setTracePrivacyToggling] = useState(false);
 	const [publicRegistryToggling, setPublicRegistryToggling] = useState(false);
 	const [reviewChecksToggling, setReviewChecksToggling] = useState(false);
+	const [leaderboardToggling, setLeaderboardToggling] = useState(false);
+	const [showLeaderboardConfirm, setShowLeaderboardConfirm] = useState(false);
 	const [registeredAgentsOnly, setRegisteredAgentsOnly] = useState(false);
 	const [registeredAgentsOnlyLoading, setRegisteredAgentsOnlyLoading] =
 		useState(() => hasMinRole(getUserRole(), "super_admin"));
@@ -409,6 +421,24 @@ export default function SettingsPage() {
 			);
 		} finally {
 			setPublicRegistryToggling(false);
+		}
+	}, [queryClient, refetch]);
+
+	const handleLeaderboardToggle = useCallback(async (checked: boolean) => {
+		setLeaderboardToggling(true);
+		try {
+			await admin.updateSetting("deployment.leaderboard_enabled", {
+				value: checked ? "true" : "false",
+			});
+			await queryClient.invalidateQueries({ queryKey: ["config", "public"] });
+			await refetch();
+			toast.success(`Leaderboard turned ${checked ? "on" : "off"}`);
+		} catch (e) {
+			toast.error(
+				e instanceof Error ? e.message : "Failed to update leaderboard visibility",
+			);
+		} finally {
+			setLeaderboardToggling(false);
 		}
 	}, [queryClient, refetch]);
 
@@ -1124,6 +1154,63 @@ export default function SettingsPage() {
 					</div>
 				</section>
 
+				{/* Interface: Leaderboard tab visibility */}
+				<section className="animate-in">
+					<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+						<PanelLeft className="h-3.5 w-3.5" />
+						Interface
+					</h3>
+					<div className="rounded-md border border-border bg-card px-4 py-3">
+						<div className="flex items-center justify-between gap-4">
+							<div className="flex-1">
+								<p className="text-sm font-medium">Show the Leaderboard</p>
+								<p className="text-xs text-muted-foreground mt-0.5">
+									Off by default. When off, the Leaderboard tab, its home page link,
+									the page, and its API are unavailable to everyone, including admins.
+									Ranking data is kept. {LEADERBOARD_DEPRECATION_NOTICE}
+								</p>
+							</div>
+							<Switch
+								checked={leaderboardEnabled}
+								onCheckedChange={(checked) => {
+									if (checked) setShowLeaderboardConfirm(true);
+									else void handleLeaderboardToggle(false);
+								}}
+								disabled={leaderboardToggling}
+								aria-label="Show the Leaderboard"
+							/>
+						</div>
+					</div>
+					<Dialog open={showLeaderboardConfirm} onOpenChange={setShowLeaderboardConfirm}>
+						<DialogContent className="max-w-md">
+							<DialogHeader>
+								<DialogTitle className="flex items-center gap-2 text-sm">
+									<AlertTriangle className="h-4 w-4 text-warning" />
+									Turn on the Leaderboard?
+								</DialogTitle>
+								<DialogDescription className="text-xs">
+									{LEADERBOARD_DEPRECATION_NOTICE} Everyone will see the Leaderboard tab
+									and page until you turn it off again.
+								</DialogDescription>
+							</DialogHeader>
+							<DialogFooter>
+								<Button size="sm" variant="outline" onClick={() => setShowLeaderboardConfirm(false)}>
+									Cancel
+								</Button>
+								<Button
+									size="sm"
+									onClick={() => {
+										setShowLeaderboardConfirm(false);
+										void handleLeaderboardToggle(true);
+									}}
+								>
+									Turn on
+								</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
+				</section>
+
 				{/* Registered Agents Only, super_admin only */}
 				{hasMinRole(getUserRole(), "super_admin") && (
 					<section className="animate-in">
@@ -1402,7 +1489,7 @@ export default function SettingsPage() {
 						{/* Unified sections, each setting stays in its section */}
 						{settingSections.filter((s) => !s.danger).map((section) => {
 								const visibleSettings = section.settings.filter(
-									(setting) => setting.key !== "deployment.public_registry_enabled",
+									(setting) => !DEDICATED_TOGGLE_KEYS.has(setting.key),
 								);
 								if (visibleSettings.length === 0) return null;
 
@@ -1522,7 +1609,7 @@ export default function SettingsPage() {
 										<div className="space-y-4">
 											{settingSections.filter((s) => s.danger).map((section) => {
 												const visibleDangerSettings = section.settings.filter(
-													(setting) => setting.key !== "deployment.public_registry_enabled",
+													(setting) => !DEDICATED_TOGGLE_KEYS.has(setting.key),
 												);
 												if (visibleDangerSettings.length === 0) return null;
 												return (

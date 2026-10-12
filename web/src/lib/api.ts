@@ -1086,6 +1086,7 @@ export type PublicConfig = {
 	github_sso_enabled: boolean;
 	sso_only: boolean;
 	public_registry_enabled: boolean;
+	leaderboard_enabled: boolean;
 	self_registration_enabled: boolean;
 	/** Public rollout hint; server install and review endpoints remain authoritative. */
 	skill_folder_delivery_enabled?: boolean;

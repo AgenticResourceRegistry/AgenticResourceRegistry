@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -148,6 +149,7 @@ async def get_public_config(response: Response, db=Depends(get_db)):
 
     sso_only = await ds.get_bool("deployment.sso_only")
     public_registry_enabled = await ds.get_bool("deployment.public_registry_enabled")
+    leaderboard_enabled = await ds.get_bool("deployment.leaderboard_enabled", False)
     self_registration_enabled = await ds.get_bool("auth.self_registration_enabled")
     skill_folder_delivery_enabled = await ds.get_bool("registry.skill_folder_delivery_enabled", False)
     review_checks_enabled = await ds.get_bool("experimental.review_checks", False)
@@ -164,6 +166,7 @@ async def get_public_config(response: Response, db=Depends(get_db)):
         "github_sso_enabled": is_github_oauth_configured(),
         "sso_only": sso_only,
         "public_registry_enabled": public_registry_enabled,
+        "leaderboard_enabled": leaderboard_enabled,
         "self_registration_enabled": self_registration_enabled,
         "skill_folder_delivery_enabled": skill_folder_delivery_enabled,
         # Experimental flags are only present when on, so nothing hints at the feature while it is off.

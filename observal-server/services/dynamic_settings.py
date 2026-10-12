@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Dynamic settings service: DB-backed runtime configuration with Redis cache.
@@ -327,6 +328,8 @@ DEFAULTS: dict[str, str] = {
     # Deployment
     "deployment.sso_only": "false",
     "deployment.public_registry_enabled": "false",
+    # Interface: the deprecated Leaderboard (tab, page, and API). Off by default.
+    "deployment.leaderboard_enabled": "false",
     "deployment.frontend_url": "http://localhost:3000",
     "deployment.public_url": "",
     "deployment.cors_origins": "http://localhost:3000",
@@ -442,6 +445,10 @@ SETTING_SUBTITLES: dict[str, str] = {
     "deployment.public_registry_enabled": (
         "Allow signed-out visitors to browse and install approved public registry content. "
         "Publishing, private data, telemetry, and administration still require authentication."
+    ),
+    "deployment.leaderboard_enabled": (
+        "Show the deprecated Leaderboard. Off by default: the tab, home page link, page, and leaderboard "
+        "API are unavailable to everyone. Ranking data is kept. The Leaderboard will be removed in a future release."
     ),
 }
 

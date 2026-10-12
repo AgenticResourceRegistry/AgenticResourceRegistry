@@ -167,6 +167,7 @@ export function RegistrySidebar() {
 		brandingLogo,
 		brandingAppName,
 		brandingWordmark,
+		leaderboardEnabled,
 	} = useDeploymentConfig();
 
 	function isActive(href: string) {
@@ -188,7 +189,8 @@ export function RegistrySidebar() {
 	}
 
 	const visibleRegistryNav = registryNav.filter(
-		(item) => !item.requiresAuth || isAuthenticated,
+		(item) => (!item.requiresAuth || isAuthenticated) &&
+			(item.href !== "/leaderboard" || leaderboardEnabled),
 	);
 
 	const visibleReviewNav = isAuthenticated
