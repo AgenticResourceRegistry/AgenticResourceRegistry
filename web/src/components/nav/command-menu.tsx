@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -14,11 +15,13 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { allNavItems } from "./registry-sidebar";
 
 export function CommandMenu() {
   const [open, setOpen] = useState(false);
   const router = useRouter();
+  const { leaderboardEnabled } = useDeploymentConfig();
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -64,15 +67,17 @@ export function CommandMenu() {
         <CommandEmpty>No pages or actions found.</CommandEmpty>
         <CommandGroup heading="Navigate">
           {allNavItems.map((group) =>
-            group.items.map((item) => (
-              <CommandItem
-                key={item.href}
-                onSelect={() => onSelect(item.href)}
-              >
-                <item.icon className="mr-2 h-4 w-4" />
-                {item.title}
-              </CommandItem>
-            )),
+            group.items
+              .filter((item) => item.href !== "/leaderboard" || leaderboardEnabled)
+              .map((item) => (
+                <CommandItem
+                  key={item.href}
+                  onSelect={() => onSelect(item.href)}
+                >
+                  <item.icon className="mr-2 h-4 w-4" />
+                  {item.title}
+                </CommandItem>
+              )),
           )}
         </CommandGroup>
         <CommandSeparator />

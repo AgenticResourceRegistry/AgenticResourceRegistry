@@ -4,6 +4,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import uuid  # noqa: TC003
 from datetime import UTC, timedelta
 from datetime import datetime as dt
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger as optic
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
@@ -50,6 +51,16 @@ from services.clickhouse import _query
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
 _RANGE_MAP = {"24h": 1, "7d": 7, "30d": 30, "90d": 90}
+
+LEADERBOARD_SETTING = "deployment.leaderboard_enabled"
+
+
+async def require_leaderboard_enabled() -> None:
+    """Hide the deprecated leaderboard endpoints unless a super admin turned the Leaderboard on."""
+    import services.dynamic_settings as ds
+
+    if not await ds.get_bool(LEADERBOARD_SETTING, False):
+        raise HTTPException(status_code=404, detail="Leaderboard is disabled")
 
 
 def _range_days(range_: str | None) -> int:
@@ -204,7 +215,11 @@ async def top_agents(
     ]
 
 
-@router.get("/overview/leaderboard", response_model=list[LeaderboardItem])
+@router.get(
+    "/overview/leaderboard",
+    response_model=list[LeaderboardItem],
+    dependencies=[Depends(require_leaderboard_enabled)],
+)
 async def agent_leaderboard(
     window: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
     limit: int = Query(20, le=50),
@@ -338,7 +353,11 @@ async def agent_leaderboard(
     ] + extra_items
 
 
-@router.get("/overview/component-leaderboard", response_model=list[ComponentLeaderboardItem])
+@router.get(
+    "/overview/component-leaderboard",
+    response_model=list[ComponentLeaderboardItem],
+    dependencies=[Depends(require_leaderboard_enabled)],
+)
 async def component_leaderboard(
     window: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
     limit: int = Query(20, le=50),

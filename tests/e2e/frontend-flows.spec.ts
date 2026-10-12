@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2025 Observal Contributors
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
@@ -138,5 +139,46 @@ test.describe("Frontend Flows", () => {
     await page.waitForLoadState("networkidle");
     await expect(hooksTab).toHaveClass(/border-foreground/);
     await expect(skillsTab).not.toHaveClass(/border-foreground/);
+  });
+});
+
+test.describe("Leaderboard visibility", () => {
+  // Serve a fixed copy of the real public config so the test does not depend on,
+  // or change, the server's stored setting. The app refetches this config often,
+  // so answer from memory instead of forwarding each request.
+  async function setLeaderboard(page: import("@playwright/test").Page, enabled: boolean) {
+    const config = await (await fetch(`${API_BASE}/api/v1/config/public`)).json();
+    await page.route("**/api/v1/config/public", (route) =>
+      route.fulfill({ json: { ...config, leaderboard_enabled: enabled } }),
+    );
+  }
+
+  test("is hidden and redirects home while off", async ({ page }) => {
+    await setLeaderboard(page, false);
+    await loginToWebUI(page);
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: "Agents", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('a[href="/leaderboard"]')).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Navigate" }).click();
+    await expect(page.getByRole("option", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "Leaderboard" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await page.goto("/leaderboard");
+    await expect(page).toHaveURL(/\/$/, { timeout: 10_000 });
+  });
+
+  test("shows the tab and a deprecation notice while on", async ({ page }) => {
+    await setLeaderboard(page, true);
+    await page.route("**/api/v1/overview/*leaderboard*", (route) => route.fulfill({ json: [] }));
+    await loginToWebUI(page);
+    await page.goto("/");
+
+    const tab = page.getByRole("link", { name: "Leaderboard", exact: true });
+    await expect(tab).toBeVisible({ timeout: 10_000 });
+    await tab.click();
+    await expect(page).toHaveURL(/\/leaderboard$/);
+    await expect(page.getByRole("status").filter({ hasText: "The Leaderboard is deprecated" })).toBeVisible();
   });
 });

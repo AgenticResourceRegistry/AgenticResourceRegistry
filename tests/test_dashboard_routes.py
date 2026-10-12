@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -767,6 +768,8 @@ async def test_admin_dashboard_routes_reject_missing_credentials_and_non_admins(
 @pytest.mark.asyncio
 async def test_public_token_route_and_dashboard_query_validation_do_not_touch_database():
     app, db = await _dashboard_app()
+    # Validate leaderboard query params with the Leaderboard enabled; while off the routes return 404.
+    app.dependency_overrides[dashboard.require_leaderboard_enabled] = lambda: None
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         token_response = await client.get("/api/v1/dashboard/tokens", params={"range": "unexpected"})

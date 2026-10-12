@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useRouter } from "@tanstack/react-router";
@@ -93,7 +94,7 @@ export default function RegistryHome() {
   const router = useRouter();
   const { isAuthenticated } = useOptionalAuth();
   const { data: whoami } = useWhoami(isAuthenticated);
-  const { brandingAppName } = useDeploymentConfig();
+  const { brandingAppName, leaderboardEnabled } = useDeploymentConfig();
   const { data: sessions, isLoading: sessionsLoading } = useSessions2({
     days: 7,
     limit: 8,
@@ -341,12 +342,14 @@ export default function RegistryHome() {
                 : "Approved agents available to install now."
             }
             action={
-              <Link
-                to="/leaderboard"
-                className="text-2xs font-medium text-muted-foreground hover:text-foreground"
-              >
-                Leaderboard →
-              </Link>
+              leaderboardEnabled ? (
+                <Link
+                  to="/leaderboard"
+                  className="text-2xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Leaderboard →
+                </Link>
+              ) : undefined
             }
             wide
           >
