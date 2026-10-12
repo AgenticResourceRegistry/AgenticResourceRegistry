@@ -248,6 +248,13 @@ async def upsert_setting(
         _validate_branding_logo(value)
     elif key == "branding.app_name":
         _validate_branding_app_name(value)
+    elif key.startswith("cost."):
+        from services.cost.pricing import validate_setting
+
+        try:
+            value = validate_setting(key, value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     elif key == "usage_ping.company_name" and len(value) > 160:
         raise HTTPException(status_code=422, detail="Company name cannot exceed 160 characters")
     elif key == "usage_ping.frequency":
@@ -286,6 +293,10 @@ async def upsert_setting(
     await db.refresh(cfg)
     await ds.invalidate(key)
     await ds.refresh_sync_cache()
+    if key.startswith("cost."):
+        from services.cost.service import invalidate_cache
+
+        await invalidate_cache()
 
     # Auto-clean deprecated AWS/legacy settings when new API key is configured
     if key == "insights.api_key" and value:

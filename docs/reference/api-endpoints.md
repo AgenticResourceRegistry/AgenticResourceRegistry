@@ -201,6 +201,11 @@ Requires `admin` or `super_admin` role.
 | `GET` | `/admin/weights` | Get dimension weights |
 | `PUT` | `/admin/weights` | Set dimension weights |
 | `GET` | `/admin/canaries/{agent_id}/reports` | Canary detection reports |
+| `GET` | `/exec/cost/intelligence` | Cost Intelligence dashboard payload; see [Cost Intelligence](../self-hosting/cost-intelligence.md) |
+| `POST` | `/exec/cost/opportunities/{id}/approve` | Approve a savings opportunity and freeze its baseline |
+| `POST` | `/exec/cost/opportunities/{id}/implemented` | Mark an opportunity shipped on an agent version |
+| `POST` | `/exec/cost/opportunities/{id}/dismiss` | Dismiss an opportunity |
+| `POST` | `/exec/cost/opportunities/{id}/reopen` | Return an opportunity to identified |
 
 ## GraphQL
 

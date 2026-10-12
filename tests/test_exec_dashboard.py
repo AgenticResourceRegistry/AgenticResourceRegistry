@@ -624,54 +624,6 @@ async def test_department_tokens_return_empty_without_departments(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cost_summary_distinguishes_unconfigured_and_configured(monkeypatch):
-    unconfigured_db = make_db(FakeResult(scalar=None))
-    configured_db = make_db(FakeResult(scalar=SimpleNamespace(id=uuid.uuid4())))
-    ch = ch_mock(monkeypatch, [{"month": "2026-04-01"}, {"month": "2026-05-01T00:00:00Z"}])
-
-    unconfigured = await dashboard.get_cost_summary("90d", unconfigured_db, admin_user())
-    configured = await dashboard.get_cost_summary("90d", configured_db, admin_user())
-
-    assert unconfigured.model_dump() == {
-        "monthly_savings": 0.0,
-        "cost_reduction_pct": 0.0,
-        "projected_annual_savings": 0.0,
-        "cost_per_task": 0.0,
-        "monthly_trend": [],
-        "by_category": [],
-        "configured": False,
-    }
-    assert configured.model_dump() == {
-        "monthly_savings": 0.0,
-        "cost_reduction_pct": 0.0,
-        "projected_annual_savings": 0.0,
-        "cost_per_task": 0.0,
-        "monthly_trend": [
-            {"month": "2026-04", "ai_spend": 0.0, "savings": 0.0},
-            {"month": "2026-05", "ai_spend": 0.0, "savings": 0.0},
-        ],
-        "by_category": [],
-        "configured": True,
-    }
-    ch.assert_awaited_once()
-    assert "INTERVAL 12 MONTH" in ch.await_args.args[0]
-
-
-@pytest.mark.asyncio
-async def test_roi_projections_report_cost_telemetry_as_unavailable():
-    result = await dashboard.get_roi_projections(admin_user())
-
-    assert result.model_dump() == {
-        "projections": [],
-        "growth_rate_pct": 0.0,
-        "time_to_breakeven_months": None,
-        "total_invested": 0.0,
-        "total_saved": 0.0,
-        "roi_multiple": 0.0,
-    }
-
-
-@pytest.mark.asyncio
 async def test_strategic_insights_derive_models_departments_platforms_and_power_users(monkeypatch):
     users = [f"user-{index}" for index in range(1, 9)]
     monkeypatch.setattr(
@@ -1266,7 +1218,7 @@ async def make_auth_app(user=None):
 async def test_exec_routes_reject_missing_credentials_and_non_admins(monkeypatch):
     unauthenticated = await make_auth_app()
     async with AsyncClient(transport=ASGITransport(app=unauthenticated), base_url="http://test") as client:
-        response = await client.get("/api/v1/exec/roi-projections")
+        response = await client.get("/api/v1/exec/config")
     assert response.status_code == 401
     assert response.json() == {"detail": "Missing credentials"}
 
@@ -1275,7 +1227,7 @@ async def test_exec_routes_reject_missing_credentials_and_non_admins(monkeypatch
     emit = AsyncMock()
     monkeypatch.setattr("api.deps.emit_security_event", emit)
     async with AsyncClient(transport=ASGITransport(app=forbidden), base_url="http://test") as client:
-        response = await client.get("/api/v1/exec/roi-projections")
+        response = await client.get("/api/v1/exec/config")
     assert response.status_code == 403
     assert response.json() == {"detail": "Insufficient permissions"}
     emit.assert_awaited_once()
@@ -1286,20 +1238,13 @@ async def test_exec_route_serialization_and_query_validation():
     app = await make_auth_app(admin_user())
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/v1/exec/roi-projections")
+        response = await client.get("/api/v1/exec/config")
         top_agents = await client.get("/api/v1/exec/top-agents", params={"limit": 51})
         developers = await client.get("/api/v1/exec/developer-breakdown", params={"limit": 101})
         config = await client.put("/api/v1/exec/config", json={"hourly_dev_cost": "not-a-number"})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "projections": [],
-        "growth_rate_pct": 0.0,
-        "time_to_breakeven_months": None,
-        "total_invested": 0.0,
-        "total_saved": 0.0,
-        "roi_multiple": 0.0,
-    }
+    assert response.json() is None
     assert top_agents.status_code == 422
     assert top_agents.json()["detail"][0]["loc"][-1] == "limit"
     assert developers.status_code == 422

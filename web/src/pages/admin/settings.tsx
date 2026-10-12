@@ -6,6 +6,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
+	CircleDollarSign,
 	Settings,
 	Plus,
 	Pencil,
@@ -89,6 +90,7 @@ const SECTION_ICONS: Record<string, React.ReactNode> = {
 	resource: <Database className="h-3.5 w-3.5" />,
 	data: <Database className="h-3.5 w-3.5" />,
 	observability: <Activity className="h-3.5 w-3.5" />,
+	cost: <CircleDollarSign className="h-3.5 w-3.5" />,
 	misc: <Settings className="h-3.5 w-3.5" />,
 };
 

@@ -14,6 +14,7 @@ from models.alert_history import AlertHistory
 from models.base import Base
 from models.component_bundle import ComponentBundle
 from models.component_source import ComponentSource
+from models.cost_opportunity import CostOpportunity
 from models.discovery_entry import (
     DiscoveryEntry,
     DiscoveryKind,
@@ -61,6 +62,7 @@ __all__ = [
     "ComponentBundle",
     "ComponentDownloadRecord",
     "ComponentSource",
+    "CostOpportunity",
     "DiscoveryEntry",
     "DiscoveryKind",
     "DiscoveryLifecycle",

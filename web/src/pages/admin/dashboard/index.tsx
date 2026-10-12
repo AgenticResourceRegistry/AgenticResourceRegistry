@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/layouts/page-header";
 import { Button } from "@/components/ui/button";
 import { AdoptionTab } from "./components/adoption-tab";
-import { CostTab } from "./components/cost-tab";
+import { CostTab } from "./components/cost/cost-tab";
 import { InvestmentsTab } from "./components/investments-tab";
 import { InsightsTab } from "./components/insights-tab";
 import { DepartmentsTab } from "./components/departments-tab";
@@ -54,9 +54,9 @@ function OnboardingWizard({ onDismiss }: { onDismiss: () => void }) {
             <li className="flex items-start gap-3">
               <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">2</span>
               <div>
-                <p className="text-sm font-medium">Set cost baselines</p>
+                <p className="text-sm font-medium">Check pricing</p>
                 <p className="text-xs text-muted-foreground">
-                  Open the Cost Intelligence tab and enter what tasks cost before AI. This enables savings calculations and ROI projections.
+                  Cost Intelligence prices usage at provider list rates. Add negotiated rates or a credit price in Settings &rarr; Cost.
                 </p>
               </div>
             </li>
@@ -239,6 +239,7 @@ function DashboardContent() {
                 </TabsList>
               </div>
               <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
+                {activeTab !== "cost" && (
                 <div className="flex items-center gap-1 rounded-xl bg-surface-raised p-1" aria-label="Dashboard date range">
                   <Calendar className="ml-2 h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                   {RANGES.map((r) => (
@@ -256,6 +257,7 @@ function DashboardContent() {
                     </button>
                   ))}
                 </div>
+                )}
                 <ExportDropdown activeTab={activeTab} />
                 <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
                   <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />

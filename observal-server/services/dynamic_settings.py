@@ -408,6 +408,12 @@ DEFAULTS: dict[str, str] = {
     # resolve to private addresses (internal A2A agents). Plain http is allowed
     # for these hosts only.
     "discovery.a2a_private_hosts": "",
+    # Cost intelligence. Prices default to provider list prices from the
+    # vendored price book; these settings adjust them for this deployment.
+    "cost.price_overrides": "",
+    "cost.price_multipliers": "",
+    "cost.credit_usd": "",
+    "cost.opportunity_min_monthly_usd": "1",
     # Misc
     "misc.harness_allowlist": "",
     "misc.default_harness": "",
@@ -428,6 +434,18 @@ SENSITIVE_KEYS: set[str] = {
 SETTING_FEATURES: dict[str, str] = {}
 
 SETTING_SUBTITLES: dict[str, str] = {
+    "cost.price_overrides": (
+        "JSON of negotiated or missing model prices in USD per 1M tokens, keyed by model name or ^regex. "
+        'Example: {"claude-opus-4-6": {"input": 4.5, "output": 22.5, "cache_read": 0.45, "cache_write": 5.6}}'
+    ),
+    "cost.price_multipliers": (
+        "JSON of price multipliers keyed by regex on the reported model, applied after list or override prices. "
+        'Example for a regional Bedrock premium: {"^eu\\\\.anthropic\\\\.": 1.1}'
+    ),
+    "cost.credit_usd": (
+        'JSON of USD per provider credit, keyed by harness. Credits stay unpriced until set. Example: {"kiro": 0.04}'
+    ),
+    "cost.opportunity_min_monthly_usd": "Savings opportunities below this monthly amount are not listed.",
     "registry.skill_folder_delivery_enabled": (
         "Enable complete-folder skill review and installation only after upgrading and draining all API/worker processes, "
         "migrating a restored database through the current head, and confirming supported CLI clients. "
@@ -610,6 +628,13 @@ SECTIONS: list[dict[str, Any]] = [
         "description": "Logging and metrics configuration.",
         "icon": "activity",
         "keys": [k for k in DEFAULTS if k.startswith("observability.")],
+    },
+    {
+        "id": "cost",
+        "title": "Cost",
+        "description": "Pricing inputs for Cost Intelligence. Leave empty to use provider list prices.",
+        "icon": "dollar-sign",
+        "keys": [k for k in DEFAULTS if k.startswith("cost.")],
     },
     {
         "id": "misc",

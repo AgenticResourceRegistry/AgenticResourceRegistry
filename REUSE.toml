@@ -378,3 +378,8 @@ SPDX-License-Identifier = "Apache-2.0"
 path = ".github/release-ruleset.json"
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "observal-server/services/cost/data/model_prices.json"
+SPDX-FileCopyrightText = "2023-2026 ClickHouse, Inc. (Langfuse) <https://github.com/langfuse/langfuse>"
+SPDX-License-Identifier = "MIT"

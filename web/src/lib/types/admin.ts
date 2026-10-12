@@ -481,38 +481,163 @@ export interface ExecDeptTokenItem {
 	trend_pct: number;
 }
 
-export interface ExecCostByCategory {
-	category: string;
-	baseline_cost: number;
-	actual_cost: number;
-	saved_pct: number;
+export type CostEvidence = "measured" | "estimated" | "estimated, outcome parity not yet shown";
+
+export interface CostHeadline {
+	spend_mtd_usd: number;
+	spend_prev_mtd_usd: number;
+	spend_change_pct: number | null;
+	savings_identified_monthly_usd: number;
+	savings_identified_pct_of_spend: number | null;
+	savings_actioned_monthly_usd: number;
+	savings_realized_mtd_usd: number;
+	realization_rate_pct: number | null;
 }
 
-export interface ExecCostSummary {
-	monthly_savings: number;
-	cost_reduction_pct: number;
-	projected_annual_savings: number;
-	cost_per_task: number;
-	monthly_trend: { month: string; ai_spend: number; savings: number }[];
-	by_category: ExecCostByCategory[];
-	configured: boolean;
+export interface CostTrendPoint {
+	month: string;
+	partial: boolean;
+	/** "none": no telemetry stored for the month (retention), so values are unknown rather than zero. */
+	data: "full" | "partial" | "none";
+	spend_usd: number | null;
+	savings_found_usd: number | null;
+	savings_actioned_usd: number;
+	sessions: number;
 }
 
-export interface ExecROIProjectionPoint {
-	quarter: string;
-	projected_savings: number;
-	cumulative_savings: number;
-	confidence: number;
+export interface CostTokenTile {
+	cache_savings_mtd_usd: number;
+	cost_per_million_usd: number | null;
+	cost_per_million_without_cache_usd: number | null;
+	cost_per_million_prev_month_usd: number | null;
+	cache_hit_pct: number | null;
+	tokens_mtd: number;
+	token_mix: { input: number; output: number; cache_read: number; cache_write: number };
+	evidence: CostEvidence;
+	note: string;
 }
 
-export interface ExecROIProjectionsResponse {
-	projections: ExecROIProjectionPoint[];
-	growth_rate_pct: number;
-	time_to_breakeven_months: number | null;
-	total_invested: number;
-	total_saved: number;
-	roi_multiple: number;
+export interface CostContextTile {
+	context_spend_mtd_usd: number;
+	context_share_pct: number | null;
+	median_first_turn_tokens: number | null;
+	sessions_measured: number;
+	pruning_opportunity_monthly_usd: number;
+	agents_over_budget: number;
+	evidence: CostEvidence;
+	note: string;
 }
+
+export interface CostInsight {
+	text: string;
+	subject: string;
+	evidence: CostEvidence;
+}
+
+export interface CostDriver {
+	label: string;
+	spend_usd: number;
+	share_pct: number;
+}
+
+export type CostOpportunityStatus = "identified" | "approved" | "implemented" | "dismissed";
+
+export interface CostOpportunity {
+	id: string;
+	detector: "model_routing" | "cache_efficiency" | "context_overhead" | string;
+	title: string;
+	agent: string;
+	agent_id: string | null;
+	baseline_version: string | null;
+	status: CostOpportunityStatus;
+	estimated_monthly_usd: number;
+	still_detected: boolean;
+	evidence: Record<string, unknown> & { formula?: string; validated?: boolean };
+	baseline: { cost_per_session: number | null; sessions: number; window: string; version: string } | null;
+	detected_at: string | null;
+	approved_at: string | null;
+	implemented_at: string | null;
+	implemented_version: string | null;
+	note: string | null;
+}
+
+export interface CostRealizedOpportunity extends CostOpportunity {
+	realized_mtd_usd: number;
+	realized_sessions: number;
+	realized_measurable: boolean;
+	realized_reason: string | null;
+}
+
+export interface CostUnitEconomics {
+	sessions: number;
+	spend_usd: number;
+	cost_per_session_usd: number | null;
+	successful_sessions: number;
+	judged_sessions: number;
+	outcome_coverage_pct: number | null;
+	cost_per_successful_session_usd: number | null;
+	prs_created: number;
+	cost_per_pr_usd: number | null;
+}
+
+export interface CostAnomaly {
+	date: string;
+	agent: string;
+	spend_usd: number;
+	baseline_daily_usd: number;
+	multiple: number | null;
+	top_model: string | null;
+}
+
+export interface CostIntelligence {
+	generated_at: string;
+	period: {
+		label: string;
+		month_start: string;
+		compare_start: string;
+		compare_end: string;
+		detection_window_days: number;
+		earliest_telemetry: string | null;
+		retention_days: number | null;
+	};
+	headline: CostHeadline;
+	trend: CostTrendPoint[];
+	tokens: CostTokenTile;
+	insight: CostInsight | null;
+	context: CostContextTile;
+	drivers: { by_agent: CostDriver[]; by_model: CostDriver[]; by_harness: CostDriver[] };
+	pipeline: {
+		identified_monthly_usd: number;
+		approved_monthly_usd: number;
+		implemented_monthly_usd: number;
+		counts: Record<"identified" | "approved" | "implemented", number>;
+		blocker: string | null;
+	};
+	opportunities: CostOpportunity[];
+	realized: CostRealizedOpportunity[];
+	unit_economics: {
+		current: CostUnitEconomics;
+		previous: CostUnitEconomics;
+		criteria: { agents_with_spend: number; agents_with_criteria: number };
+	};
+	anomalies: CostAnomaly[];
+	coverage: {
+		priced_token_pct: number | null;
+		unpriced_models: Record<string, number>;
+		unpriced_credits: Record<string, number>;
+		price_sources: string[];
+		price_book_ref: string;
+		customized_pricing: boolean;
+		reconciled: boolean;
+		basis: string;
+	};
+}
+
+export type CostOpportunityAction =
+	| { action: "approve" }
+	| { action: "dismiss"; reason?: string }
+	| { action: "reopen" }
+	| { action: "implemented"; version: string };
 
 export interface ExecModelComparison {
 	model: string;

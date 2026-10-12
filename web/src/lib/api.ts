@@ -76,8 +76,8 @@ import type {
 	ExecConfig,
 	ExecDepartmentsResponse,
 	ExecDeptTokenItem,
-	ExecCostSummary,
-	ExecROIProjectionsResponse,
+	CostIntelligence,
+	CostOpportunityAction,
 	ExecStrategicInsightsResponse,
 	ExecDeveloperBreakdown,
 	ExecInactivityAlerts,
@@ -1325,10 +1325,15 @@ export const exec = {
 		get<ExecDeptTokenItem[]>(
 			`/exec/dept-tokens${range ? `?range=${range}` : ""}`,
 		),
-	costSummary: (range?: string) =>
-		get<ExecCostSummary>(`/exec/cost-summary${range ? `?range=${range}` : ""}`),
-	roiProjections: () =>
-		get<ExecROIProjectionsResponse>("/exec/roi-projections"),
+	costIntelligence: (refresh = false) =>
+		get<CostIntelligence>(`/exec/cost/intelligence${refresh ? "?refresh=true" : ""}`),
+	costOpportunityAction: (id: string, body: CostOpportunityAction) => {
+		const { action, ...payload } = body;
+		return post<{ id: string; status: string }>(
+			`/exec/cost/opportunities/${encodeURIComponent(id)}/${action}`,
+			action === "approve" || action === "reopen" ? undefined : payload,
+		);
+	},
 	strategicInsights: () =>
 		get<ExecStrategicInsightsResponse>("/exec/strategic-insights"),
 	developerBreakdown: (limit?: number) =>

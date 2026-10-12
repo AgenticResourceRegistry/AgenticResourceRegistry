@@ -20,6 +20,7 @@ import {
   dashboard,
   exec,
 } from "@/lib/api";
+import type { CostOpportunityAction } from "@/lib/types";
 
 // ── Dashboard ───────────────────────────────────────────────────────
 
@@ -85,16 +86,33 @@ export function useExecDeptTokens(range?: string) {
   return useQuery({ queryKey: ["exec", "dept-tokens", range], queryFn: () => exec.deptTokens(range) });
 }
 
-export function useExecCostSummary(range?: string) {
-  return useQuery({ queryKey: ["exec", "cost-summary", range], queryFn: () => exec.costSummary(range) });
+export function useCostIntelligence() {
+  return useQuery({ queryKey: ["exec", "cost-intelligence"], queryFn: () => exec.costIntelligence() });
+}
+
+export function useRecomputeCostIntelligence() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => exec.costIntelligence(true),
+    onSuccess: (data) => qc.setQueryData(["exec", "cost-intelligence"], data),
+    onError: () => toast.error("Could not recompute cost data. Telemetry may be unavailable."),
+  });
+}
+
+export function useCostOpportunityAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: CostOpportunityAction }) => exec.costOpportunityAction(id, body),
+    onSuccess: async () => {
+      const fresh = await exec.costIntelligence(true);
+      qc.setQueryData(["exec", "cost-intelligence"], fresh);
+    },
+    onError: (error: Error) => toast.error(error.message || "That change could not be saved."),
+  });
 }
 
 export function useExecConfig() {
   return useQuery({ queryKey: ["exec", "config"], queryFn: exec.config });
-}
-
-export function useExecROIProjections() {
-  return useQuery({ queryKey: ["exec", "roi-projections"], queryFn: exec.roiProjections });
 }
 
 export function useExecStrategicInsights() {
