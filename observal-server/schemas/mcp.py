@@ -49,6 +49,17 @@ class ClientAnalysis(BaseModel):
     docker_image: str | None = None
 
 
+def _normalize_transport(v: str | None) -> str | None:
+    if v is None:
+        return None
+    normalized = v.lower()
+    if normalized == "http":
+        normalized = "streamable-http"
+    if normalized not in ("stdio", "sse", "streamable-http"):
+        raise ValueError("Transport must be stdio, sse, or streamable-http (http is also accepted)")
+    return normalized
+
+
 class McpSubmitRequest(BaseModel):
     git_url: str | None = None
     name: str
@@ -67,6 +78,8 @@ class McpSubmitRequest(BaseModel):
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     transport: str | None = None
+
+    _validate_transport = field_validator("transport")(_normalize_transport)
     supported_harnesses: list[str] = []
     environment_variables: list[McpEnvVar] = []
     setup_instructions: str | None = None
@@ -109,6 +122,8 @@ class McpDraftRequest(BaseModel):
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     transport: str | None = None
+
+    _validate_transport = field_validator("transport")(_normalize_transport)
     supported_harnesses: list[str] = []
     environment_variables: list[McpEnvVar] = []
     setup_instructions: str | None = None
@@ -135,6 +150,8 @@ class McpUpdateRequest(BaseModel):
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     transport: str | None = None
+
+    _validate_transport = field_validator("transport")(_normalize_transport)
     supported_harnesses: list[str] | None = None
     environment_variables: list[McpEnvVar] | None = None
     setup_instructions: str | None = None
@@ -185,6 +202,7 @@ class McpListingResponse(BaseModel):
     command: str | None = None
     args: list[str] | None = None
     url: str | None = None
+    transport: str | None = None
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     mcp_validated: bool = False

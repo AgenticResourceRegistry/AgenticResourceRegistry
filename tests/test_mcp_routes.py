@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call
 import pytest
 from fastapi import FastAPI, HTTPException, Response
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import literal
 
 from api.deps import get_current_user, get_db
@@ -23,6 +24,7 @@ from schemas.mcp import (
     McpAnalyzeRequest,
     McpDraftRequest,
     McpInstallRequest,
+    McpListingResponse,
     McpSubmitRequest,
     McpUpdateRequest,
 )
@@ -558,6 +560,7 @@ class TestSubmitMcp:
             "command": "npx",
             "args": ["-y", "@acme/review"],
             "url": None,
+            "transport": "stdio",
             "headers": [{"name": "Authorization", "description": "Bearer token", "required": True}],
             "auto_approve": ["review"],
             "mcp_validated": False,
@@ -1828,3 +1831,73 @@ class TestRouteContracts:
             },
             "message": None,
         }
+
+
+@pytest.mark.parametrize("request_model", [McpSubmitRequest, McpDraftRequest, McpUpdateRequest])
+def test_mcp_transport_alias_and_invalid_values(request_model):
+    payload = {"transport": "HTTP"}
+    if request_model is McpSubmitRequest:
+        payload.update(
+            name="remote",
+            version="0.1.0",
+            description="Remote MCP",
+            category="general",
+            owner="alice",
+            url="https://mcp.example.test/mcp",
+        )
+    elif request_model is McpDraftRequest:
+        payload["name"] = "remote"
+    assert request_model(**payload).transport == "streamable-http"
+    with pytest.raises(ValidationError, match="Transport must be"):
+        request_model(**{**payload, "transport": "ftp"})
+
+
+def test_mcp_show_response_exposes_stored_transport():
+    listing = _listing(transport="streamable-http", url="https://mcp.example.test/mcp")
+    assert McpListingResponse.model_validate(listing).transport == "streamable-http"
+
+
+@pytest.mark.asyncio
+async def test_http_transport_persists_and_generates_remote_config():
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from models.base import Base
+    from services.config_generator import generate_config
+
+    request = McpSubmitRequest(
+        name="Remote MCP",
+        version="1.0.0",
+        description="Remote",
+        category="general",
+        owner="alice",
+        transport="http",
+        url="https://mcp.example.test/mcp",
+    )
+    listing = _listing(
+        name=request.name,
+        transport=request.transport,
+        url=request.url,
+        command=None,
+        args=[],
+        environment_variables=[],
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async_session = async_sessionmaker(engine, expire_on_commit=False)
+        async with async_session() as db:
+            db.add(listing)
+            await db.commit()
+        async with async_session() as db:
+            stored = (await db.execute(select(McpListing).where(McpListing.id == LISTING_ID))).scalar_one()
+            assert McpListingResponse.model_validate(stored).transport == "streamable-http"
+            for harness in ("claude-code", "pi"):
+                config = generate_config(stored, harness)
+                entry = next(iter(config["mcpServers"].values()))
+                assert entry["url"] == request.url
+                assert entry["type"] == "streamable-http"
+                assert "command" not in entry
+    finally:
+        await engine.dispose()
