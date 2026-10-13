@@ -25,7 +25,7 @@ from rich import print as rprint
 
 from observal_cli import config
 from observal_cli.constants import REDIRECT_ALLOWLIST
-from observal_cli.install_detector import InstallInfo, InstallMethod
+from observal_cli.install_detector import SOURCE_SPEC, InstallInfo, InstallMethod, install_spec
 
 GITHUB_REPO = "Observal/Observal"
 
@@ -66,7 +66,7 @@ def execute(
 def _install_via_uv(target_version: str, direction: str, spinner) -> None:
     with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
         result = subprocess.run(
-            ["uv", "tool", "install", f"observal-cli=={target_version}", "--force"],
+            ["uv", "tool", "install", install_spec(target_version), "--force"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -79,7 +79,7 @@ def _install_via_uv(target_version: str, direction: str, spinner) -> None:
 def _install_via_pipx(target_version: str, direction: str, spinner) -> None:
     with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
         result = subprocess.run(
-            ["pipx", "install", f"observal-cli=={target_version}", "--force"],
+            ["pipx", "install", install_spec(target_version), "--force"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -94,7 +94,7 @@ def _install_via_pip(target_version: str, direction: str, spinner) -> None:
     # is installed via uv or pipx, those paths are used instead.
     with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", f"observal-cli=={target_version}", "--quiet"],
+            [sys.executable, "-m", "pip", "install", install_spec(target_version), "--quiet"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -113,6 +113,12 @@ def _install_binary(
     interactive: bool = True,
 ) -> None:
     """Download and install standalone binary with checksum verification."""
+    if install_spec(target_version) == SOURCE_SPEC:
+        rprint(
+            f"[red]v{target_version} is a development build with no standalone binary.[/red]\n"
+            f"Install it from source: uv tool install --force {SOURCE_SPEC}"
+        )
+        raise typer.Exit(1)
     system = platform.system().lower()
     machine = platform.machine().lower()
 

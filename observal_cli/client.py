@@ -97,6 +97,15 @@ def _safe_detail(response: httpx.Response) -> str | None:
     return detail.strip()[:500] if isinstance(detail, str) and detail.strip() else None
 
 
+def _install_command(response: httpx.Response) -> str | None:
+    """The fix command a 426 response carries, if any."""
+    try:
+        command = response.json().get("install_command")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return None
+    return command if isinstance(command, str) and command else None
+
+
 def _browse_remediation(path: str) -> str:
     parts = path.strip("/").split("/")
     type_plural = (
@@ -169,7 +178,11 @@ def _handle_error(
         fail(
             ErrorCategory.VERSION,
             detail or "The CLI and server versions are incompatible.",
-            remediation="Install the CLI version required by the server.",
+            remediation=(
+                f"Run {_install_command(response)}, then retry."
+                if _install_command(response)
+                else "Run observal self upgrade --force --output json, then retry."
+            ),
             **context,
         )
     if code == 429:

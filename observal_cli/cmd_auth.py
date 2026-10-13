@@ -266,19 +266,6 @@ def _ensure_cli_matches_server(server_url: str) -> None:
     if cli_version == server_version:
         return
 
-    if server_version.is_prerelease:
-        fail(
-            ErrorCategory.VERSION,
-            f"CLI version {cli_ver_str} does not match prerelease server {server_ver}.",
-            operation="Authenticate with Observal",
-            resource=f"server {server_url}",
-            remediation=(
-                "Install the CLI from the same source revision as this server "
-                "(uv tool install --force --editable /path/to/checkout). "
-                "Ask the server operator for the matching revision."
-            ),
-        )
-
     from observal_cli.install_detector import upgrade_command
 
     if cli_version > server_version:

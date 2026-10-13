@@ -269,27 +269,25 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
             pass
 
     try:
-        prerelease = Version(server_ver).is_prerelease
+        unpublished = Version(server_ver).is_devrelease
     except InvalidVersion:
-        prerelease = False
-    if prerelease:
-        install_command = None
-        guidance = "Install the CLI from the same source revision as this server; ask the server operator for the matching revision."
+        unpublished = False
+    if unpublished:
+        # Development builds are not on PyPI; they are built from main.
+        install_command = 'uv tool install --force "git+https://github.com/Observal/Observal@main"'
     else:
         install_command = f"observal self {direction} --version {server_ver}"
-        guidance = f"Run: {install_command}"
+    guidance = f"Run: {install_command}"
 
     shown_cli_version = cli_ver_str or "unknown"
-    content = {
-        "detail": f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. {guidance}",
-        "server_version": server_ver,
-        "cli_version": cli_ver_str,
-    }
-    if install_command is not None:
-        content["install_command"] = install_command
     return JSONResponse(
         status_code=426,
-        content=content,
+        content={
+            "detail": f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. {guidance}",
+            "server_version": server_ver,
+            "cli_version": cli_ver_str,
+            "install_command": install_command,
+        },
         headers={
             "X-Observal-Server": server_ver,
             "X-Observal-Required-CLI": server_ver,
