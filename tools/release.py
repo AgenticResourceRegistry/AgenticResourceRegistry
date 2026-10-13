@@ -43,6 +43,7 @@ RELEASE_FILES = (
     ".github/release-notes.md",
 )
 RELEASE_TITLE = re.compile(r"chore\(release\): v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?")
+DEV_TITLE = re.compile(r"chore: start \d+\.\d+ development")
 
 
 class ReleaseError(RuntimeError):
@@ -554,7 +555,45 @@ def ensure_preflight(upstream: str, expected: str | None = None) -> str:
     return branch
 
 
-def cut(series: str, upstream: str) -> None:
+def next_dev_version(series: str) -> str:
+    major, minor, _ = parse_version(f"{series}.0")
+    return f"{major}.{minor + 1}.0-dev.0"
+
+
+def bump_main(series: str, upstream: str, fork: str) -> None:
+    """Open a PR advancing main to the next minor dev version, as AnkiDroid does after branching."""
+    version = next_dev_version(series)
+    branch = f"chore/start-{version}"
+    worktree = ROOT / ".worktrees" / f"main-{version}"
+    if worktree.exists() or run("git", "branch", "--list", branch):
+        raise ReleaseError(f"Main bump branch or worktree already exists: {branch}")
+    repo = "/".join(repository(upstream))
+    owner, _ = repository(fork)
+    title = f"chore: start {version.rsplit('.', 2)[0]} development"
+    run("git", "worktree", "add", "-b", branch, str(worktree), f"{upstream}/main", capture=False)
+    try:
+        for relative in VERSION_FILES:
+            set_version(worktree / relative, version)
+        run("uv", "lock", cwd=worktree, capture=False)
+        run("uv", "lock", cwd=worktree / "observal-server", capture=False)
+        run("git", "add", *VERSION_FILES, "uv.lock", "observal-server/uv.lock", cwd=worktree)
+        run("git", "commit", "-s", "-m", title, "-m", f"Advance main to {version}.", cwd=worktree, capture=False)
+        run("git", "push", fork, branch, cwd=worktree, capture=False)
+        print(
+            run(
+                "gh", "pr", "create", "--repo", repo, "--head", f"{owner}:{branch}", "--base", "main",
+                "--title", title, "--body", f"Advance main to {version} after cutting release/{series}.",
+                cwd=worktree,
+            )
+        )  # fmt: skip
+    except Exception:
+        print(f"Main bump worktree preserved for recovery: {worktree}", file=sys.stderr)
+        raise
+    else:
+        run("git", "worktree", "remove", str(worktree), capture=False)
+
+
+def cut(series: str, upstream: str, fork: str) -> None:
     branch = f"release/{series}"
     release_series(branch)
     ensure_preflight(upstream, "main")
@@ -565,6 +604,7 @@ def cut(series: str, upstream: str) -> None:
     # An empty expected ref prevents a racing cut from updating another line.
     run("git", "push", f"--force-with-lease=refs/heads/{branch}:", upstream, f"HEAD:refs/heads/{branch}", capture=False)
     print(f"Created {branch} at {run('git', 'rev-parse', 'HEAD')}; nothing published")
+    bump_main(series, upstream, fork)
 
 
 def status(upstream: str) -> None:
@@ -586,7 +626,7 @@ def backport(number: int, target: str, upstream: str, fork: str) -> None:
     pull = gh_json(repo, f"pulls/{number}")
     if not isinstance(pull, dict) or not pull.get("merged_at") or pull.get("base", {}).get("ref") != "main":
         raise ReleaseError("Backports require a merged main PR")
-    if RELEASE_TITLE.fullmatch(pull["title"]):
+    if RELEASE_TITLE.fullmatch(pull["title"]) or DEV_TITLE.fullmatch(pull["title"]):
         raise ReleaseError("Do not backport release metadata")
     # GitHub reports original PR hashes even after a rebase merge. Read the
     # equivalent commits from main, ending at its recorded merge commit.
@@ -923,7 +963,7 @@ def main() -> None:
         ) and (args.cut or args.backport or args.status or args.resolve_push or args.validate_target):
             raise ReleaseError("Preparation flags cannot be combined with another action")
         if args.cut:
-            cut(args.cut, args.upstream)
+            cut(args.cut, args.upstream, args.fork)
         elif args.backport:
             if not args.to:
                 raise ReleaseError("--backport requires --to release/X.Y")
