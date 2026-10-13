@@ -2910,3 +2910,38 @@ def test_display_setup_command_redacts_url_credentials():
 
     shown = _display_setup_command(["claude", "mcp", "add", "x", "https://u:p@h.example/mcp?token=abc"])
     assert shown[-1] == "https://h.example/mcp?<redacted>"
+
+
+def test_repull_restores_deleted_project_skill_folder(pull_app_boundary, registry, tmp_path, monkeypatch):
+    import shutil
+
+    from observal_cli import lockfile
+
+    config = tmp_path / "config"
+    monkeypatch.setattr(lockfile, "CONFIG_DIR", config)
+    monkeypatch.setattr(lockfile, "LOCKFILE_PATH", config / "lockfile.json")
+    monkeypatch.setattr(lockfile, "_LOCKFILE_LOCK", config / "lockfile.lock")
+    registry.post.side_effect = lambda _path, _body: _folder_install_result()
+    target = tmp_path / "project"
+    first = _invoke(pull_app_boundary, target, "--output", "json")
+    assert first.exit_code == 0, first.output
+    skill_dir = target / ".claude/skills/demo"
+    assert (skill_dir / "SKILL.md").exists()
+    original_lock = json.loads((config / "lockfile.json").read_text())["registries"]
+    original_receipt = original_lock["https://public.observal.io"]["harnesses"]["claude-code"]["agents"][0][
+        "components"
+    ][0]["folder_receipt"]
+    shutil.rmtree(target / ".claude")
+    assert not skill_dir.exists()
+
+    second = _invoke(pull_app_boundary, target, "--output", "json")
+    assert second.exit_code == 0, second.output
+    assert (skill_dir / "SKILL.md").read_text() == "---\nname: demo\n---\n"
+    updated = json.loads((config / "lockfile.json").read_text())["registries"]
+    assert (
+        updated["https://public.observal.io"]["harnesses"]["claude-code"]["agents"][0]["components"][0][
+            "folder_receipt"
+        ]
+        == original_receipt
+    )
+    assert json.loads((target / "observal.lock").read_text())["agents"]["acme/reviewer"]["version"] == "1.1.0"
