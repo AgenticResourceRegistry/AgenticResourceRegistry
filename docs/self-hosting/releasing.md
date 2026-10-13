@@ -32,7 +32,7 @@ From an up-to-date `main`:
 uv run python tools/release.py --cut 1.14
 ```
 
-This creates `release/1.14` at the exact current canonical `main` commit. The new minor line must be above every existing release tag; maintain older lines in place. It does not publish anything. An existing line cannot be overwritten, including if another maintainer cuts the same line concurrently.
+This creates `release/1.14` at the exact current canonical `main` commit. The new minor line must be above every existing release tag; maintain older lines in place. It does not publish anything. It also opens a PR on `main` (`chore: start 1.15 development`) advancing the version files to the next minor dev version (`1.15.0-dev.0`), so `main` never looks older than the line it feeds. That commit is metadata: it is never backported. An existing line cannot be overwritten, including if another maintainer cuts the same line concurrently.
 
 ```bash
 git fetch upstream
