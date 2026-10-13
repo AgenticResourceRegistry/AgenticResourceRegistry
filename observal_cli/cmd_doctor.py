@@ -18,6 +18,7 @@ push session JSONL incrementally to the server.
 
 import hashlib
 import json
+import shutil
 import sys
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
@@ -256,6 +257,11 @@ def _check_claude_code(issues: list, warnings: list):
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
         rprint("  [dim]No ~/.claude/settings.json found[/dim]")
+        if shutil.which("claude") or (settings_path.parent / "projects").is_dir():
+            warnings.append(
+                "Claude Code session push hooks not installed. "
+                "Run `observal doctor patch --harness claude-code` to inject them."
+            )
         return
 
     data = _load_json(settings_path)
@@ -266,18 +272,11 @@ def _check_claude_code(issues: list, warnings: list):
     if data.get("disableAllHooks"):
         issues.append(f"{settings_path}: `disableAllHooks` is true. Observal hooks will not fire.")
 
-    # Check if session push hooks are installed
-    hooks = data.get("hooks", {})
-    has_session_push = False
-    for event in ("UserPromptSubmit", "Stop"):
-        groups = hooks.get(event, [])
-        for g in groups:
-            for h in g.get("hooks", []):
-                if "observal_cli.hooks.session_push" in h.get("command", ""):
-                    has_session_push = True
-                    break
+    # Require both session delivery events, not merely one installed hook.
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
 
-    if not has_session_push:
+    hooks = data.get("hooks", {})
+    if ClaudeCodeAdapter().detect_hooks(settings_path.parent) != "installed":
         warnings.append(
             "Claude Code session push hooks not installed. "
             "Run `observal doctor patch --harness claude-code` to inject them."
@@ -1263,6 +1262,8 @@ def _patch_claude_code(dry_run: bool) -> bool:
     rprint("[cyan]Claude Code - session push hooks[/cyan]")
 
     settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists() and _load_json(settings_path) is None:
+        raise ValueError(f"Cannot patch invalid Claude Code settings: {settings_path}")
     if not settings_path.exists():
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 

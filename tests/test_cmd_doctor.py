@@ -850,3 +850,75 @@ class TestCleanupFunctions:
 
         rules = read_json(hooks_path)["hooks"]
         assert rules == {"Stop": [{"hooks": [{"type": "command", "command": "foreign"}]}]}
+
+
+def test_login_installs_two_claude_hooks_in_fresh_home_and_doctor_recognizes_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
+
+    monkeypatch.setattr(cmd_auth, "_install_observal_skill", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+
+    cmd_auth._post_login_setup()
+    settings = tmp_path / ".claude/settings.json"
+    payload = json.loads(settings.read_text())
+    assert set(payload["hooks"]) == {"UserPromptSubmit", "Stop"}
+    assert ClaudeCodeAdapter().detect_hooks(settings.parent) == "installed"
+    issues: list[str] = []
+    warnings: list[str] = []
+    _check_claude_code(issues, warnings)
+    assert not issues and not warnings
+    original = settings.read_bytes()
+    cmd_auth._post_login_setup()
+    assert settings.read_bytes() == original
+
+
+def test_login_does_not_instrument_claude_dir_created_only_by_bundled_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth
+
+    def install_skill():
+        (tmp_path / ".claude/skills/observal").mkdir(parents=True)
+
+    monkeypatch.setattr(cmd_auth, "_install_observal_skill", install_skill)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+
+    cmd_auth._post_login_setup()
+    assert not (tmp_path / ".claude/settings.json").exists()
+    issues: list[str] = []
+    warnings: list[str] = []
+    _check_claude_code(issues, warnings)
+    assert not warnings
+
+
+def test_doctor_warns_if_claude_installed_without_settings_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    warnings: list[str] = []
+    _check_claude_code([], warnings)
+    assert any("Claude Code session push hooks not installed" in warning for warning in warnings)
+
+
+def test_login_never_overwrites_invalid_claude_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    settings.write_text("{ invalid")
+    monkeypatch.setattr(cmd_auth, "_install_observal_skill", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+    assert settings.read_text() == "{ invalid"

@@ -618,7 +618,7 @@ def test_empty_skills_and_agents_use_exact_defaults_and_sorted_order(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    ("managed_groups", "expected"), [(0, "missing"), (1, "partial"), (2, "partial"), (3, "installed")]
+    ("managed_groups", "expected"), [(0, "missing"), (1, "partial"), (2, "partial"), (3, "partial")]
 )
 def test_detect_hooks_counts_managed_groups_and_ignores_unmanaged_entries(
     tmp_path: Path,
@@ -636,6 +636,13 @@ def test_detect_hooks_counts_managed_groups_and_ignores_unmanaged_entries(
     )
 
     assert ClaudeCodeAdapter().detect_hooks(tmp_path) == expected
+
+
+def test_detect_hooks_requires_both_session_events(tmp_path: Path):
+    from observal_cli.harness_specs.claude_code_hooks_spec import get_desired_hooks
+
+    _write_json(tmp_path / "settings.json", {"hooks": get_desired_hooks()})
+    assert ClaudeCodeAdapter().detect_hooks(tmp_path) == "installed"
 
 
 def test_detect_hooks_accepts_managed_url_and_fails_soft_on_missing_or_malformed_settings(tmp_path: Path):
