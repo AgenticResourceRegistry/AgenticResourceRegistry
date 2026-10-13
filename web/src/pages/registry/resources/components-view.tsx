@@ -90,7 +90,7 @@ const TYPE_FILTERS: Partial<Record<RegistryType, TypeFilter[]>> = {
 const LIST_COLUMNS = "minmax(260px,1.7fr) 86px minmax(120px,.7fr) 100px";
 
 function usageLabel(item: RegistryItem): string | undefined {
-  return item.download_count != null ? `${compactNumber(item.download_count as number)} Agent Files` : undefined;
+  return item.download_count != null ? `${compactNumber(item.download_count as number)} installs` : undefined;
 }
 
 function ComponentCatalogCard({
@@ -427,7 +427,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
           subtitle="Reusable building blocks matching the current type and filters"
           count={`${compactNumber(visibleItems.length)} ${noun.toLowerCase()}`}
           columns={LIST_COLUMNS}
-          headers={["Component", "Version", "Used by", "Status"]}
+          headers={["Component", "Version", "Installs", "Status"]}
         >
           {visibleItems.map((item) => (
             <ComponentListRow key={item.id} item={item} registryType={activeType} onClick={() => handleRowClick(item.id)} />
