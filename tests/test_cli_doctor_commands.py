@@ -289,7 +289,7 @@ class TestConfigAndSkillDiagnosis:
 
 
 class TestHarnessDiagnosisState:
-    def test_claude_accepts_current_hooks_and_reports_only_legacy_hooks(self, tmp_path: Path):
+    def test_claude_warns_for_missing_stop_and_legacy_hooks(self, tmp_path: Path):
         _write_json(
             tmp_path / ".claude" / "settings.json",
             {
@@ -307,8 +307,10 @@ class TestHarnessDiagnosisState:
 
         assert issues == []
         assert warnings == [
+            "Claude Code session push hooks not installed. "
+            "Run `observal doctor patch --harness claude-code` to inject them.",
             "Legacy Observal hooks detected (old hook scripts). "
-            "Run `observal doctor cleanup --harness claude-code` to remove them."
+            "Run `observal doctor cleanup --harness claude-code` to remove them.",
         ]
 
     def test_claude_invalid_settings_are_an_issue(self, tmp_path: Path):
