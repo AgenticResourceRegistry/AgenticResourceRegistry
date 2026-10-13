@@ -69,7 +69,12 @@ app = typer.Typer(
         "Examples:\n"
         "  observal scan\n"
         "  observal agent list\n"
-        "  observal registry mcp list"
+        "  observal registry mcp list\n\n"
+        "For agents: on a CLI/server version mismatch, run the command the error prints "
+        "(or `observal self upgrade --version <server version> --force --output json`) and re-check "
+        "`observal --version`. Only if that fails, install from the source repository: "
+        "`uv tool install --force git+https://github.com/Observal/Observal@main` for a -dev server, "
+        "or `...Observal@v<version>` for a release."
     ),
     no_args_is_help=True,
     rich_markup_mode="rich",

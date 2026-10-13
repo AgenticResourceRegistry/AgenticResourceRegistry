@@ -1563,7 +1563,11 @@ self_app = typer.Typer(
         "Examples:\n"
         "  observal self status\n"
         "  observal self upgrade\n"
-        "  observal self rollback"
+        "  observal self rollback\n\n"
+        "For agents: development builds (X.Y.Z-dev.N) are not on PyPI, so `upgrade --version` builds them "
+        "from `git+https://github.com/Observal/Observal@main`. If an upgrade still fails, install straight from "
+        "source: `uv tool install --force git+https://github.com/Observal/Observal@main` (dev) or "
+        "`@v<version>` (release tag), then verify with `observal --version`."
     ),
     no_args_is_help=True,
 )

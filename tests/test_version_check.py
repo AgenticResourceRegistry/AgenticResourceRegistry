@@ -11,6 +11,7 @@ import importlib.metadata
 import json
 import stat
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
@@ -1313,7 +1314,7 @@ def test_check_version_compatibility_skips_invalid_cli_version(
     assert version_check.check_version_compatibility("https://registry.example.test") is None
 
 
-def test_check_version_compatibility_requires_matching_prerelease_cli(
+def test_check_version_compatibility_dev_server_prints_source_install(
     messages: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1326,16 +1327,18 @@ def test_check_version_compatibility_requires_matching_prerelease_cli(
         "get",
         MagicMock(return_value=response(data={"server_version": "1.15.0-dev.0"})),
     )
-    upgrade = MagicMock()
-    monkeypatch.setattr(install_detector, "upgrade_command", upgrade)
+    monkeypatch.setattr(
+        install_detector,
+        "detect",
+        lambda: install_detector.InstallInfo(install_detector.InstallMethod.UV_TOOL, Path("/x/observal"), True, "uv"),
+    )
 
     with pytest.raises(typer.Exit) as error:
         version_check.check_version_compatibility("https://registry.example.test")
 
     assert error.value.exit_code == 1
-    assert "same source revision" in messages[0]
-    assert "uv tool install --force --editable /path/to/checkout" in messages[0]
-    upgrade.assert_not_called()
+    assert "uv tool install --force git+https://github.com/Observal/Observal@main" in messages[0]
+    assert "observal-cli==" not in messages[0]
 
 
 def test_check_version_compatibility_accepts_matching_prerelease_cli(monkeypatch: pytest.MonkeyPatch) -> None:

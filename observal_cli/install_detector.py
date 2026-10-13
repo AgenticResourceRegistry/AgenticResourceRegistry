@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 
 INSTALLER_URL = "https://raw.githubusercontent.com/Observal/Observal/main/install.sh"
+# Development builds (X.Y.Z-dev.N) come from main and are never published to PyPI.
+SOURCE_SPEC = "git+https://github.com/Observal/Observal@main"
 
 
 class InstallMethod(Enum):
@@ -54,11 +56,29 @@ def detect() -> InstallInfo:
     return info
 
 
+def install_spec(target_version: str) -> str:
+    """Return the pip-style requirement that installs ``target_version``.
+
+    Published versions are pinned on PyPI. Development builds are not published,
+    so they are built from the source repository instead.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        if Version(target_version).is_devrelease:
+            return SOURCE_SPEC
+    except InvalidVersion:
+        pass
+    return f"observal-cli=={target_version}"
+
+
 def upgrade_command(target_version: str, install_info: InstallInfo | None = None) -> str:
     """Return the command users should run to install a specific CLI version."""
     info = install_info or detect()
-    package = f"observal-cli=={target_version}"
+    package = install_spec(target_version)
 
+    if package == SOURCE_SPEC and info.method not in (InstallMethod.UV_TOOL, InstallMethod.PIPX, InstallMethod.PIP):
+        return f"uv tool install --force {shlex.quote(package)}"
     if info.method == InstallMethod.UV_TOOL:
         return f"uv tool install --force {shlex.quote(package)}"
     if info.method == InstallMethod.PIPX:
