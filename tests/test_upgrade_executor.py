@@ -205,25 +205,19 @@ def test_package_installers_build_exact_commands_and_progress(
 
 
 @pytest.mark.parametrize(
-    ("installer_name", "direction", "returncode", "stderr", "expected_message"),
+    ("installer_name", "direction", "returncode", "stderr", "expected_stderr"),
     [
-        ("_install_via_uv", "upgrade", 7, " registry denied \n", "[red]Upgrade failed:[/red] registry denied"),
-        (
-            "_install_via_pipx",
-            "downgrade",
-            -signal.SIGTERM,
-            "terminated\n",
-            "[red]Downgrade failed:[/red] terminated",
-        ),
-        ("_install_via_pip", "upgrade", 1, "resolver failed", "[red]Upgrade failed:[/red] resolver failed"),
+        ("_install_via_uv", "upgrade", 7, " registry denied \n", "registry denied"),
+        ("_install_via_pipx", "downgrade", -signal.SIGTERM, "terminated\n", "terminated"),
+        ("_install_via_pip", "upgrade", 1, "resolver failed", "resolver failed"),
     ],
 )
-def test_package_installer_failures_raise_exit_with_exact_stderr(
+def test_package_installer_failure_tries_release_tag_then_fails_loudly(
     installer_name: str,
     direction: str,
     returncode: int,
     stderr: str,
-    expected_message: str,
+    expected_stderr: str,
     messages: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -234,8 +228,14 @@ def test_package_installer_failures_raise_exit_with_exact_stderr(
         getattr(executor, installer_name)("2.4.1", direction, RecordingSpinner())
 
     assert error.value.exit_code == 1
-    assert messages == [expected_message]
-    assert run.call_args.kwargs == {"capture_output": True, "text": True, "timeout": 120}
+    assert run.call_count == 2
+    assert "observal-cli==2.4.1" in " ".join(run.call_args_list[0].args[0])
+    assert "git+https://github.com/Observal/Observal@v2.4.1" in " ".join(run.call_args_list[1].args[0])
+    assert messages == [
+        f"[red]{direction.capitalize()} failed; the installed CLI was left unchanged.[/red]",
+        f"  observal-cli==2.4.1: {expected_stderr}",
+        f"  git+https://github.com/Observal/Observal@v2.4.1: {expected_stderr}",
+    ]
 
 
 @pytest.mark.parametrize(
