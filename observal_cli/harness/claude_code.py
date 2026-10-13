@@ -232,18 +232,19 @@ class ClaudeCodeAdapter(BaseAdapter):
         hooks = data.get("hooks", {})
         if not hooks:
             return "missing"
-        found = 0
-        for _evt, groups in hooks.items():
+        installed_events = set()
+        has_observal_hook = False
+        for event, groups in hooks.items():
             if not isinstance(groups, list):
                 continue
-            for g in groups:
-                for h in g.get("hooks", []):
-                    cmd = h.get("command", "")
-                    url = h.get("url", "")
-                    if any(m in cmd or m in url for m in _OBSERVAL_HOOK_MARKERS):
-                        found += 1
-                        break
-        return "installed" if found >= 3 else ("partial" if found > 0 else "missing")
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    command, url = hook.get("command", ""), hook.get("url", "")
+                    if any(marker in command or marker in url for marker in _OBSERVAL_HOOK_MARKERS):
+                        has_observal_hook = True
+                    if event in ("UserPromptSubmit", "Stop") and "observal_cli.hooks.session_push" in command:
+                        installed_events.add(event)
+        return "installed" if len(installed_events) == 2 else ("partial" if has_observal_hook else "missing")
 
     # ── Private scanning helpers ──────────────────────────────────
 

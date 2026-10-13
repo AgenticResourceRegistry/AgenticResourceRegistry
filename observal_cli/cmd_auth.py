@@ -1493,9 +1493,19 @@ def register_config(app: typer.Typer):
 
 
 def _post_login_setup():
-    """Post-login setup: install skills and the Pi extension unconditionally, then run doctor."""
+    """Install bundled integrations and instrument an existing Claude Code installation."""
+    # Bundled skill installation may create ~/.claude even when Claude Code isn't installed.
+    claude_detected = (Path.home() / ".claude").is_dir() or shutil.which("claude") is not None
     _install_observal_skill()
     _install_or_check_pi_extension()
+    if claude_detected:
+        try:
+            from observal_cli.cmd_doctor import _patch_claude_code
+
+            _patch_claude_code(dry_run=False)
+        except (OSError, ValueError, RuntimeError) as error:
+            rprint(f"[yellow]Could not install Claude Code session hooks: {error}[/yellow]")
+            rprint("  Run [bold]observal doctor patch --harness claude-code[/bold] manually.")
     _generate_initial_layer_snapshot()
     rprint()
     try:
