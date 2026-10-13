@@ -28,12 +28,7 @@ The first command installs the `observal` CLI. The second connects it to the ser
 1. **Login method**: pick the one your team uses. If unsure, choose **Web sign-in** and approve the code in your browser.
 2. **`Fix all warnings? (configures telemetry and installs AI skills for detected harnesses) [Y/n]`**: answer **Y** (or press Enter).
 
-   This is the step that instruments your coding tools. For each one Observal finds (Claude Code, Cursor, Kiro, Codex, Copilot, OpenCode, Pi, and others), it:
-
-   * adds the hooks that send your sessions to Observal
-   * installs the Observal skills, so your coding agent can search and use approved agents, MCP servers, and skills
-
-   If you answer **n**, nothing is instrumented and your sessions won't show up. You can fix that later with `observal doctor patch --all-harnesses`.
+   Login installs the bundled Observal skills and Pi extension before this prompt. Answering **Y** also applies the supported telemetry hooks for your detected coding tools. If you answer **n**, other harnesses may still need instrumentation before sessions appear. Run `observal doctor` to check, then `observal doctor patch --all-harnesses` to install missing hooks.
 
 3. Restart any coding tool that was open during setup so it picks up the changes.
 

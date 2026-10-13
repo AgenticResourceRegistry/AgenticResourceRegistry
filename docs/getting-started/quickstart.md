@@ -23,7 +23,7 @@ By the end of this guide you will have:
 curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
 ```
 
-No Python required. For alternative install methods, see [Installation](../).
+No Python required. For alternative install methods, see [Installation](installation.md).
 
 > \[!NOTE] You need Docker Engine ≥ 24.0 with Compose v2 (`docker compose`, not `docker-compose`). Homebrew's Docker formula is outdated. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages. Verify with `docker version` and `docker compose version`.
 
@@ -46,7 +46,7 @@ That's it. The `.env.example` ships with working defaults. The core services com
 | `observal-api`        | internal                | FastAPI backend                |
 | `observal-worker`     | internal                | Background jobs (arq)          |
 | `observal-init`       | internal                | Runs DB migrations, then exits |
-| `observal-db`         | `localhost:5432`        | PostgreSQL 16                  |
+| `observal-db`         | `localhost:5432`        | PostgreSQL 18                  |
 | `observal-clickhouse` | `localhost:8123`        | ClickHouse                     |
 | `observal-redis`      | `localhost:6379`        | Redis                          |
 
@@ -123,13 +123,13 @@ Browse what the community has published:
 
 ```bash
 observal agent list
-observal agent show <agent-name>
+observal agent show <namespace>/<slug>
 ```
 
 Install one into your harness:
 
 ```bash
-observal agent pull <agent-name> --harness <harness-name>
+observal agent pull <namespace>/<slug> --harness <harness-name>
 ```
 
 This writes agent files, skills, hooks, and direct MCP configs into the right places for your harness.
@@ -160,6 +160,6 @@ Observal indexes session transcript records into canonical events and aggregates
 | ----------------------------------- | --------------------------------- |
 | Understand registry identity        | [Core concepts](../core-concepts/) |
 | Understand session tracking         | [Session tracking and reconciliation](../core-concepts/session-tracking.md) |
-| Learn what to do with traces        | [Use Cases](../use-cases/)        |
+| Learn what to do with traces        | [Use Cases](../use-cases/README.md)        |
 | Configure the server for production | [Self-Hosting](../self-hosting/)  |
-| Deep-dive on a CLI command          | [CLI Reference](../cli/)          |
+| Deep-dive on a CLI command          | [CLI Reference](../cli/README.md)          |

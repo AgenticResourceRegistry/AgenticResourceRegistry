@@ -111,7 +111,7 @@ For scripts and CI, pair flags with environment variables:
 
 ```bash
 export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-export OBSERVAL_API_KEY=<your-key>
+export OBSERVAL_ACCESS_TOKEN=<your-bearer-token>
 
 observal ops traces --limit 100 --output json | jq
 ```

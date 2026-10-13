@@ -140,7 +140,7 @@ export const SECTION_DOCS: Record<string, DocRef> = {
 export const PAGE_DOCS: Record<string, DocRef> = {
 	// Traces
 	"traces": { file: "core-concepts/session-tracking.md", label: "Session Tracking" },
-	"traces.detail": { file: "self-hosting/telemetry.md", label: "Telemetry Configuration" },
+	"traces.detail": { file: "core-concepts/session-tracking.md", label: "Session Tracking" },
 
 	// Registry
 	"agents": { file: "core-concepts/README.md", label: "Core Concepts" },

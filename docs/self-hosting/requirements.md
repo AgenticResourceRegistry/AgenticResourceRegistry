@@ -16,18 +16,20 @@ Minimum and recommended specs for running the Observal stack.
 | Team (10–50) | 4 vCPU | 12 GB | 200 GB + fast SSD | Typical production deployment |
 | Large team (50+) | 8+ vCPU | 32 GB | 500 GB + fast SSD | High telemetry volume; consider externalizing ClickHouse |
 
-The stack's Docker memory limits out-of-the-box:
+Default Docker memory limits (the API, worker and web limits differ between source Compose and the one-line server package):
 
-| Service | Limit |
-| --- | --- |
-| `observal-api` | 512 MB |
-| `observal-worker` | 512 MB |
-| `observal-web` | 256 MB |
-| `observal-clickhouse` | 1 GB |
-| `observal-redis` | 256 MB |
-| `observal-grafana` | 512 MB |
+| Service | Source Compose | Server package |
+| --- | --- | --- |
+| `observal-api` | 1536 MB | 512 MB |
+| `observal-worker` | 1536 MB | 512 MB |
+| `observal-web` | 32 MB | 256 MB |
+| `observal-db` | 512 MB | 512 MB |
+| `observal-clickhouse` | 2 GB | 2 GB |
+| `observal-redis` | 256 MB | 256 MB |
+| `observal-lb` | 64 MB | 64 MB |
+| `observal-grafana` (optional overlay) | 512 MB | 512 MB |
 
-ClickHouse is the memory-hungry one. On a long-running team server, bump it to 2–4 GB in `docker/docker-compose.yml`.
+ClickHouse has the largest memory limit. Tune `CLICKHOUSE_MEMORY_LIMIT` for your workload; see [resource tuning](resource-tuning.md).
 
 ## Disk: where the data goes
 
