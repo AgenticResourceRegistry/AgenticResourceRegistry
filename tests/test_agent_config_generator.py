@@ -598,6 +598,7 @@ class TestMcpListingClaudeCodeAdapter:
         ("transport", "flag", "scope", "claude_scope"),
         [
             ("streamable-http", "http", "user", "user"),
+            ("http", "http", "user", "user"),
             ("sse", "sse", "project", "local"),
         ],
     )
@@ -631,6 +632,25 @@ class TestMcpListingClaudeCodeAdapter:
             "X-Team: eng",
         ] in cfg["mcp_setup_commands"]
         assert ["claude", "mcp", "remove", "--scope", claude_scope, "linear"] in cfg["mcp_reset_commands"]
+
+    def test_legacy_http_listing_installs_remote_in_pi(self):
+        comp_id = uuid.uuid4()
+        agent = _make_agent(components=[_make_component("mcp", comp_id)])
+        cfg = generate_agent_config(
+            agent,
+            "pi",
+            mcp_listings={comp_id: self._remote_listing(comp_id, "http")},
+        )
+        entry = cfg["mcp_config"]["content"]["mcpServers"]["linear"]
+        assert entry["url"] == "https://mcp.linear.app/mcp"
+        assert entry["type"] == "streamable-http"
+        assert "command" not in entry
+
+    def test_invalid_remote_transport_does_not_fall_back_to_stdio(self):
+        comp_id = uuid.uuid4()
+        agent = _make_agent(components=[_make_component("mcp", comp_id)])
+        with pytest.raises(ValueError, match="Unsupported remote MCP transport"):
+            generate_agent_config(agent, "pi", mcp_listings={comp_id: self._remote_listing(comp_id, "unknown")})
 
     def test_user_scope_registers_stdio_servers_for_every_project(self):
         ext_mcps = [{"name": "srv", "command": "npx", "args": ["-y", "srv"]}]
