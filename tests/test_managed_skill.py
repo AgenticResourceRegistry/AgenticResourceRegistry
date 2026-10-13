@@ -177,6 +177,92 @@ def test_initial_upgrade_preview_restore_and_prune(store):
     assert managed_skill.restore_backup(restored["current_backup"], backup_root=root, prune=True)
 
 
+def test_missing_managed_folder_reinstalls_exact_pinned_bytes(store):
+    target, root = store
+    pinned = bundle("v1")
+    install(pinned, target, root)
+    original = lockfile.read_lockfile()
+    import shutil
+
+    shutil.rmtree(target)
+    preview = install(pinned, target, root, check=True)
+    assert preview["action"] == "reinstall"
+    assert not target.exists()
+    assert lockfile.read_lockfile() == original
+    done = install(pinned, target, root)
+    assert done["action"] == "reinstall"
+    assert done["backup"] is None
+    assert not managed_skill.backups_list(backup_root=root)
+    assert lockfile.read_lockfile()["registries"] == original["registries"]
+    managed_skill.verify_tree(
+        target, original["registries"]["https://example.org"]["harnesses"]["pi"]["standalone"][0]["folder_receipt"]
+    )
+    assert install(pinned, target, root)["action"] == "unchanged"
+
+
+def test_missing_managed_folder_does_not_upgrade_or_overwrite_foreign_tree(store):
+    target, root = store
+    install(bundle("v1"), target, root)
+    import shutil
+
+    shutil.rmtree(target)
+    with pytest.raises(managed_skill.ManagedSkillError, match="re-pull its pinned version"):
+        install(bundle("v2", content=b"new"), target, root, check=True)
+    assert not target.exists()
+    target.mkdir()
+    (target / "SKILL.md").write_text("foreign")
+    with pytest.raises(managed_skill.ManagedSkillError):
+        install(bundle("v1"), target, root)
+    assert (target / "SKILL.md").read_text() == "foreign"
+    shutil.rmtree(target)
+    target.symlink_to(root, target_is_directory=True)
+    with pytest.raises(managed_skill.ManagedSkillError, match="Symlink"):
+        install(bundle("v1"), target, root)
+
+
+def test_reinstall_rollback_preserves_prior_receipt(store):
+    from observal_cli.cmd_pull import _rollback_managed_agent_folders
+
+    target, root = store
+    pinned = bundle("v1")
+    install(pinned, target, root)
+    import shutil
+
+    shutil.rmtree(target)
+    prior = lockfile.read_lockfile()["registries"]["https://example.org"]["harnesses"]["pi"]["standalone"][0][
+        "folder_receipt"
+    ]
+    proof = managed_skill.receipt(pinned, target, "pi", "project", registry_url="https://example.org")
+    outcome = install(pinned, target, root)
+    assert _rollback_managed_agent_folders([(proof, outcome)]) == []
+    assert not target.exists()
+    assert (
+        lockfile.read_lockfile()["registries"]["https://example.org"]["harnesses"]["pi"]["standalone"][0][
+            "folder_receipt"
+        ]
+        == prior
+    )
+    assert install(pinned, target, root)["action"] == "reinstall"
+
+
+def test_missing_managed_folder_recovery_after_swapped_before_record(store, monkeypatch):
+    target, root = store
+    pinned = bundle("v1")
+    install(pinned, target, root)
+    import shutil
+
+    shutil.rmtree(target)
+    proof = managed_skill.receipt(pinned, target, "pi", "project", registry_url="https://example.org")
+    key = hashlib.sha256(str(target).encode()).hexdigest()
+    folder = root / f"{key}-crashed"
+    folder.mkdir()
+    (folder / "marker.json").write_text(json.dumps({"target": str(target), "old": None, "new": proof}))
+    managed_skill.install_folder_bundle(pinned, target)
+    managed_skill.recover(target, backup_root=root)
+    assert not (folder / "marker.json").exists()
+    managed_skill.verify_tree(target, proof)
+
+
 def test_upgrade_refuses_tree_changed_between_verification_and_rename(store, monkeypatch):
     target, root = store
     first, second = bundle("v1"), bundle("v2", content=b"changed")
