@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Inbox delivery, lifecycle, idempotency, and read-time visibility.
@@ -1225,6 +1226,35 @@ async def test_counts_omit_facets_unless_asked(sessions):
         detailed = await _counts(db, user, facets=True)
         assert detailed.by_kind == {"review_requested": 1}
         assert detailed.by_subject_type == {"mcp": 1}
+
+
+@pytest.mark.asyncio
+async def test_resolved_unread_items_count_until_read_and_are_reported(sessions):
+    """OBS-1406: the badge said 4 while the Open bucket was empty.
+
+    An item resolved before the user opened it still counts as unread, so the
+    badge keeps it. The count reports how much of that sits in Done/Dismissed so
+    the Inbox can point at it, and reading the item is what clears it.
+    """
+    async with sessions() as db:
+        user = await _user(db)
+        await _deliver_named(db, user, namespace="super", slug="still-open")
+        withdrawn = await _deliver_named(db, user, namespace="super", slug="withdrawn")
+        dropped = await _deliver_named(db, user, namespace="super", slug="dropped")
+        delivery.resolve(db, withdrawn, state=InboxState.done)
+        delivery.resolve(db, dropped, state=InboxState.dismissed)
+        await db.commit()
+
+        counts = await _counts(db, user)
+        assert counts.unread == 3
+        assert (counts.unread_done, counts.unread_dismissed) == (1, 1)
+        # Not listed in the default Open bucket, which is why the page must point at them.
+        assert (await _list(db, user, state=InboxState.open)).total == 1
+
+        delivery.mark_read(db, withdrawn)
+        await db.commit()
+        cleared = await _counts(db, user)
+        assert (cleared.unread, cleared.unread_done, cleared.unread_dismissed) == (2, 0, 1)
 
 
 @pytest.mark.asyncio

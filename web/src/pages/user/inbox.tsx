@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -946,6 +947,15 @@ export default function InboxPage() {
 
 	const groups = useMemo(() => groupItems(items, group), [items, group]);
 	const filtersActive = Boolean(kind || subjectType || actionOnly || query || unreadOnly);
+	// The nav badge counts unread items in every state, but this view lists only
+	// open ones. Say so, and take the user to the rest, instead of "all caught up".
+	const resolvedUnread = (counts?.unread_done ?? 0) + (counts?.unread_dismissed ?? 0);
+	const resolvedUnreadNote = bucket === "open" && !filtersActive && resolvedUnread > 0;
+	const showResolvedUnread = () => {
+		setBucket((counts?.unread_done ?? 0) > 0 ? "done" : "dismissed");
+		setUnreadOnly(true);
+		resetPage();
+	};
 	const selectedItem = items.find((item) => item.id === selectedId);
 
 	const railProps = {
@@ -1030,6 +1040,16 @@ export default function InboxPage() {
 										Try again
 									</Button>
 								</PaneState>
+							) : items.length === 0 && resolvedUnreadNote ? (
+								<PaneState
+									icon={InboxIcon}
+									title={`Nothing open, but ${resolvedUnread} unread`}
+									copy="These were resolved before you opened them. Opening one marks it read."
+								>
+									<Button variant="ghost" onClick={showResolvedUnread}>
+										Show unread
+									</Button>
+								</PaneState>
 							) : items.length === 0 ? (
 								<PaneState
 									icon={InboxIcon}
@@ -1041,7 +1061,18 @@ export default function InboxPage() {
 									}
 								/>
 							) : (
-								groups.map((section) => (
+								<>
+								{resolvedUnreadNote && (
+									<div className="mb-2 flex items-center justify-between gap-3 rounded-lg bg-surface-raised px-3 py-2 text-2xs text-muted-foreground">
+										<span>
+											{`${resolvedUnread} resolved ${resolvedUnread === 1 ? "item" : "items"} you haven't opened`}
+										</span>
+										<Button variant="ghost" onClick={showResolvedUnread}>
+											Show
+										</Button>
+									</div>
+								)}
+								{groups.map((section) => (
 									<div key={section.label || "all"} className="mt-3 first:mt-0">
 										{section.label && <GroupHeading>{section.label}</GroupHeading>}
 
@@ -1059,7 +1090,8 @@ export default function InboxPage() {
 											))}
 										</ul>
 									</div>
-								))
+								))}
+								</>
 							)}
 						</div>
 
@@ -1179,11 +1211,19 @@ export default function InboxPage() {
 						) : (
 							<PaneState
 								icon={InboxIcon}
-								title={filtersActive ? "No matching notifications" : "You are all caught up"}
+								title={
+									filtersActive
+										? "No matching notifications"
+										: resolvedUnreadNote
+											? "Nothing open"
+											: "You are all caught up"
+								}
 								copy={
 									filtersActive
 										? "Try clearing a filter or searching for something else."
-										: "Pick a notification on the left to see what it is asking for."
+										: resolvedUnreadNote
+											? "Show the unread items on the left to read them."
+											: "Pick a notification on the left to see what it is asking for."
 								}
 							/>
 						)}
