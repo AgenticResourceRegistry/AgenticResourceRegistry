@@ -951,7 +951,8 @@ export default function InboxPage() {
 	// open ones. Say so, and offer a way into each resolved bucket that still has
 	// unread items, instead of "all caught up". Inside a resolved bucket the note
 	// follows the Unread filter that "Show unread" sets, so reading one bucket never
-	// hides the way to the other.
+	// hides the way to the other. Open keeps it under the Unread filter too, where
+	// "no matching" would otherwise hide items the badge still counts.
 	const resolvedTargets = (["done", "dismissed"] as const)
 		.map((b) => ({
 			bucket: b,
@@ -963,7 +964,7 @@ export default function InboxPage() {
 	const resolvedUnreadNote =
 		resolvedUnread > 0 &&
 		!(kind || subjectType || actionOnly || query) &&
-		(bucket === "open" ? !unreadOnly : unreadOnly);
+		(bucket === "open" || unreadOnly);
 	const showResolvedUnread = (target: InboxState) => {
 		setBucket(target);
 		setUnreadOnly(true);
@@ -1062,7 +1063,7 @@ export default function InboxPage() {
 								<PaneState
 									icon={InboxIcon}
 									title={
-										bucket === "open"
+										bucket === "open" && !unreadOnly
 											? `Nothing open, but ${resolvedUnread} unread`
 											: `Nothing unread here, but ${resolvedUnread} more unread`
 									}
