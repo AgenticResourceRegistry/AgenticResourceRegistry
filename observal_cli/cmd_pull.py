@@ -1581,11 +1581,19 @@ def _rollback_managed_agent_folders(applied: list[tuple[dict, dict]]) -> list[st
                 with lockfile._exclusive_lock(lockfile.CONFIG_DIR / f"skill-{key}.lock"):
                     managed_skill.verify_tree(target, proof)
 
-                    def remove(data: dict, target: Path = target, proof: dict = proof) -> None:
+                    def remove(
+                        data: dict,
+                        target: Path = target,
+                        proof: dict = proof,
+                        missing_prior: dict | None = outcome.get("missing_prior"),
+                    ) -> None:
                         matches = managed_skill._records(data, target)
                         if len(matches) != 1 or matches[0][1].get("folder_receipt") != proof:
                             raise RuntimeError("Receipt changed; cannot remove initial folder")
-                        matches[0][1].pop("folder_receipt")
+                        if missing_prior is not None:
+                            matches[0][1]["folder_receipt"] = missing_prior
+                        else:
+                            matches[0][1].pop("folder_receipt")
 
                     lockfile.update_lockfile(remove)
                     shutil.rmtree(target)
@@ -2559,7 +2567,7 @@ def register_pull(app: typer.Typer):
                 )
                 fail(
                     ErrorCategory.CONFLICT,
-                    "Could not safely install pinned Agent skill folders before config writes.",
+                    f"Could not safely install pinned Agent skill folders before config writes: {error}",
                     operation="Pull agent",
                     resource="agent skills",
                     remediation="Inspect the reported destination and retained backups; do not delete an unowned folder.",
