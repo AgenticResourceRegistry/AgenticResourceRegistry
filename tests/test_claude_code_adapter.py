@@ -645,6 +645,25 @@ def test_detect_hooks_requires_both_session_events(tmp_path: Path):
     assert ClaudeCodeAdapter().detect_hooks(tmp_path) == "installed"
 
 
+@pytest.mark.parametrize(
+    ("hook_type", "command"),
+    [
+        ("command", "python -m observal_cli.hooks.session_push --harness codex"),
+        ("http", "python -m observal_cli.hooks.session_push --harness claude-code"),
+    ],
+)
+def test_detect_hooks_rejects_other_harnesses_and_non_command_hooks(tmp_path: Path, hook_type: str, command: str):
+    _write_json(
+        tmp_path / "settings.json",
+        {
+            "hooks": {
+                event: [{"hooks": [{"type": hook_type, "command": command}]}] for event in ("UserPromptSubmit", "Stop")
+            }
+        },
+    )
+    assert ClaudeCodeAdapter().detect_hooks(tmp_path) == "partial"
+
+
 def test_detect_hooks_accepts_managed_url_and_fails_soft_on_missing_or_malformed_settings(tmp_path: Path):
     adapter = ClaudeCodeAdapter()
     assert adapter.detect_hooks(tmp_path) == "missing"

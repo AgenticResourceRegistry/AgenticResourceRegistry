@@ -249,7 +249,11 @@ class ClaudeCodeAdapter(BaseAdapter):
                     command, url = hook.get("command", ""), hook.get("url", "")
                     if any(marker in command or marker in url for marker in _OBSERVAL_HOOK_MARKERS):
                         has_observal_hook = True
-                    if event in ("UserPromptSubmit", "Stop") and "observal_cli.hooks.session_push" in command:
+                    if (
+                        event in ("UserPromptSubmit", "Stop")
+                        and hook.get("type") == "command"
+                        and command.endswith(" -m observal_cli.hooks.session_push --harness claude-code")
+                    ):
                         installed_events.add(event)
         return "installed" if len(installed_events) == 2 else ("partial" if has_observal_hook else "missing")
 
