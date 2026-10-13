@@ -274,13 +274,15 @@ class KeyManager:
         if self._read_only:
             raise RuntimeError("Cannot rotate JWT signing key in read-only mode")
         optic.info("rotating JWT signing key")
+        new_key = self._generate_private_key()
         with self._state_lock, self._signing_lock():
             self._refresh_active_key()
             if self._require_active().algorithm != self._algorithm:
                 raise RuntimeError("Configured JWT signing algorithm conflicts with the active key in the shared store")
             try:
                 self._retire_current_key()
-                self._generate_key_pair(self._key_dir / "signing.pem")
+                pem = self._write_private_key(self._key_dir / "signing.pem", new_key)
+                self._set_active_key(new_key, pem)
                 self._load_retired_keys()
             except Exception:
                 # An error after os.replace may mean the new key was published.
@@ -426,13 +428,14 @@ class KeyManager:
         pub = key.public_key()
         self._active = _ActiveKey(key, pub, _kid_from_public_key(pub), _algorithm_for_key(key), pem)
 
-    def _generate_key_pair(self, path: Path) -> None:
+    def _generate_private_key(self) -> PrivateKey:
         optic.debug("generating {} JWT signing key", self._algorithm)
-        key: PrivateKey
         if self._algorithm == "ES256":
-            key = ec.generate_private_key(ec.SECP256R1())
-        else:
-            key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+            return ec.generate_private_key(ec.SECP256R1())
+        return rsa.generate_private_key(public_exponent=65537, key_size=3072)
+
+    def _generate_key_pair(self, path: Path) -> None:
+        key = self._generate_private_key()
         pem = self._write_private_key(path, key)
         self._set_active_key(key, pem)
 

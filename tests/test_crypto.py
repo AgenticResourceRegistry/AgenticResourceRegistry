@@ -774,6 +774,29 @@ class TestKeyRotation:
         km.rotate_key()
         assert km.get_kid() != old_kid
 
+    def test_rotation_key_generation_does_not_block_readers(self, tmp_key_dir, monkeypatch):
+        manager = KeyManager(key_dir=tmp_key_dir)
+        manager.initialize()
+        old_kid = manager.get_kid()
+        generation_started = Event()
+        continue_generation = Event()
+        generate_private_key = ec.generate_private_key
+
+        def delayed_generation(curve):
+            generation_started.set()
+            assert continue_generation.wait(timeout=10), "key generation was not released"
+            return generate_private_key(curve)
+
+        monkeypatch.setattr("services.crypto.ec.generate_private_key", delayed_generation)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            rotation = pool.submit(manager.rotate_key)
+            try:
+                assert generation_started.wait(timeout=10), "key generation did not start"
+                assert pool.submit(manager.get_kid).result(timeout=2) == old_kid
+            finally:
+                continue_generation.set()
+            assert rotation.result(timeout=10) != old_kid
+
     def test_old_token_still_verifies_after_rotation(self, km):
         token_before = km.sign_token({"sub": "user-rotate", "test": True})
         km.rotate_key()
