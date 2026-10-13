@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh |
 
 This downloads the latest release binary for your platform and places it on your `PATH`.
 
-This validates the Ed25519-signed key, installs the CLI, and writes the key to `~/.observal/config.json`. If the key is invalid or expired, the installer exits with an error.
+The installer downloads the release binary and checks its SHA-256 hash against the release checksums when available. If it cannot download the checksums, it warns and proceeds without verification; it does not create a key in `~/.observal/config.json`.
 
 Verify it worked:
 
@@ -80,18 +80,10 @@ pip install --user observal-cli
 
 ### Optional extras
 
-Observal ships with two opt-in extras for the Python install:
-
-| Extra     | What it adds                                   | When to install                                              |
-| --------- | ---------------------------------------------- | ------------------------------------------------------------ |
-| `sandbox` | Docker SDK (for sandbox execution)             | If you run agents inside Observal sandboxes                  |
-| `migrate` | `pyarrow` (for `observal server migrate`) | If you move registry and telemetry data between deployments |
-| `all`     | Both of the above                              | If you do both                                               |
-
-Install an extra:
+The Python package includes the Docker SDK. The `migrate` extra adds `pyarrow` for `observal server migrate`:
 
 ```bash
-uv tool install 'observal-cli[sandbox]'
+uv tool install 'observal-cli[migrate]'
 ```
 
 ## Install from source (for contributors)
@@ -104,14 +96,15 @@ uv tool install --editable .
 
 ## What gets installed
 
-Four entry points land on your `PATH`:
+The Python package provides three entry points:
 
 | Command                | Purpose                                                  |
 | ---------------------- | -------------------------------------------------------- |
 | `observal`             | The main CLI                                             |
 | `observal-sandbox-run` | Sandbox runner invoked by Observal sandboxes             |
+| `observal-sandbox-mcp` | MCP adapter used by sandbox execution                   |
 
-You will almost never call the sandbox runner directly. The CLI wires it into your harness config for you.
+You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.
 
 ## Upgrade
 
