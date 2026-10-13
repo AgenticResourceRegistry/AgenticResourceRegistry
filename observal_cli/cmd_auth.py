@@ -598,7 +598,7 @@ def logout(
         OutputMode, typer.Option("--output", "-o", help="Output format: table or json")
     ] = OutputMode.table,
 ):
-    """Sign out everywhere and clear saved credentials.
+    """Attempt to sign out everywhere and clear saved credentials.
 
     Revokes every session for this account when possible (CLI, hooks, web),
     then removes local access and refresh tokens. Remote revocation failure
