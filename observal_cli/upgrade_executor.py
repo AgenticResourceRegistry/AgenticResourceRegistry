@@ -64,44 +64,43 @@ def execute(
 
 
 def _install_via_uv(target_version: str, direction: str, spinner) -> None:
-    with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
-        result = subprocess.run(
-            ["uv", "tool", "install", install_spec(target_version), "--force"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    if result.returncode != 0:
-        rprint(f"[red]{direction.capitalize()} failed:[/red] {result.stderr.strip()}")
-        raise typer.Exit(1)
+    _install_with_source_fallback(
+        lambda spec: ["uv", "tool", "install", spec, "--force"], target_version, direction, spinner
+    )
 
 
 def _install_via_pipx(target_version: str, direction: str, spinner) -> None:
-    with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
-        result = subprocess.run(
-            ["pipx", "install", install_spec(target_version), "--force"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    if result.returncode != 0:
-        rprint(f"[red]{direction.capitalize()} failed:[/red] {result.stderr.strip()}")
-        raise typer.Exit(1)
+    _install_with_source_fallback(lambda spec: ["pipx", "install", spec, "--force"], target_version, direction, spinner)
 
 
 def _install_via_pip(target_version: str, direction: str, spinner) -> None:
     # Uses sys.executable to target the current Python environment. If the CLI
     # is installed via uv or pipx, those paths are used instead.
-    with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", install_spec(target_version), "--quiet"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    if result.returncode != 0:
-        rprint(f"[red]{direction.capitalize()} failed:[/red] {result.stderr.strip()}")
-        raise typer.Exit(1)
+    _install_with_source_fallback(
+        lambda spec: [sys.executable, "-m", "pip", "install", spec, "--quiet"], target_version, direction, spinner
+    )
+
+
+def _install_with_source_fallback(
+    argv_for, target_version: str, direction: str, spinner, repo: str | None = None
+) -> None:
+    """Install from PyPI; if the release is missing there, build its git tag; else leave the install alone."""
+    from observal_cli.install_detector import SOURCE_REPO, tag_spec
+
+    specs = [install_spec(target_version)]
+    if specs[0] != SOURCE_SPEC:
+        specs.append(tag_spec(target_version, repo or SOURCE_REPO))
+    errors = []
+    for spec in specs:
+        with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
+            result = subprocess.run(argv_for(spec), capture_output=True, text=True, timeout=300 if "@" in spec else 120)
+        if result.returncode == 0:
+            return
+        errors.append(f"{spec}: {result.stderr.strip()}")
+    rprint(f"[red]{direction.capitalize()} failed; the installed CLI was left unchanged.[/red]")
+    for error in errors:
+        rprint(f"  {error}")
+    raise typer.Exit(1)
 
 
 def _install_binary(

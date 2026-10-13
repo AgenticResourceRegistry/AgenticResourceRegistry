@@ -17,7 +17,8 @@ from pathlib import Path
 
 INSTALLER_URL = "https://raw.githubusercontent.com/Observal/Observal/main/install.sh"
 # Development builds (X.Y.Z-dev.N) come from main and are never published to PyPI.
-SOURCE_SPEC = "git+https://github.com/Observal/Observal@main"
+SOURCE_REPO = "git+https://github.com/Observal/Observal"
+SOURCE_SPEC = f"{SOURCE_REPO}@main"
 
 
 class InstallMethod(Enum):
@@ -70,6 +71,17 @@ def install_spec(target_version: str) -> str:
     except InvalidVersion:
         pass
     return f"observal-cli=={target_version}"
+
+
+def tag_spec(target_version: str, repo: str = SOURCE_REPO) -> str:
+    """Requirement that builds ``target_version`` from its release tag (``vX.Y.Z[-rc.N]``)."""
+    from packaging.version import Version
+
+    v = Version(target_version)
+    tag = f"v{v.base_version}"
+    if v.pre:
+        tag += f"-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[v.pre[0]] }.{v.pre[1]}"
+    return f"{repo}@{tag}"
 
 
 def upgrade_command(target_version: str, install_info: InstallInfo | None = None) -> str:
