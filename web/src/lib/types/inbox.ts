@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 export type InboxKind =
@@ -68,6 +69,9 @@ export interface InboxCounts {
 	open: number;
 	done: number;
 	dismissed: number;
+	/** How much of `unread` is already resolved, so it is not in the default Open bucket. */
+	unread_done: number;
+	unread_dismissed: number;
 	/** Both are empty unless the request asked for facets. */
 	by_kind: Partial<Record<InboxKind, number>>;
 	by_subject_type: Record<string, number>;
