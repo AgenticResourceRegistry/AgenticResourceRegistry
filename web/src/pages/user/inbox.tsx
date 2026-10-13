@@ -947,15 +947,33 @@ export default function InboxPage() {
 
 	const groups = useMemo(() => groupItems(items, group), [items, group]);
 	const filtersActive = Boolean(kind || subjectType || actionOnly || query || unreadOnly);
-	// The nav badge counts unread items in every state, but this view lists only
-	// open ones. Say so, and take the user to the rest, instead of "all caught up".
-	const resolvedUnread = (counts?.unread_done ?? 0) + (counts?.unread_dismissed ?? 0);
-	const resolvedUnreadNote = bucket === "open" && !filtersActive && resolvedUnread > 0;
-	const showResolvedUnread = () => {
-		setBucket((counts?.unread_done ?? 0) > 0 ? "done" : "dismissed");
+	// The nav badge counts unread items in every state, but the Open view lists only
+	// open ones. Say so, and offer a way into each resolved bucket that still has
+	// unread items, instead of "all caught up". Inside a resolved bucket the note
+	// follows the Unread filter that "Show unread" sets, so reading one bucket never
+	// hides the way to the other.
+	const resolvedTargets = (["done", "dismissed"] as const)
+		.map((b) => ({
+			bucket: b,
+			label: b === "done" ? "Done" : "Dismissed",
+			count: (b === "done" ? counts?.unread_done : counts?.unread_dismissed) ?? 0,
+		}))
+		.filter((t) => t.count > 0 && t.bucket !== bucket);
+	const resolvedUnread = resolvedTargets.reduce((sum, t) => sum + t.count, 0);
+	const resolvedUnreadNote =
+		resolvedUnread > 0 &&
+		!(kind || subjectType || actionOnly || query) &&
+		(bucket === "open" ? !unreadOnly : unreadOnly);
+	const showResolvedUnread = (target: InboxState) => {
+		setBucket(target);
 		setUnreadOnly(true);
 		resetPage();
 	};
+	const resolvedActions = resolvedTargets.map((t) => (
+		<Button key={t.bucket} variant="ghost" onClick={() => showResolvedUnread(t.bucket)}>
+			{`Show unread in ${t.label}`}
+		</Button>
+	));
 	const selectedItem = items.find((item) => item.id === selectedId);
 
 	const railProps = {
@@ -1043,12 +1061,14 @@ export default function InboxPage() {
 							) : items.length === 0 && resolvedUnreadNote ? (
 								<PaneState
 									icon={InboxIcon}
-									title={`Nothing open, but ${resolvedUnread} unread`}
+									title={
+										bucket === "open"
+											? `Nothing open, but ${resolvedUnread} unread`
+											: `Nothing unread here, but ${resolvedUnread} more unread`
+									}
 									copy="These were resolved before you opened them. Opening one marks it read."
 								>
-									<Button variant="ghost" onClick={showResolvedUnread}>
-										Show unread
-									</Button>
+									{resolvedActions}
 								</PaneState>
 							) : items.length === 0 ? (
 								<PaneState
@@ -1063,13 +1083,11 @@ export default function InboxPage() {
 							) : (
 								<>
 								{resolvedUnreadNote && (
-									<div className="mb-2 flex items-center justify-between gap-3 rounded-lg bg-surface-raised px-3 py-2 text-2xs text-muted-foreground">
+									<div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-surface-raised px-3 py-2 text-2xs text-muted-foreground">
 										<span>
 											{`${resolvedUnread} resolved ${resolvedUnread === 1 ? "item" : "items"} you haven't opened`}
 										</span>
-										<Button variant="ghost" onClick={showResolvedUnread}>
-											Show
-										</Button>
+										<span className="flex flex-wrap">{resolvedActions}</span>
 									</div>
 								)}
 								{groups.map((section) => (
