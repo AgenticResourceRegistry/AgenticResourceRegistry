@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tanvi Reddy
+# SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 

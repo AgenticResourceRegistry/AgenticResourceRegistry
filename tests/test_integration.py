@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Observal Contributors
+# SPDX-FileCopyrightText: 2025 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Riya Rani <rr1182764@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tanvi Reddy
+# SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # Data tier: Azure VM running ClickHouse + Redis + Prometheus via docker-compose.

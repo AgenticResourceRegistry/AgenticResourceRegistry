@@ -1,4 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Observal contributors
 # SPDX-FileCopyrightText: 2026 Srihari <sriharilegend23@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
