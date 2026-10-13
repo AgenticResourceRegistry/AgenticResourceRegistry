@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Observal contributors
+// SPDX-FileCopyrightText: 2026 SK Akram <skcodewizard786@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useSyncExternalStore } from "react";
