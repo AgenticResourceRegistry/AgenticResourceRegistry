@@ -72,7 +72,7 @@ Every command available in the installed CLI. This block is generated from the T
 **`observal auth`**: Authentication and account commands
 
 - `observal auth login`: Connect to Observal.
-- `observal auth logout`: Sign out everywhere and clear saved credentials.
+- `observal auth logout`: Attempt to sign out everywhere and clear saved credentials.
 - `observal auth whoami`: Show current authenticated user.
 - `observal auth status`: Check authenticated server connectivity and local outbox health.
 - `observal auth change-password`: Change your password and sign out every other session.
