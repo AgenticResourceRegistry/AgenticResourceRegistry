@@ -218,14 +218,6 @@ export function useSecurityEvents(filters?: Record<string, string>) {
   });
 }
 
-export function useDiagnostics() {
-  return useQuery({
-    queryKey: ["admin", "diagnostics"],
-    queryFn: admin.diagnostics,
-    refetchInterval: 30_000,
-  });
-}
-
 export function useSystemWarnings() {
   return useQuery({
     queryKey: ["admin", "system-warnings"],

@@ -66,7 +66,6 @@ import type {
 	ComponentLeaderboardItem,
 	AuditLogEntry,
 	SecurityEvent,
-	DiagnosticsResponse,
 	RestartStatus,
 	SystemWarning,
 	UsagePingAdminResponse,
@@ -933,7 +932,6 @@ export const admin = {
 			`/admin/security-events${qs}`,
 		);
 	},
-	diagnostics: () => get<DiagnosticsResponse>("/admin/diagnostics"),
 	restartStatus: () => get<RestartStatus>("/admin/restart/status"),
 	systemWarnings: () => get<SystemWarning[]>("/admin/system-warnings"),
 	samlConfig: () => get<Record<string, unknown>>("/admin/saml-config"),
