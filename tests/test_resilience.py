@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from redis.exceptions import AuthenticationError, AuthorizationError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -225,6 +226,26 @@ class TestRedisPublishRealClientErrors:
             await publish("test-channel", {"msg": "hello"})
         assert mock_redis.publish.await_count == 1
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [AuthenticationError("bad password"), AuthorizationError("no permission")],
+        ids=["authentication", "authorization"],
+    )
+    async def test_auth_errors_are_not_retried(self, error):
+        from services.redis import publish
+
+        mock_redis = MagicMock()
+        mock_redis.publish = AsyncMock(side_effect=error)
+        with (
+            patch("services.redis.get_redis", return_value=mock_redis),
+            patch("asyncio.sleep", new_callable=AsyncMock) as sleep,
+            pytest.raises(type(error)),
+        ):
+            await publish("test-channel", {"msg": "hello"})
+        assert mock_redis.publish.await_count == 1
+        sleep.assert_not_awaited()
+
 
 @contextmanager
 def _fake_pubsub(subscribe_effects, messages=()):
@@ -291,6 +312,24 @@ class TestRedisSubscribeRealClientErrors:
         with (
             _fake_pubsub(ValueError("programming error")) as (pubsub, sleep),
             pytest.raises(ValueError, match="programming error"),
+        ):
+            async for _ in subscribe("ch"):
+                pass
+        assert pubsub.subscribe.await_count == 1
+        sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [AuthenticationError("bad password"), AuthorizationError("no permission")],
+        ids=["authentication", "authorization"],
+    )
+    async def test_auth_errors_are_not_retried(self, error):
+        from services.redis import subscribe
+
+        with (
+            _fake_pubsub(error) as (pubsub, sleep),
+            pytest.raises(type(error)),
         ):
             async for _ in subscribe("ch"):
                 pass
