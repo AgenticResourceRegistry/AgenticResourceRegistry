@@ -268,6 +268,9 @@ def _check_claude_code(issues: list, warnings: list):
     if data is None:
         issues.append(f"{settings_path}: not valid JSON.")
         return
+    if not isinstance(data.get("hooks", {}), dict) or not isinstance(data.get("env", {}), dict):
+        issues.append(f"{settings_path}: hooks and env must be JSON objects.")
+        return
 
     if data.get("disableAllHooks"):
         issues.append(f"{settings_path}: `disableAllHooks` is true. Observal hooks will not fire.")
@@ -1262,9 +1265,15 @@ def _patch_claude_code(dry_run: bool) -> bool:
     rprint("[cyan]Claude Code - session push hooks[/cyan]")
 
     settings_path = Path.home() / ".claude" / "settings.json"
-    if settings_path.exists() and _load_json(settings_path) is None:
-        raise ValueError(f"Cannot patch invalid Claude Code settings: {settings_path}")
-    if not settings_path.exists():
+    if settings_path.exists():
+        current = _load_json(settings_path)
+        if (
+            current is None
+            or not isinstance(current.get("hooks", {}), dict)
+            or not isinstance(current.get("env", {}), dict)
+        ):
+            raise ValueError(f"Cannot patch invalid Claude Code settings: {settings_path}")
+    else:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
     desired_hooks = get_desired_hooks()
