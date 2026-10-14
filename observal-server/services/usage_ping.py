@@ -117,11 +117,12 @@ def fallback_company_name(installation_id: uuid.UUID) -> str:
 
 
 def _hostname(public_url: str) -> str:
+    # The collector rejects "not-configured" identities, so an unset public URL reports "unknown".
     value = public_url.strip()
     if not value:
-        return "not-configured"
+        return "unknown"
     parsed = urlparse(value if "://" in value else f"//{value}")
-    return (parsed.hostname or "not-configured").lower()
+    return (parsed.hostname or "unknown").lower()
 
 
 def _deployment_type() -> str:

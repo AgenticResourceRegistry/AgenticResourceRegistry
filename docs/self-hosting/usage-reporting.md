@@ -7,7 +7,7 @@ Observal can send aggregate usage reports to the Observal-operated collector at 
 
 ## Configure reporting
 
-A super administrator can open **Admin > Settings > Usage Reporting**, which appears near the top of the settings page, to enter the company name and save the reporting configuration. Setting **Deployment Public URL** adds the deployment hostname to reports; without it the hostname is reported as `not-configured`. The available frequencies are every six hours, daily, and weekly. Every six hours is the default. The same panel can disable reporting, change the frequency, preview the exact payload, and send a test report.
+A super administrator can open **Admin > Settings > Usage Reporting**, which appears near the top of the settings page, to enter the company name and save the reporting configuration. Setting **Deployment Public URL** adds the deployment hostname to reports; without it the hostname is reported as `unknown`. The available frequencies are every six hours, daily, and weekly. Every six hours is the default. The same panel can disable reporting, change the frequency, preview the exact payload, and send a test report.
 
 Only a super administrator can change the company identity, frequency, or consent setting.
 
@@ -16,7 +16,7 @@ Disabling the switch stops scheduled delivery immediately. It does not remove re
 ## Data included
 
 - Stable, randomly generated installation ID
-- Company name and deployment hostname supplied by the administrator, or the `unknown-` placeholder and `not-configured` when unset
+- Company name and deployment hostname supplied by the administrator, or the `unknown-` placeholder and `unknown` hostname when unset
 - Observal version and deployment type
 - Aggregate counts for users, teams, registry components, agent installations, and sessions
 - Aggregate session totals by harness
