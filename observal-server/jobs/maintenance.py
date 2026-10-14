@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Maintenance background jobs: ClickHouse optimization, component source sync, retention, discovery."""
@@ -9,6 +10,7 @@ from loguru import logger as optic
 async def sync_component_sources(ctx: dict):
     """Background job: sync component sources that are due for re-sync."""
     optic.debug("sync_component_sources")
+    import asyncio
     from datetime import UTC, datetime
 
     from sqlalchemy import or_, select
@@ -35,7 +37,7 @@ async def sync_component_sources(ctx: dict):
             source.sync_status = "syncing"
             await db.commit()
 
-            sync_result = sync_source(source.url, source.component_type)
+            sync_result = await asyncio.to_thread(sync_source, source.url, source.component_type)
 
             source.last_synced_at = now
             source.sync_status = "success" if sync_result.success else "failed"
