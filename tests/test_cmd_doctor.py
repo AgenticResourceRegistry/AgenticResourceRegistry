@@ -1003,7 +1003,18 @@ def test_login_with_invalid_settings_still_installs_skills_without_overwriting_s
     assert all((tmp_path / ".claude/skills" / name / "SKILL.md").is_file() for name in skill_installer._SKILL_DIRS)
 
 
-@pytest.mark.parametrize("malformed", [{"hooks": None}, {"env": None}])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"hooks": None},
+        {"env": None},
+        {"hooks": {"Stop": None}},
+        {"hooks": {"Stop": ["unsupported group"]}},
+        {"hooks": {"Stop": [{"hooks": None}]}},
+        {"hooks": {"Stop": [{"hooks": ["unsupported handler"]}]}},
+        {"hooks": {"Stop": [{"hooks": [{"command": None}]}]}},
+    ],
+)
 def test_login_with_malformed_claude_hook_settings_continues_setup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: dict
 ):
@@ -1029,6 +1040,25 @@ def test_login_with_malformed_claude_hook_settings_continues_setup(
     issues: list[str] = []
     _check_claude_code(issues, [])
     assert any("settings.json" in issue for issue in issues)
+
+
+def test_login_preserves_unrelated_non_list_claude_hook_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    settings = tmp_path / ".claude/settings.json"
+    write_json(settings, {"hooks": {"Ignored": "not-a-list"}})
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+
+    assert read_json(settings)["hooks"]["Ignored"] == "not-a-list"
+    issues: list[str] = []
+    warnings: list[str] = []
+    _check_claude_code(issues, warnings)
+    assert not issues and not warnings
 
 
 def test_login_never_overwrites_invalid_claude_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
