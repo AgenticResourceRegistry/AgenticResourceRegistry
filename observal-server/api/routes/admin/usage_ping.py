@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, require_role, require_super_admin
 from models.user import User, UserRole
-from schemas.usage_ping import UsagePingAdminResponse, UsagePingPayload, UsagePingStatus
+from schemas.usage_ping import UsagePingAdminResponse, UsagePingStatus
 from services.usage_ping import build_usage_ping, send_usage_ping, usage_ping_status
 
 from ._router import router
@@ -28,10 +28,7 @@ async def preview_usage_ping(
     _current_user: User = Depends(require_role(UserRole.admin)),
 ):
     status = await usage_ping_status(db)
-    payload: UsagePingPayload | None = None
-    if status.configured:
-        payload = await build_usage_ping(db)
-    return UsagePingAdminResponse(status=status, payload=payload)
+    return UsagePingAdminResponse(status=status, payload=await build_usage_ping(db))
 
 
 @router.post("/usage-ping/send", response_model=UsagePingAdminResponse)
@@ -42,11 +39,6 @@ async def trigger_usage_ping(
     status = await usage_ping_status(db)
     if not status.enabled:
         raise HTTPException(status_code=409, detail="Usage reporting is disabled")
-    if not status.configured:
-        raise HTTPException(
-            status_code=409,
-            detail="Company name and deployment public URL are required before sending usage reports",
-        )
     result = await send_usage_ping(db)
     if result != "sent":
         updated = await usage_ping_status(db)

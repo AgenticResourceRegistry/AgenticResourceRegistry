@@ -228,11 +228,53 @@ async def test_send_respects_disabled_setting(monkeypatch: pytest.MonkeyPatch):
     assert await usage_ping.send_usage_ping(FakeDb()) == "disabled"
 
 
+def test_fallback_company_name_is_stable_per_installation():
+    installation_id = uuid.UUID("00000000-0000-0000-0000-0000000f4241")
+    assert usage_ping.fallback_company_name(installation_id) == "unknown-000001"
+    assert usage_ping.fallback_company_name(installation_id) == usage_ping.fallback_company_name(installation_id)
+
+
 @pytest.mark.asyncio
-async def test_send_requires_company_and_public_url(monkeypatch: pytest.MonkeyPatch):
+async def test_unconfigured_installation_reports_fallback_identity(monkeypatch: pytest.MonkeyPatch):
+    db = FakeDb()
+    monkeypatch.setattr(usage_ping.ds, "get", AsyncMock(return_value=""))
+    monkeypatch.setattr(usage_ping.ds, "get_bool", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        usage_ping,
+        "_postgres_counts",
+        AsyncMock(
+            return_value=sample_payload().counts.model_dump(exclude={"sessions_total", "sessions_7d", "sessions_30d"})
+        ),
+    )
+    monkeypatch.setattr(
+        usage_ping,
+        "_session_metrics",
+        AsyncMock(
+            return_value=(
+                {"sessions_total": 0, "sessions_7d": 0, "sessions_30d": 0},
+                sample_activity().model_dump(),
+                {},
+            )
+        ),
+    )
+
+    result = await usage_ping.build_usage_ping(db)
+
+    assert result.identity.company_name == usage_ping.fallback_company_name(db.state.installation_id)
+    assert result.identity.hostname == "not-configured"
+
+
+@pytest.mark.asyncio
+async def test_send_does_not_require_company_or_public_url(monkeypatch: pytest.MonkeyPatch):
+    db = FakeDb()
     monkeypatch.setattr(usage_ping.ds, "get_bool", AsyncMock(return_value=True))
     monkeypatch.setattr(usage_ping.ds, "get", AsyncMock(return_value=""))
-    assert await usage_ping.send_usage_ping(FakeDb()) == "not-configured"
+    monkeypatch.setattr(usage_ping, "build_usage_ping", AsyncMock(return_value=sample_payload()))
+    deliver = AsyncMock(return_value=MagicMock(text='{"status":"accepted"}'))
+    monkeypatch.setattr(usage_ping, "_deliver_payload", deliver)
+
+    assert await usage_ping.send_usage_ping(db) == "sent"
+    deliver.assert_awaited_once()
 
 
 @pytest.mark.asyncio
