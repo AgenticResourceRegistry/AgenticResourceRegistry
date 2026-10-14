@@ -151,6 +151,5 @@ export const PAGE_DOCS: Record<string, DocRef> = {
 	// Admin
 	"audit-log": { file: "reference/api-endpoints.md", label: "API Reference" },
 	"sso": { file: "self-hosting/authentication.md", label: "SSO" },
-	"diagnostics": { file: "self-hosting/troubleshooting.md", label: "Troubleshooting" },
 	"migration": { file: "self-hosting/data-migration.md", label: "Data Migration" },
 };

@@ -72,8 +72,7 @@ src/routes/
 │   │   ├── sso.tsx
 │   │   ├── users.tsx
 │   │   ├── audit-log.tsx
-│   │   ├── security-events.tsx
-│   │   └── diagnostics.tsx
+│   │   └── security-events.tsx
 │   ├── _user.tsx                   #   User layout
 │   └── _user/
 │       ├── account.tsx

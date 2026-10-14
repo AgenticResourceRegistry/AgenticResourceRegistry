@@ -32,7 +32,6 @@ test.describe("administration surfaces", () => {
     ["/users", "Users"],
     ["/audit-log", "Audit Log"],
     ["/security-events", "Security Events"],
-    ["/diagnostics", "Diagnostics"],
   ] as const) {
     test(`${heading} exposes its administration heading`, async ({ page }) => {
       await page.goto(path);

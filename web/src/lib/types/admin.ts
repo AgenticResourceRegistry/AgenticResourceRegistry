@@ -94,11 +94,6 @@ export interface SecurityEvent {
 	detail: string;
 }
 
-export interface DiagnosticsResponse {
-	status: "ok" | "degraded" | "unhealthy";
-	checks: Record<string, Record<string, unknown>>;
-}
-
 export interface RestartStatus {
 	required: boolean;
 	changed_at: string | null;
