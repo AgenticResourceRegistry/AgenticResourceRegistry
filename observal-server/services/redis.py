@@ -13,6 +13,8 @@ import redis.asyncio as aioredis
 from arq import create_pool as arq_create_pool
 from arq.connections import ArqRedis, RedisSettings
 from loguru import logger as optic
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from config import settings
 
@@ -55,7 +57,7 @@ async def publish(channel: str, data: dict):
             _elapsed = (time.perf_counter() - _t0) * 1000
             optic.trace("published to channel '{}' ({:.0f}ms)", channel, _elapsed)
             return
-        except (ConnectionError, OSError) as e:
+        except (ConnectionError, OSError, RedisConnectionError, RedisTimeoutError) as e:
             attempts += 1
             if attempts >= max_attempts:
                 _elapsed = (time.perf_counter() - _t0) * 1000
@@ -97,7 +99,7 @@ async def subscribe(channel: str):
                     except (json.JSONDecodeError, TypeError):
                         optic.trace("malformed message on '{}', skipping", channel)
                         continue
-        except (ConnectionError, OSError, TimeoutError) as e:
+        except (ConnectionError, OSError, TimeoutError, RedisConnectionError, RedisTimeoutError) as e:
             reconnect_count += 1
             optic.warning(
                 "lost connection to '{}', reconnecting ({}/{}) - {}",
