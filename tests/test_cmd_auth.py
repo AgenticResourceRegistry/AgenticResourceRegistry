@@ -753,6 +753,24 @@ def test_quick_choice_restores_terminal_before_printing_selection(monkeypatch: p
     assert events[3] == ("print", ("1",), {})
 
 
+def test_quick_choice_windows_uses_native_keypress(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rich
+
+    from observal_cli import prompts
+
+    keys = iter(["x", "2"])
+    msvcrt = ModuleType("msvcrt")
+    msvcrt.getwch = lambda: next(keys)
+    monkeypatch.setitem(sys.modules, "msvcrt", msvcrt)
+    monkeypatch.setattr(prompts.sys, "platform", "win32")
+    monkeypatch.setattr(prompts.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    printed: list[str] = []
+    monkeypatch.setattr(rich, "print", lambda value, **_kwargs: printed.append(value))
+
+    assert prompts.quick_choice("Login method", ["1", "2"]) == "2"
+    assert printed == ["  Login method: ", "2"]
+
+
 def test_login_password_menu_prompts_for_identifier_and_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

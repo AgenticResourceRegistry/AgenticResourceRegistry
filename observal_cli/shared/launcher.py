@@ -132,6 +132,16 @@ def windows_module_command(module: str, env: dict[str, str] | None = None) -> st
     return f'{interpreter} -I -c "{code}"' if code else f"{interpreter} -I -m {module}"
 
 
+def windows_powershell_module_command(module: str, env: dict[str, str] | None = None) -> str:
+    """PowerShell form of the isolated Windows launcher, with literal arguments.
+
+    PowerShell needs ``&`` to execute a quoted path. Single-quoted arguments
+    cannot expand inherited variables or metacharacters in the bootstrap.
+    """
+    argv = windows_module_argv(module, env)
+    return "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in argv)
+
+
 def module_command(module: str, env: dict[str, str] | None = None) -> str:
     """The hook command prefix running ``module`` (arguments are appended by the caller)."""
     if sys.platform == "win32":

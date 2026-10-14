@@ -60,6 +60,31 @@ def _install_plugin(
     )
 
 
+def test_windows_claude_mcp_commands_use_native_cmd_shim(monkeypatch: pytest.MonkeyPatch):
+    import shutil
+    import sys
+
+    adapter = ClaudeCodeAdapter()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda name: "C:/Apps/Claude CLI/claude.cmd" if name == "claude.cmd" else None)
+    assert adapter.prepare_mcp_setup_command(["claude", "mcp", "add", "srv", "--", "python"], "project") == [
+        "C:/Apps/Claude CLI/claude.cmd",
+        "mcp",
+        "add",
+        "--scope",
+        "project",
+        "srv",
+        "--",
+        "python",
+    ]
+    assert adapter.prepare_mcp_setup_command(["claude", "mcp", "remove", "srv"], "project") == [
+        "C:/Apps/Claude CLI/claude.cmd",
+        "mcp",
+        "remove",
+        "srv",
+    ]
+
+
 def test_adapter_metadata_registry_and_capability_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     adapter = ClaudeCodeAdapter()
     registry = HARNESS_REGISTRY["claude-code"]

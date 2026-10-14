@@ -288,17 +288,39 @@ def test_session_hash_recheck_declines_ambiguous_mid_session_change(monkeypatch)
         return next(values)
 
     monkeypatch.setattr(session_base, "_compute_layer_hash_safe", calculate)
-    sid = "fixture-phase0-session"
-    session_base._evict_layer_hash_cache(sid)
+    sid, cwd, harness = "fixture-phase0-session", "/tmp/fixture", "claude-code"
+    session_base._evict_layer_hash_cache(sid, cwd, harness)
     try:
-        assert session_base._get_cached_layer_hash(sid, "/tmp/fixture") == "old-file-hash"
-        assert session_base._get_cached_layer_hash(sid, "/tmp/fixture") is None
-        assert session_base._get_cached_layer_hash(sid, "/tmp/fixture") is None
+        assert session_base._get_cached_layer_hash(sid, cwd, harness) == "old-file-hash"
+        assert session_base._get_cached_layer_hash(sid, cwd, harness) is None
+        assert session_base._get_cached_layer_hash(sid, cwd, harness) is None
         assert len(calls) == 3
-        session_base._evict_layer_hash_cache(sid)
-        assert session_base._get_cached_layer_hash(sid, "/tmp/fixture") == "new-file-hash"
+        session_base._evict_layer_hash_cache(sid, cwd, harness)
+        assert session_base._get_cached_layer_hash(sid, cwd, harness) == "new-file-hash"
     finally:
-        session_base._evict_layer_hash_cache(sid)
+        session_base._evict_layer_hash_cache(sid, cwd, harness)
+
+
+def test_session_hash_cache_scopes_colliding_ids_by_project_and_harness(monkeypatch):
+    hashes = {
+        ("/one", "claude-code"): "one-v1",
+        ("/two", "claude-code"): "two-v1",
+        ("/one", "pi"): "pi-v1",
+    }
+    monkeypatch.setattr(session_base, "_compute_layer_hash_safe", lambda cwd, harness: hashes[cwd, harness])
+    sid = "same-session-id"
+    session_base._layer_hash_cache.clear()
+    try:
+        for (cwd, harness), expected in hashes.items():
+            assert session_base._get_cached_layer_hash(sid, cwd, harness) == expected
+        hashes["/one", "claude-code"] = "one-v2"
+        assert session_base._get_cached_layer_hash(sid, "/one", "claude-code") is None
+        session_base._evict_layer_hash_cache(sid, "/two", "claude-code")
+        assert session_base._get_cached_layer_hash(sid, "/one", "claude-code") is None
+        assert session_base._get_cached_layer_hash(sid, "/two", "claude-code") == "two-v1"
+        assert session_base._get_cached_layer_hash(sid, "/one", "pi") == "pi-v1"
+    finally:
+        session_base._layer_hash_cache.clear()
 
 
 def test_session_cache_detects_real_file_change_at_next_push(monkeypatch, tmp_path):
@@ -313,17 +335,17 @@ def test_session_cache_detects_real_file_change_at_next_push(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(layer, "_detect_active_harnesses", lambda: ["claude-code"])
     monkeypatch.setattr(layer, "_LOCAL_SNAPSHOT_PATH", tmp_path / "local-snapshot.json")
-    sid = "fixture-in-session-change"
-    session_base._evict_layer_hash_cache(sid)
+    sid, cwd, harness = "fixture-in-session-change", str(tmp_path), "claude-code"
+    session_base._evict_layer_hash_cache(sid, cwd, harness)
     try:
-        before = session_base._get_cached_layer_hash(sid, str(tmp_path))
+        before = session_base._get_cached_layer_hash(sid, cwd, harness)
         config.write_text("modified-mid-session")
-        assert layer.compute_layer_hash(project_dir=str(tmp_path)) != before
-        assert session_base._get_cached_layer_hash(sid, str(tmp_path)) is None
-        session_base._evict_layer_hash_cache(sid)
-        assert session_base._get_cached_layer_hash(sid, str(tmp_path)) != before
+        assert layer.compute_layer_hash(project_dir=cwd) != before
+        assert session_base._get_cached_layer_hash(sid, cwd, harness) is None
+        session_base._evict_layer_hash_cache(sid, cwd, harness)
+        assert session_base._get_cached_layer_hash(sid, cwd, harness) != before
     finally:
-        session_base._evict_layer_hash_cache(sid)
+        session_base._evict_layer_hash_cache(sid, cwd, harness)
 
 
 def test_python_v2_hash_changes_for_independent_pin_id_version_and_alias(monkeypatch):

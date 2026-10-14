@@ -19,6 +19,7 @@
 #     • test (3.12)
 #     • test (3.13)
 #     • test (3.14)
+#     • windows-launchers
 #     • web-lint
 #     • pi-extension
 #     • docker-build
@@ -206,6 +207,34 @@ jobs:
           disable_search: true
           # Fork pull requests cannot access repository secrets, so Codecov authenticates those tokenlessly.
           fail_ci_if_error: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+
+# ── Job 3b: Execute generated hook commands in native Windows shells ─────────
+  windows-launchers:
+    name: windows-launchers
+    runs-on: windows-latest
+    needs: changes
+    steps:
+      - name: Skip if no Python changes
+        if: needs.changes.outputs.python != 'true'
+        run: echo '::notice::No Python changes detected, skipping Windows launcher tests'
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: needs.changes.outputs.python == 'true'
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        if: needs.changes.outputs.python == 'true'
+        with:
+          enable-cache: true
+
+      - name: Install Python and project dependencies
+        if: needs.changes.outputs.python == 'true'
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev
+
+      - name: Run cmd.exe and PowerShell launchers
+        if: needs.changes.outputs.python == 'true'
+        run: uv run --python 3.13 pytest tests/test_windows_launcher_native.py -q
 
 # ── Job 4: Web lint + typecheck ───────────────────────────────────────────────
   web-lint:

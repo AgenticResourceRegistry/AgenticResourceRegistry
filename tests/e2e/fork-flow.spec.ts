@@ -168,6 +168,15 @@ test.describe("Registry fork workflow", () => {
     await page.getByRole("tab", { name: "Forks (1)" }).click();
     await expect(page.getByText(`e2e-forked-skill-${suffix}`).first()).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("skill-public-forks-desktop.png"), fullPage: true });
+    // Fork links navigate within the same detail route; the previous listing's
+    // active tab must not carry over to a different component.
+    await page.getByRole("link", { name: new RegExp(`e2e-forked-skill-${suffix}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/components/${forkSkill}`));
+    await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-state", "active");
+    await expect(page.getByRole("tab", { name: "Insights" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("skill-fork-overview-desktop.png"), fullPage: true });
+    await page.goto(`/components/${sourceSkill}?type=skills`);
+    await page.getByRole("tab", { name: "Forks (1)" }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: testInfo.outputPath("skill-public-forks-mobile.png"), fullPage: true });
     await api("/teams/claim-personal", "POST");
