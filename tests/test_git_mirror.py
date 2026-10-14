@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Integration tests for git mirror service — real git operations, no mocks.
@@ -8,10 +9,14 @@ These tests create real git repos in tmpdir and exercise the full clone/discover
 
 import json
 import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+import services.git_mirror_service as gms
 from services.git_mirror_service import (
     _mirror_path,
     _parse_manifest,
@@ -392,6 +397,74 @@ class TestSyncSource:
         assert r2.success is True
         assert len(r2.components) == 2  # Original + new
         assert r2.commit_sha != r1.commit_sha
+
+
+# ── Mirror Lock ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def overlap_tracker(monkeypatch):
+    """Count syncs that are between clone start and discovery end, and keep the peak.
+
+    Discovery sleeps so that an unserialized second sync would start its clone
+    while the first sync is still scanning the checkout.
+    """
+    state = {"active": 0, "peak": 0}
+    guard = threading.Lock()
+    real_clone, real_discover = gms.clone_or_update, gms.discover_components
+
+    def clone(*args, **kwargs):
+        with guard:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        return real_clone(*args, **kwargs)
+
+    def discover(*args, **kwargs):
+        time.sleep(0.3)
+        try:
+            return real_discover(*args, **kwargs)
+        finally:
+            with guard:
+                state["active"] -= 1
+
+    monkeypatch.setattr(gms, "clone_or_update", clone)
+    monkeypatch.setattr(gms, "discover_components", discover)
+    return state
+
+
+def _sync_in_parallel(*calls: tuple[str, str], base: Path):
+    with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+        futures = [pool.submit(sync_source, url, component_type, base=base) for url, component_type in calls]
+        return [f.result() for f in futures]
+
+
+class TestMirrorLock:
+    def test_same_url_syncs_run_one_at_a_time(self, monorepo_convention, tmp_base, overlap_tracker):
+        """One URL registered as both mcp and skill shares a checkout, so its syncs must not overlap."""
+        url = str(monorepo_convention)
+        mcp, skill = _sync_in_parallel((url, "mcp"), (url, "skill"), base=tmp_base)
+
+        assert overlap_tracker["peak"] == 1
+        assert mcp.success is True, mcp.error
+        assert skill.success is True, skill.error
+        assert len(mcp.components) == 2
+        assert [c.name for c in skill.components] == ["debugging"]
+
+    def test_different_urls_sync_in_parallel(self, simple_mcp_repo, manifest_repo, tmp_base, overlap_tracker):
+        """The lock is per mirror, so unrelated sources do not wait on each other."""
+        results = _sync_in_parallel((str(simple_mcp_repo), "mcp"), (str(manifest_repo), "mcp"), base=tmp_base)
+
+        assert overlap_tracker["peak"] == 2
+        assert all(r.success for r in results)
+
+    def test_lock_file_sits_beside_the_mirror(self, simple_mcp_repo, tmp_base):
+        """A fresh clone replaces the mirror directory, so the lock file cannot live inside it."""
+        result = sync_source(str(simple_mcp_repo), component_type="mcp", base=tmp_base)
+
+        mirror = _mirror_path(str(simple_mcp_repo), tmp_base)
+        assert result.success is True
+        assert (mirror / ".git").is_dir()
+        assert mirror.with_name(f"{mirror.name}.lock").is_file()
 
 
 # ── Mirror Path ──────────────────────────────────────────────────────

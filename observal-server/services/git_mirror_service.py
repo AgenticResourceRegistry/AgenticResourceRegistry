@@ -1,15 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Git mirroring and component discovery service."""
 
+import fcntl
 import hashlib
 import json
 import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,6 +47,23 @@ def _mirror_path(git_url: str, base: Path = DEFAULT_MIRROR_BASE) -> Path:
     optic.trace("computing mirror path for {}", git_url)
     url_hash = hashlib.sha256(git_url.encode()).hexdigest()[:16]
     return base / url_hash
+
+
+@contextmanager
+def _mirror_lock(mirror_dir: Path) -> Iterator[None]:
+    """Hold an exclusive lock on one mirror checkout.
+
+    flock locks belong to the open file, so this serializes syncs across worker
+    threads and across uvicorn processes that share the mirror base. The lock
+    file sits beside the mirror because a fresh clone deletes the mirror directory.
+    """
+    mirror_dir.parent.mkdir(parents=True, exist_ok=True)
+    with open(mirror_dir.with_name(f"{mirror_dir.name}.lock"), "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _run_git(args: list[str], cwd: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -251,20 +272,22 @@ def sync_source(
     """Full sync pipeline: clone -> discover -> validate. Returns SyncResult."""
     optic.debug("mirroring {} components from {} (branch={})", component_type, git_url, branch)
     try:
-        mirror_dir = clone_or_update(git_url, branch=branch, base=base)
-        commit_sha = get_commit_sha(mirror_dir)
-        components = discover_components(mirror_dir, component_type)
+        # Held until validation ends: another sync's reset would change files mid-scan.
+        with _mirror_lock(_mirror_path(git_url, base)):
+            mirror_dir = clone_or_update(git_url, branch=branch, base=base)
+            commit_sha = get_commit_sha(mirror_dir)
+            components = discover_components(mirror_dir, component_type)
 
-        # Validate MCP components
-        valid_components = []
-        for comp in components:
-            if comp.component_type == "mcp":
-                comp_path = mirror_dir / comp.path
-                passed, detail = validate_mcp_component(comp_path)
-                if not passed:
-                    optic.warning("MCP validation failed for {}: {}", comp.name, detail)
-                    continue  # Skip invalid MCPs
-            valid_components.append(comp)
+            # Validate MCP components
+            valid_components = []
+            for comp in components:
+                if comp.component_type == "mcp":
+                    comp_path = mirror_dir / comp.path
+                    passed, detail = validate_mcp_component(comp_path)
+                    if not passed:
+                        optic.warning("MCP validation failed for {}: {}", comp.name, detail)
+                        continue  # Skip invalid MCPs
+                valid_components.append(comp)
 
         return SyncResult(
             success=True,
