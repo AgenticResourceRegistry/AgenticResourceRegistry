@@ -1496,8 +1496,6 @@ def _post_login_setup():
     """Install bundled integrations and instrument an existing Claude Code installation."""
     # Bundled skill installation may create ~/.claude even when Claude Code isn't installed.
     claude_detected = (Path.home() / ".claude").is_dir() or shutil.which("claude") is not None
-    _install_observal_skill()
-    _install_or_check_pi_extension()
     if claude_detected:
         try:
             from observal_cli.cmd_doctor import _patch_claude_code
@@ -1506,6 +1504,8 @@ def _post_login_setup():
         except (OSError, ValueError, RuntimeError) as error:
             rprint(f"[yellow]Could not install Claude Code session hooks: {error}[/yellow]")
             rprint("  Run [bold]observal doctor patch --harness claude-code[/bold] manually.")
+    _install_observal_skill()
+    _install_or_check_pi_extension()
     _generate_initial_layer_snapshot()
     rprint()
     try:
