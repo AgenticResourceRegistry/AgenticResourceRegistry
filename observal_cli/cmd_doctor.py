@@ -252,6 +252,29 @@ def _check_observal_config(issues: list, warnings: list):
             issues.append(f"Cannot reach Observal server at {server_url}: {e}")
 
 
+def _valid_claude_hook_entries(hooks: dict) -> bool:
+    """Validate traversed groups; leave unrelated non-list events untouched."""
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            if event in ("UserPromptSubmit", "Stop"):
+                return False
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                return False
+            handlers = group.get("hooks", [])
+            if not isinstance(handlers, list):
+                return False
+            for handler in handlers:
+                if (
+                    not isinstance(handler, dict)
+                    or not isinstance(handler.get("command", ""), str)
+                    or not isinstance(handler.get("url", ""), str)
+                ):
+                    return False
+    return True
+
+
 def _check_claude_code(issues: list, warnings: list):
     optic.trace("issues={}, warnings={}", issues, warnings)
     settings_path = Path.home() / ".claude" / "settings.json"
@@ -270,6 +293,9 @@ def _check_claude_code(issues: list, warnings: list):
         return
     if not isinstance(data.get("hooks", {}), dict) or not isinstance(data.get("env", {}), dict):
         issues.append(f"{settings_path}: hooks and env must be JSON objects.")
+        return
+    if not _valid_claude_hook_entries(data.get("hooks", {})):
+        issues.append(f"{settings_path}: hooks contain malformed event entries.")
         return
 
     if data.get("disableAllHooks"):
@@ -1271,6 +1297,7 @@ def _patch_claude_code(dry_run: bool) -> bool:
             current is None
             or not isinstance(current.get("hooks", {}), dict)
             or not isinstance(current.get("env", {}), dict)
+            or not _valid_claude_hook_entries(current.get("hooks", {}))
         ):
             raise ValueError(f"Cannot patch invalid Claude Code settings: {settings_path}")
     else:
