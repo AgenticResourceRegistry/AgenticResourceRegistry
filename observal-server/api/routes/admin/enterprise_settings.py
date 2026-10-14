@@ -267,14 +267,6 @@ async def upsert_setting(
         value = value.lower()
         if value not in {"true", "false"}:
             raise HTTPException(status_code=422, detail="Usage reporting must be true or false")
-        if value == "true":
-            company_name = (await ds.get("usage_ping.company_name")).strip()
-            public_url = (await ds.get("deployment.public_url")).strip()
-            if not company_name or not public_url:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Company name and deployment public URL are required before enabling usage reporting",
-                )
 
     sensitive = key in ds.SENSITIVE_KEYS
     store_value = ds.encrypt_value(value) if sensitive else value

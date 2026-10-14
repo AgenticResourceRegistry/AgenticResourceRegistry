@@ -333,8 +333,8 @@ DEFAULTS: dict[str, str] = {
     "deployment.frontend_url": "http://localhost:3000",
     "deployment.public_url": "",
     "deployment.cors_origins": "http://localhost:3000",
-    # Optional aggregate usage reporting. Company identity and public URL are
-    # required before the sender will transmit anything.
+    # Aggregate usage reporting, on for new installations. Until a company name
+    # is set, reports identify the installation as unknown-<number>.
     "usage_ping.enabled": "true",
     "usage_ping.company_name": "",
     "usage_ping.frequency": "every_6_hours",
