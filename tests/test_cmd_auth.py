@@ -1914,14 +1914,17 @@ def test_config_storage_is_atomic_private_and_rejects_malformed_json(
 
 
 def test_post_login_setup_installs_skills_snapshots_and_runs_doctor(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import observal_cli.cmd_doctor as cmd_doctor
 
-    install = MagicMock()
-    pi_extension = MagicMock()
-    snapshot = MagicMock()
-    doctor = MagicMock()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    setup_order: list[str] = []
+    install = MagicMock(side_effect=lambda: setup_order.append("skills"))
+    pi_extension = MagicMock(side_effect=lambda: setup_order.append("pi"))
+    snapshot = MagicMock(side_effect=lambda: setup_order.append("snapshot"))
+    doctor = MagicMock(side_effect=lambda **_kwargs: setup_order.append("doctor"))
     monkeypatch.setattr(auth, "_install_observal_skill", install)
     monkeypatch.setattr(auth, "_install_or_check_pi_extension", pi_extension)
     monkeypatch.setattr(auth, "_generate_initial_layer_snapshot", snapshot)
@@ -1934,16 +1937,19 @@ def test_post_login_setup_installs_skills_snapshots_and_runs_doctor(
     snapshot.assert_called_once_with()
     assert doctor.call_args.kwargs["yes"] is False
     assert doctor.call_args.kwargs["ctx"].invoked_subcommand is None
+    assert setup_order == ["skills", "pi", "snapshot", "doctor"]
 
 
 @pytest.mark.parametrize("error", [typer.Exit(1), RuntimeError("doctor unavailable")])
 def test_post_login_setup_contains_doctor_failures(
     error: Exception,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     printed: list[str],
 ) -> None:
     import observal_cli.cmd_doctor as cmd_doctor
 
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(auth, "_install_observal_skill", MagicMock())
     monkeypatch.setattr(auth, "_install_or_check_pi_extension", MagicMock())
     monkeypatch.setattr(auth, "_generate_initial_layer_snapshot", MagicMock())

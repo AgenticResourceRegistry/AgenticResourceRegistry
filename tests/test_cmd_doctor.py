@@ -852,6 +852,81 @@ class TestCleanupFunctions:
         assert rules == {"Stop": [{"hooks": [{"type": "command", "command": "foreign"}]}]}
 
 
+def test_login_with_claude_binary_installs_hooks_and_bundled_skills_in_fresh_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth, skill_installer
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
+
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+    assert not (tmp_path / ".claude").exists()
+
+    cmd_auth._post_login_setup()
+
+    claude_dir = tmp_path / ".claude"
+    assert ClaudeCodeAdapter().detect_hooks(claude_dir) == "installed"
+    for name in skill_installer._SKILL_DIRS:
+        source = skill_installer._SKILLS_BASE / name
+        target = claude_dir / "skills" / name
+        assert skill_installer._directory_hash(target) == skill_installer._directory_hash(source)
+    assert skill_installer.missing_observal_skill_harnesses(tmp_path) == []
+    assert not (tmp_path / ".pi").exists()
+
+
+def test_login_without_claude_does_not_create_claude_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+
+    assert not (tmp_path / ".claude").exists()
+    assert not (tmp_path / ".pi").exists()
+
+
+def test_login_preserves_foreign_claude_hooks_and_skills_on_repeat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo foreign"}]}]},
+                "permissions": {"allow": ["Read"]},
+            }
+        )
+    )
+    custom = tmp_path / ".claude/skills/custom/SKILL.md"
+    custom.parent.mkdir(parents=True)
+    custom.write_text("User-owned skill\n")
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+    merged = json.loads(settings.read_text())
+    assert merged["permissions"] == {"allow": ["Read"]}
+    assert {event for event in merged["hooks"]} == {"UserPromptSubmit", "Stop"}
+    assert any(h.get("command") == "echo foreign" for g in merged["hooks"]["Stop"] for h in g["hooks"])
+    assert custom.read_text() == "User-owned skill\n"
+    before = settings.read_bytes()
+    skill_mtime = (tmp_path / ".claude/skills/observal/SKILL.md").stat().st_mtime_ns
+
+    cmd_auth._post_login_setup()
+
+    assert settings.read_bytes() == before
+    assert (tmp_path / ".claude/skills/observal/SKILL.md").stat().st_mtime_ns == skill_mtime
+    assert custom.read_text() == "User-owned skill\n"
+
+
 def test_login_installs_two_claude_hooks_in_fresh_home_and_doctor_recognizes_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -907,6 +982,25 @@ def test_doctor_warns_if_claude_installed_without_settings_file(tmp_path: Path, 
     warnings: list[str] = []
     _check_claude_code([], warnings)
     assert any("Claude Code session push hooks not installed" in warning for warning in warnings)
+
+
+def test_login_with_invalid_settings_still_installs_skills_without_overwriting_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth, skill_installer
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    settings.write_text("{ invalid")
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+
+    assert settings.read_text() == "{ invalid"
+    assert all((tmp_path / ".claude/skills" / name / "SKILL.md").is_file() for name in skill_installer._SKILL_DIRS)
 
 
 def test_login_never_overwrites_invalid_claude_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
