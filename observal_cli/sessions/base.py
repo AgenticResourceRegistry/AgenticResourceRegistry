@@ -886,7 +886,7 @@ def build_payload(
     agent_id, agent_version = _resolve_agent(
         cwd, lines, session_jsonl, harness=harness, session_ids=(session_id, parent_session_id)
     )
-    layer_hash = None if recovered_without_cwd and not cwd else _get_cached_layer_hash(session_id, cwd)
+    layer_hash = None if recovered_without_cwd and not cwd else _get_cached_layer_hash(session_id, cwd, harness)
     payload: dict = {
         "session_id": session_id,
         "harness": "claude-code",
@@ -905,7 +905,7 @@ def build_payload(
         payload["final"] = True
         payload["total_line_count"] = line_count_before + len(lines)
         payload["total_offset"] = new_offset
-        _evict_layer_hash_cache(session_id)
+        _evict_layer_hash_cache(session_id, cwd, harness)
     return payload
 
 
@@ -1006,22 +1006,23 @@ def _capabilities_for_session(session_id: str, cwd: str, harness: str, session_j
 
 
 # A detected mid-session transition makes later unattributable intervals unknown.
-_layer_hash_cache: dict[str, str | None] = {}
+_layer_hash_cache: dict[tuple[str, str, str], str | None] = {}
 
 
-def _get_cached_layer_hash(session_id: str, cwd: str) -> str | None:
-    """Recheck each push boundary; never apply a later snapshot to earlier calls."""
-    current = _compute_layer_hash_safe(cwd, "claude-code")
-    if session_id not in _layer_hash_cache:
-        _layer_hash_cache[session_id] = current
-    elif _layer_hash_cache[session_id] != current:
-        _layer_hash_cache[session_id] = None  # Sticky ambiguous transition.
-    return _layer_hash_cache[session_id]
+def _get_cached_layer_hash(session_id: str, cwd: str, harness: str) -> str | None:
+    """Recheck each scoped session; never mix projects or harnesses sharing an ID."""
+    key = (session_id, cwd, harness)
+    current = _compute_layer_hash_safe(cwd, harness)
+    if key not in _layer_hash_cache:
+        _layer_hash_cache[key] = current
+    elif _layer_hash_cache[key] != current:
+        _layer_hash_cache[key] = None  # Sticky ambiguous transition.
+    return _layer_hash_cache[key]
 
 
-def _evict_layer_hash_cache(session_id: str) -> None:
-    """Remove cached hash when session ends (Stop event)."""
-    _layer_hash_cache.pop(session_id, None)
+def _evict_layer_hash_cache(session_id: str, cwd: str, harness: str) -> None:
+    """Remove only the completed scoped session's hash on Stop."""
+    _layer_hash_cache.pop((session_id, cwd, harness), None)
 
 
 def _compute_layer_hash_safe(cwd: str, harness: str) -> str | None:

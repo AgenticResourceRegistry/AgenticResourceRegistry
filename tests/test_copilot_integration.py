@@ -363,7 +363,7 @@ class TestBuildCopilotCliHooks:
             bash = entries[0]["bash"]
             ps = entries[0]["powershell"]
             assert "OBSERVAL_AGENT_ID=agent-uuid-42" in bash, f"{event} bash missing UUID"
-            assert "agent-uuid-42" in ps and "OBSERVAL_AGENT_ID" in ps, f"{event} powershell missing UUID"
+            assert b"agent-uuid-42".hex() in ps, f"{event} powershell missing UUID"
             # The push command must still be present after the prefix.
             assert "hooks.session_push --harness copilot-cli" in bash
 
@@ -376,14 +376,16 @@ class TestBuildCopilotCliHooks:
         import sys
 
         from observal_cli.harness_specs.copilot_cli_hooks_spec import build_copilot_cli_hooks
+        from observal_cli.shared.launcher import windows_powershell_module_command
 
         ps_path = sys.executable.replace("'", "''")
-        invoke = f"& '{ps_path}' -m observal_cli.hooks.session_push --harness copilot-cli"
         for agent_id in ("", "agent-uuid-42"):
+            env = {"OBSERVAL_AGENT_ID": agent_id} if agent_id else None
+            invoke = windows_powershell_module_command("observal_cli.hooks.session_push", env)
             for entries in build_copilot_cli_hooks(agent_id=agent_id)["hooks"].values():
                 ps = entries[0]["powershell"]
-                assert ps.endswith(invoke), ps
-                assert not ps.startswith("python ")
+                assert ps == f"{invoke} --harness copilot-cli"
+                assert ps.startswith(f"& '{ps_path}' '-I' ")
 
 
 class TestRewriteCopilotCliHooks:
@@ -417,7 +419,7 @@ class TestRewriteCopilotCliHooks:
 
         monkeypatch.setattr(sys, "executable", "C:/Apps/$env:TEMP/it's python.exe")
         command = build_copilot_cli_hooks()["hooks"]["sessionStart"][0]["powershell"]
-        assert command.startswith("& 'C:/Apps/$env:TEMP/it''s python.exe' -m observal_cli.hooks.session_push")
+        assert command.startswith("& 'C:/Apps/$env:TEMP/it''s python.exe' '-I' ")
 
     def test_rebuilt_powershell_keeps_cli_interpreter(self):
         """Pull pins the interpreter, then this rebuild runs; it must not restore bare python."""
@@ -428,7 +430,7 @@ class TestRewriteCopilotCliHooks:
         out = _rewrite_copilot_cli_hooks(self._server_content(), agent_id="uuid-99")
         for entries in out["hooks"].values():
             obs = [e for e in entries if "hooks.session_push --harness copilot-cli" in e.get("bash", "")]
-            assert f"& '{sys.executable}' -m observal_cli.hooks.session_push" in obs[0]["powershell"]
+            assert obs[0]["powershell"].startswith(f"& '{sys.executable}' '-I' ")
 
     def test_preserves_user_added_hooks(self):
         from observal_cli.cmd_pull import _rewrite_copilot_cli_hooks

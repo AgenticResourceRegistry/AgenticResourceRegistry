@@ -1006,8 +1006,9 @@ def test_build_payload_caches_layer_metadata_and_evicts_it_on_stop(monkeypatch):
     assert stopped["total_line_count"] == 5
     assert stopped["total_offset"] == 90
     assert stopped["final"] is True
-    assert hashes == [("/repo", "claude-code")] * 3
-    assert "session" not in base._layer_hash_cache
+    assert hashes == [("/repo", "cursor"), ("/repo", "claude-code"), ("/repo", "claude-code")]
+    assert ("session", "/repo", "claude-code") not in base._layer_hash_cache
+    assert base._layer_hash_cache[("session", "/repo", "cursor")] == "layer-hash"
 
 
 def test_layer_hash_and_canonical_checks_are_fail_soft(monkeypatch):
@@ -1260,7 +1261,7 @@ def test_sessions_rebuilt_from_disk_hash_and_upload_the_recorded_project(tmp_pat
     for no project, so a session the live hooks never saw had no snapshot for its hash at all."""
     project = tmp_path / "project"
     project.mkdir()
-    monkeypatch.setattr(base, "_get_cached_layer_hash", lambda _session, cwd: f"hash-of:{cwd}")
+    monkeypatch.setattr(base, "_get_cached_layer_hash", lambda _session, cwd, _harness: f"hash-of:{cwd}")
     monkeypatch.setattr(base, "_resolve_agent", lambda *args, **kwargs: (None, None))
     monkeypatch.setattr(base, "_capabilities_for_session", lambda *args, **kwargs: None)
     monkeypatch.setattr(base, "drain_outbox", lambda *args, **kwargs: True)
