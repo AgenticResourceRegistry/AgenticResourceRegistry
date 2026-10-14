@@ -1003,6 +1003,34 @@ def test_login_with_invalid_settings_still_installs_skills_without_overwriting_s
     assert all((tmp_path / ".claude/skills" / name / "SKILL.md").is_file() for name in skill_installer._SKILL_DIRS)
 
 
+@pytest.mark.parametrize("malformed", [{"hooks": None}, {"env": None}])
+def test_login_with_malformed_claude_hook_settings_continues_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: dict
+):
+    from observal_cli import cmd_auth, skill_installer
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    original = json.dumps(malformed)
+    settings.write_text(original)
+    pi_setup = MagicMock()
+    doctor = MagicMock()
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", pi_setup)
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", doctor)
+
+    cmd_auth._post_login_setup()
+
+    assert settings.read_text() == original
+    assert all((tmp_path / ".claude/skills" / name / "SKILL.md").is_file() for name in skill_installer._SKILL_DIRS)
+    pi_setup.assert_called_once()
+    doctor.assert_called_once()
+    issues: list[str] = []
+    _check_claude_code(issues, [])
+    assert any("settings.json" in issue for issue in issues)
+
+
 def test_login_never_overwrites_invalid_claude_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from observal_cli import cmd_auth
 
