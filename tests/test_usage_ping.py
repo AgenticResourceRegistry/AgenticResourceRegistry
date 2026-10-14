@@ -261,7 +261,7 @@ async def test_unconfigured_installation_reports_fallback_identity(monkeypatch: 
     result = await usage_ping.build_usage_ping(db)
 
     assert result.identity.company_name == usage_ping.fallback_company_name(db.state.installation_id)
-    assert result.identity.hostname == "not-configured"
+    assert result.identity.hostname == "unknown"
 
 
 @pytest.mark.asyncio
