@@ -22,6 +22,12 @@ function valueOf(settings: AdminSetting[], key: string, fallback = "") {
   return settings.find((setting) => setting.key === key)?.value ?? fallback;
 }
 
+// The settings list only returns stored rows, so an unset key must fall back to
+// the server default (usage_ping.enabled = "true") rather than reading as off.
+function enabledOf(settings: AdminSetting[]): boolean {
+  return valueOf(settings, "usage_ping.enabled", "true") === "true";
+}
+
 function frequencyOf(settings: AdminSetting[]): UsagePingFrequency {
   const value = valueOf(settings, "usage_ping.frequency", "every_6_hours");
   return FREQUENCY_OPTIONS.find((option) => option.value === value)?.value ?? "every_6_hours";
@@ -33,20 +39,16 @@ export function UsagePingSection({ settings, onChanged }: { settings: AdminSetti
   const sender = useSendUsagePing();
   const [companyName, setCompanyName] = useState(() => valueOf(settings, "usage_ping.company_name"));
   const [frequency, setFrequency] = useState<UsagePingFrequency>(() => frequencyOf(settings));
-  const [enabled, setEnabled] = useState(() => valueOf(settings, "usage_ping.enabled") === "true");
+  const [enabled, setEnabled] = useState(() => enabledOf(settings));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setCompanyName(valueOf(settings, "usage_ping.company_name"));
     setFrequency(frequencyOf(settings));
-    setEnabled(valueOf(settings, "usage_ping.enabled") === "true");
+    setEnabled(enabledOf(settings));
   }, [settings]);
 
   async function save() {
-    if (enabled && !companyName.trim()) {
-      toast.error("Add the company name before enabling usage reporting");
-      return;
-    }
     setSaving(true);
     try {
       await admin.updateSetting("usage_ping.company_name", { value: companyName.trim() });
@@ -131,13 +133,13 @@ export function UsagePingSection({ settings, onChanged }: { settings: AdminSetti
           <span>Next run: {status?.next_scheduled_at ? new Date(status.next_scheduled_at).toLocaleString() : "Loading"}</span>
         </div>
         {status?.last_error ? <p className="text-xs text-destructive">Last delivery failed: {status.last_error}</p> : null}
-        {enabled && status && !status.configured ? <p className="text-xs text-warning">Set both the company name and Deployment Public URL before sending.</p> : null}
+        {enabled && !companyName.trim() ? <p className="text-xs text-muted-foreground">Reports identify this instance as unknown until you add a company name.</p> : null}
 
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => preview.mutate()} disabled={preview.isPending}>
             <Eye className="mr-1.5 h-3.5 w-3.5" /> Preview exact payload
           </Button>
-          <Button variant="outline" size="sm" onClick={sendNow} disabled={!status?.enabled || !status.configured || sender.isPending}>
+          <Button variant="outline" size="sm" onClick={sendNow} disabled={!status?.enabled || sender.isPending}>
             {sender.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
             Send now
           </Button>

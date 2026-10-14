@@ -3,11 +3,11 @@
 
 # Usage reporting
 
-Observal can send aggregate usage reports to the Observal-operated collector at `https://usage.observal.io/api/v1/usage-pings`. Reporting is enabled by default with a six-hour cadence, but delivery remains dormant until a super administrator configures the company name and Deployment Public URL. The collector and reporting dashboard are maintained separately in [Observal Usage](https://github.com/Observal/observal_usage).
+Observal can send aggregate usage reports to the Observal-operated collector at `https://usage.observal.io/api/v1/usage-pings`. Reporting is enabled by default with a six-hour cadence and starts on new installations without any setup. Until a super administrator sets a company name, reports identify the installation as `unknown-` followed by a six-digit number derived from its installation ID. Once a name is set, the next report carries it under the same installation ID. The collector and reporting dashboard are maintained separately in [Observal Usage](https://github.com/Observal/observal_usage).
 
-## Enable reporting
+## Configure reporting
 
-A super administrator must configure **Deployment Public URL** and then open **Admin > Settings > Usage Reporting**, which appears near the top of the settings page. Enter the company name and save the reporting configuration. The available frequencies are every six hours, daily, and weekly. Every six hours is the default. The same panel can disable reporting, change the frequency, preview the exact payload, and send a test report.
+A super administrator can open **Admin > Settings > Usage Reporting**, which appears near the top of the settings page, to enter the company name and save the reporting configuration. Setting **Deployment Public URL** adds the deployment hostname to reports; without it the hostname is reported as `not-configured`. The available frequencies are every six hours, daily, and weekly. Every six hours is the default. The same panel can disable reporting, change the frequency, preview the exact payload, and send a test report.
 
 Only a super administrator can change the company identity, frequency, or consent setting.
 
@@ -16,7 +16,7 @@ Disabling the switch stops scheduled delivery immediately. It does not remove re
 ## Data included
 
 - Stable, randomly generated installation ID
-- Company name and deployment hostname supplied by the administrator
+- Company name and deployment hostname supplied by the administrator, or the `unknown-` placeholder and `not-configured` when unset
 - Observal version and deployment type
 - Aggregate counts for users, teams, registry components, agent installations, and sessions
 - Aggregate session totals by harness
