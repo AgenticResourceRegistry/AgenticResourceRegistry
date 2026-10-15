@@ -202,7 +202,7 @@ services:
       - observal-net
 
   observal-lb:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${API_HOST_PORT:-8000}:80"
     volumes:
