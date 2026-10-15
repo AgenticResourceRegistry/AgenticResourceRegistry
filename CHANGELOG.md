@@ -22,6 +22,36 @@ All notable changes to this project will be documented in this file.
 - Fork approved agents and registry components into independently owned drafts with visibility-safe provenance, public fork lists, CLI and web workflows.
 - Compare fork versions against their approved upstream in the detail and review UI; expose public-only ARD fork links and an `obs:forksOf` search facet.
 - Deprecate the Leaderboard and turn it off by default. While off, the tab, page, and leaderboard API are unavailable; super admins can turn it back on under Settings > Interface.
+- add bounded, resumable ClickHouse telemetry migration exports
+- auto-install the bundled Pi telemetry extension during login and report stale npm or local installs (#1602)
+- migrate Pi telemetry extensions installed before version tracking, keeping a `.bak` copy (#1602)
+- remove a local Pi extension that duplicates a configured `npm:observal-pi`, which sent every session twice (#1602)
+- add an authenticated JSON API escape hatch and mixed Registry component bulk submission
+- standardize dedicated list JSON output with `items`, `total`, `page`, and `page_size`
+- make mutation retry behavior explicit and reserve automatic transient retries for reads
+
+### Breaking changes
+
+- dedicated list commands that previously returned top-level arrays now return the standard list envelope
+
+### Security
+
+- remove shell command construction from Kiro end-to-end tests
+- add JWT algorithm agility, file-backed credentials, secure package bindings, signed release tags, verification guidance, and a security assurance case
+
+### Fixes
+
+- answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
+- support multi-artifact migration validation and import uploads
+- restore teamspace discovery, membership controls, private join requests, and empty personal deletion
+- require global review before a teamspace becomes public
+- let approved public teamspace owners and reviewers decide all team content
+- move the inbox filter rail to the right
+- require explicit Kiro session identity and keep aged recovery non-final
+- avoid duplicate bundled Observal skill conflicts when Codex and Pi are installed together ([#1601](https://github.com/Observal/Observal/issues/1601))
+- let `observal auth login` sign in with Google or GitHub through `--provider`, and ask which provider a bare `--sso` should use instead of always sending it to OIDC ([#1771](https://github.com/Observal/Observal/issues/1771))
+- run hooks in pulled Claude Code agents with the CLI's own interpreter instead of bare `python3`, which cannot import a `uv tool` install ([#1773](https://github.com/Observal/Observal/issues/1773))
+- say in `agent pull` output, and in JSON as `reports_sessions`, when the pulled agent sends its sessions to the server ([#1772](https://github.com/Observal/Observal/issues/1772))
 
 ### Documentation
 
@@ -32,6 +62,7 @@ All notable changes to this project will be documented in this file.
 
 - publish from maintained `release/X.Y` branches with alpha, beta, RC, stable, and backport workflows; deploy and update Homebrew only after verifying the newest stable release
 - format dev log diagnostics positionally instead of structlog-style keyword args so their values reach the console and file sinks
+- merge duplicate Unreleased sections into one heading
 
 ## [1.13.1] - 2026-09-05
 
@@ -117,42 +148,6 @@ All notable changes to this project will be documented in this file.
 - cover cmd auth helpers ([#1647](https://github.com/Observal/Observal/pull/1647))
 - raise Python coverage with focused suites ([#1677](https://github.com/Observal/Observal/pull/1677))
 - target canonical Codecov project ([#1678](https://github.com/Observal/Observal/pull/1678))
-
-## [Unreleased]
-
-### Features
-
-- add bounded, resumable ClickHouse telemetry migration exports
-- auto-install the bundled Pi telemetry extension during login and report stale npm or local installs (#1602)
-- migrate Pi telemetry extensions installed before version tracking, keeping a `.bak` copy (#1602)
-- remove a local Pi extension that duplicates a configured `npm:observal-pi`, which sent every session twice (#1602)
-- add an authenticated JSON API escape hatch and mixed Registry component bulk submission
-- standardize dedicated list JSON output with `items`, `total`, `page`, and `page_size`
-- make mutation retry behavior explicit and reserve automatic transient retries for reads
-
-### Breaking changes
-
-- dedicated list commands that previously returned top-level arrays now return the standard list envelope
-
-### Security
-
-- remove shell command construction from Kiro end-to-end tests
-- add JWT algorithm agility, file-backed credentials, secure package bindings, signed release tags, verification guidance, and a security assurance case
-
-### Fixes
-
-- answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
-- support multi-artifact migration validation and import uploads
-- restore teamspace discovery, membership controls, private join requests, and empty personal deletion
-- require global review before a teamspace becomes public
-- let approved public teamspace owners and reviewers decide all team content
-- move the inbox filter rail to the right
-- require explicit Kiro session identity and keep aged recovery non-final
-- keep intentional CLI downgrades pinned when targeting legacy releases ([#1672](https://github.com/Observal/Observal/pull/1672))
-- avoid duplicate bundled Observal skill conflicts when Codex and Pi are installed together ([#1601](https://github.com/Observal/Observal/issues/1601))
-- let `observal auth login` sign in with Google or GitHub through `--provider`, and ask which provider a bare `--sso` should use instead of always sending it to OIDC ([#1771](https://github.com/Observal/Observal/issues/1771))
-- run hooks in pulled Claude Code agents with the CLI's own interpreter instead of bare `python3`, which cannot import a `uv tool` install ([#1773](https://github.com/Observal/Observal/issues/1773))
-- say in `agent pull` output, and in JSON as `reports_sessions`, when the pulled agent sends its sessions to the server ([#1772](https://github.com/Observal/Observal/issues/1772))
 
 ## [1.11.0] - 2026-08-02
 
