@@ -79,7 +79,7 @@ async def _ch_json(sql: str, params: dict | None = None) -> list[dict]:
         if r.status_code == 200:
             return r.json().get("data", [])
     except Exception as e:
-        optic.warning("clickhouse_query_failed", error=str(e))
+        optic.warning("clickhouse_query_failed: error={}", str(e))
     return []
 
 

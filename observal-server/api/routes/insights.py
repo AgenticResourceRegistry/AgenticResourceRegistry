@@ -168,7 +168,12 @@ async def _count_insight_sessions(
         count_data = r.json().get("data", []) if r.status_code == 200 else []
         return int(count_data[0]["cnt"]) if count_data else 0
     except Exception as e:
-        optic.warning("insight_session_count_agg_failed", agent=str(agent.id), version=agent_version, error=str(e))
+        optic.warning(
+            "insight_session_count_agg_failed: agent={}, version={}, error={}",
+            str(agent.id),
+            agent_version,
+            str(e),
+        )
 
     # Safe fallback for older ClickHouse aggregates that do not yet expose agent_version.
     fallback_where = (
@@ -186,7 +191,12 @@ async def _count_insight_sessions(
         count_data = r.json().get("data", []) if r.status_code == 200 else []
         return int(count_data[0]["cnt"]) if count_data else 0
     except Exception as e:
-        optic.warning("insight_session_count_fallback_failed", agent=str(agent.id), version=agent_version, error=str(e))
+        optic.warning(
+            "insight_session_count_fallback_failed: agent={}, version={}, error={}",
+            str(agent.id),
+            agent_version,
+            str(e),
+        )
         return 0
 
 
