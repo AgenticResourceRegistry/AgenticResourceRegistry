@@ -13,6 +13,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.15.1] - 2026-10-15
+
+### Maintenance
+
+- Usage reporting is on by default and sends every six hours ([#1882](https://github.com/Observal/Observal/pull/1882))
+- Upgrading switches usage reporting on for existing installations, including ones where it was off ([#1883](https://github.com/Observal/Observal/pull/1883))
+- Usage reporting guide names 1.15.1 as the release that resets reporting ([#1885](https://github.com/Observal/Observal/pull/1885))
+
 ## [1.15.0] - 2026-10-13
 
 ### Features
