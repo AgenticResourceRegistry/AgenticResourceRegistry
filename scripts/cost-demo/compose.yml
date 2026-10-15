@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Throwaway Postgres + ClickHouse + Redis for the Cost Intelligence demo.
+# Separate project name and ports so it never touches a developer's main stack.
+# Data lives in containers only (Postgres on tmpfs); `down -v` removes everything.
+name: obs-costintel
+services:
+  db:
+    image: postgres:18
+    ports: ["127.0.0.1:15432:5432"]
+    environment: {POSTGRES_DB: observal, POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres}
+    tmpfs: ["/var/lib/postgresql"]
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.6
+    ports: ["127.0.0.1:18123:8123"]
+    environment: {CLICKHOUSE_DB: observal, CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: clickhouse, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"}
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+  redis:
+    image: redis:8-alpine
+    ports: ["127.0.0.1:16379:6379"]

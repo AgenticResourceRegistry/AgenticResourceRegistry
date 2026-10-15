@@ -60,13 +60,13 @@ The headline **realization rate** is the implemented run rate divided by the ide
 ### Other figures
 
 - **Token cost savings**: what prompt caching saved against uncached list rates, net of cache-write premiums. This saving comes from the coding tools, not from Observal.
-- **Context cost**: spend on cache reads, meaning instructions, tool definitions and the conversation so far, re-read on every call. Observal has no agent memory store, so this stands in for the brief's "stored memory"; see *Brief deviations* below.
+- **Context cost**: spend on cache reads, meaning instructions, tool definitions and the conversation so far, re-read on every call. Observal has no agent memory store, so this stands in for stored agent memory; see *Limitations* below.
 - **Cost per successful task**: spend on sessions with an Agent Insights outcome divided by those judged fully or mostly achieved, with coverage shown. Insights analyses a subset of sessions, so this is a sample.
 - **Cost per pull request**: spend divided by PR-creation tool calls (`gh pr create`, `create_pull_request`). These are attempts, not confirmed PRs.
 - **Spend spike**: a day this month when an agent spent at least $5 and far above its own median over the previous 60 days (robust z ≥ 3.5); needs 14 days of history.
 - **Most material finding**: the largest of measured savings, the top open opportunity, the top spike and the biggest change in an agent's spend. Its wording is built from those figures.
 
-### Brief deviations
+### Limitations
 
 - **Agent memory cost** is shown as carried context. Observal does not store agent memory, so "% active vs stale" cannot be measured. The faithful version, the context each agent's installed skills, prompts and MCP tool definitions add per session, split by whether they were used in the last 30 days, needs component token sizes and per-component usage attribution.
 - **Top cost drivers** are by agent, model and harness. Department and team breakdowns need users mapped to departments or teams.
