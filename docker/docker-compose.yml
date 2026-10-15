@@ -250,7 +250,7 @@ services:
       - observal-net
 
   observal-lb:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     ports:
       - "${LB_HOST_PORT:-80}:80"
     volumes:
