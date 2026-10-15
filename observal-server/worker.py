@@ -14,6 +14,7 @@ from arq.worker import func
 from loguru import logger as optic
 
 from jobs.catalog import batch_generate_insights, generate_insight_report, refresh_user_profiles
+from jobs.cost import backfill_usage_dedup, refresh_cost_intelligence
 from jobs.maintenance import (
     maintain_clickhouse,
     purge_inbox_items,
@@ -68,6 +69,8 @@ class WorkerSettings:
         purge_inbox_items,
         submit_usage_ping,
         reproject_discovery_entries,
+        func(backfill_usage_dedup, timeout=300),
+        func(refresh_cost_intelligence, timeout=300),
     ]
     cron_jobs = [
         cron(sync_component_sources, hour={0, 6, 12, 18}),  # Every 6 hours
@@ -84,6 +87,9 @@ class WorkerSettings:
         cron(submit_usage_ping, hour={0, 6, 12, 18}, minute={30}, timeout=90, unique=True),
         # Safety net under the per-change reprojection hook.
         cron(reproject_discovery_entries, hour={1, 7, 13, 19}, minute={5}, timeout=600, unique=True),
+        # Re-key historical token rows until none are left, then a no-op.
+        cron(backfill_usage_dedup, minute={7, 22, 37, 52}, timeout=300, unique=True),
+        cron(refresh_cost_intelligence, minute={12, 42}, timeout=300, unique=True),  # Every 30 minutes
     ]
     on_startup = startup
     on_shutdown = shutdown

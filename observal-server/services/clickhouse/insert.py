@@ -97,12 +97,15 @@ async def insert_session_events(rows: list[dict]):
         row.setdefault("is_source_record", 1)
         row.setdefault("rendered", 1)
         row.setdefault("raw_line_truncated", 0)
+        row.setdefault("cache_write_1h_tokens", 0)
+        row.setdefault("usage_key", "")
     sql = (
         "INSERT INTO session_events (session_id, project_id, user_id, agent_id, "
         "agent_version, layer_hash, harness, line_offset, source_end_offset, line_hash, source_sha256, "
         "is_source_record, rendered, event_type, timestamp, uuid, parent_uuid, "
         "tool_name, tool_id, content_preview, content_length, raw_line, credits, parent_session_id, "
-        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, model, raw_line_truncated) FORMAT JSONEachRow"
+        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, model, "
+        "raw_line_truncated, usage_key) FORMAT JSONEachRow"
     )
     try:
         r = await _client._query(

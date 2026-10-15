@@ -21,6 +21,7 @@ import orjson
 import xxhash
 from loguru import logger as optic
 
+from services import usage_dedup
 from services.clickhouse import (
     insert_session_checkpoint,
     insert_session_events,
@@ -517,14 +518,20 @@ async def ingest_session_lines(
         tool_name, tool_id = tool_info_fn(parsed) if rendered else (None, None)
         uuid, parent_uuid = _extract_uuid(parsed, harness) if parsed else (None, None)
         usage = (
-            _extract_usage_tokens(parsed, harness)
+            {
+                **_extract_usage_tokens(parsed, harness),
+                "cache_write_1h_tokens": usage_dedup.cache_write_1h(parsed, harness),
+                "usage_key": usage_dedup.usage_key(parsed, harness),
+            }
             if parsed
             else {
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "cache_read_tokens": 0,
                 "cache_write_tokens": 0,
+                "cache_write_1h_tokens": 0,
                 "model": "",
+                "usage_key": "",
             }
         )
         rows.append(
@@ -559,7 +566,11 @@ async def ingest_session_lines(
         ingested += rendered
 
     if rows:
-        await insert_session_events(rows)
+        # One API response = one set of token counts (see services.usage_dedup).
+        rows, superseded = await usage_dedup.dedupe_batch(
+            rows, session_id=session_id, project_id=project_id, user_id=user_id, harness=harness
+        )
+        await insert_session_events(rows + superseded)
         optic.debug("inserted {} canonical rows for session={}", len(rows), session_id)
 
     extra = get_extra_rows(harness, session_id, project_id, user_id, agent_id, agent_version, total_credits)

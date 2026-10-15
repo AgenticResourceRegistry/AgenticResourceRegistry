@@ -94,6 +94,7 @@ def price_line(row: dict, book: PriceBook) -> CostLine:
         output=_f(row.get("output")),
         cache_read=_f(row.get("cache_read")),
         cache_write=_f(row.get("cache_write")),
+        cache_write_1h=_f(row.get("cache_write_1h")),
     )
     # "credit_total", not "credits": an alias named like the column would shadow it in WHERE.
     credits = _f(row.get("credit_total", row.get("credits")))
@@ -150,22 +151,22 @@ def coverage_of(lines: list[CostLine]) -> Coverage:
     return cov
 
 
-async def daily_cost_lines(start: datetime, end: datetime, book: PriceBook) -> list[CostLine]:
+async def daily_cost_lines(start: datetime, end: datetime, book: PriceBook, tz: str = "UTC") -> list[CostLine]:
     """Priced (day, harness, model, agent, version) lines for [start, end)."""
     rows = await ch_rows(
-        "SELECT toDate(timestamp) AS day, harness, model, "
+        "SELECT toDate(timestamp, {tz:String}) AS day, harness, model, "
         "ifNull(agent_id, '') AS agent_id, ifNull(agent_version, '') AS agent_version, "
         "uniqExact(session_id) AS sessions, "
         "sum(input_tokens) AS input, sum(output_tokens) AS output, "
         "sum(cache_read_tokens) AS cache_read, sum(cache_write_tokens) AS cache_write, "
-        "sum(credits) AS credit_total "
+        "sum(cache_write_1h_tokens) AS cache_write_1h, sum(credits) AS credit_total "
         "FROM session_events FINAL "
         "WHERE project_id = {pid:String} AND rendered = 1 "
         "AND timestamp >= {start:DateTime64(3)} AND timestamp < {end:DateTime64(3)} "
         "AND (input_tokens + output_tokens + cache_read_tokens + cache_write_tokens > 0 OR credits > 0) "
         "GROUP BY day, harness, model, agent_id, agent_version "
         "SETTINGS do_not_merge_across_partitions_select_final = 1",
-        {"param_pid": DEFAULT_PROJECT_ID, "param_start": _ts(start), "param_end": _ts(end)},
+        {"param_pid": DEFAULT_PROJECT_ID, "param_start": _ts(start), "param_end": _ts(end), "param_tz": tz},
     )
     return [price_line(r, book) for r in rows]
 
@@ -182,10 +183,11 @@ class SessionCost:
     usage: TokenUsage
     first_turn_context: float  # tokens sent with the first billable call
     first_turn_cost: float | None
-    prs_created: int
+    prs_created: int  # PR-creation tool calls (attempts, not confirmed merges)
     tool_errors: int
     by_model: dict[str, TokenUsage]
     calls: int = 0
+    credits: float = 0.0
 
 
 async def session_costs(start: datetime, end: datetime, book: PriceBook) -> list[SessionCost]:
@@ -196,7 +198,8 @@ async def session_costs(start: datetime, end: datetime, book: PriceBook) -> list
         "any(ifNull(agent_version, '')) AS agent_version, any(user_id) AS user_id, "
         "min(timestamp) AS started_at, "
         "sum(input_tokens) AS input, sum(output_tokens) AS output, "
-        "sum(cache_read_tokens) AS cache_read, sum(cache_write_tokens) AS cache_write, sum(credits) AS credit_total, "
+        "sum(cache_read_tokens) AS cache_read, sum(cache_write_tokens) AS cache_write, "
+        "sum(cache_write_1h_tokens) AS cache_write_1h, sum(credits) AS credit_total, "
         "countIf(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens > 0) AS calls "
         "FROM session_events FINAL "
         "WHERE project_id = {pid:String} AND rendered = 1 "
@@ -256,13 +259,9 @@ async def session_costs(start: datetime, end: datetime, book: PriceBook) -> list
             sessions[sid] = sc
         if not sc.agent_id and line.agent_id:
             sc.agent_id, sc.agent_version = line.agent_id, line.agent_version
-        sc.usage = TokenUsage(
-            sc.usage.input + line.usage.input,
-            sc.usage.output + line.usage.output,
-            sc.usage.cache_read + line.usage.cache_read,
-            sc.usage.cache_write + line.usage.cache_write,
-        )
+        sc.usage = sc.usage + line.usage
         sc.calls += int(_f(row.get("calls")))
+        sc.credits += line.credits
         if line.usage.total > 0:
             sc.by_model[line.raw_model] = line.usage
         if line.cost is None:

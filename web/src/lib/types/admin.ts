@@ -484,9 +484,16 @@ export interface ExecDeptTokenItem {
 export type CostEvidence = "measured" | "estimated" | "estimated, outcome parity not yet shown";
 
 export interface CostHeadline {
+	/** Billed money: pay-per-token usage + subscription seats + credit overage. */
 	spend_mtd_usd: number;
 	spend_prev_mtd_usd: number;
 	spend_change_pct: number | null;
+	/** All usage priced at provider rates, including subscription usage that is not billed per token. */
+	usage_value_mtd_usd: number;
+	spend_complete: boolean;
+	unclassified_usage_usd: number;
+	savings_realized_low_usd: number | null;
+	savings_realized_high_usd: number | null;
 	savings_identified_monthly_usd: number;
 	savings_identified_pct_of_spend: number | null;
 	savings_actioned_monthly_usd: number;
@@ -500,6 +507,7 @@ export interface CostTrendPoint {
 	/** "none": no telemetry stored for the month (retention), so values are unknown rather than zero. */
 	data: "full" | "partial" | "none";
 	spend_usd: number | null;
+	usage_value_usd: number | null;
 	savings_found_usd: number | null;
 	savings_actioned_usd: number;
 	sessions: number;
@@ -512,7 +520,7 @@ export interface CostTokenTile {
 	cost_per_million_prev_month_usd: number | null;
 	cache_hit_pct: number | null;
 	tokens_mtd: number;
-	token_mix: { input: number; output: number; cache_read: number; cache_write: number };
+	token_mix: { input: number; output: number; cache_read: number; cache_write: number; cache_write_1h: number };
 	evidence: CostEvidence;
 	note: string;
 }
@@ -563,6 +571,10 @@ export interface CostOpportunity {
 
 export interface CostRealizedOpportunity extends CostOpportunity {
 	realized_mtd_usd: number;
+	realized_low_usd: number | null;
+	realized_high_usd: number | null;
+	/** True: measured per successful session; false: per session (outcome coverage too low). */
+	realized_normalized: boolean;
 	realized_sessions: number;
 	realized_measurable: boolean;
 	realized_reason: string | null;
@@ -589,10 +601,41 @@ export interface CostAnomaly {
 	top_model: string | null;
 }
 
+export type CostBillingMode = "metered" | "subscription" | "unconfigured";
+
+export interface CostHarnessBilling {
+	harness: string;
+	mode: CostBillingMode;
+	source: "configured" | "detected" | "none";
+	evidence: string;
+	usage_value_usd: number;
+	metered_usd: number;
+	subscription_usd: number;
+	overage_usd: number;
+	billed_usd: number;
+	seats: number;
+	credits: number;
+}
+
+export interface CostSetting {
+	key: string;
+	value: string;
+	help: string;
+}
+
 export interface CostIntelligence {
 	generated_at: string;
+	billing: {
+		harnesses: CostHarnessBilling[];
+		billed_usd: number;
+		billed_prev_usd: number;
+		usage_value_usd: number;
+		unclassified_usd: number;
+		complete: boolean;
+	};
 	period: {
 		label: string;
+		timezone: string;
 		month_start: string;
 		compare_start: string;
 		compare_end: string;
@@ -605,13 +648,16 @@ export interface CostIntelligence {
 	tokens: CostTokenTile;
 	insight: CostInsight | null;
 	context: CostContextTile;
-	drivers: { by_agent: CostDriver[]; by_model: CostDriver[]; by_harness: CostDriver[] };
+	drivers: { by_agent: CostDriver[]; by_model: CostDriver[]; by_harness: CostDriver[]; basis: string };
 	pipeline: {
 		identified_monthly_usd: number;
 		approved_monthly_usd: number;
 		implemented_monthly_usd: number;
 		counts: Record<"identified" | "approved" | "implemented", number>;
 		blocker: string | null;
+		/** Savings on subscription usage: frees plan capacity, does not reduce the bill. */
+		capacity_monthly_usd: number;
+		last_refreshed: string | null;
 	};
 	opportunities: CostOpportunity[];
 	realized: CostRealizedOpportunity[];
@@ -637,7 +683,7 @@ export type CostOpportunityAction =
 	| { action: "approve" }
 	| { action: "dismiss"; reason?: string }
 	| { action: "reopen" }
-	| { action: "implemented"; version: string };
+	| { action: "implemented"; version?: string };
 
 export interface ExecModelComparison {
 	model: string;

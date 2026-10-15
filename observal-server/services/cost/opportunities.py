@@ -62,6 +62,9 @@ class Candidate:
     baseline_version: str
     savings: float
     evidence: dict = field(default_factory=dict)
+    # "billed": reduces the bill (pay-per-token usage). "capacity": usage on a
+    # subscription, where cheaper work frees plan capacity but the seat fee stays.
+    billing_class: str = "billed"
 
 
 def _current_version(sessions: list[SessionCost]) -> str:
@@ -69,6 +72,16 @@ def _current_version(sessions: list[SessionCost]) -> str:
     if not sessions:
         return ""
     return max(sessions, key=lambda s: s.started_at).agent_version
+
+
+def _dominant_model(session: SessionCost) -> str:
+    return max(session.by_model, key=lambda m: session.by_model[m].total) if session.by_model else ""
+
+
+def _cost_per_session(sessions: list[SessionCost], model: str, book: PriceBook) -> float | None:
+    """Mean cost of the sessions that ran mostly on ``model``."""
+    costs = [s.cost for s in sessions if s.cost is not None and normalize_model(_dominant_model(s)) == model]
+    return sum(costs) / len(costs) if len(costs) >= MIN_SESSIONS_ON_CHEAPER_MODEL else None
 
 
 def _success_rate(sessions: list[SessionCost], outcomes: dict[str, str]) -> tuple[float | None, int]:
@@ -107,16 +120,27 @@ def detect_model_routing(
         # Cheaper models this agent already ran enough times to count as viable.
         viable = [m for m in priced if len(sessions_by_model[m]) >= MIN_SESSIONS_ON_CHEAPER_MODEL]
         for premium, premium_prices in priced.items():
-            premium_cost = usage_by_model[premium].cost(premium_prices)
-            cheaper = [
-                m for m in viable if m != premium and usage_by_model[premium].cost(priced[m]) < premium_cost * 0.95
-            ]
+            premium_usage = usage_by_model[premium]
+            premium_cost = premium_usage.cost(premium_prices)
+            cheaper = [m for m in viable if m != premium and premium_usage.cost(priced[m]) < premium_cost * 0.95]
             if not cheaper:
                 continue
-            # Repricing at the cheapest viable model gives the largest saving;
-            # pick the cheapest one the agent already uses the most.
-            target = min(cheaper, key=lambda m: (usage_by_model[premium].cost(priced[m]), -len(sessions_by_model[m])))
-            repriced = usage_by_model[premium].cost(priced[target])
+            target = min(cheaper, key=lambda m: (premium_usage.cost(priced[m]), -len(sessions_by_model[m])))
+            repriced = premium_usage.cost(priced[target])
+            # Repricing assumes the cheaper model uses the same tokens and turns.
+            # Models differ (newer tokenizers alone add ~30%), so also compare what
+            # the agent's sessions actually cost on each model, and take the more
+            # conservative of the two.
+            premium_cps = _cost_per_session(sessions_by_model[premium], premium, book)
+            target_cps = _cost_per_session(sessions_by_model[target], target, book)
+            observed = (
+                (premium_cps - target_cps) * len(sessions_by_model[premium])
+                if premium_cps is not None and target_cps is not None
+                else None
+            )
+            savings = min(premium_cost - repriced, observed) if observed is not None else premium_cost - repriced
+            if savings <= 0:
+                continue
             premium_rate, premium_judged = _success_rate(sessions_by_model[premium], outcomes)
             target_rate, target_judged = _success_rate(sessions_by_model[target], outcomes)
             validated = (
@@ -131,13 +155,18 @@ def detect_model_routing(
                     title=f"Route {display_model(premium)} work to {display_model(target)}",
                     agent_id=agent_id,
                     baseline_version=_current_version(agent_sessions),
-                    savings=premium_cost - repriced,
+                    savings=savings,
                     evidence={
-                        "formula": "premium_usage x (premium_price - target_price), per token bucket",
+                        "formula": "min(premium usage repriced at target rates, premium sessions x observed cost-per-session gap)",
                         "from_model": premium,
                         "to_model": target,
                         "premium_cost_usd": round(premium_cost, 4),
                         "repriced_cost_usd": round(repriced, 4),
+                        "premium_cost_per_session_usd": None if premium_cps is None else round(premium_cps, 4),
+                        "target_cost_per_session_usd": None if target_cps is None else round(target_cps, 4),
+                        "estimate_basis": "observed"
+                        if observed is not None and observed < premium_cost - repriced
+                        else "repriced",
                         "premium_sessions": len(sessions_by_model[premium]),
                         "target_sessions": len(sessions_by_model[target]),
                         "premium_success_pct": None if premium_rate is None else round(premium_rate, 1),
@@ -159,22 +188,27 @@ def detect_cache_efficiency(sessions: list[SessionCost], book: PriceBook) -> lis
     total = TokenUsage()
     by_agent: dict[str, list[SessionCost]] = defaultdict(list)
     for s in sessions:
-        total = TokenUsage(
-            total.input + s.usage.input,
-            total.output + s.usage.output,
-            total.cache_read + s.usage.cache_read,
-            total.cache_write + s.usage.cache_write,
-        )
+        total = total + s.usage
         if s.agent_id != NO_AGENT:
             by_agent[s.agent_id].append(s)
-    target = _hit_rate(total)
-    if target is None:
+    deployment_rate = _hit_rate(total)
+    if deployment_rate is None:
         return []
+    # How many times, on average, a cache write is read back. Writing a prefix
+    # costs a premium; that premium is spread over the reads it serves.
+    reads_per_write = total.cache_read / total.cache_write if total.cache_write else 1.0
 
     out = []
     for agent_id, agent_sessions in by_agent.items():
         if len(agent_sessions) < MIN_SESSIONS_FOR_CACHE:
             continue
+        session_rates = sorted(r for r in (_hit_rate(s.usage) for s in agent_sessions) if r is not None)
+        if not session_rates:
+            continue
+        # Target what this agent's own better sessions already achieve, never
+        # more than the deployment rate: short sessions cannot cache like long ones.
+        own_best = session_rates[int(0.75 * (len(session_rates) - 1))]
+        target = min(deployment_rate, own_best)
         savings = 0.0
         agent_usage = TokenUsage()
         for s in agent_sessions:
@@ -182,16 +216,11 @@ def detect_cache_efficiency(sessions: list[SessionCost], book: PriceBook) -> lis
                 prices = book.prices_for(raw)
                 if prices is None or prices.cache_read >= prices.input:
                     continue  # model without a cache discount: nothing to gain
-                agent_usage = TokenUsage(
-                    agent_usage.input + usage.input,
-                    agent_usage.output + usage.output,
-                    agent_usage.cache_read + usage.cache_read,
-                    agent_usage.cache_write + usage.cache_write,
-                )
+                agent_usage = agent_usage + usage
                 prompt_tokens = usage.input + usage.cache_read + usage.cache_write
-                achievable = max(target / 100 * prompt_tokens - usage.cache_read, 0.0)
-                # Only uncached input can become a cache read.
-                savings += min(achievable, usage.input) * (prices.input - prices.cache_read)
+                gained = min(max(target / 100 * prompt_tokens - usage.cache_read, 0.0), usage.input)
+                write_premium = max(prices.cache_write - prices.input, 0.0) / max(reads_per_write, 1.0)
+                savings += gained * (prices.input - prices.cache_read - write_premium)
         rate = _hit_rate(agent_usage)
         if rate is None or rate > target - CACHE_GAP_POINTS or savings <= 0:
             continue
@@ -204,9 +233,12 @@ def detect_cache_efficiency(sessions: list[SessionCost], book: PriceBook) -> lis
                 baseline_version=_current_version(agent_sessions),
                 savings=savings,
                 evidence={
-                    "formula": "min(target_hit x prompt_tokens - cache_reads, uncached_input) x (input - cache_read price)",
+                    "formula": "uncached input that could be cached x (input - cache_read price - write premium / reads per write)",
                     "agent_hit_pct": round(rate, 1),
-                    "deployment_hit_pct": round(target, 1),
+                    "target_hit_pct": round(target, 1),
+                    "agent_best_quartile_hit_pct": round(own_best, 1),
+                    "deployment_hit_pct": round(deployment_rate, 1),
+                    "reads_per_write": round(reads_per_write, 1),
                     "sessions": len(agent_sessions),
                 },
             )

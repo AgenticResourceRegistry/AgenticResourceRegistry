@@ -32,6 +32,7 @@ _BUCKET_KEYS = {
     "input": ("input", "input_tokens", "prompt_tokens"),
     "output": ("output", "output_tokens", "completion_tokens"),
     "cache_read": ("cache_read_input_tokens", "input_cache_read", "input_cached_tokens", "cached_tokens"),
+    "cache_write_1h": ("input_cache_creation_1h",),
     "cache_write": (
         "cache_creation_input_tokens",
         "input_cache_creation",
@@ -60,20 +61,22 @@ def compact(raw: list[dict], ref: str) -> dict:
         output_price = _bucket(prices, "output")
         if input_price is None and output_price is None:
             continue
+        cache_read = _bucket(prices, "cache_read")
+        cache_write = _bucket(prices, "cache_write")
+        cache_write_1h = _bucket(prices, "cache_write_1h")
+        # Missing cache prices fall back to the plain input price: that is what a
+        # provider charges when it does not discount cached input. Providers with
+        # no separate one-hour rate bill one-hour writes at the normal write price.
+        write = cache_write if cache_write is not None else input_price or 0.0
         models.append(
             {
                 "model": entry["modelName"],
                 "pattern": entry["matchPattern"],
                 "input": input_price or 0.0,
                 "output": output_price or 0.0,
-                # Missing cache prices fall back to the plain input price: that is
-                # what a provider charges when it does not discount cached input.
-                "cache_read": _bucket(prices, "cache_read")
-                if _bucket(prices, "cache_read") is not None
-                else input_price or 0.0,
-                "cache_write": _bucket(prices, "cache_write")
-                if _bucket(prices, "cache_write") is not None
-                else input_price or 0.0,
+                "cache_read": cache_read if cache_read is not None else input_price or 0.0,
+                "cache_write": write,
+                "cache_write_1h": cache_write_1h if cache_write_1h is not None else write,
                 "updated_at": entry.get("updatedAt", ""),
             }
         )

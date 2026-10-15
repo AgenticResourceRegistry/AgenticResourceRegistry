@@ -202,6 +202,8 @@ Requires `admin` or `super_admin` role.
 | `PUT` | `/admin/weights` | Set dimension weights |
 | `GET` | `/admin/canaries/{agent_id}/reports` | Canary detection reports |
 | `GET` | `/exec/cost/intelligence` | Cost Intelligence dashboard payload; see [Cost Intelligence](../self-hosting/cost-intelligence.md) |
+| `POST` | `/exec/cost/refresh` | Re-run cost opportunity detection |
+| `GET` / `PUT` | `/exec/cost/settings[/{key}]` | Cost pricing and billing settings (admin) |
 | `POST` | `/exec/cost/opportunities/{id}/approve` | Approve a savings opportunity and freeze its baseline |
 | `POST` | `/exec/cost/opportunities/{id}/implemented` | Mark an opportunity shipped on an agent version |
 | `POST` | `/exec/cost/opportunities/{id}/dismiss` | Dismiss an opportunity |

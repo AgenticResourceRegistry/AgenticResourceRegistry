@@ -18,6 +18,7 @@ const DETECTOR_LABEL: Record<string, string> = {
 	model_routing: "Model routing",
 	cache_efficiency: "Prompt caching",
 	context_overhead: "Context size",
+	plan_fit: "Seat right-sizing",
 };
 
 export function PipelineStages({ pipeline }: { pipeline: CostIntelligence["pipeline"] }) {
@@ -70,6 +71,16 @@ function EvidenceLine({ opp }: { opp: CostOpportunity }) {
 			</>
 		);
 	}
+	if (opp.detector === "plan_fit") {
+		return (
+			<>
+				{ev.seats} {String(ev.harness)} seats at {usd(Number(ev.seat_usd_month))}/mo; {ev.active_users} active users used{" "}
+				{usd(Number(ev.usage_value_monthly_usd))}/mo at API rates. {ev.underused_users} seats cost more than their user&apos;s usage
+				{Number(ev.idle_seats) > 0 ? ` and ${ev.idle_seats} had no usage at all` : ""}. Dropping or switching those seats to pay-per-token
+				saves the difference.
+			</>
+		);
+	}
 	if (opp.detector === "context_overhead") {
 		return (
 			<>
@@ -113,6 +124,12 @@ function OpportunityRow({ opp, realized }: { opp: CostOpportunity; realized?: Co
 					{realized?.realized_measurable ? (
 						<p className={`text-xs tabular-nums ${realized.realized_mtd_usd >= 0 ? "text-success" : "text-destructive"}`}>
 							{usd(realized.realized_mtd_usd)} realized this month
+							{realized.realized_low_usd !== null && realized.realized_high_usd !== null && (
+								<span className="text-muted-foreground">
+									{" "}
+									({usd(realized.realized_low_usd)} to {usd(realized.realized_high_usd)})
+								</span>
+							)}
 						</p>
 					) : (
 						<p className="text-xs capitalize text-muted-foreground">{opp.status}</p>
@@ -126,6 +143,18 @@ function OpportunityRow({ opp, realized }: { opp: CostOpportunity; realized?: Co
 					</p>
 					{opp.evidence.formula && <p className="font-mono text-2xs">{String(opp.evidence.formula)}</p>}
 					{realized && !realized.realized_measurable && realized.realized_reason && <p>Realized savings: {realized.realized_reason}.</p>}
+					{realized?.realized_measurable && (
+						<p>
+							Measured over {realized.realized_sessions} sessions on v{opp.implemented_version}{" "}
+							{realized.realized_normalized
+								? "per successful session, so easier tasks are not counted as savings."
+								: "per session; not enough judged outcomes to compare per successful session."}{" "}
+							Range is a 90% bootstrap interval.
+						</p>
+					)}
+					{(opp.evidence as { billing_class?: string }).billing_class === "capacity" && (
+						<p>Subscription usage: this frees plan capacity; the seat fee does not change.</p>
+					)}
 					{opp.baseline?.cost_per_session != null && (
 						<p>
 							Baseline frozen at approval: {usd(opp.baseline.cost_per_session)} per session over {opp.baseline.sessions} sessions on v{opp.baseline.version}.
@@ -144,7 +173,12 @@ function OpportunityRow({ opp, realized }: { opp: CostOpportunity; realized?: Co
 								</Button>
 							</>
 						)}
-						{opp.status === "approved" && (
+						{opp.status === "approved" && !opp.agent_id && (
+							<Button size="sm" onClick={() => run({ action: "implemented" })} disabled={busy}>
+								Mark implemented
+							</Button>
+						)}
+						{opp.status === "approved" && opp.agent_id && (
 							<form
 								className="flex flex-wrap items-center gap-2"
 								onSubmit={(e) => {

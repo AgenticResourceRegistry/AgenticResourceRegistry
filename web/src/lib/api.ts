@@ -78,6 +78,7 @@ import type {
 	ExecDeptTokenItem,
 	CostIntelligence,
 	CostOpportunityAction,
+	CostSetting,
 	ExecStrategicInsightsResponse,
 	ExecDeveloperBreakdown,
 	ExecInactivityAlerts,
@@ -1327,6 +1328,10 @@ export const exec = {
 		),
 	costIntelligence: (refresh = false) =>
 		get<CostIntelligence>(`/exec/cost/intelligence${refresh ? "?refresh=true" : ""}`),
+	costRefresh: () => post<{ opportunities: number; candidates: number }>("/exec/cost/refresh"),
+	costSettings: () => get<{ settings: CostSetting[] }>("/exec/cost/settings"),
+	costSettingUpdate: (key: string, value: string) =>
+		put<{ key: string; value: string }>(`/exec/cost/settings/${encodeURIComponent(key)}`, { value }),
 	costOpportunityAction: (id: string, body: CostOpportunityAction) => {
 		const { action, ...payload } = body;
 		return post<{ id: string; status: string }>(

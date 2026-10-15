@@ -29,6 +29,7 @@ from pathlib import Path
 from loguru import logger as optic
 
 _DATA = Path(__file__).parent / "data" / "model_prices.json"
+_CORRECTIONS = Path(__file__).parent / "data" / "model_price_corrections.json"
 
 PRICE_SOURCE_LIST = "list_price"
 PRICE_SOURCE_OVERRIDE = "override"
@@ -45,8 +46,14 @@ class TokenPrices:
     cache_read: float
     cache_write: float
     source: str
+    cache_write_1h: float | None = None  # None: same as cache_write
+    adjustments: tuple[str, ...] = ()
 
-    def scaled(self, factor: float) -> TokenPrices:
+    @property
+    def write_1h(self) -> float:
+        return self.cache_write if self.cache_write_1h is None else self.cache_write_1h
+
+    def scaled(self, factor: float, reason: str) -> TokenPrices:
         return TokenPrices(
             model=self.model,
             input=self.input * factor,
@@ -54,6 +61,8 @@ class TokenPrices:
             cache_read=self.cache_read * factor,
             cache_write=self.cache_write * factor,
             source=self.source,
+            cache_write_1h=None if self.cache_write_1h is None else self.cache_write_1h * factor,
+            adjustments=(*self.adjustments, reason),
         )
 
 
@@ -62,23 +71,46 @@ class TokenUsage:
     input: float = 0.0
     output: float = 0.0
     cache_read: float = 0.0
-    cache_write: float = 0.0
+    cache_write: float = 0.0  # all cache writes, including one-hour ones
+    cache_write_1h: float = 0.0  # subset of cache_write with one-hour retention
 
     @property
     def total(self) -> float:
         return self.input + self.output + self.cache_read + self.cache_write
 
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        return TokenUsage(
+            self.input + other.input,
+            self.output + other.output,
+            self.cache_read + other.cache_read,
+            self.cache_write + other.cache_write,
+            self.cache_write_1h + other.cache_write_1h,
+        )
+
     def cost(self, prices: TokenPrices) -> float:
+        hour = min(self.cache_write_1h, self.cache_write)
         return (
             self.input * prices.input
             + self.output * prices.output
             + self.cache_read * prices.cache_read
-            + self.cache_write * prices.cache_write
+            + (self.cache_write - hour) * prices.cache_write
+            + hour * prices.write_1h
         )
 
     def cache_savings(self, prices: TokenPrices) -> float:
-        """What cached reads saved compared with paying the full input price."""
-        return self.cache_read * max(prices.input - prices.cache_read, 0.0)
+        """Net saving from prompt caching versus sending the same prompt uncached.
+
+        Cached reads save (input - cache_read) per token; writing the cache costs
+        a premium over plain input (1.25x for five minutes, 2x for one hour on
+        Anthropic models). The premium is subtracted, so a cache that is written
+        but rarely read shows little or negative saving.
+        """
+        hour = min(self.cache_write_1h, self.cache_write)
+        read_saving = self.cache_read * (prices.input - prices.cache_read)
+        write_premium = (self.cache_write - hour) * (prices.cache_write - prices.input) + hour * (
+            prices.write_1h - prices.input
+        )
+        return read_saving - write_premium
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,10 +121,23 @@ class _ListEntry:
 
 
 @lru_cache(maxsize=1)
+def _corrections() -> dict[str, dict]:
+    if not _CORRECTIONS.exists():
+        return {}
+    return json.loads(_CORRECTIONS.read_text(encoding="utf-8")).get("corrections", {})
+
+
+@lru_cache(maxsize=1)
 def _list_entries() -> tuple[_ListEntry, ...]:
     data = json.loads(_DATA.read_text(encoding="utf-8"))
+    corrections = _corrections()
     entries = []
-    for item in data["models"]:
+    for raw_item in data["models"]:
+        fix = corrections.get(raw_item["model"], {})
+        item = {
+            **raw_item,
+            **{k: v for k, v in fix.items() if k in ("input", "output", "cache_read", "cache_write", "cache_write_1h")},
+        }
         try:
             pattern = re.compile(item["pattern"])
         except re.error:
@@ -109,6 +154,8 @@ def _list_entries() -> tuple[_ListEntry, ...]:
                     cache_read=float(item["cache_read"]),
                     cache_write=float(item["cache_write"]),
                     source=PRICE_SOURCE_LIST,
+                    cache_write_1h=float(item.get("cache_write_1h", item["cache_write"])),
+                    adjustments=("corrected",) if fix else (),
                 ),
             )
         )
@@ -144,6 +191,30 @@ def normalize_model(raw: str | None) -> str:
         model = bedrock.group(1)
     model = model.split("@", 1)[0]
     return model
+
+
+# Bedrock geographic inference profiles (eu., us., jp., apac., au., ...) cost 10%
+# more than global ones for Claude Sonnet 4.5, Haiku 4.5, Opus 4.5 and every
+# later model. Earlier models keep their original pricing.
+# Sources: platform.claude.com/docs/en/about-claude/pricing (Cloud platform
+# pricing) and docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html
+REGIONAL_ENDPOINT_PREMIUM = 1.10
+_REGIONAL_PROFILE_RE = re.compile(r"^(?:amazon-bedrock/|bedrock/)?(eu|us|jp|apac|au|ca|us-gov)\.anthropic\.", re.I)
+# The minor version is one or two digits not followed by more digits, so a date
+# suffix (claude-sonnet-4-20250514) is not read as minor version 20.
+_VERSION_RE = re.compile(r"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2})(?!\d))?", re.I)
+
+
+def regional_endpoint_premium_applies(raw: str) -> bool:
+    if not _REGIONAL_PROFILE_RE.match(raw or ""):
+        return False
+    match = _VERSION_RE.search(normalize_model(raw))
+    if not match:
+        return False
+    family, major, minor = match.group(1).lower(), int(match.group(2)), int(match.group(3) or 0)
+    if family in ("fable", "mythos"):
+        return True
+    return (major, minor) >= (4, 5)
 
 
 _FAMILY_RE = re.compile(r"^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$", re.I)
@@ -287,9 +358,11 @@ class PriceBook:
                     break
         if prices is None:
             return None
+        if regional_endpoint_premium_applies(raw):
+            prices = prices.scaled(REGIONAL_ENDPOINT_PREMIUM, "regional_endpoint")
         for pattern, factor in self.config.multipliers:
             if pattern.search(raw):
-                prices = prices.scaled(factor)
+                prices = prices.scaled(factor, "multiplier")
         return prices
 
     def credit_rate(self, harness: str) -> float | None:
@@ -312,6 +385,22 @@ async def load_price_book() -> PriceBook:
 def validate_setting(key: str, value: str) -> str:
     """Validate a ``cost.*`` setting on write. Raises ValueError with a user-facing message."""
     if not value:
+        return value
+    if key == "cost.billing":
+        from services.cost.billing import validate as validate_billing
+
+        try:
+            validate_billing(value)
+        except json.JSONDecodeError:
+            raise ValueError("cost.billing must be a JSON object") from None
+        return value
+    if key == "cost.timezone":
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"Unknown timezone {value!r}; use an IANA name such as Europe/London") from None
         return value
     if key == "cost.opportunity_min_monthly_usd":
         try:

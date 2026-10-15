@@ -1,0 +1,10 @@
+{
+ "note": "Corrections applied on top of model_prices.json where the upstream list disagrees with the provider's published price. Each entry cites its source; remove an entry once upstream is fixed.",
+ "corrections": {
+  "claude-sonnet-5-5": {
+   "cache_read": 1e-07,
+   "source": "https://platform.claude.com/docs/en/about-claude/pricing (Model pricing: Claude Sonnet 5.5 cache hits $0.10 / MTok, 0.05x input)",
+   "checked": "2026-10-13"
+  }
+ }
+}

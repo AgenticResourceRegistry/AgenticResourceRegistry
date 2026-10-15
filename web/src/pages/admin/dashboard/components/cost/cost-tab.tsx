@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useCostIntelligence, useRecomputeCostIntelligence } from "@/hooks/use-api";
 import type { CostIntelligence, CostUnitEconomics } from "@/lib/types";
 import { ChartLegend, Donut, PairBars, RankedBars, SpendSavingsTrend } from "./cost-charts";
+import { BillingPanel } from "./cost-billing";
 import { OpportunityList, PipelineStages } from "./cost-pipeline";
 import { CHART, modelLabel, pct, tokens, usd } from "./format";
 
@@ -67,7 +68,18 @@ function Headline({ data }: { data: CostIntelligence }) {
 	const h = data.headline;
 	return (
 		<div className="grid grid-cols-1 gap-px overflow-hidden rounded-xl bg-border shadow-sm sm:grid-cols-2 xl:grid-cols-4">
-			<Kpi label="Total agent spend, month to date" value={usd(h.spend_mtd_usd)} detail={<SpendChange change={h.spend_change_pct} />} />
+			<Kpi
+				label="Total agent spend, month to date"
+				value={usd(h.spend_mtd_usd)}
+				tone={h.spend_complete ? "muted" : "warning"}
+				detail={
+					h.spend_complete ? (
+						<SpendChange change={h.spend_change_pct} />
+					) : (
+						<>Includes {usd(h.unclassified_usage_usd)} not yet classified · see billing below</>
+					)
+				}
+			/>
 			<Kpi
 				label="Savings identified"
 				value={`${usd(h.savings_identified_monthly_usd)}/mo`}
@@ -77,7 +89,11 @@ function Headline({ data }: { data: CostIntelligence }) {
 			<Kpi
 				label="Savings actioned"
 				value={`${usd(h.savings_actioned_monthly_usd)}/mo`}
-				detail={`${usd(h.savings_realized_mtd_usd)} measured so far this month`}
+				detail={
+					h.savings_realized_low_usd !== null && h.savings_realized_high_usd !== null
+						? `${usd(h.savings_realized_mtd_usd)} measured this month (range ${usd(h.savings_realized_low_usd)} to ${usd(h.savings_realized_high_usd)})`
+						: `${usd(h.savings_realized_mtd_usd)} measured so far this month`
+				}
 				tone="success"
 			/>
 			<Kpi
@@ -118,7 +134,7 @@ function TokenTile({ data }: { data: CostIntelligence }) {
 	const t = data.tokens;
 	const mix = t.token_mix;
 	return (
-		<Panel title="Token cost savings" description="From the coding tools' prompt caching, priced against uncached list rates.">
+		<Panel title="Token cost savings" description="Prompt caching, net of cache-write premiums, against uncached list rates.">
 			<p className="text-2xl font-semibold tabular-nums">{usd(t.cache_savings_mtd_usd)}</p>
 			<p className="mb-4 text-xs text-muted-foreground">avoided this month · cache hit rate {pct(t.cache_hit_pct)}</p>
 			<Donut
@@ -175,9 +191,10 @@ function InsightTile({ data }: { data: CostIntelligence }) {
 
 function ContextTile({ data }: { data: CostIntelligence }) {
 	const c = data.context;
-	const other = Math.max(data.headline.spend_mtd_usd - c.context_spend_mtd_usd, 0);
+	// Same basis as the share text: all usage at provider rates.
+	const other = Math.max(data.headline.usage_value_mtd_usd - c.context_spend_mtd_usd, 0);
 	return (
-		<Panel title="Context cost" description="Prompt, skills, and tool definitions re-read on every call.">
+		<Panel title="Context cost" description="Instructions, tool definitions and the conversation so far, re-read from cache on every call.">
 			<p className="text-2xl font-semibold tabular-nums">{usd(c.context_spend_mtd_usd)}</p>
 			<p className="mb-4 text-xs text-muted-foreground">spent carrying context this month · {pct(c.context_share_pct)} of spend</p>
 			<Donut
@@ -219,7 +236,7 @@ function DriversPanel({ data }: { data: CostIntelligence }) {
 	return (
 		<Panel
 			title="Top cost drivers"
-			description="Month-to-date spend, largest first."
+			description={`Month-to-date ${data.drivers.basis}, largest first.`}
 			action={
 				<div className="flex rounded-lg bg-surface-raised p-0.5" role="group" aria-label="Group spend by">
 					{DRIVER_VIEWS.map((v) => (
@@ -284,7 +301,12 @@ function UnitEconomicsPanel({
 					previous={previous.cost_per_successful_session_usd}
 					note={current.outcome_coverage_pct === null ? "No outcomes judged yet" : `${current.judged_sessions} of ${current.sessions} sessions judged (${pct(current.outcome_coverage_pct)})`}
 				/>
-				<UnitRow label="Cost per pull request" current={current.cost_per_pr_usd} previous={previous.cost_per_pr_usd} note={`${current.prs_created} PRs opened this month`} />
+				<UnitRow
+					label="Cost per pull request"
+					current={current.cost_per_pr_usd}
+					previous={previous.cost_per_pr_usd}
+					note={`${current.prs_created} PR-creation attempts this month`}
+				/>
 				<UnitRow label="Cost per session" current={current.cost_per_session_usd} previous={previous.cost_per_session_usd} note={`${current.sessions} sessions`} />
 			</div>
 			<p className="mt-4 text-2xs text-muted-foreground">
@@ -389,7 +411,8 @@ export function CostTab() {
 		<div className="space-y-5 pt-4">
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<p className="text-xs text-muted-foreground">
-					{data.period.label} · updated{" "}
+					{data.period.label}
+					{data.period.timezone !== "UTC" ? ` (${data.period.timezone})` : " (UTC)"} · updated{" "}
 					{new Date(data.generated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
 				</p>
 				<Button variant="outline" size="sm" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
@@ -426,6 +449,9 @@ export function CostTab() {
 					>
 						<SpendSavingsTrend data={data.trend} />
 						{retention && <p className="mt-2 text-2xs text-muted-foreground">{retention}</p>}
+						{data.billing.harnesses.some((h) => h.mode === "subscription" && h.subscription_usd > 0) && (
+							<p className="mt-1 text-2xs text-muted-foreground">Seat fees use the current billing settings for every month shown.</p>
+						)}
 					</Panel>
 
 					<SectionHeading>Where the savings come from</SectionHeading>
@@ -443,16 +469,26 @@ export function CostTab() {
 							description={`Monthly run rates from the last ${data.period.detection_window_days} days. Actioned savings are measured after release, not assumed.`}
 						>
 							<PipelineStages pipeline={data.pipeline} />
+							{data.pipeline.capacity_monthly_usd > 0 && (
+								<p className="mt-2 text-xs text-muted-foreground">
+									Plus {usd(data.pipeline.capacity_monthly_usd)}/mo on subscription usage: frees plan capacity but does not lower the bill.
+								</p>
+							)}
 							<div className="mt-5 border-t border-border pt-2">
 								<OpportunityList data={data} />
 							</div>
 						</Panel>
 					</div>
-					<UnitEconomicsPanel
-						current={data.unit_economics.current}
-						previous={data.unit_economics.previous}
-						criteria={data.unit_economics.criteria}
-					/>
+					<div className="grid gap-5 lg:grid-cols-2">
+						<Panel title="How spend is billed" description="Billed money versus the same usage at provider API rates, by harness.">
+							<BillingPanel data={data} />
+						</Panel>
+						<UnitEconomicsPanel
+							current={data.unit_economics.current}
+							previous={data.unit_economics.previous}
+							criteria={data.unit_economics.criteria}
+						/>
+					</div>
 				</>
 			)}
 			<CoverageNote data={data} />

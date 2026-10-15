@@ -93,9 +93,29 @@ export function useCostIntelligence() {
 export function useRecomputeCostIntelligence() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => exec.costIntelligence(true),
+    mutationFn: async () => {
+      await exec.costRefresh();
+      return exec.costIntelligence(true);
+    },
     onSuccess: (data) => qc.setQueryData(["exec", "cost-intelligence"], data),
     onError: () => toast.error("Could not recompute cost data. Telemetry may be unavailable."),
+  });
+}
+
+export function useCostSettings() {
+  return useQuery({ queryKey: ["exec", "cost-settings"], queryFn: () => exec.costSettings() });
+}
+
+export function useUpdateCostSetting() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, value }: { key: string; value: string }) => exec.costSettingUpdate(key, value),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["exec", "cost-settings"] });
+      qc.setQueryData(["exec", "cost-intelligence"], await exec.costIntelligence(true));
+      toast.success("Saved. Cost figures recalculated.");
+    },
+    onError: (error: Error) => toast.error(error.message || "That setting could not be saved."),
   });
 }
 

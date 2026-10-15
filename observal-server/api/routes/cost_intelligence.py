@@ -3,7 +3,10 @@
 
 """Cost Intelligence endpoints for the executive dashboard.
 
-    GET  /api/v1/exec/cost/intelligence                       full dashboard payload
+    GET  /api/v1/exec/cost/intelligence                       full dashboard payload (read-only)
+    POST /api/v1/exec/cost/refresh                            re-run detection now (also runs every 30 min)
+    GET  /api/v1/exec/cost/settings                           pricing and billing settings
+    PUT  /api/v1/exec/cost/settings/{key}                     update one cost.* setting
     POST /api/v1/exec/cost/opportunities/{id}/approve         freeze baseline, move to approved
     POST /api/v1/exec/cost/opportunities/{id}/implemented     mark shipped on a version
     POST /api/v1/exec/cost/opportunities/{id}/dismiss         drop from the pipeline
@@ -46,12 +49,28 @@ class DismissRequest(BaseModel):
 
 
 class ImplementedRequest(BaseModel):
-    version: str = Field(..., min_length=1, max_length=50)
+    # Required for agent changes (the released version); omitted for billing
+    # changes such as removing seats, which are not tied to an agent release.
+    version: str | None = Field(None, min_length=1, max_length=50)
+
+
+COST_SETTING_KEYS = (
+    "cost.billing",
+    "cost.price_overrides",
+    "cost.price_multipliers",
+    "cost.credit_usd",
+    "cost.timezone",
+    "cost.opportunity_min_monthly_usd",
+)
+
+
+class SettingUpdate(BaseModel):
+    value: str = Field("", max_length=20000)
 
 
 @router.get("/intelligence")
 async def get_cost_intelligence(
-    refresh: bool = Query(False, description="Recompute instead of serving the 5-minute cache"),
+    refresh: bool = Query(False, description="Rebuild from telemetry instead of serving the 5-minute cache"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ) -> dict:
@@ -62,6 +81,72 @@ async def get_cost_intelligence(
         raise HTTPException(
             status_code=503, detail="Cost data is temporarily unavailable: telemetry could not be read."
         ) from exc
+
+
+@router.post("/refresh")
+async def refresh_cost_intelligence(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(UserRole.admin)),
+) -> dict:
+    """Detect opportunities and mark shipped ones implemented, then rebuild the dashboard."""
+    try:
+        result = await service.refresh(db)
+    except CostDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail="Cost data is temporarily unavailable: telemetry could not be read."
+        ) from exc
+    optic.info("cost intelligence refreshed by={} opportunities={}", current_user.id, result["opportunities"])
+    return result
+
+
+@router.get("/settings")
+async def get_cost_settings(current_user: User = Depends(require_role(UserRole.admin))) -> dict:
+    import services.dynamic_settings as ds
+
+    return {
+        "settings": [
+            {"key": key, "value": await ds.get(key), "help": ds.SETTING_SUBTITLES.get(key, "")}
+            for key in COST_SETTING_KEYS
+        ]
+    }
+
+
+@router.put("/settings/{key}")
+async def put_cost_setting(
+    key: str,
+    req: SettingUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(UserRole.admin)),
+) -> dict:
+    """Admins manage cost inputs here; other deployment settings stay super-admin only."""
+    import services.dynamic_settings as ds
+    from models.enterprise_config import EnterpriseConfig
+    from services.cost.pricing import validate_setting
+
+    if key not in COST_SETTING_KEYS:
+        raise HTTPException(status_code=404, detail="Not a cost setting")
+    value = req.value.strip()
+    try:
+        value = validate_setting(key, value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    cfg = (await db.execute(select(EnterpriseConfig).where(EnterpriseConfig.key == key))).scalar_one_or_none()
+    if cfg is None:
+        db.add(EnterpriseConfig(key=key, value=value))
+    else:
+        cfg.value = value
+    await db.commit()
+    await ds.invalidate(key)
+    await ds.refresh_sync_cache()
+    await service.invalidate_cache()
+    optic.info("cost setting updated key={} by={}", key, current_user.id)
+    # Pricing and billing change what each saving is worth and whether it lowers
+    # the bill, so re-run detection now rather than at the next scheduled refresh.
+    try:
+        await service.refresh(db)
+    except CostDataUnavailableError:
+        optic.warning("cost refresh after setting change skipped: telemetry unavailable")
+    return {"key": key, "value": value}
 
 
 async def _load(db: AsyncSession, opportunity_id: uuid.UUID) -> CostOpportunity:
@@ -104,7 +189,14 @@ async def mark_implemented(
     opp = await _load(db, opportunity_id)
     _require(opp, STATUS_APPROVED)
     if opp.agent_id is None:
-        raise HTTPException(status_code=422, detail="Only agent opportunities can be tied to a released version")
+        opp.status = STATUS_IMPLEMENTED
+        opp.implemented_at = datetime.now(UTC)
+        await db.commit()
+        await service.invalidate_cache()
+        optic.info("cost opportunity implemented id={} by={}", opp.id, current_user.id)
+        return {"id": str(opp.id), "status": opp.status, "implemented_version": None}
+    if not req.version:
+        raise HTTPException(status_code=422, detail="Give the agent version that shipped this change")
     version = (
         await db.execute(
             select(AgentVersion).where(AgentVersion.agent_id == opp.agent_id, AgentVersion.version == req.version)

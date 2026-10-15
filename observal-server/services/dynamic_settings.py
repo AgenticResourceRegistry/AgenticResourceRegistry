@@ -414,6 +414,8 @@ DEFAULTS: dict[str, str] = {
     "cost.price_multipliers": "",
     "cost.credit_usd": "",
     "cost.opportunity_min_monthly_usd": "1",
+    "cost.billing": "",
+    "cost.timezone": "UTC",
     # Misc
     "misc.harness_allowlist": "",
     "misc.default_harness": "",
@@ -446,6 +448,13 @@ SETTING_SUBTITLES: dict[str, str] = {
         'JSON of USD per provider credit, keyed by harness. Credits stay unpriced until set. Example: {"kiro": 0.04}'
     ),
     "cost.opportunity_min_monthly_usd": "Savings opportunities below this monthly amount are not listed.",
+    "cost.billing": (
+        'JSON of how each harness is paid for. "metered" means pay-per-token (API key, Bedrock, Vertex, Azure); '
+        '"subscription" means seat fees. Example: {"claude-code": {"mode": "subscription", "seats": 4, '
+        '"seat_usd_month": 100}, "kiro": {"mode": "subscription", "seats": 3, "seat_usd_month": 20, '
+        '"plan_credits": 1000, "overage_usd_per_credit": 0.04}}'
+    ),
+    "cost.timezone": "IANA timezone for month boundaries on the Cost Intelligence dashboard, e.g. Europe/London.",
     "registry.skill_folder_delivery_enabled": (
         "Enable complete-folder skill review and installation only after upgrading and draining all API/worker processes, "
         "migrating a restored database through the current head, and confirming supported CLI clients. "

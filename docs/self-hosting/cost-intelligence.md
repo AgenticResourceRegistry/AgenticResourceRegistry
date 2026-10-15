@@ -7,47 +7,69 @@ The **Cost Intelligence** tab of the executive dashboard (Administration → Das
 
 ## Where the numbers come from
 
-### Spend
+### Token counts (counted once per model call)
 
-Each model call in session telemetry records its model and four token buckets: fresh input, output, cache reads and cache writes. Spend is those tokens multiplied by the model's price.
+Claude Code writes one transcript line per content block of an API response (thinking, text, each tool call), and every line repeats the response's usage. Observal keeps the token counts on exactly one line per response (the one with the largest output count, because lines written mid-stream carry partial counts) and stores zero on the others. On a production deployment this removed a 1.8x to 2.1x overcount. The raw transcript line is never changed. Existing data is corrected by the worker's `backfill_usage_dedup` job, one session at a time; it stops when nothing is left. The correction applies everywhere tokens are read, not only on this dashboard.
 
-- **Prices** come from a vendored price list (`observal-server/services/cost/data/model_prices.json`), derived from [Langfuse's audited model prices](https://github.com/langfuse/langfuse/blob/main/worker/src/constants/default-model-prices.json) (MIT). Regenerate it with `python scripts/update_model_prices.py`.
-- Model names are normalized across harnesses, so `eu.anthropic.claude-opus-4-6-v1`, `amazon-bedrock/anthropic.claude-opus-4-6` and `claude-opus-4-6` all price as Claude Opus 4.6.
-- Usage on a model with no known price, and provider credits with no configured rate, are listed under **Not included**. They never count as $0.
-- Months before the oldest telemetry still stored (see `data.retention_days`) show **no data** rather than zero spend.
+### Spend: billed money and usage value
 
-Figures use list prices and are not reconciled to invoices. Set negotiated rates under **Settings → Cost** (below).
+*Usage value* is every token priced at provider rates. *Spend* is what you are billed, which depends on how each harness is paid for:
+
+| Billing mode | Spend | How it is known |
+|---|---|---|
+| Pay per token (API key, Bedrock, Vertex, Azure) | Usage value | Detected from Bedrock, Vertex or Azure model ids; otherwise set in Settings → Cost |
+| Subscription (Claude Pro/Max, Kiro plans) | Seats x seat price, plus credit overage beyond the plan | Kiro is detected from credits; seats and prices are set in Settings → Cost |
+| Not set | Usage value, flagged as an assumption on the headline | Claude Code transcripts do not say whether an API key or a subscription was used |
+
+Admins set billing modes from the **How spend is billed** panel on the tab. Seat fees use the current settings for every month shown.
+
+### Prices
+
+- Prices come from a vendored price list (`observal-server/services/cost/data/model_prices.json`) derived from [Langfuse's audited model prices](https://github.com/langfuse/langfuse/blob/main/worker/src/constants/default-model-prices.json) (MIT). Regenerate with `python scripts/update_model_prices.py`. Every Claude model was checked against [Anthropic's price table](https://platform.claude.com/docs/en/about-claude/pricing); disagreements are fixed in `model_price_corrections.json` with a citation.
+- One-hour cache writes are priced at their own rate (2x input on Anthropic models) instead of the five-minute rate (1.25x).
+- Bedrock geographic endpoints (`eu.`, `us.`, `jp.`, `apac.` ...) carry the published 10% premium over `global.` for Claude Sonnet 4.5, Haiku 4.5, Opus 4.5 and later models.
+- Model names are normalized across harnesses, so `eu.anthropic.claude-opus-4-6-v1` and `claude-opus-4-6` price as the same model.
+- Unpriced models and credits without a rate are listed under **Not included**, never counted as $0. Months before the oldest stored telemetry (see `data.retention_days`) show **no data**.
+- Months follow `cost.timezone` (default UTC).
+
+Figures use list prices and are not reconciled to invoices; set negotiated rates in Settings → Cost.
 
 ### Savings identified
 
-Deterministic detectors scan the last 30 days of usage and produce priced opportunities. Each one stores its formula and inputs, which you can see by expanding it in the pipeline.
+Detectors run every 30 minutes (and when you press **Recompute** or change a cost setting) over the last 30 days. Each opportunity stores its formula and inputs.
 
 | Detector | Fires when | Monthly saving |
 |---|---|---|
-| Model routing | An agent runs some sessions on a premium model and has already run at least three sessions on a cheaper one | Premium usage repriced at the cheaper model's rates. Marked *validated* only when Agent Insights outcomes show the cheaper model succeeding at least as often (within 5 points) |
-| Prompt caching | An agent's cache hit rate is at least 10 points below the deployment's own rate | Missing cache reads priced at the difference between the input and cache-read prices |
-| Context size | An agent's median first-turn context is at least 1.5× the median across agents | Excess tokens × billable calls × cache-read price |
+| Model routing | An agent runs sessions on a premium model and already has 3+ sessions on a cheaper one | The smaller of: premium usage repriced at the cheaper model's rates, and premium sessions x the observed cost-per-session gap (models use different token counts). *Validated* only when Agent Insights outcomes show the cheaper model succeeding at least as often |
+| Prompt caching | An agent's cache hit rate is 10+ points below what its own best quarter of sessions achieves (capped at the deployment rate) | Cacheable uncached input x (input price - cache-read price - write premium spread over the deployment's reads per write) |
+| Context size | An agent's median first-turn context is 1.5x+ the median across agents | Excess tokens x billable calls x cache-read price |
+| Seat right-sizing | A subscription seat costs more than its user's usage at pay-per-token rates | Sum of (seat price - usage) for those seats plus idle seats, capped at the seat bill |
 
-Opportunities below `cost.opportunity_min_monthly_usd` are not listed.
+Savings on subscription usage free plan capacity but do not lower the bill; they are listed as *capacity* and kept out of the headline. Opportunities below `cost.opportunity_min_monthly_usd` are not listed.
 
 ### Savings actioned and realized
 
 An opportunity moves **identified → approved → implemented**:
 
-1. **Approve** freezes a baseline: the agent's cost per session on its current version over the previous 30 days.
-2. **Implemented** is set automatically once a newer approved version of the agent has sessions, or manually with the released version number.
-3. **Realized savings** are then measured, not assumed: for every session on the new version, the baseline cost per session minus that session's actual cost. A change that made sessions more expensive shows as negative savings.
+1. **Approve** freezes a baseline sample: per-session costs and judged outcomes on the agent's current version over the previous 30 days.
+2. **Implemented** is set automatically once a newer approved version has sessions, or manually (agent changes need the released version; seat changes do not).
+3. **Realized savings** are measured once both the baseline and the new version have at least 10 sessions. The unit is cost per *successful* session when half of both cohorts have a judged outcome, so a version that gets easier tasks is not credited with a saving; otherwise cost per session, labelled as such. A 90% bootstrap interval is shown with the figure. Regressions stay negative.
 
 The headline **realization rate** is the implemented run rate divided by the identified run rate.
 
 ### Other figures
 
-- **Token cost savings** is what prompt caching saved compared with uncached list prices. This is a saving delivered by the coding tools themselves; the dashboard does not attribute it to Observal.
-- **Context cost** is spend on cache reads, meaning the prompt, skills and tool definitions re-read on every call. Observal does not store agent memory, so carried context stands in for stored-memory cost.
-- **Cost per successful task** divides spend on sessions with an Agent Insights outcome by the number judged fully or mostly achieved. Coverage is shown beside it.
-- **Cost per pull request** counts `gh pr create` and `create_pull_request` tool calls.
-- **Spend spike** flags a day this month when an agent spent at least $5 and far above its own median over the previous 60 days (robust z-score ≥ 3.5). It needs at least 14 days of history, so a new agent is never flagged.
-- **Most material finding** picks the largest of: measured savings, the top open opportunity, the top spike, and the biggest change in an agent's spend against last month. Its wording is built from those figures.
+- **Token cost savings**: what prompt caching saved against uncached list rates, net of cache-write premiums. This saving comes from the coding tools, not from Observal.
+- **Context cost**: spend on cache reads, meaning instructions, tool definitions and the conversation so far, re-read on every call. Observal has no agent memory store, so this stands in for the brief's "stored memory"; see *Brief deviations* below.
+- **Cost per successful task**: spend on sessions with an Agent Insights outcome divided by those judged fully or mostly achieved, with coverage shown. Insights analyses a subset of sessions, so this is a sample.
+- **Cost per pull request**: spend divided by PR-creation tool calls (`gh pr create`, `create_pull_request`). These are attempts, not confirmed PRs.
+- **Spend spike**: a day this month when an agent spent at least $5 and far above its own median over the previous 60 days (robust z ≥ 3.5); needs 14 days of history.
+- **Most material finding**: the largest of measured savings, the top open opportunity, the top spike and the biggest change in an agent's spend. Its wording is built from those figures.
+
+### Brief deviations
+
+- **Agent memory cost** is shown as carried context. Observal does not store agent memory, so "% active vs stale" cannot be measured. The faithful version, the context each agent's installed skills, prompts and MCP tool definitions add per session, split by whether they were used in the last 30 days, needs component token sizes and per-component usage attribution.
+- **Top cost drivers** are by agent, model and harness. Department and team breakdowns need users mapped to departments or teams.
 
 ## Settings → Cost
 
@@ -57,8 +79,10 @@ The headline **realization rate** is the implemented run rate divided by the ide
 | `cost.price_multipliers` | JSON keyed by regex on the reported model | `{"^eu\\.anthropic\\.": 1.1}` for a regional premium |
 | `cost.credit_usd` | JSON of USD per credit, keyed by harness | `{"kiro": 0.04}` |
 | `cost.opportunity_min_monthly_usd` | Number | `5` |
+| `cost.billing` | JSON per harness: `mode` (`metered` or `subscription`), `seats`, `seat_usd_month`, `plan_credits`, `overage_usd_per_credit` | `{"claude-code": {"mode": "subscription", "seats": 4, "seat_usd_month": 100}}` |
+| `cost.timezone` | IANA timezone for month boundaries | `Europe/London` |
 
-Values are validated when saved, and the dashboard cache is cleared immediately.
+Admins can change these from the Cost Intelligence tab or the API below; super-admins also see them under Settings → Cost. Values are validated when saved and detection re-runs immediately.
 
 ## API
 
@@ -66,8 +90,11 @@ All endpoints require the admin role.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/exec/cost/intelligence[?refresh=true]` | Full dashboard payload (cached for 5 minutes). Returns `503` if telemetry cannot be read |
+| `GET` | `/api/v1/exec/cost/intelligence[?refresh=true]` | Full dashboard payload, read-only (cached for 5 minutes). Returns `503` if telemetry cannot be read |
+| `POST` | `/api/v1/exec/cost/refresh` | Re-run detection and implementation checks now |
+| `GET` | `/api/v1/exec/cost/settings` | Cost settings |
+| `PUT` | `/api/v1/exec/cost/settings/{key}` | `{"value": "..."}` for one `cost.*` setting |
 | `POST` | `/api/v1/exec/cost/opportunities/{id}/approve` | Freeze the baseline and approve |
-| `POST` | `/api/v1/exec/cost/opportunities/{id}/implemented` | `{"version": "1.2.0"}` |
+| `POST` | `/api/v1/exec/cost/opportunities/{id}/implemented` | `{"version": "1.2.0"}` for agent changes; empty body for seat changes |
 | `POST` | `/api/v1/exec/cost/opportunities/{id}/dismiss` | `{"reason": "..."}` |
 | `POST` | `/api/v1/exec/cost/opportunities/{id}/reopen` | Return to identified |
