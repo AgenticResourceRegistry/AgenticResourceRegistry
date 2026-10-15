@@ -139,6 +139,45 @@ def test_updated_notice_requires_durable_completion_seal(isolated: Path) -> None
     assert not notice.exists() and not notice.with_suffix(".complete").exists()
 
 
+def test_journaled_notice_without_final_flag_never_touches_another_seal(isolated: Path) -> None:
+    """A malformed journaled record must not reuse an earlier notice's seal or crash the hook."""
+
+    def write(session: str, mtime: int, **extra: object) -> Path:
+        key = bridge.notice_key(REGISTRY, "alice", session)
+        notice = startup_update_check.NOTICE_DIR / f"{key}.json"
+        record = {
+            "schema": 1,
+            "registry": REGISTRY,
+            "account_id": "alice",
+            "session_id": session,
+            "harness": "claude-code",
+            "journaled": True,
+            "effective_in_current_session": "no",
+            "items": [{"status": "updated", "name": "alice/review", "current_version": "1", "latest_version": "2"}],
+            **extra,
+        }
+        startup_update_check._write_json(notice, record, startup_update_check.MAX_NOTICE_BYTES)
+        os.utime(notice, (mtime, mtime))
+        return notice
+
+    import time as _time
+
+    now = int(_time.time())
+    sealed = write("s-1", now - 20, outcome_final=True)
+    seal = sealed.with_suffix(".complete")
+    startup_update_check._write_json(
+        seal,
+        {"schema": 1, "state": "complete", "registry": REGISTRY, "account_id": "alice", "session_id": "s-1"},
+        startup_update_check.MAX_NOTICE_BYTES,
+    )
+    malformed = write("s-2", now - 10)  # journaled, but no outcome_final
+    ack: list[Path] = []
+    output = bridge.handle({"hook_event_name": "UserPromptSubmit", "session_id": "s-3"}, ack=ack)
+    assert output and "installed on disk" in output["systemMessage"]
+    assert sorted(ack) == sorted([sealed, seal])  # only s-1's own pair is acknowledged
+    assert malformed.exists()
+
+
 def test_identity_permissions_env_overrides_and_foreign_results_fail_closed(
     isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

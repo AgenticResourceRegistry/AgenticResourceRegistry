@@ -75,8 +75,12 @@ def _notices(registry: str, account: str, *, ack: list[Path] | None = None) -> l
                 or not isinstance(record.get("session_id"), str)
                 or path.name != f"{notice_key(registry, account, record['session_id'])}.json"
                 or not isinstance(record.get("items"), list)
+                # A journaled record must say whether its outcome is final;
+                # otherwise there is no seal to verify or acknowledge.
+                or (record.get("journaled") is True and not isinstance(record.get("outcome_final"), bool))
             ):
                 continue
+            seal: Path | None = None
             if record.get("journaled") is True and record.get("outcome_final") is True:
                 seal = path.with_suffix(".complete")
                 seal_info = seal.lstat()
@@ -133,7 +137,7 @@ def _notices(registry: str, account: str, *, ack: list[Path] | None = None) -> l
                 messages.append("Observal update check could not complete; run `observal outdated` later.")
             # The real hook acknowledges only after flushing the user-facing
             # systemMessage. Unit callers without an ack list consume directly.
-            paths = [path, seal] if record.get("journaled") is True else [path]
+            paths = [path, seal] if seal is not None else [path]
             if ack is None:
                 for delivered in paths:
                     delivered.unlink(missing_ok=True)
