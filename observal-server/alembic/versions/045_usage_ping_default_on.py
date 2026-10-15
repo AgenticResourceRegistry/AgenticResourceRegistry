@@ -6,7 +6,7 @@
 Revision ID: 045_usage_ping_default_on
 Revises: 044_review_orphan_authors
 
-Before 1.16 the settings panel read a missing usage_ping.enabled row as off,
+Before 1.15.1 the settings panel read a missing usage_ping.enabled row as off,
 so saving the panel stored "false" without the administrator choosing it, and
 delivery stayed dormant until a company name and public URL were set. Drop
 the stored enabled and frequency rows so every installation falls back to the
