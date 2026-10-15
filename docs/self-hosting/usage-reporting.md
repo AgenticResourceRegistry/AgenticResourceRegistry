@@ -11,6 +11,8 @@ A super administrator must configure **Deployment Public URL** and then open **A
 
 Only a super administrator can change the company identity, frequency, or consent setting.
 
+Upgrading to 1.16 resets usage reporting to its defaults (on, every six hours) on every existing installation, including installations where it was previously switched off. A super administrator can switch it off again after the upgrade.
+
 Disabling the switch stops scheduled delivery immediately. It does not remove reports already received by Observal. Contact the Observal maintainers with the installation ID shown in the panel to request deletion.
 
 ## Data included
