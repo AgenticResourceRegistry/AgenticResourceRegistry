@@ -73,7 +73,6 @@ def register_scan(app: typer.Typer):
         Examples:
             observal scan
             observal scan --harness claude-code
-            observal scan --harness kiro
             observal scan --inventory --output json
         """
         startup = ctx.meta.get("observal.scan.startup")

@@ -481,12 +481,13 @@ async def test_visibility_mirrors_registry_rules(sessions):
         await reproject_all(db, ctx=fx.CTX)
 
         assert await _visible(db, None) == {"Public Approved"}
-        assert await _visible(db, stranger) == {"Public Approved"}
-        # Team-private entries need membership, exactly as apply_visibility_filter requires;
-        # a submitter who is not on the team does not see them either.
+        assert await _visible(db, stranger) == set()
+        # ARD is narrower than registry browsing: a co-author outside the
+        # listing's namespace cannot discover it, even when it is public.
+        # A submitter removed from a teamspace cannot discover its items either.
         assert await _visible(db, owner) == {"Public Approved", "Public Pending", "Public Rejected", "Personal Private"}
-        assert await _visible(db, co_author) == {"Public Approved", "Public Pending"}
-        assert await _visible(db, member) == {"Public Approved", "Team Private"}
+        assert await _visible(db, co_author) == set()
+        assert await _visible(db, member) == {"Team Private"}
         # Reviewers see their queue (pending), not other people's rejections or drafts.
         assert await _visible(db, reviewer) == {"Public Approved", "Public Pending"}
         assert await _visible(db, admin) == {

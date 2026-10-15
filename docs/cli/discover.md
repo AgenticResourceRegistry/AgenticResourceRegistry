@@ -5,7 +5,7 @@
 
 Find approved registry resources for the task at hand and use them in the current session, without building an Agent first.
 
-Discovery searches every kind at once (agents, MCP servers, skills, hooks, prompts, sandboxes), ranks by relevance, and tells you separately whether each result is approved, whether it works in your harness, and whether it can be used right now or only after a restart. The bundled `observal` skill tells coding assistants to run this before reinventing something or declaring a capability unavailable.
+Discovery searches every kind at once (agents, MCP servers, skills, hooks, prompts, sandboxes), ranks by relevance, and tells you separately whether each result is approved, whether it works in your harness, and whether it can be used right now or only after a restart. For signed-in users, results are scoped to personal listings they own and listings in every teamspace they currently belong to (including public teamspace listings); other people's public listings are not returned. Global reviewers and admins retain their review/admin scope. Anonymous public discovery is unchanged when the public registry is enabled. The bundled `observal` skill tells coding assistants to run this before reinventing something or declaring a capability unavailable.
 
 ## Search
 

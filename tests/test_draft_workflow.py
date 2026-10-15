@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,6 +40,20 @@ def _lock_service_stub(monkeypatch):
 
     monkeypatch.setattr(agent_lock, "lock_agent_version", AsyncMock(return_value={}))
     monkeypatch.setattr(agent_lock, "attach_pinned_components", AsyncMock(return_value=[]))
+    # Synthetic agents cannot be requeued via the mapped-model publication policy.
+    monkeypatch.setattr("api.routes.agent.draft.review_publication_to_public", AsyncMock(return_value=False))
+
+
+@pytest.fixture
+def review_submission_stub(monkeypatch):
+    async def submit(_db, _subject_type, agent, version, _author_id, *, message=None):
+        agent.status = AgentStatus.pending
+        version.status = AgentStatus.pending
+        return SimpleNamespace(number=42)
+
+    mock_submit = AsyncMock(side_effect=submit)
+    monkeypatch.setattr("api.routes.agent.draft.submit_for_review", mock_submit)
+    return mock_submit
 
 
 def _user(**kw):
@@ -636,6 +651,7 @@ class TestDraftUpdateFieldHandling:
 # ═══════════════════════════════════════════════════════════
 
 
+@pytest.mark.usefixtures("review_submission_stub")
 class TestDraftSubmit:
     """Test submitting a personal draft for review."""
 
@@ -708,6 +724,7 @@ class TestDraftSubmit:
 # ═══════════════════════════════════════════════════════════
 
 
+@pytest.mark.usefixtures("review_submission_stub")
 class TestTeamDraftSubmit:
     """Team publishing never auto-approves: every submit waits for an explicit
     (possibly self-) approval, so each release records a reviewed_by decision."""
@@ -822,9 +839,10 @@ class TestDraftSubmitNotDraft:
     """Test submitting a non-draft agent returns an error."""
 
     @pytest.mark.asyncio
+    @patch("services.agent_snapshot.build_yaml_snapshot", new=AsyncMock(return_value="snapshot"))
     @patch("api.routes.agent.draft._load_agent")
-    async def test_submit_pending_returns_400(self, mock_load):
-        """Submitting a pending agent returns 400."""
+    async def test_submit_pending_creates_new_revision(self, mock_load, review_submission_stub):
+        """Pending submissions can be resubmitted as a new review revision."""
         user = _user()
         app, db, _ = _app_with(user=user)
         agent = _agent_mock(status=AgentStatus.pending, created_by=user.id)
@@ -833,7 +851,9 @@ class TestDraftSubmitNotDraft:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(f"/api/v1/agents/{agent.id}/submit")
 
-        assert r.status_code == 400
+        assert r.status_code == 200
+        assert r.json()["review_number"] == 42
+        review_submission_stub.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch("api.routes.agent.draft._load_agent")

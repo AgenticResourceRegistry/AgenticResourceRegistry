@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # `observal auth`
@@ -10,10 +11,10 @@ Authentication and account management.
 | Command | Description |
 | --- | --- |
 | `observal auth login` | Authenticate with credentials or browser SSO |
-| `observal auth logout` | Revoke the remote session when possible and clear local credentials |
+| `observal auth logout` | Sign out every session for this account (CLI, hooks, web) and clear local credentials |
 | `observal auth whoami` | Show the authenticated user |
 | `observal auth status` | Check authenticated server and local outbox health |
-| `observal auth change-password` | Change the current user's password |
+| `observal auth change-password` | Change the current user's password; signs out every other session, this CLI stays signed in |
 | `observal auth set-username` | Set or update the registry namespace username |
 
 ## Login

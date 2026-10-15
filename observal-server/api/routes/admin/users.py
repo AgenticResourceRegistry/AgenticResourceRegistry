@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Admin user management routes."""
@@ -24,6 +25,7 @@ from schemas.admin import (
     UserRoleUpdate,
 )
 from services.security_events import EventType, SecurityEvent, Severity, emit_security_event
+from services.token_revocation import revoke_user_tokens
 from services.username_generator import generate_unique_username
 
 from ._router import router
@@ -234,11 +236,13 @@ async def reset_user_password(
         raise HTTPException(status_code=422, detail="Provide new_password or set generate=true")
 
     user.set_password(new_password)
+    from services.redis import get_redis
+
+    # Sign the user out everywhere before the reset lands; a Redis error aborts with the old password intact.
+    await revoke_user_tokens(get_redis(), user.id)
     await db.commit()
 
     try:
-        from services.redis import get_redis
-
         redis = get_redis()
         await redis.setex(f"must_change_password:{user.id}", 86400, "1")
     except (RedisError, Exception):

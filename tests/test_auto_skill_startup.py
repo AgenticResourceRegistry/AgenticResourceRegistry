@@ -20,7 +20,7 @@ ID = "22222222-2222-4222-8222-222222222222"
 
 @pytest.fixture()
 def instance(tmp_path: Path):
-    state = {"latest": "1.0.0", "script": False, "script_v1": False, "mismatch": False}
+    state = {"latest": "1.0.0", "script": False, "script_v1": False, "mismatch": False, "bundle": False}
 
     class Registry(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
@@ -66,9 +66,12 @@ def instance(tmp_path: Path):
                 }
                 if (version == "1.0.0" and state["script_v1"]) or (version == "2.0.0" and state["script"]):
                     skill.update(script_content=f"echo {version}\n", script_filename="run.sh")
-                return self.respond(
-                    {"version": version, "digest": f"sha256:{version}", "config_snippet": {"skill": skill}}
-                )
+                response = {"version": version, "digest": f"sha256:{version}", "config_snippet": {"skill": skill}}
+                if version == "2.0.0" and state["bundle"]:
+                    # The release became a complete reviewed folder (main's managed receipts).
+                    skill["bundle_version_id"] = "33333333-3333-4333-8333-333333333333"
+                    response["bundle"] = {"files": [{"path": "review/SKILL.md", "content": "# review 2.0.0\n"}]}
+                return self.respond(response)
             self.send_error(404)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Registry)
@@ -229,6 +232,31 @@ def test_unsafe_skill_remains_notice_only(instance, change: str) -> None:
     if change in {"shared", "shared-local-name"}:
         assert "Another installed skill" in notice["items"][0]["reason"]
     assert file.read_bytes() == (b"# my local edit\n" if change == "edit" else original)
+    assert not list((home / ".observal/update-backups").glob("*/manifest.json"))
+
+
+@pytest.mark.parametrize("case", ["release-bundle", "receipt-owned"])
+def test_complete_folder_skills_are_never_automatic(instance, case: str) -> None:
+    """Folder bundles and receipt-owned folders upgrade only through the reviewed --upgrade flow."""
+    state, home, cli, apply, _env, _url = instance
+    cli("registry", "skill", "install", ID, "--harness", "pi", "--output", "json")
+    file = home / ".pi/agent/skills/review/SKILL.md"
+    original = file.read_bytes()
+    if case == "release-bundle":
+        state["bundle"] = True
+    else:
+        path = home / ".observal/lockfile.json"
+        lock = json.loads(path.read_text())
+        for registry in lock["registries"].values():
+            for row in registry["harnesses"]["pi"]["standalone"]:
+                row["folder_receipt"] = {"version_id": "v", "target": str(file.parent)}
+        path.write_text(json.dumps(lock))
+    cli("unfreeze")
+    state["latest"] = "2.0.0"
+    notice = apply(case)
+    assert notice["items"][0]["status"] != "updated", notice
+    assert "complete folder bundle" in notice["items"][0]["reason"], notice
+    assert file.read_bytes() == original
     assert not list((home / ".observal/update-backups").glob("*/manifest.json"))
 
 

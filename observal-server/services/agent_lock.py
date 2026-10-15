@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent version locks.
@@ -31,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from loguru import logger as optic
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from models.agent_component import AgentComponent
@@ -39,6 +41,9 @@ from models.mcp import ListingStatus, McpListing, McpVersion
 from models.prompt import PromptListing, PromptVersion
 from models.sandbox import SandboxListing, SandboxVersion
 from models.skill import SkillListing, SkillVersion
+from services.skill_bundle import needs_bundle_delivery, validate_skill_bundle
+from services.skill_revisions import verified_skill_revision
+from services.skill_validator import SkillValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -47,6 +52,7 @@ if TYPE_CHECKING:
 
 LOCK_VERSION = 1
 DIGEST_ALG = "observal-content-v1"
+SKILL_DIGEST_ALG_V2 = "observal-content-v2"
 
 LISTING_MODELS: dict[str, type] = {
     "mcp": McpListing,
@@ -156,7 +162,12 @@ def _sha256(payload: object) -> str:
 
 
 def content_digest(component_type: str, version: Any) -> str:
-    """Digest of the install-relevant content of one component version row."""
+    """Digest of a selected version; resource-bearing skills bind every file and mode.
+
+    Keep the existing v1 payload byte-for-byte for resource-less and git-fetch
+    pins. The named v2 prefix prevents an old v1 lock from silently accepting
+    files that were added to its previously resource-less version.
+    """
     payload: dict[str, object] = {}
     for name in (*_COMMON_FIELDS, *CONTENT_FIELDS[component_type]):
         value = getattr(version, name, None)
@@ -164,7 +175,28 @@ def content_digest(component_type: str, version: Any) -> str:
             value = _named(value)
         if value is not None:
             payload[name] = value
+    if component_type == "skill" and needs_bundle_delivery(version):
+        files = validate_skill_bundle(
+            delivery_mode=version.delivery_mode,
+            skill_md_content=version.skill_md_content,
+            script_filename=version.script_filename,
+            script_content=version.script_content,
+            extra_files=version.extra_files or [],
+            enforce_limits=False,
+        )
+        payload["digest_alg"] = SKILL_DIGEST_ALG_V2
+        try:
+            payload["files"] = [file.declaration.model_dump() for file in sorted(files, key=lambda file: file.path)]
+        except ValidationError as exc:
+            raise SkillValidationError("Stored skill folder exceeds manifest limits") from exc
+        return f"{SKILL_DIGEST_ALG_V2}:{_sha256(payload)}"
     return _sha256(payload)
+
+
+def _requires_v2_skill_pin(component: Any, row: Any) -> bool:
+    """A pinned whole folder stays exact even if stored bytes later disappear."""
+    recorded = getattr(component, "resolved_digest", None)
+    return needs_bundle_delivery(row) or (isinstance(recorded, str) and recorded.startswith(f"{SKILL_DIGEST_ALG_V2}:"))
 
 
 def _external_mcp_digest(mcp: dict) -> str:
@@ -212,7 +244,11 @@ async def _versions_for(db: AsyncSession, keys: Iterable[tuple[str, uuid.UUID]])
     found: dict[tuple[str, uuid.UUID], list] = {}
     for component_type, ids in by_type.items():
         model = VERSION_MODELS[component_type]
-        rows = (await db.execute(select(model).where(model.listing_id.in_(ids)))).scalars().all()
+        rows = (
+            (await db.execute(select(model).where(model.listing_id.in_(ids)).execution_options(populate_existing=True)))
+            .scalars()
+            .all()
+        )
         for row in rows:
             found.setdefault((component_type, row.listing_id), []).append(row)
     return found
@@ -346,6 +382,20 @@ async def attach_pinned_components(
         if row is None:
             errors.append({"component_type": key[0], "component_id": str(key[1]), "reason": reason})
             continue
+        if key[0] == "skill" and row.delivery_mode == "registry_direct":
+            try:
+                if listings.get(key) is None:
+                    raise SkillValidationError("Skill listing no longer exists")
+                verified_skill_revision(listings[key], row)
+            except SkillValidationError:
+                errors.append(
+                    {
+                        "component_type": key[0],
+                        "component_id": str(key[1]),
+                        "reason": "skill folder has no valid review revision",
+                    }
+                )
+                continue
         chosen.append((ref, key, row))
     if errors:
         raise HTTPException(status_code=400, detail=errors)
@@ -425,6 +475,13 @@ async def build_lock_document(db: AsyncSession, agent: Any, version: Any, *, per
     for component in components:
         key = (component.component_type, component.component_id)
         row, source = _pinned_row(component, versions.get(key, []))
+        if persist and key[0] == "skill" and row is not None and row.delivery_mode == "registry_direct":
+            try:
+                if listings.get(key) is None:
+                    raise SkillValidationError("Skill listing no longer exists")
+                verified_skill_revision(listings[key], row)
+            except SkillValidationError as exc:
+                raise HTTPException(status_code=409, detail="Pinned skill folder has no valid review revision") from exc
         entry = _entry(component, row, listings.get(key), source)
         entries.append(entry)
         if persist and row is not None:
@@ -433,7 +490,12 @@ async def build_lock_document(db: AsyncSession, agent: Any, version: Any, *, per
             component.resolved_digest = entry["digest"]
     document = {
         "lock_version": LOCK_VERSION,
-        "digest_alg": DIGEST_ALG,
+        "digest_alg": SKILL_DIGEST_ALG_V2
+        if any(
+            entry["type"] == "skill" and (entry["digest"] or "").startswith(f"{SKILL_DIGEST_ALG_V2}:")
+            for entry in entries
+        )
+        else DIGEST_ALG,
         "agent": {
             "id": str(agent.id),
             "qualified_name": f"{agent.namespace}/{agent.slug}",
@@ -498,13 +560,68 @@ async def pinned_component_blockers(db: AsyncSession, components: Iterable[Any])
         key = (component.component_type, component.component_id)
         listing = listings.get(key)
         if listing is None:
-            # Unknown types and vanished listings are reported by install, not here.
+            blockers.append(
+                {
+                    "component_type": component.component_type,
+                    "component_id": str(component.component_id),
+                    "name": component.component_name,
+                    "version": getattr(component, "resolved_version", "?"),
+                    "status": "missing_listing",
+                }
+            )
             continue
         row, _source = _pinned_row(component, versions.get(key, []))
+        if (
+            component.component_type == "skill"
+            and component.resolved_version_id is not None
+            and (row is None or row.id != component.resolved_version_id)
+        ):
+            blockers.append(
+                {
+                    "component_type": "skill",
+                    "component_id": str(component.component_id),
+                    "name": listing.name,
+                    "version": component.resolved_version,
+                    "status": "missing_pin",
+                }
+            )
+            continue
         if row is None:
             row = next((r for r in versions.get(key, []) if r.id == listing.latest_version_id), None)
+        if component.component_type == "skill" and row is not None and _requires_v2_skill_pin(component, row):
+            try:
+                pinned_digest = content_digest("skill", row)
+            except SkillValidationError:
+                pinned_digest = None
+            if component.resolved_version_id != row.id or component.resolved_digest != pinned_digest:
+                blockers.append(
+                    {
+                        "component_type": "skill",
+                        "component_id": str(component.component_id),
+                        "name": listing.name,
+                        "version": row.version,
+                        "status": "invalid_bundle_pin",
+                    }
+                )
+                continue
+        if component.component_type == "skill" and row is not None and row.delivery_mode == "registry_direct":
+            try:
+                verified_skill_revision(listing, row)
+            except SkillValidationError:
+                blockers.append(
+                    {
+                        "component_type": "skill",
+                        "component_id": str(component.component_id),
+                        "name": listing.name,
+                        "version": row.version,
+                        "status": "invalid_review_revision",
+                    }
+                )
+                continue
         status = getattr(row, "status", None)
-        if status in INSTALLABLE_STATUSES:
+        if status in INSTALLABLE_STATUSES and not (
+            component.component_type == "skill" and getattr(row, "requires_global_review", False) is True
+        ):
             continue
         blockers.append(
             {
@@ -512,7 +629,11 @@ async def pinned_component_blockers(db: AsyncSession, components: Iterable[Any])
                 "component_id": str(component.component_id),
                 "name": getattr(listing, "name", "") or component.component_name,
                 "version": getattr(row, "version", component.resolved_version),
-                "status": getattr(status, "value", "missing"),
+                "status": (
+                    "pending_public_review"
+                    if component.component_type == "skill" and getattr(row, "requires_global_review", False) is True
+                    else getattr(status, "value", "missing")
+                ),
             }
         )
     return blockers
@@ -643,6 +764,11 @@ async def load_pinned_listings(
         listing = listings_by_type[kind][component.component_id]
         row, source = _pinned_row(component, versions.get((kind, component.component_id), []))
         label = f"{kind} '{listing.name}'"
+        if kind == "skill" and getattr(component, "resolved_version_id", None) is not None and source != "lock":
+            # A missing explicit UUID must not silently become a semver match
+            # or the listing's latest release. Old ID-less resource-less locks
+            # still use the documented compatibility fallback below.
+            raise HTTPException(status_code=409, detail=f"{label} pinned version no longer exists")
         if row is None:
             row = getattr(listing, "latest_version", None)
             loaded.problems.append(f"{label} is not locked")
@@ -653,7 +779,19 @@ async def load_pinned_listings(
         if row is None:
             loaded.entries.append(_entry(component, None, listing, source))
             continue
-        entry = _entry(component, row, listing, source)
+        if kind == "skill" and needs_bundle_delivery(row) and source != "lock":
+            raise HTTPException(status_code=409, detail=f"{label} requires an exact v2 version pin")
+        try:
+            entry = _entry(component, row, listing, source)
+        except SkillValidationError as exc:
+            raise HTTPException(status_code=409, detail=f"{label} has an invalid stored skill folder") from exc
+        if kind == "skill" and _requires_v2_skill_pin(component, row) and component.resolved_digest != entry["digest"]:
+            raise HTTPException(status_code=409, detail=f"{label} pinned folder differs from its v2 digest")
+        if kind == "skill" and row.delivery_mode == "registry_direct":
+            try:
+                verified_skill_revision(listing, row)
+            except SkillValidationError as exc:
+                raise HTTPException(status_code=409, detail=f"{label} has an invalid stored skill folder") from exc
         loaded.entries.append(entry)
         loaded.listings[kind][component.component_id] = PinnedListing(listing, row)
         if component.resolved_digest and source != "fallback-latest" and component.resolved_digest != entry["digest"]:

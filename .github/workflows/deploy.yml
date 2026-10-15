@@ -4,13 +4,19 @@
 name: Deploy to EC2
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      target:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
 
 concurrency:
   group: deploy-ec2
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -20,18 +26,35 @@ jobs:
     if: github.repository == 'Observal/Observal'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: production
+    env:
+      RELEASE_TARGET: ${{ inputs.target }}
+      RELEASE_VERSION: ${{ inputs.version }}
     steps:
+      - name: Validate immutable deployment target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RELEASE_TARGET" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          [ "$LATEST" = "v$RELEASE_VERSION" ] || exit 1
+
       - name: Deploy to EC2
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RELEASE_TARGET,RELEASE_VERSION
           script: |
-            set -e
+            set -eu
+            case "$RELEASE_TARGET" in *[!0-9a-f]*|'') exit 1;; esac
+            test "${#RELEASE_TARGET}" -eq 40
             cd ~/Observal
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin "refs/tags/v$RELEASE_VERSION:refs/tags/v$RELEASE_VERSION"
+            test "$(git rev-parse "v$RELEASE_VERSION^{commit}")" = "$RELEASE_TARGET"
+            git checkout --detach "$RELEASE_TARGET"
 
             cd docker
             docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build --remove-orphans

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ def test_server_boot_and_cli_tokens_use_secret_files(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CLONE_TOKEN_FILE", str(git_token))
     monkeypatch.setenv("OBSERVAL_TOKEN_FILE", str(token))
     monkeypatch.setattr(cli_config, "CONFIG_FILE", tmp_path / "missing.json")
+    # This case exercises explicit *_FILE env vars, not the developer's .env.
+    monkeypatch.chdir(tmp_path)
 
     overrides = _secret_overrides()
     assert overrides["SECRET_KEY"] == "a" * 32

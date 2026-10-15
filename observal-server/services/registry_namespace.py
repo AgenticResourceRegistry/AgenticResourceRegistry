@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 RESERVED_NAMESPACES = frozenset({"admin", "api", "auth", "registry", "root", "system", "teams", "users"})
-RESERVED_SLUGS = frozenset({"archive", "draft", "install", "resolve", "restore", "submit", "unarchive", "versions"})
+RESERVED_SLUGS = frozenset(
+    {"archive", "draft", "fork", "forks", "install", "resolve", "restore", "submit", "unarchive", "versions"}
+)
 
 
 def validate_namespace(handle: str, *, allow_reserved: bool = False) -> str:

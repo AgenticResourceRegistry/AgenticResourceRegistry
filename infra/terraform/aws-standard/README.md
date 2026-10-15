@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Observal AWS Standard Module
 
 Single-account, cost-optimized Terraform deployment for Observal on AWS. Runs the full stack (API, web frontend, background workers, Postgres, Redis, ClickHouse, Grafana, Prometheus) on two EC2 instances — one ECS EC2 cluster node for containers and one data-tier host for stateful services.
@@ -51,6 +54,10 @@ To deploy into an existing VPC, set `vpc_id`, `public_subnet_ids`, and `private_
 
 Set `domain_name`, `route53_zone_id`, and `enable_tls = true` to provision an ACM certificate with DNS validation and enable HTTPS on the ALB.
 
+## Git webhooks on a private install
+
+With `alb_scheme = "internal"`, github.com and gitlab.com cannot deliver the webhooks that MCP repository sync relies on. Set `enable_webhook_ingress = true` and `webhook_providers` (`github`, `gitlab`, or both) to add an API Gateway HTTP API with one route per provider, `POST /api/v1/webhooks/<provider>/mcp/{sync_id}`, that reaches the ALB privately through a VPC link and answers `404` to everything else. See [Git webhooks on a private install](../../../docs/self-hosting/aws-terraform.md#git-webhooks-on-a-private-install).
+
 ## Differences from Enterprise Module
 
 | Feature | Standard | Enterprise (`infra/terraform/aws/`) |
@@ -67,5 +74,5 @@ Set `domain_name`, `route53_zone_id`, and `enable_tls = true` to provision an AC
 
 ## SPDX
 
-SPDX-FileCopyrightText: 2026 Observal
+SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 SPDX-License-Identifier: Apache-2.0

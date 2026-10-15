@@ -442,7 +442,7 @@ export function AgentEditForm({
       <section className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="agent-name" className="text-sm font-medium">
-            Agent Name
+            Agent File Name
             <span className="ml-1 text-destructive">*</span>
           </Label>
           <Input
@@ -452,7 +452,7 @@ export function AgentEditForm({
             className="max-w-md bg-muted/40 text-muted-foreground"
           />
           <p className="text-xs text-muted-foreground">
-            Agent name cannot be changed after creation.
+            Agent File name cannot be changed after creation.
           </p>
         </div>
 
@@ -462,7 +462,7 @@ export function AgentEditForm({
           </Label>
           <Textarea
             id="agent-description"
-            placeholder="What does this agent do?"
+            placeholder="What does this Agent File do?"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
@@ -483,7 +483,7 @@ export function AgentEditForm({
       {/* Agent Prompt */}
       <section className="space-y-2">
         <Label htmlFor="agent-prompt" className="text-sm font-medium">
-          Agent Prompt
+          Agent File Prompt
           <span className="ml-1 text-destructive">*</span>
         </Label>
         <Textarea
@@ -512,7 +512,7 @@ export function AgentEditForm({
             Components
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Select the MCPs, skills, hooks, prompts, and sandboxes for this agent. Drag to reorder.
+            Select the MCPs, skills, hooks, prompts, and sandboxes for this Agent File. Drag to reorder.
           </p>
         </div>
 

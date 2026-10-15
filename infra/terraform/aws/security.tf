@@ -26,6 +26,17 @@ resource "aws_security_group" "alb" {
     cidr_blocks = var.alb_ingress_cidrs
   }
 
+  dynamic "ingress" {
+    for_each = local.webhook_ingress_enabled ? [1] : []
+    content {
+      description     = "Git provider webhooks from the API Gateway VPC link"
+      from_port       = local.webhook_alb_port
+      to_port         = local.webhook_alb_port
+      protocol        = "tcp"
+      security_groups = [aws_security_group.webhook_vpc_link[0].id]
+    }
+  }
+
   # tfsec:ignore:aws-ec2-no-public-egress-sgr ALB egress is constrained by routing to in-VPC targets.
   egress {
     description = "All egress (load balancer to targets)"

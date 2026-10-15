@@ -20,7 +20,10 @@ from jobs.maintenance import (
     reproject_discovery_entries,
     sync_component_sources,
 )
+from jobs.mcp_sync import MAX_TRIES as MCP_SYNC_MAX_TRIES
+from jobs.mcp_sync import sync_mcp_webhook
 from jobs.migration import MAX_MIGRATION_JOB_TIMEOUT_SECONDS, purge_migration_artifacts, run_migration_job
+from jobs.review_checks import run_review_checks
 from jobs.usage_ping import submit_usage_ping
 from logging_config import setup_logging
 from services.alert_evaluator import evaluate_alerts
@@ -55,6 +58,7 @@ class WorkerSettings:
 
     functions = [
         sync_component_sources,
+        func(sync_mcp_webhook, max_tries=MCP_SYNC_MAX_TRIES),
         evaluate_alerts,
         maintain_clickhouse,
         generate_insight_report,
@@ -65,10 +69,12 @@ class WorkerSettings:
         purge_inbox_items,
         submit_usage_ping,
         reproject_discovery_entries,
+        run_review_checks,
     ]
     cron_jobs = [
         cron(sync_component_sources, hour={0, 6, 12, 18}),  # Every 6 hours
         cron(evaluate_alerts, second={0}, timeout=55),  # Every minute
+        cron(run_review_checks, second={0, 15, 30, 45}, timeout=300),  # Automated review checks
         cron(maintain_clickhouse, hour={0, 4, 8, 12, 16, 20}, timeout=120),  # Every 4 hours
         cron(batch_generate_insights, weekday={0}, hour={6}, minute={0}, timeout=300),  # Weekly Monday 6AM
         cron(

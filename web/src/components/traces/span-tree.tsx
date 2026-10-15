@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -314,10 +315,10 @@ export function SpanTree({ spans, selectedId, onSelect }: SpanTreeProps) {
             <PickerSelect
               value={agentFilter}
               onValueChange={setAgentFilter}
-              placeholder="Agent"
+              placeholder="Agent File"
               className="w-[160px]"
               inputClassName="h-7 text-xs"
-              options={[{ value: "all", label: "All agents" }, ...agentNames.map((name) => ({ value: name, label: name }))]}
+              options={[{ value: "all", label: "All Agent Files" }, ...agentNames.map((name) => ({ value: name, label: name }))]}
             />
           )}
           {modelNames.length > 0 && (

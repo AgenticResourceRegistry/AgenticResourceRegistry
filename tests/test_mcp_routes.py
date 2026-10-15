@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -53,7 +53,7 @@ def _db():
         flush=AsyncMock(),
         refresh=AsyncMock(),
         execute=AsyncMock(),
-        scalar=AsyncMock(),
+        scalar=AsyncMock(return_value=None),
         commit=AsyncMock(),
         rollback=AsyncMock(),
     )
@@ -451,11 +451,16 @@ class TestSubmitMcp:
         db.refresh.side_effect = refresh
         target = _target(auto_approve=True, team_id=TEAM_ID, visibility="team")
         resolve_target = AsyncMock(return_value=target)
-        publish = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
+
+        async def reviewed(*_args, **_kwargs):
+            events.append("review")
+            return SimpleNamespace(number=42)
+
+        publish = AsyncMock(side_effect=reviewed)
         commit = AsyncMock(side_effect=lambda *args: events.append("commit"))
         monkeypatch.setattr(mcp, "datetime", FrozenDateTime)
         monkeypatch.setattr(mcp, "resolve_publish_target", resolve_target)
-        monkeypatch.setattr(mcp.inbox, "on_publish", publish)
+        monkeypatch.setattr(mcp, "submit_for_review", publish)
         monkeypatch.setattr(mcp, "commit_or_name_conflict", commit)
         background = Mock()
         request = _submit_request(team_id=TEAM_ID, visibility="team")
@@ -521,11 +526,11 @@ class TestSubmitMcp:
             "Install Node.js",
             "Initial release",
             None,
-            ListingStatus.approved,
+            ListingStatus.pending,
             USER_ID,
             NOW,
-            USER_ID,
-            NOW,
+            None,
+            None,
         )
         assert listing.latest_version_id == VERSION_ID
         assert response.model_dump() == {
@@ -554,7 +559,7 @@ class TestSubmitMcp:
             "headers": [{"name": "Authorization", "description": "Bearer token", "required": True}],
             "auto_approve": ["review"],
             "mcp_validated": False,
-            "status": ListingStatus.approved,
+            "status": ListingStatus.pending,
             "rejection_reason": None,
             "submitted_by": USER_ID,
             "created_at": NOW,
@@ -564,13 +569,18 @@ class TestSubmitMcp:
             "download_count": 0,
             "user_permission": None,
             "is_recommended": False,
+            "forked_from": None,
+            "fork_count": 0,
+            "warnings": [],
+            "review_number": 42,
+            "review_url": "/review/42",
         }
         assert events == [
             "add:McpListing",
             "flush",
             "add:McpVersion",
             "flush",
-            "inbox",
+            "review",
             "commit",
             "refresh",
         ]
@@ -585,14 +595,7 @@ class TestSubmitMcp:
         assert "mcp_listings.namespace =" in _sql(existing_stmt)
         assert "mcp_listings.slug =" in _sql(existing_stmt)
         assert {"platform", "review-mcp"} <= set(existing_stmt.compile().params.values())
-        publish.assert_awaited_once_with(
-            db,
-            listing,
-            subject_type="mcp",
-            actor_id=USER_ID,
-            auto_approved=True,
-            version="1.0.0",
-        )
+        publish.assert_awaited_once_with(db, "mcp", listing, version, USER_ID, message=None)
         commit.assert_awaited_once_with(db, "listing")
         background.add_task.assert_not_called()
 
@@ -603,7 +606,7 @@ class TestSubmitMcp:
         db.flush.side_effect = lambda: _prepare_new_rows(db)
         db.refresh.side_effect = lambda row: _refresh_new_listing(db, row)
         monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
-        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock())
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
         monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock())
         background = Mock()
 
@@ -631,7 +634,7 @@ class TestSubmitMcp:
         db.flush.side_effect = lambda: _prepare_new_rows(db)
         db.refresh.side_effect = lambda row: _refresh_new_listing(db, row)
         monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
-        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock())
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
         monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock())
         store = AsyncMock()
         monkeypatch.setattr(mcp, "_store_client_analysis", store)
@@ -652,7 +655,7 @@ class TestSubmitMcp:
         db.flush.side_effect = lambda: _prepare_new_rows(db)
         db.refresh.side_effect = lambda row: _refresh_new_listing(db, row)
         monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
-        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock())
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
         monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock())
         background = Mock()
 
@@ -682,7 +685,7 @@ class TestSubmitMcp:
         db.flush.side_effect = flush
         db.refresh.side_effect = lambda row: _refresh_new_listing(db, row)
         monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
-        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock())
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
         monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock())
 
         await mcp.submit_mcp(_submit_request(), Mock(), db, _user())
@@ -692,10 +695,28 @@ class TestSubmitMcp:
         assert db.flush.await_count == 3
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [ListingStatus.pending, ListingStatus.rejected])
+    async def test_submit_does_not_delete_an_existing_reviewed_mcp(self, monkeypatch, status):
+        db = _db()
+        existing = _listing(status=status, submitted_by=USER_ID)
+        db.execute.return_value = _result(existing)
+        db.scalar.return_value = uuid.uuid4()  # An old live or closed review still refers to this listing.
+        monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
+
+        with pytest.raises(HTTPException) as exc:
+            await mcp.submit_mcp(_submit_request(), Mock(), db, _user())
+
+        _http_error(exc, 409, "MCP server already has a review; edit and resubmit its draft instead")
+        db.delete.assert_not_awaited()
+        db.add.assert_not_called()
+        db.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("status", "submitted_by"),
         [
             (ListingStatus.approved, USER_ID),
+            (ListingStatus.archived, USER_ID),
             (ListingStatus.pending, OTHER_USER_ID),
         ],
     )
@@ -737,7 +758,7 @@ class TestSubmitMcp:
         db.execute.return_value = _result(None)
         db.flush.side_effect = lambda: _prepare_new_rows(db)
         monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
-        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock(side_effect=RuntimeError("inbox unavailable")))
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(side_effect=RuntimeError("inbox unavailable")))
         commit = AsyncMock()
         monkeypatch.setattr(mcp, "commit_or_name_conflict", commit)
         background = Mock()
@@ -761,7 +782,7 @@ class TestSubmitMcp:
         db.execute.return_value = _result(None)
         db.flush.side_effect = lambda: _prepare_new_rows(db)
         monkeypatch.setattr(mcp, "resolve_publish_target", AsyncMock(return_value=_target()))
-        monkeypatch.setattr(mcp.inbox, "on_publish", AsyncMock())
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
         monkeypatch.setattr(mcp, "commit_or_name_conflict", AsyncMock(side_effect=RuntimeError("commit failed")))
         store = AsyncMock()
         monkeypatch.setattr(mcp, "_store_client_analysis", store)
@@ -779,6 +800,18 @@ class TestSubmitMcp:
 
 
 class TestListAndDetail:
+    @pytest.fixture(autouse=True)
+    def _stub_fork_enrichment(self, monkeypatch):
+        # These tests assert the existing list/detail query shapes. Fork metadata
+        # and the additional grouped count query are covered by the HTTP fork tests.
+        from api.routes.component_forks import RESPONSE_MODELS, SUMMARY_MODELS
+
+        async def serialize(items, kind, _user, _db, *, summary=True):
+            schema = SUMMARY_MODELS[kind] if summary else RESPONSE_MODELS[kind]
+            return [schema.model_validate(item) for item in items]
+
+        monkeypatch.setattr(mcp, "component_responses", serialize)
+
     @pytest.mark.asyncio
     async def test_list_builds_filters_count_rank_scope_and_pagination(self, monkeypatch):
         db = _db()
@@ -1361,7 +1394,11 @@ class TestDraftCreationAndUpdates:
         [
             ("missing", ListingStatus.draft, "Listing not found"),
             ("nonowner", ListingStatus.draft, "Not the listing owner"),
-            ("approved", ListingStatus.approved, "Only draft, rejected, or pending listings can be edited"),
+            (
+                "approved",
+                ListingStatus.approved,
+                "Only draft, rejected, pending, or changes-requested listings can be edited",
+            ),
             ("noversion", ListingStatus.draft, "Listing has no version to update"),
         ],
     )
@@ -1556,41 +1593,33 @@ class TestEditingLocks:
 
 class TestSubmitDraftAndLifecycle:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("auto_approved", [False, True])
-    async def test_submit_draft_notifies_and_sets_review_state_in_order(self, monkeypatch, auto_approved):
+    async def test_submit_draft_opens_review_and_stays_pending(self, monkeypatch):
         db = _db()
         listing = _listing(status=ListingStatus.rejected, submitted_by=USER_ID)
         events = []
         monkeypatch.setattr(mcp, "datetime", FrozenDateTime)
         monkeypatch.setattr(mcp, "resolve_listing", AsyncMock(return_value=listing))
-        decide = AsyncMock(return_value=auto_approved)
-        publish = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
+
+        async def reviewed(_db, _kind, subject, version, _actor, **_kwargs):
+            subject.status = ListingStatus.pending
+            version.status = ListingStatus.pending
+            events.append("review")
+            return SimpleNamespace(number=42)
+
+        publish = AsyncMock(side_effect=reviewed)
         commit = AsyncMock(side_effect=lambda *args: events.append("commit"))
-        monkeypatch.setattr(mcp, "publish_auto_approves_for_entity", decide)
-        monkeypatch.setattr(mcp.inbox, "on_publish", publish)
+        monkeypatch.setattr(mcp, "submit_for_review", publish)
         monkeypatch.setattr(mcp, "commit_or_name_conflict", commit)
         db.refresh.side_effect = lambda row: events.append("refresh")
 
-        response = await mcp.submit_mcp_draft("alice/review-mcp", db, _user())
+        response = await mcp.submit_mcp_draft("alice/review-mcp", db=db, current_user=_user())
 
-        expected_status = ListingStatus.approved if auto_approved else ListingStatus.pending
-        assert listing.status == expected_status
-        if auto_approved:
-            assert listing.latest_version.reviewed_by == USER_ID
-            assert listing.latest_version.reviewed_at == NOW
-        else:
-            assert listing.latest_version.reviewed_by is None
-        assert response.status == expected_status
-        assert events == ["inbox", "commit", "refresh"]
-        decide.assert_awaited_once_with(listing, _user(), db)
-        publish.assert_awaited_once_with(
-            db,
-            listing,
-            subject_type="mcp",
-            actor_id=USER_ID,
-            auto_approved=auto_approved,
-            version="1.2.3",
-        )
+        assert listing.status == ListingStatus.pending
+        assert listing.latest_version.reviewed_by is None
+        assert response.status == ListingStatus.pending
+        assert response.review_number == 42
+        assert events == ["review", "commit", "refresh"]
+        publish.assert_awaited_once_with(db, "mcp", listing, listing.latest_version, USER_ID, message=None)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1598,7 +1627,7 @@ class TestSubmitDraftAndLifecycle:
         [
             ("missing", ListingStatus.draft, "Listing not found", 404),
             ("nonowner", ListingStatus.draft, "Not the listing owner", 403),
-            ("pending", ListingStatus.pending, "Listing is not a draft", 400),
+            ("archived", ListingStatus.archived, "Listing is not a draft", 400),
             ("nodescription", ListingStatus.draft, "Description is required before submitting", 400),
             ("nosource", ListingStatus.draft, "At least one of git_url, command, or url is required", 400),
         ],
@@ -1618,34 +1647,27 @@ class TestSubmitDraftAndLifecycle:
             "get_effective_component_permission",
             Mock(return_value="view" if mode == "nonowner" else "owner"),
         )
-        decide = AsyncMock()
         publish = AsyncMock()
         commit = AsyncMock()
-        monkeypatch.setattr(mcp, "publish_auto_approves_for_entity", decide)
-        monkeypatch.setattr(mcp.inbox, "on_publish", publish)
+        monkeypatch.setattr(mcp, "submit_for_review", publish)
         monkeypatch.setattr(mcp, "commit_or_name_conflict", commit)
 
         with pytest.raises(HTTPException) as exc:
-            await mcp.submit_mcp_draft(str(LISTING_ID), db, _user())
+            await mcp.submit_mcp_draft(str(LISTING_ID), db=db, current_user=_user())
 
         _http_error(exc, code, detail)
-        decide.assert_not_awaited()
         publish.assert_not_awaited()
         commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_publish_policy_failure_preserves_rejected_state(self, monkeypatch):
+    async def test_review_failure_preserves_rejected_state(self, monkeypatch):
         db = _db()
         listing = _listing(status=ListingStatus.rejected, submitted_by=USER_ID)
         monkeypatch.setattr(mcp, "resolve_listing", AsyncMock(return_value=listing))
-        monkeypatch.setattr(
-            mcp,
-            "publish_auto_approves_for_entity",
-            AsyncMock(side_effect=RuntimeError("policy unavailable")),
-        )
+        monkeypatch.setattr(mcp, "submit_for_review", AsyncMock(side_effect=RuntimeError("review unavailable")))
 
-        with pytest.raises(RuntimeError, match="policy unavailable"):
-            await mcp.submit_mcp_draft(str(LISTING_ID), db, _user())
+        with pytest.raises(RuntimeError, match="review unavailable"):
+            await mcp.submit_mcp_draft(str(LISTING_ID), db=db, current_user=_user())
 
         assert listing.status == ListingStatus.rejected
 
@@ -1794,4 +1816,5 @@ class TestRouteContracts:
                 "command": "python",
                 "args": ["-m", "review"],
             },
+            "message": None,
         }

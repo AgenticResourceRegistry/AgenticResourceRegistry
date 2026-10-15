@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -12,7 +13,9 @@ export function useDeploymentConfig() {
 	const { data, isLoading, isError } = useQuery<PublicConfig>({
 		queryKey: ["config", "public"],
 		queryFn: config.public,
-		staleTime: 5 * 60 * 1000, // cache for 5 minutes
+		staleTime: 10_000, // rollout hints must not remain fresh for minutes
+		refetchOnMount: "always",
+		refetchOnWindowFocus: "always",
 		retry: 2,
 	});
 
@@ -24,7 +27,10 @@ export function useDeploymentConfig() {
 		githubSsoEnabled: data?.github_sso_enabled ?? false,
 		ssoOnly: data?.sso_only ?? false,
 		publicRegistryEnabled: data?.public_registry_enabled ?? false,
+		leaderboardEnabled: data?.leaderboard_enabled ?? false,
 		selfRegistrationEnabled: data?.self_registration_enabled ?? false,
+		skillFolderDeliveryEnabled: data?.skill_folder_delivery_enabled === true && !isError,
+		experimentalReviewChecks: data?.experimental_review_checks === true && !isError,
 		samlEnabled: data?.saml_enabled ?? false,
 		enabledFeatures: data?.enabled_features ?? [],
 		brandingLogo: data?.branding_logo ?? null,

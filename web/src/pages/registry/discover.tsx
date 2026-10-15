@@ -41,7 +41,7 @@ const EXAMPLES = [
 ];
 
 const KIND_META: Record<DiscoveryKind, { label: string; icon: LucideIcon; color: string }> = {
-  agent: { label: "Agent", icon: Bot, color: "text-primary" },
+  agent: { label: "Agent File", icon: Bot, color: "text-primary" },
   mcp: { label: "MCP", icon: PlugZap, color: "text-component-mcp" },
   skill: { label: "Skill", icon: BookOpenCheck, color: "text-component-skill" },
   hook: { label: "Hook", icon: GitBranch, color: "text-component-hook" },
@@ -52,8 +52,8 @@ const KIND_META: Record<DiscoveryKind, { label: string; icon: LucideIcon; color:
 
 const KIND_OPTIONS: { value: DiscoveryKind | "all"; label: string }[] = [
   { value: "all", label: "All kinds" },
-  { value: "agent", label: "Agents" },
-  { value: "mcp", label: "MCP servers" },
+  { value: "agent", label: "Agent Files" },
+  { value: "mcp", label: "MCP Clients" },
   { value: "skill", label: "Skills" },
   { value: "hook", label: "Hooks" },
   { value: "prompt", label: "Prompts" },
@@ -307,7 +307,7 @@ export default function DiscoverPage() {
       {!active && (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Search every approved agent, remote A2A agent, MCP server, skill, hook, prompt and sandbox at once. Results are ranked by
+            Search every approved Agent File, remote A2A agent, MCP Client, skill, hook, prompt and sandbox at once. Results are ranked by
             relevance; whether something is approved and whether it can be used right now are shown separately.
           </p>
           <div className="flex flex-wrap gap-2">

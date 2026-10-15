@@ -64,6 +64,17 @@ def _check_depth(obj: object, current: int = 0) -> bool:
     return False
 
 
+def _has_nul(obj: object) -> bool:
+    """PostgreSQL text cannot store NUL; JSON can carry it as \\u0000 in any string or key."""
+    if isinstance(obj, str):
+        return "\x00" in obj
+    if isinstance(obj, dict):
+        return any(_has_nul(k) or _has_nul(v) for k, v in obj.items())
+    if isinstance(obj, list):
+        return any(_has_nul(item) for item in obj)
+    return False
+
+
 def _content_type_base(header: str | None) -> str:
     """Extract the media type portion (before any parameters like charset)."""
     if not header:
@@ -122,6 +133,11 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
                         return JSONResponse(
                             status_code=400,
                             content={"detail": f"JSON payload exceeds maximum nesting depth of {MAX_JSON_DEPTH}"},
+                        )
+                    if _has_nul(parsed):
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": "Text fields must not contain NUL characters"},
                         )
             except json.JSONDecodeError:
                 return JSONResponse(

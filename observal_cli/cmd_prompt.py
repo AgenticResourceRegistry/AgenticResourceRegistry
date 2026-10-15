@@ -12,6 +12,7 @@ from __future__ import annotations
 import json as _json
 from contextlib import nullcontext
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -19,6 +20,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from observal_cli import client, config
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_PROMPT_CATEGORIES
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import select_one, text_input
@@ -35,6 +37,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_review_link
 
 prompt_app = typer.Typer(
     help=(
@@ -63,6 +66,7 @@ def prompt_submit(
     template: str | None = typer.Option(None, "--template", "-t", help="Template body"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
     submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (prompt ID)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -95,11 +99,14 @@ def prompt_submit(
         resolved = client.resolve_registry_reference("prompt", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/prompts/{resolved}/submit")
+            result = client.post(
+                f"/api/v1/prompts/{resolved}/submit" + (f"?message={quote(message)}" if message else "")
+            )
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+            print_review_link(result)
         return
 
     flag_mode = any(x is not None for x in (name, version, description, category, template))
@@ -208,9 +215,11 @@ def prompt_submit(
     if output == "json":
         output_json(result)
         return
-    message = "Draft saved" if draft else "Prompt submitted"
-    rprint(f"[green]✓ {message}![/green] ID: [bold]{esc(result['id'])}[/bold]")
+    label = "Draft saved" if draft else "Prompt submitted"
+    rprint(f"[green]✓ {label}![/green] ID: [bold]{esc(result['id'])}[/bold]")
     rprint(f"  Render: [cyan]observal registry prompt render {esc(client.canonical_name(result))}[/cyan]")
+    if not draft:
+        print_review_link(result)
 
 
 @prompt_app.command(name="list")
@@ -359,6 +368,7 @@ def prompt_show(
                 ("Namespace", esc(handle(item) or "N/A")),
                 ("Description", esc(item.get("description", ""))),
                 ("Created", esc(relative_time(item.get("created_at")))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{esc(item['id'])}[/dim]"),
             ],
             border_style="cyan",

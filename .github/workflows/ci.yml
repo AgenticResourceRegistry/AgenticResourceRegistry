@@ -31,11 +31,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   merge_group:
     types: [checks_requested]
   push:
-    branches: [main]
+    branches: [main, 'release/**']
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -410,3 +410,23 @@ jobs:
         with:
           scan-args: |-
             --lockfile=pnpm-lock.yaml
+
+  release-policy:
+    name: release-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Check release policy and run release tests
+        env:
+          BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref || github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 tools/check_release_policy.py
+          python3 -m unittest discover -s tests/release -v

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # All VPC networking resources are conditional on local.should_create_vpc.

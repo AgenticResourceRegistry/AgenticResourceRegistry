@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
@@ -8,7 +9,7 @@ const WEB_BASE = "http://localhost:3000";
 
 test.describe("Visibility removal smoke test", () => {
   test("Agent list page loads without visibility UI", async ({ page }) => {
-    await page.goto(`${WEB_BASE}/agents`);
+    await page.goto(`${WEB_BASE}/resources/agents`);
     await page.waitForLoadState("networkidle");
 
     // Page should not have visibility-related UI elements
@@ -18,7 +19,7 @@ test.describe("Visibility removal smoke test", () => {
 
   test("Agent detail page has no access settings widget", async ({ page }) => {
     await loginToWebUI(page);
-    await page.goto(`${WEB_BASE}/agents`);
+    await page.goto(`${WEB_BASE}/resources/agents`);
     await page.waitForLoadState("networkidle");
 
     // Click first agent

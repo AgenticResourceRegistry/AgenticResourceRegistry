@@ -4,11 +4,13 @@
 
 """Who may see which discovery entries.
 
-Reproduces the registry's rules (ADR 0001, Decision 6) as a SQL predicate:
+Applies the caller's namespace scope and the registry's lifecycle rules
+(ADR 0001, Decision 6) as a SQL predicate:
 
-1. Privacy — same as ``api.deps.apply_visibility_filter``: public entries to
-   everyone, owner-private entries to their submitter, team-private entries to
-   team members, everything to admins and super-admins.
+1. Scope — ordinary signed-in users see their own personal listings and items
+   in teamspaces they currently belong to, regardless of public/private status.
+   Anonymous callers see public items; reviewers retain their public review
+   scope, and admins and super-admins retain access to everything.
 2. Lifecycle — approved entries to everyone who passes (1); pending, rejected
    and draft entries only to the owner or a co-author (the owner fallback that
    install already honours); whoever may review a pending entry
@@ -54,22 +56,38 @@ def _is_reviewer(user: Any | None) -> bool:
 
 
 def privacy_predicate(user: Any | None):
-    """Which entries the caller is allowed to know exist."""
+    """Scope ARD reads by current ownership/membership, not the public catalog.
+
+    For personal listings, owner_user_id follows the native owner through
+    transfers (unlike a parsed namespace/slug reference). A team's submitter
+    cannot retain access after losing membership, even when the item is public.
+    """
     public = DiscoveryEntry.visibility == DiscoveryVisibility.public
     if user is None:
         return public
     if _is_admin(user):
         return true()
     user_id: uuid.UUID = user.id
-    own = and_(DiscoveryEntry.visibility == DiscoveryVisibility.owner, DiscoveryEntry.owner_user_id == user_id)
+    own = and_(
+        DiscoveryEntry.team_id.is_(None),
+        DiscoveryEntry.owner_user_id == user_id,
+        DiscoveryEntry.visibility.in_((DiscoveryVisibility.public, DiscoveryVisibility.owner)),
+    )
     member = (
         select(TeamMembership.id)
         .where(TeamMembership.team_id == DiscoveryEntry.team_id, TeamMembership.user_id == user_id)
         .correlate(DiscoveryEntry)
         .exists()
     )
-    team = and_(DiscoveryEntry.visibility == DiscoveryVisibility.team, member)
-    return or_(public, own, team)
+    team = and_(
+        DiscoveryEntry.team_id.is_not(None),
+        DiscoveryEntry.visibility.in_((DiscoveryVisibility.public, DiscoveryVisibility.team)),
+        member,
+    )
+    if _is_reviewer(user):
+        # Reviewers still browse the public catalog to work their global queue.
+        return or_(public, own, team)
+    return or_(own, team)
 
 
 def _review_queue(user: Any):

@@ -23,6 +23,7 @@ import {
   Clock,
   Sparkles,
   AlertTriangle,
+  GitFork,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
@@ -46,6 +47,8 @@ import {
   useArchiveAgent,
   useDeleteAgent,
   useUnarchiveAgent,
+  useForkAgent,
+  useAgentForks,
 } from "@/hooks/use-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -53,6 +56,7 @@ import type {
   AgentComponentLink,
   AgentComponentReference,
   AgentVersionSummary,
+  ForkProvenance,
   ComponentPinFreshness,
   FeedbackItem,
   InsightReportListItem,
@@ -61,6 +65,10 @@ import type {
 import { PullCommand } from "@/components/registry/pull-command";
 import { RegistryName } from "@/components/registry/registry-name";
 import { ShareLinkButton } from "@/components/registry/share-link-button";
+import { ForkDialog } from "@/components/registry/fork-dialog";
+import { ForkedFromChip } from "@/components/registry/fork-provenance";
+import { ForkDiffPanel } from "@/components/registry/fork-diff-panel";
+import { ForksList } from "@/components/registry/forks-list";
 import { canonicalRouteParts, registryIdentity, registryItemPath, type QualifiedIdentity } from "@/lib/registry-name";
 import { VersionDropdown } from "@/components/registry/version-dropdown";
 import { StatusBadge } from "@/components/registry/status-badge";
@@ -84,6 +92,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/layouts/page-header";
+import { ActiveReviewBanner } from "@/components/review/active-review-banner";
 import { DetailSkeleton } from "@/components/shared/skeleton-layouts";
 import { ErrorState } from "@/components/shared/error-state";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -96,7 +105,7 @@ const FEATURE_LABELS: Record<string, string> = {
   skills: "Slash-command skills",
   superpowers: "Kiro superpowers",
   hook_bridge: "Hook bridge",
-  mcp_servers: "MCP servers",
+  mcp_servers: "MCP Clients",
   rules: "Rules / system prompt",
   steering_files: "Steering files",
   otlp_telemetry: "OTLP telemetry",
@@ -205,6 +214,8 @@ interface AgentDetail {
   required_capabilities?: string[];
   inferred_supported_harnesses?: string[];
   is_recommended?: boolean;
+  forked_from?: ForkProvenance | null;
+  fork_count?: number;
   [key: string]: unknown;
 }
 
@@ -240,10 +251,10 @@ function ArchivedComponentsBanner({ components }: { components: ComponentLink[] 
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="space-y-1 text-sm">
         <p className="font-medium">
-          This agent includes archived components: {names}{extra}.
+          This Agent File includes archived components: {names}{extra}.
         </p>
         <p className="text-xs text-dark-yellow/80">
-          Users can still pull the agent, but installs will show archived component warnings.
+          Users can still pull the Agent File, but installs will show archived component warnings.
         </p>
       </div>
     </div>
@@ -267,7 +278,7 @@ function PinFreshnessBadge({ pin }: { pin?: ComponentPinFreshness }) {
   return (
     <span
       className="shrink-0 rounded bg-light-yellow px-1.5 py-0.5 text-[10px] text-dark-yellow"
-      title="Installs keep the pinned version until the author releases a new agent version."
+      title="Installs keep the pinned version until the author releases a new Agent File version."
     >
       v{pin.latest_version} available
     </span>
@@ -281,7 +292,7 @@ function PromptSection({ prompt }: { prompt: string }) {
 
   return (
     <div className="space-y-2">
-      <h3 className="text-sm font-semibold font-display">Agent Prompt</h3>
+      <h3 className="text-sm font-semibold font-display">Agent File Prompt</h3>
       <div className="relative">
         <pre
           className={`select-text rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-mono whitespace-pre-wrap break-words leading-relaxed text-foreground ${isLong && !expanded ? "max-h-[280px] overflow-hidden" : ""}`}
@@ -329,7 +340,7 @@ function AgentVersionContents({
         <div>
           <h3 className="text-sm font-medium font-display">Components</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            MCPs, skills, hooks, prompts, and sandboxes linked to this agent version.
+            MCPs, skills, hooks, prompts, and sandboxes linked to this Agent File version.
           </p>
         </div>
 
@@ -337,7 +348,7 @@ function AgentVersionContents({
           <EmptyState
             icon={Puzzle}
             title="No components linked"
-            description="This version does not have any linked MCP servers or components."
+            description="This version does not have any linked MCP Clients or components."
           />
         ) : (
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ComponentGroupKey)}>
@@ -444,7 +455,7 @@ function AgentDeleteButton({ agentId, agentName, onSuccess }: { agentId: string;
             <DialogTitle>Delete {agentName}?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This soft deletes the agent, hides it from registry lists, and frees the name for reuse.
+            This soft deletes the Agent File, hides it from registry lists, and frees the name for reuse.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
@@ -495,8 +506,8 @@ function AgentArchiveButton({ agentId, agentName, status, onSuccess }: { agentId
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             {isArchived
-              ? "This makes the agent discoverable again."
-              : "Archived agents stop appearing in registry lists. Direct pulls still work by ID."}
+              ? "This makes the Agent File discoverable again."
+              : "Archived Agent Files stop appearing in registry lists. Direct pulls still work by ID."}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
@@ -562,7 +573,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
         <div className="space-y-1">
           <h3 className="text-sm font-semibold font-display flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            Agent Insights
+            Agent File Insights
           </h3>
           <p className="text-xs text-muted-foreground">
             {countLoading
@@ -605,7 +616,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
         <EmptyState
           icon={Sparkles}
           title="No insights yet"
-          description="Generate your first insight report to see how this agent is performing."
+          description="Generate your first insight report to see how this Agent File is performing."
         />
       ) : (
         <div className="space-y-3">
@@ -688,6 +699,11 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   const latestApprovedVersion = useMemo(() => getLatestApprovedVersion(versions), [versions]);
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
+  const [forkOpen, setForkOpen] = useState(false);
+  const [forkPage, setForkPage] = useState(1);
+  const [activeTab, setActiveTab] = useState("overview");
+  const forkAgent = useForkAgent();
+  const { data: publicForks, isLoading: forksLoading, error: forksError } = useAgentForks(id, forkPage, activeTab === "forks");
   const { data: versionDetail, isLoading: isVersionDetailLoading } = useAgentVersionDetail(id, selectedVersion);
   const effectiveVersionForDetail = selectedVersion ?? latestApprovedVersion ?? (agent as unknown as AgentDetail | undefined)?.version ?? null;
   const { data: effectiveVersionDetail } = useAgentVersionDetail(id, effectiveVersionForDetail);
@@ -767,7 +783,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   const showVisibilityControl = canChangeVisibility && Boolean(a?.team_id || personalTeam);
   const canManageLifecycle = isAdmin || isOwner;
   const agentStatus = a?.status as string | undefined;
-  const canEdit = (isAdmin || a?.user_permission === "owner" || a?.user_permission === "edit") && ["approved", "pending", "draft", "rejected"].includes(agentStatus ?? "");
+  const canEdit = (isAdmin || a?.user_permission === "owner" || a?.user_permission === "edit") && ["approved", "pending", "changes_requested", "draft", "rejected"].includes(agentStatus ?? "");
   // Header/breadcrumb show the bare name; the pull command needs the canonical
   // `namespace/slug` the CLI resolves.
   const agentIdentity = registryIdentity(a as QualifiedIdentity | undefined, id.slice(0, 8));
@@ -839,14 +855,19 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   return (
     <>
       <PageHeader
-        title={isLoading ? "Agent" : agentName}
+        title={isLoading ? "Agent File" : agentName}
         breadcrumbs={[
           { label: "Registry", href: "/" },
-          { label: "Agents", href: "/agents" },
+          { label: "Agentic Resources", href: "/resources/agents" },
           { label: isLoading ? "..." : agentName },
         ]}
         actionButtonsRight={
-          a ? <ShareLinkButton path={canonicalAgentPath ?? `/agents/${id}`} /> : undefined
+          a ? <div className="flex items-center gap-2">
+            {isAuthenticated && a.status === "approved" && latestApprovedVersion && (
+              <Button size="sm" variant="outline" onClick={() => setForkOpen(true)}><GitFork className="h-4 w-4" /> Fork</Button>
+            )}
+            <ShareLinkButton path={canonicalAgentPath ?? `/agents/${id}`} />
+          </div> : undefined
         }
       />
 
@@ -856,11 +877,12 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
         ) : isError ? (
           <ErrorState message={error?.message} onRetry={() => refetch()} />
         ) : !a ? (
-          <ErrorState message="Agent not found" />
+          <ErrorState message="Agent File not found" />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-8 items-start">
             {/* Main content */}
             <div className="space-y-6 min-w-0 animate-in">
+              <ActiveReviewBanner subjectId={id} enabled={canEdit} />
               {canEdit && archivedComponents.length > 0 && (
                 <ArchivedComponentsBanner components={archivedComponents} />
               )}
@@ -876,6 +898,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                   />
                   {a.status && <StatusBadge status={a.status} />}
                   {a.is_recommended && <RecommendedBadge />}
+                  {!!a.fork_count && a.fork_count > 0 && <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><GitFork className="h-3.5 w-3.5" />{a.fork_count} public forks</span>}
                   {showVisibilityControl && (
                     <PickerSelect
                       value={currentVisibility}
@@ -890,7 +913,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                         applyVisibility("team");
                       }}
                       options={visibilityOptions}
-                      ariaLabel="Agent visibility"
+                      ariaLabel="Agent File visibility"
                       className="w-40"
                       inputClassName="h-7 px-2 text-xs"
                       disabled={
@@ -912,6 +935,10 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                   ) : null}
                 </div>
 
+                <ForkedFromChip provenance={a.forked_from} />
+                {a.forked_from?.available && (selectedVersion ?? a.version) && (
+                  <ForkDiffPanel type="agents" id={id} version={String(selectedVersion ?? a.version)} />
+                )}
                 {a.owner && (
                   <p className="text-sm text-muted-foreground">{a.owner}</p>
                 )}
@@ -963,7 +990,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
               )}
 
               {/* Tabs */}
-              <Tabs defaultValue="overview">
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="overview">Overview</TabsTrigger>
                   <TabsTrigger value="components">
@@ -982,6 +1009,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                       </span>
                     )}
                   </TabsTrigger>
+                  <TabsTrigger value="forks">Forks{a.fork_count ? ` (${a.fork_count})` : ""}</TabsTrigger>
                   {canEdit && <TabsTrigger value="edit">Edit</TabsTrigger>}
                   {canEdit && <TabsTrigger value="insights">Insights</TabsTrigger>}
 
@@ -1050,7 +1078,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
 
                   {!versionDescription && !versionPrompt && !versionSuccessCriteria?.intended_purpose && (
                     <p className="text-sm text-muted-foreground">
-                      No additional details provided for this agent.
+                      No additional details provided for this Agent File.
                     </p>
                   )}
                 </TabsContent>
@@ -1089,7 +1117,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                       title="No reviews yet"
                       description={
                         isAuthenticated
-                          ? "Be the first to review this agent."
+                          ? "Be the first to review this Agent File."
                           : "Log in to leave a review."
                       }
                     />
@@ -1132,6 +1160,9 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                   )}
                 </TabsContent>
 
+                <TabsContent value="forks" className="mt-6">
+                  <ForksList type="agents" result={publicForks} page={forkPage} onPage={setForkPage} isLoading={forksLoading} error={forksError} />
+                </TabsContent>
                 {canEdit && (
                   <TabsContent value="edit" className="mt-6">
                     {isVersionContentLoading ? (
@@ -1290,7 +1321,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                       <div className="flex flex-wrap gap-2">
                         <AgentArchiveButton agentId={id} agentName={agentName} status={agentStatus} onSuccess={() => refetch()} />
                         {agentStatus === "approved" && (
-                          <AgentDeleteButton agentId={id} agentName={agentName} onSuccess={() => navigate({ to: "/agents" })} />
+                          <AgentDeleteButton agentId={id} agentName={agentName} onSuccess={() => navigate({ to: "/resources/$type", params: { type: "agents" } })} />
                         )}
                       </div>
                     </div>
@@ -1302,12 +1333,30 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
         )}
       </div>
 
+      {forkOpen && a && (
+        <ForkDialog
+          open={forkOpen}
+          onOpenChange={setForkOpen}
+          kind="agent"
+          sourceName={a.name}
+          sourceIsPrivate={!!a.is_private}
+          sourceTeamId={a.team_id}
+          versions={versions}
+          initialVersion={selectedVersionSummary?.status === "approved" ? selectedVersionSummary.version : latestApprovedVersion}
+          teams={teams}
+          username={whoami?.username}
+          onFork={async (body) => {
+            const fork = await forkAgent.mutateAsync({ id, body });
+            await navigate({ to: "/agents/builder", search: { draft: fork.id } });
+          }}
+        />
+      )}
       <AlertDialog open={confirmPublicOpen} onOpenChange={setConfirmPublicOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Make {agentName} public?</AlertDialogTitle>
             <AlertDialogDescription>
-              Everyone who can reach this registry will be able to find and pull this agent, not just the members of
+              Everyone who can reach this registry will be able to find and pull this Agent File, not just the members of
               its teamspace. Publishing publicly also returns it to the review queue, so it leaves the catalog until a
               reviewer approves it. Approval is manual, so it will not be immediate.
             </AlertDialogDescription>

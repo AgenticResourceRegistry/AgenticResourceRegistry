@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for Antigravity CLI session helpers, reconcile, and hook push."""
@@ -60,7 +61,8 @@ class TestResolveAntigravityConfigDir:
         result = resolve_antigravity_config_dir(tmp_path)
         assert result == config_dir
 
-    def test_returns_none_when_missing(self, tmp_path):
+    @patch("observal_cli.shared.utils.resolve_wsl_windows_home", return_value=None)
+    def test_returns_none_when_missing(self, _mock_wsl, tmp_path):
         result = resolve_antigravity_config_dir(tmp_path)
         assert result is None
 

@@ -128,16 +128,22 @@ has allowed a specific upstream, and results from upstreams always carry their
 
 ## Decision 6: Visibility
 
-Discovery reproduces the registry's existing visibility exactly. It is never
-stricter than install, because a submitter told their own skill "does not
-exist" is a bug.
+Discovery narrows the signed-in user's registry view to their own namespace
+and teamspaces they currently belong to. This is intentionally stricter than
+registry browsing/install for public resources in other namespaces: a public
+resource can be installed by reference without appearing in a user's ARD
+search. The same scope applies to search, list, inspect, and versioned artifact
+reads, including imported A2A agents. Membership is checked at query time, so
+removing a member revokes their ARD access to that team's public and private
+entries. Submitter status alone does not grant access to an old teamspace.
 
 Two filters apply, in order:
 
-1. **Who can see the listing** — the same predicate as
-   `api.deps.apply_visibility_filter` / `services.registry_recommender.visibility_clause`:
-   public listings to everyone; personal private listings to their creator;
-   team-private listings to team members; admins and super-admins see all.
+1. **Who can see the listing** — ordinary signed-in users see personal listings
+   they own (public or private) and listings in *all* teamspaces where they are
+   current members (public or private). Global reviewers retain their public
+   review scope; admins and super-admins still see everything. Anonymous calls
+   retain the public-catalog behavior described below.
 2. **Which lifecycle states are returned** — approved versions to everyone
    who passes filter 1; pending and rejected versions only to users whose
    effective component permission is `owner` (the same rule install uses for

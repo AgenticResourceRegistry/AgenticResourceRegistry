@@ -83,7 +83,7 @@ The stack starts at `http://localhost` (nginx LB on port 80). The `.env.example`
 cd web && pnpm install && pnpm dev
 ```
 
-Set `NEXT_PUBLIC_API_URL=http://localhost` in `web/.env.local` if the backend is on a different host.
+The Vite dev server proxies `/api` to `http://localhost:8000` (see `web/vite.config.ts`); the Docker stack does not publish port 8000, so run the API locally or point the proxy target at `http://localhost` (the nginx LB).
 
 > [!NOTE]
 > See the [Development Guide](docs/DEVELOPMENT_GUIDE.md) for the full environment setup and troubleshooting steps.
@@ -118,7 +118,9 @@ fix/clickhouse-insert-timeout
 docs/update-setup-guide
 ```
 
-Never commit directly to `main`.
+Never commit directly to `main` or a protected `release/X.Y` branch.
+
+Normal changes target `main`. Release preparation and backport PRs target their matching `release/X.Y` line. Never merge a release line back into `main`. See the [release guide](docs/self-hosting/releasing.md) for beta, RC, stable, and backport workflows.
 
 ### Code Style
 

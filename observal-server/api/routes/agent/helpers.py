@@ -104,6 +104,9 @@ def _agent_to_response(
     user_permission: str | None = None,
     status_map: dict[str, str] | None = None,
     identity_map: dict[str, tuple[str, str]] | None = None,
+    forked_from: dict | None = None,
+    fork_count: int = 0,
+    warnings: list[str] | None = None,
 ) -> AgentResponse:
     name_map = name_map or {}
     status_map = status_map or {}
@@ -176,6 +179,9 @@ def _agent_to_response(
     agent_dict["created_by_email"] = created_by_email
     agent_dict["created_by_username"] = created_by_username
     agent_dict["user_permission"] = user_permission
+    agent_dict["forked_from"] = forked_from
+    agent_dict["fork_count"] = fork_count
+    agent_dict["warnings"] = warnings or []
     # Populate version fields for CLI pull resolution
     approved_versions = [
         v for v in getattr(agent, "versions", []) if getattr(v, "status", None) == AgentStatus.approved

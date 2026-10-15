@@ -18,19 +18,6 @@ from observal_cli.install_detector import (
 
 
 class TestDetectFromPath:
-    def test_homebrew_detected(self):
-        path = Path("/opt/homebrew/bin/observal")
-        result = _detect_from_path(path, str(path).lower())
-        assert result.method == InstallMethod.HOMEBREW
-        assert result.managed_by == "brew"
-        assert result.writable is False
-
-    def test_linuxbrew_detected(self):
-        path = Path("/home/user/.linuxbrew/bin/observal")
-        result = _detect_from_path(path, str(path).lower())
-        assert result.method == InstallMethod.HOMEBREW
-        assert result.managed_by == "brew"
-
     def test_system_package_detected(self):
         path = Path("/usr/bin/observal")
         with patch("os.access", return_value=False):

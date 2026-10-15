@@ -42,6 +42,7 @@ from api.sanitize import escape_like
 from models.discovery_entry import DiscoveryEntry, DiscoveryLifecycle, DiscoverySourceKind
 from models.user import User
 from schemas.ard import ArdError, ArdExploreRequest, ArdSearchRequest
+from services.discovery.forks import public_upstreams
 from services.discovery.identity import normalize_media_type, normalize_urn
 from services.discovery.projection import PUBLISHER_DOMAIN_SETTING, ProjectionContext
 from services.discovery.search import (
@@ -180,9 +181,12 @@ async def _manifest_response(db: AsyncSession) -> JSONResponse:
             .limit(MANIFEST_LIMIT)
         )
         entries = list((await db.execute(stmt)).scalars().all())
+    upstreams = await public_upstreams(db, entries)
     optic.debug("ard manifest served entries={}", len(entries))
     return JSONResponse(
-        content=manifest(entries, publisher_domain=ctx.publisher_domain, base_url=ctx.artifact_base_url),
+        content=manifest(
+            entries, publisher_domain=ctx.publisher_domain, base_url=ctx.artifact_base_url, upstreams=upstreams
+        ),
         headers={"Cache-Control": "public, max-age=300"},
     )
 
@@ -227,7 +231,18 @@ async def ard_search(
 
     harness = filters.harnesses[0] if len(filters.harnesses) == 1 else None
     source = _search_source(ctx)
-    content: dict[str, Any] = {"results": [search_result_item(r, source=source, harness=harness) for r in page.results]}
+    upstreams = await public_upstreams(db, [r.entry for r in page.results])
+    content: dict[str, Any] = {
+        "results": [
+            search_result_item(
+                r,
+                source=source,
+                harness=harness,
+                forked_from=upstreams.get((r.entry.kind, r.entry.local_entity_id)),
+            )
+            for r in page.results
+        ]
+    }
     if page.next_page_token:
         content["pageToken"] = page.next_page_token
     # Federation: an omitted field means "auto" bounded by the upstream allowlist
@@ -415,7 +430,8 @@ async def ard_list(
     rows = list((await db.execute(stmt)).scalars().all())
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     has_more = len(rows) > page_size
-    items = [list_item(e) for e in rows[:page_size]]
+    upstreams = await public_upstreams(db, rows[:page_size])
+    items = [list_item(e, forked_from=upstreams.get((e.kind, e.local_entity_id))) for e in rows[:page_size]]
     content: dict[str, Any] = {"items": items, "total": int(total)}
     if has_more:
         content["pageToken"] = encode_page_token(offset + page_size, fingerprint)
@@ -442,7 +458,11 @@ async def ard_entry(
     entry = (await db.execute(stmt)).scalar_one_or_none()
     if entry is None:
         return _error(404, "NOT_FOUND", "Entry not found")
-    return JSONResponse(content=entry_document(entry), headers={"Cache-Control": "no-store"})
+    upstreams = await public_upstreams(db, [entry])
+    return JSONResponse(
+        content=entry_document(entry, forked_from=upstreams.get((entry.kind, entry.local_entity_id))),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 __all__ = ["router"]

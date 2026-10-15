@@ -44,7 +44,7 @@ function buildMarkdownBody(
 		if (items.length === 0) continue;
 		const heading =
 			type === "mcps"
-				? "MCP Servers"
+				? "MCP Clients"
 				: type.charAt(0).toUpperCase() + type.slice(1);
 		lines.push("");
 		lines.push(`## ${heading}`);

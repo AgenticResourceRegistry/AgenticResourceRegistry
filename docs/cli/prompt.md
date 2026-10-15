@@ -12,7 +12,8 @@ Manage reusable prompt templates in the Registry. Prompts can be submitted, list
 | `submit` | Submit a prompt or save a draft |
 | `list` | List approved visible prompts |
 | `my` | List your prompts across all statuses |
-| `show` | Show one prompt and its template |
+| `show` | Show one prompt, visible source provenance, and public fork count |
+| `fork` | Copy an approved prompt release into an independent draft |
 | `render` | Render a prompt with variables |
 | `edit` | Edit a draft, pending, or rejected prompt |
 | `archive` | Archive an approved prompt |
@@ -49,6 +50,16 @@ observal registry prompt show acme/review --output json
 ```
 
 Row numbers are scoped to the latest Prompt list. Empty Prompt lists clear previous Prompt row references. Human output escapes template text so bracketed content is rendered literally.
+
+## Fork
+
+```bash
+observal registry prompt fork acme/review --name review-custom --output json
+observal registry prompt edit FORK_UUID --template 'Review {{code}} and tests' --output json
+observal registry prompt submit --submit FORK_UUID --output json
+```
+
+Only approved source listings and versions can be forked. A fork has its own namespace, review status, and template; editing it does not change the original. Public fork counts exclude drafts and private teamspace forks. A source that the viewer cannot access is shown only as **Source unavailable**.
 
 ## Render
 

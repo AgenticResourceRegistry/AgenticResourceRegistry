@@ -31,8 +31,25 @@ import type {
 	SessionsSummary,
 	SessionErrorEvent,
 	TelemetryStatus,
-	ReviewItem,
+	SkillFolderDraftRequest,
+	SkillVersionManifest,
+	SkillApprovedBase,
+	SkillSuccessorRequest,
+	SkillFileContents,
+	SkillBinaryContents,
+	ReviewSummary,
+	ReviewDetail,
+	ReviewGate,
+	ReviewFile,
+	ReviewThread,
+	ReviewCheck,
+	ReviewTimelineEntry,
+	ReviewPolicy,
+	CheckSettings,
 	RegistryItem,
+	ForkRequest,
+	ForkDiff,
+	ForksResponse,
 	LeaderboardItem,
 	LeaderboardWindow,
 	ValidationResult,
@@ -40,6 +57,8 @@ import type {
 	AgentVersionDetail,
 	AgentVersionsResponse,
 	ComponentVersionsResponse,
+	McpWebhookSync,
+	McpWebhookSyncRequest,
 	ComponentVersionDetail,
 	VersionDiff,
 	AgentVersionOutdated,
@@ -232,10 +251,18 @@ export async function refreshAccessTokenWithReason(): Promise<RefreshResult> {
 	return _tryRefreshToken();
 }
 
+async function decodeResponse<T>(response: Response, fileResponse: boolean): Promise<T> {
+	if (fileResponse && response.headers.get("content-type")?.includes("application/octet-stream")) {
+		return { encoding: "binary", content: await response.blob() } as T;
+	}
+	return response.json() as Promise<T>;
+}
+
 async function request<T = unknown>(
 	method: string,
 	path: string,
 	body?: unknown,
+	fileResponse = false,
 ): Promise<T> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
@@ -280,7 +307,7 @@ async function request<T = unknown>(
 				});
 				if (retryRes.ok) {
 					if (retryRes.status === 204) return undefined as T;
-					return retryRes.json() as Promise<T>;
+					return decodeResponse<T>(retryRes, fileResponse);
 				}
 				const retryText = await retryRes.text().catch(() => "Request failed");
 				const retryErr = new Error(retryText);
@@ -345,7 +372,7 @@ async function request<T = unknown>(
 
 	if (response.status === 204) return undefined as T;
 
-	return response.json() as Promise<T>;
+	return decodeResponse<T>(response, fileResponse);
 }
 
 function get<T = unknown>(path: string) {
@@ -416,7 +443,7 @@ export const auth = {
 	deviceConfirm: (userCode: string) =>
 		post<{ message: string }>("/auth/device/confirm", { user_code: userCode }),
 	changePassword: (body: { current_password: string; new_password: string }) =>
-		put<{ message: string }>("/auth/profile/password", body),
+		put<{ message: string; exchange_code: string }>("/auth/profile/password", body),
 	uploadAvatar: (body: { avatar_url: string }) =>
 		put<{ avatar_url: string | null }>("/auth/profile/avatar", body),
 	deleteAvatar: () => del<{ avatar_url: null }>("/auth/profile/avatar"),
@@ -451,6 +478,14 @@ export const registry = {
 		return get<RegistryItem[]>(`/${type}${qs}`);
 	},
 	get: (type: RegistryType, id: string) => get<RegistryItem>(`/${type}/${id}`),
+	forkDiff: (type: RegistryType, id: string, version: string) =>
+		get<ForkDiff>(`/${type}/${id}/fork-diff?${new URLSearchParams({ version })}`),
+	fork: (type: RegistryType, id: string, body: ForkRequest) =>
+		post<RegistryItem>(`/${type}/${encodeURIComponent(id)}/fork`, body),
+	forks: (type: RegistryType, id: string, page = 1, pageSize = 12) =>
+		get<ForksResponse<RegistryItem>>(
+			`/${type}/${encodeURIComponent(id)}/forks?limit=${pageSize}&offset=${(page - 1) * pageSize}`,
+		),
 	create: (type: RegistryType, body: unknown) =>
 		post<RegistryItem>(`/${type}`, body),
 	install: (type: RegistryType, id: string, body?: unknown) =>
@@ -497,12 +532,25 @@ export const registry = {
 	unarchiveComponent: (type: RegistryType, id: string) => patch(`/${type}/${id}/unarchive`),
 	draft: (body: unknown, type?: RegistryType) =>
 		post<RegistryItem>(`/${type ?? "agents"}/draft`, body),
+	folderDraft: (body: SkillFolderDraftRequest) =>
+		post<SkillVersionManifest>("/skills/folder-drafts", {
+			name: body.name,
+			version: body.version,
+			description: body.description,
+			owner: body.owner,
+			task_type: body.task_type,
+			skill_md_content: body.skill_md_content,
+			extra_files: body.extra_files,
+			team_id: body.team_id,
+			visibility: body.visibility,
+			supported_harnesses: body.supported_harnesses,
+		}),
 	updateDraft: (id: string, body: unknown, type?: RegistryType) =>
 		put<RegistryItem>(`/${type ?? "agents"}/${id}/draft`, body),
 	updateAgent: (id: string, body: unknown) =>
 		put<RegistryItem>(`/agents/${id}`, body),
-	submitDraft: (id: string, type?: RegistryType) =>
-		post(`/${type ?? "agents"}/${id}/submit`),
+	submitDraft: (id: string, type?: RegistryType, message?: string) =>
+		post<RegistryItem>(`/${type ?? "agents"}/${id}/submit${message ? `?message=${encodeURIComponent(message)}` : ""}`),
 	submit: (type: RegistryType, body: unknown) =>
 		post<RegistryItem>(`/${type}/submit`, body),
 	updateVisibility: (type: RegistryType, id: string, visibility: "public" | "team") =>
@@ -519,13 +567,20 @@ export const registry = {
 	getVersion: (agentId: string, version: string) =>
 		get<AgentVersionDetail>(`/agents/${agentId}/versions/${version}`),
 	createVersion: (agentId: string, body: unknown) =>
-		post<unknown>(`/agents/${agentId}/versions`, body),
+		post<{ review_number?: number | null; review_url?: string | null }>(`/agents/${agentId}/versions`, body),
 	getVersionDiff: (agentId: string, v1: string, v2: string) =>
 		get<VersionDiff>(`/agents/${agentId}/versions/${v1}/diff/${v2}`),
 	getVersionOutdated: (agentId: string, version: string) =>
 		get<AgentVersionOutdated>(`/agents/${agentId}/versions/${version}/outdated`),
 
 	// Component versions
+	mcpWebhookSync: (listingId: string) => get<McpWebhookSync>(`/mcps/${listingId}/webhook-sync`),
+	configureMcpWebhookSync: (listingId: string, body: McpWebhookSyncRequest) =>
+		put<McpWebhookSync>(`/mcps/${listingId}/webhook-sync`, body),
+	rotateMcpWebhookSecret: (listingId: string) =>
+		post<McpWebhookSync>(`/mcps/${listingId}/webhook-sync/rotate-secret`),
+	runMcpWebhookSync: (listingId: string) => post<McpWebhookSync>(`/mcps/${listingId}/webhook-sync/run`),
+	disableMcpWebhookSync: (listingId: string) => del(`/mcps/${listingId}/webhook-sync`),
 	listComponentVersions: (
 		type: RegistryType,
 		listingId: string,
@@ -547,41 +602,79 @@ export const registry = {
 	) => post<ComponentVersionDetail>(`/${type}/${listingId}/versions`, body),
 	componentVersionSuggestions: (type: RegistryType, listingId: string) =>
 		get<VersionSuggestions>(`/${type}/${listingId}/version-suggestions`),
+	getSkillApprovedBase: (listingId: string) =>
+		get<SkillApprovedBase>(`/skills/${listingId}/approved-base`),
+	forkSkillVersion: (listingId: string, body: SkillSuccessorRequest) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/drafts`, body),
+	importSkillFolder: (listingId: string, body: SkillSuccessorRequest & {
+		skill_md_content: string; extra_files: SkillFolderDraftRequest["extra_files"];
+	}) => post<SkillVersionManifest>(`/skills/${listingId}/folder-import-drafts`, body),
+	getSkillVersionManifest: (listingId: string, versionId: string) =>
+		get<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/manifest`),
+	updateSkillVersionDraft: (listingId: string, versionId: string, body: unknown) =>
+		put<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/draft`, body),
+	submitSkillVersionDraft: (listingId: string, versionId: string, observedRevision: string, message?: string) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/submit`, { observed_revision: observedRevision, message }),
+	withdrawSkillVersion: (listingId: string, versionId: string, observedRevision: string) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/withdraw`, { observed_revision: observedRevision }),
+	getSkillFileContent: (listingId: string, versionId: string, filePath: string) =>
+		request<SkillFileContents | SkillBinaryContents>(
+			"GET", `/skills/${listingId}/versions/${versionId}/files/${encodeURIComponent(filePath)}`, undefined, true
+		),
 	startEdit: (id: string, type?: RegistryType) =>
 		post<{ status: string }>(`/${type ?? "agents"}/${id}/start-edit`),
 	cancelEdit: (id: string, type?: RegistryType) =>
 		post<{ status: string }>(`/${type ?? "agents"}/${id}/cancel-edit`),
 };
 
-// ── Review ──────────────────────────────────────────────────────────
-export const review = {
-	list: (params?: Record<string, string>) => {
-		const qs = params ? `?${new URLSearchParams(params)}` : "";
-		return get<ReviewItem[]>(`/review${qs}`);
-	},
-	listAgents: () => get<ReviewItem[]>("/review?tab=agents"),
-	/**
-	 * Pending queue narrowed to one teamspace. The server answers 403 when the
-	 * caller does not review for that teamspace, so callers must gate on the
-	 * team role before asking.
-	 */
-	listForTeam: (teamId: string, params?: Record<string, string>) =>
-		get<ReviewItem[]>(`/review?${new URLSearchParams({ ...params, team_id: teamId })}`),
-	get: (id: string) => get<ReviewItem>(`/review/${id}`),
-	approve: (id: string) => post(`/review/${id}/approve`),
-	reject: (id: string, body: { reason: string }) =>
-		post(`/review/${id}/reject`, body),
-	approveAgent: (id: string, body?: { category?: string }) =>
-		post(`/review/agents/${id}/approve`, body),
-	rejectAgent: (id: string, body: { reason: string }) =>
-		post(`/review/agents/${id}/reject`, body),
-	approveBundle: (id: string) => post(`/review/bundles/${id}/approve`),
-	rejectBundle: (id: string, body: { reason: string }) =>
-		post(`/review/bundles/${id}/reject`, body),
-	relatedSkills: (id: string) =>
-		get<{ skills: ReviewItem[] }>(`/review/${id}/related-skills`),
-	approveWithSkills: (id: string, body: { skill_ids: string[] }) =>
-		post(`/review/${id}/approve-with-skills`, body),
+// ── PR reviews ──────────────────────────────────────────────────────
+export const prReviews = {
+  list: (filters: Record<string, string>) => get<{ items: ReviewSummary[]; next_cursor: number | null }>(
+    `/reviews?${new URLSearchParams(filters)}`,
+  ),
+  detail: (ref: string) => get<ReviewDetail>(`/reviews/${encodeURIComponent(ref)}`),
+  files: (ref: string) => get<ReviewFile[]>(`/reviews/${encodeURIComponent(ref)}/files`),
+  diff: (ref: string, params: Record<string, string>) => get<ReviewFile[]>(
+    `/reviews/${encodeURIComponent(ref)}/diff?${new URLSearchParams(params)}`,
+  ),
+  gate: (ref: string) => get<ReviewGate>(`/reviews/${encodeURIComponent(ref)}/gate`),
+  checks: (ref: string) => get<ReviewCheck[]>(`/reviews/${encodeURIComponent(ref)}/checks`),
+  threads: (ref: string) => get<ReviewThread[]>(`/reviews/${encodeURIComponent(ref)}/threads`),
+  timeline: (ref: string) => get<{ items: ReviewTimelineEntry[]; next_cursor: string | null }>(
+    `/reviews/${encodeURIComponent(ref)}/timeline`,
+  ),
+  submit: (ref: string, verdict: string, body: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/submissions`, { verdict, body },
+  ),
+  comment: (ref: string, body: string, path?: string, line?: number, asDraft = false) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads`,
+    path ? { path, side: "head", start_line: line, body, as_draft: asDraft } : { body, as_draft: asDraft },
+  ),
+  reply: (ref: string, threadId: string, body: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/comments`, { body },
+  ),
+  resolve: (ref: string, threadId: string, resolved: boolean) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/${resolved ? "resolve" : "unresolve"}`,
+  ),
+  publish: (ref: string, category?: string, overrideReason?: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/publish`, { category, override_reason: overrideReason },
+  ),
+  close: (ref: string, reason: string) => post(`/reviews/${encodeURIComponent(ref)}/close`, { reason }),
+  withdraw: (ref: string) => post(`/reviews/${encodeURIComponent(ref)}/withdraw`),
+  subscribe: (ref: string, mode: "watching" | "muted") => put(
+    `/reviews/${encodeURIComponent(ref)}/subscription`, { mode },
+  ),
+  requestReviewer: (ref: string, userId: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/reviewers`, { user_id: userId },
+  ),
+  orgPolicy: () => get<ReviewPolicy>("/admin/review-policy"),
+  setOrgPolicy: (value: ReviewPolicy) => put<ReviewPolicy>("/admin/review-policy", value),
+  checkSettings: (teamId?: string) => get<CheckSettings>(teamId ? `/teams/${teamId}/review-checks` : "/admin/review-checks"),
+  setCheckSettings: (checks: Record<string, { enabled: boolean; required: boolean }>, teamId?: string) =>
+    put<CheckSettings>(teamId ? `/teams/${teamId}/review-checks` : "/admin/review-checks", { checks }),
+  rerunChecks: (ref: string) => post<{ queued: number }>(`/reviews/${encodeURIComponent(ref)}/checks/rerun`),
+  teamPolicy: (id: string) => get<ReviewPolicy | null>(`/teams/${id}/review-policy`),
+  setTeamPolicy: (id: string, value: ReviewPolicy) => put<ReviewPolicy>(`/teams/${id}/review-policy`, value),
 };
 
 // ── Telemetry ───────────────────────────────────────────────────────
@@ -993,7 +1086,12 @@ export type PublicConfig = {
 	github_sso_enabled: boolean;
 	sso_only: boolean;
 	public_registry_enabled: boolean;
+	leaderboard_enabled: boolean;
 	self_registration_enabled: boolean;
+	/** Public rollout hint; server install and review endpoints remain authoritative. */
+	skill_folder_delivery_enabled?: boolean;
+	/** Present only while the experimental review-checks feature is on. */
+	experimental_review_checks?: boolean;
 	saml_enabled: boolean;
 	exec_dashboard_available: boolean;
 	enabled_features: string[];

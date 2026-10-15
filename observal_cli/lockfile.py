@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Lock file management for Observal CLI.
@@ -20,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -80,14 +82,14 @@ def migrate_lockfile_v1(server_url: str | None = None) -> bool:
     with _exclusive_lock(_LOCKFILE_LOCK):
         try:
             data = json.loads(LOCKFILE_PATH.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
             raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
         if not isinstance(data, dict):
             raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
         if data.get("lock_version") != 1:
             return False
         registry_url = normalize_server_url(server_url) if server_url else current_registry_url()
-        _write_lockfile_unlocked(
+        _write_locked(
             {
                 "lock_version": LOCK_VERSION,
                 "updated_at": datetime.now(UTC).isoformat(),
@@ -109,7 +111,7 @@ def _read_lockfile_unmigrated() -> dict:
         return _empty_lockfile()
     try:
         data = json.loads(LOCKFILE_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
         raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
@@ -138,25 +140,27 @@ def _exclusive_lock(path: Path):
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _write_lockfile_unlocked(data: dict) -> None:
-    """Commit under _LOCKFILE_LOCK; never call with an unguarded stale snapshot."""
+def _write_locked(data: dict) -> None:
+    """Replace the lockfile while its cross-process lock is held; never call with a stale snapshot."""
     data["updated_at"] = datetime.now(UTC).isoformat()
     data["lock_version"] = LOCK_VERSION
-    tmp_path = LOCKFILE_PATH.with_suffix(".tmp")
+    descriptor, name = tempfile.mkstemp(prefix=".lockfile.", suffix=".tmp", dir=LOCKFILE_PATH.parent)
+    tmp_path = Path(name)
     try:
-        tmp_path.write_text(json.dumps(data, indent=2) + "\n")
-        with tmp_path.open("rb") as handle:
-            os.fsync(handle.fileno())
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(json.dumps(data, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(tmp_path, 0o600)
         tmp_path.replace(LOCKFILE_PATH)
-        if os.name != "nt":
-            fd = os.open(LOCKFILE_PATH.parent, os.O_RDONLY)
+        if os.name == "posix":
+            directory = os.open(LOCKFILE_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                os.fsync(fd)
+                os.fsync(directory)
             finally:
-                os.close(fd)
+                os.close(directory)
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+        tmp_path.unlink(missing_ok=True)
     optic.debug("lockfile written: {}", LOCKFILE_PATH)
 
 
@@ -164,7 +168,7 @@ def write_lockfile(data: dict) -> None:
     """Replace the whole lockfile (bootstrap/explicit reset only, not RMW)."""
     LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_lock(_LOCKFILE_LOCK):
-        _write_lockfile_unlocked(data)
+        _write_locked(data)
 
 
 def _write_initial_lockfile(data: dict) -> bool:
@@ -173,7 +177,7 @@ def _write_initial_lockfile(data: dict) -> bool:
     with _exclusive_lock(_LOCKFILE_LOCK):
         if LOCKFILE_PATH.exists():
             return False
-        _write_lockfile_unlocked(data)
+        _write_locked(data)
         return True
 
 
@@ -191,7 +195,18 @@ def _update_registry(mutator: Callable[[dict], tuple[bool, Any]]) -> Any:
         registry = data["registries"].setdefault(registry_url, {"server_url": registry_url, "harnesses": {}})
         changed, result = mutator(registry)
         if changed:
-            _write_lockfile_unlocked(data)
+            _write_locked(data)
+        return result
+
+
+def update_lockfile(mutate: Callable[[dict], Any]) -> Any:
+    """Serialize the entire read/modify/write, including across different registries."""
+    migrate_lockfile_v1()
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(_LOCKFILE_LOCK):
+        data = _read_lockfile_unmigrated()
+        result = mutate(data)
+        _write_locked(data)
         return result
 
 
@@ -362,6 +377,8 @@ def upsert_agent(
         agents = _ensure_harness(registry, harness)["agents"]
         existing_idx = _find_agent_idx(agents, agent_id, scope, directory)
         if existing_idx is not None:
+            if any(c.get("folder_receipt") for c in agents[existing_idx].get("components", [])):
+                raise RuntimeError("Pinned Agent owns verified skill folders; legacy pull cannot replace receipts")
             agents[existing_idx] = entry
         else:
             agents.append(entry)
@@ -471,6 +488,10 @@ def upsert_standalone(
         standalone = _ensure_harness(registry, harness)["standalone"]
         existing_idx = _find_standalone_idx(standalone, component_type, component_id, scope, directory)
         if existing_idx is not None:
+            if component_type == "skill" and standalone[existing_idx].get("folder_receipt"):
+                raise RuntimeError(
+                    "A verified skill folder owns this installation; legacy delivery cannot replace its receipt"
+                )
             standalone[existing_idx] = entry
         else:
             standalone.append(entry)
@@ -716,7 +737,7 @@ def migrate_agent_markers() -> int:
                 try:
                     marker_data = json.loads(marker.read_text())
                     markers_found.append((marker.parent.parent, marker_data))
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, OSError, UnicodeError):
                     continue
         except (OSError, PermissionError):
             continue

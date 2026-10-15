@@ -6,6 +6,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import re
@@ -13,13 +14,19 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_serializer
 
 from models.agent import AgentStatus
 from schemas.constants import AGENT_NAME_REGEX, RecommendedFlag, Visibility, make_name_validator
+from schemas.fork import ForkProvenance
+from schemas.skill_resources import SkillInstallFolder
 from services.versioning import validate_semver
 
 VALID_COMPONENT_TYPES = {"mcp", "skill", "hook", "prompt", "sandbox"}
+
+SUCCESS_METRIC_MAX_LENGTH = 200
+SUCCESS_CRITERIA_TEXT_MAX_LENGTH = 2000
+SUCCESS_METRICS_MAX_COUNT = 10
 
 
 class ExternalMcp(BaseModel):
@@ -40,7 +47,7 @@ class SuccessMetric(BaseModel):
     def _not_blank_and_bounded(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Must not be blank")
-        if len(v) > 200:
+        if len(v) > SUCCESS_METRIC_MAX_LENGTH:
             raise ValueError("Must be at most 200 characters")
         return v.strip()
 
@@ -55,21 +62,21 @@ class SuccessCriteria(BaseModel):
     def _purpose_not_blank(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Intended purpose must not be blank")
-        if len(v) > 2000:
+        if len(v) > SUCCESS_CRITERIA_TEXT_MAX_LENGTH:
             raise ValueError("Intended purpose must be at most 2000 characters")
         return v.strip()
 
     @field_validator("success_metrics")
     @classmethod
     def _max_metrics(cls, v: list[SuccessMetric]) -> list[SuccessMetric]:
-        if len(v) > 10:
+        if len(v) > SUCCESS_METRICS_MAX_COUNT:
             raise ValueError("At most 10 success metrics allowed")
         return v
 
     @field_validator("evaluation_notes")
     @classmethod
     def _notes_bounded(cls, v: str) -> str:
-        if len(v) > 2000:
+        if len(v) > SUCCESS_CRITERIA_TEXT_MAX_LENGTH:
             raise ValueError("Evaluation notes must be at most 2000 characters")
         return v.strip()
 
@@ -120,6 +127,14 @@ class AgentCreateRequest(BaseModel):
     success_criteria: SuccessCriteria | None = None
 
     _validate_name = field_validator("name")(make_name_validator("name"))
+
+    @field_validator("components")
+    @classmethod
+    def _reject_duplicate_components(cls, v: list[ComponentRef]) -> list[ComponentRef]:
+        keys = [(c.component_type, c.component_id) for c in v]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Each component may be listed only once")
+        return v
 
     @field_validator("version")
     @classmethod
@@ -203,6 +218,8 @@ class ComponentLinkResponse(BaseModel):
 
 
 class AgentResponse(BaseModel):
+    review_number: int | None = None
+    review_url: str | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -237,6 +254,9 @@ class AgentResponse(BaseModel):
     latest_approved_version: str | None = None
     latest_version: str | None = None
     is_recommended: RecommendedFlag = False
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
 
     model_config = {"from_attributes": True}
 
@@ -271,6 +291,8 @@ class AgentSummary(BaseModel):
     components_ready: bool = True
     blocking_components: list = []
     is_recommended: RecommendedFlag = False
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -304,6 +326,7 @@ class AgentInstallRequest(BaseModel):
     # Refuse the install when any component is unlocked, changed after it was
     # locked, or pinned to a version that is not approved.
     strict: bool = False
+    supported_features: list[str] = []
 
 
 class AgentInstallResponse(BaseModel):
@@ -315,9 +338,18 @@ class AgentInstallResponse(BaseModel):
     warnings: list[str] = []
     # The component versions that were installed and how they matched the lock.
     lock: dict | None = None
+    skill_bundles: list[SkillInstallFolder] = []
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        result = handler(self)
+        if not self.skill_bundles:
+            result.pop("skill_bundles", None)  # Old agent install clients keep the legacy response.
+        return result
 
 
 class AgentVersionCreateRequest(BaseModel):
+    message: str | None = None
     version: str
     description: str = ""
     prompt: str = ""

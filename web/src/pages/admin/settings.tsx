@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { Link } from "@tanstack/react-router";
 import {
 	Settings,
 	Plus,
@@ -19,6 +21,7 @@ import {
 	Shield,
 	HelpCircle,
 	Eye,
+	FlaskConical,
 	Upload,
 	RotateCcw,
 	Palette,
@@ -26,6 +29,7 @@ import {
 	ShieldAlert,
 	ArrowLeftRight,
 	Power,
+	PanelLeft,
 } from "lucide-react";
 import { InsightsSection } from "./settings/insights-section";
 import { UsagePingSection } from "./settings/usage-ping-section";
@@ -37,6 +41,7 @@ import { SETTING_DOCS, SECTION_DOCS } from "@/lib/docs-map";
 import { useAdminSettings, useAdminSettingsSchema, useRestartApi, useRestartStatus, useSystemWarnings } from "@/hooks/use-api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { LEADERBOARD_DEPRECATION_NOTICE } from "@/lib/leaderboard";
 import { useRoleGuard, hasMinRole } from "@/hooks/use-role-guard";
 import type { AdminSetting, AdminSettingDef, AdminSettingSection, SystemWarning } from "@/lib/types";
 import { admin, getUserRole } from "@/lib/api";
@@ -68,6 +73,12 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 const REDACTED_VALUE = "**REDACTED**";
+
+// Settings with their own switch above; keep them out of the generic editors.
+const DEDICATED_TOGGLE_KEYS = new Set([
+	"deployment.public_registry_enabled",
+	"deployment.leaderboard_enabled",
+]);
 
 const ALLOWED_LOGO_TYPES = [
 	"image/png",
@@ -168,6 +179,27 @@ function HarnessAllowlistEditor({
 	);
 }
 
+function BoolSettingCard({ def, value, onToggle, helpClass, openHelp }: { def: AdminSettingDef; value: boolean; onToggle: (checked: boolean) => Promise<void>; helpClass: string; openHelp: (key?: string) => boolean }) {
+	const [busy, setBusy] = useState(false);
+	return (
+		<div className={`rounded-md border-2 border-border bg-card p-3 relative ${helpClass}`}>
+			<SettingHelpIcon settingKey={def.key} openHelp={openHelp} />
+			<div className="flex items-start justify-between gap-3 pr-6">
+				<div className="min-w-0">
+					<div className="flex items-center gap-2"><span className="text-sm font-semibold text-foreground">{def.label}</span>{def.restart_required && <RestartRequiredMark />}</div>
+					{def.subtitle && <p className="mt-1 text-xs text-foreground/60">{def.subtitle}</p>}
+				</div>
+				<Switch
+					checked={value}
+					disabled={busy}
+					aria-label={def.label}
+					onCheckedChange={async (checked) => { setBusy(true); try { await onToggle(checked); } finally { setBusy(false); } }}
+				/>
+			</div>
+		</div>
+	);
+}
+
 function RestartRequiredMark() {
 	return (
 		<span
@@ -216,6 +248,8 @@ export default function SettingsPage() {
 		ssoEnabled,
 		samlEnabled,
 		publicRegistryEnabled,
+		experimentalReviewChecks,
+		leaderboardEnabled,
 		brandingLogo,
 		brandingAppName,
 		brandingWordmark,
@@ -230,6 +264,9 @@ export default function SettingsPage() {
 	const [tracePrivacyLoading, setTracePrivacyLoading] = useState(true);
 	const [tracePrivacyToggling, setTracePrivacyToggling] = useState(false);
 	const [publicRegistryToggling, setPublicRegistryToggling] = useState(false);
+	const [reviewChecksToggling, setReviewChecksToggling] = useState(false);
+	const [leaderboardToggling, setLeaderboardToggling] = useState(false);
+	const [showLeaderboardConfirm, setShowLeaderboardConfirm] = useState(false);
 	const [registeredAgentsOnly, setRegisteredAgentsOnly] = useState(false);
 	const [registeredAgentsOnlyLoading, setRegisteredAgentsOnlyLoading] =
 		useState(() => hasMinRole(getUserRole(), "super_admin"));
@@ -355,6 +392,20 @@ export default function SettingsPage() {
 		}
 	}, []);
 
+	const handleReviewChecksToggle = useCallback(async (checked: boolean) => {
+		setReviewChecksToggling(true);
+		try {
+			await admin.updateSetting("experimental.review_checks", { value: checked ? "true" : "false" });
+			await queryClient.invalidateQueries({ queryKey: ["config", "public"] });
+			await refetch();
+			toast.success(`Review checks ${checked ? "enabled" : "disabled"}`);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : "Failed to update review checks");
+		} finally {
+			setReviewChecksToggling(false);
+		}
+	}, [queryClient, refetch]);
+
 	const handlePublicRegistryToggle = useCallback(async (checked: boolean) => {
 		setPublicRegistryToggling(true);
 		try {
@@ -373,6 +424,24 @@ export default function SettingsPage() {
 		}
 	}, [queryClient, refetch]);
 
+	const handleLeaderboardToggle = useCallback(async (checked: boolean) => {
+		setLeaderboardToggling(true);
+		try {
+			await admin.updateSetting("deployment.leaderboard_enabled", {
+				value: checked ? "true" : "false",
+			});
+			await queryClient.invalidateQueries({ queryKey: ["config", "public"] });
+			await refetch();
+			toast.success(`Leaderboard turned ${checked ? "on" : "off"}`);
+		} catch (e) {
+			toast.error(
+				e instanceof Error ? e.message : "Failed to update leaderboard visibility",
+			);
+		} finally {
+			setLeaderboardToggling(false);
+		}
+	}, [queryClient, refetch]);
+
 	const handleRegisteredAgentsOnlyToggle = useCallback(
 		async (checked: boolean) => {
 			setRegisteredAgentsOnlyToggling(true);
@@ -380,7 +449,7 @@ export default function SettingsPage() {
 				const res = await admin.setRegisteredAgentsOnly(checked);
 				setRegisteredAgentsOnly(res.registered_agents_only);
 				toast.success(
-					`Registered agents only ${res.registered_agents_only ? "enabled" : "disabled"}`,
+					`Registered Agent Files only ${res.registered_agents_only ? "enabled" : "disabled"}`,
 				);
 			} catch (e) {
 				toast.error(
@@ -601,7 +670,7 @@ export default function SettingsPage() {
 				}))
 	).filter((e) => !e.key.startsWith("branding."));
 
-	const settingSections = settingsSchema.filter((section) => section.id !== "sso" && section.id !== "usage_ping");
+	const settingSections = settingsSchema.filter((section) => section.id !== "sso" && section.id !== "usage_ping" && section.id !== "experimental");
 	const settingByKey = useMemo(() => {
 		const map = new Map<string, AdminSettingDef>();
 		for (const section of settingSections) {
@@ -723,6 +792,7 @@ export default function SettingsPage() {
 				}
 			/>
 			<div className="page-body w-full mx-auto space-y-5">
+				{getUserRole() === "super_admin" && <Link to="/review-policy" className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"><span className="flex items-center gap-2"><Shield className="size-4" /> Review policy</span><span className="text-xs font-normal text-muted-foreground">Approval counts and publication rules →</span></Link>}
 				{/* Security warnings */}
 				{systemWarnings && systemWarnings.length > 0 && (
 					<section className="animate-in">
@@ -1007,6 +1077,31 @@ export default function SettingsPage() {
 					</div>
 				</section>
 
+				{/* Experimental features */}
+				<section className="animate-in">
+					<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1.5">
+						<FlaskConical className="h-3.5 w-3.5" />
+						Experimental
+					</h3>
+					<p className="text-xs text-muted-foreground mb-3">Features that are not ready for general use. Off by default, and hidden everywhere while off.</p>
+					<div className="rounded-md border border-border bg-card px-4 py-3">
+						<div className="flex items-center justify-between gap-4">
+							<div className="flex-1">
+								<p className="text-sm font-medium">Review checks</p>
+								<p className="text-xs text-muted-foreground mt-0.5">
+									Automated checks on review revisions, with per-organization and per-teamspace settings. Behavior and APIs may change or be removed.
+								</p>
+							</div>
+							<Switch
+								checked={experimentalReviewChecks}
+								onCheckedChange={handleReviewChecksToggle}
+								disabled={reviewChecksToggling}
+								aria-label="Enable experimental review checks"
+							/>
+						</div>
+					</div>
+				</section>
+
 				{/* Public registry access */}
 				<section className="animate-in">
 					<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
@@ -1018,7 +1113,7 @@ export default function SettingsPage() {
 							<div className="flex-1">
 								<p className="text-sm font-medium">Allow public browsing and installs</p>
 								<p className="text-xs text-muted-foreground mt-0.5">
-									Signed-out visitors can browse and install approved public agents and components. Publishing, private content, telemetry, and administration still require sign-in.
+									Signed-out visitors can browse and install approved public Agent Files and components. Publishing, private content, telemetry, and administration still require sign-in.
 								</p>
 							</div>
 							<Switch
@@ -1059,13 +1154,70 @@ export default function SettingsPage() {
 					</div>
 				</section>
 
+				{/* Interface: Leaderboard tab visibility */}
+				<section className="animate-in">
+					<h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+						<PanelLeft className="h-3.5 w-3.5" />
+						Interface
+					</h3>
+					<div className="rounded-md border border-border bg-card px-4 py-3">
+						<div className="flex items-center justify-between gap-4">
+							<div className="flex-1">
+								<p className="text-sm font-medium">Show the Leaderboard</p>
+								<p className="text-xs text-muted-foreground mt-0.5">
+									Off by default. When off, the Leaderboard tab, its home page link,
+									the page, and its API are unavailable to everyone, including admins.
+									Ranking data is kept. {LEADERBOARD_DEPRECATION_NOTICE}
+								</p>
+							</div>
+							<Switch
+								checked={leaderboardEnabled}
+								onCheckedChange={(checked) => {
+									if (checked) setShowLeaderboardConfirm(true);
+									else void handleLeaderboardToggle(false);
+								}}
+								disabled={leaderboardToggling}
+								aria-label="Show the Leaderboard"
+							/>
+						</div>
+					</div>
+					<Dialog open={showLeaderboardConfirm} onOpenChange={setShowLeaderboardConfirm}>
+						<DialogContent className="max-w-md">
+							<DialogHeader>
+								<DialogTitle className="flex items-center gap-2 text-sm">
+									<AlertTriangle className="h-4 w-4 text-warning" />
+									Turn on the Leaderboard?
+								</DialogTitle>
+								<DialogDescription className="text-xs">
+									{LEADERBOARD_DEPRECATION_NOTICE} Everyone will see the Leaderboard tab
+									and page until you turn it off again.
+								</DialogDescription>
+							</DialogHeader>
+							<DialogFooter>
+								<Button size="sm" variant="outline" onClick={() => setShowLeaderboardConfirm(false)}>
+									Cancel
+								</Button>
+								<Button
+									size="sm"
+									onClick={() => {
+										setShowLeaderboardConfirm(false);
+										void handleLeaderboardToggle(true);
+									}}
+								>
+									Turn on
+								</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
+				</section>
+
 				{/* Registered Agents Only, super_admin only */}
 				{hasMinRole(getUserRole(), "super_admin") && (
 					<section className="animate-in">
-						<h3 className={`text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5 ${sectionHelpHeadingClass("Registered Agents Only")}`} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && openHelp(undefined, "Registered Agents Only")) event.preventDefault(); }}>
+						<h3 className={`text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5 ${sectionHelpHeadingClass("Registered Agent Files Only")}`} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && openHelp(undefined, "Registered Agent Files Only")) event.preventDefault(); }}>
 							<Shield className="h-3.5 w-3.5" />
-							Registered Agents Only
-							<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); openHelp(undefined, "Registered Agents Only"); }} aria-label="Open Registered Agents Only documentation">
+							Registered Agent Files Only
+							<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); openHelp(undefined, "Registered Agent Files Only"); }} aria-label="Open Registered Agent Files Only documentation">
 								<HelpCircle className="h-3.5 w-3.5" />
 							</button>
 						</h3>
@@ -1073,11 +1225,11 @@ export default function SettingsPage() {
 							<div className="flex items-center justify-between">
 								<div className="flex-1">
 									<p className="text-sm font-medium">
-										Only trace registered agents
+										Only trace registered Agent Files
 									</p>
 									<p className="text-xs text-muted-foreground mt-0.5">
-										Unstable. When enabled, only registered agents are traced.
-										Unregistered agent activity may be missing from traces.
+										Unstable. When enabled, only registered Agent Files are traced.
+										Unregistered Agent File activity may be missing from traces.
 									</p>
 								</div>
 								<Switch
@@ -1337,7 +1489,7 @@ export default function SettingsPage() {
 						{/* Unified sections, each setting stays in its section */}
 						{settingSections.filter((s) => !s.danger).map((section) => {
 								const visibleSettings = section.settings.filter(
-									(setting) => setting.key !== "deployment.public_registry_enabled",
+									(setting) => !DEDICATED_TOGGLE_KEYS.has(setting.key),
 								);
 								if (visibleSettings.length === 0) return null;
 
@@ -1394,6 +1546,10 @@ export default function SettingsPage() {
 									{visibleSettings.map((d) => {
 										const existing = entries.find((e) => e.key === d.key);
 										const isEditing = editingKey === d.key;
+										const isBool = d.default === "true" || d.default === "false";
+										if (isBool && !isEditing) {
+											return <BoolSettingCard key={d.key} def={d} value={(existing?.value || d.default) === "true"} helpClass={helpTargetClass(d.key)} openHelp={openHelp} onToggle={async (checked) => { try { await admin.updateSetting(d.key, { value: checked ? "true" : "false" }); await queryClient.invalidateQueries({ queryKey: ["config", "public"] }); await refetch(); refetchRestartStatus(); toast.success(`${d.label} ${checked ? "enabled" : "disabled"}`); } catch (e) { toast.error(e instanceof Error ? e.message : `Failed to update ${d.label}`); } }} />;
+										}
 										if (isEditing) {
 											return (
 												<div key={d.key} className={`rounded-md border-2 border-primary/50 bg-card p-3 ${helpTargetClass(d.key)}`} onClick={(e) => { if ((e.ctrlKey || e.metaKey) && openHelp(d.key)) { e.preventDefault(); e.stopPropagation(); } }}>
@@ -1453,7 +1609,7 @@ export default function SettingsPage() {
 										<div className="space-y-4">
 											{settingSections.filter((s) => s.danger).map((section) => {
 												const visibleDangerSettings = section.settings.filter(
-													(setting) => setting.key !== "deployment.public_registry_enabled",
+													(setting) => !DEDICATED_TOGGLE_KEYS.has(setting.key),
 												);
 												if (visibleDangerSettings.length === 0) return null;
 												return (
@@ -1489,6 +1645,10 @@ export default function SettingsPage() {
 														}
 														const existing = entries.find((e) => e.key === d.key);
 														const isEditing = editingKey === d.key;
+														const isBool = d.default === "true" || d.default === "false";
+										if (isBool && !isEditing) {
+											return <BoolSettingCard key={d.key} def={d} value={(existing?.value || d.default) === "true"} helpClass={helpTargetClass(d.key)} openHelp={openHelp} onToggle={async (checked) => { try { await admin.updateSetting(d.key, { value: checked ? "true" : "false" }); await queryClient.invalidateQueries({ queryKey: ["config", "public"] }); await refetch(); refetchRestartStatus(); toast.success(`${d.label} ${checked ? "enabled" : "disabled"}`); } catch (e) { toast.error(e instanceof Error ? e.message : `Failed to update ${d.label}`); } }} />;
+										}
 														if (isEditing) {
 															return (
 																<div key={d.key} className="rounded-md border-2 border-primary/50 bg-card p-3">

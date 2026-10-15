@@ -177,11 +177,11 @@ clean:  ## Remove build artifacts and caches
 
 # ── Release ─────────────────────────────────────────────────
 
-release:  ## Interactively prepare a curated release PR
-	uv run python tools/release.py
+release:  ## Prepare a release-line PR (pass ARGS for cut, channel, backport, status)
+	uv run python tools/release.py $(ARGS)
 
-release-preview:  ## Preview a curated release without writing changes
-	uv run python tools/release.py --preview
+release-preview:  ## Preview a release-line PR without writing changes
+	uv run python tools/release.py --preview $(ARGS)
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_ -]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'

@@ -42,15 +42,15 @@ def mock_install_uv(monkeypatch):
 
 
 @pytest.fixture
-def mock_install_brew(monkeypatch):
-    """Mock install detection as Homebrew."""
+def mock_install_system(monkeypatch):
+    """Mock install detection as a system package."""
     from observal_cli.install_detector import InstallInfo, InstallMethod
 
     info = InstallInfo(
-        method=InstallMethod.HOMEBREW,
-        path=Path("/opt/homebrew/bin/observal"),
+        method=InstallMethod.SYSTEM_PACKAGE,
+        path=Path("/usr/bin/observal"),
         writable=False,
-        managed_by="brew",
+        managed_by="apt",
     )
     monkeypatch.setattr("observal_cli.install_detector.detect", lambda: info)
     monkeypatch.setattr("observal_cli.install_detector._cached_info", info)
@@ -89,10 +89,10 @@ class TestSelfUpgrade:
         result = runner.invoke(app, ["self", "upgrade", "--force"])
         assert "Already on v1.2.0" in result.output
 
-    def test_upgrade_managed_install_blocked(self, mock_version, mock_install_brew, monkeypatch):
+    def test_upgrade_managed_install_blocked(self, mock_version, mock_install_system, monkeypatch):
         app = _get_app()
         result = runner.invoke(app, ["self", "upgrade", "--force"])
-        assert "managed by brew" in result.output.lower() or "brew" in result.output
+        assert "managed by apt" in result.output.lower()
 
     def test_upgrade_specific_version(self, mock_version, mock_install_uv, mock_lock, monkeypatch):
         """--version 1.3.0 should attempt install of that version."""

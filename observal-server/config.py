@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # Outbound Git authentication
     GIT_CLONE_TOKEN: str | None = None
 
+    # Public base URL GitHub uses to reach /api/v1/webhooks/* when the rest of the
+    # deployment is private (for example a dedicated webhook load balancer).
+    # Unset means webhooks use the deployment's normal public URL.
+    WEBHOOK_PUBLIC_URL: str | None = None
+
     # Vendor usage-ping destination. The production default is intentionally
     # fixed; overrides exist for development and isolated collector deployments.
     USAGE_PING_URL: str = "https://usage.observal.io/api/v1/usage-pings"

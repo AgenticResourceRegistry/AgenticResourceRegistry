@@ -599,7 +599,7 @@ export default function TracesPage() {
 			},
 			{
 				accessorKey: "agent_name",
-				header: "Agent",
+				header: "Agent File",
 				cell: ({ row }) => (
 					<span className="block max-w-[180px] truncate text-2xs font-medium text-foreground">
 						{row.original.agent_name || "—"}

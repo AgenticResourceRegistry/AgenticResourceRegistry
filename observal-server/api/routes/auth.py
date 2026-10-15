@@ -61,6 +61,13 @@ from services.security_events import (
     emit_security_event,
 )
 from services.teamspace import reserve_handle as reserve_team_handle
+from services.token_revocation import (
+    get_revocation_marker,
+    is_revoked,
+    revoke_user_tokens,
+    token_issued_us,
+    upgrade_legacy_revocation,
+)
 from services.username_generator import generate_unique_username
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -241,15 +248,14 @@ async def _issue_tokens(user: User, groups: list[str] | None = None) -> tuple[st
     Fails open: tokens are still returned if Redis is temporarily unreachable.
     """
     optic.trace("user_id={}, groups={}", user.id, groups)
-    access_token, expires_in = create_access_token(user.id, user.role, groups=groups)
-    refresh_token, jti = create_refresh_token(user.id, user.role, groups=groups)
-
     try:
         redis = get_redis()
+        # Before minting: an upgraded legacy marker means "now", and the new pair must postdate it.
+        await upgrade_legacy_revocation(redis, user.id)
+        access_token, expires_in = create_access_token(user.id, user.role, groups=groups)
+        refresh_token, jti = create_refresh_token(user.id, user.role, groups=groups)
         refresh_ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
         await redis.setex(f"refresh_jti:{jti}", refresh_ttl, str(user.id))
-        # Clear any logout revocation so hooks resume after re-login
-        await redis.delete(f"revoked_user:{user.id}")
     except RedisError as e:
         optic.warning("Redis unavailable when storing refresh JTI: {}", e)
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
@@ -1609,9 +1615,8 @@ async def logout(
             ttl = max(exp - now_ts, 1)
             await redis.setex(f"revoked_jti:{jti}", ttl, "1")
 
-        # Mark the user as revoked for 30 days (max hooks token lifetime)
-        hooks_ttl = 30 * 86400
-        await redis.setex(f"revoked_user:{current_user.id}", hooks_ttl, "1")
+        # Log out everywhere: every token issued so far, including hooks tokens, stops working.
+        await revoke_user_tokens(redis, current_user.id)
     except RedisError as e:
         optic.warning("Redis unavailable during logout: {}", e)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
@@ -1714,11 +1719,12 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
     try:
         redis = get_redis()
         stored = await redis.get(f"refresh_jti:{jti}")
+        marker = await get_revocation_marker(redis, user_id)
     except RedisError as e:
         optic.warning("Redis unavailable during token refresh: {}", e)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
-    if stored is None:
+    if stored is None or is_revoked(marker, token_issued_us(payload)):
         raise HTTPException(status_code=401, detail="Refresh token has been revoked or expired")
 
     # Revoke the old refresh token (one-time use / rotation)
@@ -1741,9 +1747,16 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
     try:
         refresh_ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
         await redis.setex(f"refresh_jti:{new_jti}", refresh_ttl, str(user.id))
+        # A logout can land while this request is in flight. Re-check after issuing: a later
+        # revocation is newer than the new pair, so it is caught either here or by the marker itself.
+        revoked_meanwhile = is_revoked(await get_revocation_marker(redis, user_id), token_issued_us(payload))
+        if revoked_meanwhile:
+            await redis.delete(f"refresh_jti:{new_jti}")
     except RedisError as e:
         optic.warning("Redis unavailable when storing new refresh JTI: {}", e)
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
+    if revoked_meanwhile:
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked or expired")
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,
@@ -1790,14 +1803,35 @@ async def change_password(
 
     _validate_password_strength(req.new_password)
     current_user.set_password(req.new_password)
+    # Sign out every session before the change lands; if Redis is down the password stays unchanged.
+    try:
+        redis = get_redis()
+        await revoke_user_tokens(redis, current_user.id)
+    except RedisError:
+        raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
     await db.commit()
 
     try:
-        redis = get_redis()
         await redis.delete(f"must_change_password:{current_user.id}")
     except RedisError:
         pass
-    return {"message": "Password changed"}
+    # The device that made the change stays signed in with a pair issued after the revocation. Like SSO,
+    # the pair is handed over through a one-time /auth/exchange code rather than in this response.
+    access_token, refresh_token, expires_in = await _issue_tokens(current_user, getattr(current_user, "_groups", None))
+    code = secrets.token_urlsafe(32)
+    session = json.dumps(
+        {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_in": expires_in,
+            "user_id": str(current_user.id),
+        }
+    )
+    try:
+        await redis.setex(f"oauth_code:{code}", 30, session)
+    except RedisError:
+        raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
+    return {"message": "Password changed", "exchange_code": code}
 
 
 @router.put("/profile/username", response_model=UserResponse)

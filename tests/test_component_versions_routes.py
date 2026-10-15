@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused contracts and failure coverage for generic component versions."""
@@ -23,7 +24,8 @@ from models.prompt import PromptListing, PromptVersion
 from models.sandbox import SandboxListing, SandboxVersion
 from models.skill import SkillListing, SkillVersion
 from models.user import UserRole
-from schemas.component_version import VersionPublishRequest, VersionReviewRequest
+from schemas.component_version import VersionPublishRequest
+from services.skill_revisions import skill_content_revision
 
 NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 LISTING_ID = uuid.UUID(int=1001)
@@ -240,6 +242,7 @@ def _db():
     return SimpleNamespace(
         add=Mock(),
         execute=AsyncMock(),
+        refresh=AsyncMock(),
         flush=AsyncMock(),
         commit=AsyncMock(),
         rollback=AsyncMock(),
@@ -303,11 +306,6 @@ def test_semver_pattern_accepts_the_documented_forms(value):
 )
 def test_semver_pattern_rejects_malformed_forms(value):
     assert versions.SEMVER_RE.fullmatch(value) is None
-
-
-def test_semver_parser_compares_numeric_core_and_ignores_prerelease_label():
-    assert versions._parse_semver("10.2.30") == (10, 2, 30)
-    assert versions._parse_semver("2.0.0-beta.1") == (2, 0, 0)
 
 
 @pytest.mark.asyncio
@@ -467,8 +465,9 @@ async def test_list_version_visibility_matches_effective_permissions(monkeypatch
 
     assert result == {"items": [], "total": 0, "page": 1, "page_size": 20}
     for awaited in db.execute.await_args_list:
-        has_status_filter = "skill_versions.status =" in _sql(awaited.args[0])
-        assert has_status_filter is expects_status_filter
+        statement = _sql(awaited.args[0])
+        assert ("skill_versions.status IN" in statement) is expects_status_filter
+        assert ("skill_versions.requires_global_review IS false" in statement) is expects_status_filter
 
 
 @pytest.mark.asyncio
@@ -558,16 +557,12 @@ async def test_every_operation_hides_a_missing_listing_without_database_mutation
     monkeypatch.setattr(versions, "resolve_visible_listing", resolve)
     actor = _user(user_id=OWNER_ID, role=UserRole.reviewer)
     request = _request("mcp")
-    review_request = VersionReviewRequest(action="approve")
 
     operations = [
         lambda db: versions._list_versions("missing", 1, 20, McpListing, McpVersion, "mcp", db, actor),
         lambda db: versions._get_version("missing", "1.0.0", McpListing, McpVersion, "mcp", db, actor),
         lambda db: versions._publish_version("missing", request, McpListing, McpVersion, "mcp", db, actor),
         lambda db: versions._version_suggestions("missing", McpListing, McpVersion, db, actor),
-        lambda db: versions._review_version(
-            "missing", "1.0.0", review_request, McpListing, McpVersion, "mcp", db, actor
-        ),
     ]
 
     for operation in operations:
@@ -588,7 +583,7 @@ async def test_publish_rejects_invalid_semver_before_resolution_or_mutation(monk
     inbox = AsyncMock()
     monkeypatch.setattr(versions, "resolve_visible_listing", resolve)
     monkeypatch.setattr(versions, "validate_and_extract", validate)
-    monkeypatch.setattr(versions.inbox, "on_publish", inbox)
+    monkeypatch.setattr(versions, "submit_for_review", inbox)
     db = _db()
 
     with pytest.raises(HTTPException) as exc:
@@ -628,10 +623,22 @@ async def test_publish_uses_real_model_pair_snapshots_content_and_orders_transac
     db.flush.side_effect = flush
     db.commit.side_effect = lambda: events.append("commit")
     resolve = AsyncMock(return_value=listing)
-    notify = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
+
+    async def reviewed(*_args, **_kwargs):
+        events.append("review")
+        return SimpleNamespace(number=42)
+
+    notify = AsyncMock(side_effect=reviewed)
     monkeypatch.setattr(versions, "resolve_visible_listing", resolve)
-    monkeypatch.setattr(versions.inbox, "on_publish", notify)
+    monkeypatch.setattr(versions, "submit_for_review", notify)
     monkeypatch.setattr(versions, "datetime", FrozenDateTime)
+    if component_type == "skill":
+        listing.latest_version.review_epoch = 3  # Successors must not inherit withdrawn review cycles.
+        listing.latest_version.content_revision = skill_content_revision(listing, listing.latest_version)
+        monkeypatch.setattr(
+            versions, "lock_skill_version", AsyncMock(return_value=(OLD_VERSION_ID, listing.latest_version))
+        )
+        monkeypatch.setattr(versions, "check_listing_visibility_async", AsyncMock(return_value=True))
 
     result = await versions._publish_version(
         "Alice/Review-Item",
@@ -670,10 +677,15 @@ async def test_publish_uses_real_model_pair_snapshots_content_and_orders_transac
         assert created.args == ["-m", "review"]
         assert created.transport == "stdio"
     elif component_type == "skill":
+        assert created.review_epoch is None  # Database supplies the new generation's default 0.
         assert created.skill_md_content == "# Review\n"
         assert created.script_content == "print('review')"
         assert created.git_url == "https://github.com/acme/skills"
         assert created.slash_command == "review-v2"
+        assert created.base_version_id == listing.latest_version.id
+        assert created.base_revision == skill_content_revision(listing, listing.latest_version)
+        assert created.content_revision == skill_content_revision(listing, created)
+        assert created.content_revision != created.base_revision
     elif component_type == "hook":
         assert created.script_content == "print('guard')"
     elif component_type == "sandbox":
@@ -683,16 +695,10 @@ async def test_publish_uses_real_model_pair_snapshots_content_and_orders_transac
     assert result["status"] == "pending"
     assert result[unique_field] == expected
     assert listing.latest_version_id == OLD_VERSION_ID
-    assert events == ["add", "flush", "inbox", "commit"]
+    assert events == ["add", "flush", "review", "commit"]
+    assert result["review_number"] == 42 and result["review_url"] == "/review/42"
     resolve.assert_awaited_once_with(listing_model, "Alice/Review-Item", db, actor)
-    notify.assert_awaited_once_with(
-        db,
-        listing,
-        subject_type=component_type,
-        actor_id=OWNER_ID,
-        auto_approved=False,
-        version="2.0.0",
-    )
+    notify.assert_awaited_once_with(db, component_type, listing, created, OWNER_ID, message=None)
     duplicate_stmt = db.execute.await_args.args[0]
     assert f"FROM {version_model.__tablename__}" in _sql(duplicate_stmt)
     assert {LISTING_ID, "2.0.0"} == _bound_values(duplicate_stmt)
@@ -708,7 +714,12 @@ async def test_publish_snapshots_complete_metadata_when_optional_fields_are_omit
     db.execute.return_value = _result()
     db.flush.side_effect = lambda: _set_generated_defaults(db, component_type)
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_publish", AsyncMock())
+    monkeypatch.setattr(versions, "submit_for_review", AsyncMock())
+    if component_type == "skill":
+        monkeypatch.setattr(
+            versions, "lock_skill_version", AsyncMock(return_value=(OLD_VERSION_ID, listing.latest_version))
+        )
+        monkeypatch.setattr(versions, "check_listing_visibility_async", AsyncMock(return_value=True))
     request = VersionPublishRequest(version="2.0.0", description="Second release")
 
     await versions._publish_version(
@@ -724,7 +735,10 @@ async def test_publish_snapshots_complete_metadata_when_optional_fields_are_omit
     created = db.add.call_args.args[0]
     for column in version_model.__table__.columns:
         if column.name not in versions._VERSION_MANAGED_FIELDS:
-            assert getattr(created, column.name) == getattr(listing.latest_version, column.name)
+            expected = getattr(listing.latest_version, column.name)
+            if component_type == "skill" and column.name == "extra_files" and expected is None:
+                expected = []  # Transient fixtures lack the database's non-null JSON default.
+            assert getattr(created, column.name) == expected
 
 
 @pytest.mark.asyncio
@@ -737,7 +751,7 @@ async def test_coauthor_and_admin_have_owner_level_publish_permission(monkeypatc
     db.flush.side_effect = lambda: _set_generated_defaults(db, "mcp")
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
     notify = AsyncMock()
-    monkeypatch.setattr(versions.inbox, "on_publish", notify)
+    monkeypatch.setattr(versions, "submit_for_review", notify)
 
     result = await versions._publish_version(str(LISTING_ID), _request("mcp"), McpListing, McpVersion, "mcp", db, actor)
 
@@ -754,7 +768,7 @@ async def test_publish_denies_nonowners_before_duplicate_query(monkeypatch, role
     db = _db()
     notify = AsyncMock()
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_publish", notify)
+    monkeypatch.setattr(versions, "submit_for_review", notify)
 
     with pytest.raises(HTTPException) as exc:
         await versions._publish_version(str(LISTING_ID), _request("mcp"), McpListing, McpVersion, "mcp", db, actor)
@@ -776,7 +790,7 @@ async def test_publish_duplicate_is_exact_conflict_without_mutation(monkeypatch)
     validate = Mock()
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
     monkeypatch.setattr(versions, "validate_and_extract", validate)
-    monkeypatch.setattr(versions.inbox, "on_publish", notify)
+    monkeypatch.setattr(versions, "submit_for_review", notify)
 
     with pytest.raises(HTTPException) as exc:
         await versions._publish_version(
@@ -814,7 +828,7 @@ async def test_publish_boundary_failures_stop_later_work(monkeypatch, boundary):
     notify = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
     monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
     monkeypatch.setattr(versions, "validate_and_extract", validate)
-    monkeypatch.setattr(versions.inbox, "on_publish", notify)
+    monkeypatch.setattr(versions, "submit_for_review", notify)
     if boundary == "query":
         db.execute.side_effect = RuntimeError("query failed")
     elif boundary == "validation":
@@ -892,283 +906,6 @@ async def test_version_suggestion_database_failure_propagates(monkeypatch):
         await versions._version_suggestions(str(LISTING_ID), McpListing, McpVersion, db, _user(user_id=OWNER_ID))
 
 
-@pytest.mark.asyncio
-async def test_review_approve_newer_version_updates_latest_then_notifies_and_commits(monkeypatch):
-    listing = _listing("mcp", version="1.9.0")
-    pending = _pending_version("mcp", version="2.0.0")
-    actor = _user(user_id=REVIEWER_ID, role=UserRole.reviewer)
-    db = _db()
-    db.execute.return_value = _result(scalar=pending)
-    events = []
-    notify = AsyncMock(side_effect=lambda *args, **kwargs: events.append("inbox"))
-    db.commit.side_effect = lambda: events.append("commit")
-    resolve = AsyncMock(return_value=listing)
-    monkeypatch.setattr(versions, "resolve_visible_listing", resolve)
-    monkeypatch.setattr(versions.inbox, "on_review_decided", notify)
-    monkeypatch.setattr(versions, "datetime", FrozenDateTime)
-
-    result = await versions._review_version(
-        "Alice/Review-MCP",
-        "2.0.0",
-        VersionReviewRequest(action="approve"),
-        McpListing,
-        McpVersion,
-        "mcp",
-        db,
-        actor,
-    )
-
-    assert result == {"version": "2.0.0", "new_status": "approved", "reason": None}
-    assert pending.status is ListingStatus.approved
-    assert pending.rejection_reason is None
-    assert pending.reviewed_by == REVIEWER_ID
-    assert pending.reviewed_at == NOW
-    assert listing.latest_version_id == NEW_VERSION_ID
-    assert events == ["inbox", "commit"]
-    resolve.assert_awaited_once_with(McpListing, "Alice/Review-MCP", db, actor)
-    statement = db.execute.await_args.args[0]
-    assert "mcp_versions.status =" not in _sql(statement)
-    assert {LISTING_ID, "2.0.0"} == _bound_values(statement)
-    notify.assert_awaited_once_with(
-        db,
-        listing,
-        subject_type="mcp",
-        approved=True,
-        actor_id=REVIEWER_ID,
-        version="2.0.0",
-        reason=None,
-        submitter_id=OWNER_ID,
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("current", "incoming", "updates_latest"),
-    [("2.0.0", "1.9.9", False), ("2.0.0", "2.0.0", True)],
-)
-async def test_review_approval_uses_numeric_semver_for_latest_relationship(
-    monkeypatch, current, incoming, updates_latest
-):
-    listing = _listing("mcp", version=current)
-    original_latest_id = listing.latest_version_id
-    pending = _pending_version("mcp", version=incoming)
-    db = _db()
-    db.execute.return_value = _result(scalar=pending)
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", AsyncMock())
-
-    await versions._review_version(
-        str(LISTING_ID),
-        incoming,
-        VersionReviewRequest(action="approve"),
-        McpListing,
-        McpVersion,
-        "mcp",
-        db,
-        _user(user_id=REVIEWER_ID, role=UserRole.reviewer),
-    )
-
-    expected = NEW_VERSION_ID if updates_latest else original_latest_id
-    assert listing.latest_version_id == expected
-
-
-@pytest.mark.asyncio
-async def test_review_approval_sets_latest_when_listing_has_no_current_release(monkeypatch):
-    listing = _listing("sandbox")
-    listing.latest_version = None
-    listing.latest_version_id = None
-    pending = _pending_version("sandbox", version="1.0.0")
-    db = _db()
-    db.execute.return_value = _result(scalar=pending)
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", AsyncMock())
-
-    await versions._review_version(
-        str(LISTING_ID),
-        "1.0.0",
-        VersionReviewRequest(action="approve"),
-        SandboxListing,
-        SandboxVersion,
-        "sandbox",
-        db,
-        _user(user_id=REVIEWER_ID, role=UserRole.reviewer),
-    )
-
-    assert listing.latest_version_id == NEW_VERSION_ID
-
-
-@pytest.mark.asyncio
-async def test_review_rejection_records_reason_and_never_changes_latest(monkeypatch):
-    listing = _listing("prompt")
-    pending = _pending_version("prompt")
-    original_latest_id = listing.latest_version_id
-    actor = _user(user_id=REVIEWER_ID, role=UserRole.reviewer)
-    db = _db()
-    db.execute.return_value = _result(scalar=pending)
-    notify = AsyncMock()
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", notify)
-    monkeypatch.setattr(versions, "datetime", FrozenDateTime)
-
-    result = await versions._review_version(
-        str(LISTING_ID),
-        "2.0.0",
-        VersionReviewRequest(action="reject", reason="Needs documentation"),
-        PromptListing,
-        PromptVersion,
-        "prompt",
-        db,
-        actor,
-    )
-
-    assert result == {
-        "version": "2.0.0",
-        "new_status": "rejected",
-        "reason": "Needs documentation",
-    }
-    assert pending.status is ListingStatus.rejected
-    assert pending.rejection_reason == "Needs documentation"
-    assert pending.reviewed_by == REVIEWER_ID
-    assert pending.reviewed_at == NOW
-    assert listing.latest_version_id == original_latest_id
-    notify.assert_awaited_once_with(
-        db,
-        listing,
-        subject_type="prompt",
-        approved=False,
-        actor_id=REVIEWER_ID,
-        version="2.0.0",
-        reason="Needs documentation",
-        submitter_id=OWNER_ID,
-    )
-    db.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "status",
-    [ListingStatus.draft, ListingStatus.approved, ListingStatus.rejected, ListingStatus.archived],
-)
-async def test_review_only_accepts_pending_versions_without_side_effects(monkeypatch, status):
-    listing = _listing("mcp")
-    row = _pending_version("mcp")
-    row.status = status
-    db = _db()
-    db.execute.return_value = _result(scalar=row)
-    notify = AsyncMock()
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", notify)
-
-    with pytest.raises(HTTPException) as exc:
-        await versions._review_version(
-            str(LISTING_ID),
-            "2.0.0",
-            VersionReviewRequest(action="approve"),
-            McpListing,
-            McpVersion,
-            "mcp",
-            db,
-            _user(user_id=REVIEWER_ID, role=UserRole.reviewer),
-        )
-
-    _assert_http(exc, 422, f"Version is {status.value!r}, only pending versions can be reviewed")
-    notify.assert_not_awaited()
-    db.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_review_hidden_or_missing_version_returns_404_without_side_effects(monkeypatch):
-    listing = _listing("mcp")
-    actor = _user()
-    db = _db()
-    db.execute.return_value = _result()
-    notify = AsyncMock()
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", notify)
-
-    with pytest.raises(HTTPException) as exc:
-        await versions._review_version(
-            str(LISTING_ID),
-            "2.0.0",
-            VersionReviewRequest(action="approve"),
-            McpListing,
-            McpVersion,
-            "mcp",
-            db,
-            actor,
-        )
-
-    _assert_http(exc, 404, "Version not found")
-    statement = db.execute.await_args.args[0]
-    assert "mcp_versions.status =" in _sql(statement)
-    assert ListingStatus.approved in _bound_values(statement)
-    notify.assert_not_awaited()
-    db.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_review_currently_does_not_gate_an_active_edit_lock(monkeypatch):
-    listing = _listing("hook")
-    pending = _pending_version("hook")
-    pending.is_editing = True
-    pending.editing_by = OWNER_ID
-    pending.editing_since = NOW
-    db = _db()
-    db.execute.return_value = _result(scalar=pending)
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", AsyncMock())
-
-    result = await versions._review_version(
-        str(LISTING_ID),
-        "2.0.0",
-        VersionReviewRequest(action="approve"),
-        HookListing,
-        HookVersion,
-        "hook",
-        db,
-        _user(user_id=REVIEWER_ID, role=UserRole.reviewer),
-    )
-
-    assert result["new_status"] == "approved"
-    assert pending.is_editing is True
-    db.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["query", "inbox", "commit"])
-async def test_review_boundary_failures_stop_later_work(monkeypatch, boundary):
-    listing = _listing("mcp")
-    pending = _pending_version("mcp")
-    db = _db()
-    db.execute.return_value = _result(scalar=pending)
-    notify = AsyncMock()
-    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
-    monkeypatch.setattr(versions.inbox, "on_review_decided", notify)
-    if boundary == "query":
-        db.execute.side_effect = RuntimeError("query failed")
-    elif boundary == "inbox":
-        notify.side_effect = RuntimeError("inbox failed")
-    else:
-        db.commit.side_effect = RuntimeError("commit failed")
-
-    with pytest.raises(RuntimeError, match=f"{boundary} failed"):
-        await versions._review_version(
-            str(LISTING_ID),
-            "2.0.0",
-            VersionReviewRequest(action="approve"),
-            McpListing,
-            McpVersion,
-            "mcp",
-            db,
-            _user(user_id=REVIEWER_ID, role=UserRole.reviewer),
-        )
-
-    if boundary == "query":
-        notify.assert_not_awaited()
-    if boundary in {"query", "inbox"}:
-        db.commit.assert_not_awaited()
-
-
 @pytest.mark.parametrize("component_type", COMPONENTS)
 def test_factory_exposes_the_five_exact_route_contracts(component_type):
     listing_model, version_model, _plural = COMPONENTS[component_type]
@@ -1180,7 +917,6 @@ def test_factory_exposes_the_five_exact_route_contracts(component_type):
         ("GET", "/{listing_id}/versions"),
         ("POST", "/{listing_id}/versions"),
         ("GET", "/{listing_id}/versions/{version}"),
-        ("POST", "/{listing_id}/versions/{version}/review"),
         ("GET", "/{listing_id}/version-suggestions"),
     }
     assert {tag for route in router.routes for tag in route.tags} == {f"{component_type}-versions"}
@@ -1208,12 +944,10 @@ async def test_factory_handlers_delegate_every_argument_and_return_exact_payload
     list_call = AsyncMock(return_value={"kind": "list"})
     detail_call = AsyncMock(return_value={"kind": "detail"})
     publish_call = AsyncMock(return_value={"kind": "publish"})
-    review_call = AsyncMock(return_value={"kind": "review"})
     suggestions_call = AsyncMock(return_value={"kind": "suggestions"})
     monkeypatch.setattr(versions, "_list_versions", list_call)
     monkeypatch.setattr(versions, "_get_version", detail_call)
     monkeypatch.setattr(versions, "_publish_version", publish_call)
-    monkeypatch.setattr(versions, "_review_version", review_call)
     monkeypatch.setattr(versions, "_version_suggestions", suggestions_call)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -1223,17 +957,12 @@ async def test_factory_handlers_delegate_every_argument_and_return_exact_payload
             f"/api/v1/mcps/{LISTING_ID}/versions",
             json={"version": "2.0.0", "description": "Second", "extra": {"command": "python"}},
         )
-        reviewed = await client.post(
-            f"/api/v1/mcps/{LISTING_ID}/versions/2.0.0/review",
-            json={"action": "reject", "reason": "policy"},
-        )
         suggested = await client.get(f"/api/v1/mcps/{LISTING_ID}/version-suggestions")
 
-    assert [response.json() for response in (listed, detailed, published, reviewed, suggested)] == [
+    assert [response.json() for response in (listed, detailed, published, suggested)] == [
         {"kind": "list"},
         {"kind": "detail"},
         {"kind": "publish"},
-        {"kind": "review"},
         {"kind": "suggestions"},
     ]
     list_call.assert_awaited_once_with(
@@ -1271,19 +1000,8 @@ async def test_factory_handlers_delegate_every_argument_and_return_exact_payload
         "changelog": None,
         "supported_harnesses": [],
         "extra": {"command": "python"},
+        "message": None,
     }
-    review_kwargs = review_call.await_args.kwargs
-    assert review_kwargs == {
-        "listing_id": str(LISTING_ID),
-        "version": "2.0.0",
-        "req": review_kwargs["req"],
-        "listing_model": McpListing,
-        "version_model": McpVersion,
-        "component_type": "mcp",
-        "db": db,
-        "current_user": actor,
-    }
-    assert review_kwargs["req"].model_dump() == {"action": "reject", "reason": "policy"}
     suggestions_call.assert_awaited_once_with(
         listing_id=str(LISTING_ID),
         listing_model=McpListing,
@@ -1333,10 +1051,8 @@ async def test_fastapi_request_validation_contracts_prevent_handler_calls(monkey
     app, _db_instance = _generic_app(actor=actor)
     list_call = AsyncMock()
     publish_call = AsyncMock()
-    review_call = AsyncMock()
     monkeypatch.setattr(versions, "_list_versions", list_call)
     monkeypatch.setattr(versions, "_publish_version", publish_call)
-    monkeypatch.setattr(versions, "_review_version", review_call)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         bad_page = await client.get(f"/api/v1/mcps/{LISTING_ID}/versions?page=0")
@@ -1346,7 +1062,7 @@ async def test_fastapi_request_validation_contracts_prevent_handler_calls(monkey
             f"/api/v1/mcps/{LISTING_ID}/versions",
             json={"version": "2.0.0", "description": "Second", "extra": []},
         )
-        invalid_action = await client.post(f"/api/v1/mcps/{LISTING_ID}/versions/2.0.0/review", json={"action": "ship"})
+        removed_action = await client.post(f"/api/v1/mcps/{LISTING_ID}/versions/2.0.0/review", json={"action": "ship"})
 
     assert bad_page.status_code == 422
     assert bad_page.json()["detail"] == [
@@ -1386,19 +1102,9 @@ async def test_fastapi_request_validation_contracts_prevent_handler_calls(monkey
             "input": [],
         }
     ]
-    assert invalid_action.status_code == 422
-    assert invalid_action.json()["detail"] == [
-        {
-            "type": "literal_error",
-            "loc": ["body", "action"],
-            "msg": "Input should be 'approve' or 'reject'",
-            "input": "ship",
-            "ctx": {"expected": "'approve' or 'reject'"},
-        }
-    ]
+    assert removed_action.status_code == 404
     list_call.assert_not_awaited()
     publish_call.assert_not_awaited()
-    review_call.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1415,14 +1121,7 @@ async def test_router_authentication_and_reviewer_role_fail_before_handlers(monk
     list_call.assert_not_awaited()
 
     user_app, _db_instance = _generic_app(actor=_user(user_id=OWNER_ID))
-    review_call = AsyncMock()
-    security_event = AsyncMock()
-    monkeypatch.setattr(versions, "_review_version", review_call)
-    monkeypatch.setattr("api.deps.emit_security_event", security_event)
     async with AsyncClient(transport=ASGITransport(app=user_app), base_url="http://test") as client:
-        forbidden = await client.post(f"/api/v1/mcps/{LISTING_ID}/versions/2.0.0/review", json={"action": "approve"})
+        removed = await client.post(f"/api/v1/mcps/{LISTING_ID}/versions/2.0.0/review", json={"action": "approve"})
 
-    assert forbidden.status_code == 403
-    assert forbidden.json() == {"detail": "Insufficient permissions"}
-    review_call.assert_not_awaited()
-    security_event.assert_awaited_once()
+    assert removed.status_code == 404

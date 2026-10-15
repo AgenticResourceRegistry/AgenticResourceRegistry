@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for alert evaluation engine, SSRF protection, and webhook delivery."""
@@ -260,6 +261,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=0.25,
@@ -308,6 +314,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=0.05,
@@ -351,6 +362,11 @@ class TestEvaluateAlerts:
             patch(
                 "services.alert_evaluator.async_session",
                 return_value=mock_session_ctx,
+            ),
+            patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
             ),
             patch(
                 "services.alert_evaluator._query_metric",
@@ -454,3 +470,72 @@ class TestAlertRuleUpdateSchema:
         update = AlertRuleUpdate(status="active", webhook_url="https://example.com/hook")
         assert update.status == "active"
         assert update.webhook_url == "https://example.com/hook"
+
+
+class TestAlertRuleCreateValidation:
+    def test_valid_rule_accepted(self):
+        from schemas.alert import AlertRuleCreate
+
+        rule = AlertRuleCreate(name="ok", metric="token_usage", threshold=1.0, condition="below")
+        assert rule.metric == "token_usage"
+        assert rule.target_type == "all"
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"metric": "banana"},
+            {"metric": "error_rate"},
+            {"metric": "latency_p99"},
+            {"condition": "sideways"},
+            {"target_type": "galaxy"},
+        ],
+    )
+    def test_unhandled_values_rejected(self, kwargs):
+        from pydantic import ValidationError
+
+        from schemas.alert import AlertRuleCreate
+
+        fields = {"name": "bad", "metric": "token_usage", "threshold": 1.0, "condition": "above", **kwargs}
+        with pytest.raises(ValidationError):
+            AlertRuleCreate(**fields)
+
+
+class TestAlertCooldown:
+    @pytest.mark.asyncio
+    async def test_recent_trigger_suppresses_refire(self):
+        from datetime import UTC, datetime, timedelta
+
+        from services.alert_evaluator import evaluate_alerts
+
+        rule = MagicMock()
+        rule.id = uuid.uuid4()
+        rule.name = "Token Usage"
+        rule.metric = "token_usage"
+        rule.threshold = 100.0
+        rule.condition = "above"
+        rule.target_type = "all"
+        rule.target_id = ""
+        rule.webhook_url = "https://example.com/webhook"
+        rule.status = "active"
+        rule.last_triggered = datetime.now(UTC) - timedelta(minutes=1)
+
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = [rule]
+        mock_result = MagicMock()
+        mock_result.scalars.return_value = mock_scalars
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.add = MagicMock()
+        mock_db.commit = AsyncMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("services.alert_evaluator.async_session", return_value=mock_session_ctx),
+            patch("services.alert_evaluator._query_metric", new_callable=AsyncMock, return_value=500.0),
+            patch("services.alert_evaluator._deliver_webhook_signed", new_callable=AsyncMock) as mock_deliver,
+        ):
+            await evaluate_alerts({})
+        mock_deliver.assert_not_called()
+        mock_db.add.assert_not_called()

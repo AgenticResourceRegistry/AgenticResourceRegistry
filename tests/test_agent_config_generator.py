@@ -216,7 +216,7 @@ class TestGenerateClaudeCode:
         assert "mcp_setup_commands" in cfg
         assert len(cfg["mcp_setup_commands"]) == 1
         cmd = cfg["mcp_setup_commands"][0]
-        assert cmd[0:4] == ["claude", "mcp", "add", "srv"]
+        assert cmd[0:6] == ["claude", "mcp", "add", "--scope", "local", "srv"]
 
     def test_no_otlp_env_in_config(self):
         agent = _make_agent()
@@ -561,7 +561,82 @@ class TestMcpListingClaudeCodeAdapter:
         assert "my-mcp" in fm["mcpServers"]
         assert cfg["mcp_config"]["my-mcp"]["command"] == "npx"
         assert cfg["mcp_config"]["my-mcp"]["args"] == ["-y", "my-mcp"]
-        assert cfg["mcp_setup_commands"] == [["claude", "mcp", "add", "my-mcp", "--", "npx", "-y", "my-mcp"]]
+        assert cfg["mcp_setup_commands"] == [
+            [
+                "claude",
+                "mcp",
+                "add",
+                "--scope",
+                "local",
+                "my-mcp",
+                "-e",
+                f"OBSERVAL_AGENT_ID={agent.id}",
+                "--",
+                "npx",
+                "-y",
+                "my-mcp",
+            ]
+        ]
+        assert cfg["mcp_reset_commands"] == [["claude", "mcp", "remove", "--scope", "local", "my-mcp"]]
+
+    @staticmethod
+    def _remote_listing(comp_id: uuid.UUID, transport: str) -> MagicMock:
+        listing = MagicMock()
+        listing.name = "linear"
+        listing.id = comp_id
+        listing.url = "https://mcp.linear.app/mcp"
+        listing.transport = transport
+        listing.command = None
+        listing.args = None
+        listing.framework = None
+        listing.docker_image = None
+        listing.auto_approve = None
+        listing.environment_variables = []
+        return listing
+
+    @pytest.mark.parametrize(
+        ("transport", "flag", "scope", "claude_scope"),
+        [
+            ("streamable-http", "http", "user", "user"),
+            ("sse", "sse", "project", "local"),
+        ],
+    )
+    def test_registers_remote_servers(self, transport: str, flag: str, scope: str, claude_scope: str):
+        comp_id = uuid.uuid4()
+        agent = _make_agent(components=[_make_component("mcp", comp_id)])
+        cfg = generate_agent_config(
+            agent,
+            "claude-code",
+            mcp_listings={comp_id: self._remote_listing(comp_id, transport)},
+            header_values={str(comp_id): {"Authorization": "Bearer tok", "X-Team": "eng"}},
+            options={"scope": scope},
+        )
+
+        fm = yaml.safe_load(cfg["agent_profile"]["content"].split("---", 2)[1])
+        assert "linear" in fm["mcpServers"]
+        # Headers follow the URL: -H takes several values and would swallow the name.
+        assert [
+            "claude",
+            "mcp",
+            "add",
+            "--transport",
+            flag,
+            "--scope",
+            claude_scope,
+            "linear",
+            "https://mcp.linear.app/mcp",
+            "-H",
+            "Authorization: Bearer tok",
+            "-H",
+            "X-Team: eng",
+        ] in cfg["mcp_setup_commands"]
+        assert ["claude", "mcp", "remove", "--scope", claude_scope, "linear"] in cfg["mcp_reset_commands"]
+
+    def test_user_scope_registers_stdio_servers_for_every_project(self):
+        ext_mcps = [{"name": "srv", "command": "npx", "args": ["-y", "srv"]}]
+        agent = _make_agent(external_mcps=ext_mcps)
+        cfg = generate_agent_config(agent, "claude-code", options={"scope": "user"})
+        assert cfg["mcp_setup_commands"][0][:6] == ["claude", "mcp", "add", "--scope", "user", "srv"]
 
 
 # ═══════════════════════════════════════════════════════════════════

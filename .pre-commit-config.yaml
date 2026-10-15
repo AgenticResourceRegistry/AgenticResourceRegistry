@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-FileCopyrightText: 2026 ravichopra0107 <shivamchopra1234567890@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 repos:
@@ -21,7 +22,9 @@ repos:
       - id: trailing-whitespace
         exclude: ^observal-server/vendor/  # vendored upstream files stay byte-identical
       - id: end-of-file-fixer
-        exclude: ^observal-server/vendor/
+        # Keep the pre-generated fake-key fixture byte-identical; staging its
+        # entire contents just for an EOF newline triggers the secrets guard.
+        exclude: ^(observal-server/vendor/|tests/fixtures/fake_api_keys\.json$)
       - id: check-yaml
         exclude: ^infra/helm/.*/templates/.*
       - id: check-toml

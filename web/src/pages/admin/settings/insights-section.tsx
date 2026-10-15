@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -296,10 +297,10 @@ export function InsightsSection({ entries, onSave, onRevoke, refetch }: Insights
 		<section className="mb-6 mt-2">
 			{/* Header */}
 			<div className="flex items-center justify-between mb-1">
-				<h3 className={cn("text-sm font-semibold uppercase tracking-wider text-foreground/80 flex items-center gap-1.5", helpCtx.helpActive && "cursor-help ring-2 ring-primary/60 ring-offset-2 ring-offset-background rounded-sm")} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && helpCtx.openHelp({ sectionTitle: "Agent Insights" })) event.preventDefault(); }}>
+				<h3 className={cn("text-sm font-semibold uppercase tracking-wider text-foreground/80 flex items-center gap-1.5", helpCtx.helpActive && "cursor-help ring-2 ring-primary/60 ring-offset-2 ring-offset-background rounded-sm")} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && helpCtx.openHelp({ sectionTitle: "Agent File Insights" })) event.preventDefault(); }}>
 					<Activity className="h-3.5 w-3.5" />
-					Agent Insights
-					<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); helpCtx.openHelp({ sectionTitle: "Agent Insights" }); }} aria-label="Open Agent Insights documentation">
+					Agent File Insights
+					<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); helpCtx.openHelp({ sectionTitle: "Agent File Insights" }); }} aria-label="Open Agent File Insights documentation">
 						<HelpCircle className="h-3.5 w-3.5" />
 					</button>
 				</h3>

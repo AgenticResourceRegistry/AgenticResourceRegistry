@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """The events that produce inbox items.
@@ -61,6 +62,7 @@ async def on_review_requested(
     subject_type: str,
     actor_id: uuid.UUID | None,
     version: str | None = None,
+    global_only: bool = False,
 ) -> int:
     """Something entered the review queue: tell everyone who can clear it.
 
@@ -68,7 +70,7 @@ async def on_review_requested(
     auto-approves has nothing waiting on a reviewer.
     """
     subject = subject_from_entity(entity, subject_type, version=version)
-    users = await recipients.reviewers_for(db, entity)
+    users = await (recipients.global_reviewers(db) if global_only else recipients.reviewers_for(db, entity))
     items = await deliver(
         db,
         kind=InboxKind.review_requested,
@@ -78,6 +80,26 @@ async def on_review_requested(
     )
     optic.debug("inbox: review_requested for {} {} -> {} item(s)", subject_type, subject.id, len(items))
     return len(items)
+
+
+async def on_review_withdrawn(
+    db: AsyncSession,
+    entity,
+    *,
+    subject_type: str,
+    actor_id: uuid.UUID,
+    version: str,
+) -> int:
+    """Close every reviewer's copy of a withdrawn version's open request."""
+    subject = subject_from_entity(entity, subject_type, version=version)
+    request_key = spec_for(InboxKind.review_requested).dedupe(subject, {})[:255]
+    return await resolve_matching(
+        db,
+        kind=InboxKind.review_requested,
+        dedupe_key=request_key,
+        detail="Review request withdrawn by author",
+        actor_id=actor_id,
+    )
 
 
 async def on_publish(

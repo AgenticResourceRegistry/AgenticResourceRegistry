@@ -31,6 +31,7 @@ import {
   Check,
 } from "lucide-react";
 import { toast } from "sonner";
+import { reviewToast } from "@/lib/review-toast";
 import { useHelp } from "@/components/wiki/help-context";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -67,6 +68,7 @@ import { SubmitComponentDialog } from "@/components/registry/submit-component-di
 import { ValidationPanel } from "@/components/builder/validation-panel";
 import { PreviewPanel } from "@/components/builder/preview-panel";
 import { ModelPicker } from "@/components/builder/model-picker";
+import { ObservalSkillBanner } from "@/components/builder/observal-skill-banner";
 import { COMPONENT_TYPES, REVERSE_TYPE_MAP, TYPE_MAP } from "@/components/registry/agent-component-constants";
 import { ComponentPicker } from "@/components/registry/component-picker";
 import { VersionBumpDialog } from "@/components/registry/version-bump-dialog";
@@ -461,12 +463,12 @@ function AgentBuilderInner() {
 
   /* ── Draft save ── */
   async function handleSaveDraft() {
-    if (!name.trim()) { toast.error("Agent name is required"); return; }
-    if (!isValidAgentName(name)) { toast.error(`Invalid agent name. ${AGENT_NAME_ERROR}`); return; }
+    if (!name.trim()) { toast.error("Agent File name is required"); return; }
+    if (!isValidAgentName(name)) { toast.error(`Invalid Agent File name. ${AGENT_NAME_ERROR}`); return; }
     const hasPromptComponent = (selectedComponents.prompts ?? []).length > 0;
     if (!systemPrompt.trim() && !hasPromptComponent) {
-      setPromptError("An agent prompt is required.");
-      toast.error("An agent prompt is required.");
+      setPromptError("An Agent File prompt is required.");
+      toast.error("An Agent File prompt is required.");
       return;
     }
     const criteriaError = validateSuccessCriteria(successCriteria);
@@ -492,14 +494,14 @@ function AgentBuilderInner() {
 
   /* ── Publish ── */
   async function handlePublish() {
-    if (!name.trim()) { toast.error("Agent name is required"); return; }
+    if (!name.trim()) { toast.error("Agent File name is required"); return; }
     const hasPromptComponent = (selectedComponents.prompts ?? []).length > 0;
     if (!systemPrompt.trim() && !hasPromptComponent) {
-      setPromptError("An agent prompt is required.");
-      toast.error("An agent prompt is required.");
+      setPromptError("An Agent File prompt is required.");
+      toast.error("An Agent File prompt is required.");
       return;
     }
-    if (!isValidAgentName(name)) { toast.error(`Invalid agent name. ${AGENT_NAME_ERROR}`); return; }
+    if (!isValidAgentName(name)) { toast.error(`Invalid Agent File name. ${AGENT_NAME_ERROR}`); return; }
     const criteriaError = validateSuccessCriteria(successCriteria);
     if (criteriaError) { toast.error(criteriaError); return; }
 
@@ -522,19 +524,16 @@ function AgentBuilderInner() {
       const body = buildRequestBody();
       if (draftId) {
         await updateDraft.mutateAsync({ id: draftId, body });
-        const agentStatus = existingAgent?.status;
-        if (agentStatus && agentStatus !== "pending") {
-          await registry.submitDraft(draftId);
-        }
-        toast.success(!agentStatus || agentStatus === "pending" ? "Changes saved." : "Agent resubmitted for review.");
+        const review = await registry.submitDraft(draftId);
+        reviewToast("Agent File revision submitted for review", review);
         router.navigate({ to: "/agents/$agentId", params: { agentId: draftId } });
       } else {
         const created = await registry.create("agents", body);
-        toast.success("Agent submitted for review. An admin must approve it before it becomes visible.");
+        reviewToast("Agent File submitted for review", created);
         router.navigate({ to: "/agents/$agentId", params: { agentId: created.id } });
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to publish agent";
+      const msg = e instanceof Error ? e.message : "Failed to publish Agent File";
       toast.error(msg);
     } finally {
       setPublishing(false);
@@ -550,12 +549,13 @@ function AgentBuilderInner() {
     try {
       const body = buildRequestBody(selectedVersion);
       await registry.updateDraft(editId, body);
+      const review = await registry.submitDraft(editId);
       setVersion(selectedVersion);
       setShowVersionDialog(false);
-      toast.success("Agent updated and submitted for review.");
+      reviewToast("Agent File revision submitted for review", review);
       router.navigate({ to: "/agents/$agentId", params: { agentId: editId } });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to update agent";
+      const msg = e instanceof Error ? e.message : "Failed to update Agent File";
       toast.error(msg);
     } finally {
       setPublishing(false);
@@ -587,10 +587,10 @@ function AgentBuilderInner() {
   return (
     <>
       <PageHeader
-        title={isEditMode ? "Edit Agent" : "Agent Builder"}
+        title={isEditMode ? "Edit Agent File" : "Agent File Builder"}
         breadcrumbs={[
           { label: "Registry", href: "/" },
-          { label: "Agents", href: "/agents" },
+          { label: "Agentic Resources", href: "/resources/agents" },
           { label: isEditMode ? "Edit" : "Builder" },
         ]}
         actionButtonsRight={
@@ -598,7 +598,7 @@ function AgentBuilderInner() {
             type="button"
             className="text-muted-foreground hover:text-primary transition-colors"
             onClick={() => helpCtx.openHelp({ pageKey: "agents.builder" })}
-            title="Agent builder documentation"
+            title="Agent File builder documentation"
           >
             <HelpCircle className="h-4 w-4" />
           </button>
@@ -606,6 +606,7 @@ function AgentBuilderInner() {
       />
 
       <div className="page-body w-full mx-auto">
+        <ObservalSkillBanner />
         {/* Restore draft banner */}
         {showRestoreBanner && (
           <div className="mb-4 flex items-center gap-3 rounded-lg border border-info/20 bg-info/5 px-4 py-3">
@@ -730,7 +731,7 @@ function AgentBuilderInner() {
             const targetBody = teamId && !body.team_id ? { ...body, team_id: teamId, visibility } : body;
             setPendingComponents((prev) => [...prev, { id: tempId, type: createDialogType!, name: cname, body: targetBody }]);
             setCreateDialogType(null);
-            toast.success(`${cname} added, will be submitted with the agent.`);
+            toast.success(`${cname} added, will be submitted with the Agent File.`);
           }}
           onSaveDraft={(body) => {
             const tempId = Math.random().toString(36).slice(2);
@@ -738,7 +739,7 @@ function AgentBuilderInner() {
             const targetBody = teamId && !body.team_id ? { ...body, team_id: teamId, visibility } : body;
             setPendingComponents((prev) => [...prev, { id: tempId, type: createDialogType!, name: cname, body: targetBody }]);
             setCreateDialogType(null);
-            toast.success(`${cname} added, will be submitted with the agent.`);
+            toast.success(`${cname} added, will be submitted with the Agent File.`);
           }}
           isSubmitting={false}
           isSavingDraft={false}
@@ -783,7 +784,7 @@ function IdentityStage(props: {
     <section className="rounded-xl bg-card p-5 shadow-sm">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium">Give the agent a stable identity</h2>
+          <h2 className="text-sm font-medium">Give the Agent File a stable identity</h2>
           <p className="mt-0.5 text-2xs text-muted-foreground">
             This becomes the install name developers use from the CLI.
           </p>
@@ -798,7 +799,7 @@ function IdentityStage(props: {
 
       <div className="grid gap-3.5 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-2xs font-medium">Agent name</Label>
+          <Label className="text-2xs font-medium">Agent File name</Label>
           <Input
             className="font-mono"
             value={props.name}
@@ -882,7 +883,7 @@ function BehaviorStage(props: {
       <section className="rounded-xl bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-medium">Define how the agent should behave</h2>
+            <h2 className="text-sm font-medium">Define how the Agent File should behave</h2>
             <p className="mt-0.5 text-2xs text-muted-foreground">
               Keep the operating instructions specific, testable, and clear about when to stop.
             </p>
@@ -896,11 +897,11 @@ function BehaviorStage(props: {
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-2xs font-medium">Agent prompt</Label>
+          <Label className="text-2xs font-medium">Agent File prompt</Label>
           <Textarea
             value={props.systemPrompt}
             onChange={(e) => { props.setSystemPrompt(e.target.value); if (e.target.value.trim()) props.setPromptError(""); }}
-            placeholder="You are a migration planning agent for production systems…"
+            placeholder="You are a migration planning Agent File for production systems…"
             rows={8}
             className={cn("min-h-[210px] resize-y font-mono text-2xs", props.promptError && "border-destructive")}
           />
@@ -958,7 +959,7 @@ function ComponentsStage(props: {
         <div>
           <h2 className="text-sm font-medium">Choose building blocks</h2>
           <p className="mt-0.5 text-2xs text-muted-foreground">
-            Add only what this agent needs. You can reorder selected components before review.
+            Add only what this Agent File needs. You can reorder selected components before review.
           </p>
         </div>
         <button
@@ -1061,7 +1062,7 @@ function ReviewStage(props: {
     {
       label: "Components",
       detail: props.componentsValid
-        ? `${props.mcpCount} MCP servers · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""} · validation passed`
+        ? `${props.mcpCount} MCP Clients · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""} · validation passed`
         : props.totalComponents > 0
           ? "Run component validation before submission."
           : "Add at least one component.",
@@ -1070,7 +1071,7 @@ function ReviewStage(props: {
     },
     {
       label: "Ownership",
-      detail: "You will be recorded as this agent's point of contact.",
+      detail: "You will be recorded as this Agent File's point of contact.",
       ok: true,
       step: "review" as StepId,
     },
@@ -1181,7 +1182,7 @@ function SummaryPanel(props: {
       <section className="rounded-xl bg-card p-5 shadow-sm">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-medium">Agent at a glance</h3>
+            <h3 className="text-sm font-medium">Agent File at a glance</h3>
             <p className="mt-0.5 text-2xs text-muted-foreground">What reviewers will see</p>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-raised px-2.5 py-1 text-2xs font-medium text-warning">
@@ -1209,7 +1210,7 @@ function SummaryPanel(props: {
           <SettingRow label="Publish to" sub="Personal namespace" value={`${props.namespace}/`} />
           <SettingRow label="Visibility" sub="Available after approval" value={props.visibility === "team" ? "Team only" : "Public"} />
           <SettingRow label="Model" sub="Default across harnesses" value={props.modelName || "Harness default"} />
-          <SettingRow label="Components" sub={`${props.mcpCount} MCP servers · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""}`} value={String(props.totalComponents)} />
+          <SettingRow label="Components" sub={`${props.mcpCount} MCP Clients · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""}`} value={String(props.totalComponents)} />
         </div>
       </section>
 
@@ -1319,7 +1320,7 @@ function BuilderFooter({
           </Button>
           <Button size="sm" onClick={onPublish} disabled={publishing}>
             {publishing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
-            {isEditMode ? "Update Agent" : existingStatus === "pending" ? "Save Changes" : "Submit for review"}
+            {isEditMode || existingStatus === "pending" ? "Submit revision" : "Submit for review"}
           </Button>
         </div>
       )}

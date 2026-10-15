@@ -1,5 +1,6 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Discovery and installation
@@ -81,6 +82,11 @@ observal registry mcp install NAMESPACE/SLUG --harness cursor --version 2.1.0 --
 observal registry mcp install NAMESPACE/SLUG --harness pi --managed --output json
 observal registry skill install NAMESPACE/SLUG --harness claude-code --scope project --output json
 observal registry skill install NAMESPACE/SLUG --harness kiro --scope user --version 1.2.0 --output json
+observal registry skill install NAMESPACE/SLUG --harness kiro --scope user --version 1.3.0 --check-upgrade --output json
+observal registry skill install NAMESPACE/SLUG --harness kiro --scope user --version 1.3.0 --upgrade --output json
+observal registry skill backups list --output json
+observal registry skill backups restore BACKUP_ID --output json
+observal registry skill backups prune BACKUP_ID --output json
 observal registry hook install NAMESPACE/SLUG --harness kiro --output json
 observal registry hook install NAMESPACE/SLUG --harness claude-code --platform darwin --dir . --output json
 observal registry hook install NAMESPACE/SLUG --harness claude-code --version 1.0.0 --dir . --output json
@@ -92,7 +98,9 @@ Use raw output only when the user explicitly asks for a config snippet or raw re
 observal registry mcp install NAMESPACE/SLUG --harness claude-code --raw
 ```
 
-Without `--managed`, MCP install still prints a snippet and writes nothing. `--managed` is for user-scope installs on Pi and Claude Code. On Pi it creates and tracks an Observal-owned `~/.pi/agent/mcp.json` (credentials you supply stay in that private file), or updates another entry in that already-owned file. On Claude Code it adds one user entry with `claude mcp add` and tracks it; it accepts no credentials. It refuses existing pasted configs, an existing entry with the same name, setup warnings, renamed keys and foreign edits. After `observal unfreeze`, an unpinned managed entry can be updated at startup (Pi carries saved credentials forward unchanged and refuses new or changed ones); reload Pi, or start a new Claude Code session, to use it. Do not infer ownership for pasted snippets. Never combine raw and JSON modes. JSON snippet generation requires `--no-prompt`; missing required values return a nonzero `error.result.needs_input` response before install generation. Raw mode is the only template workflow that may intentionally contain placeholders. Never print supplied environment or header values.
+Without `--managed`, MCP install still prints a snippet and writes nothing. `--managed` is for user-scope installs on Pi and Claude Code. On Pi it creates and tracks an Observal-owned `~/.pi/agent/mcp.json` (credentials you supply stay in that private file), or updates another entry in that already-owned file. On Claude Code it adds one user entry with `claude mcp add` and tracks it; it accepts no credentials. It refuses existing pasted configs, an existing entry with the same name, setup warnings, renamed keys and foreign edits. After `observal unfreeze`, an unpinned managed entry can be updated at startup (Pi carries saved credentials forward unchanged and refuses new or changed ones); reload Pi, or start a new Claude Code session, to use it. Do not infer ownership for pasted snippets.
+
+Complete registry folders have managed receipts; upgrades require both exact reviewed provenance and an unchanged complete installed tree. Preview with `--check-upgrade` (it lists `added`, `removed`, `modified` and `mode_changed` paths), then opt in with `--upgrade`. A first install needs no backup root; replacing a folder does, so use `--backup-root DIR` only for a private, Git-ignored, same-filesystem root outside harness skill discovery. Backups are retained until explicitly pruned; restore refuses local modifications. Older unreceipted folders need an unambiguous exact-version lock entry and matching reviewed folder bytes; untracked folders cannot be silently adopted. Git and resource-less direct skills retain their existing install semantics. Never combine raw and JSON modes. JSON MCP installation requires `--no-prompt`; missing required values return a nonzero `error.result.needs_input` response before install generation. Raw mode is the only template workflow that may intentionally contain placeholders. Never print supplied environment or header values.
 
 ## Verification
 

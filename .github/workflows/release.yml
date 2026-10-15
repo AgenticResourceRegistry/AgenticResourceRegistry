@@ -2,17 +2,13 @@
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-# Curated release pipeline for Observal.
-#
-# A release PR is based on a selected, contiguous main-branch cutoff. After the
-# PR is squash/rebase merged, this workflow builds and publishes its exact PR
-# head so later commits already on main cannot leak into the release.
+# Publish exact, validated commits from protected release/X.Y branches.
 
 name: Release
 
 on:
   push:
-    branches: [main]
+    branches: ['release/**']
   workflow_dispatch:
     inputs:
       target:
@@ -23,6 +19,7 @@ on:
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -45,140 +42,49 @@ jobs:
       target: ${{ steps.target.outputs.target }}
       is_release: ${{ steps.target.outputs.is_release }}
     steps:
-      - name: Generate release app token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-contents: read
-
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
 
       - name: Resolve release target
         id: target
         env:
-          GH_TOKEN: ${{ github.token }}
           MANUAL_TARGET: ${{ inputs.target }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF" =~ ^refs/heads/release/[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Releases must run on release/X.Y, never main or a tag"
+            exit 1
+          fi
           if [ -n "$MANUAL_TARGET" ]; then
-            git fetch --no-tags origin "$MANUAL_TARGET" || true
-            TARGET=$(git rev-parse "$MANUAL_TARGET^{commit}")
+            [[ "$MANUAL_TARGET" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            TARGET="$MANUAL_TARGET"
           else
-            if [[ "$BEFORE" =~ ^0+$ ]]; then
-              BEFORE=$(git rev-parse "$AFTER^")
-            fi
-            TARGET=$(python3 tools/release.py \
-              --resolve-push \
-              --before "$BEFORE" \
-              --after "$AFTER" \
-              --repo "$GITHUB_REPOSITORY")
-            if [ -z "$TARGET" ]; then
-              echo "is_release=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+            TARGET=$(python3 tools/release.py --resolve-push \
+              --before "$BEFORE" --after "$AFTER" --branch "$GITHUB_REF_NAME")
+          fi
+          if [ -z "$TARGET" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "is_release=true" >> "$GITHUB_OUTPUT"
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release manifest and cutoff
+      - name: Validate release branch and manifest
         id: version
         if: steps.target.outputs.is_release == 'true'
         env:
           TARGET: ${{ steps.target.outputs.target }}
         run: |
-          git checkout --detach "$TARGET"
-          python3 <<'PY'
-          import json
-          import os
-          import pathlib
-          import re
-          import subprocess
-          import tomllib
-
-          target = os.environ["TARGET"]
-          manifest = tomllib.loads(pathlib.Path(".release.toml").read_text())
-          version = manifest["version"]
-          subject = subprocess.check_output(["git", "show", "-s", "--format=%s", target], text=True).strip()
-          if subject != f"chore(release): v{version}":
-              raise SystemExit(f"invalid release commit subject: {subject}")
-          channel = manifest["channel"]
-          cutoff = manifest["cutoff"]
-          previous_tag = manifest["previous_tag"]
-
-          if channel not in {"stable", "rc", "beta", "alpha"}:
-              raise SystemExit(f"invalid release channel: {channel}")
-          expected = r"\d+\.\d+\.\d+" if channel == "stable" else rf"\d+\.\d+\.\d+-{channel}\.\d+"
-          if not re.fullmatch(expected, version):
-              raise SystemExit(f"version {version} does not match channel {channel}")
-
-          parents = subprocess.check_output(["git", "show", "-s", "--format=%P", target], text=True).split()
-          if parents != [cutoff]:
-              raise SystemExit("release commit must have the selected cutoff as its only parent")
-          previous_manifest = subprocess.run(
-              ["git", "show", f"{previous_tag}:.release.toml"], text=True, capture_output=True
-          )
-          if previous_manifest.returncode == 0:
-              previous_cutoff = tomllib.loads(previous_manifest.stdout)["cutoff"]
-          else:
-              previous_cutoff = previous_tag
-          subprocess.run(["git", "merge-base", "--is-ancestor", previous_cutoff, cutoff], check=True)
-          subprocess.run(["git", "merge-base", "--is-ancestor", cutoff, "origin/main"], check=True)
-
-          allowed = {
-              "pyproject.toml", "observal-server/pyproject.toml", "web/package.json",
-              "packages/pi-extension/package.json", "uv.lock", "observal-server/uv.lock",
-              "CHANGELOG.md", ".release.toml", ".github/release-notes.md",
-          }
-          changed = set(subprocess.check_output(
-              ["git", "diff", "--name-only", f"{cutoff}..{target}"], text=True
-          ).splitlines())
-          unexpected = changed - allowed
-          if unexpected:
-              raise SystemExit(f"release commit changed forbidden files: {sorted(unexpected)}")
-
-          versions = {
-              tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"],
-              tomllib.loads(pathlib.Path("observal-server/pyproject.toml").read_text())["project"]["version"],
-              json.loads(pathlib.Path("web/package.json").read_text())["version"],
-              json.loads(pathlib.Path("packages/pi-extension/package.json").read_text())["version"],
-          }
-          if versions != {version}:
-              raise SystemExit(f"release versions disagree: {sorted(versions)}")
-          if f"## [{version}]" not in pathlib.Path("CHANGELOG.md").read_text():
-              raise SystemExit("release version is missing from CHANGELOG.md")
-          notes = pathlib.Path(".github/release-notes.md").read_text()
-          if f"{previous_tag}...v{version}" not in notes:
-              raise SystemExit("release notes are incomplete")
-
-          previous = previous_tag.removeprefix("v").split(".")
-          current = version.split("-")[0].split(".")
-          bump = "major" if current[0] != previous[0] else "feature" if current[1] != previous[1] else "patch"
-          python_version = version
-          if channel != "stable":
-              base, prerelease = version.split("-", 1)
-              name, serial = prerelease.split(".")
-              python_version = f"{base}{ {'alpha': 'a', 'beta': 'b', 'rc': 'rc'}[name] }{serial}"
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(
-                  f"version={version}\npython_version={python_version}\nchannel={channel}\nbump_type={bump}\n"
-              )
-          PY
-
-          VERSION=$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path(".release.toml").read_text())["version"])')
-          TAG="v$VERSION"
-          if git rev-parse "$TAG^{commit}" >/dev/null 2>&1; then
-            [ "$(git rev-parse "$TAG^{commit}")" = "$TARGET" ] || {
-              echo "::error::$TAG already points to a different commit"
-              exit 1
-            }
-          fi
+          python3 tools/release.py --validate-target "$TARGET" \
+            --branch "$GITHUB_REF_NAME" --upstream origin >> "$GITHUB_OUTPUT"
 
   # ── Job 1: Build CLI binaries (5-platform matrix) ──────────
   cli-binaries:
@@ -314,11 +220,18 @@ jobs:
     if: needs.tag.result == 'success'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     strategy:
       matrix:
         image: [api, web]
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight.outputs.target }}
+          persist-credentials: false
+
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -339,11 +252,10 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
           CHANNEL: ${{ needs.preflight.outputs.channel }}
         run: |
+          DIST_TAG=$(python3 -c 'import os; from tools.release import distribution_tag, version_tags; print(distribution_tag(os.environ["VERSION"], os.environ["CHANNEL"], version_tags()))')
           IMAGE="${{ env.IMAGE_PREFIX }}-${{ matrix.image }}"
           TAGS=(-t "$IMAGE:$VERSION")
-          if [ "$CHANNEL" = "stable" ]; then
-            TAGS+=(-t "$IMAGE:latest")
-          fi
+          TAGS+=(-t "$IMAGE:$DIST_TAG")
           docker buildx imagetools create \
             "${TAGS[@]}" \
             $(printf "$IMAGE@sha256:%s " $(ls /tmp/digests/))
@@ -454,7 +366,7 @@ jobs:
           verify_tag() {
             for attempt in {1..5}; do
               if gitsign verify-tag "$TAG" \
-                --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main" \
+                --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
                 --certificate-oidc-issuer "https://token.actions.githubusercontent.com"; then
                 return 0
               fi
@@ -472,14 +384,7 @@ jobs:
               echo "$TAG already points to the validated release commit and has a valid Sigstore signature"
               exit 0
             fi
-            git fetch origin main
-            POLICY_COMMIT=$(git log origin/main --diff-filter=A --format=%H -- docs/security/release-verification.md | tail -1)
-            if [ -n "$POLICY_COMMIT" ] && [ "$TARGET" != "$POLICY_COMMIT" ] && \
-              git merge-base --is-ancestor "$TARGET" "$POLICY_COMMIT"; then
-              echo "$TAG predates signed-tag enforcement; leaving the historical tag unchanged"
-              exit 0
-            fi
-            echo "::error::$TAG is unsigned but does not predate signed-tag enforcement"
+            echo "::error::$TAG must have a valid signature; existing tags cannot be replaced"
             exit 1
           fi
           git tag -s "$TAG" -m "Release $TAG" "$TARGET"
@@ -518,8 +423,11 @@ jobs:
           if [ "$STATUS" = "200" ]; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
             echo "observal-cli $VERSION is already on PyPI, skipping publish"
-          else
+          elif [ "$STATUS" = "404" ]; then
             echo "already_published=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::PyPI version lookup failed: HTTP $STATUS"
+            exit 1
           fi
 
       - name: Publish to PyPI
@@ -539,6 +447,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           ref: ${{ needs.preflight.outputs.target }}
           persist-credentials: false
 
@@ -559,22 +468,25 @@ jobs:
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
-          if npm view "observal-pi@$VERSION" version 2>/dev/null | grep -qx "$VERSION"; then
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/observal-pi/$VERSION")
+          if [ "$STATUS" = "200" ]; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
-            echo "observal-pi $VERSION is already on npm, skipping publish"
-          else
+          elif [ "$STATUS" = "404" ]; then
             echo "already_published=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::npm version lookup failed: HTTP $STATUS"
+            exit 1
           fi
 
       - name: Publish observal-pi
         if: steps.published.outputs.already_published != 'true'
         env:
           CHANNEL: ${{ needs.preflight.outputs.channel }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
+          DIST_TAG=$(python3 -c 'import os; from tools.release import distribution_tag, version_tags; print(distribution_tag(os.environ["VERSION"], os.environ["CHANNEL"], version_tags()))')
           cd packages/pi-extension
-          TAG="latest"
-          [ "$CHANNEL" = "stable" ] || TAG="$CHANNEL"
-          npm publish --access public --tag "$TAG"
+          npm publish --access public --tag "$DIST_TAG"
 
   # ── Job 6: Helm chart to GHCR (after approval) ────────────
   helm-chart:
@@ -696,15 +608,14 @@ jobs:
           # Verify every attested artifact against the bundle. gh attestation verify
           # validates the Sigstore certificate chain, the signer workflow identity,
           # and the source repository/commit recorded in the provenance.
-          # The signer-workflow identity uses refs/heads/main because push-triggered
-          # runs record that ref in the signing certificate, not the commit SHA.
+          # Signatures bind to this exact release branch, not main or a wildcard.
           fail=0
           for f in release/observal-*; do
             echo "Verifying $f"
             gh attestation verify "$f" \
               --repo "$GITHUB_REPOSITORY" \
               --bundle release/build-provenance.intoto.jsonl \
-              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF" \
               || { echo "::error::Provenance verification failed for $f"; fail=1; }
           done
           [ "$fail" -eq 0 ] || exit 1
@@ -718,9 +629,8 @@ jobs:
         run: |
           VERSION="v$RELEASE_VERSION"
           FLAGS=(--title "Observal $VERSION" --notes-file .github/release-notes.md)
-          if [ "$CHANNEL" = "stable" ]; then
-            FLAGS+=(--latest)
-          else
+          FLAGS+=(--latest=false)
+          if [ "$CHANNEL" != "stable" ]; then
             FLAGS+=(--prerelease)
           fi
           if gh release view "$VERSION" >/dev/null 2>&1; then
@@ -747,7 +657,10 @@ jobs:
             echo "::error::Expected $EXPECTED release assets, found $ACTUAL"
             exit 1
           }
-          gh release edit "$VERSION" --draft=false
+          DRAFT=$(gh release view "$VERSION" --json isDraft --jq '.isDraft')
+          if [ "$DRAFT" = true ]; then
+            gh release edit "$VERSION" --draft=false --latest=false
+          fi
 
   verify:
     name: Verify published release
@@ -789,6 +702,11 @@ jobs:
             return 1
           }
           gh release view "v$VERSION" --repo Observal/Observal --json isDraft --jq '.isDraft' | grep -qx false
+          mkdir downloaded
+          gh release download "v$VERSION" --repo Observal/Observal --dir downloaded
+          (cd downloaded && sha256sum --check checksums.txt)
+          chmod +x downloaded/observal-linux-x64
+          ./downloaded/observal-linux-x64 --version | grep -F "$PYTHON_VERSION"
           retry curl --fail --silent --show-error "https://pypi.org/pypi/observal-cli/$PYTHON_VERSION/json" -o /dev/null
           retry sh -c "npm view 'observal-pi@$VERSION' version | grep -qx '$VERSION'"
           echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
@@ -796,3 +714,42 @@ jobs:
           retry docker buildx imagetools inspect "${{ env.IMAGE_PREFIX }}-web:$VERSION"
           retry helm pull oci://ghcr.io/observal/charts/observal --version "$VERSION" --destination /tmp
           retry sh -c "uvx --refresh --from 'observal-cli==$PYTHON_VERSION' observal --version | grep -F '$PYTHON_VERSION'"
+
+  promote:
+    name: Promote verified stable release
+    needs: [preflight, verify]
+    if: needs.preflight.outputs.channel == 'stable' && needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      promoted: ${{ steps.promote.outputs.promoted }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight.outputs.target }}
+          persist-credentials: false
+      - name: Mark newest verified stable as latest
+        id: promote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          # Failed-job reruns retain preflight outputs. Recheck current tags here.
+          DIST_TAG=$(python3 -c 'import os; from tools.release import distribution_tag, version_tags; print(distribution_tag(os.environ["VERSION"], "stable", version_tags()))')
+          if [ "$DIST_TAG" != latest ]; then
+            echo "promoted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --latest
+          echo "promoted=true" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: [preflight, promote]
+    if: needs.promote.outputs.promoted == 'true'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      target: ${{ needs.preflight.outputs.target }}
+      version: ${{ needs.preflight.outputs.version }}
+    secrets: inherit

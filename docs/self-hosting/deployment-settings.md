@@ -1,5 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 SPDX-License-Identifier: Apache-2.0
 -->
 
@@ -82,3 +83,14 @@ Origins allowed to make cross-origin browser requests to the API.
 | `*` | Allow all origins (not recommended for production) |
 
 **When to set:** When the frontend URL differs from the API URL (which is almost always in production). Typically set to match your Frontend URL value.
+
+## Leaderboard {#leaderboard}
+
+Show or hide the Leaderboard. Toggle it from **Settings > Interface**. The Leaderboard is deprecated and will be removed in a future release.
+
+**Affects:** The Leaderboard entry in the sidebar and command menu, the "Leaderboard" link on the home page, the `/leaderboard` page, and the `/api/v1/overview/leaderboard` and `/api/v1/overview/component-leaderboard` endpoints. Ranking data is kept either way.
+
+| Value | Effect |
+|-------|--------|
+| `false` (default) | Entry points are hidden, `/leaderboard` redirects to the home page, and both endpoints return 404 |
+| `true` | The Leaderboard is available and shows a deprecation notice |

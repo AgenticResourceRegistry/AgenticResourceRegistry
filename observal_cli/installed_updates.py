@@ -123,6 +123,12 @@ def prepare_entry(entry: object, lockfile_path: str) -> dict:
         "lock_digest": _text(entry.get("lock_digest")),
         "lock_status": _text(entry.get("lock_status")),
         "components": entry.get("components"),
+        # A managed complete-folder receipt (on the item or any agent component)
+        # means only the reviewed --upgrade flow may replace it.
+        "folder_managed": isinstance(entry.get("folder_receipt"), dict)
+        or any(
+            isinstance(c, dict) and isinstance(c.get("folder_receipt"), dict) for c in entry.get("components") or []
+        ),
     }
 
 

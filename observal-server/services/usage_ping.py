@@ -111,12 +111,18 @@ def _reporting_week(value: datetime) -> str:
     return monday.isoformat()
 
 
+def fallback_company_name(installation_id: uuid.UUID) -> str:
+    """Stable placeholder identity for installations that have not named themselves."""
+    return f"unknown-{installation_id.int % 1_000_000:06d}"
+
+
 def _hostname(public_url: str) -> str:
+    # The collector rejects "not-configured" identities, so an unset public URL reports "unknown".
     value = public_url.strip()
     if not value:
-        return "not-configured"
+        return "unknown"
     parsed = urlparse(value if "://" in value else f"//{value}")
-    return (parsed.hostname or "not-configured").lower()
+    return (parsed.hostname or "unknown").lower()
 
 
 def _deployment_type() -> str:
@@ -340,7 +346,10 @@ async def build_usage_ping(db: AsyncSession, *, now: datetime | None = None) -> 
         ping_id=ping_id,
         installation_id=state.installation_id,
         sent_at=sent_at,
-        identity=UsagePingIdentity(company_name=company_name or "not-configured", hostname=_hostname(public_url)),
+        identity=UsagePingIdentity(
+            company_name=company_name or fallback_company_name(state.installation_id),
+            hostname=_hostname(public_url),
+        ),
         instance=UsagePingInstance(version=get_server_version(), deployment_type=_deployment_type()),
         counts=UsagePingCounts(**postgres_counts, **session_counts),
         activity=UsagePingActivity(**activity),
@@ -369,9 +378,7 @@ async def usage_ping_status(db: AsyncSession) -> UsagePingStatus:
         last_success_at=state.last_success_at,
         last_error=state.last_error,
         next_scheduled_at=(
-            _next_delivery_at(frequency, state.last_success_at)
-            if enabled and configured
-            else next_scheduled_at(frequency=frequency)
+            _next_delivery_at(frequency, state.last_success_at) if enabled else next_scheduled_at(frequency=frequency)
         ),
     )
 
@@ -434,13 +441,9 @@ async def send_scheduled_usage_ping(db: AsyncSession, *, now: datetime | None = 
 
 
 async def send_usage_ping(db: AsyncSession) -> str:
-    """Send one usage ping. Disabled or incomplete installations are skipped."""
+    """Send one usage ping. Installations without a company name report a stable placeholder."""
     if not await ds.get_bool("usage_ping.enabled"):
         return "disabled"
-    company_name = (await ds.get("usage_ping.company_name")).strip()
-    public_url = (await ds.get("deployment.public_url")).strip()
-    if not company_name or not public_url:
-        return "not-configured"
 
     payload = await build_usage_ping(db)
     state = await _state(db)

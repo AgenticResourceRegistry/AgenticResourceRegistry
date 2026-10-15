@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Add migration_jobs table for data migration tracking.
@@ -8,7 +9,7 @@ Revises: c680c63ced65
 """
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import ENUM, JSON, UUID
 
 from alembic import op
 
@@ -20,9 +21,11 @@ depends_on = None
 
 def upgrade() -> None:
     # Create PG enum types
-    migration_operation = sa.Enum("export", "import", "validate", name="migration_operation")
-    migration_scope = sa.Enum("postgres", "clickhouse", "both", name="migration_scope")
-    migration_status = sa.Enum("queued", "running", "completed", "failed", name="migration_status")
+    # Explicitly create these enums once below. A generic sa.Enum in
+    # op.create_table attempts to CREATE TYPE again even when it already exists.
+    migration_operation = ENUM("export", "import", "validate", name="migration_operation", create_type=False)
+    migration_scope = ENUM("postgres", "clickhouse", "both", name="migration_scope", create_type=False)
+    migration_status = ENUM("queued", "running", "completed", "failed", name="migration_status", create_type=False)
 
     migration_operation.create(op.get_bind(), checkfirst=True)
     migration_scope.create(op.get_bind(), checkfirst=True)

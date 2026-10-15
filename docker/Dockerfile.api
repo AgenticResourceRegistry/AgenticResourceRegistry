@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # Build stage
@@ -41,7 +42,7 @@ COPY --chown=appuser:appgroup docker/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && \
     /app/.venv/bin/python -m compileall -q -j0 -x '/\.venv/' /app
 
-USER appuser
+USER 1001:1001
 
 EXPOSE 8000
 

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -23,11 +24,12 @@ import {
 } from "@/components/ui/code-editor";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, HelpCircle, Info, Loader2, Plus, X } from "lucide-react";
+import { Check, HelpCircle, Info, Loader2, Plus, X, Upload, FolderUp, File, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { RegistryType } from "@/lib/api";
 import { useTeams, useWhoami } from "@/hooks/use-api";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { parseMcpConfigJson, applyParsedConfig } from "@/lib/mcp-parser";
 import type { EnvVar } from "@/lib/mcp-parser";
 import { useHelp } from "@/components/wiki/help-context";
@@ -126,8 +128,22 @@ const COMPONENT_HELP_DOCS = {
 	hooks: { file: "registry-hook-helper.md", label: "Hook helper" },
 	sandboxes: { file: "registry-sandbox-helper.md", label: "Sandbox helper" },
 	prompts: { file: "cli/prompt.md", label: "Prompt helper" },
-	agents: { file: "core-concepts/README.md", label: "Agent helper" },
+	agents: { file: "core-concepts/README.md", label: "Agent File helper" },
 } as const;
+
+const MAX_SKILL_UPLOAD_BYTES = 2 * 1024 * 1024;
+
+function decodeSkillUpload(bytes: Uint8Array): { content: string; encoding?: "base64" } {
+	try {
+		return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+	} catch {
+		const chunks: string[] = [];
+		for (let offset = 0; offset < bytes.length; offset += 8192) {
+			chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
+		}
+		return { content: btoa(chunks.join("")), encoding: "base64" };
+	}
+}
 
 interface SubmitComponentDialogProps {
 	open: boolean;
@@ -161,6 +177,7 @@ export function SubmitComponentDialog({
 	const { data: whoami } = useWhoami();
 	const { data: teams = [] } = useTeams();
 	const { data: harnessList } = useHarnesses();
+	const { skillFolderDeliveryEnabled, loading: folderConfigLoading, configError: folderConfigError } = useDeploymentConfig();
 	const defaultOwner =
 		(d?.owner as string) ||
 		whoami?.username ||
@@ -169,7 +186,10 @@ export function SubmitComponentDialog({
 
 	// ── Common ──────────────────────────────────────────────
 	const [name, setName] = useState((d?.name as string) ?? "");
-	const [version, setVersion] = useState((d?.version as string) ?? "0.1.0");
+	const [version, setVersion] = useState((d?.version as string) ?? (type === "skills" ? "1.0.0" : "0.1.0"));
+	useEffect(() => {
+		if (!open && !editItem) setVersion(type === "skills" ? "1.0.0" : "0.1.0");
+	}, [type, open, editItem]);
 	const [description, setDescription] = useState(
 		(d?.description as string) ?? "",
 	);
@@ -241,7 +261,107 @@ export function SubmitComponentDialog({
 	const [skillScriptFilename, setSkillScriptFilename] = useState(
 		(d?.script_filename as string) ?? "",
 	);
-	const [skillMode, setSkillMode] = useState<"git" | "paste">("git");
+	const isFolderVersion = type === "skills" && typeof d?.folder_version_id === "string";
+	const [skillMode, setSkillMode] = useState<"git" | "paste" | "upload">(
+		isFolderVersion ? "upload" : d?.delivery_mode === "registry_direct" ? "paste" : "git",
+	);
+	// Folder mode: extra files beyond SKILL.md
+	const [skillExtraFiles, setSkillExtraFiles] = useState<Array<{ path: string; content: string; executable?: boolean; encoding?: "base64" }>>(
+		Array.isArray(d?.extra_files) ? d.extra_files as Array<{ path: string; content: string; executable?: boolean; encoding?: "base64" }> : [],
+	);
+	const [pendingSkillUploads, setPendingSkillUploads] = useState(0);
+	const skillUploadGeneration = useRef(0);
+	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+
+	async function handleSkillFiles(files: FileList | null, folder: boolean) {
+		const selected = Array.from(files ?? []);
+		if (!selected.length) return;
+		if (folder && selected.some((file) => !file.webkitRelativePath || !file.webkitRelativePath.includes("/"))) {
+			toast.error("Browser cannot preserve this folder's relative paths. Use `skill replace-files --from-dir` instead.");
+			return;
+		}
+		const paths = selected.map((file) =>
+			folder && file.webkitRelativePath
+				? file.webkitRelativePath.split("/").slice(1).join("/")
+				: file.name,
+		);
+		const omitted = paths.some((path) =>
+			!path || path.length > 240 || path.split("/").some((segment) =>
+				!segment || segment.startsWith(".") || segment === "node_modules" || segment === ".venv"),
+		);
+		if (omitted) {
+			toast.error("Upload refused: hidden, excluded or unsafe paths were found. Use the CLI to review exclusions.");
+			return;
+		}
+		const selectedBytes = selected.reduce((total, file) => total + file.size, 0);
+		if (selected.length > 129 || selected.some((file) => file.size > MAX_SKILL_UPLOAD_BYTES)
+			|| selectedBytes > 4 * 1024 * 1024) {
+			toast.error(`Selected ${selected.length - (paths.includes("SKILL.md") ? 1 : 0)} extra files (${selectedBytes} bytes). Limits: 128 extra, 2097152 bytes per file, 4194304 bytes total.`);
+			return;
+		}
+		if (folder && !paths.includes("SKILL.md")) {
+			toast.error("Folder must contain SKILL.md at its root.");
+			return;
+		}
+		if (new Set(paths.map((path) => path.normalize("NFC").toLowerCase())).size !== paths.length) {
+			toast.error("Folder contains duplicate or case-colliding file paths.");
+			return;
+		}
+		if (paths.some((path) => /(?:secret|credential|private|password|token|\.env|\.pem|\.key)/i.test(path))
+			&& !window.confirm("The selected skill contains likely-sensitive files. Upload them anyway?")) return;
+
+		const generation = skillUploadGeneration.current;
+		setPendingSkillUploads((count) => count + 1);
+		try {
+			const captured = await Promise.all(selected.map(async (file, index) => ({
+				path: paths[index],
+				...decodeSkillUpload(new Uint8Array(await file.arrayBuffer())),
+			})));
+			if (generation !== skillUploadGeneration.current) return;
+			const skillMd = captured.find((file) => file.path === "SKILL.md");
+			if (skillMd?.encoding === "base64") throw new Error("SKILL.md must be UTF-8 text");
+			const resources = captured.filter((file) => file.path !== "SKILL.md").map((file) => ({
+				...file, executable: skillExtraFiles.find((existing) => existing.path === file.path)?.executable ?? false,
+			}));
+			if (folder) {
+				const priorPaths = new Set(skillExtraFiles.map((file) => file.path));
+				const newPaths = new Set(resources.map((file) => file.path));
+				const removed = [...priorPaths].filter((path) => !newPaths.has(path));
+				if (removed.length && !window.confirm(
+					`Replace the whole unsaved folder? ${[...newPaths].filter((path) => !priorPaths.has(path)).length} added, ` +
+					`${[...newPaths].filter((path) => priorPaths.has(path)).length} replaced, ${removed.length} removed.\n\n` +
+					`Removed files: ${removed.slice(0, 10).join(", ")}${removed.length > 10 ? "…" : ""}`,
+				)) return;
+			}
+			if (skillMd) {
+				setSkillMdContent(skillMd.content);
+				const frontmatter = skillMd.content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+				for (const line of frontmatter?.[1].split(/\r?\n/) ?? []) {
+					const parsedName = line.match(/^name:\s*(.+)$/);
+					const parsedDescription = line.match(/^description:\s*["']?(.+?)["']?$/);
+					if (parsedName && !name) setName(parsedName[1].trim());
+					if (parsedDescription && !description) setDescription(parsedDescription[1].trim());
+				}
+			}
+			if (resources.some((file) => !skillExtraFiles.some((old) => old.path === file.path) && /\.(?:sh|py|js|ts)$/.test(file.path))) {
+				toast.message("New scripts are not executable by default. Review their executable switches before saving.");
+			}
+			if (folder) {
+				setSkillExtraFiles(resources);
+			} else {
+				setSkillExtraFiles((previous) => [...previous.filter((existing) =>
+					!resources.some((file) => file.path === existing.path)), ...resources]);
+			}
+		} catch (error) {
+			if (generation === skillUploadGeneration.current) {
+				toast.error(error instanceof Error ? error.message : "Could not read the selected skill files.");
+			}
+		} finally {
+			if (generation === skillUploadGeneration.current) {
+				setPendingSkillUploads((count) => count - 1);
+			}
+		}
+	}
 
 	// Auto-discover skill_path from GitHub Trees API when git_url changes
 	const skillDiscoverRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -412,7 +532,7 @@ export function SubmitComponentDialog({
 
 	function reset() {
 		setName("");
-		setVersion("0.1.0");
+		setVersion(type === "skills" ? "1.0.0" : "0.1.0");
 		setDescription("");
 		// The publication target has to reset with everything else. Leaving it means
 		// the next submission silently inherits the previous teamspace and
@@ -444,6 +564,10 @@ export function SubmitComponentDialog({
 		setSkillMdContent("");
 		setSkillScriptContent("");
 		setSkillScriptFilename("");
+		skillUploadGeneration.current += 1;
+		setPendingSkillUploads(0);
+		setSkillExtraFiles([]);
+		setSelectedFilePath(null);
 		setSkillMode("git");
 		setEvent("PreToolUse");
 		setHandlerType("command");
@@ -500,16 +624,25 @@ export function SubmitComponentDialog({
 				const skillBody: Record<string, unknown> = {
 					...base,
 					task_type: taskType,
-					delivery_mode: skillMode === "paste" ? "registry_direct" : "git_fetch",
+					delivery_mode: skillMode === "git" ? "git_fetch" : "registry_direct",
 				};
 				if (skillMode === "git") {
 					skillBody.git_url = skillGitUrl || undefined;
 					skillBody.skill_path = skillPath || "/";
 					if (skillGitRef) skillBody.git_ref = skillGitRef;
-				} else {
+				} else if (skillMode === "paste") {
 					if (skillMdContent) skillBody.skill_md_content = skillMdContent;
 					if (skillScriptContent) skillBody.script_content = skillScriptContent;
 					if (skillScriptFilename) skillBody.script_filename = skillScriptFilename;
+				} else if (skillMode === "upload") {
+					// Folder mode: SKILL.md + extra files
+					if (skillMdContent) skillBody.skill_md_content = skillMdContent;
+					skillBody.extra_files = skillExtraFiles.map((file) => ({
+						path: file.path,
+						content: file.content,
+						encoding: file.encoding ?? "utf-8",
+						executable: file.executable ?? false,
+					}));
 				}
 				return skillBody;
 			}
@@ -563,6 +696,12 @@ export function SubmitComponentDialog({
 	function validateForSubmit(): string | null {
 		if (!name) return "Name is required";
 		if (!description) return "Description is required";
+		if (type === "skills" && skillMode === "upload" && pendingSkillUploads > 0) {
+			return "Wait for all skill files to finish uploading";
+		}
+		if (type === "skills" && skillMode === "upload" && !skillMdContent.trim()) {
+			return "SKILL.md is required for a folder draft";
+		}
 
 		if (type === "mcps") {
 			if (mcpMode === "json" && !jsonParsed && !isEditMode) {
@@ -601,12 +740,17 @@ export function SubmitComponentDialog({
 			toast.error(err);
 			return;
 		}
+		if (type === "skills" && skillMode === "upload") {
+			onSaveDraft(buildBody());
+			return;
+		}
 		onSubmit(buildBody());
 	}
 
 	function handleDraft() {
-		if (!name) {
-			toast.error("Name is required");
+		const err = type === "skills" && skillMode === "upload" ? validateForSubmit() : !name ? "Name is required" : null;
+		if (err) {
+			toast.error(err);
 			return;
 		}
 		onSaveDraft(buildBody());
@@ -642,7 +786,7 @@ export function SubmitComponentDialog({
 	const busy = isSubmitting || isSavingDraft;
 	const typeLabel =
 		type === "mcps"
-			? "MCP Server"
+			? "MCP Client"
 			: type === "sandboxes"
 				? "Sandbox"
 				: type.charAt(0).toUpperCase() + type.slice(1, -1);
@@ -663,7 +807,9 @@ export function SubmitComponentDialog({
 			}}
 		>
 			<DialogContent
-				className="max-w-lg max-h-[85vh] overflow-y-auto"
+				className={type === "skills" && skillMode === "upload"
+					? "sm:max-w-3xl max-h-[90vh] overflow-y-auto"
+					: "max-w-lg max-h-[85vh] overflow-y-auto"}
 				onPointerDownOutside={(event) => {
 					const target = event.target;
 					if (target instanceof Node && document.querySelector('[data-help-panel="true"]')?.contains(target)) {
@@ -712,6 +858,7 @@ export function SubmitComponentDialog({
 								value={name}
 								onChange={(e) => setName(e.target.value)}
 								placeholder="my-component"
+								disabled={isFolderVersion}
 							/>
 						</div>
 						<div className="space-y-1.5">
@@ -720,7 +867,8 @@ export function SubmitComponentDialog({
 								id="comp-version"
 								value={version}
 								onChange={(e) => setVersion(e.target.value)}
-								placeholder="0.1.0"
+								placeholder={type === "skills" ? "1.0.0" : "0.1.0"}
+								disabled={isFolderVersion}
 							/>
 						</div>
 					</div>
@@ -742,7 +890,7 @@ export function SubmitComponentDialog({
 							<PickerSelect
 								id="component-publish-to"
 								value={(fixedTeamId ?? teamId) || "personal"}
-								disabled={fixedTeamId !== undefined || fixedVisibility !== undefined}
+								disabled={isFolderVersion || fixedTeamId !== undefined || fixedVisibility !== undefined}
 								onValueChange={(value) => {
 									const next = value === "personal" ? "" : value;
 									setTeamId(next);
@@ -763,7 +911,7 @@ export function SubmitComponentDialog({
 							<PickerSelect
 								id="component-visibility"
 								value={fixedVisibility ?? visibility}
-								disabled={fixedVisibility !== undefined || teamRequiresPrivate}
+								disabled={isFolderVersion || fixedVisibility !== undefined || teamRequiresPrivate}
 								onValueChange={(value) => {
 									if (value === "team" && !(fixedTeamId ?? teamId)) {
 										toast.error("Team visibility requires a teamspace");
@@ -1012,7 +1160,7 @@ export function SubmitComponentDialog({
 											id="mcp-setup"
 											value={setupInstructions}
 											onChange={(e) => setSetupInstructions(e.target.value)}
-											placeholder="Steps to configure this MCP server..."
+											placeholder="Steps to configure this MCP Client..."
 											rows={3}
 											className="text-sm"
 										/>
@@ -1034,10 +1182,11 @@ export function SubmitComponentDialog({
 								/>
 							</div>
 
-							<Tabs value={skillMode} onValueChange={(v) => setSkillMode(v as "git" | "paste")} className="w-full">
-								<TabsList className="grid w-full grid-cols-2">
-									<TabsTrigger value="git">Git Submit</TabsTrigger>
-									<TabsTrigger value="paste">Registry Submit</TabsTrigger>
+							<Tabs value={skillMode} onValueChange={(v) => setSkillMode(v as "git" | "paste" | "upload")} className="w-full">
+								<TabsList className="grid w-full grid-cols-3">
+									<TabsTrigger value="git" disabled={isFolderVersion}>Git</TabsTrigger>
+									<TabsTrigger value="paste" disabled={isFolderVersion}>Paste</TabsTrigger>
+									<TabsTrigger value="upload">Upload</TabsTrigger>
 								</TabsList>
 
 								<TabsContent value="git" className="space-y-3 pt-3">
@@ -1149,6 +1298,174 @@ export function SubmitComponentDialog({
 											Detected from filename. Use .sh for Bash, .py for Python, or .mjs/.js for JavaScript.
 										</p>
 									</div>
+								</TabsContent>
+
+								<TabsContent value="upload" className="space-y-3 pt-3">
+									{!folderConfigLoading && !skillFolderDeliveryEnabled && (
+										<p role="status" className="rounded-md border border-border bg-muted/40 p-3 text-sm text-foreground">
+											{folderConfigError
+												? "Could not verify whether complete-folder review is available. You can save a draft, but confirm deployment readiness with your administrator before planning a review."
+												: "Complete-folder review and installation are not enabled on this deployment. You can save and edit a draft, but an administrator must finish the rollout before it can be submitted or installed."}
+										</p>
+									)}
+									<p className="text-xs text-muted-foreground">Save a complete folder draft; it will not be submitted for review yet. Choose Folder preserves nested paths (your browser will ask for permission). Add Files places files at the root. Browser uploads cannot read executable permissions: select each runnable file and enable its executable switch before saving.</p>
+									{/* Hidden file inputs */}
+									<input
+										type="file"
+										id="skill-file-upload"
+										className="hidden"
+										multiple
+										onChange={(e) => {
+											void handleSkillFiles(e.currentTarget.files, false);
+											e.currentTarget.value = "";
+										}}
+									/>
+									<input
+										type="file"
+										id="skill-folder-upload"
+										className="hidden"
+										{...({ webkitdirectory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
+										onChange={(e) => {
+											void handleSkillFiles(e.currentTarget.files, true);
+											e.currentTarget.value = "";
+
+										}}
+									/>
+
+									{/* Upload buttons */}
+									<div className="flex gap-2">
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={() => document.getElementById("skill-file-upload")?.click()}
+										>
+											<Upload className="h-4 w-4 mr-1" />
+											Add Files
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											size="sm"
+											onClick={() => document.getElementById("skill-folder-upload")?.click()}
+										>
+											<FolderUp className="h-4 w-4 mr-1" />
+											{skillMdContent || skillExtraFiles.length > 0 ? "Replace Whole Folder" : "Choose Folder"}
+										</Button>
+										{(skillMdContent || skillExtraFiles.length > 0) && (
+											<Button
+												type="button"
+												variant="ghost"
+												size="sm"
+												onClick={() => {
+													setSkillMdContent("");
+													setSkillExtraFiles([]);
+													setSelectedFilePath(null);
+												}}
+											>
+												<Trash2 className="h-4 w-4 mr-1" />
+												Clear All
+											</Button>
+										)}
+									</div>
+
+									{/* File tree */}
+									{(skillMdContent || skillExtraFiles.length > 0) && (
+										<div className="border rounded-md divide-y max-h-72 overflow-auto" aria-label="Skill folder files">
+											{skillMdContent && (
+												<button type="button"
+												className={`flex w-full items-center justify-between px-3 py-1.5 text-sm text-left hover:bg-muted/50 ${selectedFilePath === "SKILL.md" ? "bg-primary/10" : ""}`}
+												aria-label="Edit SKILL.md"
+												onClick={() => setSelectedFilePath("SKILL.md")}
+												>
+													<span className="flex items-center gap-2">
+														<File className="h-4 w-4 text-muted-foreground" />
+														<span className="font-mono text-xs">SKILL.md</span>
+													</span>
+													<span className="text-xs text-muted-foreground">{(new Blob([skillMdContent]).size / 1024).toFixed(1)} KB</span>
+												</button>
+											)}
+											{skillExtraFiles.map((file, idx) => (
+												<div key={file.path} className={`flex items-center justify-between text-sm ${selectedFilePath === file.path ? "bg-primary/10" : ""}`}>
+													<button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-muted/50"
+														aria-label={`Edit ${file.path}`} onClick={() => setSelectedFilePath(file.path)}>
+													<span className="flex items-center gap-2">
+														<File className="h-4 w-4 text-muted-foreground" />
+														<span className="font-mono text-xs truncate">{file.path}</span>
+														{file.executable && <span className="text-[10px] text-success font-medium">exec</span>}
+													</span>
+														<span className="text-xs text-muted-foreground">{((file.encoding === "base64" ? atob(file.content).length : new Blob([file.content]).size) / 1024).toFixed(1)} KB</span>
+													</button>
+													<div className="flex items-center gap-2 px-2">
+														<Button
+															type="button"
+															variant="ghost"
+															size="icon"
+															className="h-5 w-5"
+															aria-label={`Remove ${file.path}`}
+															onClick={(e) => {
+																e.stopPropagation();
+																setSkillExtraFiles(skillExtraFiles.filter((_, i) => i !== idx));
+																if (selectedFilePath === file.path) setSelectedFilePath(null);
+															}}
+														>
+															<X className="h-3 w-3" />
+														</Button>
+													</div>
+												</div>
+											))}
+										</div>
+									)}
+
+									{/* File editor */}
+									{selectedFilePath && (
+										<div className="space-y-1.5">
+											<div className="flex items-center justify-between">
+												<Label className="font-mono text-xs">{selectedFilePath}</Label>
+												{selectedFilePath !== "SKILL.md" && (
+													<label className="flex items-center gap-1 text-xs cursor-pointer">
+														<input
+															type="checkbox"
+															checked={skillExtraFiles.find((f) => f.path === selectedFilePath)?.executable || false}
+															onChange={(e) => setSkillExtraFiles(skillExtraFiles.map((f) => f.path === selectedFilePath ? { ...f, executable: e.target.checked } : f))}
+														/>
+														Executable
+													</label>
+												)}
+											</div>
+											{skillExtraFiles.find((f) => f.path === selectedFilePath)?.encoding === "base64" && (
+												<p className="text-xs text-muted-foreground">Binary file preserved exactly. Replace it with another upload to edit.</p>
+											)}
+											<Textarea
+												disabled={skillExtraFiles.find((f) => f.path === selectedFilePath)?.encoding === "base64"}
+												value={
+													selectedFilePath === "SKILL.md"
+														? skillMdContent
+														: skillExtraFiles.find((f) => f.path === selectedFilePath)?.encoding === "base64"
+															? ""
+															: skillExtraFiles.find((f) => f.path === selectedFilePath)?.content || ""
+												}
+												onChange={(e) => {
+													if (selectedFilePath === "SKILL.md") {
+														setSkillMdContent(e.target.value);
+													} else {
+														setSkillExtraFiles(skillExtraFiles.map((f) => f.path === selectedFilePath ? { ...f, content: e.target.value } : f));
+													}
+												}}
+												rows={8}
+												className="font-mono text-xs"
+												placeholder="File content..."
+											/>
+										</div>
+									)}
+
+									{!skillMdContent && skillExtraFiles.length === 0 && (
+										<div className="border-2 border-dashed rounded-md p-6 text-center text-muted-foreground">
+											<FolderUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
+											<p className="text-sm">Upload files or a folder containing SKILL.md</p>
+											<p className="text-xs mt-1">Supports scripts, templates, and assets</p>
+										</div>
+									)}
 								</TabsContent>
 							</Tabs>
 						</>
@@ -1344,7 +1661,7 @@ export function SubmitComponentDialog({
 					<div className="space-y-1.5">
 						<Label>Supported harnesses</Label>
 						<div className="flex flex-wrap gap-1.5">
-							{(harnessList ?? []).map((harness) => (
+							{(harnessList ?? []).filter((harness) => type !== "skills" || harness.capabilities.includes("skills") || supportedHarnesses.includes(harness.name)).map((harness) => (
 								<button
 									key={harness.name}
 									type="button"
@@ -1362,10 +1679,25 @@ export function SubmitComponentDialog({
 					</div>
 
 					{/* ── Actions ───────────────────────────────────── */}
+					{type === "skills" && skillMode === "upload" && submitError && (
+						<p role="status" className="text-xs text-muted-foreground">{submitError}</p>
+					)}
 					<div className="flex justify-end gap-2 pt-2">
 						{isEditMode ? (
 							<>
-								{isPendingEdit ? (
+								{isFolderVersion ? (
+									<Button
+										onClick={() => {
+										const err = validateForSubmit();
+										if (err) { toast.error(err); return; }
+										onUpdateDraft?.(String(d?.id), buildBody());
+									}}
+										disabled={busy || pendingSkillUploads > 0}
+									>
+										{isSavingDraft && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+										Save folder changes
+									</Button>
+								) : isPendingEdit ? (
 									<Button
 										onClick={() => {
 											const err = validateForSubmit();
@@ -1414,10 +1746,6 @@ export function SubmitComponentDialog({
 													toast.error(err);
 													return;
 												}
-												onUpdateDraft?.(
-													(editItem as Record<string, unknown>).id as string,
-													buildBody(),
-												);
 												onSubmit(buildBody());
 											}}
 											disabled={busy || !!submitError}
@@ -1433,25 +1761,25 @@ export function SubmitComponentDialog({
 							</>
 						) : (
 							<>
-								<Button
+								{!(type === "skills" && skillMode === "upload") && <Button
 									variant="outline"
 									onClick={handleDraft}
-									disabled={busy || !name}
+									disabled={busy || !name || pendingSkillUploads > 0}
 								>
 									{isSavingDraft && (
 										<Loader2 className="h-4 w-4 animate-spin mr-1.5" />
 									)}
 									Save Draft
-								</Button>
+								</Button>}
 								<Button
 									onClick={handleSubmit}
-									disabled={busy || !!submitError}
+									disabled={busy || !!submitError || pendingSkillUploads > 0}
 									title={submitError ?? undefined}
 								>
-									{isSubmitting && (
+									{(isSubmitting || (type === "skills" && skillMode === "upload" && isSavingDraft)) && (
 										<Loader2 className="h-4 w-4 animate-spin mr-1.5" />
 									)}
-									Submit for Review
+									{type === "skills" && skillMode === "upload" ? "Save folder draft" : "Submit for Review"}
 								</Button>
 							</>
 						)}

@@ -20,7 +20,6 @@ from tools.release import (
     latest_tag,
     pr_body,
     prepend_changelog,
-    release_cutoff,
     render_changelog_section,
     render_release_notes,
     resolve_release_push,
@@ -52,7 +51,7 @@ def test_bump_version():
     assert bump_version("1.10.7", "major") == "2.0.0"
 
 
-def test_cutoff_picker_defaults_to_last_choice(monkeypatch):
+def test_release_picker_includes_entire_branch(monkeypatch):
     questionary = ModuleType("questionary")
 
     class Choice:
@@ -69,11 +68,6 @@ def test_cutoff_picker_defaults_to_last_choice(monkeypatch):
             return self.answer
 
     def select(question, *, choices, default):
-        if question.startswith("Release through"):
-            assert default is choices[-1]
-            return Prompt(0)
-        if question == "Version bump:":
-            return Prompt("patch")
         return Prompt("stable")
 
     questionary.Choice = Choice
@@ -82,7 +76,7 @@ def test_cutoff_picker_defaults_to_last_choice(monkeypatch):
     questionary.confirm = lambda *args, **kwargs: Prompt(False)
     monkeypatch.setitem(sys.modules, "questionary", questionary)
 
-    included, version, channel = choose_release([_change()], "1.10.7", set())
+    included, version, channel = choose_release([_change()], "release/1.10", {"v1.10.7"})
 
     assert included == [_change()]
     assert (version, channel) == ("1.10.8", "stable")
@@ -143,29 +137,6 @@ def test_latest_tag_chooses_highest_stable_even_when_detached(monkeypatch):
     assert latest_tag() == "v1.10.9"
 
 
-def test_release_cutoff_uses_manifest_with_old_tag_fallback(monkeypatch):
-    cutoff = "b" * 40
-    old_tag_sha = "a" * 40
-
-    def fake_run(*args, **kwargs):
-        if args[:3] == ("git", "show", "v1.10.8:.release.toml"):
-            return f'cutoff = "{cutoff}"\n'
-        if args[:3] == ("git", "show", "v1.10.7:.release.toml"):
-            raise ReleaseError("missing manifest")
-        # No .release.toml at the tag: the fallback resolves the tag to a
-        # commit SHA so later git log ranges don't depend on the tag ref.
-        if args[:3] == ("git", "rev-parse", "v1.10.7^{commit}"):
-            return old_tag_sha
-        if args[:3] == ("git", "cat-file", "-e"):
-            return ""
-        raise AssertionError(args)
-
-    monkeypatch.setattr(release, "run", fake_run)
-
-    assert release_cutoff("v1.10.8") == cutoff
-    assert release_cutoff("v1.10.7") == old_tag_sha
-
-
 def test_release_discovery_skips_prior_release_metadata(monkeypatch):
     release_commit = Commit("a" * 40, "Maintainer", "m@example.com", "chore(release): v1.10.8", "")
     feature_commit = Commit("b" * 40, "Contributor", "c@example.com", "feat: next change", "")
@@ -185,45 +156,45 @@ def test_release_discovery_skips_prior_release_metadata(monkeypatch):
     assert [change.title for change in changes] == ["feat: next change"]
 
 
-def test_resolve_release_push_uses_exact_merged_pr_head(monkeypatch):
+def test_gh_json_retries_transient_failures_then_fails_loudly(monkeypatch):
+    calls = []
+
+    def flaky(*args):
+        calls.append(args)
+        if len(calls) < 3:
+            raise release.ReleaseError("i/o timeout")
+        return '{"ok": true}'
+
+    monkeypatch.setattr(release, "run", flaky)
+    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    assert release.gh_json("o/r", "x") == {"ok": True}
+
+    monkeypatch.setattr(release, "run", lambda *a: (_ for _ in ()).throw(release.ReleaseError("down")))
+    with pytest.raises(release.ReleaseError, match="down"):
+        release.gh_json("o/r", "x")
+
+
+def test_note_overrides_apply_and_reject_unknown_prs():
+    a, b = Change(["a"], "a", "n", "e", pr=1), Change(["b"], "b", "n", "e", pr=2)
+    a.include_in_notes = False
+    release.apply_note_overrides([a, b], (1,), (2,), (1,))
+    assert a.include_in_notes and a.highlight and not b.include_in_notes
+    release.apply_note_overrides([a, b], titles={2: "New"}, categories={2: "Fixes"}, breaking=(2,))
+    assert (b.title, b.category, b.breaking, b.include_in_notes) == ("New", "Fixes", True, True)
+    with pytest.raises(release.ReleaseError, match="Unknown category"):
+        release.apply_note_overrides([a, b], categories={1: "Nope"})
+    with pytest.raises(release.ReleaseError, match="#9"):
+        release.apply_note_overrides([a, b], (9,), (), ())
+    with pytest.raises(release.ReleaseError, match="overlap"):
+        release.apply_note_overrides([a, b], (1,), (1,), ())
+
+
+def test_resolve_release_push_uses_exact_commit_on_release_branch(monkeypatch):
     normal = Commit("a" * 40, "A", "a@example.com", "fix: normal", "")
     merged = Commit("b" * 40, "B", "b@example.com", "chore(release): v1.10.8", "")
-    head = "c" * 40
     monkeypatch.setattr(release, "commit_log", lambda revision_range: [normal, merged])
-
-    def fake_run(*args, **kwargs):
-        if args[:4] == ("git", "log", "--format=%H", "0" * 40 + ".." + "f" * 40):
-            return merged.sha
-        if args[:3] == ("git", "fetch", "--no-tags"):
-            return ""
-        if args[:3] == ("git", "rev-parse", "FETCH_HEAD^{commit}"):
-            return head
-        raise AssertionError(args)
-
-    def fake_gh_json(repo, endpoint):
-        if endpoint == f"commits/{merged.sha}/pulls":
-            return [
-                {
-                    "number": 42,
-                    "merged_at": "2026-08-02T00:00:00Z",
-                    "base": {"ref": "main"},
-                    "title": merged.title,
-                }
-            ]
-        if endpoint == "pulls/42":
-            return {
-                "merged_at": "2026-08-02T00:00:00Z",
-                "merge_commit_sha": merged.sha,
-                "title": merged.title,
-                "base": {"ref": "main"},
-                "head": {"sha": head},
-            }
-        raise AssertionError(endpoint)
-
-    monkeypatch.setattr(release, "run", fake_run)
-    monkeypatch.setattr(release, "gh_json", fake_gh_json)
-
-    assert resolve_release_push("0" * 40, "f" * 40, "Observal/Observal") == (head, 42)
+    monkeypatch.setattr(release, "run", lambda *args, **kwargs: merged.sha if args[1] == "log" else "")
+    assert resolve_release_push("a" * 40, "f" * 40, "release/1.10") == merged.sha
 
 
 def test_resolve_release_push_rejects_manifest_without_release_commit(monkeypatch):
@@ -232,13 +203,13 @@ def test_resolve_release_push_rejects_manifest_without_release_commit(monkeypatc
     monkeypatch.setattr(release, "run", lambda *args, **kwargs: normal.sha)
 
     with pytest.raises(ReleaseError, match="ambiguous or malformed"):
-        resolve_release_push("0" * 40, "f" * 40, "Observal/Observal")
+        resolve_release_push("a" * 40, "f" * 40, "release/1.10")
 
 
 def test_release_pr_instructions_allow_linear_merges():
     body = pr_body("1.10.8", "v1.10.7", "a" * 40, [_change()], "preview")
 
-    assert "squash, rebase, or the merge queue" in body
+    assert "Rebase-merge into `release/1.10`" in body
     assert "merge commit" not in body
 
 
@@ -249,7 +220,8 @@ def test_write_manifest_supports_no_pull_requests(tmp_path):
 
     manifest = tomllib.loads(path.read_text())
     assert manifest["version"] == "1.1.0"
-    assert manifest["cutoff"] == "a" * 40
+    assert manifest["source_sha"] == "a" * 40
+    assert manifest["branch"] == "release/1.1"
     assert manifest["included_prs"] == []
 
 
@@ -322,8 +294,9 @@ def test_release_workflow_signs_and_verifies_tags_before_push():
     assert "sleep 15" in verify_tag
     assert tag_job.index("gitsign verify-tag") < tag_job.index("git push origin")
     assert "certificate-oidc-issuer" in tag_job
-    assert "predates signed-tag enforcement" in tag_job
-    assert "git merge-base --is-ancestor" in tag_job
+    assert "predates signed-tag enforcement" not in tag_job
+    assert "existing tags cannot be replaced" in tag_job
+    assert "release.yml@$GITHUB_REF" in tag_job
 
 
 def test_server_release_package_contains_no_generated_secrets_or_tls_overlay():
@@ -344,3 +317,78 @@ def test_changelog_uses_only_selected_public_notes():
 
     assert "add safe releases" in section
     assert "internal work" not in section
+
+
+def test_release_workflows_gate_stable_integrations_and_sign_branch_identity():
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    jobs = workflow["jobs"]
+    assert workflow[True]["push"]["branches"] == ["release/**"]
+    assert workflow["concurrency"]["group"] == "release"
+    assert workflow["concurrency"]["queue"] == "max"
+    assert jobs["promote"]["needs"] == ["preflight", "verify"]
+    assert "outputs.channel == 'stable'" in jobs["promote"]["if"]
+    assert "version_tags()" in jobs["promote"]["steps"][-1]["run"]
+    assert "homebrew" not in jobs
+    assert jobs["deploy"]["needs"] == ["preflight", "promote"]
+    assert "needs.promote.outputs.promoted == 'true'" in jobs["deploy"]["if"]
+    trigger = yaml.safe_load((ROOT / ".github/workflows/deploy.yml").read_text())[True]
+    assert set(trigger) == {"workflow_call"}
+    deploy = (ROOT / ".github/workflows/deploy.yml").read_text()
+    assert 'git checkout --detach "$RELEASE_TARGET"' in deploy
+    assert "origin/main" not in deploy
+    assert "releases/latest" in deploy
+    assert "release.yml@$GITHUB_REF" in (ROOT / ".github/workflows/release.yml").read_text()
+
+
+def test_release_ci_and_terraform_keep_branch_coverage():
+    import yaml
+
+    for name in ("ci", "codeql", "dependency-review", "terraform", "e2e-frontend"):
+        workflow = yaml.safe_load((ROOT / f".github/workflows/{name}.yml").read_text())
+        assert workflow[True]["pull_request"]["branches"] == ["main", "release/**"]
+    terraform = yaml.safe_load((ROOT / ".github/workflows/terraform.yml").read_text())
+    assert "merge_group" in terraform[True]
+    assert terraform[True]["push"]["branches"] == ["main", "release/**"]
+    text = (ROOT / ".github/workflows/terraform.yml").read_text()
+    assert "terraform apply" not in text
+    assert "terraform init -backend=false" in text
+    assert "terraform validate" in text
+    assert "scripts/check_terraform_consistency.py" in text
+
+
+def test_release_ruleset_is_linear_reviewed_and_requires_release_policy():
+    import json
+
+    ruleset = json.loads((ROOT / ".github/release-ruleset.json").read_text())
+    assert ruleset["conditions"]["ref_name"]["include"] == ["refs/heads/release/*"]
+    assert ruleset["bypass_actors"] == []
+    rules = {rule["type"]: rule.get("parameters", {}) for rule in ruleset["rules"]}
+    assert {"deletion", "non_fast_forward", "required_linear_history"} <= rules.keys()
+    assert rules["pull_request"]["required_approving_review_count"] == 1
+    assert rules["pull_request"]["allowed_merge_methods"] == ["rebase"]
+    assert "release-policy" in {check["context"] for check in rules["required_status_checks"]["required_status_checks"]}
+
+
+def test_prerelease_aliases_do_not_move_backward():
+    assert release.distribution_tag("1.1.0-rc.1", "rc", ["v1.2.0-rc.1"]) == "next-1.1"
+    assert release.distribution_tag("1.1.1-beta.1", "beta", ["v1.2.0-beta.2"]) == "beta-1.1"
+    assert release.distribution_tag("1.2.0-rc.2", "rc", ["v1.2.0-rc.1"]) == "next"
+
+
+def test_publishing_jobs_recheck_tags_on_failed_job_reruns():
+    import yaml
+
+    jobs = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]
+    for name in ("docker-merge", "npm", "promote"):
+        runs = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert "distribution_tag" in runs and "version_tags()" in runs
+        assert jobs[name]["steps"][0]["with"]["fetch-depth"] == 0
+    runs = "\n".join(step.get("run", "") for step in jobs["release"]["steps"])
+    assert 'if [ "$DRAFT" = true ]; then\n  gh release edit "$VERSION" --draft=false --latest=false' in runs
+
+
+def test_next_dev_version_and_title():
+    assert release.next_dev_version("1.14") == "1.15.0-dev.0"
+    assert release.DEV_TITLE.fullmatch("chore: start 1.15 development")

@@ -40,8 +40,10 @@ from schemas.agent import (
 from services.cache import invalidate_namespace
 from services.config_generator import validate_mcp_command
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.registry_fork import agent_fork_counts, provenance_for, provenance_for_many
 from services.registry_namespace import identity_exists, slugify
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import lock_review_for_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
 from ._router import router
@@ -68,7 +70,9 @@ _VERSION_OWNED_FIELDS = (
     "components",
     "mcp_server_ids",
 )
-_EDITABLE_VERSION_STATUSES = frozenset({AgentStatus.draft, AgentStatus.pending, AgentStatus.rejected})
+_EDITABLE_VERSION_STATUSES = frozenset(
+    {AgentStatus.draft, AgentStatus.pending, AgentStatus.rejected, AgentStatus.changes_requested}
+)
 
 
 @router.post("", response_model=AgentResponse)
@@ -167,10 +171,8 @@ async def create_agent(
         models_by_harness=req.models_by_harness,
         external_mcps=[m.model_dump() for m in req.external_mcps],
         supported_harnesses=req.supported_harnesses,
-        status=AgentStatus.approved if target.auto_approve else AgentStatus.pending,
+        status=AgentStatus.pending,
         released_by=current_user.id,
-        reviewed_by=current_user.id if target.auto_approve else None,
-        reviewed_at=datetime.now(UTC) if target.auto_approve else None,
         success_criteria=req.success_criteria.model_dump() if req.success_criteria else None,
     )
     db.add(version)
@@ -216,6 +218,7 @@ async def create_agent(
 
     await lock_agent_version(db, agent, version)
     version.yaml_snapshot = await build_yaml_snapshot(version, db)
+    review = await submit_for_review(db, "agent", agent, version, current_user.id)
 
     try:
         await db.commit()
@@ -243,7 +246,7 @@ async def create_agent(
 
     return _agent_to_response(
         agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
-    )
+    ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 @router.get("", response_model=list[AgentSummary])
@@ -329,6 +332,9 @@ async def list_agents(
         )
         rating_map = {r[0]: round(float(r[1]), 2) for r in rows.all()}
 
+    fork_counts = await agent_fork_counts(db, agent_ids)
+    provenance = await provenance_for_many(agents, current_user, db)
+
     # Batch-fetch creator emails and usernames
     user_ids = {a.created_by for a in agents}
     email_map: dict[uuid.UUID, str] = {}
@@ -365,6 +371,8 @@ async def list_agents(
             created_at=a.created_at,
             updated_at=a.updated_at,
             is_recommended=a.is_recommended,
+            forked_from=provenance.get(a.id),
+            fork_count=fork_counts.get(a.id, 0),
         )
         for a in agents
     ]
@@ -396,6 +404,8 @@ async def my_agents(
         )
         rating_map = {r[0]: round(float(r[1]), 2) for r in rows.all()}
 
+    fork_counts = await agent_fork_counts(db, agent_ids)
+    provenance = await provenance_for_many(agents, current_user, db)
     return [
         AgentSummary(
             id=a.id,
@@ -422,6 +432,8 @@ async def my_agents(
             created_at=a.created_at,
             updated_at=a.updated_at,
             is_recommended=a.is_recommended,
+            forked_from=provenance.get(a.id),
+            fork_count=fork_counts.get(a.id, 0),
         )
         for a in agents
     ]
@@ -589,6 +601,8 @@ async def get_agent(
         user_permission=perm,
         status_map=status_map,
         identity_map=identity_map,
+        forked_from=await provenance_for(agent, current_user, db),
+        fork_count=(await agent_fork_counts(db, [agent.id])).get(agent.id, 0),
     )
 
 
@@ -670,6 +684,8 @@ async def update_agent(
     edits_version = "success_criteria" in req.model_fields_set or any(
         getattr(req, field) is not None for field in _VERSION_OWNED_FIELDS
     )
+    if edits_version and latest is not None:
+        await lock_review_for_edit(db, "agent", latest)
     if edits_version and latest is not None and latest.status not in _EDITABLE_VERSION_STATUSES:
         raise HTTPException(
             status_code=409,

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused boundary and behavior coverage for the agent pull command."""
@@ -1329,6 +1330,7 @@ def test_pull_full_project_flow_writes_every_shape_and_exact_side_effects(
                 "local_name": "local-reviewer",
             },
             "platform": sys.platform,
+            "supported_features": ["skill_extra_files_v1"],
             "version": "1.4.0",
         },
     )
@@ -1432,9 +1434,9 @@ def test_pull_full_project_flow_writes_every_shape_and_exact_side_effects(
         sensitivity="high",
     )
     assert run.call_args_list == [
-        call(["good", "mcp", "add", "new"], capture_output=True, text=True, timeout=60),
-        call(["missing", "mcp", "add", "manual"], capture_output=True, text=True, timeout=60),
-        call(["bad", "mcp", "add", "broken"], capture_output=True, text=True, timeout=60),
+        call(["good", "mcp", "add", "new"], capture_output=True, text=True, timeout=60, cwd=target.resolve()),
+        call(["missing", "mcp", "add", "manual"], capture_output=True, text=True, timeout=60, cwd=target.resolve()),
+        call(["bad", "mcp", "add", "broken"], capture_output=True, text=True, timeout=60, cwd=target.resolve()),
     ]
     for visible in (
         "Pulled claude-code config (10 files)",
@@ -2259,6 +2261,51 @@ def test_pull_setup_failure_does_not_record_installation(
     boundaries.emit.assert_not_called()
 
 
+def test_pull_resets_then_registers_mcp_servers_in_target_without_echoing_values(
+    pull_app: typer.Typer,
+    boundaries: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    target = tmp_path / "project"
+    remote = ["claude", "mcp", "add", "--transport", "http", "linear", "https://x.test/mcp", "-H", "Auth: tok-1"]
+    stdio = ["claude", "mcp", "add", "srv", "-e", "API_KEY=key-1", "--", "npx", "srv"]
+    boundaries.post.return_value = {
+        "config_snippet": {
+            "agent_profile": {"path": "agent.md", "content": "agent\n"},
+            "mcp_reset_commands": [["claude", "mcp", "remove", "linear"], ["missing-binary"]],
+            "mcp_setup_commands": [remote, stdio],
+        }
+    }
+    calls: list[tuple[list[str], object]] = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs.get("cwd")))
+        if command[0] == "missing-binary":
+            raise FileNotFoundError(command[0])
+        # Nothing registered yet, so the reset fails; that must not fail the pull.
+        return subprocess.CompletedProcess(command, 1 if "remove" in command else 0, "", "")
+
+    monkeypatch.setattr(cmd_pull.subprocess, "run", run)
+
+    result = _invoke(pull_app, target, "--output", "json")
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (["claude", "mcp", "remove", "linear"], target.resolve()),
+        (["missing-binary"], target.resolve()),
+        (remote, target.resolve()),
+        (stdio, target.resolve()),
+    ]
+    shown = [setup["command"] for setup in json.loads(result.output)["setup_commands"]]
+    assert shown == [
+        [*remote[:-1], "Auth: <secret>"],
+        ["claude", "mcp", "add", "srv", "-e", "API_KEY=<secret>", "--", "npx", "srv"],
+    ]
+    assert "tok-1" not in result.output and "key-1" not in result.output
+    boundaries.upsert.assert_called_once()
+
+
 def test_pull_snapshot_failure_is_visible_warning(
     pull_app: typer.Typer,
     boundaries: SimpleNamespace,
@@ -2618,7 +2665,42 @@ def test_without_a_project_lock_the_installed_version_is_kept(pull_app, registry
     assert result.exit_code == 0, result.output
     assert _sent_version(registry) == "1.0.0"
     assert json.loads(result.output)["agent"]["resolved_from"] == "installed"
-    installed.assert_called_once_with("claude-code", "agent-uuid", scope="project", directory=str(target.resolve()))
+    # Recheck current receipts immediately before the first nonfolder write:
+    # a later legacy pull must not erase ownership of a newly installed folder.
+    assert installed.call_count == 2
+    assert (
+        installed.call_args_list
+        == [
+            call("claude-code", "agent-uuid", scope="project", directory=str(target.resolve())),
+        ]
+        * 2
+    )
+
+
+def test_nonfolder_agent_pull_refuses_managed_receipt_before_config_writes(
+    pull_app_boundary, registry, tmp_path, monkeypatch
+):
+    import observal_cli.lockfile as lockfile
+
+    target = tmp_path / "project"
+    monkeypatch.setattr(
+        lockfile,
+        "installed_agent",
+        MagicMock(
+            return_value={
+                "id": "agent-uuid",
+                "version": "1.0.0",
+                "components": [
+                    {"type": "skill", "id": "skill-1", "folder_receipt": {"target": str(target / ".pi/skills/review")}},
+                ],
+            }
+        ),
+    )
+    result = _invoke(pull_app_boundary, target, "--output", "json")
+    assert result.exit_code == 6, result.output
+    assert "owns verified skill folders" in json.loads(result.stderr)["error"]["message"]
+    assert not (target / "observal.lock").exists()
+    assert not (target / ".claude").exists()
 
 
 def test_upgrade_and_version_cannot_be_combined(pull_app, registry, tmp_path):
@@ -2751,3 +2833,83 @@ def test_inline_hook_rewrite_survives_a_malformed_entry():
         "a bare string someone hand-edited in",
         {"command": "echo mine"},
     ]
+
+
+def _folder_install_result() -> dict:
+    import base64
+    import hashlib
+
+    def entry(path: str, data: bytes) -> dict:
+        return {
+            "path": path,
+            "content": base64.b64encode(data).decode(),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "mode": "0644",
+            "version_id": "ver-1",
+        }
+
+    result = _install_result("1.1.0")
+    result["config_snippet"]["skill_components"] = [
+        {"name": "demo", "path": ".claude/skills/demo/SKILL.md", "bundle_version_id": "ver-1"}
+    ]
+    result["skill_bundles"] = [
+        {
+            "listing_id": "skill-1",
+            "version_id": "ver-1",
+            "digest": "sha256:" + "d" * 64,
+            "skill_file_path": ".claude/skills/demo/SKILL.md",
+            "files": [entry("SKILL.md", b"---\nname: demo\n---\n")],
+        }
+    ]
+    result["lock"]["components"] = [
+        {
+            "type": "skill",
+            "id": "skill-1",
+            "qualified_name": "acme/demo",
+            "version": "1.0.0",
+            "version_id": "ver-1",
+            "digest": "sha256:" + "d" * 64,
+            "source": "lock",
+        }
+    ]
+    return result
+
+
+def test_committed_folder_failure_reports_a_partial_pull_and_rolls_nothing_back(
+    pull_app_boundary, registry, tmp_path, monkeypatch
+):
+    from observal_cli import managed_skill
+
+    target = tmp_path / "project"
+    registry.post.side_effect = lambda _path, _body: _folder_install_result()
+    plan = [(object(), target / "f", {"target": str(target / "f"), "listing_id": "skill-1"}, {})]
+    monkeypatch.setattr(cmd_pull, "_managed_agent_folders", lambda *_a, **_k: plan)
+
+    def committed(*_args, **_kwargs):
+        raise managed_skill.ManagedSkillCommittedError(
+            "New skill is complete and recorded, but its destination path was substituted afterwards",
+            outcome={"action": "install", "target": str(target / "f")},
+            remediation="Verify the destination path.",
+        )
+
+    def forbidden_rollback(*_args, **_kwargs):
+        raise AssertionError("a committed folder must never be rolled back")
+
+    monkeypatch.setattr(managed_skill, "transact", committed)
+    monkeypatch.setattr(cmd_pull, "_rollback_managed_agent_state", forbidden_rollback)
+
+    result = _invoke(pull_app_boundary, target, "--output", "json")
+
+    assert result.exit_code == 6, result.output
+    error = json.loads(result.stderr)["error"]
+    assert "partially applied" in error["message"]
+    assert error["result"]["installation_tracked"] is True
+    assert error["result"]["committed_folders"] == [str(target / "f")]
+
+
+def test_display_setup_command_redacts_url_credentials():
+    from observal_cli.cmd_pull import _display_setup_command
+
+    shown = _display_setup_command(["claude", "mcp", "add", "x", "https://u:p@h.example/mcp?token=abc"])
+    assert shown[-1] == "https://h.example/mcp?<redacted>"

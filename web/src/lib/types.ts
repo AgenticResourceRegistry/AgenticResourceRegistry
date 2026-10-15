@@ -13,3 +13,4 @@ export * from "./types/registry";
 export * from "./types/admin";
 export * from "./types/team";
 export * from "./types/inbox";
+export * from "./types/review";

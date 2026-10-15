@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the 6 new registry types: tool, skill, hook, prompt, sandbox, graphrag."""
@@ -17,6 +18,17 @@ from httpx import ASGITransport, AsyncClient
 from api.deps import get_current_user, get_db, get_registry_user
 from models.mcp import ListingStatus
 from models.user import User, UserRole
+
+
+@pytest.fixture(autouse=True)
+def _isolate_submission_review_boundary(monkeypatch):
+    """These route serialization tests mock the database; review lifecycle is tested with a real session."""
+    for component in ("skill", "hook", "prompt", "sandbox"):
+        monkeypatch.setattr(
+            f"api.routes.{component}.submit_for_review",
+            AsyncMock(return_value=SimpleNamespace(number=1)),
+        )
+
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -78,7 +90,17 @@ def _listing_mock(model_cls, status=ListingStatus.pending, **extra):
     m.skill_md_content = None
     m.created_at = datetime.now(UTC)
     m.updated_at = datetime.now(UTC)
-    m.latest_version = SimpleNamespace(id=uuid.uuid4(), version=m.version, status=status, download_count=0)
+    m.latest_version = SimpleNamespace(
+        id=uuid.uuid4(),
+        version=m.version,
+        status=status,
+        download_count=0,
+        delivery_mode="git_fetch",
+        extra_files=[],
+        script_filename=None,
+        script_content=None,
+        requires_global_review=False,
+    )
     for k, v in extra.items():
         setattr(m, k, v)
     return m
@@ -153,11 +175,6 @@ class TestModels:
         for model in (McpVersion, SkillVersion, HookVersion, PromptVersion, SandboxVersion):
             col = model.__table__.columns["status"]
             assert col.type.enum_class is Canonical
-
-    def test_submission_model_tablename(self):
-        from models.submission import Submission
-
-        assert Submission.__tablename__ == "submissions"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -353,12 +370,23 @@ class TestSkillRoutes:
         version.skill_md_content = "---\nname: review\ndescription: d\ncommand: /review\n---\n"
         version.slash_command = "review"
         version.is_editing = False
+        version.status = ListingStatus.draft
+        version.content_revision = None
+        version.base_version_id = None
+        version.review_epoch = 0
+        version.delivery_mode = "registry_direct"
+        version.script_content = None
+        version.script_filename = None
+        version.extra_files = []
         version.editing_by = None
         version.editing_since = None
         listing = _listing_mock(object, status=ListingStatus.draft, latest_version=version)
+        listing.latest_version_id = version.id
 
         with (
             patch.object(skill_routes, "resolve_listing", AsyncMock(return_value=listing)),
+            patch.object(skill_routes, "lock_skill_version", AsyncMock(return_value=(version.id, version))),
+            patch.object(skill_routes, "_recheck_skill_owner", AsyncMock()),
             patch.object(skill_routes, "get_effective_component_permission", return_value="owner"),
             patch.object(skill_routes.SkillListingResponse, "model_validate", return_value=listing),
         ):
@@ -388,8 +416,13 @@ class TestSkillRoutes:
         app, db, user = _app_with(router)
         listing = _listing_mock(None, status=ListingStatus.approved)
         db.execute = AsyncMock(return_value=_scalar_result(listing))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/skills/{listing.id}/install", json={"harness": "cursor"})
+        with patch(
+            "api.routes.skill._selected_skill_release",
+            new_callable=AsyncMock,
+            return_value=(listing, listing.latest_version),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                r = await ac.post(f"/api/v1/skills/{listing.id}/install", json={"harness": "cursor"})
         assert r.status_code == 200
         assert "config_snippet" in r.json()
 
@@ -576,92 +609,6 @@ class TestSandboxRoutes:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.post(f"/api/v1/sandboxes/{listing.id}/install", json={"harness": "cursor"})
         assert r.status_code == 404
-
-
-# ═══════════════════════════════════════════════════════════
-# 4. TestUnifiedReview
-# ═══════════════════════════════════════════════════════════
-
-
-class TestUnifiedReview:
-    @pytest.mark.asyncio
-    async def test_list_pending_returns_empty(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        empty = MagicMock()
-        empty.scalars.return_value.all.return_value = []
-        db.execute = AsyncMock(return_value=empty)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.get("/api/v1/review")
-        assert r.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_list_pending_requires_admin(self):
-        from api.routes.review import router
-
-        user = _user(role=UserRole.user)
-        app, db, _ = _app_with(router, user=user)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.get("/api/v1/review")
-        assert r.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_approve_not_found(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        db.execute = AsyncMock(return_value=_scalar_result(None))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{uuid.uuid4()}/approve")
-        assert r.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_reject_not_found(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        db.execute = AsyncMock(return_value=_scalar_result(None))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{uuid.uuid4()}/reject", json={"reason": "bad"})
-        assert r.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_approve_changes_status(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        listing = _listing_mock(None, status=ListingStatus.pending)
-        # First query finds the listing; everything after — including the inbox
-        # queries a decision now runs — answers empty rather than exhausting.
-        script = iter([_scalar_result(listing)])
-        db.execute = AsyncMock(side_effect=lambda *a, **k: next(script, _scalar_result(None)))
-        db.refresh = AsyncMock(side_effect=lambda obj: None)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{listing.id}/approve")
-        assert r.status_code == 200
-        assert listing.status == ListingStatus.approved
-
-    @pytest.mark.asyncio
-    async def test_reject_sets_reason(self):
-        from api.routes.review import router
-
-        app, db, _ = _app_with(router)
-        listing = _listing_mock(None, status=ListingStatus.pending)
-        script = iter([_scalar_result(listing)])
-        db.execute = AsyncMock(side_effect=lambda *a, **k: next(script, _scalar_result(None)))
-        db.refresh = AsyncMock(side_effect=lambda obj: None)
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(f"/api/v1/review/{listing.id}/reject", json={"reason": "incomplete"})
-        assert r.status_code == 200
-        assert listing.status == ListingStatus.rejected
-        assert listing.rejection_reason == "incomplete"
-
-    def test_listing_models_dict_has_all_types(self):
-        from api.routes.review import LISTING_MODELS
-
-        for t in ("mcp", "skill", "hook", "prompt", "sandbox"):
-            assert t in LISTING_MODELS
 
 
 # ═══════════════════════════════════════════════════════════

@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Remote A2A agents in discovery: card parsing, registration, review, search and delegation flags."""
@@ -315,8 +316,11 @@ async def test_register_review_and_search(sessions, settings, card_server, monke
     assert resp.json()["obs:lifecycle"] == "approved"
     assert resp.json()["obs:delegable"] is True
 
-    results = await _search(sessions, stranger)
+    # A public import is still outside another signed-in user's namespace.
+    assert await _search(sessions, stranger) == []
+    results = await _search(sessions, owner)
     assert [r["identifier"] for r in results] == [urn]
+    assert [r["identifier"] for r in await _search(sessions, None)] == [urn]
     top = results[0]
     assert top["obs:availability"] == "delegate"
     assert top["obs:delegable"] is True
@@ -325,6 +329,8 @@ async def test_register_review_and_search(sessions, settings, card_server, monke
 
     # Fetch the full entry: the reviewed card is pinned inside it.
     async with _client(_app(sessions, stranger)) as client:
+        assert (await client.get(f"/api/v1/ard/entries/{urn}")).status_code == 404
+    async with _client(_app(sessions, owner)) as client:
         full = (await client.get(f"/api/v1/ard/entries/{urn}")).json()
     assert full["obs:a2aInterface"] == {
         "url": "https://agents.acme.com/a2a/v1",

@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Recovery workflows
@@ -45,6 +45,8 @@ observal self downgrade --list --output json
 observal self downgrade --version 2.5.0 --force --output json
 observal self rollback --force --output json
 ```
+
+`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds them from `git+https://github.com/Observal/Observal@main`. The 426 error and `observal auth login` print the exact command. If it fails, as a last resort install from source: `uv tool install --force git+https://github.com/Observal/Observal@main` (dev) or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
 
 Standalone binary changes require a published checksum because JSON mode does not accept unsigned downloads interactively. Verify installed version after mutation.
 

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Suspense, useEffect, useState } from "react";
@@ -136,10 +137,10 @@ function RegisterContent() {
               <span className="text-lg font-semibold tracking-tight">{appName}</span>
             </div>
             <h1 className="mt-10 max-w-sm text-3xl font-semibold tracking-tight text-balance">
-              Governed agent access, without waiting on setup.
+              Governed Agent File access, without waiting on setup.
             </h1>
             <p className="mt-4 max-w-sm text-sm leading-6 text-muted-foreground">
-              Create a standard user account for browsing the registry, viewing traces, and using approved agent context.
+              Create a standard user account for browsing the registry, viewing traces, and using approved Agent File context.
             </p>
           </div>
           <ul className="space-y-3 text-sm text-muted-foreground">

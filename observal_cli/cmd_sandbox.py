@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json as _json
 from contextlib import nullcontext
+from urllib.parse import quote
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -17,6 +18,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from observal_cli import client, config
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_SANDBOX_NETWORK_POLICIES, VALID_SANDBOX_RUNTIME_TYPES
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import select_one, text_input
@@ -33,6 +35,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_review_link
 
 sandbox_app = typer.Typer(
     help=(
@@ -90,6 +93,7 @@ def sandbox_submit(
     sandbox_path: str | None = typer.Option(None, "--sandbox-path", help="Path in source repo"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
     submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (sandbox ID)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -122,11 +126,14 @@ def sandbox_submit(
         resolved = client.resolve_registry_reference("sandbox", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/sandboxes/{resolved}/submit")
+            result = client.post(
+                f"/api/v1/sandboxes/{resolved}/submit" + (f"?message={quote(message)}" if message else "")
+            )
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+            print_review_link(result)
         return
 
     flag_mode = any(
@@ -287,9 +294,11 @@ def sandbox_submit(
     if output == "json":
         output_json(result)
         return
-    message = "Draft saved" if draft else "Sandbox submitted"
-    rprint(f"[green]✓ {message}![/green] ID: [bold]{esc(result['id'])}[/bold]")
+    label = "Draft saved" if draft else "Sandbox submitted"
+    rprint(f"[green]✓ {label}![/green] ID: [bold]{esc(result['id'])}[/bold]")
     rprint(f"  Attach to an agent with ID: [cyan]{esc(result['id'])}[/cyan]")
+    if not draft:
+        print_review_link(result)
 
 
 @sandbox_app.command(name="list")
@@ -394,6 +403,7 @@ def sandbox_show(
                 ("Namespace", esc(handle(item) or "N/A")),
                 ("Description", esc(item.get("description", ""))),
                 ("Created", esc(relative_time(item.get("created_at")))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{esc(item['id'])}[/dim]"),
             ],
             border_style="red",

@@ -200,44 +200,58 @@ Existing files prompt in human mode. JSON mode fails with a conflict unless `--f
 
 ## Review queue
 
-List pending submissions:
+Reviews are revision-based and use the `observal review` command group. Content is visible only to participants and authorized reviewers.
 
 ```bash
-observal admin review list --output json
-observal admin review list --type mcp --output json
-observal admin review list --tab agents --output json
-observal admin review list --team-id 11111111-1111-1111-1111-111111111111 --output json
+observal review list --output json
+observal review list --type mcp --output json
+observal review list --team-id 11111111-1111-1111-1111-111111111111 --output json
+observal review show 123 --output json
+observal review files 123 --output json
+observal review diff 123 --file SKILL.md --output json
+observal review checks 123 --output json
 ```
 
-Component types are `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. Tabs are `agents` and `components`. A component type cannot be combined with the Agents tab.
+Review data can include submitted configuration. Handle it as potentially sensitive. Credentials are redacted in snapshots.
 
-The list refreshes the `review` row cache, including when empty. Row numbers can then be used by other review commands.
-
-Show a submission:
+Submit a verdict and publish. Approval never publishes by itself unless the effective policy sets automatic publishing:
 
 ```bash
-observal admin review show 1 --output json
+observal review approve 123 --output json
+observal review request-changes 123 --body 'Please document the required variables' --output json
+observal review publish 123 --output json
 ```
 
-The JSON detail may include submitted configuration, headers, or environment-variable declarations. Handle review data as potentially sensitive.
-
-Approve:
+Review policy sets required approvals (0 to 5 per type), self-approval, and automatic publishing. A teamspace may set one policy for team-visible items and another for its public namespace; neither can be looser than the organization policy for public items. Zero approvals with automatic publishing is the "auto approve" setting.
 
 ```bash
-observal admin review approve 1 --output json
-observal admin review approve AGENT_UUID --agent --output json
-observal admin review approve BUNDLE_UUID --bundle --output json
+observal review policy show --output json
+observal review policy set required_approvals.mcp 2 --output json
 ```
 
-Reject with a reason containing 1 through 5,000 characters:
+Use `observal review --help` for threads, comments, reviewer requests, dismissal, and watch/mute.
 
-```bash
-observal admin review reject 1 --reason 'Missing environment variable documentation' --output json
-observal admin review reject AGENT_UUID --agent --reason 'Unsafe prompt' --output json
-observal admin review reject BUNDLE_UUID --bundle --reason 'License conflict' --output json
-```
+### Automated checks (experimental)
 
-`--agent` and `--bundle` are mutually exclusive. Approval and rejection return the direct server decision object.
+Experimental and off by default. A super admin or admin turns it on under Settings, Experimental (`experimental.review_checks`). While off, the checks tab, queue labels, settings and endpoints below are hidden, and automated checks neither run nor block publishing; the built-in secret, schema and skill folder checks still apply.
+
+Each revision runs built-in checks (secret scan, required fields, skill folder validity) plus configurable automated checks on the worker, within about 15 seconds of submission:
+
+| Check | Applies to | Reads or contacts |
+| --- | --- | --- |
+| Harness config generation | agent | nothing external |
+| Script syntax and risky patterns | hook, skill | nothing external; never executes scripts |
+| Prompt template variables | prompt | nothing external |
+| High-entropy secret heuristic | all | nothing external |
+| Sandbox image pinned by digest | sandbox | nothing external |
+| Git source resolves | mcp, skill, hook, sandbox | the Git host |
+| Remote MCP server responds | mcp | the MCP URL (anonymous, public addresses only) |
+| Sandbox image exists | sandbox | the image registry (anonymous) |
+| Known-vulnerable dependencies | mcp, skill, hook, sandbox | Git host and osv.dev (package names and versions) |
+
+Checks that contact external hosts, other than the Git source check, are off by default. Every check is advisory by default; an admin or team owner can mark one as blocking. A blocking check that is queued, running, failed or errored holds publication, including automatic publication. A check that could not run reports `skipped` or `error`, never `pass`.
+
+Settings are scoped. Admins edit the organization settings (used for public items) with the gear button on the review queue, or `PUT /api/v1/admin/review-checks`. Team owners and admins edit their teamspace's settings (used for team-visible items) on the teamspace Settings tab, or `PUT /api/v1/teams/{id}/review-checks`. Changes apply to new revisions; `POST /api/v1/reviews/{number}/checks/rerun` re-queues an open review under the current settings. These checks are static and network lookups: they do not prove a component is safe or that it works.
 
 ## Exit codes
 

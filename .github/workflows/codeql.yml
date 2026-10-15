@@ -5,11 +5,9 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
-    branches: [main]
-  merge_group:
-    types: [checks_requested]
+    branches: [main, 'release/**']
   schedule:
     - cron: '0 6 * * 1'
 

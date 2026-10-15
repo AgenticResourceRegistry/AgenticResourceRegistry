@@ -172,3 +172,20 @@ def test_inaccessible_exact_release_is_notice_only(monkeypatch: pytest.MonkeyPat
     assert "accessible" in result["reason"]
     assert result["outdated"] is True
     assert result["release_verified"] is False
+
+
+@pytest.mark.parametrize(
+    ("entry", "managed"),
+    [
+        ({"entry_type": "standalone", "type": "skill", "folder_receipt": {"version_id": "v", "target": "/x"}}, True),
+        ({"entry_type": "agent", "components": [{"type": "skill", "folder_receipt": {"target": "/x"}}]}, True),
+        ({"entry_type": "agent", "components": [{"type": "skill"}, "not-a-dict"]}, False),
+        ({"entry_type": "standalone", "type": "skill", "folder_receipt": "forged-string"}, False),
+        ({"entry_type": "standalone", "type": "skill"}, False),
+    ],
+)
+def test_folder_receipts_mark_items_as_reviewed_upgrade_only(entry: dict, managed: bool) -> None:
+    """Startup updates must recognise main's managed folder receipts without exposing them publicly."""
+    item = installed_updates.prepare_entry({"id": "i", "harness": "pi", "version": "1.0.0", **entry}, "lock")
+    assert item["folder_managed"] is managed
+    assert "folder_managed" not in installed_updates._PUBLIC_FIELDS

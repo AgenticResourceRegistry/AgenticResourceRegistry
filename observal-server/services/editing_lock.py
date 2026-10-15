@@ -19,7 +19,10 @@ def _is_lock_expired(editing_since: datetime | None) -> bool:
     optic.trace("checking editing lock age")
     if not editing_since:
         return True
-    return datetime.now(UTC) - editing_since > timedelta(minutes=LOCK_TTL_MINUTES)
+    # SQLite-backed tests may return a naive timestamp for a timezone-aware
+    # column; stored lock times originate from UTC in acquire_edit_lock.
+    stored = editing_since.replace(tzinfo=UTC) if editing_since.tzinfo is None else editing_since
+    return datetime.now(UTC) - stored > timedelta(minutes=LOCK_TTL_MINUTES)
 
 
 def acquire_edit_lock(

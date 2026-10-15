@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Development Guide
@@ -288,7 +289,7 @@ Observal is a monorepo:
 ```
 observal-server/    FastAPI backend (Python)
 observal_cli/       CLI and session exporters (Python)
-web/                Next.js 16 / React 19 frontend (TypeScript)
+web/                Vite 8 / React 19 frontend (TypeScript)
 tests/              Shared test suite (~1500 tests, 96 files)
 docker/             Docker Compose and Dockerfiles
 docs/               Documentation
@@ -342,15 +343,7 @@ Conflicts arise when the same file was changed in both `main` and your branch. D
 CONFLICT (content): Merge conflict in some/file.py
 ```
 
-Open the file and look for conflict markers:
-
-```python
-<<<<<<< HEAD
-# this is what's on main
-=======
-# this is what's in your branch
->>>>>>> feature/my-feature
-```
+Open the file and look for the three Git conflict-marker lines: seven less-than signs followed by `HEAD`, seven equals signs, and seven greater-than signs followed by the other branch name. The text between them contains the competing changes.
 
 Edit the file to the correct final state (keeping whichever changes are right, or combining them), then:
 
@@ -516,13 +509,7 @@ pnpm install
 pnpm dev
 ```
 
-Create `web/.env.local` with:
-
-```bash
-NEXT_PUBLIC_API_URL=http://localhost
-```
-
-The frontend proxies all `/api/v1/*` calls to the backend URL set by `NEXT_PUBLIC_API_URL`.
+The Vite dev server proxies all `/api` calls to the backend at `http://localhost:8000`, configured in `web/vite.config.ts`. The Docker stack does not publish port 8000, so run the API locally or point the proxy target at `http://localhost` (the nginx LB).
 
 ### Design system
 

@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from models.base import Base
 class ListingStatus(str, enum.Enum):
     draft = "draft"
     pending = "pending"
+    changes_requested = "changes_requested"
     approved = "approved"
     rejected = "rejected"
     archived = "archived"
@@ -32,6 +34,7 @@ class McpListing(Base):
         Index("ix_mcp_listings_namespace", "namespace"),
         Index("ix_mcp_listings_submitted_by", "submitted_by"),
         Index("ix_mcp_listings_team_id", "team_id"),
+        Index("ix_mcp_listings_forked_from_id", "forked_from_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -44,9 +47,6 @@ class McpListing(Base):
     team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True
     )
-    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("component_bundles.id"), nullable=True
-    )
     submitted_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     co_authors: Mapped[list] = mapped_column(JSON, default=list)
     unique_agents: Mapped[int] = mapped_column(Integer, default=0)
@@ -57,6 +57,14 @@ class McpListing(Base):
         onupdate=lambda: datetime.now(UTC),
     )
     is_recommended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    forked_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mcp_listings.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mcp_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    forked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     latest_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -76,6 +84,10 @@ class McpListing(Base):
     latest_version: Mapped[McpVersion | None] = relationship(
         foreign_keys=[latest_version_id], lazy="selectin", uselist=False, post_update=True
     )
+
+    @property
+    def is_fork(self) -> bool:
+        return self.forked_from_id is not None or self.forked_from_ref is not None
 
     @property
     def qualified_name(self) -> str:

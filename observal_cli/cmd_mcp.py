@@ -17,6 +17,7 @@ import sys
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from loguru import logger as optic
@@ -26,6 +27,7 @@ from rich.table import Table
 
 from observal_cli import client, config
 from observal_cli.analyzer import analyze_local
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_MCP_CATEGORIES
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import fuzzy_select, select_one, text_input
@@ -44,6 +46,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_review_link
 
 mcp_app = typer.Typer(
     help=(
@@ -657,6 +660,8 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
         rprint(f"\n[green]{msg}[/green] ID: [bold]{result['id']}[/bold]")
         rprint(f"  Install: [cyan]observal registry mcp install {client.canonical_name(result)}[/cyan]")
         rprint(f"  Status: {status_badge(result.get('status', 'pending'))}")
+        if not draft:
+            print_review_link(result)
         return result
 
     # ── Path A: Git URL analysis ─────────────────────────────
@@ -967,6 +972,8 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
     if _framework:
         rprint(f"  Framework: [cyan]{_framework}[/cyan]")
     rprint(f"  Status: {status_badge(result.get('status', 'pending'))}")
+    if not draft:
+        print_review_link(result)
     return result
 
 
@@ -1062,6 +1069,7 @@ def _show_impl(mcp_id, output):
                 ("Setup", esc(item.get("setup_instructions") or "none")),
                 ("Changelog", esc(item.get("changelog") or "none")),
                 ("Created", esc(relative_time(item.get("created_at")))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{esc(item['id'])}[/dim]"),
             ],
             border_style="cyan",
@@ -1458,6 +1466,7 @@ def submit(
     config: bool = typer.Option(False, "--config", hidden=True, help="(deprecated) JSON paste is now the default"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
     submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (MCP ID)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -1501,11 +1510,12 @@ def submit(
         resolved = client.resolve_registry_reference("mcp", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/mcps/{resolved}/submit")
+            result = client.post(f"/api/v1/mcps/{resolved}/submit" + (f"?message={quote(message)}" if message else ""))
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{result['id']}[/bold]")
+            print_review_link(result)
         return
     if output != "json":
         if config:

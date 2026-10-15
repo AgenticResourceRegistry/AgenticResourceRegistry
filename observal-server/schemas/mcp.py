@@ -17,6 +17,7 @@ from schemas.constants import (
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 
 class McpEnvVar(BaseModel):
@@ -52,6 +53,7 @@ class McpSubmitRequest(BaseModel):
     git_url: str | None = None
     name: str
     version: str
+    message: str | None = None
     description: str = Field(min_length=1)
     category: str
     owner: str
@@ -154,6 +156,11 @@ class McpValidationResultResponse(BaseModel):
 
 
 class McpListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
+    review_number: int | None = None
+    review_url: str | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -201,6 +208,8 @@ class McpListingResponse(BaseModel):
 
 
 class McpListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str

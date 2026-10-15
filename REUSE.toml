@@ -228,6 +228,11 @@ SPDX-License-Identifier = "Apache-2.0"
 
 
 [[annotations]]
+path = "docs/img/fork-workflow/*.png"
+SPDX-FileCopyrightText = "2026 Naraen Rammoorthi <naraen13@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "docs/img/audit_logging.png"
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
@@ -354,6 +359,11 @@ path = "docs/pr-screenshots/1732/**"
 SPDX-FileCopyrightText = "2026 Chandhini03 <chandhini06sv@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
+[[annotations]]
+path = "docs/pr-screenshots/review-system/*.png"
+SPDX-FileCopyrightText = "2026 Naraen Rammoorthi <naraen13@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
 # Fuzzing seed corpora are raw fuzzer inputs and cannot carry comment headers.
 [[annotations]]
 path = "fuzz/corpus/**"
@@ -367,4 +377,9 @@ SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
 path = ["observal-server/vendor/ard/spec/**", "observal-server/vendor/ard/conformance/**", "observal-server/vendor/ard/LICENSE"]
 SPDX-FileCopyrightText = "2026 Agentic Resource Discovery project"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ".github/release-ruleset.json"
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"

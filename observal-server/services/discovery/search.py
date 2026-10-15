@@ -78,6 +78,7 @@ class SearchFilters:
     capabilities: list[str] = field(default_factory=list)
     publishers: list[str] = field(default_factory=list)
     versions: list[str] = field(default_factory=list)
+    forks_of: str | None = None
     lifecycles: tuple[DiscoveryLifecycle, ...] = DEFAULT_LIFECYCLES
     activatable_only: bool = False
 
@@ -127,6 +128,11 @@ class SearchFilters:
                     except ValueError:
                         raise InvalidSearchRequestError(f"unknown lifecycle in filter: {v}") from None
                 filters.lifecycles = tuple(lifecycles)
+            elif key == "obs:forksOf":
+                refs = values(key)
+                if len(refs) != 1 or len(refs[0]) > 255:
+                    raise InvalidSearchRequestError("obs:forksOf requires one source identifier")
+                filters.forks_of = refs[0]
             elif key == "obs:activatable":
                 filters.activatable_only = str(values(key)[0]).lower() in ("true", "1", "yes")
             else:
@@ -247,6 +253,7 @@ def _query_fingerprint(text: str, filters: SearchFilters, user_id: str | None) -
             "c": sorted(filters.capabilities),
             "p": sorted(filters.publishers),
             "v": sorted(filters.versions),
+            "forks_of": filters.forks_of,
             "l": sorted(lc.value for lc in filters.lifecycles),
             "a": filters.activatable_only,
             "u": user_id,
@@ -352,6 +359,14 @@ async def search_entries(
     stmt = stmt.where(or_(*(DiscoveryEntry.search_document.like(f"%{escape_like(t)}%") for t in tokens)))
     stmt = stmt.order_by(DiscoveryEntry.last_seen_at.desc(), DiscoveryEntry.ard_identifier).limit(CANDIDATE_LIMIT)
     candidates = [e for e in (await db.execute(stmt)).scalars().all() if _post_filter(e, filters)]
+    if filters.forks_of:
+        # A search facet must never reveal team-private forks, even to an admin.
+        from services.discovery.forks import public_upstreams
+
+        public_links = await public_upstreams(db, candidates)
+        candidates = [
+            entry for entry in candidates if public_links.get((entry.kind, entry.local_entity_id)) == filters.forks_of
+        ]
 
     ranked = rank_entries(text, candidates)
     page = ranked[offset : offset + page_size]

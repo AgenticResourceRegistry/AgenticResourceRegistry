@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare a curated Observal release from a safe, contiguous main-branch cutoff."""
+"""Cut release lines, prepare channel releases, and backport fixes."""
 
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +43,7 @@ RELEASE_FILES = (
     ".github/release-notes.md",
 )
 RELEASE_TITLE = re.compile(r"chore\(release\): v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?")
+DEV_TITLE = re.compile(r"chore: start \d+\.\d+ development")
 
 
 class ReleaseError(RuntimeError):
@@ -91,10 +94,10 @@ class Commit:
     message: str
 
 
-def run(*args: str, cwd: Path = ROOT, capture: bool = True) -> str:
-    result = subprocess.run(args, cwd=cwd, check=False, text=True, capture_output=capture)
+def run(*args: str, cwd: Path | None = None, capture: bool = True) -> str:
+    result = subprocess.run(args, cwd=cwd or ROOT, check=False, text=True, capture_output=capture)
     if result.returncode:
-        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        detail = (result.stderr or "").strip() or (result.stdout or "").strip() or f"exit code {result.returncode}"
         raise ReleaseError(f"{' '.join(args)} failed: {detail}")
     return result.stdout.strip() if capture else ""
 
@@ -114,9 +117,18 @@ def repository(remote: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
+GH_ATTEMPTS = 4
+
+
 def gh_json(repo: str, endpoint: str) -> object:
-    output = run("gh", "api", f"repos/{repo}/{endpoint}")
-    return json.loads(output)
+    for attempt in range(1, GH_ATTEMPTS + 1):
+        try:
+            return json.loads(run("gh", "api", f"repos/{repo}/{endpoint}"))
+        except ReleaseError as exc:
+            if attempt == GH_ATTEMPTS:
+                raise
+            print(f"gh api {endpoint} failed (attempt {attempt}/{GH_ATTEMPTS}), retrying: {exc}", file=sys.stderr)
+            time.sleep(2**attempt)
 
 
 def parse_version(version: str) -> tuple[int, int, int]:
@@ -136,6 +148,9 @@ def bump_version(version: str, bump: str) -> str:
 
 
 def validate_version_channel(version: str, channel: str) -> None:
+    version_key(version)
+    if channel not in {"alpha", "beta", "rc", "stable"}:
+        raise ReleaseError(f"Invalid release channel: {channel}")
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", version):
         raise ReleaseError(f"Invalid cross-registry version: {version}")
     if (channel == "stable") != ("-" not in version) or (channel != "stable" and f"-{channel}." not in version):
@@ -182,54 +197,14 @@ def commit_log(revision_range: str) -> list[Commit]:
     return commits
 
 
-def resolve_release_push(before: str, after: str, repo: str, remote: str = "origin") -> tuple[str, int] | None:
-    revision_range = f"{before}..{after}"
-    commits = commit_log(revision_range)
-    release_commits = [commit for commit in commits if RELEASE_TITLE.fullmatch(commit.title)]
-    manifest_commits = set(
-        filter(None, run("git", "log", "--format=%H", revision_range, "--", ".release.toml").splitlines())
-    )
-    if not release_commits and not manifest_commits:
-        return None
-    if len(release_commits) != 1 or manifest_commits != {release_commits[0].sha}:
-        raise ReleaseError("push contains an ambiguous or malformed release change")
-
-    merged = [
-        pull
-        for pull in gh_json(repo, f"commits/{release_commits[0].sha}/pulls")
-        if pull.get("merged_at")
-        and pull.get("base", {}).get("ref") == "main"
-        and RELEASE_TITLE.fullmatch(pull.get("title", ""))
-    ]
-    if len(merged) != 1:
-        raise ReleaseError("release commit must belong to exactly one merged release PR")
-
-    number = merged[0]["number"]
-    pull = gh_json(repo, f"pulls/{number}")
-    head = pull.get("head", {}).get("sha") if isinstance(pull, dict) else None
-    if (
-        not isinstance(head, str)
-        or not re.fullmatch(r"[0-9a-f]{40}", head)
-        or not pull.get("merged_at")
-        or pull.get("base", {}).get("ref") != "main"
-        or pull.get("merge_commit_sha") != release_commits[0].sha
-        or not RELEASE_TITLE.fullmatch(pull.get("title", ""))
-    ):
-        raise ReleaseError(f"merged release PR #{number} has invalid head metadata")
-
-    run("git", "fetch", "--no-tags", remote, f"refs/pull/{number}/head")
-    fetched = run("git", "rev-parse", "FETCH_HEAD^{commit}")
-    if fetched != head:
-        raise ReleaseError(f"release PR #{number} head changed while resolving it")
-    return head, number
-
-
-def discover_changes(repo: str, previous_ref: str, branch: str) -> list[Change]:
+def discover_changes(repo: str, previous_ref: str, branch: str, base: str = "main") -> list[Change]:
     changes: list[Change] = []
     seen_prs: set[int] = set()
-    for commit in commit_log(f"{previous_ref}..{branch}"):
-        pulls = gh_json(repo, f"commits/{commit.sha}/pulls")
-        matching = [pr for pr in pulls if pr.get("merged_at") and pr.get("base", {}).get("ref") == "main"]
+    commits = commit_log(f"{previous_ref}..{branch}")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        all_pulls = list(pool.map(lambda c: gh_json(repo, f"commits/{c.sha}/pulls"), commits))
+    for commit, pulls in zip(commits, all_pulls, strict=True):
+        matching = [pr for pr in pulls if pr.get("merged_at") and pr.get("base", {}).get("ref") in {"main", base}]
         pr = max(matching, key=lambda item: item["merged_at"]) if matching else None
         pr_number = pr["number"] if pr else None
         if changes and pr_number is not None and changes[-1].pr == pr_number:
@@ -266,6 +241,42 @@ def discover_changes(repo: str, previous_ref: str, branch: str) -> list[Change]:
         change.breaking = is_breaking(title, labels, change.body)
         changes.append(change)
     return changes
+
+
+def apply_note_overrides(
+    changes: list[Change],
+    include: tuple[int, ...] = (),
+    exclude: tuple[int, ...] = (),
+    highlight: tuple[int, ...] = (),
+    breaking: tuple[int, ...] = (),
+    titles: dict[int, str] | None = None,
+    categories: dict[int, str] | None = None,
+) -> None:
+    titles, categories = titles or {}, categories or {}
+    by_pr = {change.pr: change for change in changes if change.pr}
+    for numbers in (include, exclude, highlight, breaking, titles, categories):
+        unknown = sorted(set(numbers) - by_pr.keys())
+        if unknown:
+            raise ReleaseError(f"PRs not in this release: {', '.join(f'#{n}' for n in unknown)}")
+    if set(include) & set(exclude):
+        raise ReleaseError("--include-pr and --exclude-pr overlap")
+    bad = sorted(set(categories.values()) - set(CATEGORIES))
+    if bad:
+        raise ReleaseError(f"Unknown category {', '.join(bad)}; choose from {', '.join(CATEGORIES)}")
+    for number, title in titles.items():
+        by_pr[number].title = title
+    for number, category in categories.items():
+        by_pr[number].category = category
+        by_pr[number].include_in_notes = by_pr[number].include_in_notes or category != "Maintenance"
+    for number in include:
+        by_pr[number].include_in_notes = True
+    for number in exclude:
+        by_pr[number].include_in_notes = False
+    for number in highlight:
+        by_pr[number].include_in_notes = True
+        by_pr[number].highlight = True
+    for number in breaking:
+        by_pr[number].breaking = True
 
 
 def coauthors(commits: list[Commit]) -> list[Contributor]:
@@ -342,7 +353,7 @@ def render_changelog_section(version: str, date: str, changes: list[Change]) -> 
 def render_release_notes(
     version: str,
     previous_tag: str,
-    cutoff: str,
+    source_sha: str,
     changes: list[Change],
     contributors: list[Contributor],
 ) -> str:
@@ -355,7 +366,7 @@ def render_release_notes(
         "<!-- SPDX-License-Identifier: Apache-2.0 -->",
         # REUSE-IgnoreEnd
         "",
-        f"This release includes {len(changes)} change groups through `{cutoff[:7]}`.",
+        f"This release includes {len(changes)} change groups through `{source_sha[:7]}`.",
     ]
     if highlights:
         lines.extend(("", "## Highlights", "", render_entries(highlights)))
@@ -420,9 +431,11 @@ def write_manifest(
     version: str,
     channel: str,
     previous_tag: str,
-    cutoff: str,
+    source_sha: str,
     changes: list[Change],
 ) -> None:
+    validate_version_channel(version, channel)
+    branch = "release/" + ".".join(version.split(".")[:2])
     prs = ", ".join(str(change.pr) for change in changes if change.pr)
     path.write_text(
         "# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>\n"
@@ -432,86 +445,317 @@ def write_manifest(
         f'version = "{version}"\n'
         f'channel = "{channel}"\n'
         f'previous_tag = "{previous_tag}"\n'
-        f'cutoff = "{cutoff}"\n'
+        f'source_sha = "{source_sha}"\n'
+        f'branch = "{branch}"\n'
         f'created_at = "{datetime.now(UTC).isoformat()}"\n'
         f"commit_count = {sum(len(change.commits) for change in changes)}\n"
         f"included_prs = [{prs}]\n"
     )
 
 
-def pr_body(version: str, previous_tag: str, cutoff: str, changes: list[Change], preview: str) -> str:
+def pr_body(version: str, previous_tag: str, source_sha: str, changes: list[Change], preview: str) -> str:
+    branch = "release/" + ".".join(version.split(".")[:2])
     return f"""## Purpose / Description
-Prepare Observal v{version} from the contiguous release range `{previous_tag}..{cutoff[:7]}`.
-
-## Fixes
-No linked issue. This is a release preparation change.
+Prepare v{version} on `{branch}` from `{previous_tag}..{source_sha}`.
 
 ## Approach
-The release contains {len(changes)} PR or commit groups. This PR updates version metadata, lockfiles, the curated release notes, and prepends one new changelog section without rewriting existing changelog history.
-
-Merge this PR with squash, rebase, or the merge queue. The release workflow publishes this PR's selected-cutoff head rather than the resulting `main` commit.
+Includes all {len(changes)} change groups on the release branch. Only release metadata changes.
+Rebase-merge into `{branch}`, never into main. If the base advances, regenerate this PR.
 
 ## How Has This Been Tested?
-
-The release tool validated ancestry, tag state, version consistency, allowed changed files, changelog preservation, and release-note generation. The release workflow will build and verify every artifact before publishing.
-
-## Learning (optional, can help others)
-Not applicable. The implementation uses existing Git, GitHub CLI, uv, and repository build tooling.
+Local version and ancestry checks; required branch CI and release preflight validate the merged commit.
+Publication completes only after artifact verification.
 
 ## Release preview
-
 {preview}
-
-## Checklist
-
-- [x] You have a descriptive commit message with a short title (first line, max 50 chars).
-- [ ] You have commented your code, particularly in hard-to-understand areas. Not applicable, this PR contains generated release metadata.
-- [x] You have performed a self-review of your own code.
-- [ ] UI changes: include screenshots of all affected screens. Not applicable, this PR has no UI changes.
-
-## AI Assistance
-
-- [ ] Yes (Please Specify the tool): Not applicable to generated release metadata.
-- [ ] Was the generated code manually reviewed and tested? Not applicable.
 """
 
 
-def ensure_preflight(upstream: str) -> None:
-    for command in ("git", "gh", "uv"):
+def release_series(branch: str) -> str:
+    if not re.fullmatch(r"release/(0|[1-9]\d*)\.(0|[1-9]\d*)", branch):
+        raise ReleaseError("Expected release/X.Y, never main or a patch/channel branch")
+    return branch.removeprefix("release/")
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.([1-9]\d*))?", version)
+    if not match:
+        raise ReleaseError(f"Invalid release version: {version}")
+    major, minor, patch, channel, serial = match.groups()
+    return int(major), int(minor), int(patch), {"alpha": 0, "beta": 1, "rc": 2, None: 3}[channel], int(serial or 0)
+
+
+def version_tags(ref: str | None = None) -> list[str]:
+    args = ["git", "tag", "--list", "v[0-9]*"]
+    if ref:
+        args.extend(("--merged", ref))
+    tags = run(*args).splitlines()
+    return [tag for tag in tags if re.fullmatch(r"v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", tag)]
+
+
+def latest_tag(ref: str | None = None) -> str:
+    tags = version_tags(ref)
+    if not ref:
+        tags = [tag for tag in tags if "-" not in tag]
+    if not tags:
+        raise ReleaseError("No release tag exists in the requested history")
+    return max(tags, key=lambda tag: version_key(tag[1:]))
+
+
+def validate_progression(version: str, channel: str, branch: str, tags: list[str]) -> None:
+    validate_version_channel(version, channel)
+    series = release_series(branch)
+    key = version_key(version)
+    if version.split("-")[0].rsplit(".", 1)[0] != series:
+        raise ReleaseError(f"Version {version} does not belong to {branch}")
+    line = [tag for tag in tags if tag[1:].split("-")[0].rsplit(".", 1)[0] == series]
+    if any(version_key(tag[1:]) >= key for tag in line):
+        raise ReleaseError("Version must advance beyond every existing release on this line")
+
+
+def distribution_tag(version: str, channel: str, tags: list[str]) -> str:
+    validate_version_channel(version, channel)
+    if channel != "stable":
+        alias = {"rc": "next", "beta": "beta", "alpha": "alpha"}[channel]
+        newer = any(f"-{channel}." in tag and version_key(tag[1:]) > version_key(version) for tag in tags)
+        return f"{alias}-{version.split('-')[0].rsplit('.', 1)[0]}" if newer else alias
+    newer = any("-" not in tag and version_key(tag[1:]) > version_key(version) for tag in tags)
+    return "lts-" + version.rsplit(".", 1)[0] if newer else "latest"
+
+
+def next_version(branch: str, channel: str, tags: list[str]) -> str:
+    series = release_series(branch)
+    line = [tag[1:] for tag in tags if tag[1:].split("-")[0].rsplit(".", 1)[0] == series]
+    previous = max(line, key=version_key) if line else None
+    core = previous.split("-")[0] if previous else f"{series}.0"
+    if previous and "-" not in previous:
+        core = bump_version(core, "patch")
+    serial = 1
+    while f"v{core}-{channel}.{serial}" in tags:
+        serial += 1
+    version = core if channel == "stable" else f"{core}-{channel}.{serial}"
+    validate_progression(version, channel, branch, tags)
+    return version
+
+
+def ensure_preflight(upstream: str, expected: str | None = None) -> str:
+    for command in ("git", "gh"):
         require(command)
     if run("git", "status", "--porcelain"):
         raise ReleaseError("Working tree is dirty. Commit or stash changes first.")
-    if run("git", "branch", "--show-current") != "main":
-        raise ReleaseError("Releases must be prepared from main")
+    branch = run("git", "branch", "--show-current")
+    if expected and branch != expected:
+        raise ReleaseError(f"Must run from {expected}")
+    if not expected:
+        release_series(branch)
     run("gh", "auth", "status")
-    run("git", "fetch", upstream, "main", "--tags", "--force", "--no-prune-tags")
-    if run("git", "rev-parse", "HEAD") != run("git", "rev-parse", f"{upstream}/main"):
-        raise ReleaseError(f"Local main must exactly match {upstream}/main")
+    run("git", "fetch", upstream, branch, "--tags", "--no-prune-tags")
+    if run("git", "rev-parse", "HEAD") != run("git", "rev-parse", f"{upstream}/{branch}"):
+        raise ReleaseError(f"Local {branch} must exactly match {upstream}/{branch}")
+    return branch
 
 
-def latest_tag() -> str:
-    tags = run("git", "tag", "--list", "v[0-9]*").splitlines()
-    stable = [tag for tag in tags if re.fullmatch(r"v\d+\.\d+\.\d+", tag)]
-    if not stable:
-        raise ReleaseError("No stable release tag exists")
-    return max(stable, key=lambda tag: parse_version(tag[1:]))
+def next_dev_version(series: str) -> str:
+    major, minor, _ = parse_version(f"{series}.0")
+    return f"{major}.{minor + 1}.0-dev.0"
 
 
-def release_cutoff(tag: str) -> str:
+def bump_main(series: str, upstream: str, fork: str) -> None:
+    """Open a PR advancing main to the next minor dev version, as AnkiDroid does after branching."""
+    version = next_dev_version(series)
+    branch = f"chore/start-{version}"
+    worktree = ROOT / ".worktrees" / f"main-{version}"
+    if worktree.exists() or run("git", "branch", "--list", branch):
+        raise ReleaseError(f"Main bump branch or worktree already exists: {branch}")
+    repo = "/".join(repository(upstream))
+    owner, _ = repository(fork)
+    title = f"chore: start {version.rsplit('.', 2)[0]} development"
+    run("git", "worktree", "add", "-b", branch, str(worktree), f"{upstream}/main", capture=False)
     try:
-        manifest = tomllib.loads(run("git", "show", f"{tag}:.release.toml"))
-    except ReleaseError:
-        # No .release.toml at this tag (older release). Resolve the tag to a
-        # commit SHA immediately so subsequent git log ranges don't depend on
-        # the tag ref surviving background fetches with fetch.pruneTags.
-        return run("git", "rev-parse", f"{tag}^{{commit}}")
-    except tomllib.TOMLDecodeError as exc:
-        raise ReleaseError(f"Invalid release manifest in {tag}: {exc}") from exc
-    cutoff = manifest.get("cutoff")
-    if not isinstance(cutoff, str) or not re.fullmatch(r"[0-9a-f]{40}", cutoff):
-        raise ReleaseError(f"Invalid release cutoff in {tag}")
-    run("git", "cat-file", "-e", f"{cutoff}^{{commit}}")
-    return cutoff
+        for relative in VERSION_FILES:
+            set_version(worktree / relative, version)
+        run("uv", "lock", cwd=worktree, capture=False)
+        run("uv", "lock", cwd=worktree / "observal-server", capture=False)
+        run("git", "add", *VERSION_FILES, "uv.lock", "observal-server/uv.lock", cwd=worktree)
+        run("git", "commit", "-s", "-m", title, "-m", f"Advance main to {version}.", cwd=worktree, capture=False)
+        run("git", "push", fork, branch, cwd=worktree, capture=False)
+        print(
+            run(
+                "gh", "pr", "create", "--repo", repo, "--head", f"{owner}:{branch}", "--base", "main",
+                "--title", title, "--body", f"Advance main to {version} after cutting release/{series}.",
+                cwd=worktree,
+            )
+        )  # fmt: skip
+    except Exception:
+        print(f"Main bump worktree preserved for recovery: {worktree}", file=sys.stderr)
+        raise
+    else:
+        run("git", "worktree", "remove", str(worktree), capture=False)
+
+
+def cut(series: str, upstream: str, fork: str) -> None:
+    branch = f"release/{series}"
+    release_series(branch)
+    ensure_preflight(upstream, "main")
+    if any(version_key(tag[1:])[:2] >= version_key(f"{series}.0")[:2] for tag in version_tags()):
+        raise ReleaseError("Cut a new minor line above all existing release tags; maintain existing lines in place")
+    if run("git", "ls-remote", "--heads", upstream, f"refs/heads/{branch}"):
+        raise ReleaseError(f"Release line already exists: {branch}")
+    # An empty expected ref prevents a racing cut from updating another line.
+    run("git", "push", f"--force-with-lease=refs/heads/{branch}:", upstream, f"HEAD:refs/heads/{branch}", capture=False)
+    print(f"Created {branch} at {run('git', 'rev-parse', 'HEAD')}; nothing published")
+    bump_main(series, upstream, fork)
+
+
+def status(upstream: str) -> None:
+    run("git", "fetch", upstream, "--tags", "--no-prune-tags")
+    branch = run("git", "branch", "--show-current")
+    if branch == "main":
+        print(run("git", "ls-remote", "--heads", upstream, "refs/heads/release/*"))
+        return
+    release_series(branch)
+    tag = latest_tag("HEAD")
+    print(f"{branch}: latest reachable tag {tag}")
+    print(run("git", "log", "--oneline", f"{tag}..HEAD"))
+
+
+def backport(number: int, target: str, upstream: str, fork: str) -> None:
+    series = release_series(target)
+    ensure_preflight(upstream, "main")
+    repo = "/".join(repository(upstream))
+    pull = gh_json(repo, f"pulls/{number}")
+    if not isinstance(pull, dict) or not pull.get("merged_at") or pull.get("base", {}).get("ref") != "main":
+        raise ReleaseError("Backports require a merged main PR")
+    if RELEASE_TITLE.fullmatch(pull["title"]) or DEV_TITLE.fullmatch(pull["title"]):
+        raise ReleaseError("Do not backport release metadata")
+    # GitHub reports original PR hashes even after a rebase merge. Read the
+    # equivalent commits from main, ending at its recorded merge commit.
+    count = pull["commits"]
+    if not isinstance(count, int) or count < 1:
+        raise ReleaseError("PR has no commits")
+    tip = pull["merge_commit_sha"]
+    if not isinstance(tip, str) or not re.fullmatch(r"[0-9a-f]{40}", tip):
+        raise ReleaseError("PR has invalid merge commit")
+    run("git", "merge-base", "--is-ancestor", tip, f"{upstream}/main")
+    commits = run("git", "rev-list", "--reverse", "--first-parent", f"{tip}~{count}..{tip}").splitlines()
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repo}/pulls/{number}/commits"))
+    original = [commit["commit"]["message"].strip() for page in pages for commit in page]
+    messages = [run("git", "show", "-s", "--format=%B", sha) for sha in commits]
+    if original != messages:
+        raise ReleaseError("Cannot identify rebase-merged PR commits exactly; inspect the merge manually")
+    if run("git", "rev-list", "--merges", f"{tip}~{count}..{tip}"):
+        raise ReleaseError("Backports require linear rebase-merged PRs")
+    run("git", "fetch", upstream, target)
+    branch = f"backport/{series}/{number}"
+    worktree = ROOT / ".worktrees" / f"backport-{series}-{number}"
+    run("git", "worktree", "add", "-b", branch, str(worktree), f"{upstream}/{target}", capture=False)
+    try:
+        run("git", "cherry-pick", "-x", *commits, cwd=worktree, capture=False)
+        run("git", "push", fork, branch, cwd=worktree, capture=False)
+        owner, _ = repository(fork)
+        body = f"Backport-of: #{number}\nTarget: {target}\nOriginal-commits:\n" + "\n".join(
+            f"- {sha}" for sha in commits
+        )
+        print(
+            run(
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                repo,
+                "--head",
+                f"{owner}:{branch}",
+                "--base",
+                target,
+                "--title",
+                f"[{series}] {pull['title']}",
+                "--body",
+                body,
+                cwd=worktree,
+            )
+        )
+    except Exception:
+        print(f"Backport worktree preserved for recovery: {worktree}", file=sys.stderr)
+        raise
+    else:
+        run("git", "worktree", "remove", str(worktree), capture=False)
+
+
+def resolve_release_push(before: str, after: str, branch: str) -> str | None:
+    release_series(branch)
+    if before == "0" * 40:
+        return None  # Cutting a line is not a release.
+    for sha in (before, after):
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ReleaseError("Push commits must be full SHAs")
+    run("git", "merge-base", "--is-ancestor", before, after)
+    commits = commit_log(f"{before}..{after}")
+    releases = [commit for commit in commits if RELEASE_TITLE.fullmatch(commit.title)]
+    manifests = set(run("git", "log", "--format=%H", f"{before}..{after}", "--", ".release.toml").splitlines())
+    if not releases and not manifests:
+        return None
+    if len(releases) != 1 or manifests != {releases[0].sha}:
+        raise ReleaseError("push contains an ambiguous or malformed release change")
+    return releases[0].sha
+
+
+def validate_target(target: str, branch: str, upstream: str = "origin", *, candidate: bool = False) -> dict[str, str]:
+    release_series(branch)
+    if not re.fullmatch(r"[0-9a-f]{40}", target):
+        raise ReleaseError("Target must be a full commit SHA")
+    if not candidate:
+        run("git", "merge-base", "--is-ancestor", target, f"{upstream}/{branch}")
+    manifest = tomllib.loads(run("git", "show", f"{target}:.release.toml"))
+    version, channel = manifest["version"], manifest["channel"]
+    if manifest["branch"] != branch:
+        raise ReleaseError("Release manifest branch does not match workflow branch")
+    tags = version_tags()
+    if f"v{version}" in tags:
+        if run("git", "rev-parse", f"v{version}^{{commit}}") != target:
+            raise ReleaseError("Existing tag points to a different commit")
+        tags.remove(f"v{version}")
+    validate_progression(version, channel, branch, tags)
+    if run("git", "show", "-s", "--format=%s", target) != f"chore(release): v{version}":
+        raise ReleaseError("Invalid release commit subject")
+    source = manifest["source_sha"]
+    if not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source):
+        raise ReleaseError("Invalid source SHA")
+    if candidate and source != run("git", "rev-parse", f"{upstream}/{branch}"):
+        raise ReleaseError("Release PR is stale; regenerate it from the latest release branch")
+    if run("git", "show", "-s", "--format=%P", target).split() != [source]:
+        raise ReleaseError("Release source must be its only parent; regenerate stale release PRs")
+    previous = manifest["previous_tag"]
+    if previous not in tags:
+        raise ReleaseError("Previous release tag is missing or invalid")
+    run("git", "merge-base", "--is-ancestor", previous, source)
+    if latest_tag(source) != previous:
+        raise ReleaseError("Previous tag is not the latest reachable release")
+    changed = set(run("git", "diff", "--name-only", source, target).splitlines())
+    if changed - set(RELEASE_FILES):
+        raise ReleaseError(f"Release commit changed forbidden files: {sorted(changed - set(RELEASE_FILES))}")
+    for relative in VERSION_FILES:
+        text = run("git", "show", f"{target}:{relative}")
+        actual = (
+            tomllib.loads(text)["project"]["version"] if relative.endswith(".toml") else json.loads(text)["version"]
+        )
+        if actual != version:
+            raise ReleaseError(f"Release versions disagree: {relative}")
+    if f"## [{version}]" not in run("git", "show", f"{target}:CHANGELOG.md"):
+        raise ReleaseError("Release version missing from changelog")
+    if f"{previous}...v{version}" not in run("git", "show", f"{target}:.github/release-notes.md"):
+        raise ReleaseError("Release notes incomplete")
+    key, old = version_key(version), version_key(previous[1:])
+    bump = "major" if key[0] != old[0] else "feature" if key[1] != old[1] else "patch"
+    python_version = re.sub(r"-(alpha|beta|rc)\.", lambda m: {"alpha": "a", "beta": "b", "rc": "rc"}[m[1]], version)
+    dist_tag = distribution_tag(version, channel, tags)
+    return dict(
+        version=version,
+        channel=channel,
+        python_version=python_version,
+        bump_type=bump,
+        dist_tag=dist_tag,
+        promote_latest=str(dist_tag == "latest").lower(),
+    )
 
 
 def _ask(prompt):
@@ -521,26 +765,13 @@ def _ask(prompt):
     return answer
 
 
-def choose_release(changes: list[Change], previous_version: str, tags: set[str]):
+def choose_release(
+    changes: list[Change], branch: str, tags: set[str], channel: str | None = None, version: str | None = None
+):
     import questionary
     from questionary import Choice
 
-    cutoff_choices = [
-        Choice(
-            f"{index + 1:>3}. {('#' + str(change.pr)) if change.pr else change.commits[-1][:7]}  "
-            f"{clean_title(change.title)}  ({len(change.commits)} commit{'s' if len(change.commits) != 1 else ''})",
-            value=index,
-        )
-        for index, change in enumerate(changes)
-    ]
-    cutoff_index = _ask(
-        questionary.select(
-            "Release through which pull request or commit?",
-            choices=cutoff_choices,
-            default=cutoff_choices[-1],
-        )
-    )
-    included = changes[: cutoff_index + 1]
+    included = changes
     selected_notes = _ask(
         questionary.checkbox(
             "Which included changes belong in public release notes?",
@@ -566,82 +797,71 @@ def choose_release(changes: list[Change], previous_version: str, tags: set[str])
             change.category = _ask(questionary.select("Category:", choices=CATEGORIES, default=change.category))
             change.highlight = _ask(questionary.confirm("Highlight this change?", default=False))
             change.breaking = _ask(questionary.confirm("Breaking change?", default=change.breaking))
-    suggested = (
-        "major"
-        if any(change.breaking for change in included)
-        else (
-            "feature"
-            if any(change.category == "Features" for change in included if change.include_in_notes)
-            else "patch"
-        )
+    channel = channel or _ask(
+        questionary.select("Release channel:", choices=("alpha", "beta", "rc", "stable"), default="rc")
     )
-    bump = _ask(
-        questionary.select(
-            "Version bump:",
-            choices=[suggested, *[item for item in ("patch", "feature", "major", "custom") if item != suggested]],
-            default=suggested,
-        )
-    )
-    version = _ask(questionary.text("Version:")) if bump == "custom" else bump_version(previous_version, bump)
-    channel = _ask(questionary.select("Release channel:", choices=("stable", "rc", "beta", "alpha"), default="stable"))
-    if channel != "stable" and "-" not in version:
-        serial = 1
-        while f"v{version}-{channel}.{serial}" in tags:
-            serial += 1
-        version = f"{version}-{channel}.{serial}"
-    validate_version_channel(version, channel)
+    version = version or next_version(branch, channel, list(tags))
+    validate_progression(version, channel, branch, list(tags))
     return included, version, channel
 
 
-def prepare(preview_only: bool, upstream: str = "upstream", fork: str = "origin") -> None:
+def prepare(
+    preview_only: bool,
+    upstream: str = "upstream",
+    fork: str = "origin",
+    channel: str | None = None,
+    version: str | None = None,
+    yes: bool = False,
+    overrides: dict | None = None,
+) -> None:
     import questionary
 
-    ensure_preflight(upstream)
+    base = ensure_preflight(upstream)
+    require("uv")
     owner, name = repository(upstream)
     repo = f"{owner}/{name}"
     fork_owner, _ = repository(fork)
-    branch = f"{upstream}/main"
-    # Re-fetch tags in case a background process (e.g. lazygit with
-    # fetch.pruneTags) pruned them between ensure_preflight and here.
-    run("git", "fetch", upstream, "--tags", "--force", "--no-prune-tags")
-    previous_tag = latest_tag()
-    previous_cutoff = release_cutoff(previous_tag)
-    changes = discover_changes(repo, previous_cutoff, branch)
-    if not changes:
-        raise ReleaseError(f"No commits exist after {previous_tag}")
-    included, version, channel = choose_release(
-        changes, previous_tag[1:], set(run("git", "tag", "--list").splitlines())
-    )
+    branch = f"{upstream}/{base}"
+    previous_tag = latest_tag(branch)
+    changes = discover_changes(repo, previous_tag, branch, base)
+    apply_note_overrides(changes, **(overrides or {}))
+    if yes:
+        if not channel:
+            raise ReleaseError("Non-interactive preparation requires --channel")
+        included = changes
+        version = version or next_version(base, channel, version_tags())
+        validate_progression(version, channel, base, version_tags())
+    else:
+        included, version, channel = choose_release(changes, base, set(version_tags()), channel, version)
     undocumented_migrations = [change for change in migration_changes(included) if not change.include_in_notes]
     if undocumented_migrations:
         names = ", ".join(
             f"#{change.pr}" if change.pr else change.commits[-1][:7] for change in undocumented_migrations
         )
-        raise ReleaseError(f"Database migrations must be included in release notes: {names}")
-    cutoff = included[-1].commits[-1]
+        raise ReleaseError(f"Database migrations must be included in release notes (use --include-pr): {names}")
+    source_sha = run("git", "rev-parse", branch)
     commits = [
-        commit for commit in commit_log(f"{previous_cutoff}..{cutoff}") if not RELEASE_TITLE.fullmatch(commit.title)
+        commit for commit in commit_log(f"{previous_tag}..{source_sha}") if not RELEASE_TITLE.fullmatch(commit.title)
     ]
     contributors = all_contributors(included, commits)
     date = datetime.now(UTC).date().isoformat()
     changelog_section = render_changelog_section(version, date, included)
-    notes = render_release_notes(version, previous_tag, cutoff, included, contributors)
+    notes = render_release_notes(version, previous_tag, source_sha, included, contributors)
     print("\nIncluded:")
     print(f"  {len(included)} change groups, {len(commits)} commits, {len(contributors)} contributors")
-    print(f"Deferred: {len(changes) - len(included)} change groups")
     print(f"Version:  {version} ({channel})")
     print("\nRelease notes preview:\n")
     print(notes)
     if preview_only:
         return
-    if not _ask(questionary.confirm("Create and push this release PR?", default=False)):
+    if not yes and not _ask(questionary.confirm("Create and push this release PR?", default=False)):
         raise ReleaseError("Release cancelled")
 
-    release_branch = f"release/v{version}"
+    release_branch = f"prepare/v{version}"
     worktree = ROOT / ".worktrees" / f"release-v{version}"
     if worktree.exists() or run("git", "branch", "--list", release_branch):
         raise ReleaseError(f"Release branch or worktree already exists: {release_branch}")
-    run("git", "worktree", "add", "-b", release_branch, str(worktree), cutoff, capture=False)
+    run("git", "worktree", "add", "-b", release_branch, str(worktree), source_sha, capture=False)
     try:
         for relative in VERSION_FILES:
             set_version(worktree / relative, version)
@@ -651,7 +871,7 @@ def prepare(preview_only: bool, upstream: str = "upstream", fork: str = "origin"
         changelog.write_text(prepend_changelog(changelog.read_text(), changelog_section, version))
         notes_path = worktree / ".github" / "release-notes.md"
         notes_path.write_text(notes)
-        write_manifest(worktree / ".release.toml", version, channel, previous_tag, cutoff, included)
+        write_manifest(worktree / ".release.toml", version, channel, previous_tag, source_sha, included)
         run("git", "add", *RELEASE_FILES, cwd=worktree)
         changed = set(run("git", "diff", "--cached", "--name-only", cwd=worktree).splitlines())
         unexpected = changed - set(RELEASE_FILES)
@@ -662,7 +882,7 @@ def prepare(preview_only: bool, upstream: str = "upstream", fork: str = "origin"
         run("git", "diff", "--cached", "--check", cwd=worktree)
         run("git", "commit", "-s", "-m", f"chore(release): v{version}", cwd=worktree, capture=False)
         run("git", "push", fork, release_branch, cwd=worktree, capture=False)
-        body = pr_body(version, previous_tag, cutoff, included, changelog_section)
+        body = pr_body(version, previous_tag, source_sha, included, changelog_section)
         with tempfile.TemporaryDirectory() as tmpdir:
             body_path = Path(tmpdir) / "release-pr-body.md"
             body_path.write_text(body)
@@ -675,7 +895,7 @@ def prepare(preview_only: bool, upstream: str = "upstream", fork: str = "origin"
                 "--head",
                 f"{fork_owner}:{release_branch}",
                 "--base",
-                "main",
+                base,
                 "--title",
                 f"chore(release): v{version}",
                 "--body-file",
@@ -683,7 +903,7 @@ def prepare(preview_only: bool, upstream: str = "upstream", fork: str = "origin"
                 cwd=worktree,
             )
         print(f"\nRelease PR created: {url}")
-        print("Merge with squash, rebase, or the merge queue; the selected cutoff remains the release target.")
+        print(f"Rebase-merge into {base}. If its base advances, regenerate this PR.")
     except Exception:
         print(f"Release worktree preserved for recovery: {worktree}", file=sys.stderr)
         raise
@@ -691,26 +911,94 @@ def prepare(preview_only: bool, upstream: str = "upstream", fork: str = "origin"
         run("git", "worktree", "remove", str(worktree), capture=False)
 
 
+def _pr_pair(value: str) -> tuple[int, str]:
+    number, sep, text = value.partition("=")
+    if not sep or not number.isdigit() or not text:
+        raise argparse.ArgumentTypeError("expected PR=VALUE")
+    return int(number), text
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--preview", action="store_true", help="render the release without creating a branch or PR")
-    parser.add_argument("--upstream", default="upstream", help="remote for the canonical repository")
-    parser.add_argument("--fork", default="origin", help="remote that receives the release branch")
-    parser.add_argument("--resolve-push", action="store_true", help=argparse.SUPPRESS)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--cut", metavar="X.Y", help="cut a release line from the current canonical main")
+    action.add_argument("--backport", type=int, metavar="PR", help="backport a rebase-merged main PR")
+    action.add_argument("--status", action="store_true", help="show release lines or unreleased commits")
+    action.add_argument("--resolve-push", action="store_true", help=argparse.SUPPRESS)
+    action.add_argument("--validate-target", help=argparse.SUPPRESS)
+    parser.add_argument("--to", help="backport destination release/X.Y")
+    parser.add_argument("--channel", choices=("alpha", "beta", "rc", "stable"))
+    parser.add_argument("--version", help="explicit version within the current release line")
+    parser.add_argument("--yes", action="store_true", help="prepare without prompts, requires --channel")
+    for flag, text in (("include", "include in"), ("exclude", "exclude from"), ("highlight", "highlight in")):
+        parser.add_argument(
+            f"--{flag}-pr", type=int, action="append", default=[], metavar="PR", help=f"{text} public release notes"
+        )
+    parser.add_argument("--breaking-pr", type=int, action="append", default=[], metavar="PR", help="mark as breaking")
+    parser.add_argument(
+        "--title-pr", type=_pr_pair, action="append", default=[], metavar="PR=TITLE", help="set release-note title"
+    )
+    parser.add_argument(
+        "--category-pr", type=_pr_pair, action="append", default=[], metavar="PR=CATEGORY", help="set category"
+    )
+    parser.add_argument("--preview", action="store_true", help="render release notes without writing or publishing")
+    parser.add_argument("--upstream", default="upstream", help="canonical repository remote")
+    parser.add_argument("--fork", default="origin", help="remote receiving preparation and backport PRs")
     parser.add_argument("--before", help=argparse.SUPPRESS)
     parser.add_argument("--after", help=argparse.SUPPRESS)
-    parser.add_argument("--repo", help=argparse.SUPPRESS)
+    parser.add_argument("--branch", help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
-        if args.resolve_push:
-            if not all((args.before, args.after, args.repo)):
-                raise ReleaseError("--resolve-push requires --before, --after, and --repo")
-            resolved = resolve_release_push(args.before, args.after, args.repo)
-            if resolved:
-                print(resolved[0])
-            return
-        prepare(args.preview, args.upstream, args.fork)
-    except (ReleaseError, KeyboardInterrupt) as exc:
+        if (
+            args.preview
+            or args.yes
+            or args.channel
+            or args.version
+            or args.include_pr
+            or args.exclude_pr
+            or args.highlight_pr
+            or args.breaking_pr
+            or args.title_pr
+            or args.category_pr
+        ) and (args.cut or args.backport or args.status or args.resolve_push or args.validate_target):
+            raise ReleaseError("Preparation flags cannot be combined with another action")
+        if args.cut:
+            cut(args.cut, args.upstream, args.fork)
+        elif args.backport:
+            if not args.to:
+                raise ReleaseError("--backport requires --to release/X.Y")
+            backport(args.backport, args.to, args.upstream, args.fork)
+        elif args.status:
+            status(args.upstream)
+        elif args.resolve_push:
+            if not all((args.before, args.after, args.branch)):
+                raise ReleaseError("--resolve-push requires --before, --after, --branch")
+            target = resolve_release_push(args.before, args.after, args.branch)
+            if target:
+                print(target)
+        elif args.validate_target:
+            if not args.branch:
+                raise ReleaseError("--validate-target requires --branch")
+            for key, value in validate_target(args.validate_target, args.branch, args.upstream).items():
+                print(f"{key}={value}")
+        else:
+            prepare(
+                args.preview,
+                args.upstream,
+                args.fork,
+                args.channel,
+                args.version,
+                args.yes,
+                dict(
+                    include=tuple(args.include_pr),
+                    exclude=tuple(args.exclude_pr),
+                    highlight=tuple(args.highlight_pr),
+                    breaking=tuple(args.breaking_pr),
+                    titles=dict(args.title_pr),
+                    categories=dict(args.category_pr),
+                ),
+            )
+    except (ReleaseError, KeyboardInterrupt, KeyError, tomllib.TOMLDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 

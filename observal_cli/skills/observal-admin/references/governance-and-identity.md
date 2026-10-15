@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Governance and identity
@@ -39,26 +39,29 @@ Valid roles are `super_admin`, `admin`, `reviewer`, and `user`. Creation and res
 
 ## Review queue
 
-List and select by UUID:
+List open reviews by number (or filter by teamspace/type). Content is visible only to participants and authorized reviewers:
 
 ```bash
-observal admin review list --output json
-observal admin review list --type mcp --output json
-observal admin review list --tab agents --output json
-observal admin review list --team-id TEAM_UUID --output json
-observal admin review show REVIEW_UUID --output json
+observal review list --output json
+observal review list --type mcp --output json
+observal review list --team-id TEAM_UUID --output json
+observal review show 123 --output json
+observal review files 123 --output json
+observal review diff 123 --file SKILL.md --output json
+observal review checks 123 --output json
 ```
 
-Review only the requested item after inspecting details:
+Inspect the complete payload, pinned Agent dependencies, and checks before submitting a verdict. Approval does not publish by default; an eligible actor publishes only after the gate is ready:
 
 ```bash
-observal admin review approve REVIEW_UUID --output json
-observal admin review approve AGENT_UUID --agent --output json
-observal admin review approve BUNDLE_UUID --bundle --output json
-observal admin review reject REVIEW_UUID --reason 'Not reproducible' --output json
+observal review approve 123 --output json
+observal review request-changes 123 --body 'Please clarify the command permissions' --output json
+observal review publish 123 --output json
+observal review policy show --output json
+observal review policy set required_approvals.mcp 2 --output json
 ```
 
-Component types include `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. Agent and bundle selectors are mutually exclusive. Verify returned status and do not act on unrelated queue items.
+Use `observal review --help` for threads, comments, drafts, reviewer requests, dismissal, and watch/mute. Component types include `agent`, `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. There are no submission bundles. Verify returned state and do not act on unrelated reviews.
 
 ## Recommendations
 

@@ -147,17 +147,17 @@ observal
 ├── auth                     # login, logout, whoami, status, change-password, set-username
 ├── config                   # show, set, path, alias, aliases
 ├── registry                 # component parent group
-│   ├── mcp                  #   submit, list, show, install, edit, delete, co-authors
-│   ├── skill                #   submit, list, show, install, edit, delete, co-authors
-│   ├── hook                 #   submit, list, show, install, edit, delete, co-authors
-│   ├── prompt               #   submit, list, show, edit, render, delete, co-authors
-│   ├── sandbox              #   submit, list, show, edit, delete, co-authors
+│   ├── mcp                  #   submit, list, show, fork, install, edit, delete, co-authors, sync
+│   ├── skill                #   submit, list, show, fork, fork-listing, install, edit, delete, co-authors
+│   ├── hook                 #   submit, list, show, fork, install, edit, delete, co-authors
+│   ├── prompt               #   submit, list, show, fork, edit, render, delete, co-authors
+│   ├── sandbox              #   submit, list, show, fork, edit, delete, co-authors
 │   ├── models               #   inspect registry-backed harness model data
 │   ├── version              #   component version commands
 │   ├── recommend            #   components recommended from your own sessions
 │   ├── bulk                 #   mixed component submission from one JSON file
 │   └── a2a                  #   submit, list, review, remove remote A2A agents
-├── agent                    # create, bulk-create, list, my, show, install, archive,
+├── agent                    # create, bulk-create, list, my, show, fork, install, archive,
 │                            # unarchive, delete, init, add, build, publish, release,
 │                            # versions, transfer-owner, co-authors
 │   └── pull                 #   install agent into harness (primary workflow)
@@ -207,6 +207,12 @@ Session delivery uses a local outbox and resumes after transient network failure
 - Device authorization flow for CLI login via browser confirmation.
 - Redis fail-closed: if Redis is down, auth fails (prevents stale token usage).
 - Fresh servers auto-bootstrap admin on first `observal auth login` (localhost-only).
+
+## Release branches
+
+For maintainer release tasks, use the repository-local [release skill](.agents/skills/release/SKILL.md). It is not part of the bundled end-user skills.
+
+Forward development targets `main`; publishing runs only from protected `release/X.Y` branches. Alpha, beta, RC, stable, and patches share one minor-line branch. Use `tools/release.py` (or `make release ARGS="..."`) for cutting lines, preparation, backports, and status. Never merge a release branch back into `main`. Only the newest verified stable release triggers hosted deployment. Terraform validation remains independent and never applies infrastructure during release. See `docs/self-hosting/releasing.md` for the workflow and production rollout gates.
 
 ## Commands
 

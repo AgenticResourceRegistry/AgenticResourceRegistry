@@ -16,6 +16,9 @@ from enum import Enum
 from pathlib import Path
 
 INSTALLER_URL = "https://raw.githubusercontent.com/Observal/Observal/main/install.sh"
+# Development builds (X.Y.Z-dev.N) come from main and are never published to PyPI.
+SOURCE_REPO = "git+https://github.com/Observal/Observal"
+SOURCE_SPEC = f"{SOURCE_REPO}@main"
 
 
 class InstallMethod(Enum):
@@ -23,7 +26,6 @@ class InstallMethod(Enum):
     PIPX = "pipx"
     PIP = "pip"
     BINARY = "binary"
-    HOMEBREW = "homebrew"
     SYSTEM_PACKAGE = "system"
     UNKNOWN = "unknown"
 
@@ -55,11 +57,40 @@ def detect() -> InstallInfo:
     return info
 
 
+def install_spec(target_version: str) -> str:
+    """Return the pip-style requirement that installs ``target_version``.
+
+    Published versions are pinned on PyPI. Development builds are not published,
+    so they are built from the source repository instead.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        if Version(target_version).is_devrelease:
+            return SOURCE_SPEC
+    except InvalidVersion:
+        pass
+    return f"observal-cli=={target_version}"
+
+
+def tag_spec(target_version: str, repo: str = SOURCE_REPO) -> str:
+    """Requirement that builds ``target_version`` from its release tag (``vX.Y.Z[-rc.N]``)."""
+    from packaging.version import Version
+
+    v = Version(target_version)
+    tag = f"v{v.base_version}"
+    if v.pre:
+        tag += f"-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[v.pre[0]] }.{v.pre[1]}"
+    return f"{repo}@{tag}"
+
+
 def upgrade_command(target_version: str, install_info: InstallInfo | None = None) -> str:
     """Return the command users should run to install a specific CLI version."""
     info = install_info or detect()
-    package = f"observal-cli=={target_version}"
+    package = install_spec(target_version)
 
+    if package == SOURCE_SPEC and info.method not in (InstallMethod.UV_TOOL, InstallMethod.PIPX, InstallMethod.PIP):
+        return f"uv tool install --force {shlex.quote(package)}"
     if info.method == InstallMethod.UV_TOOL:
         return f"uv tool install --force {shlex.quote(package)}"
     if info.method == InstallMethod.PIPX:
@@ -68,8 +99,6 @@ def upgrade_command(target_version: str, install_info: InstallInfo | None = None
         return f"{shlex.quote(sys.executable)} -m pip install {shlex.quote(package)}"
     if info.method == InstallMethod.BINARY and info.managed_by == "curl":
         return f"curl -fsSL {INSTALLER_URL} | bash -s -- --version {_release_tag(target_version)}"
-    if info.method == InstallMethod.HOMEBREW:
-        return "brew upgrade observal"
     if info.method == InstallMethod.SYSTEM_PACKAGE and info.managed_by:
         return f"{info.managed_by} upgrade observal"
     return f"observal self upgrade --version {target_version} --force"
@@ -82,14 +111,6 @@ def downgrade_command(target_version: str) -> str:
 
 def _detect_from_path(binary_path: Path, path_str: str) -> InstallInfo:
     """Internal detection logic, separated for testability."""
-
-    if "/homebrew/" in path_str or "/linuxbrew/" in path_str or "linuxbrew" in path_str:
-        return InstallInfo(
-            method=InstallMethod.HOMEBREW,
-            path=binary_path,
-            writable=False,
-            managed_by="brew",
-        )
 
     if path_str.startswith(("/usr/bin/", "/usr/sbin/")):
         return InstallInfo(

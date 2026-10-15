@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Request and response shapes for the inbox API."""
@@ -69,6 +70,10 @@ class InboxCountResponse(BaseModel):
     open: int
     done: int = 0
     dismissed: int = 0
+    # How many of `unread` are already resolved. The default Inbox lists only open
+    # items, so the page needs these to point at what the badge is counting.
+    unread_done: int = 0
+    unread_dismissed: int = 0
     by_kind: dict[str, int] = Field(default_factory=dict)
     by_subject_type: dict[str, int] = Field(default_factory=dict)
 

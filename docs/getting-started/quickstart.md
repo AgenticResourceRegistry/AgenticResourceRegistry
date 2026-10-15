@@ -42,7 +42,7 @@ That's it. The `.env.example` ships with working defaults. The core services com
 | Service               | URL                     | Purpose                        |
 | --------------------- | ----------------------- | ------------------------------ |
 | `observal-lb` (nginx) | `http://localhost`      | Reverse proxy (API + Web)      |
-| `observal-web`        | `http://localhost:3000` | Web UI (Next.js, direct)       |
+| `observal-web`        | `http://localhost:3000` | Web UI (Vite, direct)          |
 | `observal-api`        | internal                | FastAPI backend                |
 | `observal-worker`     | internal                | Background jobs (arq)          |
 | `observal-init`       | internal                | Runs DB migrations, then exits |

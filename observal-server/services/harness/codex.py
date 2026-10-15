@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Codex CLI harness adapter for agent config generation."""
@@ -93,6 +94,9 @@ class CodexAdapter(BaseHarnessAdapter):
             },
             "scope": codex_scope,
         }
+
+        if ctx.skill_configs:
+            result["skill_components"] = ctx.skill_configs
 
         warnings_combined = list(ctx.compatibility_warnings)
         warnings_combined.extend(options.get("_model_warnings") or [])

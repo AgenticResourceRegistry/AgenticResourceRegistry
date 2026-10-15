@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the component version API (factory-generated endpoints).
@@ -405,11 +406,12 @@ async def test_publish_version_happy_path():
         version=SEMVER_VALID, description="New version desc", changelog="Added stuff", extra=None
     )
 
-    # DB returns None for the duplicate check
+    # DB returns None for the duplicate check; AsyncSession.add is synchronous.
     db = AsyncMock()
     dup_result = MagicMock()
     dup_result.scalar_one_or_none.return_value = None
     db.execute = AsyncMock(return_value=dup_result)
+    db.add = MagicMock()
     db.commit = AsyncMock()
 
     with (
@@ -437,8 +439,16 @@ async def test_publish_version_happy_path():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def review_notification():
+    # The inbox delivery service has its own integration tests; a generic
+    # AsyncMock session cannot represent its nested SQLAlchemy transaction.
+    with patch("services.inbox.sources.on_review_decided", new=AsyncMock(return_value=0)) as notify:
+        yield notify
+
+
 @pytest.mark.asyncio
-async def test_review_version_approve_updates_latest():
+async def test_review_version_approve_updates_latest(review_notification):
     """Approving a pending version sets listing.latest_version_id."""
     from api.routes.component_versions import _review_version
     from models.mcp import McpListing, McpVersion
@@ -475,11 +485,12 @@ async def test_review_version_approve_updates_latest():
 
     assert result["new_status"] == ListingStatus.approved.value
     assert listing.latest_version_id == ver.id
+    review_notification.assert_awaited_once()
     db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_review_version_reject_stores_reason():
+async def test_review_version_reject_stores_reason(review_notification):
     """Rejecting a pending version stores the rejection reason."""
     from api.routes.component_versions import _review_version
     from models.mcp import McpListing, McpVersion
@@ -515,6 +526,7 @@ async def test_review_version_reject_stores_reason():
 
     assert result["new_status"] == ListingStatus.rejected.value
     assert ver.rejection_reason == "Not acceptable"
+    review_notification.assert_awaited_once()
     db.commit.assert_called_once()
 
 

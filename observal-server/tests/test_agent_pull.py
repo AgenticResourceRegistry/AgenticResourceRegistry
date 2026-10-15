@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for observal pull / observal agent pull fixes (Issue #667).
@@ -82,6 +83,7 @@ def _make_agent(owner_id: uuid.UUID | None = None, *, with_approved_version: boo
     agent.owner = "testuser"
     agent.created_by = owner_id
     agent.co_authors = []
+    agent.success_criteria = None
 
     if with_approved_version:
         ver = _make_version(agent.id)

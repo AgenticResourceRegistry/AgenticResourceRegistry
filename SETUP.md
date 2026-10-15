@@ -105,12 +105,6 @@ uv tool install observal-cli
 # or: pipx install observal-cli
 ```
 
-**Via Homebrew** (macOS Apple Silicon, Linux x64/arm64):
-
-```bash
-brew install Observal/observal/observal-cli
-```
-
 Verify: `observal --version`
 
 ---
