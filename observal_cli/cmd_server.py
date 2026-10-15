@@ -623,6 +623,8 @@ def _get_health_url(compose_dir: Path) -> str:
 
     Reads LB_HOST_PORT (preferred) or API_HOST_PORT from .env to determine
     the correct port. Falls back to 8000 (standard API port) if neither is set.
+    Every shipped nginx.conf routes /health to the API's readiness check;
+    /readyz falls through to the web app there and would pass without the API.
     """
     optic.trace("compose_dir={}", compose_dir)
     env_file = _find_env_file(compose_dir)
@@ -636,7 +638,25 @@ def _get_health_url(compose_dir: Path) -> str:
             elif line.startswith("API_HOST_PORT="):
                 api_port = line.split("=", 1)[1].strip().strip('"') or None
     port = lb_port or api_port or "8000"
-    return f"http://localhost:{port}/readyz"
+    return f"http://localhost:{port}/health"
+
+
+def _refresh_load_balancer(compose_dir: Path) -> None:
+    """Restart nginx so it resolves the recreated API and web containers.
+
+    nginx resolves upstream hostnames once at startup, so after `up -d`
+    replaces the API container it keeps proxying to the old address.
+    """
+    optic.trace("compose_dir={}", compose_dir)
+    result = subprocess.run(
+        ["docker", "compose", "restart", "observal-lb"],
+        cwd=compose_dir,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        optic.warning("load balancer restart failed returncode={}", result.returncode)
 
 
 def _update_env_version(compose_dir: Path, version: str) -> None:
@@ -813,6 +833,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 remediation="Inspect Docker Compose logs and retry.",
                 detail=f"docker_returncode={result.returncode}",
             )
+        _refresh_load_balancer(compose_dir)
 
         # Health check
         console.print("[blue]==>[/blue] Health check...")
@@ -840,6 +861,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 capture_output=True,
                 timeout=300,
             )
+            _refresh_load_balancer(compose_dir)
             fail(
                 ErrorCategory.UNAVAILABLE,
                 "The upgraded server failed its health check.",
@@ -1002,6 +1024,7 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
                 remediation="Inspect Docker Compose logs before retrying.",
                 detail=f"docker_returncode={recreate.returncode}",
             )
+        _refresh_load_balancer(compose_dir)
 
         # Health check
         import time

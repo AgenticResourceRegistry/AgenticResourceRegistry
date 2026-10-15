@@ -373,18 +373,55 @@ def test_upgrade_applies_backup_images_and_health_check(isolated, monkeypatch: p
     monkeypatch.setattr(isolated.upgrade_lock, "acquire_lock", MagicMock(return_value="lock"))
     release = MagicMock()
     monkeypatch.setattr(isolated.upgrade_lock, "release_lock", release)
-    run = MagicMock(side_effect=[completed(), completed()])
+    run = MagicMock(side_effect=[completed(), completed(), completed()])
     monkeypatch.setattr(cmd_server.subprocess, "run", run)
     monkeypatch.setattr("time.sleep", MagicMock())
-    monkeypatch.setattr(httpx, "get", MagicMock(return_value=SimpleNamespace(status_code=200)))
+    health = MagicMock(return_value=SimpleNamespace(status_code=200))
+    monkeypatch.setattr(httpx, "get", health)
 
     result = cmd_server._server_upgrade("2.0.0", False, False, True)
 
     assert result["status"] == "upgraded"
     assert result["backup"] == str(backup)
     assert (compose / ".env").read_text() == "OBSERVAL_VERSION=2.0.0\n"
-    assert run.call_args_list[0].args[0] == ["docker", "compose", "pull"]
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["docker", "compose", "pull"],
+        ["docker", "compose", "up", "-d"],
+        ["docker", "compose", "restart", "observal-lb"],
+    ]
+    assert health.call_args.args[0] == "http://localhost:8000/health"
     release.assert_called_once_with("lock")
+
+
+def test_failed_upgrade_health_check_restores_and_refreshes_load_balancer(
+    isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compose = prepare_compose(isolated, monkeypatch)
+    monkeypatch.setattr(isolated.version_check, "verify_server_image_exists", MagicMock(return_value=True))
+    monkeypatch.setattr(isolated.upgrade_lock, "acquire_lock", MagicMock(return_value="lock"))
+    monkeypatch.setattr(isolated.upgrade_lock, "release_lock", MagicMock())
+    run = MagicMock(return_value=completed())
+    monkeypatch.setattr(cmd_server.subprocess, "run", run)
+    monkeypatch.setattr("time.sleep", MagicMock())
+    monkeypatch.setattr(httpx, "get", MagicMock(return_value=SimpleNamespace(status_code=502)))
+
+    with pytest.raises(Exception) as error:
+        cmd_server._server_upgrade("2.0.0", True, False, True)
+
+    assert getattr(error.value, "category", None).value == "unavailable"
+    assert (compose / ".env").read_text() == "OBSERVAL_VERSION=1.0.0\n"
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["docker", "compose", "pull"],
+        ["docker", "compose", "up", "-d"],
+        ["docker", "compose", "restart", "observal-lb"],
+        ["docker", "compose", "up", "-d"],
+        ["docker", "compose", "restart", "observal-lb"],
+    ]
+
+
+def test_health_url_targets_an_api_route_behind_the_load_balancer(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("API_HOST_PORT=41800\n")
+    assert cmd_server._get_health_url(tmp_path) == "http://localhost:41800/health"
 
 
 def test_rollback_is_confined_and_reports_clickhouse_unchanged(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -397,7 +434,8 @@ def test_rollback_is_confined_and_reports_clickhouse_unchanged(isolated, monkeyp
     monkeypatch.setattr(isolated.backup, "restore_backup", restore)
     monkeypatch.setattr(isolated.upgrade_lock, "acquire_lock", MagicMock(return_value="lock"))
     monkeypatch.setattr(isolated.upgrade_lock, "release_lock", MagicMock())
-    monkeypatch.setattr(cmd_server.subprocess, "run", MagicMock(return_value=completed()))
+    run = MagicMock(return_value=completed())
+    monkeypatch.setattr(cmd_server.subprocess, "run", run)
     monkeypatch.setattr("time.sleep", MagicMock())
     monkeypatch.setattr(httpx, "get", MagicMock(return_value=SimpleNamespace(status_code=200)))
 
@@ -407,6 +445,10 @@ def test_rollback_is_confined_and_reports_clickhouse_unchanged(isolated, monkeyp
     assert result["clickhouse_restored"] is False
     restore.assert_called_once_with(backup, compose)
     assert (compose / ".env").read_text() == "OBSERVAL_VERSION=1.5.0\n"
+    assert [call.args[0] for call in run.call_args_list] == [
+        ["docker", "compose", "up", "-d"],
+        ["docker", "compose", "restart", "observal-lb"],
+    ]
 
 
 def test_rollback_rejects_external_backup(isolated, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
