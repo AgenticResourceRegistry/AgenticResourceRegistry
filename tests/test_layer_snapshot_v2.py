@@ -304,6 +304,7 @@ async def test_conflict_marker_insert_preserves_explicit_newer_version(monkeypat
     }
     await ch_insert.insert_layer_snapshot(row)
     assert "lockfile_hash, uploaded_at) FORMAT JSONEachRow" in query.await_args.args[0]
+    assert query.await_args.args[1] == {"wait_for_async_insert": "1"}
     assert json.loads(query.await_args.kwargs["data"])["uploaded_at"] == row["uploaded_at"]
 
 

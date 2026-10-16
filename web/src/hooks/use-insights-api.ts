@@ -132,7 +132,20 @@ export function useGenerateComponentInsight() {
       void qc.invalidateQueries({ queryKey: ["insights", "component-reports", vars.type, vars.id] });
       toast.success("Component report queued");
     },
-    onError: (error: Error) => toast.error(error.message || "Could not queue component report"),
+    onError: (error: Error) => {
+      // The API returns structured coverage when no verified-present session exists.
+      // Never show its raw JSON as a toast or suggest that unknown history means zero use.
+      if ((error as Error & { status?: number }).status === 422) {
+        try {
+          const detail: unknown = JSON.parse(error.message);
+          if (detail && typeof detail === "object" && "message" in detail && detail.message === "No verified present sessions") {
+            toast.error("No verified-present sessions for this component. Missing installation evidence cannot establish presence or zero use. Check activity coverage; if the matching historical evidence does not exist, run a new session with a verified install.");
+            return;
+          }
+        } catch { /* Other validation errors retain their normal message. */ }
+      }
+      toast.error(error.message || "Could not queue component report");
+    },
   });
 }
 

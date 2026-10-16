@@ -76,6 +76,26 @@ test.describe("Component Insights report", () => {
     });
   }
 
+  test("MCP coverage explains historical gaps without attributing them to the listing", async ({ page }, testInfo) => {
+    await loginToWebUI(page);
+    await page.route("**/api/v1/insights/reports/report-fixture", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({
+        ...base, component_type: "mcp", ...reports.mcp,
+        coverage: { ...reports.mcp.coverage, presence: { ...coverage.presence, legacy_hash_sessions: 60, snapshot_missing_sessions: 1 } },
+      }),
+    }));
+    await page.goto("/insights/report-fixture");
+    const note = page.getByRole("note");
+    await expect(note).toContainText("Some sessions lack installation evidence");
+    await expect(note).toContainText("60 project sessions have legacy layer hashes.");
+    await expect(note).toContainText("1 project session has no installation snapshot.");
+    await expect(note).toContainText("not proof that this component was installed or used");
+    await expect(note).toContainText("A missing v2 snapshot may arrive late");
+    await expect(page.getByText("1 of 2 verified-present sessions processed.")).toBeVisible();
+    await note.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("mcp-historical-coverage.png") });
+  });
+
   test("UI demo skill keeps all published evidence stages distinct", async ({ page }, testInfo) => {
     // A sanitized, deterministic rendering fixture from the real Pi demo report; not a live delivery claim.
     const demo = {

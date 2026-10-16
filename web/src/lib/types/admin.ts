@@ -167,7 +167,7 @@ export interface ComponentInsightNarrative {
 
 export interface ComponentInsightCoverage {
 	attribution_state: "observed" | "no_observed_calls" | "attribution_not_possible";
-	presence: { present_sessions: number; present_users: number; eligible_sessions: number };
+	presence: { present_sessions: number; present_users: number; eligible_sessions: number; legacy_hash_sessions?: number; snapshot_missing_sessions?: number };
 	projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
 	calls: { collision_calls: number; unmatched_calls: number; unknown_result_calls: number };
 	usage_rate_denominator_sessions: number;
@@ -244,7 +244,7 @@ export interface HookInsightMetrics {
 
 export interface HookInsightCoverage {
 	attribution_state: "observed" | "no_recorded_runs" | "attribution_not_possible";
-	presence: { present_sessions: number; present_users: number; eligible_sessions: number };
+	presence: { present_sessions: number; present_users: number; eligible_sessions: number; legacy_hash_sessions?: number; snapshot_missing_sessions?: number };
 	projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
 	eligibility: { eligible_sessions: number; headless_sessions: number; agent_inactive_sessions: number; mode_unknown_sessions: number; agent_unknown_sessions?: number; version_unverified_sessions?: number };
 	evidence: { candidate_runs: number; attributed_runs: number; collision_runs: number; unmatched_runs: number };
