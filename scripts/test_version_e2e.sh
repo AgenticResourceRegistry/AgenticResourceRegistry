@@ -152,7 +152,7 @@ fi
 echo ""
 echo "The version mismatch banner triggers when:"
 echo "  - Server header X-Observal-Server: 0.X.0"
-echo "  - Frontend build NEXT_PUBLIC_APP_VERSION: 0.Y.0 (different)"
+echo "  - Frontend build VITE_APP_VERSION: 0.Y.0 (different)"
 echo "  → Shows 'New version available. [Refresh]' toast"
 echo ""
 echo "To test manually:"
