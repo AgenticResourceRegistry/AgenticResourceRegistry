@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """ClickHouse insert functions for live tables."""
 
@@ -8,6 +9,12 @@ import orjson
 from loguru import logger as optic
 
 import services.clickhouse.client as _client
+
+# Ingest awaits these inserts while the harness hook, and so the user's prompt, waits.
+# The server default floors the async insert window at 50ms; adaptive timeout still
+# widens it toward async_insert_busy_timeout_max_ms under load, so a low floor only
+# shortens the wait when inserts are sparse.
+_AWAITED_INSERT_SETTINGS = {"wait_for_async_insert": "1", "async_insert_busy_timeout_min_ms": "10"}
 
 
 def _dumps(obj: dict) -> str:
@@ -107,7 +114,7 @@ async def insert_session_events(rows: list[dict]):
     try:
         r = await _client._query(
             sql,
-            {"wait_for_async_insert": "1"},
+            dict(_AWAITED_INSERT_SETTINGS),
             data="\n".join(_dumps(row) for row in rows),
         )
         r.raise_for_status()
@@ -137,7 +144,7 @@ async def insert_session_checkpoint(
     r = await _client._query(
         "INSERT INTO session_checkpoints (session_id, project_id, user_id, harness, acknowledged_line, "
         "acknowledged_offset, checkpoint_version) FORMAT JSONEachRow",
-        {"wait_for_async_insert": "1"},
+        dict(_AWAITED_INSERT_SETTINGS),
         data=_dumps(row),
     )
     r.raise_for_status()
