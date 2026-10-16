@@ -101,3 +101,62 @@ def test_empty_presence_generation_error_preserves_coverage_without_raw_json():
     assert "missing snapshots: 1" in failure.value.message
     assert "{" not in failure.value.message
     assert "Legacy Agent traces alone do not prove" in failure.value.remediation
+
+
+@pytest.mark.parametrize("kind", ["mcp", "skill", "hook"])
+def test_version_is_resolved_and_scopes_activity_sessions_and_generation(monkeypatch, kind):
+    monkeypatch.setattr("observal_cli.cmd_insights.client.resolve_registry_reference", lambda *_: COMPONENT_ID)
+    version_id = "22222222-2222-4222-8222-222222222222"
+    version = "1.2.3-rc.1"
+    calls = []
+
+    def get(path, params=None):
+        calls.append(("get", path, params))
+        if "/versions/" in path:
+            return {"id": version_id, "version": version}
+        if path.endswith("/sessions"):
+            return {"sessions": [], "next_cursor": None}
+        return {"coverage": {"presence": {}}, "component": {"qualified_name": "team/probe"}}
+
+    def post(path, body):
+        calls.append(("post", path, body))
+        return {"id": "report-id", "status": "queued"}
+
+    monkeypatch.setattr("observal_cli.cmd_insights.client.get", get)
+    monkeypatch.setattr("observal_cli.cmd_insights.client.post", post)
+    for args in (
+        ["activity", "--component", kind, "team/probe", "--version", version],
+        ["sessions", "--component", kind, "team/probe", "--version", version],
+        ["generate", "--component", kind, "team/probe", "--version", version],
+    ):
+        result = runner.invoke(insights_app, [*args, "--output", "json"])
+        assert result.exit_code == 0, result.output
+
+    version_path = f"/api/v1/{kind}s/{COMPONENT_ID}/versions/{version}"
+    assert calls == [
+        ("get", version_path, None),
+        (
+            "get",
+            f"/api/v1/components/{kind}/{COMPONENT_ID}/activity/summary",
+            {"period_days": 14, "component_version_id": version_id},
+        ),
+        ("get", version_path, None),
+        (
+            "get",
+            f"/api/v1/components/{kind}/{COMPONENT_ID}/activity/sessions",
+            {"period_days": 14, "limit": 50, "component_version_id": version_id},
+        ),
+        ("get", version_path, None),
+        (
+            "post",
+            f"/api/v1/insights/components/{kind}/{COMPONENT_ID}/generate",
+            {"period_days": 14, "component_version_id": version_id},
+        ),
+    ]
+
+
+def test_invalid_component_version_does_not_request_report(monkeypatch):
+    monkeypatch.setattr("observal_cli.cmd_insights.client.resolve_registry_reference", lambda *_: COMPONENT_ID)
+    monkeypatch.setattr("observal_cli.cmd_insights.client.post", lambda *_: pytest.fail("should not generate"))
+    result = runner.invoke(insights_app, ["generate", "--component", "mcp", "team/probe", "--version", "not/a/version"])
+    assert result.exit_code == 7
