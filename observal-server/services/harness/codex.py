@@ -11,7 +11,8 @@ import json
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.harness import BaseHarnessAdapter, ConfigContext, McpConfigContext, register_adapter
 
-_CODEX_SESSION_PUSH_CMD = "python3 -m observal_cli.hooks.codex_session_push"
+# The same session push hook `observal doctor patch` installs for Codex.
+_CODEX_SESSION_PUSH_CMD = "python3 -m observal_cli.hooks.session_push --harness codex"
 
 
 def _toml_string(value: str) -> str:
@@ -88,9 +89,13 @@ class CodexAdapter(BaseHarnessAdapter):
                 ),
             },
             "mcp_config": {"path": codex_spec["mcp_config"][codex_scope], "content": codex_content},
+            # Merge, never replace: ~/.codex/hooks.json also holds the user's own
+            # hooks and Observal's SessionStart/SessionEnd startup-update hooks.
+            # Only the UserPromptSubmit and Stop lists are refreshed.
             "hooks_config": {
                 "path": codex_spec["hooks"][codex_scope],
                 "content": _codex_hooks_config(agent_name=ctx.safe_name),
+                "merge": True,
             },
             "scope": codex_scope,
         }
