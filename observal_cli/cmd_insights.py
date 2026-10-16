@@ -134,7 +134,7 @@ def _select_report_id(reports: list[dict], report_ref: str | None) -> str:
 _COMPONENT_REPORT_TYPES = ("mcp", "skill", "hook")
 
 
-def _component_path(component: tuple[str, str]) -> str:
+def _component_route(component: tuple[str, str], prefix: str) -> str:
     kind, ref = component
     if kind not in _COMPONENT_REPORT_TYPES:
         fail(
@@ -145,7 +145,109 @@ def _component_path(component: tuple[str, str]) -> str:
             remediation="Use --component mcp|skill|hook <ref>.",
         )
     resolved = client.resolve_registry_reference(kind, ref)
-    return f"/api/v1/insights/components/{kind}/{resolved}"
+    return f"/api/v1/{prefix}/{kind}/{resolved}"
+
+
+def _component_path(component: tuple[str, str]) -> str:
+    return _component_route(component, "insights/components")
+
+
+def _activity_path(component: tuple[str, str]) -> str:
+    return _component_route(component, "components") + "/activity"
+
+
+@insights_app.command(name="activity")
+def insights_activity(
+    component: tuple[str, str] = typer.Option(
+        ..., "--component", help="Component type and ref: mcp|skill|hook NAMESPACE/SLUG"
+    ),
+    period_days: int = typer.Option(14, "--period", "-p", min=1, max=90),
+    output: OutputMode = typer.Option("table", "--output", "-o"),
+):
+    """Show current verified presence, usage and coverage before generating a report."""
+    with _progress(output, "Fetching component activity..."):
+        data = client.get(f"{_activity_path(component)}/summary", params={"period_days": period_days})
+    if output == "json":
+        output_json(data)
+        return
+    kind = component[0]
+    coverage = data.get("coverage") or {}
+    presence = coverage.get("presence") or {}
+    projection = coverage.get("projection") or {}
+    rprint(
+        f"[bold]{esc(data.get('component', {}).get('qualified_name') or component[1])} · {esc(kind)} activity[/bold]"
+    )
+    rprint(
+        f"  Verified-present sessions: {data.get('present_sessions', 0)} / {presence.get('eligible_sessions', 0)} eligible"
+    )
+    if kind == "mcp":
+        rprint(
+            f"  Observed calls: {data.get('observed_calls', 0) if coverage.get('usage_rate_denominator_sessions') else 'not measured'}"
+        )
+    elif kind == "skill":
+        rprint(
+            f"  Confirmed loads: {data.get('confirmed_loads', 0)}  Invocations: {data.get('invocations') if data.get('invocations') is not None else 'not recorded'}"
+        )
+    else:
+        rprint(
+            f"  Eligible sessions: {data.get('eligible_sessions', 0)}  Recorded runs: {data.get('sessions_with_recorded_run', 0)} sessions"
+        )
+    rprint(
+        f"  Projection: {projection.get('projection_complete_sessions', 0)} processed; state: {esc(coverage.get('attribution_state', 'unknown'))}"
+    )
+    gaps = {
+        k: presence.get(k)
+        for k in (
+            "legacy_hash_sessions",
+            "snapshot_missing_sessions",
+            "mapping_pending_sessions",
+            "mapping_failed_sessions",
+            "unverified_presence_sessions",
+        )
+        if presence.get(k)
+    }
+    if gaps:
+        rprint("  Presence gaps: " + ", ".join(f"{esc(k)}={v}" for k, v in gaps.items()))
+    if coverage.get("reasons"):
+        rprint(f"  Gaps: {esc(', '.join(coverage['reasons']))}")
+
+
+@insights_app.command(name="sessions")
+def insights_sessions(
+    component: tuple[str, str] = typer.Option(
+        ..., "--component", help="Component type and ref: mcp|skill|hook NAMESPACE/SLUG"
+    ),
+    period_days: int = typer.Option(14, "--period", "-p", min=1, max=90),
+    limit: int = typer.Option(50, "--limit", min=1, max=100),
+    cursor: str | None = typer.Option(None, "--cursor", help="Opaque cursor returned by the previous page"),
+    output: OutputMode = typer.Option("table", "--output", "-o"),
+):
+    """List verified-present sessions and their published component evidence."""
+    params: dict[str, str | int] = {"period_days": period_days, "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    with _progress(output, "Fetching component sessions..."):
+        data = client.get(f"{_activity_path(component)}/sessions", params=params)
+    if output == "json":
+        output_json(data)
+        return
+    table = Table(title=f"{esc(component[1])} · {esc(component[0])} sessions")
+    for label in ("Session", "Harness", "Projection", "Evidence"):
+        table.add_column(label)
+    for row in data.get("sessions", []):
+        signal = (
+            f"{row.get('observed_calls', 0)} calls"
+            if component[0] == "mcp"
+            else f"{row.get('confirmed_loads', 0)} loads"
+            if component[0] == "skill"
+            else f"{row.get('runs_with_output', 0)} output runs"
+        )
+        table.add_row(
+            esc(row.get("session_id", "")), esc(row.get("harness", "")), esc(row.get("projection_state", "")), signal
+        )
+    console.print(table)
+    if data.get("next_cursor"):
+        rprint(f"  Next page: --cursor {esc(data['next_cursor'])}")
 
 
 def _resolve_report_for_show(target: str, report_ref: str | None, component: tuple[str, str] | None = None) -> dict:
