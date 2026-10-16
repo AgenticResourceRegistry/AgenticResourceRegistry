@@ -110,7 +110,7 @@ def _hook_summary(aggregate: dict) -> dict:
     [
         ({"eligible_sessions": 2, "observed_sessions": 1}, ["recorded runs", "not what it changed"]),
         ({"eligible_sessions": 2}, ["does not show the hook never ran"]),
-        ({"headless_sessions": 3}, ["no conclusion can be drawn", "ran headless"]),
+        ({"headless_sessions": 3}, ["no conclusion can be drawn", "ran headless", "hook's placement cannot run there"]),
     ],
 )
 async def test_hook_report_states_what_runs_do_and_do_not_show(monkeypatch, aggregate, phrases):

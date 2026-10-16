@@ -988,7 +988,7 @@ def test_hook_component_reports_show_lower_bounds_and_sessions_that_could_not_ru
     text = " ".join(cli.messages())
     assert "Sessions with a recorded run: 1 (a lower bound)" in text
     assert "0 with output, 1 failed, 0 blocked" in text
-    assert "1 headless (agent hooks do not run), 1 agent not active" in text
+    assert "1 headless (this agent hook's placement cannot run), 1 agent not active" in text
     for other in ("Observed calls", "confirmed load", "invocation"):
         assert other not in text
 

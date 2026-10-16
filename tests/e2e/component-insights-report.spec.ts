@@ -67,6 +67,9 @@ test.describe("Component Insights report", () => {
         await expect(page.getByText("Only harnesses that record it")).toHaveCount(0);
       } else {
         await expect(page.getByText("At least; silent runs may be unrecorded")).toBeVisible();
+        const exclusions = page.getByText("Excluded because the hook could not run:", { exact: false });
+        await expect(exclusions).toContainText("this hook's placement cannot run");
+        await expect(exclusions).not.toContainText("agent hooks do not run");
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`${kind}-${kind === "skill" ? "mobile" : "desktop"}.png`) });
