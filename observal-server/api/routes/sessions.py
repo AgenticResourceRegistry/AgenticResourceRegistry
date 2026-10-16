@@ -7,6 +7,7 @@
 # SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session listing and detail endpoints - backed by session_events table.
@@ -19,7 +20,10 @@ raw JSONL rows into frontend-friendly event dicts.
 import asyncio
 import uuid as _uuid
 
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response
 from fastapi_cache.decorator import cache
 from loguru import logger as optic
 from sqlalchemy import select
@@ -379,7 +383,7 @@ async def get_session(
         identity_params,
     )
     if not identity_rows:
-        return {"session_id": session_id, "harness": "", "events": []}
+        return _session_response({"session_id": session_id, "harness": "", "events": []})
 
     identity = identity_rows[0]
     params: dict[str, str] = {
@@ -435,8 +439,8 @@ async def get_session(
     if not rows:
         if after_offset is not None:
             # Incremental fetch with no new data
-            return {"session_id": session_id, "events": [], "max_offset": after_offset}
-        return {"session_id": session_id, "service_name": "", "events": [], "traces": []}
+            return _session_response({"session_id": session_id, "events": [], "max_offset": after_offset})
+        return _session_response({"session_id": session_id, "service_name": "", "events": [], "traces": []})
 
     harness = rows[0].get("harness", "claude-code")
     agent_id = next((r.get("agent_id") for r in rows if r.get("agent_id")), None)
@@ -492,17 +496,32 @@ async def get_session(
                     "events": sub_events,
                 }
             )
-    return {
-        "session_id": session_id,
-        "service_name": harness,
-        "agent_id": agent_id,
-        "agent_name": agent_name,
-        "agent_version": agent_version,
-        "events": events,
-        "traces": [],
-        "subagent_sessions": subagent_sessions,
-        "max_offset": max_offset,
-    }
+    return _session_response(
+        {
+            "session_id": session_id,
+            "service_name": harness,
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+            "agent_version": agent_version,
+            "events": events,
+            "traces": [],
+            "subagent_sessions": subagent_sessions,
+            "max_offset": max_offset,
+        }
+    )
+
+
+def _session_response(content: dict) -> Response:
+    """Encode a trace payload without FastAPI's per-node ``jsonable_encoder`` walk.
+
+    A trace carries every event of its session and the trace page re-fetches it
+    while open, so it is encoded with orjson. Transcripts can carry integers
+    beyond 64 bits, which only the stdlib encoder accepts.
+    """
+    try:
+        return Response(orjson.dumps(content), media_type="application/json")
+    except TypeError:
+        return JSONResponse(jsonable_encoder(content))
 
 
 @router.post("/{session_id}/bind-agent")

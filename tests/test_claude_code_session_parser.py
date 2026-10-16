@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Madhumidha <madhumidha072005@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for Claude Code session parser."""
@@ -263,3 +264,14 @@ class TestClaudeCodeSessionParser:
         assert events[4]["attributes"]["input_tokens"] == "3"
         assert events[5]["body"] == "Observal is an agent registry and observability platform."
         assert events[5]["attributes"]["cache_read_tokens"] == "16743"
+
+
+def test_load_line_accepts_what_only_the_stdlib_parser_reads():
+    from services.session_parsers.base import load_line
+
+    assert load_line('{"type":"user","n":NaN}')["type"] == "user"
+    assert load_line('{"type":"user","n":' + str(2**70) + "}")["n"] == 2**70
+    assert load_line('{"type":"user"}') == {"type": "user"}
+    assert load_line("[1, 2]") is None
+    assert load_line("not json") is None
+    assert load_line("[" * 100_000) is None
