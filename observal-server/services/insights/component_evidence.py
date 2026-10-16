@@ -258,6 +258,7 @@ async def component_findings(report: InsightReport) -> dict:
         "succeeded, completed, failed or worked. Only say 'a published call returned an error' when a cited "
         "call has result:error. Do not infer use from prompts. Do not assert cost, impact, or that "
         "a component was unused. If evidence is inadequate return an empty findings list. Never output high confidence. "
+        "Return at most five findings, even if more sessions are sampled; prefer fewer over repeating the same call. "
         # Each rule below is one _validate enforces; a finding that breaks any of them is rejected.
         "Rules for every finding: cite refs from exactly one session, so all of its evidence_refs share one "
         "sN- prefix (a pattern seen in several sessions is separate findings, one per session, or none); "
@@ -297,7 +298,7 @@ async def component_findings(report: InsightReport) -> dict:
                 reason = str(error) if type(error) is ValueError else "the JSON did not match the schema"
                 repair = (
                     f"\nYour response was rejected: {reason}. "
-                    "Return only the required JSON using supplied refs and the rules above; "
+                    "Return only the required JSON with at most five findings using supplied refs and the rules above; "
                     "otherwise an empty findings list."
                 )
                 if attempt == 0 and len(prompt) + len(repair) <= MAX_PROMPT_CHARS:
