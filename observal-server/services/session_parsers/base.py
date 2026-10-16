@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import re
 
-import orjson
-
 # ANSI escape sequence pattern (CSI sequences + OSC + simple escapes)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^\[]")
 
@@ -24,13 +22,9 @@ def load_line(raw_line: str) -> dict | None:
     Callers fall back to ``basic_event`` when this returns None.
     """
     try:
-        parsed = orjson.loads(raw_line)
-    except orjson.JSONDecodeError:
-        # orjson rejects what the stdlib accepts (NaN literals, integers beyond 64 bits).
-        try:
-            parsed = json.loads(raw_line)
-        except (json.JSONDecodeError, RecursionError, ValueError):
-            return None
+        parsed = json.loads(raw_line)
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        return None
     return parsed if isinstance(parsed, dict) else None
 
 

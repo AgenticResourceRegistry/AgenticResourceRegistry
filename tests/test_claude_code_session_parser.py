@@ -7,6 +7,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "observal-server"))
 
 from services.session_parsers.claude_code import parse_rows
@@ -266,12 +268,22 @@ class TestClaudeCodeSessionParser:
         assert events[5]["attributes"]["cache_read_tokens"] == "16743"
 
 
-def test_load_line_accepts_what_only_the_stdlib_parser_reads():
+def test_load_line_accepts_lenient_json_and_rejects_non_objects():
     from services.session_parsers.base import load_line
 
     assert load_line('{"type":"user","n":NaN}')["type"] == "user"
-    assert load_line('{"type":"user","n":' + str(2**70) + "}")["n"] == 2**70
     assert load_line('{"type":"user"}') == {"type": "user"}
     assert load_line("[1, 2]") is None
     assert load_line("not json") is None
     assert load_line("[" * 100_000) is None
+
+
+@pytest.mark.parametrize("value", [2**70 + 1, 2**64, -(2**63) - 1, 2**64 - 1, -(2**63), 10**30 + 7])
+def test_load_line_keeps_integers_exact_at_and_beyond_64_bits(value):
+    from services.session_parsers.base import load_line
+
+    parsed = load_line('{"type":"user","n":' + str(value) + ',"list":[' + str(value) + "]}")
+
+    assert type(parsed["n"]) is int
+    assert parsed["n"] == value
+    assert parsed["list"] == [value]

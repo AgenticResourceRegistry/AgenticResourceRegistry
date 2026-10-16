@@ -21,7 +21,8 @@ class AuditMiddleware:
     """Emit a loguru audit record for every non-skipped HTTP request.
 
     Pure ASGI: the record is emitted when the response starts, after the route
-    has set its ``request.state.audit_*`` attributes.
+    has set its ``request.state.audit_*`` attributes and the inner
+    RequestIDMiddleware has set ``request.state.request_id``.
     """
 
     def __init__(self, app):
@@ -42,13 +43,12 @@ class AuditMiddleware:
             return
 
         event_id = str(uuid.uuid4())
-        request_id = getattr(request.state, "request_id", "")
         # Real IP is resolved by TrustedProxyMiddleware into request.scope["client"]
         ip = request.client.host if request.client else "127.0.0.1"
 
         async def send_with_audit(message):
             if message["type"] == "http.response.start":
-                _emit_audit(request, path, sensitivity, event_id, request_id, ip, message["status"], start)
+                _emit_audit(request, path, sensitivity, event_id, ip, message["status"], start)
             await send(message)
 
         await self.app(scope, receive, send_with_audit)
@@ -59,13 +59,13 @@ def _emit_audit(
     path: str,
     sensitivity: str,
     event_id: str,
-    request_id: str,
     ip: str,
     status: int,
     start: float,
 ) -> None:
     duration_ms = (time.perf_counter() - start) * 1000
 
+    request_id = getattr(request.state, "request_id", "")
     user = getattr(request.state, "audit_user", None)
 
     if status < 300:

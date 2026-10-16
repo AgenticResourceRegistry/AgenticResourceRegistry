@@ -359,6 +359,27 @@ class TestMiddleware:
             assert kwargs["http_path"] == "/api/v1/agent-shares/{token}"
             assert "secret-share-token" not in repr(mock_optic.bind.call_args)
 
+    @pytest.mark.asyncio
+    async def test_records_the_request_id_set_by_the_inner_request_id_middleware(self):
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        from api.middleware.audit import AuditMiddleware
+        from api.middleware.request_id import RequestIDMiddleware
+
+        app = Starlette(routes=[Route("/api/v1/agents", lambda request: PlainTextResponse("ok"))])
+        # Same order as configure_middleware: RequestID is added first, so Audit wraps it.
+        app.add_middleware(RequestIDMiddleware)
+        app.add_middleware(AuditMiddleware)
+
+        with patch("api.middleware.audit.optic") as mock_optic:
+            mock_optic.bind.return_value = MagicMock()
+            response = await _call(app, "GET", "/api/v1/agents")
+            kwargs = mock_optic.bind.call_args[1]
+        assert kwargs["request_id"]
+        assert kwargs["request_id"] == response.headers["x-request-id"]
+
 
 class TestCliAudit:
     """CLI audit emission."""
