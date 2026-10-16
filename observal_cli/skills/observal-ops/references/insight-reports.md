@@ -32,6 +32,16 @@ observal ops insights show --component mcp NAMESPACE/SLUG --output json
 observal ops insights show latest --component mcp NAMESPACE/SLUG
 ```
 
+Before generating, inspect the owned component's current evidence and gaps (read-only; owner, co-author or admin access required):
+
+```bash
+observal ops insights activity --component mcp NAMESPACE/SLUG --period 14 --output json
+observal ops insights sessions --component mcp NAMESPACE/SLUG --limit 50 --output json
+observal ops insights sessions --component mcp NAMESPACE/SLUG --cursor NEXT_CURSOR --output json
+```
+
+Use `--component skill` or `--component hook` in the same way. The `next_cursor` is opaque and is bound to caller, component, period and version. `--version 1.2.3` on activity, sessions or generate selects the exact component release (unavailable versions error out). Examine the full JSON `coverage.presence`, `coverage.projection`, reasons and limitations before treating an absence of observed use as meaningful. A legacy Agent pin, Bash call, unverified install or missing snapshot is not verified presence. Source/projection gaps are unknown, never zero use.
+
 Component reports contain verified presence, published observed calls and attribution coverage. New reports may also contain `narrative.component_analysis`: bounded interpretations citing published call names and result states, never user prompts or tool arguments. Older prompt-backed analysis is removed. Installation or activation alone never proves use. An `unknown` analysis means insufficient or invalid evidence, not no use. For reports beyond the recent list, use `--all` and open a report by its full ID.
 
 ## Generate only when needed
@@ -47,11 +57,12 @@ Generate a component report (1–90 days; the deterministic block works without 
 
 ```bash
 observal ops insights generate --component mcp NAMESPACE/SLUG --period 14 --wait --output json
+observal ops insights generate --component mcp NAMESPACE/SLUG --version 1.2.3 --period 14 --output json
 ```
 
 Skill reports use the same commands with `--component skill NAMESPACE/SLUG`. They are deterministic (no model findings) and report present sessions, sessions with a confirmed load (a successful read or `Skill` call that put the file's text into context), sessions with an invocation (an explicit `/name`, only where the harness records its origin), and sessions where the skill was offered. A `null` count means no harness in the cohort records that kind, which is unknown, not zero; `*_not_recorded_on_some_harnesses` in `coverage.reasons` means the count covers only the harnesses that record it. Load attempts that failed are not loads. Skill evidence counts only for a verified install at the exact file location the session named. Never say a skill helped, was followed, or improved an outcome: the evidence shows only that its instructions entered context. Hook reports (`--component hook`, Claude Code and Pi) are deterministic. They report present sessions, `eligible_sessions` (sessions where the hook could run), `sessions_with_recorded_run`, and runs that printed output, ran silently, failed or blocked. Pi records silent runs; Claude Code does not, so there `silent_runs` is null, recorded runs are a lower bound, and "no recorded runs" never means the hook did not run. On Claude Code, hooks installed by `agent pull` run only while their agent is active and never in headless `claude -p` sessions; on Pi, a verified hook can run in every session, headless included; `coverage.eligibility` counts those sessions separately, outside the denominator. Never say a hook helped or changed an outcome.
 
-Generation can take longer than normal CLI calls. Verify final status before reading the report. If the component presence cohort is empty, the server returns 422 with coverage rather than a zero-use report.
+Generation can take longer than normal CLI calls. Verify final status before reading the report. If the component presence cohort is empty, generation fails with validation exit code 7 rather than producing a zero-use report. In JSON mode read `error.result.coverage` on stderr for the complete server-provided coverage; the human error summarizes the main gaps and suggests checking activity. A permission or connection error is not an empty cohort.
 
 ## Choose a section
 
@@ -66,7 +77,7 @@ observal ops insights show NAMESPACE/AGENT_SLUG latest --section version_compari
 observal ops insights show NAMESPACE/AGENT_SLUG latest --section regression_detection --output json
 ```
 
-Other sections include `what_they_work_on`, `interaction_style`, `usage_patterns`, `what_works`, `on_the_horizon`, and `fun_ending`. For MCPs, `--section component_analysis --output json` exposes sampled interpretations and cited call names, without user prompts.
+Other sections include `what_they_work_on`, `interaction_style`, `usage_patterns`, `what_works`, `on_the_horizon`, and `fun_ending`. For components, `--section summary`, `--section metrics` and `--section coverage` work across MCP, skill and hook reports. For MCPs, `--section component_analysis --output json` exposes sampled interpretations and cited call names, without user prompts.
 
 ## Analyze evidence
 
