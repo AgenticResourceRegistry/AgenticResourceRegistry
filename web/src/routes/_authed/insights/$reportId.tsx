@@ -3,8 +3,8 @@
 
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import React from "react";
-import { Loader2, ArrowLeft } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Loader2 } from "lucide-react";
+import { ComponentReportFrame } from "@/components/insights/component-report-frame";
 import type {
   ComponentInsightCoverage,
   ComponentInsightMetrics,
@@ -18,25 +18,6 @@ import type {
 } from "@/lib/types";
 import { ErrorState } from "@/components/shared/error-state";
 import { useLegacyInsightReport } from "@/hooks/use-insights-api";
-
-function ReportHeader({ report }: { report: InsightReport }) {
-  return (
-    <>
-      <Link to="/components/$componentId" params={{ componentId: report.component_id ?? "" }}
-        search={{ type: report.component_type === "skill" ? "skills" : report.component_type === "hook" ? "hooks" : "mcps" }}
-        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
-        <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back to component
-      </Link>
-      <header className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">{report.component_name ?? "Component"} Insights</h1>
-        <p className="text-sm text-muted-foreground">
-          {new Date(report.period_start).toLocaleDateString()} – {new Date(report.period_end).toLocaleDateString()}
-          {report.component_version ? ` · Version ${report.component_version}` : " · All versions"}
-        </p>
-      </header>
-    </>
-  );
-}
 
 function DistributionSection({ versions, harnesses }: { versions?: Record<string, number>; harnesses?: Record<string, number> }) {
   return (
@@ -59,12 +40,6 @@ function DistributionSection({ versions, harnesses }: { versions?: Record<string
   );
 }
 
-function ReportStatus({ report, children }: { report: InsightReport; children: React.ReactNode }) {
-  if (report.status === "failed") return <ErrorState message={report.error_message ?? "Report generation failed"} />;
-  if (report.status !== "completed") return <p role="status" className="text-muted-foreground">Report {report.status}. This page updates automatically.</p>;
-  return <>{children}</>;
-}
-
 /** A count that is either measured, not measured for this period, or never recorded by the cohort's harnesses. */
 function SkillCount({ value, measured, partial = false }: { value: number | null | undefined; measured: boolean; partial?: boolean }) {
   if (value === null) return <>Not recorded</>;
@@ -82,9 +57,7 @@ function SkillReport({ report }: { report: InsightReport }) {
     metrics?.invoked_sessions === null ? "explicit invocations" : null,
   ].filter(Boolean);
   return (
-    <main className="mx-auto max-w-4xl space-y-8 px-4 py-8 sm:px-6">
-      <ReportHeader report={report} />
-      <ReportStatus report={report}>
+    <ComponentReportFrame report={report}>
         <section aria-label="Evidence" className="space-y-4 border-b border-border pb-6">
           <h2 className="text-lg font-semibold">What the data shows</h2>
           <p className="max-w-[70ch] text-sm leading-relaxed">{narrative?.summary}</p>
@@ -110,8 +83,7 @@ function SkillReport({ report }: { report: InsightReport }) {
             </ul>
           </> : <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p>}
         </section>
-      </ReportStatus>
-    </main>
+    </ComponentReportFrame>
   );
 }
 
@@ -131,9 +103,7 @@ function HookReport({ report }: { report: InsightReport }) {
   const lowerBound = !!coverage?.limitations.some((note) => note.startsWith("silent_success_unrecorded"));
   const silentRuns = metrics?.silent_runs ?? null;
   return (
-    <main className="mx-auto max-w-4xl space-y-8 px-4 py-8 sm:px-6">
-      <ReportHeader report={report} />
-      <ReportStatus report={report}>
+    <ComponentReportFrame report={report}>
         <section aria-label="Evidence" className="space-y-4 border-b border-border pb-6">
           <h2 className="text-lg font-semibold">What the data shows</h2>
           <p className="max-w-[70ch] text-sm leading-relaxed">{narrative?.summary}</p>
@@ -161,8 +131,7 @@ function HookReport({ report }: { report: InsightReport }) {
             </ul>
           </> : <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p>}
         </section>
-      </ReportStatus>
-    </main>
+    </ComponentReportFrame>
   );
 }
 
@@ -176,9 +145,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
   const analysis = narrative?.component_analysis;
   const canMeasureCalls = !!coverage && coverage.usage_rate_denominator_sessions > 0;
   return (
-    <main className="mx-auto max-w-4xl space-y-8 px-4 py-8 sm:px-6">
-      <ReportHeader report={report} />
-      <ReportStatus report={report}>
+    <ComponentReportFrame report={report}>
           <section aria-label="Interpretive insights" className="space-y-4 border-b border-border pb-7">
             <h2 className="text-lg font-semibold">What the published calls suggest</h2>
             {!analysis ? (
@@ -230,8 +197,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
               </ul>
             </> : <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p>}
           </section>
-      </ReportStatus>
-    </main>
+    </ComponentReportFrame>
   );
 }
 
