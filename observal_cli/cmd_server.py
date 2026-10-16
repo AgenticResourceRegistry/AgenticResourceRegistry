@@ -646,15 +646,20 @@ def _refresh_load_balancer(compose_dir: Path) -> None:
 
     nginx resolves upstream hostnames once at startup, so after `up -d`
     replaces the API container it keeps proxying to the old address.
+    Failures only warn: the health check that follows reports the outcome.
     """
     optic.trace("compose_dir={}", compose_dir)
-    result = subprocess.run(
-        ["docker", "compose", "restart", "observal-lb"],
-        cwd=compose_dir,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "restart", "observal-lb"],
+            cwd=compose_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        optic.warning("load balancer restart failed error={}", type(error).__name__)
+        return
     if result.returncode != 0:
         optic.warning("load balancer restart failed returncode={}", result.returncode)
 

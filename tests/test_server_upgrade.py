@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import socket
+import subprocess
 from contextlib import contextmanager
 from io import StringIO
 from types import SimpleNamespace
@@ -417,6 +418,36 @@ def test_failed_upgrade_health_check_restores_and_refreshes_load_balancer(
         ["docker", "compose", "up", "-d"],
         ["docker", "compose", "restart", "observal-lb"],
     ]
+
+
+def test_hung_load_balancer_restart_still_reports_the_failed_health_check(
+    isolated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compose = prepare_compose(isolated, monkeypatch)
+    monkeypatch.setattr(isolated.version_check, "verify_server_image_exists", MagicMock(return_value=True))
+    monkeypatch.setattr(isolated.upgrade_lock, "acquire_lock", MagicMock(return_value="lock"))
+    monkeypatch.setattr(isolated.upgrade_lock, "release_lock", MagicMock())
+
+    def run(args, **_kwargs):
+        if args[2] == "restart":
+            raise subprocess.TimeoutExpired(args, 120)
+        return completed()
+
+    monkeypatch.setattr(cmd_server.subprocess, "run", MagicMock(side_effect=run))
+    monkeypatch.setattr("time.sleep", MagicMock())
+    monkeypatch.setattr(httpx, "get", MagicMock(return_value=SimpleNamespace(status_code=502)))
+
+    with pytest.raises(Exception) as error:
+        cmd_server._server_upgrade("2.0.0", True, False, True)
+
+    assert not isinstance(error.value, subprocess.SubprocessError)
+    assert getattr(error.value, "category", None).value == "unavailable"
+    assert (compose / ".env").read_text() == "OBSERVAL_VERSION=1.0.0\n"
+
+
+def test_load_balancer_refresh_tolerates_missing_docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cmd_server.subprocess, "run", MagicMock(side_effect=FileNotFoundError("docker")))
+    cmd_server._refresh_load_balancer(tmp_path)
 
 
 def test_health_url_targets_an_api_route_behind_the_load_balancer(tmp_path: Path) -> None:
