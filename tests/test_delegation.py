@@ -38,6 +38,11 @@ def _isolated(tmp_path, monkeypatch):
         "OBSERVAL_DELEGATION_CHAIN",
         "OBSERVAL_DELEGATION_MAX_DEPTH",
         "OBSERVAL_DELEGATION_TASK_ID",
+        "OBSERVAL_HARNESS",
+        "CLAUDECODE",
+        "CODEX_THREAD_ID",
+        "KIRO_CLI_IS_CHILD_PROCESS",
+        "KIRO_SESSION_ID",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(service, "SPAWN", None)
@@ -292,7 +297,9 @@ def test_local_run_with_no_answer_and_no_changes_fails_even_on_exit_zero(tmp_pat
     monkeypatch.setattr(local, "materialize", _fake_materialize)
     task = local.run(_local_task(repo), save=tasks.save, should_cancel=lambda: False)
     assert task["status"]["state"] == tasks.STATE_FAILED
-    assert tasks.message_text(task["status"]["message"]) == "Authentication failed."
+    assert tasks.message_text(task["status"]["message"]) == (
+        "claude-code, the harness the agent ran in, reported: Authentication failed."
+    )
 
 
 def test_command_line_guard_refuses_what_the_os_would_mangle(monkeypatch):
@@ -356,16 +363,67 @@ def test_start_refuses_loops_and_unapproved_agents(monkeypatch):
         service.start(AGENT_URN, "do it")
 
 
-def test_choose_harness_prefers_the_caller_and_respects_support(monkeypatch):
+def test_choose_harness_runs_in_the_callers_harness(monkeypatch):
     monkeypatch.setattr(service, "headless_harnesses", lambda: ["kiro", "claude-code", "codex"])
     assert service.choose_harness(["claude-code", "kiro"], "kiro") == "kiro"
-    assert service.choose_harness(["claude-code"], "kiro") == "claude-code"
-    assert service.choose_harness([], None) == "kiro"
+    assert service.choose_harness([], "codex") == "codex"
+    # Only one harness could run it, so there is nothing to choose.
+    assert service.choose_harness(["codex"], None) == "codex"
     with pytest.raises(service.DelegationError, match="only kiro, claude-code, codex"):
         service.choose_harness(["goose"], None)
     monkeypatch.setattr(service, "headless_harnesses", lambda: [])
     with pytest.raises(service.DelegationError, match="No harness"):
         service.choose_harness([], None)
+
+
+def test_choose_harness_never_swaps_the_callers_harness_for_another(monkeypatch):
+    # OBS-1407: a Kiro caller and an agent without Kiro support ran in Claude Code, unannounced,
+    # and Claude Code's own expired login came back as the task's 401.
+    monkeypatch.setattr(service, "headless_harnesses", lambda: ["kiro", "claude-code", "codex"])
+    with pytest.raises(service.DelegationError) as refused:
+        service.choose_harness(["claude-code", "codex", "goose"], "kiro")
+    assert refused.value.message == (
+        "You are delegating from kiro, which the agent does not support. Choose the harness to run it in with "
+        "--harness (the delegate tool's harness argument): claude-code, codex."
+    )
+    with pytest.raises(service.DelegationError, match="from pi, which cannot run an agent headless"):
+        service.choose_harness([], "pi")
+    with pytest.raises(service.DelegationError, match=r"Could not tell which harness.*: kiro, claude-code, codex"):
+        service.choose_harness([], None)
+    with pytest.raises(service.DelegationError, match=r"from kiro, which the agent does not support. The agent sup"):
+        service.choose_harness(["goose"], "kiro")
+
+
+def test_caller_harness_comes_from_observal_harness_or_the_harness_markers(monkeypatch):
+    assert service.caller_harness() is None
+    monkeypatch.setenv("KIRO_CLI_IS_CHILD_PROCESS", "1")
+    assert service.caller_harness() == "kiro"
+    # One harness started inside another: neither is guessed.
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert service.caller_harness() is None
+    # A delegated child and the observal-agents server name their harness outright.
+    monkeypatch.setenv("OBSERVAL_HARNESS", "codex")
+    assert service.caller_harness() == "codex"
+    monkeypatch.setenv("OBSERVAL_HARNESS", "not-a-harness")
+    assert service.caller_harness() is None
+
+
+def test_delegate_run_passes_the_callers_harness(monkeypatch):
+    from typer.testing import CliRunner
+
+    from observal_cli.main import app
+
+    captured = {}
+
+    def fake_start(agent, message, **kwargs):
+        captured.update(kwargs)
+        return tasks.new_task(message=message, observal={"target": agent})
+
+    monkeypatch.setattr(service, "start", fake_start)
+    monkeypatch.setenv("KIRO_CLI_IS_CHILD_PROCESS", "1")
+    out = CliRunner().invoke(app, ["delegate", "run", "acme/reviewer", "review it", "--output", "json"])
+    assert out.exit_code == 0, out.output
+    assert captured["parent_harness"] == "kiro" and captured["harness"] is None
 
 
 def test_choose_harness_never_swaps_an_explicit_harness(monkeypatch):
@@ -379,7 +437,7 @@ def test_choose_harness_never_swaps_an_explicit_harness(monkeypatch):
 
 def test_start_records_the_delegation_and_runs_the_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(service.client, "get", lambda *_a, **_k: _agent_entry())
-    monkeypatch.setattr(service, "headless_harnesses", lambda: ["claude-code"])
+    monkeypatch.setattr(service, "headless_harnesses", lambda: ["claude-code", "kiro"])
 
     def fake_worker(task_id):
         task = tasks.load(task_id)
@@ -391,7 +449,8 @@ def test_start_records_the_delegation_and_runs_the_worker(tmp_path, monkeypatch)
     task = service.start(AGENT_URN, "Review src/auth", parent_harness="kiro", cwd=tmp_path, wait_seconds=5)
     assert task["status"]["state"] == tasks.STATE_COMPLETED
     m = tasks.meta(task)
-    assert m["harness"] == "claude-code" and m["depth"] == 0 and m["agentId"] == AGENT_ID
+    assert m["harness"] == "kiro" and m["parentHarness"] == "kiro"
+    assert m["depth"] == 0 and m["agentId"] == AGENT_ID
     summary = service.summarize(task)
     assert "No auth bugs found." in summary and "TASK_STATE_COMPLETED" in summary
 
@@ -732,6 +791,13 @@ def test_mcp_initialize_and_tools(monkeypatch):
     refused = _rpc(server, "tools/call", {"name": "delegate", "arguments": {"agent": AGENT_URN, "message": "x"}})
     assert refused["result"]["isError"] is True and "depth limit" in refused["result"]["content"][0]["text"]
     assert captured["parent_harness"] == "kiro" and captured["parent_agent_id"] == AGENT_ID
+    assert captured["harness"] is None
+    _rpc(
+        server,
+        "tools/call",
+        {"name": "delegate", "arguments": {"agent": AGENT_URN, "message": "x", "harness": "codex"}},
+    )
+    assert captured["harness"] == "codex"
 
     missing = _rpc(server, "tools/call", {"name": "delegate", "arguments": {"message": "x"}})["result"]
     assert missing["isError"] is True

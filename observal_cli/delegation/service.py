@@ -201,12 +201,36 @@ def headless_harnesses() -> list[str]:
     return out
 
 
+def caller_harness() -> str | None:
+    """The harness this process was started from, or None when that cannot be told.
+
+    ``OBSERVAL_HARNESS`` wins (a delegated child and the observal-agents server
+    carry it); otherwise the harness whose own environment markers are set. Markers
+    of several harnesses mean one was started inside another, so none is guessed.
+    """
+    from observal_cli.harness import ensure_loaded, get_all_adapters
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    named = (os.environ.get("OBSERVAL_HARNESS") or "").strip()
+    if named in HARNESS_REGISTRY:
+        return named
+    ensure_loaded()
+    found = [
+        name
+        for name, adapter in get_all_adapters().items()
+        if any(os.environ.get(marker) for marker in adapter.caller_env_markers)
+    ]
+    return found[0] if len(found) == 1 else None
+
+
 def choose_harness(supported: list[str], preferred: str | None, *, required: str | None = None) -> str:
     """Pick the harness a delegated agent runs in.
 
-    ``preferred`` (the caller's own harness) is a hint that falls back to any
-    usable harness. ``required`` (an explicit ``--harness``) is used as given
-    or the delegation fails; it never silently becomes a different harness.
+    ``required`` (an explicit ``--harness``) is used as given or the delegation
+    fails. Otherwise the caller's own harness (``preferred``) runs it. When the
+    caller's harness cannot, or the caller is unknown and several harnesses could,
+    the delegation fails and names the choices: a harness nobody picked fails
+    with its own login and model errors, which read as the caller's.
     """
     available = headless_harnesses()
     if required:
@@ -218,18 +242,29 @@ def choose_harness(supported: list[str], preferred: str | None, *, required: str
         if supported and required not in supported:
             raise DelegationError(f"The agent supports {', '.join(supported)}, not {required}.")
         return required
-    ordered = ([preferred] if preferred else []) + [h for h in available if h != preferred]
-    for harness in ordered:
-        if harness in available and (not supported or harness in supported):
-            return harness
     if not available:
         from observal_shared.harness_registry import HARNESS_REGISTRY, get_harnesses_with_fact
 
         names = ", ".join(HARNESS_REGISTRY[h]["display_name"] for h in get_harnesses_with_fact("headless_run"))
         raise DelegationError(f"No harness on this machine can run an agent headless. Install one of: {names}.")
-    raise DelegationError(
-        f"The agent supports {', '.join(supported)}, but only {', '.join(available)} can run headless here."
-    )
+    usable = [h for h in available if not supported or h in supported]
+    if preferred in usable:
+        return preferred
+    if not preferred and len(usable) == 1:
+        return usable[0]
+    if preferred and supported and preferred not in supported:
+        problem = f"You are delegating from {preferred}, which the agent does not support."
+    elif preferred:
+        problem = f"You are delegating from {preferred}, which cannot run an agent headless on this machine."
+    else:
+        problem = "Could not tell which harness you are delegating from."
+    if usable:
+        raise DelegationError(
+            f"{problem} Choose the harness to run it in with --harness (the delegate tool's harness argument): "
+            f"{', '.join(usable)}."
+        )
+    unsupported = f"The agent supports {', '.join(supported)}, but only {', '.join(available)} can run headless here."
+    raise DelegationError(f"{problem} {unsupported}" if preferred else unsupported)
 
 
 # ── Worker ───────────────────────────────────────────────────────────────

@@ -103,6 +103,9 @@ class BaseAdapter:
     headless_binary: str | None = None
     # headless_command passes the task on stdin, so its length and cmd.exe quoting never matter.
     headless_task_on_stdin = False
+    # Environment variables the harness sets for the commands it runs, so a command can tell
+    # which harness started it (delegation runs in the caller's harness by default).
+    caller_env_markers: tuple[str, ...] = ()
     managed_agent_profiles: tuple[str, ...] = ()
     managed_skills: tuple[str, ...] = ()
     managed_mcp_files: tuple[str, ...] = ()
