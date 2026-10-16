@@ -100,6 +100,12 @@ def _user_agent_candidate(item: dict, *, registry: str, harness: str) -> dict[st
         raise PreflightSkipError(item.get("reason") or "No verified approved update is available.")
     if not auto_update_policy.policy_status(registry)["effective"]:
         raise PreflightSkipError("Automatic updates are frozen; run `observal unfreeze` to opt in.")
+    if item.get("folder_managed"):
+        # Checked before pin intent: the folder transaction records no pin
+        # intent, so that would otherwise hide the real cause.
+        raise PreflightSkipError(
+            "The agent installs complete skill folders, which are upgraded only by a reviewed manual pull."
+        )
     if item.get("pin_known") is not True:
         raise PreflightSkipError("The user agent's pin intent is unknown; manually re-pull it before auto-updating.")
     if item.get("requested_version"):
