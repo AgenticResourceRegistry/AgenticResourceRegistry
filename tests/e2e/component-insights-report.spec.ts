@@ -76,6 +76,49 @@ test.describe("Component Insights report", () => {
     });
   }
 
+  test("UI demo skill keeps all published evidence stages distinct", async ({ page }, testInfo) => {
+    // A sanitized, deterministic rendering fixture from the real Pi demo report; not a live delivery claim.
+    const demo = {
+      ...base,
+      component_type: "skill",
+      component_name: "super/component-insights-ui-demo",
+      metrics: {
+        present_sessions: 2, present_users: 1, available_sessions: 2, loaded_sessions: 1,
+        confirmed_loads: 1, load_attempts: 0, invoked_sessions: null, invocations: null,
+        version_distribution: { "1.0.0": 2 }, harness_distribution: { pi: 2 },
+        activation_actions: { context_sessions: 0, next_session_sessions: 0, scope: "component" },
+      },
+      coverage: {
+        ...coverage,
+        presence: { present_sessions: 2, present_users: 1, eligible_sessions: 62, legacy_hash_sessions: 60, snapshot_missing_sessions: 0, verified_presence_sessions: 2, drifted_presence_sessions: 0 },
+        projection: { projection_complete_sessions: 2, projection_pending_sessions: 0, projection_failed_sessions: 0, projection_stale_sessions: 0, unsupported_present_sessions: 0, source_missing_sessions: 0, source_unavailable_sessions: 0, source_incomplete_sessions: 0 },
+        evidence: { candidate_facts: 5, attributed_facts: 3, collision_facts: 0, unmatched_facts: 2, unknown_load_results: 0 },
+        usage_rate_denominator_sessions: 2,
+        reasons: ["unattributed_skill_facts"],
+        limitations: ["entered_context_not_helped: a load puts instructions into context; it does not prove effectiveness", "invocations_not_recorded: Pi cannot distinguish an explicit skill invocation"],
+      },
+      narrative: { summary: "The skill's instructions entered context. This does not show the skill was followed or helped." },
+    };
+    await loginToWebUI(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.route("**/api/v1/insights/reports/report-fixture", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify(demo),
+    }));
+    await page.goto("/insights/report-fixture");
+    await expect(page.getByRole("region", { name: "Evidence" }).getByText("Not recorded")).toBeVisible();
+    await expect(page.getByText("2 of 2 verified-present sessions processed.")).toBeVisible();
+    await page.getByText("Detailed skill evidence").click();
+    const details = page.locator("details").filter({ hasText: "Detailed skill evidence" });
+    await expect(details.getByText("Legacy layer hashes")).toBeVisible();
+    await expect(details.getByText("Cannot establish verified presence")).toBeVisible();
+    await expect(details.getByText("60", { exact: true })).toBeVisible();
+    await expect(details.getByText("Candidate records")).toBeVisible();
+    await expect(details.getByText("Unmatched records")).toBeVisible();
+    await expect(details.getByText("Activation is configuration activity, not observed skill use.", { exact: false })).toBeVisible();
+    await details.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("demo-skill-detailed-desktop.png") });
+  });
+
   for (const status of ["pending", "failed"] as const) {
     test(`${status} report keeps the report shell and explains its status`, async ({ page }) => {
       await loginToWebUI(page);

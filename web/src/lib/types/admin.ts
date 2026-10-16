@@ -185,6 +185,7 @@ export interface SkillInsightMetrics {
 	loaded_sessions: number;
 	confirmed_loads: number;
 	load_attempts: number;
+	activation_actions?: { context_sessions: number; next_session_sessions: number; scope: "component" | "component_version" };
 	/** Null when no harness in the cohort records a distinguishable invocation. */
 	invoked_sessions: number | null;
 	invocations: number | null;
@@ -198,8 +199,25 @@ export interface SkillInsightNarrative {
 
 export interface SkillInsightCoverage {
 	attribution_state: "observed" | "no_observed_skill_use" | "attribution_not_possible";
-	presence: { present_sessions: number; present_users: number; eligible_sessions: number };
-	projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
+	presence: {
+		present_sessions: number;
+		present_users: number;
+		eligible_sessions: number;
+		legacy_hash_sessions?: number;
+		snapshot_missing_sessions?: number;
+		verified_presence_sessions?: number;
+		drifted_presence_sessions?: number;
+	};
+	projection: {
+		projection_complete_sessions: number;
+		projection_pending_sessions: number;
+		projection_failed_sessions: number;
+		projection_stale_sessions?: number;
+		unsupported_present_sessions: number;
+		source_missing_sessions?: number;
+		source_unavailable_sessions?: number;
+		source_incomplete_sessions?: number;
+	};
 	evidence: { candidate_facts: number; attributed_facts: number; collision_facts: number; unmatched_facts: number; unknown_load_results: number };
 	usage_rate_denominator_sessions: number;
 	observed_sessions: number;
