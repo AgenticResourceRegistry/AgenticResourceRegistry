@@ -154,6 +154,8 @@ def _show_startup_update_notices() -> None:
             if channel == "cli"
             for message in claude_updates._notices(registry, account, ack=ack, harness=harness)
         ]
+        # Every session writes its own result; repeat refusals print once.
+        messages = list(dict.fromkeys(messages))
         if messages:
             print("\n".join(messages), file=sys.stderr, flush=True)
         for delivered in ack:  # Acknowledge only after the message reached the terminal.

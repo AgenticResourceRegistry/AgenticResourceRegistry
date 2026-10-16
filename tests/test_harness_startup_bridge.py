@@ -260,3 +260,21 @@ def test_skill_plan_roots_match_the_installer_destinations() -> None:
     assert set(automatic_skill_plan.SKILL_ROOTS) == SKILL_HARNESSES
     for harness in SKILL_HARNESSES:
         assert automatic_skill_plan.destination("review", harness) == _user_skill_dest(harness, "review")
+
+
+def test_identical_cli_notices_from_several_sessions_print_once(
+    isolated: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    from observal_cli import main as cli_main
+
+    first, second = _sealed_notice("kiro", "one"), _sealed_notice("kiro", "two")
+    monkeypatch.setattr(cli_main.sys, "argv", ["observal", "agent", "list"])
+    monkeypatch.setattr(cli_main.sys.stderr, "isatty", lambda: True, raising=False)
+    cli_main._show_startup_update_notices()
+    assert capsys.readouterr().err.count("Observal Kiro update result") == 1
+    assert not first.exists() and not second.exists()
+
+
+def test_codex_patch_tells_the_user_to_trust_the_new_hooks(home: Path, capsys: pytest.CaptureFixture) -> None:
+    startup_update_hooks.patch("codex", dry_run=False)
+    assert "/hooks" in capsys.readouterr().out

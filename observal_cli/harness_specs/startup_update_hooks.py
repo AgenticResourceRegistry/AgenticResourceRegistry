@@ -128,6 +128,11 @@ def patch(harness: str, dry_run: bool) -> bool:
     if result == current:
         return False
     _write(path, result, dry_run, "Installed")
+    if harness == "codex":
+        # Codex skips new or changed non-managed hooks until the user trusts them.
+        rprint(
+            "  [yellow]Codex runs new hooks only after you review and trust them: open Codex and run /hooks.[/yellow]"
+        )
     return True
 
 
