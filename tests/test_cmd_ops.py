@@ -1452,7 +1452,7 @@ def test_every_remaining_ops_workflow_has_output_and_dead_commands_are_removed()
                 yield name, child
 
     rows = list(leaves(command))
-    assert len(rows) == 11
+    assert len(rows) == 13
     assert all(any(parameter.name == "output" for parameter in leaf.params) for _name, leaf in rows)
     assert "metrics" not in command.commands
     assert "spans" not in command.commands

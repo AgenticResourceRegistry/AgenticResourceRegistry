@@ -765,7 +765,7 @@ def test_typer_validation_rejects_bad_arguments_before_any_side_effect(cli, argu
 
 
 def test_insights_app_registers_only_current_commands():
-    assert sorted(get_command(insights.insights_app).commands) == ["generate", "list", "show"]
+    assert sorted(get_command(insights.insights_app).commands) == ["activity", "generate", "list", "sessions", "show"]
 
 
 def test_component_cli_list_show_generate_use_owner_scoped_routes(cli):
