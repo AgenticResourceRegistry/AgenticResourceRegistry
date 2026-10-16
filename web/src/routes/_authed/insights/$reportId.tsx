@@ -5,6 +5,7 @@ import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router"
 import React from "react";
 import { Loader2 } from "lucide-react";
 import { ComponentReportFrame, CoveragePanel, EvidencePanel } from "@/components/insights/component-report-frame";
+import { SkillEvidenceBreakdown } from "@/components/insights/skill-evidence-breakdown";
 import type {
   ComponentInsightCoverage,
   ComponentInsightMetrics,
@@ -74,6 +75,7 @@ function SkillReport({ report }: { report: InsightReport }) {
           {coverage && <p>{coverage.observed_sessions} {coverage.observed_sessions === 1 ? "session" : "sessions"} had a confirmed load or an invocation. {coverage.evidence.collision_facts} ambiguous and {coverage.evidence.unmatched_facts} unmatched skill records were not counted.</p>}
         </CoveragePanel>
         <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />
+        <SkillEvidenceBreakdown metrics={metrics} coverage={coverage} />
     </ComponentReportFrame>
   );
 }
