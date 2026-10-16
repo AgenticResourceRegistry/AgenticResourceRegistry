@@ -191,3 +191,52 @@ def test_show_component_section_supports_facts_and_rejects_unknown_sections(monk
     assert "not recorded" in table.output
     invalid = runner.invoke(insights_app, ["show", "--component", kind, "team/probe", "--section", "not_a_section"])
     assert invalid.exit_code == 7
+
+
+@pytest.mark.parametrize("kind", ["mcp", "skill", "hook"])
+def test_sessions_table_does_not_turn_unknown_into_zero(monkeypatch, kind):
+    monkeypatch.setattr("observal_cli.cmd_insights.client.resolve_registry_reference", lambda *_: COMPONENT_ID)
+    rows = [
+        {"session_id": "unprocessed", "projection_state": "pending", "source_state": "available", "observed_calls": 0},
+        {
+            "session_id": "lost-source",
+            "projection_state": "complete",
+            "source_state": "source_missing",
+            "observed_calls": 0,
+        },
+        {
+            "session_id": "measured",
+            "projection_state": "complete",
+            "source_state": "available",
+            "observed_calls": 0,
+            "confirmed_loads": 0,
+            "invocations": None,
+            "runs_with_output": 0,
+            "silent_runs": None,
+            "eligibility": "eligible",
+        },
+    ]
+    monkeypatch.setattr(
+        "observal_cli.cmd_insights.client.get", lambda *_args, **_kwargs: {"sessions": rows, "next_cursor": "next"}
+    )
+    result = runner.invoke(insights_app, ["sessions", "--component", kind, "team/probe"])
+    assert result.exit_code == 0, result.output
+    assert result.output.count("not measured") == 2
+    if kind == "mcp":
+        assert "0 calls" in result.output
+    else:
+        assert "not recorded" in result.output
+    assert "--cursor next" in result.output
+
+
+@pytest.mark.parametrize("category,code", [(ErrorCategory.PERMISSION, 4), (ErrorCategory.UNAVAILABLE, 9)])
+def test_activity_does_not_hide_permission_or_service_errors(monkeypatch, category, code):
+    monkeypatch.setattr("observal_cli.cmd_insights.client.resolve_registry_reference", lambda *_: COMPONENT_ID)
+
+    def deny(*_args, **_kwargs):
+        raise CliError(category, "Unavailable", "Component activity")
+
+    monkeypatch.setattr("observal_cli.cmd_insights.client.get", deny)
+    result = runner.invoke(insights_app, ["activity", "--component", "hook", "team/probe", "--output", "json"])
+    assert result.exit_code == code
+    assert not result.stdout.strip()

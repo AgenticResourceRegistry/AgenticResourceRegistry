@@ -4,9 +4,9 @@
 title: "observal ops"
 ---
 
-Inspect current session telemetry, Registry usage, feedback, logs, and Agent insight reports.
+Inspect current session telemetry, Registry usage, feedback, logs, and Agent or component insight reports.
 
-All 11 supported workflows provide table and JSON output. Finite commands return one JSON document. Streaming commands return JSON Lines, one compact object per update.
+All 13 supported workflows provide table and JSON output. Finite commands return one JSON document. Streaming commands return JSON Lines, one compact object per update.
 
 The dead `ops metrics`, legacy `ops spans`, and synthetic `ops telemetry test` commands have been removed. Current trace detail comes from `ops traces --span` through the Sessions API.
 
@@ -22,7 +22,9 @@ The dead `ops metrics`, legacy `ops spans`, and synthetic `ops telemetry test` c
 | `traces` | List current sessions or fetch their details |
 | `telemetry status` | Check server event counts and local outbox health |
 | `logs` | Follow local or remote development logs |
-| `insights list` | List Agent insight reports |
+| `insights activity` | Summarize verified component presence, usage and evidence gaps |
+| `insights sessions` | Page through verified-present component sessions |
+| `insights list` | List Agent or component insight reports |
 | `insights show` | Show an insight report or section |
 | `insights generate` | Generate an insight report |
 
@@ -231,15 +233,19 @@ Report sections include:
 
 ## Component insights
 
-Owners, co-authors and admins of an MCP, skill or hook can report on it with `--component TYPE NAMESPACE/SLUG`:
+Owners, co-authors and admins of an MCP, skill or hook can inspect its evidence with `--component TYPE NAMESPACE/SLUG` (or a component UUID). Read-only activity and session inspection use the same owner-authorized APIs as the web UI:
 
 ```bash
-observal ops insights generate --component skill alice/review --period 14 --wait --output json
+observal ops insights activity --component mcp alice/tool --period 14 --output json
+observal ops insights sessions --component hook alice/hook --limit 50 --output json
+observal ops insights sessions --component hook alice/hook --cursor NEXT_CURSOR --output json
+observal ops insights activity --component skill alice/review --version 1.2.3 --output json
+observal ops insights generate --component skill alice/review --version 1.2.3 --period 14 --wait --output json
 observal ops insights list --component skill alice/review --output json
-observal ops insights show --component skill alice/review latest
+observal ops insights show --component skill alice/review latest --section coverage --output json
 ```
 
-Periods accept 1 through 90 days. Component reports count only sessions where the component was verified present. If there are none, generation returns 422 with the coverage instead of a zero-use report.
+Periods accept 1 through 90 days for components; session page size accepts 1 through 100. `--version` on activity, sessions and generate resolves an **exact** component semantic-version label through its version-history endpoint, then scopes the request by version ID. A missing or inaccessible version is an error, not a fallback to all versions. The server binds pagination cursors to the caller, component, version and period. Use `--output json` for complete `coverage` (presence, projection, evidence, attribution reasons and limitations), nullable counts, source references, and the opaque `next_cursor`; the table is a brief readout, not the complete evidence record. For a component report, `--section summary`, `--section metrics`, `--section coverage`, and (when available) `--section component_analysis` select just that section. Component reports count only sessions where the component was verified present. If there are none, generation exits with validation code 7; JSON error output on stderr contains `error.result.coverage` and the human error summarizes presence gaps. Check `activity` first. Legacy Agent pins without an installation snapshot do not prove presence, and incomplete/unavailable projections do not prove zero use. Unauthorized access exits with permission code 4; failed server requests are not silently returned as empty sessions.
 
 **Trust boundary:** “verified present” means the server checked consistency of the client's uploaded snapshot, drift claims and transcript; it does not independently attest to the user's files, harness execution or session contents. A user can copy another person's component pins into a fabricated snapshot and session transcript, inflating that component owner's distinct-user and usage counts; a fabricated hook-run line can likewise count as a run because the client supplies the transcript. These counts must stay out of rankings, recommendations and review/approval decisions. Treat them as self-reported observations, not fraud-resistant measurements.
 

@@ -206,13 +206,16 @@ def insights_activity(
             f"  Observed calls: {data.get('observed_calls', 0) if coverage.get('usage_rate_denominator_sessions') else 'not measured'}"
         )
     elif kind == "skill":
-        rprint(
-            f"  Confirmed loads: {data.get('confirmed_loads', 0)}  Invocations: {data.get('invocations') if data.get('invocations') is not None else 'not recorded'}"
-        )
+        loads = data.get("confirmed_loads", 0) if coverage.get("usage_rate_denominator_sessions") else "not measured"
+        invocations = data.get("invocations")
+        rprint(f"  Confirmed loads: {loads}  Invocations: {invocations if invocations is not None else 'not recorded'}")
     else:
-        rprint(
-            f"  Eligible sessions: {data.get('eligible_sessions', 0)}  Recorded runs: {data.get('sessions_with_recorded_run', 0)} sessions"
+        runs = (
+            data.get("sessions_with_recorded_run", 0)
+            if coverage.get("usage_rate_denominator_sessions")
+            else "not measured"
         )
+        rprint(f"  Eligible sessions: {data.get('eligible_sessions', 0)}  Recorded runs: {runs} sessions")
     rprint(
         f"  Projection: {projection.get('projection_complete_sessions', 0)} processed; state: {esc(coverage.get('attribution_state', 'unknown'))}"
     )
@@ -256,18 +259,28 @@ def insights_sessions(
         output_json(data)
         return
     table = Table(title=f"{esc(component[1])} · {esc(component[0])} sessions")
-    for label in ("Session", "Harness", "Projection", "Evidence"):
+    for label in ("Session", "Harness", "Projection", "Source", "Evidence"):
         table.add_column(label)
     for row in data.get("sessions", []):
-        signal = (
-            f"{row.get('observed_calls', 0)} calls"
-            if component[0] == "mcp"
-            else f"{row.get('confirmed_loads', 0)} loads"
-            if component[0] == "skill"
-            else f"{row.get('runs_with_output', 0)} output runs"
-        )
+        source = row.get("source_state", "available")
+        if row.get("projection_state") != "complete" or source != "available":
+            signal = "not measured"
+        elif component[0] == "mcp":
+            signal = f"{row.get('observed_calls', 0)} calls"
+        elif component[0] == "skill":
+            invocations = row.get("invocations")
+            signal = f"{row.get('confirmed_loads', 0)} loads; invocations: {invocations if invocations is not None else 'not recorded'}"
+        elif row.get("eligibility") != "eligible":
+            signal = f"not eligible ({row.get('eligibility', 'unknown')})"
+        else:
+            silent = row.get("silent_runs")
+            signal = f"{row.get('runs_with_output', 0)} output runs; silent: {silent if silent is not None else 'not recorded'}"
         table.add_row(
-            esc(row.get("session_id", "")), esc(row.get("harness", "")), esc(row.get("projection_state", "")), signal
+            esc(row.get("session_id", "")),
+            esc(row.get("harness", "")),
+            esc(row.get("projection_state", "")),
+            esc(source),
+            esc(signal),
         )
     console.print(table)
     if data.get("next_cursor"):
