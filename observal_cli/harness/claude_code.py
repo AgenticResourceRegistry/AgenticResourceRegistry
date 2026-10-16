@@ -47,6 +47,11 @@ class ClaudeCodeAdapter(BaseAdapter):
     headless_binary = "claude"
     headless_task_on_stdin = True
     caller_env_markers = ("CLAUDECODE",)
+    # Exits 1 only when there is no credential at all; an API key, Bedrock or Vertex counts as one.
+    headless_ready_argv = ("claude", "auth", "status")
+    headless_not_ready_hint = (
+        "Claude Code is not logged in. Run `claude auth login` (or set ANTHROPIC_API_KEY), then delegate again."
+    )
     managed_agent_profiles = ("user:agents/{name}.md", "project:.claude/agents/{name}.md")
     managed_skills = ("user:skills/{name}/SKILL.md",)
 

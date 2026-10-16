@@ -137,6 +137,9 @@ class KiroAdapter(BaseAdapter):
     home_markers = (".kiro",)
     headless_binary = "kiro-cli"
     caller_env_markers = ("KIRO_CLI_IS_CHILD_PROCESS", "KIRO_SESSION_ID")
+    # Exits 1 with "Not logged in" when there is no login.
+    headless_ready_argv = ("kiro-cli", "whoami")
+    headless_not_ready_hint = "Kiro is not logged in. Run `kiro-cli login`, then delegate again."
     managed_agent_profiles = ("user:agents/{name}.json", "project:.kiro/agents/{name}.json")
     managed_skills = ("user:skills/{name}/SKILL.md",)
 
