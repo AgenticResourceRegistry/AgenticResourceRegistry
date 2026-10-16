@@ -28,6 +28,7 @@ AGENT_ID = "5f2c1a9e-8b1d-4d0c-9c4e-1f2a3b4c5d6e"
 AGENT_URN = f"urn:air:observal.example.com:agent:{AGENT_ID}"
 A2A_URN = "urn:air:agents.acme.com:a2a:incident-triage"
 HAS_GIT = shutil.which("git") is not None
+REAL_CHECK_READY = service.check_ready
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +47,8 @@ def _isolated(tmp_path, monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(service, "SPAWN", None)
+    # Never ask the harness CLIs on the machine running the tests whether they are logged in.
+    monkeypatch.setattr(service, "check_ready", lambda _harness: None)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -433,6 +436,48 @@ def test_choose_harness_never_swaps_an_explicit_harness(monkeypatch):
         service.choose_harness(["claude-code"], None, required="pi")
     with pytest.raises(service.DelegationError, match="kiro cannot run an agent headless"):
         service.choose_harness([], None, required="kiro")
+
+
+def test_headless_not_ready_asks_the_harness_its_own_login_command(monkeypatch):
+    from observal_cli.harness import base
+
+    ensure_loaded()
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "TIMEOUT" in os.environ:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return subprocess.CompletedProcess(argv, int(os.environ.get("RC", "0")), b"", b"")
+
+    monkeypatch.setattr(base.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(base.subprocess, "run", fake_run)
+    kiro, claude = get_adapter("kiro"), get_adapter("claude-code")
+    assert kiro.headless_not_ready() is None and claude.headless_not_ready() is None
+    assert calls == [["/bin/kiro-cli", "whoami"], ["/bin/claude", "auth", "status"]]
+    monkeypatch.setenv("RC", "1")
+    assert kiro.headless_not_ready() == "Kiro is not logged in. Run `kiro-cli login`, then delegate again."
+    assert "claude auth login" in claude.headless_not_ready()
+    # A check that does not answer never blocks; a harness with no reliable check is never asked.
+    monkeypatch.setenv("TIMEOUT", "1")
+    assert kiro.headless_not_ready() is None
+    calls.clear()
+    assert get_adapter("codex").headless_not_ready() is None and calls == []
+
+
+def test_start_refuses_a_harness_that_is_not_logged_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "check_ready", REAL_CHECK_READY)
+    monkeypatch.setattr(service.client, "get", lambda *_a, **_k: _agent_entry())
+    monkeypatch.setattr(service, "headless_harnesses", lambda: ["kiro"])
+    adapter = type(get_adapter("kiro"))
+    monkeypatch.setattr(adapter, "headless_not_ready", lambda _self: "Kiro is not logged in.")
+    monkeypatch.setattr(service, "SPAWN", lambda _task_id: pytest.fail("a worker started"))
+    with pytest.raises(service.DelegationError) as refused:
+        service.start(AGENT_URN, "Review src/auth", harness="kiro", cwd=tmp_path)
+    assert refused.value.message == (
+        "kiro cannot run the delegated agent: Kiro is not logged in. To use another harness, pass --harness."
+    )
+    assert tasks.list_tasks(10) == []
 
 
 def test_start_records_the_delegation_and_runs_the_worker(tmp_path, monkeypatch):

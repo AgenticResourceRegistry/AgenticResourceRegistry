@@ -13,6 +13,8 @@ methods they support; the feature gate runs before the override.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -90,6 +92,9 @@ def _check_feature(harness_name: str, method_name: str) -> None:
         raise NotSupportedError(harness_name, method_name)
 
 
+HEADLESS_READY_TIMEOUT_SECONDS = 15
+
+
 class BaseAdapter:
     """Base class providing feature-gated defaults for all protocol methods.
 
@@ -106,6 +111,10 @@ class BaseAdapter:
     # Environment variables the harness sets for the commands it runs, so a command can tell
     # which harness started it (delegation runs in the caller's harness by default).
     caller_env_markers: tuple[str, ...] = ()
+    # A quick command that exits non-zero exactly when headless_command would fail before doing
+    # any work (no usable login), and what to tell the user then. Empty: nothing reliable to ask.
+    headless_ready_argv: tuple[str, ...] = ()
+    headless_not_ready_hint = ""
     managed_agent_profiles: tuple[str, ...] = ()
     managed_skills: tuple[str, ...] = ()
     managed_mcp_files: tuple[str, ...] = ()
@@ -314,6 +323,27 @@ class BaseAdapter:
 
     def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         raise NotSupportedError(self.harness_name, "headless_command")
+
+    def headless_not_ready(self) -> str | None:
+        """Why this harness cannot run a delegated agent right now; None when it can, or cannot tell."""
+        if not self.headless_ready_argv:
+            return None
+        binary = shutil.which(self.headless_ready_argv[0])
+        if binary is None:
+            return None
+        try:
+            proc = subprocess.run(
+                [binary, *self.headless_ready_argv[1:]],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=HEADLESS_READY_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None  # a check that does not answer never blocks a delegation
+        if proc.returncode == 0:
+            return None
+        return self.headless_not_ready_hint or f"`{' '.join(self.headless_ready_argv)}` failed."
 
     def parse_headless_output(self, plan: HeadlessPlan, stdout: str) -> HeadlessResult:
         """Plain-text harnesses: the answer is stdout, or the file the harness wrote it to."""

@@ -427,6 +427,13 @@ class HarnessAdapter(Protocol):
         """
         ...
 
+    def headless_not_ready(self) -> str | None:
+        """Why the harness cannot run a headless task right now (no usable login), or None.
+
+        None also when the harness has no reliable check or the check does not answer.
+        """
+        ...
+
     def parse_headless_output(self, plan: HeadlessPlan, stdout: str) -> HeadlessResult:
         """Extract the child's final answer (and session id, when known) from its output."""
         ...

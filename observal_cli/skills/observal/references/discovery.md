@@ -85,6 +85,7 @@ observal delegate cancel <task-id> --output json
 - A registry Agent runs in the harness you are working in. When the agent does not support it, or it cannot run headless here, the delegation fails and lists the harnesses that can. Ask the user which one to use, then pass `--harness <name>` (the `harness` argument of the `delegate` tool). Never pick one yourself: it runs with that harness's own login and model.
 - The response is an A2A Task. `status.state` is `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_CANCELED`, `TASK_STATE_REJECTED`, `TASK_STATE_INPUT_REQUIRED` (answer with `reply`), or still `TASK_STATE_WORKING` (poll with `status --wait`).
 - Delegation is refused past two levels, past three tasks started by one delegated agent, for an agent already in the chain, and for unapproved agents. Do not work around a refusal; do that part yourself.
+- A refusal that says a harness is not logged in names the command that fixes it. Tell the user; never log in for them.
 - Remote agents that need credentials read them from `OBSERVAL_A2A_TOKEN_<HOST>`, named after the agent's endpoint host (`agents.acme.com` is `OBSERVAL_A2A_TOKEN_AGENTS_ACME_COM`). Never put a token in the message.
 
 ## Save a working session as an Agent
