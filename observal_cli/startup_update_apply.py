@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Guarded Pi and Claude Code startup apply workers.
+"""Guarded startup apply workers for Pi, Claude Code, Kiro, Cursor and Codex.
 
 A registry/account worker lock covers comparison through durable outcome
 sealing. The 90-second budget limits *admission*, not the duration of an
@@ -21,6 +21,14 @@ from typing import TYPE_CHECKING
 from observal_cli import auto_update_policy, client, cmd_update, install_recovery, installed_updates
 from observal_cli import startup_update_check as check
 from observal_cli.errors import CliError
+from observal_cli.startup_harnesses import (
+    AGENT_HARNESSES,
+    DISPLAY_NAME,
+    MCP_HARNESSES,
+    PROFILE_PLAN_HARNESSES,
+    SKILL_HARNESSES,
+    updated_reason,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -164,6 +172,34 @@ def apply_claude(cwd: str, session_id: str, notice_key: str) -> None:
     _refresh_claude_hooks(registry)
 
 
+def apply_hooked(harness: str, cwd: str, session_id: str, notice_key: str) -> None:
+    """Kiro, Cursor and Codex: the same journal and admission as Claude Code.
+
+    Only the owned-file plan (automatic_profile_plan) and the notice channel
+    differ; see observal_cli.startup_harnesses.
+    """
+    from observal_cli.hooks.claude_updates import notice_key as expected_key
+    from observal_cli.startup_harnesses import HOOK_BRIDGE_HARNESSES, PROFILE_PLAN_HARNESSES
+
+    if harness not in HOOK_BRIDGE_HARNESSES & PROFILE_PLAN_HARNESSES:
+        raise ValueError("Unsupported startup harness")
+    shutdown_marker(notice_key)
+    if not session_id or len(session_id) > 256:
+        raise ValueError("Invalid session identifier")
+    registry = auto_update_policy.active_registry()
+    account = auto_update_policy.active_account()
+    if notice_key != expected_key(registry, account, session_id, harness=harness):
+        raise ValueError("Startup notice key does not match the authenticated session")
+    deadline = time.monotonic() + APPLY_SECONDS
+    with (
+        auto_update_policy.apply_worker_gate(registry, account, timeout=max(0, deadline - time.monotonic())),
+        client.bounded_requests(deadline - RECOVERY_RESERVE_SECONDS),
+    ):
+        _apply_serialized(
+            cwd, session_id, notice_key, registry=registry, account=account, deadline=deadline, harness=harness
+        )
+
+
 def _refresh_claude_hooks(registry: str) -> None:
     """Keep Observal's own settings hooks current; consent-gated, reported once, never silent.
 
@@ -265,9 +301,21 @@ def _apply_serialized(
                     msg["reason"] = "Automatic updates are frozen or unavailable; run `observal unfreeze` to opt in."
                 elif item.get("reason") is None:
                     msg["reason"] = "This item requires a manual update in the startup pilot."
+                supported = {"agent": AGENT_HARNESSES, "skill": SKILL_HARNESSES, "mcp": MCP_HARNESSES}
                 if (
                     enabled
-                    and item.get("type") in {"agent", "skill", "mcp"}
+                    and item.get("type") in supported
+                    and item.get("scope") == "user"
+                    and item.get("release_verified")
+                    and harness not in supported[item["type"]]
+                ):
+                    msg["status"] = "skipped"
+                    msg["reason"] = (
+                        f"Automatic {item['type']} updates are not available for {DISPLAY_NAME[harness]}; update manually."
+                    )
+                elif (
+                    enabled
+                    and item.get("type") in supported
                     and item.get("scope") == "user"
                     and item.get("release_verified")
                 ):
@@ -322,7 +370,7 @@ def _apply_serialized(
                                 if harness == "pi"
                                 else cmd_update.apply_startup_claude_mcp,
                             }[item["type"]]
-                            kwargs = {"harness": harness} if harness == "claude-code" else {}
+                            kwargs = {"harness": harness} if harness != "pi" else {}
                             reason_file = marker.with_suffix(".reason")
                             reason_file.unlink(missing_ok=True)
                             os.environ["OBSERVAL_AUTO_UPDATE_REASON_FILE"] = str(reason_file)
@@ -347,7 +395,9 @@ def _apply_serialized(
                             reason_file.unlink(missing_ok=True)
                             if msg["status"] == "updated":
                                 msg["reason"] = (
-                                    "Saved Pi profile updated and verified; the current session and any copied "
+                                    updated_reason(harness, item["type"])
+                                    if harness in PROFILE_PLAN_HARNESSES
+                                    else "Saved Pi profile updated and verified; the current session and any copied "
                                     "active profile are unchanged. Re-select the agent with `/agent` and reload "
                                     "to activate it."
                                     if item["type"] == "agent" and harness == "pi"

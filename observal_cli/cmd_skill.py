@@ -57,6 +57,7 @@ from observal_cli.skill_folder import (
     snapshot_to_extra_files,
     validate_bundle,
 )
+from observal_cli.startup_harnesses import SKILL_HARNESSES
 
 skill_app = typer.Typer(
     help=(
@@ -840,12 +841,12 @@ def _serialize_pi_skill_install(callback):
     @wraps(callback)
     def wrapped(*args, **kwargs):
         harness = kwargs.get("harness", args[1] if len(args) > 1 else None)
-        if harness not in {"pi", "claude-code"}:
+        if harness not in SKILL_HARNESSES:
             return callback(*args, **kwargs)
         from observal_cli import auto_update_policy
         from observal_cli.lockfile import current_registry_url
 
-        lock = auto_update_policy.pi_install_lock if harness == "pi" else auto_update_policy.claude_install_lock
+        lock = auto_update_policy.install_lock_for(harness)
         with lock(current_registry_url()):
             cutoff = os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF")
             if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" and cutoff is not None:
@@ -1025,7 +1026,7 @@ def skill_install(
         ]
         try:
             if (
-                harness not in {"pi", "claude-code"}
+                harness not in SKILL_HARNESSES
                 or scope != "user"
                 or raw
                 or no_write
@@ -1250,7 +1251,7 @@ def skill_install(
                     version_id=str(result["version_id"]) if result.get("version_id") else None,
                     digest=result.get("digest"),
                     requested_version=requested_version,
-                    **({"pin_known": True} if harness in {"pi", "claude-code"} and scope == "user" else {}),
+                    **({"pin_known": True} if harness in SKILL_HARNESSES and scope == "user" else {}),
                 )
         except PermissionError as error:
             fail(
@@ -1272,7 +1273,7 @@ def skill_install(
             )
         # Record ownership only for a complete registry-direct Pi file set.
         # A manual install may succeed without making it eligible for startup.
-        if harness in {"pi", "claude-code"} and scope == "user" and delivery_mode == "registry_direct":
+        if harness in SKILL_HARNESSES and scope == "user" and delivery_mode == "registry_direct":
             from observal_cli import automatic_skill_plan, install_baseline
             from observal_cli.lockfile import current_registry_url
 

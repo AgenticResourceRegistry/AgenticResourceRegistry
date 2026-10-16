@@ -46,7 +46,7 @@ def instance(tmp_path: Path):
                 release = {
                     "version": version,
                     "status": "approved",
-                    "supported_harnesses": ["pi", "claude-code"],
+                    "supported_harnesses": ["pi", "claude-code", "codex"],
                     "skill_md_content": f"# {'different' if state['mismatch'] else 'review'} {version}\n",
                 }
                 if (version == "1.0.0" and state["script_v1"]) or (version == "2.0.0" and state["script"]):
@@ -442,3 +442,60 @@ def test_claude_code_skill_updates_only_after_unfreeze_and_when_clean(instance, 
     assert file.read_text() == "# review 2.0.0\n"
     if with_script:
         assert (file.parent / "scripts/run.sh").read_text() == "echo 2.0.0\n"
+
+
+def _apply_codex(instance, session: str) -> dict:
+    from observal_cli.hooks.claude_updates import notice_key
+
+    _state, home, _cli, _apply, env, url = instance
+    key = notice_key(url, "alice", session, harness="codex")
+    argv = ["_startup-apply-hook", "--harness", "codex", "--cwd", str(home), "--session-id", session]
+    proc = subprocess.run(
+        [sys.executable, "-m", "observal_cli", *argv, "--notice-key", key],
+        env=env,
+        cwd=home,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads((home / ".observal/update-notices" / f"{key}.json").read_text())
+
+
+@pytest.mark.parametrize("with_script", [False, True])
+def test_codex_skill_updates_only_after_unfreeze_and_when_clean(instance, with_script: bool) -> None:
+    state, home, cli, _apply, _env, _url = instance
+    state["script_v1"] = state["script"] = with_script
+    cli("registry", "skill", "install", ID, "--harness", "codex", "--output", "json")
+    file = home / ".agents/skills/review/SKILL.md"
+    assert file.read_text() == "# review 1.0.0\n"
+    state["latest"] = "2.0.0"
+    assert _apply_codex(instance, "frozen")["items"][0]["status"] != "updated"
+    cli("unfreeze")
+    file.write_text("# my edit\n")
+    assert _apply_codex(instance, "edited")["items"][0]["status"] != "updated"
+    assert file.read_text() == "# my edit\n"
+    file.write_text("# review 1.0.0\n")
+    notice = _apply_codex(instance, "clean")
+    assert notice["items"][0]["status"] == "updated", notice
+    assert "Codex" in notice["items"][0]["reason"]
+    assert file.read_text() == "# review 2.0.0\n"
+    if with_script:
+        assert (file.parent / "scripts/run.sh").read_text() == "echo 2.0.0\n"
+
+
+def test_codex_skill_folder_shared_with_another_harness_stays_manual(instance) -> None:
+    """~/.agents/skills is also the default folder of other harnesses (Goose, Antigravity ...)."""
+    state, home, cli, _apply, _env, _url = instance
+    cli("registry", "skill", "install", ID, "--harness", "codex", "--output", "json")
+    path = home / ".observal/lockfile.json"
+    lock = json.loads(path.read_text())
+    other = {"type": "skill", "scope": "user", "id": "goose-skill", "name": "review", "local_name": "review"}
+    lock["registries"]["https://other.example"] = {"harnesses": {"goose": {"standalone": [other]}}}
+    path.write_text(json.dumps(lock))
+    cli("unfreeze")
+    state["latest"] = "2.0.0"
+    notice = _apply_codex(instance, "shared-folder")
+    assert notice["items"][0]["status"] != "updated", notice
+    assert "Another installed skill" in notice["items"][0]["reason"]
+    assert (home / ".agents/skills/review/SKILL.md").read_text() == "# review 1.0.0\n"

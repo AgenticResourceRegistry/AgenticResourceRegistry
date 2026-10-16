@@ -263,13 +263,17 @@ class CodexAdapter(BaseAdapter):
 
     def patch_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _patch_codex
+        from observal_cli.harness_specs import startup_update_hooks
 
-        return _patch_codex(dry_run)
+        telemetry = _patch_codex(dry_run)
+        return startup_update_hooks.patch("codex", dry_run) or telemetry
 
     def cleanup_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _cleanup_codex
+        from observal_cli.harness_specs import startup_update_hooks
 
-        return _cleanup_codex(dry_run)
+        telemetry = _cleanup_codex(dry_run)
+        return startup_update_hooks.cleanup("codex", dry_run) or telemetry
 
     # ── Headless delegation ──────────────────────────────────
 

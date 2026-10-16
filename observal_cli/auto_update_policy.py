@@ -222,6 +222,31 @@ def claude_install_lock(registry: str, *, timeout: float = GATE_TIMEOUT_SECONDS)
         yield
 
 
+@contextmanager
+def profile_install_lock(harness: str, registry: str, *, timeout: float = GATE_TIMEOUT_SECONDS) -> Iterator[None]:
+    """Serialize manual and guarded Kiro, Cursor or Codex writes across registries.
+
+    One lock per harness: its agent profiles, skills and shared configs live
+    under one home directory, whichever registry the install came from.
+    """
+    from observal_cli.startup_harnesses import PROFILE_PLAN_HARNESSES
+
+    if harness not in PROFILE_PLAN_HARNESSES:
+        raise ValueError(f"No profile install lock for harness: {harness}")
+    normalize_server_url(registry)
+    with _file_gate(f"{harness}-install:all-registries", timeout=timeout):
+        yield
+
+
+def install_lock_for(harness: str):
+    """The install lock that manual and guarded writes for *harness* share."""
+    if harness == "pi":
+        return pi_install_lock
+    if harness == "claude-code":
+        return claude_install_lock
+    return lambda registry, *, timeout=GATE_TIMEOUT_SECONDS: profile_install_lock(harness, registry, timeout=timeout)
+
+
 def record_skip_reason(message: object) -> None:
     """Child installers leave one short, fixed refusal reason for the startup notice.
 

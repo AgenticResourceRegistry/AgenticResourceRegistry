@@ -78,6 +78,15 @@ def claude_user_agent_candidate(item: dict, *, registry: str) -> dict[str, str]:
     return _user_agent_candidate(item, registry=registry, harness="claude-code")
 
 
+def user_agent_candidate(item: dict, *, registry: str, harness: str) -> dict[str, str]:
+    """Eligibility for any harness the guarded agent pull supports."""
+    from observal_cli.startup_harnesses import AGENT_HARNESSES
+
+    if harness not in AGENT_HARNESSES:
+        raise PreflightSkipError(f"{harness} agents are not updated automatically.")
+    return _user_agent_candidate(item, registry=registry, harness=harness)
+
+
 def _user_agent_candidate(item: dict, *, registry: str, harness: str) -> dict[str, str]:
     """A positive comparison alone is never installation authorization."""
     if item.get("type") != "agent" or item.get("harness") != harness or item.get("scope") != "user":
@@ -108,16 +117,25 @@ def _user_agent_candidate(item: dict, *, registry: str, harness: str) -> dict[st
             "The release adds or removes an MCP. Claude Code registers an agent's MCPs per project "
             "directory, which is not updated automatically; run `observal agent pull` manually."
         )
-    allowed_types = {"skill", "hook", "mcp"} if harness == "pi" else {"skill", "hook"}
+    if harness in {"cursor", "codex"} and "mcp" in changed_types:
+        raise PreflightSkipError(
+            "The release adds or removes an MCP. Its entry lives in a config shared with other agents, "
+            "which is not changed automatically; run `observal agent pull` manually."
+        )
+    # Pi and Kiro keep an agent's MCPs in files that agent owns.
+    mcp_owned = harness in {"pi", "kiro"}
+    allowed_types = {"skill", "hook", "mcp"} if mcp_owned else {"skill", "hook"}
     if changed_types - allowed_types:
         raise PreflightSkipError(
             "The release adds or removes a component type that needs manual review (only "
-            + ("skills, hooks and credential-free MCPs" if harness == "pi" else "skills and hooks")
+            + ("skills, hooks and credential-free MCPs" if mcp_owned else "skills and hooks")
             + " can be added or removed automatically)."
         )
     root = item.get("directory")
     if not isinstance(root, str) or not root:
         raise PreflightSkipError("The installation root is unknown; update manually.")
+    from observal_cli import automatic_profile_plan
+
     try:
         files = install_baseline.verified_files(
             registry=registry,
@@ -127,9 +145,15 @@ def _user_agent_candidate(item: dict, *, registry: str, harness: str) -> dict[st
             root=root,
             version=current,
             lock_digest=item["lock_digest"],
+            shared=automatic_profile_plan.shared_config_paths(harness, "user", root),
         )
     except install_baseline.BaselineError as error:
         raise PreflightSkipError(str(error)) from error
+    if harness in automatic_profile_plan.PROFILE_PLAN_HARNESSES:
+        try:
+            automatic_profile_plan.owned_profile(harness, item, files)
+        except automatic_profile_plan.ProfilePlanError as error:
+            raise PreflightSkipError(str(error)) from error
     if harness == "claude-code":
         from observal_cli import automatic_claude_plan
 

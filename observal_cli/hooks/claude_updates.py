@@ -1,11 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Claude Code hook bridge for the shared gated startup worker.
+"""Session hook bridge for the shared gated startup worker.
 
 SessionStart launches a detached worker; it never waits for registry I/O.
 A later prompt or session displays sealed results through a user-facing
 systemMessage, not model context. SessionEnd prevents new write admission.
+
+Claude Code is the default. Codex, Kiro and Cursor reuse the same bridge via
+``observal_cli.hooks.harness_updates``; ``normalize_event`` maps their event
+names and fields. Kiro and Cursor have no user-only output channel, so their
+hooks print nothing and the CLI shows their notices instead.
 """
 
 from __future__ import annotations
@@ -27,8 +32,42 @@ STARTED_DIR = config.CONFIG_DIR / "claude-update-started"
 MAX_AGE = 7 * 24 * 60 * 60
 
 
-def notice_key(registry: str, account: str, session_id: str) -> str:
-    return hashlib.sha256(f"claude-code\0{registry}\0{account}\0{session_id}".encode()).hexdigest()
+def notice_key(registry: str, account: str, session_id: str, *, harness: str = "claude-code") -> str:
+    return hashlib.sha256(f"{harness}\0{registry}\0{account}\0{session_id}".encode()).hexdigest()
+
+
+_EVENTS = {
+    "SessionStart": "SessionStart",
+    "UserPromptSubmit": "UserPromptSubmit",
+    "SessionEnd": "SessionEnd",
+    "agentSpawn": "SessionStart",  # Kiro CLI 2.x inline alias
+    "sessionStart": "SessionStart",  # Cursor
+    "sessionEnd": "SessionEnd",  # Cursor
+}
+
+
+def normalize_event(event: object, harness: str) -> dict | None:
+    """Map a host's hook payload to ``{hook_event_name, session_id, cwd}``.
+
+    Verified against real payloads: Claude Code and Codex send those fields;
+    Kiro V3 sends them with ``SessionStart``; Cursor sends ``sessionStart`` with
+    ``session_id`` (or ``conversation_id``) and ``workspace_roots``.
+    """
+    if not isinstance(event, dict):
+        return None
+    name = _EVENTS.get(str(event.get("hook_event_name") or ""))
+    if name is None:
+        return None
+    session_id = event.get("session_id")
+    if harness == "cursor":
+        if event.get("is_background_agent") is True:
+            return None  # A cloud/background agent has no local profile to update.
+        session_id = session_id or event.get("conversation_id")
+        roots = event.get("workspace_roots")
+        cwd = event.get("cwd") or (roots[0] if isinstance(roots, list) and roots else None)
+    else:
+        cwd = event.get("cwd")
+    return {"hook_event_name": name, "session_id": session_id, "cwd": cwd}
 
 
 def _safe_text(value: object, length: int = 120) -> str:
@@ -43,8 +82,11 @@ def _private_directory(directory: Path) -> bool:
         return False
 
 
-def _notices(registry: str, account: str, *, ack: list[Path] | None = None) -> list[str]:
-    """Consume only sealed Claude Code results; leave Pi journals alone."""
+def _notices(registry: str, account: str, *, ack: list[Path] | None = None, harness: str = "claude-code") -> list[str]:
+    """Consume only this harness's sealed results; leave other hosts' journals alone."""
+    from observal_cli.startup_harnesses import DISPLAY_NAME
+
+    host = DISPLAY_NAME.get(harness, harness)
     if not _private_directory(check.NOTICE_DIR):
         return []
     messages = []
@@ -68,12 +110,12 @@ def _notices(registry: str, account: str, *, ack: list[Path] | None = None) -> l
             if (
                 not isinstance(record, dict)
                 or record.get("schema") != 1
-                or record.get("harness") != "claude-code"
+                or record.get("harness") != harness
                 or record.get("registry") != registry
                 or record.get("account_id") != account
                 or record.get("effective_in_current_session") not in {"unknown", "no"}
                 or not isinstance(record.get("session_id"), str)
-                or path.name != f"{notice_key(registry, account, record['session_id'])}.json"
+                or path.name != f"{notice_key(registry, account, record['session_id'], harness=harness)}.json"
                 or not isinstance(record.get("items"), list)
                 # A journaled record must say whether its outcome is final;
                 # otherwise there is no seal to verify or acknowledge.
@@ -96,7 +138,7 @@ def _notices(registry: str, account: str, *, ack: list[Path] | None = None) -> l
                 # Failure may have partially written files. The private backup
                 # and pending journal must remain for manual inspection.
                 messages.append(
-                    "Observal Claude Code update outcome unresolved; inspect managed files and the private backup before retrying."
+                    f"Observal {host} update outcome unresolved; inspect managed files and the private backup before retrying."
                 )
                 continue
             lines = []
@@ -130,7 +172,7 @@ def _notices(registry: str, account: str, *, ack: list[Path] | None = None) -> l
                 )
             if lines:
                 messages.append(
-                    "Observal Claude Code update result; saved files alone do not confirm which profile this session loaded. "
+                    f"Observal {host} update result; saved files alone do not confirm which profile this session loaded. "
                     + " ".join(lines)
                 )
             elif record.get("warning"):
@@ -179,7 +221,7 @@ def _hooks_notice(ack: list[Path] | None) -> list[str]:
     ]
 
 
-def _launch(cwd: str, session_id: str, key: str) -> None:
+def _launch(cwd: str, session_id: str, key: str, harness: str = "claude-code") -> None:
     STARTED_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
     if not _private_directory(STARTED_DIR):
         return
@@ -191,12 +233,15 @@ def _launch(cwd: str, session_id: str, key: str) -> None:
     with os.fdopen(fd, "w") as handle:
         handle.write("startup-worker\n")
     try:
+        command = (
+            ["_startup-apply-claude"] if harness == "claude-code" else ["_startup-apply-hook", "--harness", harness]
+        )
         subprocess.Popen(
             [
                 sys.executable,
                 "-m",
                 "observal_cli",
-                "_startup-apply-claude",
+                *command,
                 "--cwd",
                 cwd,
                 "--session-id",
@@ -239,7 +284,13 @@ def _mark_shutdown(key: str) -> None:
     check._sync_directory(directory)
 
 
-def handle(event: object, *, ack: list[Path] | None = None) -> dict | None:
+def handle(event: object, *, ack: list[Path] | None = None, harness: str = "claude-code") -> dict | None:
+    from observal_cli.startup_harnesses import HOOK_BRIDGE_HARNESSES, NOTICE_CHANNEL
+
+    if harness not in HOOK_BRIDGE_HARNESSES:
+        return None
+    if harness != "claude-code":
+        event = normalize_event(event, harness)
     if not isinstance(event, dict) or event.get("hook_event_name") not in {
         "SessionStart",
         "UserPromptSubmit",
@@ -258,15 +309,23 @@ def handle(event: object, *, ack: list[Path] | None = None) -> dict | None:
         return None
     registry = auto_update_policy.active_registry()
     account = auto_update_policy.active_account()
-    key = notice_key(registry, account, session_id)
+    key = notice_key(registry, account, session_id, harness=harness)
     if event["hook_event_name"] == "SessionEnd":
         _mark_shutdown(key)
         return None
-    messages = _notices(registry, account, ack=ack) + _hooks_notice(ack)
+    # Hosts without a user-only channel leave their notices for the CLI.
+    messages = (
+        (
+            _notices(registry, account, ack=ack, harness=harness)
+            + (_hooks_notice(ack) if harness == "claude-code" else [])
+        )
+        if NOTICE_CHANNEL.get(harness) == "hook"
+        else []
+    )
     if event["hook_event_name"] == "SessionStart":
         cwd = event.get("cwd")
         if isinstance(cwd, str) and cwd and Path(cwd).is_dir():
-            _launch(str(Path(cwd).resolve()), session_id, key)
+            _launch(str(Path(cwd).resolve()), session_id, key, harness)
     return {"systemMessage": "\n".join(messages)[:6000]} if messages else None
 
 
