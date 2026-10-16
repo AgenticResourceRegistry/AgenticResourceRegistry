@@ -427,6 +427,23 @@ def insights_show(
             if component
             else _resolve_report_for_show(target, report_ref)
         )
+    if data.get("subject_type") == "component" and section:
+        narrative = data.get("narrative") or {}
+        sections = {"metrics": data.get("metrics"), "coverage": data.get("coverage")}
+        if isinstance(narrative, dict):
+            sections.update(narrative)
+        if section not in sections:
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Unknown component insight section: {section}.",
+                operation="Show component insight report",
+                remediation=f"Choose from: {', '.join(sections)}.",
+            )
+        if output == "json":
+            output_json({"report_id": data.get("id"), "section": section, "data": sections[section]})
+        else:
+            _render_component_section(section, sections[section])
+        return
     if output == "json":
         if section:
             narrative = data.get("narrative") or {}
@@ -593,6 +610,39 @@ def insights_show(
                 note_rendered = True
     if not note_rendered:
         _render_registry_match_note(registry_match)
+
+
+def _render_component_section(name: str, content: object) -> None:
+    """Render selected component facts without treating missing evidence as zero."""
+    rprint(f"[bold]{esc(name.replace('_', ' ').title())}[/bold]")
+    if isinstance(content, str):
+        rprint(f"  {esc(content)}")
+        return
+    if not isinstance(content, dict):
+        rprint("  [dim]No data recorded.[/dim]")
+        return
+    table = Table(show_header=True, show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    for key, value in content.items():
+        if isinstance(value, dict):
+            for child, amount in value.items():
+                if not isinstance(amount, (dict, list)):
+                    table.add_row(esc(f"{key}.{child}"), esc("not recorded" if amount is None else str(amount)))
+        elif isinstance(value, list):
+            table.add_row(esc(key), esc(", ".join(str(item) for item in value)))
+        else:
+            table.add_row(esc(key), esc("not recorded" if value is None else str(value)))
+    console.print(table)
+    if name == "component_analysis" and isinstance(content.get("findings"), list):
+        for finding in content["findings"]:
+            if not isinstance(finding, dict):
+                continue
+            rprint(f"  {esc(finding.get('kind', 'Finding'))}: {esc(finding.get('insight', ''))}")
+            for ref in finding.get("evidence_refs") or []:
+                excerpt = (content.get("evidence") or {}).get(ref)
+                if excerpt:
+                    rprint(f"    [dim]{esc(ref)} · {esc(excerpt)}[/dim]")
 
 
 def _skill_count(metrics: dict, key: str, measured: bool, partial: bool) -> str:

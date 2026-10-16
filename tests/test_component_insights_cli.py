@@ -160,3 +160,34 @@ def test_invalid_component_version_does_not_request_report(monkeypatch):
     monkeypatch.setattr("observal_cli.cmd_insights.client.post", lambda *_: pytest.fail("should not generate"))
     result = runner.invoke(insights_app, ["generate", "--component", "mcp", "team/probe", "--version", "not/a/version"])
     assert result.exit_code == 7
+
+
+@pytest.mark.parametrize("kind", ["mcp", "skill", "hook"])
+def test_show_component_section_supports_facts_and_rejects_unknown_sections(monkeypatch, kind):
+    report = {
+        "id": "report-1",
+        "subject_type": "component",
+        "component_type": kind,
+        "status": "completed",
+        "narrative": {"summary": "Confirmed evidence only"},
+        "metrics": {"present_sessions": 2, "invocations": None},
+        "coverage": {"presence": {"legacy_hash_sessions": 9}, "attribution_state": "attribution_not_possible"},
+    }
+    monkeypatch.setattr("observal_cli.cmd_insights._resolve_report_for_show", lambda *_: report)
+    for section, expected in (
+        ("summary", "Confirmed evidence only"),
+        ("metrics", "present_sessions"),
+        ("coverage", "legacy_hash_sessions"),
+    ):
+        result = runner.invoke(
+            insights_app, ["show", "--component", kind, "team/probe", "--section", section, "--output", "json"]
+        )
+        assert result.exit_code == 0, result.output
+        assert expected in json.dumps(json.loads(result.output))
+        assert json.loads(result.output)["section"] == section
+
+    table = runner.invoke(insights_app, ["show", "--component", kind, "team/probe", "--section", "metrics"])
+    assert table.exit_code == 0, table.output
+    assert "not recorded" in table.output
+    invalid = runner.invoke(insights_app, ["show", "--component", kind, "team/probe", "--section", "not_a_section"])
+    assert invalid.exit_code == 7
