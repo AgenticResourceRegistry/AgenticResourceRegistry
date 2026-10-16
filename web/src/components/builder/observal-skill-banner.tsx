@@ -48,7 +48,7 @@ export function ObservalSkillBanner() {
             Build your Agent File in your harness
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Ask your coding assistant to use the Observal skill to create an agent. Or keep using the builder below.
+            Ask your coding assistant to use the Observal skill to create an agent.
           </p>
         </div>
         <Link
