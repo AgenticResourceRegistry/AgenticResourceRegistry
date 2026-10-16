@@ -728,6 +728,7 @@ async def test_import_both_extracts_telemetry_and_merges_row_counts(monkeypatch,
         rows_inserted={"users": 3},
         rows_skipped={"users": 1},
         duration_seconds=1.0,
+        warnings=["insight_session_facets: skipped 60 unscoped legacy cache rows"],
     )
     ch_result = TelemetryImportResult(
         migration_id="migration-4",
@@ -761,6 +762,7 @@ async def test_import_both_extracts_telemetry_and_merges_row_counts(monkeypatch,
         "rows_inserted": {"users": 3, "session_events": 4},
         "rows_skipped": {"users": 1},
         "tables_skipped": ["audit_log"],
+        "warnings": ["insight_session_facets: skipped 60 unscoped legacy cache rows"],
         "total_rows": 8,
         "schema_version_diff": None,
     }
