@@ -651,7 +651,7 @@ export function BuilderStepNav({
             <span
               className={cn(
                 "grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-surface-raised font-mono text-[10px]",
-                isActive && "bg-primary text-primary-foreground",
+                isActive && "border border-foreground/70 bg-transparent text-foreground",
                 isDone && "text-success",
               )}
             >

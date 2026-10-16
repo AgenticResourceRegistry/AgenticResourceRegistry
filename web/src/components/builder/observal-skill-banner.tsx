@@ -44,7 +44,7 @@ export function ObservalSkillBanner() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
         <div className="min-w-0 flex-1">
           <h2 id="observal-skill-recommendation-title" className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Info aria-hidden="true" className="h-4 w-4 shrink-0 text-info" />
+            <Info aria-hidden="true" className="h-5 w-5 shrink-0 fill-foreground text-card" />
             Build your Agent File in your harness
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
