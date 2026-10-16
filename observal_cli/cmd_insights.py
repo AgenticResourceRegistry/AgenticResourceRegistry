@@ -745,7 +745,7 @@ def _render_hook_report(data: dict) -> None:
     else:
         rprint("  Recorded runs: not measured (no processed session where it could run)")
     labels = (
-        ("headless_sessions", "headless (agent hooks do not run)"),
+        ("headless_sessions", "headless (this agent hook's placement cannot run)"),
         ("agent_inactive_sessions", "agent not active"),
         ("mode_unknown_sessions", "session mode unknown"),
     )

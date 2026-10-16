@@ -87,7 +87,7 @@ function HookReport({ report }: { report: InsightReport }) {
   const measured = !!coverage && coverage.usage_rate_denominator_sessions > 0;
   const eligibility = coverage?.eligibility;
   const couldNotRun = [
-    eligibility?.headless_sessions ? `${eligibility.headless_sessions} ran headless, where agent hooks do not run` : null,
+    eligibility?.headless_sessions ? `${eligibility.headless_sessions} ran the hook's agent headless, where this hook's placement cannot run` : null,
     eligibility?.agent_inactive_sessions ? `${eligibility.agent_inactive_sessions} did not run the hook's agent` : null,
     eligibility?.mode_unknown_sessions ? `${eligibility.mode_unknown_sessions} did not record whether they were headless` : null,
   ].filter(Boolean);

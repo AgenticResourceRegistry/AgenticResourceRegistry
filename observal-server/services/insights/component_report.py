@@ -212,8 +212,8 @@ def generate_hook_sections(summary: dict, coverage: dict) -> dict:
     if eligibility["headless_sessions"]:
         count = eligibility["headless_sessions"]
         conclusion += (
-            f" In {count} {'session' if count == 1 else 'sessions'} the hook's agent ran headless, where agent "
-            f"hooks do not run; {'it is' if count == 1 else 'they are'} excluded."
+            f" In {count} {'session' if count == 1 else 'sessions'} the hook's agent ran headless, but this "
+            f"hook's placement cannot run there; {'it is' if count == 1 else 'they are'} excluded."
         )
     if eligibility.get("agent_unknown_sessions"):
         count = eligibility["agent_unknown_sessions"]
