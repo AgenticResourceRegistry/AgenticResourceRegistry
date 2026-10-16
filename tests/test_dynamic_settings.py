@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused coverage for the DB-backed dynamic settings service."""
@@ -136,7 +137,34 @@ async def test_get_database_miss_resolves_call_default_service_default_and_unkno
     assert await ds.get("insights.batch_period_days", default="21") == "21"
     assert await ds.get("insights.batch_period_days") == "14"
     assert await ds.get("unknown.setting") == ""
+    redis.set.assert_awaited_with("settings:unknown.setting", ds._UNSET_MARKER, ex=30)
+
+
+@pytest.mark.asyncio
+async def test_get_cached_unset_marker_resolves_defaults_without_database(monkeypatch):
+    redis = _redis_client(monkeypatch, cached=ds._UNSET_MARKER)
+    read_db = AsyncMock(side_effect=AssertionError("database should not be read"))
+    monkeypatch.setattr(ds, "_read_from_db", read_db)
+
+    assert await ds.get("insights.batch_period_days", default="21") == "21"
+    assert await ds.get("insights.batch_period_days") == "14"
+    assert await ds.get("unknown.setting") == ""
+    assert await ds.get_bool("deployment.sso_only") is False
     redis.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_database_failure_resolves_default_and_is_never_cached(monkeypatch):
+    redis = _redis_client(monkeypatch)
+    logger = MagicMock()
+    monkeypatch.setattr(ds, "optic", logger)
+    monkeypatch.setattr(ds, "_read_from_db", AsyncMock(side_effect=RuntimeError("database failed around secret")))
+
+    assert await ds.get("insights.batch_period_days") == "14"
+    redis.set.assert_not_awaited()
+    assert logger.warning.call_args_list == [
+        (("dynamic settings database read failed for key={}", "insights.batch_period_days"), {}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -322,7 +350,8 @@ async def test_database_read_failures_return_absence_without_logging_values(monk
         MagicMock(side_effect=RuntimeError("database failed around super-secret-value")),
     )
 
-    assert await ds._read_from_db("oauth.client_secret") is None
+    _redis_client(monkeypatch)
+    assert await ds.get("oauth.client_secret") == ""
     assert await ds._read_all_from_db() == {}
     assert logger.warning.call_args_list == [
         (("dynamic settings database read failed for key={}", "oauth.client_secret"), {}),
