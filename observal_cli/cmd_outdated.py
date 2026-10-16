@@ -6,21 +6,18 @@
 
 from __future__ import annotations
 
-import shlex
 from contextlib import nullcontext
 
 import typer
-from packaging.version import InvalidVersion, Version
 from rich import print as rprint
 from rich.table import Table
 
-from observal_cli import client
+from observal_cli import client, installed_updates
 from observal_cli.constants import VALID_HARNESSES
 from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.render import OutputMode, console, esc, output_json, spinner
 
 _OPERATION = "Check installed versions"
-_COMPONENT_TYPES = {"mcp", "skill", "hook"}
 
 
 def register_outdated(app: typer.Typer):
@@ -112,90 +109,27 @@ def register_outdated(app: typer.Typer):
                 rprint("[dim]Run `observal agent pull` or a registry install command first.[/dim]")
             return
 
-        installed = [_prepare_entry(entry, str(LOCKFILE_PATH)) for entry in entries]
+        installed = [installed_updates.prepare_entry(entry, str(LOCKFILE_PATH)) for entry in entries]
 
         if output != "json":
             rprint(f"\n[bold]Checking {len(installed)} installed item(s)...[/bold]\n")
 
-        results: list[dict] = []
         fetch_context = nullcontext() if output == "json" else spinner("Fetching latest registry versions...")
         with fetch_context:
-            for item in installed:
-                try:
-                    data = client.get(
-                        _registry_path(item["type"], item["id"]),
-                        operation=_OPERATION,
-                        resource=f"{item['type']} {item['qualified_name']}",
-                    )
-                except CliError as error:
-                    if error.category is not ErrorCategory.NOT_FOUND:
-                        raise
-                    results.append(
-                        {
-                            **item,
-                            "latest_version": None,
-                            "status": "missing",
-                            "outdated": False,
-                            "error": _error_payload(error),
-                            "upgrade_command": None,
-                        }
-                    )
-                    continue
+            # The shared service retains private installation context, but the
+            # explicit CLI's long-standing JSON contract stays unchanged.
+            results = [installed_updates.public_result(item) for item in installed_updates.compare(installed)]
 
-                if not isinstance(data, dict):
-                    fail(
-                        ErrorCategory.UNAVAILABLE,
-                        "The registry returned an invalid item response.",
-                        operation=_OPERATION,
-                        resource=f"{item['type']} {item['qualified_name']}",
-                        remediation="Check server health and version compatibility, then retry.",
-                    )
+        # An explicit check is fresh; do not show the previous startup cache
+        # for this account after a successful manual refresh.
+        try:
+            from observal_cli import auto_update_policy, startup_update_check
 
-                latest = _latest_version(item["type"], data)
-                if not isinstance(latest, str) or not latest.strip():
-                    fail(
-                        ErrorCategory.UNAVAILABLE,
-                        "The registry response does not contain a valid latest version.",
-                        operation=_OPERATION,
-                        resource=f"{item['type']} {item['qualified_name']}",
-                        remediation="Check server health and version compatibility, then retry.",
-                    )
-
-                try:
-                    # Check the registry's version even when the installed one is
-                    # unknown, so a malformed release is never reported as fine.
-                    Version(latest)
-                    is_outdated = item["current_version"] is not None and _version_newer(
-                        latest, item["current_version"]
-                    )
-                except InvalidVersion as error:
-                    fail(
-                        ErrorCategory.UNAVAILABLE,
-                        "The registry returned an invalid latest version.",
-                        operation=_OPERATION,
-                        resource=f"{item['type']} {item['qualified_name']}",
-                        remediation="Correct the registry version and retry.",
-                        detail=repr(error),
-                    )
-
-                namespace = _text(data.get("namespace")) or item["namespace"]
-                slug = _text(data.get("slug")) or item["slug"]
-                qualified_name = f"{namespace}/{slug}" if namespace and slug else item["qualified_name"]
-                result = {
-                    **item,
-                    "qualified_name": qualified_name,
-                    "namespace": namespace,
-                    "slug": slug,
-                    "latest_version": latest,
-                    "status": _status(item["current_version"], is_outdated),
-                    "outdated": is_outdated,
-                    "error": None,
-                    "upgrade_command": None,
-                }
-                if result["status"] != "current":
-                    # Reinstalling also records the version of an "unknown" entry.
-                    result["upgrade_command"] = _upgrade_command(result)
-                results.append(result)
+            startup_update_check.invalidate_cache(
+                auto_update_policy.active_registry(), auto_update_policy.active_account()
+            )
+        except (ValueError, OSError):
+            pass  # cache maintenance must not fail the explicit version check
 
         outdated_items = [item for item in results if item["outdated"]]
         if report and outdated_items:
@@ -207,123 +141,6 @@ def register_outdated(app: typer.Typer):
             return
 
         _render_table(payload)
-
-
-def _status(current_version: str | None, is_outdated: bool) -> str:
-    if current_version is None:
-        return "unknown"
-    return "outdated" if is_outdated else "current"
-
-
-def _text(value: object) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
-def _prepare_entry(entry: object, lockfile_path: str) -> dict:
-    if not isinstance(entry, dict):
-        fail(
-            ErrorCategory.VALIDATION,
-            "The installed-state lockfile contains an invalid item entry.",
-            operation=_OPERATION,
-            resource=lockfile_path,
-            remediation="Reinstall the affected item to rebuild its lockfile entry.",
-        )
-    entry_type = _text(entry.get("entry_type"))
-    component_type = _text(entry.get("type"))
-    item_type = "agent" if entry_type == "agent" else component_type if entry_type == "standalone" else None
-    if item_type != "agent" and item_type not in _COMPONENT_TYPES:
-        fail(
-            ErrorCategory.VALIDATION,
-            "The installed-state lockfile contains an unsupported item type.",
-            operation=_OPERATION,
-            resource=lockfile_path,
-            remediation="Reinstall the affected item to rebuild its lockfile entry.",
-        )
-
-    item_id = _text(entry.get("id"))
-    # Older CLIs recorded no version for skills installed without --version.
-    # Such entries are reported as "unknown" rather than failing the whole check.
-    current_version = _text(entry.get("version"))
-    item_harness = _text(entry.get("harness"))
-    if not item_id or not item_harness:
-        fail(
-            ErrorCategory.VALIDATION,
-            "An installed-state lockfile entry is missing its ID or harness.",
-            operation=_OPERATION,
-            resource=lockfile_path,
-            remediation="Reinstall the affected item to rebuild its lockfile entry.",
-        )
-    if item_harness not in VALID_HARNESSES:
-        fail(
-            ErrorCategory.VALIDATION,
-            "An installed-state lockfile entry uses an unsupported harness.",
-            operation=_OPERATION,
-            resource=lockfile_path,
-            remediation="Reinstall the affected item for a currently supported harness.",
-        )
-    try:
-        if current_version is not None:
-            Version(current_version)
-    except InvalidVersion as error:
-        fail(
-            ErrorCategory.VALIDATION,
-            "An installed-state lockfile entry has an invalid version.",
-            operation=_OPERATION,
-            resource=lockfile_path,
-            remediation="Reinstall the affected item to rebuild its lockfile entry.",
-            detail=repr(error),
-        )
-
-    name = _text(entry.get("name")) or item_id[:8]
-    namespace = _text(entry.get("namespace"))
-    slug = _text(entry.get("slug"))
-    qualified_name = _text(entry.get("qualified_name"))
-    if not qualified_name:
-        qualified_name = f"{namespace}/{slug}" if namespace and slug else item_id
-
-    return {
-        "id": item_id,
-        "qualified_name": qualified_name,
-        "name": name,
-        "namespace": namespace,
-        "slug": slug,
-        "type": item_type,
-        "harness": item_harness,
-        "current_version": current_version,
-    }
-
-
-def _registry_path(item_type: str, item_id: str) -> str:
-    return f"/api/v1/agents/{item_id}" if item_type == "agent" else f"/api/v1/{item_type}s/{item_id}"
-
-
-def _latest_version(item_type: str, data: dict) -> object:
-    if item_type == "agent":
-        return data.get("latest_approved_version") or data.get("version")
-    return data.get("version")
-
-
-def _upgrade_command(item: dict) -> str:
-    target = shlex.quote(item["qualified_name"])
-    harness = shlex.quote(item["harness"])
-    if item["type"] == "agent":
-        # A plain pull keeps the locked version; moving forward is explicit.
-        return f"observal agent pull {target} --harness {harness} --no-prompt --upgrade"
-    prompt_flag = " --no-prompt" if item["type"] == "mcp" else ""
-    return f"observal registry {item['type']} install {target} --harness {harness}{prompt_flag}"
-
-
-def _error_payload(error: CliError) -> dict:
-    return {
-        "category": error.category.value,
-        "message": error.message,
-        "operation": error.operation,
-        "resource": error.resource,
-        "remediation": error.remediation,
-        "request_id": error.request_id,
-        "http_status": error.http_status,
-        "exit_code": error.contract_exit_code,
-    }
 
 
 def _report_status(*, requested: bool) -> dict:
@@ -362,7 +179,7 @@ def _report_to_inbox(outdated_items: list[dict]) -> dict:
         )
     except CliError as error:
         status["succeeded"] = False
-        status["error"] = _error_payload(error)
+        status["error"] = installed_updates.error_payload(error)
         return status
 
     counters = None if not isinstance(result, dict) else (result.get("created", 0), result.get("superseded", 0))
@@ -375,7 +192,7 @@ def _report_to_inbox(outdated_items: list[dict]) -> dict:
             remediation="Check server health and version compatibility, then retry.",
         )
         status["succeeded"] = False
-        status["error"] = _error_payload(error)
+        status["error"] = installed_updates.error_payload(error)
         return status
 
     status["succeeded"] = True
@@ -456,8 +273,3 @@ def _render_table(payload: dict) -> None:
     elif report["attempted"]:
         category = report["error"]["category"] if report["error"] else "unexpected"
         rprint(f"[yellow]Inbox reporting failed ({esc(category)}); the version comparison still completed.[/yellow]")
-
-
-def _version_newer(latest: str, current: str) -> bool:
-    """Return whether the registry version is newer using the installed version parser."""
-    return Version(latest) > Version(current)

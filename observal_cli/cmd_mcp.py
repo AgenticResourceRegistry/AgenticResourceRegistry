@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from contextlib import nullcontext, redirect_stdout
@@ -1113,6 +1114,7 @@ def _install_impl(
     env_file: str | None = None,
     no_prompt: bool = False,
     output: OutputMode = OutputMode.table,
+    managed: bool = False,
 ):
     optic.trace("mcp_id={}, harness={}, version={}", mcp_id, harness, version)
     import json as _json
@@ -1127,6 +1129,20 @@ def _install_impl(
         spec = client.get(f"/api/v1/mcps/{resolved}/versions/{version}") if version else listing
     env_var_list = _install_input_definitions(spec, "environment_variables", "environment_variable")
     header_list = _install_input_definitions(spec, "headers", "header")
+    if managed and harness == "claude-code" and (env_var_list or header_list or env_overrides or header_overrides):
+        from observal_cli.auto_update_policy import record_skip_reason
+
+        record_skip_reason(
+            "Claude Code's generated MCP command cannot carry credentials Observal can verify; "
+            "install and update this MCP manually."
+        )
+        fail(
+            ErrorCategory.CONFLICT,
+            "Managed Claude Code MCP installs cannot retain credential inputs.",
+            operation="Install MCP server",
+            resource=mcp_id,
+            remediation="Use the printed snippet and update it manually for MCPs requiring credentials.",
+        )
 
     # Build env overrides from --env flags and --env-file
     _env_from_flags: dict[str, str] = dict(env_overrides) if env_overrides else {}
@@ -1149,6 +1165,19 @@ def _install_impl(
                         _env_from_flags[k] = v
 
     _header_from_flags: dict[str, str] = dict(header_overrides) if header_overrides else {}
+    if managed and harness == "pi" and os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1":
+        from observal_cli import automatic_mcp_plan
+        from observal_cli.lockfile import local_registry_name as _local_name
+
+        saved_env, saved_headers = automatic_mcp_plan.saved_inputs(
+            _local_name(harness, "mcp", listing["namespace"], listing["slug"])
+        )
+        for ev in env_var_list:
+            if ev["name"] in saved_env:
+                _env_from_flags.setdefault(ev["name"], saved_env[ev["name"]])
+        for header in header_list:
+            if header["name"] in saved_headers:
+                _header_from_flags.setdefault(header["name"], saved_headers[header["name"]])
     skip_prompts = machine_output or no_prompt
 
     env_values: dict[str, str] = {}
@@ -1164,6 +1193,13 @@ def _install_impl(
             if header.get("required", True) and not _header_from_flags.get(header["name"])
         )
         if missing_inputs:
+            if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1":
+                from observal_cli.auto_update_policy import record_skip_reason
+
+                record_skip_reason(
+                    "The release needs a credential or value that was not saved; "
+                    "run `observal registry mcp install` manually to provide it."
+                )
             fail(
                 ErrorCategory.VALIDATION,
                 "MCP installation requires values that are unavailable in non-interactive mode.",
@@ -1203,7 +1239,7 @@ def _install_impl(
         for ev in env_var_list:
             if ev["name"] in _env_from_flags:
                 env_values[ev["name"]] = _env_from_flags[ev["name"]]
-            else:
+            elif not managed:
                 env_values[ev["name"]] = f"<{ev['name']}>"
 
     # Prompt for headers (SSE/HTTP servers with auth)
@@ -1236,7 +1272,7 @@ def _install_impl(
         for h in header_list:
             if h["name"] in _header_from_flags:
                 header_values[h["name"]] = _header_from_flags[h["name"]]
-            else:
+            elif not managed:
                 header_values[h["name"]] = f"<{h['name']}>"
 
     from observal_cli.lockfile import local_registry_name
@@ -1258,6 +1294,124 @@ def _install_impl(
         )
 
     snippet = result.get("config_snippet", {})
+    if managed and harness == "claude-code":
+        from observal_cli import automatic_claude_mcp as claude_mcp
+        from observal_cli.lockfile import current_registry_url
+
+        try:
+            release_version = result["version"]
+            if not isinstance(release_version, str) or (version and release_version != version):
+                raise claude_mcp.ClaudeMcpError("The server did not return the requested MCP version.")
+            release = client.get(f"/api/v1/mcps/{resolved}/versions/{release_version}")
+            if (
+                not isinstance(release, dict)
+                or release.get("version") != release_version
+                or release.get("status") != "approved"
+                or harness not in release.get("supported_harnesses", [])
+                or result.get("harness") != harness
+                or str(result.get("listing_id")) != resolved
+                or not result.get("version_id")
+                or not isinstance(result.get("digest"), str)
+                or not result["digest"]
+                or listing.get("id") != resolved
+                or (release.get("id") and str(release["id"]) != str(result.get("version_id")))
+                or result.get("warnings")
+            ):
+                raise claude_mcp.ClaudeMcpError("No exact approved Claude Code MCP release was returned.")
+            path = claude_mcp.install(
+                registry=current_registry_url(),
+                component_id=resolved,
+                name=listing.get("name", local_name),
+                namespace=listing.get("namespace"),
+                slug=listing.get("slug"),
+                local_name=local_name,
+                version=release_version,
+                version_id=result.get("version_id"),
+                digest_value=result.get("digest"),
+                requested_version=None if os.environ.get("OBSERVAL_UPDATE_EXACT_TARGET") == "1" else version,
+                entry=claude_mcp.parse_snippet(snippet, local_name),
+            )
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            if isinstance(error, ValueError) and not isinstance(error, OSError):
+                from observal_cli.auto_update_policy import record_skip_reason
+
+                record_skip_reason(str(error))
+            fail(
+                ErrorCategory.CONFLICT,
+                "The Claude Code MCP cannot be installed or updated as managed config.",
+                operation="Install MCP server",
+                resource=mcp_id,
+                remediation="Inspect the Claude Code MCP entry and update manually.",
+                detail=str(error),
+            )
+        if output == "json":
+            output_json({"id": resolved, "version": release_version, "managed_path": path})
+        else:
+            rprint(f"[green]✓ Managed Claude Code MCP entry installed:[/green] {esc(local_name)}")
+        return
+    if managed:
+        from observal_cli import automatic_mcp_plan
+        from observal_cli.lockfile import current_registry_url
+
+        try:
+            release_version = result["version"]
+            if not isinstance(release_version, str) or (version and release_version != version):
+                raise automatic_mcp_plan.McpPlanError("The server did not return the requested MCP version.")
+            release = client.get(f"/api/v1/mcps/{resolved}/versions/{release_version}")
+            if (
+                not isinstance(release, dict)
+                or release.get("version") != release_version
+                or release.get("status") != "approved"
+                or "pi" not in release.get("supported_harnesses", [])
+                or result.get("harness") != "pi"
+                or str(result.get("listing_id")) != resolved
+                or not result.get("version_id")
+                or not isinstance(result.get("digest"), str)
+                or not result["digest"]
+                or not isinstance(snippet, dict)
+                or set(snippet) != {"mcpServers"}
+                or not isinstance(snippet["mcpServers"], dict)
+                or set(snippet["mcpServers"]) != {local_name}
+                or not isinstance(snippet["mcpServers"][local_name], dict)
+                or listing.get("id") != resolved
+                or (release.get("id") and str(release["id"]) != str(result.get("version_id")))
+                or result.get("warnings")
+            ):
+                raise automatic_mcp_plan.McpPlanError("No exact approved single-entry Pi MCP reference was returned.")
+            registry = current_registry_url()
+            path = automatic_mcp_plan.install(
+                registry=registry,
+                component_id=resolved,
+                name=listing.get("name", local_name),
+                namespace=listing.get("namespace"),
+                slug=listing.get("slug"),
+                local_name=local_name,
+                version=release_version,
+                version_id=result.get("version_id"),
+                digest_value=result.get("digest"),
+                requested_version=None if os.environ.get("OBSERVAL_UPDATE_EXACT_TARGET") == "1" else version,
+                entry=snippet["mcpServers"][local_name],
+                required={ev["name"] for ev in env_var_list if ev.get("required", True)},
+                required_headers={h["name"] for h in header_list if h.get("required", True)},
+            )
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            if isinstance(error, ValueError) and not isinstance(error, OSError):
+                from observal_cli.auto_update_policy import record_skip_reason
+
+                record_skip_reason(str(error))
+            fail(
+                ErrorCategory.CONFLICT,
+                "The Pi MCP reference cannot be installed automatically or as managed config.",
+                operation="Install MCP server",
+                resource=mcp_id,
+                remediation="Inspect the local Pi MCP config and update manually.",
+                detail=str(error),
+            )
+        if output == "json":
+            output_json({"id": resolved, "version": release_version, "managed_path": str(path)})
+        else:
+            rprint(f"[green]✓ Managed Pi MCP reference installed:[/green] {esc(path)}")
+        return
     if raw:
         print(_json.dumps(snippet, indent=2))
         return
@@ -1522,12 +1676,18 @@ def install(
     env_file: str | None = typer.Option(None, "--env-file", help="Path to .env file for environment variables"),
     no_prompt: bool = typer.Option(False, "--no-prompt", "-y", help="Skip interactive prompts"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+    managed: bool = typer.Option(False, "--managed", help="Write and track a managed user MCP (Pi or Claude Code)"),
 ):
-    """Generate an install config snippet for an MCP server.
+    """Generate an MCP snippet, or install a managed user MCP (Pi or Claude Code).
 
-    Produces harness-specific configuration that you paste into your editor's
-    MCP settings file. Prompts for required environment variables and
-    headers interactively (unless --raw or --no-prompt is used).
+    By default, prints harness-specific configuration to paste into your
+    editor. With --managed, Observal writes and tracks the entry itself:
+    for Pi it owns the whole global MCP file (credentials you supply are
+    kept private to that file); for Claude Code it adds one user entry with
+    `claude mcp add` and accepts no credentials. Existing pasted config or
+    an existing entry with the same name is never adopted. Other installs
+    prompt for required environment variables and headers unless --raw or
+    --no-prompt is used.
 
     Use --env KEY=VALUE to pass environment variables non-interactively
     (repeatable). Use --header KEY=VALUE for headers. Use --env-file to
@@ -1540,6 +1700,8 @@ def install(
         observal registry mcp install my-server --harness claude-code
         observal registry mcp install my-server --harness claude-code --env-file .env --no-prompt
         observal registry mcp install my-server --harness cursor --raw > .cursor/mcp.json
+        observal registry mcp install my-server --harness pi --managed
+        observal registry mcp install my-server --harness claude-code --managed
     """
     optic.trace("mcp_id={}, harness={}", mcp_id, harness)
     if raw and output == "json":
@@ -1572,7 +1734,7 @@ def install(
             )
     env_overrides = _parse_assignments(env, "environment variable")
     header_overrides = _parse_assignments(header, "header")
-    if output == "json" and not no_prompt:
+    if output == "json" and not no_prompt and not managed:
         fail(
             ErrorCategory.VALIDATION,
             "JSON mode cannot prompt for MCP installation values.",
@@ -1580,6 +1742,40 @@ def install(
             resource="MCP installation",
             remediation="Add --no-prompt and provide every required value, or use interactive table mode.",
         )
+    if managed and (harness not in {"pi", "claude-code"} or raw):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Managed MCP installation is limited to Pi and Claude Code user scope and cannot use --raw.",
+            operation="Install MCP server",
+            resource=mcp_id,
+            remediation="Use --harness pi or claude-code with --managed, or omit --managed to print a snippet.",
+        )
+    if managed:
+        from observal_cli.auto_update_policy import claude_install_lock, pi_install_lock
+        from observal_cli.lockfile import current_registry_url
+
+        install_lock = pi_install_lock if harness == "pi" else claude_install_lock
+
+        cutoff = os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF")
+        requests = (
+            client.bounded_requests(float(cutoff))
+            if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" and cutoff
+            else nullcontext()
+        )
+        with install_lock(current_registry_url()), requests:
+            _install_impl(
+                mcp_id,
+                harness,
+                raw,
+                version=version,
+                env_overrides=env_overrides or None,
+                header_overrides=header_overrides or None,
+                env_file=env_file,
+                no_prompt=no_prompt,
+                output=output,
+                managed=True,
+            )
+        return
     _install_impl(
         mcp_id,
         harness,

@@ -127,8 +127,9 @@ def test_claude_hook_spec_uses_generic_harness_entrypoint():
     commands = {
         hook["command"] for groups in get_desired_hooks().values() for group in groups for hook in group["hooks"]
     }
-    assert len(commands) == 1
-    assert "observal_cli.hooks.session_push --harness claude-code" in commands.pop()
+    assert len(commands) == 2
+    assert any("observal_cli.hooks.session_push --harness claude-code" in cmd for cmd in commands)
+    assert any("observal_cli.hooks.claude_updates" in cmd for cmd in commands)
 
 
 def test_main_never_raises_on_invalid_input(monkeypatch):

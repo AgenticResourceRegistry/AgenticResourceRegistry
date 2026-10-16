@@ -238,11 +238,11 @@ Replace user-facing UUID links with `/agents/{namespace}/{slug}`, `/components/{
 
 #### Installed-item update notices, P0
 
-**Status:** In progress in [PR #1669](https://github.com/Observal/Observal/pull/1669), which persists explicit `observal outdated` findings in Inbox. Periodic non-blocking checks and verified exact upgrade commands remain.
+**Status:** In progress in [PR #1669](https://github.com/Observal/Observal/pull/1669), which persists explicit `observal outdated` findings in Inbox. Periodic non-blocking checks, verified upgrade commands, and opt-in auto-updating remain.
 
-Reuse the installed lockfile inventory and outdated comparison to show a periodic, non-blocking “update available” notice for installed agents and components in the terminal and create the corresponding Inbox item. Do not update automatically.
+Reuse the installed lockfile inventory and outdated comparison to show periodic, non-blocking notices for installed agents and components in the terminal and create the corresponding Inbox item. Auto-updating is off by default. `observal unfreeze` enables safe updates of this user's managed user-scoped installs; `observal freeze` disables them. Project-scoped updates require a separate, local per-canonical-directory opt-in. The first project pilot is limited to untracked installs with a prior local ownership baseline: Git tracking of every planned path and of `observal.lock` is checked at admission and again before writing (failing closed), tracked files and a tracked `observal.lock` stay notice-only, and our own `observal.lock` entry is updated with compare-and-swap and entry-level recovery. Claude Code agent MCPs need exact per-entry ownership, a proof that no other entry in the shared `~/.claude.json` changed, and a multi-entry recovery journal before they can update automatically. Report exact version changes and author-provided release details; keep unsupported or unsafe installs notice-only, with verified manual instructions. An agent update installs only the components pinned by its new release.
 
-**Complete when:** notices compare exact installed and latest approved versions, are cached to avoid noisy network checks, remain queryable in Inbox, and include the exact explicit upgrade command.
+**Complete when:** notices compare exact installed and latest approved versions, are cached to avoid noisy network checks, remain queryable in Inbox, and give accurate explicit upgrade steps; opted-in eligible installations update safely across supported harnesses with verified outcomes and clear reload guidance; frozen, project-unapproved, offline, and detected unsafe cases refuse automatic file changes (subject to the documented concurrent-filesystem-write limitation). IDE startup integrations require separate host-level verification.
 
 #### Teamspace creation and membership approvals, P0
 
@@ -354,7 +354,7 @@ Harden `observal server upgrade` and explicit rollback around a coherent backup 
 
 The following are explicitly outside this roadmap's intended implementation:
 
-- Update notices never install an agent or component automatically.
+- Installed-item updates are opt-in, scoped to Observal-managed installations, and never change project-scoped files or pins without a separate local project opt-in. Unsupported or unsafe updates remain notice-only.
 - Notification channels mean terminal notices plus the Observal Inbox, not Slack or email delivery.
 - Review customization uses Strict, Balanced, and Fast presets, an approval count, and scoped auto-approve toggles, not a general-purpose policy language.
 - Success criteria are server-side evaluation metadata and never ship with installed agents or components.

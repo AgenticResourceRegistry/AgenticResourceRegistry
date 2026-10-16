@@ -15,7 +15,9 @@ def test_claude_get_desired_hooks_has_expected_events():
     hooks = claude_code_hooks_spec.get_desired_hooks()
     assert "UserPromptSubmit" in hooks
     assert "Stop" in hooks
-    assert len(hooks) == 2
+    assert "SessionStart" in hooks
+    assert "SessionEnd" in hooks
+    assert len(hooks) == 4
 
 
 def test_claude_get_desired_hooks_has_metadata():

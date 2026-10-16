@@ -79,6 +79,8 @@ def _walk(prefix: str, group_app: typer.Typer, lines: list[str], depth: int = 0)
             _walk(full, sub.typer_instance, lines, depth + 1)
 
     for cmd in sorted(group_app.registered_commands, key=lambda c: c.name or ""):
+        if cmd.hidden:
+            continue
         name = cmd.name or (cmd.callback.__name__ if cmd.callback else "")
         full = f"{prefix} {name}".strip()
         summary = _command_help(cmd)
@@ -98,6 +100,8 @@ def generate_reference() -> str:
     # Root-level commands (scan, use, profile, uninstall, etc.) come first.
     root_lines: list[str] = []
     for cmd in sorted(app.registered_commands, key=lambda c: c.name or ""):
+        if cmd.hidden:
+            continue
         name = cmd.name or (cmd.callback.__name__ if cmd.callback else "")
         summary = _command_help(cmd)
         root_lines.append(f"- `observal {name}`: {summary}" if summary else f"- `observal {name}`")

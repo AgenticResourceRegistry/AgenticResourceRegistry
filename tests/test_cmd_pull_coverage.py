@@ -1420,6 +1420,8 @@ def test_pull_full_project_flow_writes_every_shape_and_exact_side_effects(
         local_name="local-reviewer",
         lock_digest="sha256:" + "a" * 64,
         lock_status="locked",
+        requested_version=None,
+        pin_known=False,
     )
     boundaries.snapshot.assert_called_once_with(project_dir=str(target.resolve()))
     boundaries.adapter.persist_active_agent.assert_called_once_with("agent-uuid", "reviewer", "1.4.0")
@@ -2200,7 +2202,8 @@ def test_pull_json_returns_stable_file_and_setup_result_without_secrets(
     assert payload["harness"] == "claude-code"
     assert payload["dry_run"] is False
     assert payload["files"] == [{"path": str(target.resolve() / "agent.md"), "status": "created"}]
-    assert payload["warnings"] == ["server warning"]
+    assert payload["warnings"][0] == "server warning"
+    assert any("Ownership evidence could not be recorded" in warning for warning in payload["warnings"])
     assert payload["setup_commands"][0]["status"] == "completed"
     assert "secret-value" not in result.output
     boundaries.upsert.assert_called_once()

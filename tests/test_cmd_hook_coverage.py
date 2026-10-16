@@ -1064,7 +1064,10 @@ def test_hook_validation_uses_stable_exit_code(arguments, monkeypatch):
     get.assert_not_called()
 
 
-def test_install_sends_the_requested_version_and_records_what_was_installed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("runner_target", [False, True])
+def test_install_sends_the_requested_version_and_records_what_was_installed(tmp_path, monkeypatch, runner_target):
+    if runner_target:
+        monkeypatch.setenv("OBSERVAL_UPDATE_EXACT_TARGET", "1")
     import observal_cli.lockfile as lockfile
 
     project = tmp_path / "project"
@@ -1107,6 +1110,6 @@ def test_install_sends_the_requested_version_and_records_what_was_installed(tmp_
         "1.0.0",
         "v-1",
         "sha256:x",
-        "1.0.0",
+        None if runner_target else "1.0.0",
     )
     assert invalid.exit_code == 7

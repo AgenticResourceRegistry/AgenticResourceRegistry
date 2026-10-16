@@ -190,6 +190,26 @@ class TestDoctorDiagnosis:
         patch_targets.assert_called_once_with(list(doctor_module._VALID_HARNESSES), dry_run=False, output="table")
         install_skill.assert_called_once_with()
 
+    def test_stale_reconciliation_does_not_claim_success(
+        self, runner: CliRunner, quiet_diagnosis: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ):
+        from observal_cli import skill_installer
+
+        plan = SimpleNamespace(
+            changes=[SimpleNamespace(label="agent", field="name", old="old", new="new")],
+            warnings=[],
+            apply=MagicMock(return_value=False),
+        )
+        plan.apply.side_effect = lambda: (plan.warnings.append("Installed state changed; rerun doctor."), False)[1]
+        quiet_diagnosis.planner.return_value = plan
+        monkeypatch.setattr(doctor_module, "_patch_targets", MagicMock(return_value={}))
+        monkeypatch.setattr(skill_installer, "install_observal_skill", MagicMock())
+
+        result = runner.invoke(doctor_module.doctor_app, ["--yes"])
+        assert result.exit_code == 0
+        assert "reconciliation was skipped" in _plain(result.output)
+        assert "Reconciled 1 lockfile field(s)" not in _plain(result.output)
+
     def test_lockfile_planning_failure_is_reported_as_an_issue(
         self, runner: CliRunner, quiet_diagnosis: SimpleNamespace
     ):

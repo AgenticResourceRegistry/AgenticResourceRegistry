@@ -27,6 +27,10 @@ sys.modules["_sync_observal_skill"] = _sync
 _spec.loader.exec_module(_sync)  # type: ignore[union-attr]
 
 
+def test_hidden_worker_not_advertised_as_user_command():
+    assert "_startup-check" not in _sync.generate_reference()
+
+
 def test_skill_reference_block_in_sync():
     """The reference block on disk equals what the sync script would emit."""
     expected = _sync.generate_reference()

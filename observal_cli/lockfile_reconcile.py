@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from observal_cli import client
-from observal_cli.lockfile import current_registry_url, read_registry_lockfile, write_lockfile
+from observal_cli.lockfile import _update_registry, current_registry_url, read_registry_lockfile
 
 _CANONICAL_FIELDS = ("name", "namespace", "slug", "qualified_name")
 _ITEM_TYPES = {"agent", "mcp", "skill", "hook", "prompt", "sandbox"}
@@ -31,11 +31,27 @@ class LockfileReconciliation:
     changes: list[LockfileChange] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
-    def apply(self) -> None:
-        for change in self.changes:
-            change.entry[change.field] = change.new
-        if self.changes:
-            write_lockfile(self.data)
+    def apply(self) -> bool:
+        if not self.changes:
+            return True
+        if current_registry_url() != self.server_url:
+            self.warnings.append("Registry changed during reconciliation; rerun `observal doctor`.")
+            return False
+
+        def commit(registry: dict) -> tuple[bool, bool]:
+            # The registry request ran outside the file lock. Never write the
+            # plan's stale complete lockfile over an intervening installation.
+            planned = self.data["registries"].get(self.server_url, {"server_url": self.server_url, "harnesses": {}})
+            if registry != planned:
+                self.warnings.append("Installed state changed during reconciliation; rerun `observal doctor`.")
+                return False, False
+            for change in self.changes:
+                change.entry[change.field] = change.new
+            registry.clear()
+            registry.update(planned)
+            return True, True
+
+        return _update_registry(commit)
 
 
 def _normalize_type(value: str) -> str | None:

@@ -824,7 +824,10 @@ def test_sparse_clone_handles_checkout_failure(monkeypatch, tmp_path):
     assert not skill._sparse_clone_skill_dir("https://example.test/repo", "/", "main", tmp_path / "dest")
 
 
-def test_install_command_registry_direct_tracks_project_metadata(monkeypatch):
+@pytest.mark.parametrize("runner_target", [False, True])
+def test_install_command_registry_direct_tracks_project_metadata(monkeypatch, runner_target):
+    if runner_target:
+        monkeypatch.setenv("OBSERVAL_UPDATE_EXACT_TARGET", "1")
     listing = _skill_item()
     snippet = {
         "skill": {
@@ -901,7 +904,7 @@ def test_install_command_registry_direct_tracks_project_metadata(monkeypatch):
         local_name="alice-review-skill",
         version_id=None,
         digest=None,
-        requested_version="2.0.0",
+        requested_version=None if runner_target else "2.0.0",
     )
 
 

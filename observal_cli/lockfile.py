@@ -24,12 +24,15 @@ import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger as optic
 
 from observal_cli.config import CONFIG_DIR
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 try:
     import fcntl
@@ -72,36 +75,38 @@ def current_registry_url() -> str:
 
 
 def migrate_lockfile_v1(server_url: str | None = None) -> bool:
-    """Assign a version 1 lockfile to its previously configured registry."""
+    """Assign a version 1 lockfile under the same lock as all current writers."""
     if not LOCKFILE_PATH.exists():
         return False
-    try:
-        data = json.loads(LOCKFILE_PATH.read_text())
-    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
-        raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
-    if data.get("lock_version") != 1:
-        return False
-    registry_url = normalize_server_url(server_url) if server_url else current_registry_url()
-    write_lockfile(
-        {
-            "lock_version": LOCK_VERSION,
-            "updated_at": datetime.now(UTC).isoformat(),
-            "registries": {
-                registry_url: {
-                    "server_url": registry_url,
-                    "harnesses": data.get("harnesses", {}),
-                }
-            },
-        }
-    )
-    return True
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(_LOCKFILE_LOCK):
+        try:
+            data = json.loads(LOCKFILE_PATH.read_text())
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+            raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
+        if data.get("lock_version") != 1:
+            return False
+        registry_url = normalize_server_url(server_url) if server_url else current_registry_url()
+        _write_locked(
+            {
+                "lock_version": LOCK_VERSION,
+                "updated_at": datetime.now(UTC).isoformat(),
+                "registries": {registry_url: {"server_url": registry_url, "harnesses": data.get("harnesses", {})}},
+            }
+        )
+        return True
 
 
 def read_lockfile() -> dict:
     """Read the complete multi-registry lockfile, migrating version 1 once."""
     migrate_lockfile_v1()
+    return _read_lockfile_unmigrated()
+
+
+def _read_lockfile_unmigrated() -> dict:
+    """Read an atomic snapshot; transaction callers have already migrated v1."""
     if not LOCKFILE_PATH.exists():
         return _empty_lockfile()
     try:
@@ -136,7 +141,7 @@ def _exclusive_lock(path: Path):
 
 
 def _write_locked(data: dict) -> None:
-    """Replace the lockfile while its cross-process lock is held."""
+    """Replace the lockfile while its cross-process lock is held; never call with a stale snapshot."""
     data["updated_at"] = datetime.now(UTC).isoformat()
     data["lock_version"] = LOCK_VERSION
     descriptor, name = tempfile.mkstemp(prefix=".lockfile.", suffix=".tmp", dir=LOCKFILE_PATH.parent)
@@ -156,37 +161,50 @@ def _write_locked(data: dict) -> None:
                 os.close(directory)
     finally:
         tmp_path.unlink(missing_ok=True)
-
-
-def write_lockfile(data: dict) -> None:
-    """Write the complete lockfile atomically with file locking."""
-    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _exclusive_lock(_LOCKFILE_LOCK):
-        _write_locked(data)
     optic.debug("lockfile written: {}", LOCKFILE_PATH)
 
 
-def update_lockfile(mutate: Any) -> Any:
-    """Serialize the entire read/modify/write, including across different targets."""
+def write_lockfile(data: dict) -> None:
+    """Replace the whole lockfile (bootstrap/explicit reset only, not RMW)."""
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(_LOCKFILE_LOCK):
+        _write_locked(data)
+
+
+def _write_initial_lockfile(data: dict) -> bool:
+    """Bootstrap only if no other writer has created the lockfile."""
     LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_lock(_LOCKFILE_LOCK):
         if LOCKFILE_PATH.exists():
-            try:
-                data = json.loads(LOCKFILE_PATH.read_text())
-            except (json.JSONDecodeError, OSError, UnicodeError) as exc:
-                raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
-            if not isinstance(data, dict):
-                raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
-            if data.get("lock_version") == 1:
-                url = current_registry_url()
-                data = {
-                    "lock_version": LOCK_VERSION,
-                    "registries": {url: {"server_url": url, "harnesses": data.get("harnesses", {})}},
-                }
-            if data.get("lock_version") != LOCK_VERSION or not isinstance(data.get("registries"), dict):
-                raise RuntimeError(f"Unsupported lockfile version in {LOCKFILE_PATH}")
-        else:
-            data = _empty_lockfile()
+            return False
+        _write_locked(data)
+        return True
+
+
+def _update_registry(mutator: Callable[[dict], tuple[bool, Any]]) -> Any:
+    """Re-read, modify and commit one registry inside the same cross-process lock.
+
+    Writers must not hold a stale `read_registry_lockfile()` snapshot while
+    waiting for this lock. Automatic installs take policy -> Pi -> this lock.
+    """
+    migrate_lockfile_v1()
+    registry_url = current_registry_url()
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(_LOCKFILE_LOCK):
+        data = _read_lockfile_unmigrated()
+        registry = data["registries"].setdefault(registry_url, {"server_url": registry_url, "harnesses": {}})
+        changed, result = mutator(registry)
+        if changed:
+            _write_locked(data)
+        return result
+
+
+def update_lockfile(mutate: Callable[[dict], Any]) -> Any:
+    """Serialize the entire read/modify/write, including across different registries."""
+    migrate_lockfile_v1()
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(_LOCKFILE_LOCK):
+        data = _read_lockfile_unmigrated()
         result = mutate(data)
         _write_locked(data)
         return result
@@ -315,6 +333,9 @@ def upsert_agent(
     local_name: str | None = None,
     lock_digest: str | None = None,
     lock_status: str | None = None,
+    requested_version: str | None = None,
+    pin_known: bool = False,
+    record_use: bool = True,
 ) -> None:
     """Add or update an agent entry in the lock file.
 
@@ -333,7 +354,7 @@ def upsert_agent(
     }
     if directory:
         entry["directory"] = directory
-    if components:
+    if components is not None:
         entry["components"] = components
     if namespace:
         entry["namespace"] = namespace
@@ -347,10 +368,12 @@ def upsert_agent(
         entry["lock_digest"] = lock_digest
     if lock_status:
         entry["lock_status"] = lock_status
+    if requested_version:
+        entry["requested_version"] = requested_version
+    if pin_known:
+        entry["pin_known"] = True
 
-    def update(data: dict) -> None:
-        url = current_registry_url()
-        registry = data["registries"].setdefault(url, {"server_url": url, "harnesses": {}})
+    def commit(registry: dict) -> tuple[bool, None]:
         agents = _ensure_harness(registry, harness)["agents"]
         existing_idx = _find_agent_idx(agents, agent_id, scope, directory)
         if existing_idx is not None:
@@ -359,34 +382,34 @@ def upsert_agent(
             agents[existing_idx] = entry
         else:
             agents.append(entry)
+        return True, None
 
-    update_lockfile(update)
-    _record_capability_use(
-        kind="agent",
-        source="pull",
-        harness=harness,
-        component_id=agent_id,
-        version=version,
-        directory=directory,
-        namespace=namespace,
-        slug=slug,
-    )
+    _update_registry(commit)
+    if record_use:
+        _record_capability_use(
+            kind="agent",
+            source="pull",
+            harness=harness,
+            component_id=agent_id,
+            version=version,
+            directory=directory,
+            namespace=namespace,
+            slug=slug,
+        )
 
 
 def remove_agent(harness: str, agent_id: str, directory: str | None = None) -> bool:
     """Remove an agent entry. Returns True if found and removed."""
-    data, registry = read_registry_lockfile(create=True)
-    harness_section = _ensure_harness(registry, harness)
-    agents = harness_section["agents"]
 
-    for i, agent in enumerate(agents):
-        if agent.get("id") == agent_id:
-            if directory and agent.get("directory") != directory:
-                continue
-            agents.pop(i)
-            write_lockfile(data)
-            return True
-    return False
+    def commit(registry: dict) -> tuple[bool, bool]:
+        agents = _ensure_harness(registry, harness)["agents"]
+        for i, agent in enumerate(agents):
+            if agent.get("id") == agent_id and (not directory or agent.get("directory") == directory):
+                agents.pop(i)
+                return True, True
+        return False, False
+
+    return _update_registry(commit)
 
 
 def _find_agent_idx(agents: list[dict], agent_id: str, scope: str, directory: str | None) -> int | None:
@@ -424,6 +447,7 @@ def upsert_standalone(
     version_id: str | None = None,
     digest: str | None = None,
     requested_version: str | None = None,
+    pin_known: bool = False,
 ) -> None:
     """Add or update a standalone component (MCP, skill, hook, etc.) in the lock file.
 
@@ -457,10 +481,10 @@ def upsert_standalone(
         entry["digest"] = digest
     if requested_version:
         entry["requested_version"] = requested_version
+    if pin_known:
+        entry["pin_known"] = True
 
-    def update(data: dict) -> None:
-        url = current_registry_url()
-        registry = data["registries"].setdefault(url, {"server_url": url, "harnesses": {}})
+    def commit(registry: dict) -> tuple[bool, None]:
         standalone = _ensure_harness(registry, harness)["standalone"]
         existing_idx = _find_standalone_idx(standalone, component_type, component_id, scope, directory)
         if existing_idx is not None:
@@ -471,8 +495,9 @@ def upsert_standalone(
             standalone[existing_idx] = entry
         else:
             standalone.append(entry)
+        return True, None
 
-    update_lockfile(update)
+    _update_registry(commit)
     _record_capability_use(
         kind=component_type,
         source="install",
@@ -487,18 +512,20 @@ def upsert_standalone(
 
 def remove_standalone(harness: str, component_type: str, component_id: str, directory: str | None = None) -> bool:
     """Remove a standalone component entry. Returns True if found and removed."""
-    data, registry = read_registry_lockfile(create=True)
-    harness_section = _ensure_harness(registry, harness)
-    standalone = harness_section["standalone"]
 
-    for i, item in enumerate(standalone):
-        if item.get("type") == component_type and item.get("id") == component_id:
-            if directory and item.get("directory") != directory:
-                continue
-            standalone.pop(i)
-            write_lockfile(data)
-            return True
-    return False
+    def commit(registry: dict) -> tuple[bool, bool]:
+        standalone = _ensure_harness(registry, harness)["standalone"]
+        for i, item in enumerate(standalone):
+            if (
+                item.get("type") == component_type
+                and item.get("id") == component_id
+                and (not directory or item.get("directory") == directory)
+            ):
+                standalone.pop(i)
+                return True, True
+        return False, False
+
+    return _update_registry(commit)
 
 
 def _find_standalone_idx(
@@ -716,8 +743,8 @@ def migrate_agent_markers() -> int:
             continue
 
     if not markers_found:
-        # Create empty lockfile so migration doesn't re-run
-        write_lockfile(_empty_lockfile())
+        # Another installer may have initialized it while the scan ran.
+        _write_initial_lockfile(_empty_lockfile())
         return 0
 
     data = _empty_lockfile()
@@ -755,7 +782,8 @@ def migrate_agent_markers() -> int:
         )
         migrated += 1
 
-    write_lockfile(data)
+    if not _write_initial_lockfile(data):
+        return 0  # Never replace another writer's newly committed state.
 
     # Delete old marker files after successful migration
     for project_dir, _ in markers_found:

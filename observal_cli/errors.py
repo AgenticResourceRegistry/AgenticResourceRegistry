@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 from contextlib import nullcontext, redirect_stdout
 from contextvars import ContextVar
@@ -104,6 +105,10 @@ def fail(
     detail: str | None = None,
     result: object | None = None,
 ) -> NoReturn:
+    if category is ErrorCategory.CONFLICT and os.environ.get("OBSERVAL_AUTO_UPDATE_REASON_FILE"):
+        from observal_cli.auto_update_policy import record_skip_reason
+
+        record_skip_reason(message)
     error = CliError(
         category=category,
         message=message,

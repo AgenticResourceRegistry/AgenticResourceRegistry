@@ -65,7 +65,13 @@ observal scan --inventory --output json  # local-only; no Registry request or su
 observal scan --harness kiro --inventory --output json
 observal outdated --output json
 observal outdated --harness claude-code --no-report --output json
+observal freeze --output json
+observal unfreeze --output json
+observal unfreeze --project --dir ./repo --output json
+observal freeze --project --dir ./repo --output json
 ```
+
+`freeze`/`unfreeze` change only local consent for *future* automatic registry updates; after `observal unfreeze`, Pi and Claude Code apply updates at interactive startup only for installs Observal owns and can verify: user-scope agents (profile, bundled skills, hook scripts; Pi agent MCPs in the agent's own `mcp.json`), registry-direct standalone skills (`SKILL.md` and at most one owned script), `registry mcp install --managed` MCPs, and Observal's own Claude Code hook groups. Pins, edited files, name collisions, new credentials and other shapes stay manual and the notice says why; other harnesses stay notice-only until their file plans and startup bridges are verified. `freeze` and `unfreeze` require a locally signed-in account but make no network request. Consent is per account and registry; a different login or environment-overridden token never inherits it. Auto-updating defaults to frozen. Global `unfreeze` covers eligible user-scoped installs; project installs are not auto-updated yet. A later project pilot is planned only for untracked, baseline-owned installs with a separate per-directory `unfreeze --project`; tracked files and a tracked `observal.lock` stay notice-only. Manual installs remain possible while frozen. Verify `effective` in JSON: a project grant is dormant when global auto-updating is frozen.
 
 For scan results, report detected harnesses, installed components, Agents, and unregistered items. For outdated results, inspect `items`, `summary`, and `report`. `--no-report` suppresses inbox reporting, not the Registry check. An Agent's `upgrade_command` uses `observal agent pull --upgrade`, because a plain pull keeps the version locked in the project's `observal.lock`; run it only after the user agrees. An `unknown` item has no recorded version; its reinstall command records one.
 

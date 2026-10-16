@@ -15,7 +15,11 @@ hooks by script path pattern, not by position or event name.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
+import stat
+import tempfile
 from pathlib import Path
 
 from loguru import logger as optic
@@ -153,7 +157,156 @@ def reconcile(
         # Record applied spec version
         config.save({"hooks_spec_version": HOOKS_SPEC_VERSION})
 
+    if not dry_run:
+        # Our own groups now equal the generated spec exactly: that equality is
+        # the ownership evidence the startup refresh relies on.
+        _record_if_generated(_load_claude_settings(), desired_hooks)
+
     return all_changes
+
+
+# ---------------------------------------------------------------------------
+# Startup refresh: replace only unedited Observal hook groups
+# ---------------------------------------------------------------------------
+
+RECORD_PATH = config.CONFIG_DIR / "managed-claude-hooks.json"
+MAX_SETTINGS_BYTES = 2 * 1024 * 1024
+_RECORD_HINT = "run `observal doctor patch --harness claude-code`"
+
+
+def _group_hash(group: object) -> str:
+    return hashlib.sha256(json.dumps(group, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _observal_hashes(hooks: object) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    if not isinstance(hooks, dict):
+        return result
+    for event, groups in hooks.items():
+        if isinstance(groups, list):
+            found = sorted(_group_hash(g) for g in groups if isinstance(g, dict) and is_observal_matcher_group(g))
+            if found:
+                result[str(event)] = found
+    return result
+
+
+def _write_record(hashes: dict[str, list[str]]) -> None:
+    RECORD_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = RECORD_PATH.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"schema": 1, "hooks": hashes}, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, RECORD_PATH)
+
+
+def _read_record() -> dict[str, list[str]] | None:
+    try:
+        info = RECORD_PATH.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 1024 * 1024:
+            return None
+        raw = json.loads(RECORD_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    hooks = raw.get("hooks") if isinstance(raw, dict) and raw.get("schema") == 1 else None
+    if not isinstance(hooks, dict) or any(
+        not isinstance(v, list) or any(not isinstance(h, str) for h in v) for v in hooks.values()
+    ):
+        return None
+    return {str(k): list(v) for k, v in hooks.items()}
+
+
+def _record_if_generated(settings: dict, desired_hooks: dict[str, list]) -> None:
+    """Record our groups only when they are exactly what the spec generates."""
+    try:
+        current = settings.get("hooks", {})
+        for event, desired in desired_hooks.items():
+            ours = [g for g in current.get(event, []) if isinstance(g, dict) and is_observal_matcher_group(g)]
+            if not _groups_equal(ours, desired):
+                return
+        _write_record({e: h for e, h in _observal_hashes(current).items() if e in desired_hooks})
+    except (OSError, AttributeError, TypeError, ValueError):
+        pass  # Best effort: no record just means manual updates.
+
+
+def refresh_unedited() -> tuple[str, str]:
+    """Bring our Claude Code hook groups up to the shipped spec without touching anything else.
+
+    Returns (status, reason): "current", "updated" or "manual". Only groups that
+    still hash to what Observal recorded are replaced; foreign hooks and every
+    other setting are preserved. The write is atomic and abandoned if the file
+    changed while it was being prepared.
+    """
+    from observal_cli.harness_specs.claude_code_hooks_spec import get_desired_hooks
+
+    path = CLAUDE_SETTINGS_PATH
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    if configured and Path(configured).expanduser() != path.parent:
+        return "manual", "Claude Code uses a different config directory; " + _RECORD_HINT + " there."
+    if not path.exists():
+        return "current", ""
+    try:
+        if any(part.is_symlink() for part in (path, *path.parents)) or not stat.S_ISREG(path.lstat().st_mode):
+            return "manual", "The Claude Code settings path is a link or not a regular file."
+        if path.stat().st_size > MAX_SETTINGS_BYTES:
+            return "manual", "The Claude Code settings file is unusually large."
+        original = path.read_bytes()
+        settings = json.loads(original.decode("utf-8"))
+        mode = stat.S_IMODE(path.lstat().st_mode)
+    except (OSError, ValueError, UnicodeError):
+        return "manual", "The Claude Code settings file could not be read as JSON."
+    if not isinstance(settings, dict) or not isinstance(settings.get("hooks", {}), dict):
+        return "manual", "The Claude Code settings file has an unexpected hooks layout."
+    desired = get_desired_hooks()
+    current = settings.get("hooks", {})
+    if not any(event in desired for event in _observal_hashes(current)):
+        return "current", ""  # Never install hooks for someone who has none; that is `doctor patch`.
+    merged, changes = reconcile_hooks(current, desired)
+    if not changes:
+        _record_if_generated(settings, desired)
+        return "current", ""
+    recorded = _read_record()
+    if recorded is None:
+        return "manual", "No ownership record exists for Observal's Claude Code hooks; " + _RECORD_HINT + " once."
+    found = {e: h for e, h in _observal_hashes(current).items() if e in desired}
+    if any(set(found.get(event, [])) - set(recorded.get(event, [])) for event in found):
+        return "manual", "Observal's Claude Code hook entries were edited or added by hand; " + _RECORD_HINT + "."
+    if any(set(recorded.get(event, [])) - set(found.get(event, [])) for event in recorded if event in desired):
+        # A deliberately removed managed group is a local change, not drift to repair.
+        return (
+            "manual",
+            "An Observal Claude Code hook entry was removed from your settings; " + _RECORD_HINT + " to restore it.",
+        )
+    settings["hooks"] = merged
+    updated = (json.dumps(settings, indent=2) + "\n").encode("utf-8")
+    if len(updated) > MAX_SETTINGS_BYTES:
+        return "manual", "The updated Claude Code settings would be unusually large."
+    handle, name = tempfile.mkstemp(dir=path.parent, prefix=".settings.", suffix=".tmp")
+    temporary = Path(name)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(updated)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(temporary, mode)
+        # Claude Code also writes this file. Abandon the update if it changed.
+        if path.read_bytes() != original or any(part.is_symlink() for part in (path, *path.parents)):
+            return "manual", "Claude Code settings changed while updating; nothing was written."
+        os.replace(temporary, path)
+    except OSError:
+        return "manual", "The Claude Code settings file could not be written; nothing was changed."
+    finally:
+        temporary.unlink(missing_ok=True)
+    try:
+        reread = json.loads(path.read_text(encoding="utf-8"))
+        if reread != settings:
+            return "manual", "Claude Code settings did not read back as planned; inspect the file."
+        _write_record({e: h for e, h in _observal_hashes(reread.get("hooks", {})).items() if e in desired})
+        config.save({"hooks_spec_version": HOOKS_SPEC_VERSION})
+    except (OSError, ValueError):
+        return "manual", "Claude Code settings were updated but the ownership record could not be saved."
+    return "updated", "; ".join(changes)[:200]
 
 
 def needs_upgrade() -> bool:

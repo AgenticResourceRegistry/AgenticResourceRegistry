@@ -109,6 +109,13 @@ def main(
     setup_optic(debug=debug, verbose=verbose)
     _check_package_conflict()
 
+    # Startup workers (Pi and Claude Code) must not run CLI startup migrations
+    # or rewrite bundled skills in the harness while a session is starting.
+    if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" or any(
+        cmd in sys.argv[1:] for cmd in ("_startup-check", "_startup-apply", "_startup-apply-claude")
+    ):
+        return
+
     if debug:
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
     elif verbose:
@@ -207,6 +214,7 @@ from observal_cli.cmd_delegate import delegate_app
 from observal_cli.cmd_discover import discover_app
 from observal_cli.cmd_doctor import doctor_app
 from observal_cli.cmd_fork import add_fork_command
+from observal_cli.cmd_freeze import register_freeze
 from observal_cli.cmd_hook import hook_app
 from observal_cli.cmd_inbox import inbox_app
 from observal_cli.cmd_insights import insights_app
@@ -296,6 +304,45 @@ register_config(app)
 register_api(app)
 register_scan(app)
 register_outdated(app)
+register_freeze(app)
+
+
+@app.command("_startup-check", hidden=True)
+def startup_check(
+    cwd: str = typer.Option(..., "--cwd"),
+    session_id: str = typer.Option(..., "--session-id"),
+    notice_key: str = typer.Option(..., "--notice-key"),
+) -> None:
+    """Check-only Pi update worker; writes a bounded local result, never installs."""
+    from observal_cli.startup_update_check import check_pi
+
+    check_pi(cwd, session_id, notice_key)
+
+
+@app.command("_startup-apply-claude", hidden=True)
+def startup_apply_claude(
+    cwd: str = typer.Option(..., "--cwd"),
+    session_id: str = typer.Option(..., "--session-id"),
+    notice_key: str = typer.Option(..., "--notice-key"),
+) -> None:
+    """Guarded Claude Code user-profile update worker."""
+    from observal_cli.startup_update_apply import apply_claude
+
+    apply_claude(cwd, session_id, notice_key)
+
+
+@app.command("_startup-apply", hidden=True)
+def startup_apply(
+    cwd: str = typer.Option(..., "--cwd"),
+    session_id: str = typer.Option(..., "--session-id"),
+    notice_key: str = typer.Option(..., "--notice-key"),
+) -> None:
+    """Pi apply worker (reserved for the verified opt-in rollout)."""
+    from observal_cli.startup_update_apply import apply_pi
+
+    apply_pi(cwd, session_id, notice_key)
+
+
 app.add_typer(discover_app, name="discover")
 app.add_typer(delegate_app, name="delegate")
 

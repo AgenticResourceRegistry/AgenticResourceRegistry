@@ -189,8 +189,11 @@ def doctor(
         if should_fix:
             fix_attempted = True
             if lockfile_plan and lockfile_plan.changes:
-                lockfile_plan.apply()
-                rprint(f"[green]✓ Reconciled {len(lockfile_plan.changes)} lockfile field(s)[/green]")
+                if lockfile_plan.apply():
+                    rprint(f"[green]✓ Reconciled {len(lockfile_plan.changes)} lockfile field(s)[/green]")
+                else:
+                    warnings.extend(str(warning) for warning in lockfile_plan.warnings)
+                    rprint("[yellow]⚠ Installed state changed; registry reconciliation was skipped.[/yellow]")
             patch_result = _patch_targets(list(_VALID_HARNESSES), dry_run=False, output=output)
             from observal_cli.skill_installer import install_observal_skill
 

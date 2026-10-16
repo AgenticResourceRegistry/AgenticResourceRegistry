@@ -14,12 +14,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+import time
 import tomllib
 from contextlib import nullcontext, redirect_stdout
+from functools import wraps
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -285,6 +288,62 @@ def _component_input_definitions(listing: dict, field: str, kind: str, component
     return definitions
 
 
+def _saved_pi_mcp_inputs(
+    agent_detail: dict, agent_uuid: str, target_dir: Path, spec_cache: dict
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    """Credentials the user already saved in this Pi agent's own mcp.json, per MCP.
+
+    Only used by the startup updater to re-supply values to the normal install
+    request. The plan later proves every credential in the result is unchanged.
+    """
+    from observal_cli import installed_updates
+    from observal_cli.install_recovery import _regular
+    from observal_cli.shared.utils import sanitize_name
+
+    rows = [
+        row
+        for row in installed_updates.inventory_for_context("pi", str(target_dir))
+        if row["type"] == "agent"
+        and row["scope"] == "user"
+        and row["id"] == agent_uuid
+        and row["directory"] == str(target_dir)
+    ]
+    local = rows[0].get("local_name") if len(rows) == 1 else None
+    if not isinstance(local, str) or not local or Path(local).name != local:
+        return {}, {}
+    path = Path.home() / ".pi" / "agent" / "agents" / local / "mcp.json"
+    try:
+        _regular(path)
+        if path.stat().st_size > 1024 * 1024:
+            return {}, {}
+        servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {})
+    except (OSError, ValueError, AttributeError):
+        return {}, {}
+    if not isinstance(servers, dict):
+        return {}, {}
+    env_saved: dict[str, dict[str, str]] = {}
+    header_saved: dict[str, dict[str, str]] = {}
+    for listing_id, _display, _pinned in _mcp_components(agent_detail):
+        spec = _mcp_spec(listing_id, None, spec_cache)  # The listing, which carries slug and namespace.
+        slug = spec.get("slug") or spec.get("name")
+        if not isinstance(slug, str) or not slug:
+            continue
+        namespace = str(spec.get("namespace") or "").replace(".", "-")
+        keys = {sanitize_name(slug), sanitize_name(f"{namespace}-{slug}")} & set(servers)
+        if len(keys) != 1:
+            continue  # Ambiguous or absent: nothing is carried; the plan refuses.
+        entry = servers[next(iter(keys))]
+        if not isinstance(entry, dict):
+            continue
+        env = entry.get("env") if isinstance(entry.get("env"), dict) else {}
+        headers = entry.get("headers") if isinstance(entry.get("headers"), dict) else {}
+        env_saved[listing_id] = {
+            k: v for k, v in env.items() if isinstance(k, str) and isinstance(v, str) and v and k != "OBSERVAL_AGENT_ID"
+        }
+        header_saved[listing_id] = {k: v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str) and v}
+    return env_saved, header_saved
+
+
 def _collect_mcp_env_vars(
     agent_detail: dict,
     *,
@@ -292,6 +351,7 @@ def _collect_mcp_env_vars(
     env_overrides: dict[str, str] | None = None,
     spec_cache: dict | None = None,
     missing_inputs: list[dict[str, str]] | None = None,
+    saved: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Discover MCP env vars from agent components and prompt the user for values.
 
@@ -331,6 +391,8 @@ def _collect_mcp_env_vars(
             for ev in required + optional:
                 if ev["name"] in _overrides:
                     mcp_env[ev["name"]] = _overrides[ev["name"]]
+                elif ev["name"] in (saved or {}).get(listing_id, {}):
+                    mcp_env[ev["name"]] = saved[listing_id][ev["name"]]  # type: ignore[index]
                 elif ev.get("required", True) and missing_inputs is not None:
                     missing_inputs.append({"kind": "environment_variable", "name": ev["name"], "component": mcp_name})
         else:
@@ -371,6 +433,7 @@ def _collect_mcp_headers(
     header_overrides: dict[str, str] | None = None,
     spec_cache: dict | None = None,
     missing_inputs: list[dict[str, str]] | None = None,
+    saved: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Discover MCP headers from agent components and prompt the user for values.
 
@@ -402,6 +465,8 @@ def _collect_mcp_headers(
             for h in required + optional:
                 if h["name"] in _overrides:
                     mcp_hdrs[h["name"]] = _overrides[h["name"]]
+                elif h["name"] in (saved or {}).get(listing_id, {}):
+                    mcp_hdrs[h["name"]] = saved[listing_id][h["name"]]  # type: ignore[index]
                 elif h.get("required", True) and missing_inputs is not None:
                     missing_inputs.append({"kind": "header", "name": h["name"], "component": mcp_name})
         else:
@@ -2002,6 +2067,28 @@ def write_install_snippet(
     return written, failed_skills
 
 
+def _serialize_managed_pull(callback):
+    """Coordinate manual Pi/Claude Code pulls with guarded installs across processes."""
+
+    @wraps(callback)
+    def wrapped(*args, **kwargs):
+        harness = kwargs.get("harness", args[1] if len(args) > 1 else None)
+        if harness not in {"pi", "claude-code"}:
+            return callback(*args, **kwargs)
+        from observal_cli.auto_update_policy import claude_install_lock, pi_install_lock
+        from observal_cli.lockfile import current_registry_url
+
+        install_lock = pi_install_lock if harness == "pi" else claude_install_lock
+        with install_lock(current_registry_url()):
+            cutoff = os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF")
+            if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" and cutoff is not None:
+                with client.bounded_requests(float(cutoff)):
+                    return callback(*args, **kwargs)
+            return callback(*args, **kwargs)
+
+    return wrapped
+
+
 def _install_skill_bundle(
     *,
     sc_name: str,
@@ -2093,6 +2180,7 @@ def _install_skill_bundle(
 
 def register_pull(app: typer.Typer):
     @app.command("pull")
+    @_serialize_managed_pull
     def pull(
         agent_id: str = typer.Argument(..., help="Agent ID, name, row number, or @alias"),
         harness: str = typer.Option(
@@ -2266,11 +2354,12 @@ def register_pull(app: typer.Typer):
         )
         agent_uuid = str(agent_detail.get("id", resolved))
         locked_entry = None if is_user_scope else _project_locked_agent(target_dir, qualified_name, agent_uuid)
+        installed_entry = _installed_agent(harness, agent_uuid, options, target_dir)
         version, resolved_from = _target_version(
             requested=version,
             upgrade=upgrade,
             project_locked=locked_entry,
-            installed=_installed_agent(harness, agent_uuid, options, target_dir),
+            installed=installed_entry,
         )
 
         # MCP env vars and headers come from the versions that will be installed
@@ -2294,12 +2383,17 @@ def register_pull(app: typer.Typer):
 
         spec_cache: dict = {}
         missing_inputs: list[dict[str, str]] = []
+        saved_env: dict[str, dict[str, str]] = {}
+        saved_headers: dict[str, dict[str, str]] = {}
+        if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" and harness == "pi" and is_user_scope:
+            saved_env, saved_headers = _saved_pi_mcp_inputs(plan, str(agent_uuid), target_dir, spec_cache)
         env_values = _collect_mcp_env_vars(
             plan,
             no_prompt=no_prompt,
             env_overrides=env_overrides or None,
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
+            saved=saved_env or None,
         )
         header_values = _collect_mcp_headers(
             plan,
@@ -2307,8 +2401,15 @@ def register_pull(app: typer.Typer):
             header_overrides=header_overrides or None,
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
+            saved=saved_headers or None,
         )
         if missing_inputs:
+            from observal_cli.auto_update_policy import record_skip_reason
+
+            record_skip_reason(
+                "The release needs credentials or other values only you can enter; "
+                "run `observal agent pull` manually to provide them."
+            )
             fail(
                 ErrorCategory.VALIDATION,
                 "Agent installation requires values that are unavailable in non-interactive mode.",
@@ -2459,6 +2560,174 @@ def register_pull(app: typer.Typer):
                     operation="Pull agent",
                     resource=qualified_name,
                     remediation="Keep the pinned folder release or perform an explicit manual migration first.",
+                )
+
+        # The startup runner uses the *normal* pull command, but must not let
+        # it overwrite a locally edited or unowned managed profile. The harness
+        # install lock is held by _serialize_managed_pull for this operation.
+        automatic_paths: list[str] | None = None
+        if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1":
+            from observal_cli import (
+                automatic_pull_plan,
+                install_baseline,
+                install_recovery,
+                installed_updates,
+                update_preflight,
+            )
+            from observal_cli.lockfile import LOCKFILE_PATH, current_registry_url
+
+            existing = [
+                row
+                for row in installed_updates.inventory_for_context(harness, str(target_dir))
+                if row["type"] == "agent"
+                and row["scope"] == "user"
+                and row["id"] == agent_uuid
+                and row["directory"] == str(target_dir)
+            ]
+            if (
+                harness not in {"pi", "claude-code"}
+                or not is_user_scope
+                or len(existing) != 1
+                or (harness == "pi" and snippet.get("mcp_setup_commands"))
+                # Complete skill folders are installed and receipted only by the
+                # reviewed folder transaction; the pilot plan does not cover them.
+                or result.get("skill_bundles")
+                or existing[0].get("folder_managed")
+            ):
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "This agent installation cannot be updated automatically.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Run a manual agent pull to review its files and setup steps.",
+                )
+            previous = existing[0]
+            if previous.get("pin_known") is not True or previous.get("requested_version"):
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "The user agent's pin intent changed or is unknown; automatic pull was not started.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Review the pinned version and update this agent manually.",
+                )
+            # Keep the tracked profile identity if an older server omits the
+            # display name; Pi resolves `/agent` selection against that name.
+            if not agent_detail.get("name"):
+                agent_detail["name"] = previous["name"]
+            if installed_version != version or lock.get("status") != "locked" or not lock.get("digest"):
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "The server did not return the requested complete agent release.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Update manually after inspecting the approved agent release.",
+                )
+            if previous["current_version"] != os.environ.get("OBSERVAL_AUTO_UPDATE_EXPECTED_VERSION"):
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "The installed agent version changed during the update check.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Run `observal outdated` again before retrying.",
+                )
+            try:
+                update_preflight.require_generated_release_lock(version_detail, lock, version=version, harness=harness)
+            except update_preflight.PreflightSkipError as error:
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "The generated agent lock differs from the approved exact release.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Inspect the release and update manually instead.",
+                    detail=str(error),
+                )
+            try:
+                old_files, automatic_paths = install_baseline.verified_manifest(
+                    registry=current_registry_url(),
+                    harness=harness,
+                    agent_id=agent_uuid,
+                    scope="user",
+                    root=str(target_dir),
+                    version=previous["current_version"],
+                    lock_digest=previous["lock_digest"],
+                )
+                if harness == "pi":
+                    planned = automatic_pull_plan.plan_pi_files(snippet, previous, old_files)
+                else:
+                    from observal_cli import automatic_claude_plan
+
+                    if result.get("warnings") or lock_warnings or conflict_warnings:
+                        raise automatic_claude_plan.ClaudePlanError(
+                            "Installing this release produced warnings; run `observal agent pull` manually to review them."
+                        )
+                    planned, claude_modes = automatic_claude_plan.plan(snippet, previous, old_files)
+                added = [path for path in planned if str(path) not in old_files]
+                if added:
+                    install_baseline.reject_foreign_creation(
+                        added,
+                        install_baseline._path(current_registry_url(), harness, agent_uuid, "user", str(target_dir)),
+                    )
+                cutoff = float(os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF", "inf"))
+                marker = os.environ.get("OBSERVAL_AUTO_UPDATE_SHUTDOWN_MARKER")
+                if time.monotonic() + 15 >= cutoff or (marker and Path(marker).exists()):
+                    raise ValueError("The session ended or the install admission window expired")
+                recovery = os.environ.get("OBSERVAL_AUTO_UPDATE_RECOVERY_DIR")
+                if not recovery:
+                    raise ValueError("An automatic pull has no durable recovery directory")
+                client.end_startup_network_budget()  # No alarm may interrupt a disk write.
+                expected_modes = {
+                    path: claude_modes[path]
+                    if harness == "claude-code"
+                    else (
+                        0o755 if path.suffix in {".sh", ".bash", ".py", ".rb"} else install_recovery.created_mode(path)
+                    )
+                    if not path.exists()
+                    else install_recovery.atomic_text_mode(path.parent)
+                    if path.name == "AGENTS.md"
+                    or (harness == "pi" and path.name == "mcp.json" and planned[path] != path.read_bytes())
+                    else 0o755
+                    if harness == "pi"
+                    and path.parent.name == "scripts"
+                    and path.suffix in {".sh", ".bash", ".py", ".rb"}
+                    else path.lstat().st_mode & 0o777
+                    for path in planned
+                }
+                removed_files = [Path(name) for name in old_files if name not in {str(p) for p in planned}]
+                install_recovery.save(
+                    Path(recovery),
+                    planned,
+                    old_files,
+                    [
+                        LOCKFILE_PATH,
+                        install_baseline._path(current_registry_url(), harness, agent_uuid, "user", str(target_dir)),
+                    ],
+                    expected_modes=expected_modes,
+                    deleted=removed_files,
+                )
+                # Do not let the normal merge rewrite an identical owned MCP
+                # file. A changed, exactly planned config stays in the snippet.
+                if harness == "pi" and snippet.get("mcp_config"):
+                    mcp_path = next((path for path in planned if path.name == "mcp.json"), None)
+                    if mcp_path is not None and planned[mcp_path] == mcp_path.read_bytes():
+                        snippet.pop("mcp_config", None)
+                elif snippet.get("mcp_config"):
+                    # The exact existing project-local delegation registration
+                    # was proved above. Never run its setup command or write a
+                    # shared Claude config during this profile-only update.
+                    snippet.pop("mcp_config", None)
+                    snippet.pop("mcp_setup_commands", None)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                if isinstance(error, ValueError) and not isinstance(error, OSError):
+                    from observal_cli.auto_update_policy import record_skip_reason
+
+                    record_skip_reason(str(error))
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "The managed files changed or this release needs a manual pull.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Inspect the saved managed profile, then update it manually.",
+                    detail=repr(error),
                 )
 
         def disclose_telemetry() -> None:
@@ -2685,6 +2954,40 @@ def register_pull(app: typer.Typer):
                 remediation="Check agent contents and harness support, then retry.",
             )
 
+        if automatic_paths is not None:
+            from observal_cli.install_baseline import BaselineError, _files
+
+            try:
+                # The normal writer never deletes: remove files this release
+                # dropped (saved in the recovery backup), then require the
+                # exact planned file set before recording new ownership.
+                for gone in removed_files:
+                    gone.unlink(missing_ok=True)
+                if harness == "pi":
+                    # The normal writer merges MCP entries and never drops one.
+                    # The plan holds the release's exact server set.
+                    for path, raw in planned.items():
+                        if path.name == "mcp.json" and path.read_bytes() != raw:
+                            _atomic_write_text(path, raw.decode("utf-8"))
+                automatic_paths = [str(path) for path in planned]
+                if set(_files(automatic_paths)) != set(automatic_paths):
+                    raise BaselineError("The managed path set changed during installation")
+                if harness == "claude-code" and any(
+                    path.read_bytes() != raw or path.stat().st_mode & 0o777 != expected_modes[path]
+                    for path, raw in planned.items()
+                ):
+                    raise BaselineError("The written profile differs from the planned bytes or mode")
+            except (BaselineError, OSError) as error:
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "The managed file result changed while installing; the outcome needs manual inspection.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Inspect local files before retrying.",
+                    detail=repr(error),
+                    result=_pull_failure_result(written, "verify_paths", installation_tracked=False),
+                )
+
         warnings_list = (
             lock_warnings + conflict_warnings + list(result.get("warnings") or []) + (snippet.get("_warnings") or [])
         )
@@ -2809,6 +3112,20 @@ def register_pull(app: typer.Typer):
                         local_name=local_name,
                         lock_digest=lock.get("digest"),
                         lock_status=lock.get("status"),
+                        requested_version=(
+                            version
+                            if (
+                                is_user_scope
+                                and resolved_from == "requested"
+                                and automatic_paths is None
+                                and os.environ.get("OBSERVAL_UPDATE_EXACT_TARGET") != "1"
+                            )
+                            else installed_entry.get("requested_version")
+                            if resolved_from == "installed" and installed_entry
+                            else None
+                        ),
+                        pin_known=(is_user_scope and automatic_paths is None)
+                        or (automatic_paths is not None and previous.get("pin_known") is True),
                     )
             except (OSError, RuntimeError) as error:
                 recovery = _rollback_managed_agent_state(
@@ -2901,7 +3218,10 @@ def register_pull(app: typer.Typer):
                 warnings_list.append("Local layer snapshot could not be refreshed; run `observal doctor`.")
 
             try:
-                adapter.persist_active_agent(str(agent_uuid), agent_detail.get("name", resolved), agent_version)
+                # A startup update changes the saved Pi profile, not the
+                # profile currently loaded into the running Pi session.
+                if automatic_paths is None:
+                    adapter.persist_active_agent(str(agent_uuid), agent_detail.get("name", resolved), agent_version)
             except (OSError, RuntimeError) as error:
                 fail(
                     ErrorCategory.UNAVAILABLE,
@@ -2918,6 +3238,39 @@ def register_pull(app: typer.Typer):
                         active_agent_persisted=False,
                         reports_sessions=reports_sessions,
                     ),
+                )
+
+            # An explicit pull may establish initial ownership. An automatic
+            # pull may only refresh its existing, previously verified baseline;
+            # legacy installations remain notice-only until manually re-pulled.
+            try:
+                from observal_cli.install_baseline import BaselineError, capture
+                from observal_cli.lockfile import current_registry_url
+
+                capture(
+                    registry=current_registry_url(),
+                    harness=harness,
+                    agent_id=str(agent_uuid),
+                    scope=options.get("scope", "project"),
+                    root=str(target_dir),
+                    version=str(installed_version),
+                    lock_digest=str(lock.get("digest") or ""),
+                    written_paths=automatic_paths or [path for path, _status in written],
+                )
+            except (OSError, ValueError, BaselineError) as error:
+                if automatic_paths is not None:
+                    fail(
+                        ErrorCategory.UNAVAILABLE,
+                        "Agent files were written, but their updated ownership evidence could not be saved.",
+                        operation="Pull agent",
+                        resource=qualified_name,
+                        remediation="Inspect managed files before retrying an automatic update.",
+                        detail=repr(error),
+                        result=_pull_failure_result(written, "capture_baseline", installation_tracked=True),
+                    )
+                warnings_list.append(
+                    "Ownership evidence could not be recorded; automatic updates remain unavailable "
+                    "until the agent is manually re-pulled."
                 )
 
             from observal_cli.audit import emit_cli_audit

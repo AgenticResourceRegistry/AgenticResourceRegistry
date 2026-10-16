@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import json as _json
+import os
 import re
 import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager, nullcontext, redirect_stdout
+from functools import wraps
 from io import StringIO
 from pathlib import Path
 from urllib.parse import quote
@@ -832,7 +834,30 @@ def _sparse_clone_skill_dir(git_url: str, skill_path: str, git_ref: str, dest: P
         return False
 
 
+def _serialize_pi_skill_install(callback):
+    """Share the Pi file lock with manual pulls and guarded startup installs."""
+
+    @wraps(callback)
+    def wrapped(*args, **kwargs):
+        harness = kwargs.get("harness", args[1] if len(args) > 1 else None)
+        if harness not in {"pi", "claude-code"}:
+            return callback(*args, **kwargs)
+        from observal_cli import auto_update_policy
+        from observal_cli.lockfile import current_registry_url
+
+        lock = auto_update_policy.pi_install_lock if harness == "pi" else auto_update_policy.claude_install_lock
+        with lock(current_registry_url()):
+            cutoff = os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF")
+            if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" and cutoff is not None:
+                with client.bounded_requests(float(cutoff)):
+                    return callback(*args, **kwargs)
+            return callback(*args, **kwargs)
+
+    return wrapped
+
+
 @skill_app.command(name="install")
+@_serialize_pi_skill_install
 def skill_install(
     skill_id: str = typer.Argument(..., help="Skill ID, name, row number, or @alias"),
     harness: str = typer.Option(..., "--harness", "-i", help="Target harness"),
@@ -924,7 +949,9 @@ def skill_install(
     )
     # Resolve the selected version before sending a name. Older resource-less
     # skills retain their established aliases; a folder must use SKILL.md name.
-    requested_version = version
+    # An automatic exact-target update installs the approved release without
+    # turning it into a user pin; only an explicit --version is pin intent.
+    requested_version = None if os.environ.get("OBSERVAL_UPDATE_EXACT_TARGET") == "1" else version
     selected_version_id = None
     selected_version_name = version or listing.get("version")
     if selected_version_name and (listing.get("delivery_mode") == "registry_direct" or version):
@@ -981,6 +1008,121 @@ def skill_install(
         )
 
     installed_path: Path | None = None
+    automatic = os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1"
+    if automatic:
+        # This check is inside the normal installer, immediately before its
+        # first write; the parent worker's comparison is not authorization.
+        import time
+
+        from observal_cli import automatic_skill_plan, install_baseline, install_recovery, installed_updates
+        from observal_cli.lockfile import LOCKFILE_PATH, current_registry_url
+
+        registry = current_registry_url()
+        existing = [
+            row
+            for row in installed_updates.inventory_for_context(harness, str(Path.cwd()))
+            if row["type"] == "skill" and row["scope"] == "user" and row["id"] == resolved
+        ]
+        try:
+            if (
+                harness not in {"pi", "claude-code"}
+                or scope != "user"
+                or raw
+                or no_write
+                or len(existing) != 1
+                or not version
+            ):
+                raise automatic_skill_plan.SkillPlanError("No unique existing Pi skill installation; update manually.")
+            previous = existing[0]
+            # Complete folder bundles are owned by managed receipts and upgraded only
+            # through the explicit --upgrade review flow; the pilot plans SKILL.md
+            # plus at most one script, so it must never stand in for that writer.
+            if (
+                previous.get("folder_managed")
+                or skill_info.get("bundle_version_id")
+                or (isinstance(result.get("bundle"), dict) and result["bundle"].get("files"))
+            ):
+                raise automatic_skill_plan.SkillPlanError(
+                    "The skill is a complete folder bundle; review and upgrade it manually."
+                )
+            if previous["current_version"] != os.environ.get("OBSERVAL_AUTO_UPDATE_EXPECTED_VERSION"):
+                raise automatic_skill_plan.SkillPlanError("The installed skill version changed; update manually.")
+            if (
+                listing.get("id") != resolved
+                or listing.get("namespace") != previous["namespace"]
+                or listing.get("slug") != previous["slug"]
+                or local_name != previous["local_name"]
+            ):
+                raise automatic_skill_plan.SkillPlanError("The skill identity or destination changed; update manually.")
+            release = client.get(f"/api/v1/skills/{resolved}/versions/{version}")
+            if (
+                not isinstance(release, dict)
+                or release.get("version") != version
+                or release.get("status") != "approved"
+                or not isinstance(release.get("supported_harnesses"), list)
+                or harness not in release["supported_harnesses"]
+                or result.get("version") != version
+                or not isinstance(release.get("skill_md_content"), str)
+                or release["skill_md_content"] != skill_info.get("skill_md_content")
+                or release.get("git_url")
+                or release.get("script_content") != skill_info.get("script_content")
+                or release.get("script_filename") != skill_info.get("script_filename")
+                or (release.get("has_scripts") is True and not release.get("script_content"))
+                or (release.get("id") and str(release["id"]) != str(result.get("version_id")))
+            ):
+                raise automatic_skill_plan.SkillPlanError("The exact approved skill release was not returned.")
+            from observal_cli import auto_update_policy
+
+            if not auto_update_policy.policy_status(registry)["effective"]:
+                raise automatic_skill_plan.SkillPlanError("Automatic updates are frozen.")
+            file = automatic_skill_plan.verified_path(previous, registry=registry)
+            if str(skill_info.get("id")) != resolved:
+                raise automatic_skill_plan.SkillPlanError("The install response changed the skill identity.")
+            planned, modes = automatic_skill_plan.target(previous, skill_info, file)
+            cutoff = float(os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF", "inf"))
+            marker = os.environ.get("OBSERVAL_AUTO_UPDATE_SHUTDOWN_MARKER")
+            if time.monotonic() + 15 >= cutoff or (marker and Path(marker).exists()):
+                raise automatic_skill_plan.SkillPlanError("The Pi session ended or install window expired.")
+            recovery = os.environ.get("OBSERVAL_AUTO_UPDATE_RECOVERY_DIR")
+            if not recovery:
+                raise automatic_skill_plan.SkillPlanError("No durable recovery location is available.")
+            client.end_startup_network_budget()
+            old_files = install_baseline.verified_files(
+                registry=registry,
+                harness=harness,
+                agent_id=automatic_skill_plan.identity(resolved),
+                scope="user",
+                root=str(file.parent),
+                version=previous["current_version"],
+                lock_digest=automatic_skill_plan.release_key(
+                    previous["current_version"], previous.get("digest"), previous.get("version_id")
+                ),
+            )
+            install_recovery.save(
+                Path(recovery),
+                planned,
+                old_files,
+                [
+                    LOCKFILE_PATH,
+                    install_baseline._path(
+                        registry, harness, automatic_skill_plan.identity(resolved), "user", str(file.parent)
+                    ),
+                ],
+                expected_modes=modes,
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            if isinstance(error, ValueError) and not isinstance(error, OSError):
+                from observal_cli.auto_update_policy import record_skip_reason
+
+                record_skip_reason(str(error))
+            fail(
+                ErrorCategory.CONFLICT,
+                "The Pi skill cannot be updated automatically.",
+                operation="Install skill",
+                resource=skill_id,
+                remediation="Inspect its files and install the version manually.",
+                detail=str(error),
+            )
     managed_result: dict | None = None
     bundle_response = result.get("bundle")
     if (upgrade or check_upgrade or backup_root) and not (
@@ -1108,6 +1250,7 @@ def skill_install(
                     version_id=str(result["version_id"]) if result.get("version_id") else None,
                     digest=result.get("digest"),
                     requested_version=requested_version,
+                    **({"pin_known": True} if harness in {"pi", "claude-code"} and scope == "user" else {}),
                 )
         except PermissionError as error:
             fail(
@@ -1126,6 +1269,71 @@ def skill_install(
                 resource="installed-state lockfile",
                 remediation="Check local storage and retry.",
                 detail=repr(error),
+            )
+        # Record ownership only for a complete registry-direct Pi file set.
+        # A manual install may succeed without making it eligible for startup.
+        if harness in {"pi", "claude-code"} and scope == "user" and delivery_mode == "registry_direct":
+            from observal_cli import automatic_skill_plan, install_baseline
+            from observal_cli.lockfile import current_registry_url
+
+            try:
+                if (
+                    skill_info.get("git_url")
+                    or _sanitize_name(skill_info["name"]) != local_name
+                    or installed_path != automatic_skill_plan.destination(skill_info["name"], harness)
+                ):
+                    raise automatic_skill_plan.SkillPlanError("Skill has an ambiguous source or destination")
+                file = installed_path / "SKILL.md"
+                automatic_skill_plan.unshared(
+                    current_registry_url(), str(skill_info.get("id", resolved)), skill_info["name"], harness
+                )
+                planned, modes = automatic_skill_plan.target(
+                    {"local_name": local_name, "harness": harness}, skill_info, file
+                )
+                if any(
+                    path.read_bytes() != raw or path.stat().st_mode & 0o777 != modes[path]
+                    for path, raw in planned.items()
+                ):
+                    raise automatic_skill_plan.SkillPlanError(
+                        "The installed skill bytes or modes differ from the release"
+                    )
+                installed_version = (
+                    result.get("version") or version or skill_info.get("version") or listing.get("version")
+                )
+                install_baseline.capture(
+                    registry=current_registry_url(),
+                    harness=harness,
+                    agent_id=automatic_skill_plan.identity(str(skill_info.get("id", resolved))),
+                    scope="user",
+                    root=str(installed_path),
+                    version=str(installed_version),
+                    lock_digest=automatic_skill_plan.release_key(
+                        str(installed_version),
+                        result.get("digest"),
+                        str(result["version_id"]) if result.get("version_id") else None,
+                    ),
+                    written_paths=list(map(str, planned)),
+                )
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                if automatic:
+                    fail(
+                        ErrorCategory.UNAVAILABLE,
+                        "Skill was written but its ownership evidence could not be saved.",
+                        operation="Install skill",
+                        resource=skill_id,
+                        remediation="Inspect the installed skill and recovery backup before retrying.",
+                        detail=str(error),
+                    )
+                result.setdefault("warnings", []).append(
+                    "Ownership evidence could not be recorded; automatic updates remain unavailable until a manual reinstall."
+                )
+        elif automatic:
+            fail(
+                ErrorCategory.CONFLICT,
+                "The skill release has no safe owned-file plan.",
+                operation="Install skill",
+                resource=skill_id,
+                remediation="Update this skill manually.",
             )
     elif output != "json":
         rprint("[dim]Skill install skipped (no-write mode).[/dim]")

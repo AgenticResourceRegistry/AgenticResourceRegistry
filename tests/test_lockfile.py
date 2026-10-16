@@ -507,6 +507,77 @@ def test_legacy_upserts_cannot_erase_verified_standalone_or_agent_receipts(isola
     )
 
 
+def test_interleaved_pi_agent_and_other_harness_component_keep_both_entries(isolated_lockfile, monkeypatch):
+    """A non-Pi writer cannot commit a snapshot read before the Pi transaction."""
+    first_inside_commit = threading.Event()
+    release_first = threading.Event()
+    second_waiting = threading.Event()
+    real_write = lockfile._write_locked
+    calls = 0
+
+    def delayed_write(data):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_inside_commit.set()
+            assert release_first.wait(5)
+        return real_write(data)
+
+    def other_harness_install():
+        second_waiting.set()
+        lockfile.upsert_standalone(
+            "codex", component_type="skill", name="lint", component_id="skill-1", version="1.0.0"
+        )
+
+    monkeypatch.setattr(lockfile, "_write_locked", delayed_write)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pi = executor.submit(
+            lockfile.upsert_agent,
+            "pi",
+            name="reviewer",
+            agent_id="agent-1",
+            version="2.0.0",
+            scope="user",
+            components=[],
+            lock_digest="digest",
+            lock_status="locked",
+        )
+        assert first_inside_commit.wait(5)
+        other = executor.submit(other_harness_install)
+        try:
+            assert second_waiting.wait(5)
+            assert not other.done()
+        finally:
+            release_first.set()
+        pi.result(timeout=5)
+        other.result(timeout=5)
+    _, registry = lockfile.read_registry_lockfile()
+    assert registry["harnesses"]["pi"]["agents"][0]["version"] == "2.0.0"
+    assert registry["harnesses"]["codex"]["standalone"][0]["id"] == "skill-1"
+
+
+def test_reconcile_skips_stale_plan_instead_of_overwriting_install(isolated_lockfile):
+    from observal_cli.lockfile_reconcile import LockfileChange, LockfileReconciliation
+
+    lockfile.upsert_agent("pi", name="old", agent_id="agent-1", version="1.0.0", scope="user")
+    data, registry = lockfile.read_registry_lockfile()
+    agent = registry["harnesses"]["pi"]["agents"][0]
+    change = LockfileChange(entry=agent, field="name", old="old", new="renamed", label="agent")
+    plan = LockfileReconciliation(data=data, server_url=isolated_lockfile.server_url, changes=[change])
+    lockfile.upsert_standalone("codex", component_type="skill", name="lint", component_id="skill-1", version="1.0.0")
+    plan.apply()
+    _, latest = lockfile.read_registry_lockfile()
+    assert latest["harnesses"]["pi"]["agents"][0]["name"] == "old"
+    assert latest["harnesses"]["codex"]["standalone"][0]["id"] == "skill-1"
+    assert any("changed" in warning for warning in plan.warnings)
+
+
+def test_initial_migration_cannot_overwrite_new_lockfile(isolated_lockfile):
+    lockfile.upsert_agent("pi", name="existing", agent_id="agent-1", version="1.0.0", scope="user")
+    assert lockfile._write_initial_lockfile(lockfile._empty_lockfile()) is False
+    assert lockfile.installed_agent("pi", "agent-1", scope="user", directory=None)["version"] == "1.0.0"
+
+
 def test_read_registry_section_creation_is_explicit_and_in_memory(isolated_lockfile):
     data, missing = lockfile.read_registry_lockfile()
     assert missing == {"server_url": isolated_lockfile.server_url, "harnesses": {}}
@@ -1131,7 +1202,7 @@ def test_marker_write_failure_keeps_source_marker(isolated_lockfile, monkeypatch
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setattr(Path, "cwd", lambda: home)
     write = Mock(side_effect=OSError("write denied"))
-    monkeypatch.setattr(lockfile, "write_lockfile", write)
+    monkeypatch.setattr(lockfile, "_write_initial_lockfile", write)
 
     with pytest.raises(OSError, match="write denied"):
         lockfile.migrate_agent_markers()

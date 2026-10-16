@@ -702,7 +702,7 @@ def hook_install(
             scope="project",
             version_id=str(result["version_id"]) if result.get("version_id") else None,
             digest=result.get("digest"),
-            requested_version=version,
+            requested_version=None if os.environ.get("OBSERVAL_UPDATE_EXACT_TARGET") == "1" else version,
             directory=str(project_root),
             namespace=listing.get("namespace"),
             slug=listing.get("slug"),

@@ -14,7 +14,7 @@ import typer
 from click import unstyle
 from typer.testing import CliRunner
 
-from observal_cli import cmd_outdated
+from observal_cli import cmd_outdated, installed_updates
 from observal_cli.cmd_outdated import register_outdated
 from observal_cli.errors import CliError, ErrorCategory, ErrorHandlingGroup, ExitCode
 
@@ -395,9 +395,9 @@ def test_invalid_registry_version_is_unavailable(
 
 
 def test_version_comparison_handles_prereleases_and_downgrades() -> None:
-    assert cmd_outdated._version_newer("2.0.0", "1.9.9") is True
-    assert cmd_outdated._version_newer("2.0.0rc1", "2.0.0") is False
-    assert cmd_outdated._version_newer("1.9.9", "2.0.0") is False
+    assert installed_updates.version_newer("2.0.0", "1.9.9") is True
+    assert installed_updates.version_newer("2.0.0rc1", "2.0.0") is False
+    assert installed_updates.version_newer("1.9.9", "2.0.0") is False
 
 
 def test_report_failure_is_visible_but_does_not_hide_results(
@@ -498,7 +498,8 @@ def test_no_report_prevents_inbox_write(
 )
 def test_upgrade_commands_are_type_specific(item_type: str, expected: str) -> None:
     assert (
-        cmd_outdated._upgrade_command({"type": item_type, "qualified_name": "acme/tool", "harness": "pi"}) == expected
+        installed_updates.upgrade_command({"type": item_type, "qualified_name": "acme/tool", "harness": "pi"})
+        == expected
     )
 
 

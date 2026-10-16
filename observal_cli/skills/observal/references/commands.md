@@ -15,9 +15,11 @@ Every command available in the installed CLI. This block is generated from the T
 **Root commands**
 
 - `observal api`: Call an authenticated Observal JSON API endpoint.
+- `observal freeze`: Turn off automatic registry updates; does not affect manual upgrades.
 - `observal outdated`: Show installed agents and standalone components with their registry status.
 - `observal reconcile`: Backfill local session records missed by automatic hook delivery
 - `observal scan`: Show a read-only inventory of your local harness setup.
+- `observal unfreeze`: Opt in to automatic updates of eligible managed installations.
 
 **`observal admin`**: Core administration commands (use 'observal review' for submission reviews)
 
@@ -174,7 +176,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry mcp sync status`: Show webhook sync settings and the result of the last sync.
   - `observal registry mcp submit`: Submit an MCP server to the registry.
   - `observal registry mcp show`: Show full details of an MCP server.
-  - `observal registry mcp install`: Generate an install config snippet for an MCP server.
+  - `observal registry mcp install`: Generate an MCP snippet, or install a managed user MCP (Pi or Claude Code).
   - `observal registry mcp archive`: Archive this component.
   - `observal registry mcp edit`: Edit an MCP server submission.
   - `observal registry mcp fork`: Fork an approved mcp release into your own editable draft.

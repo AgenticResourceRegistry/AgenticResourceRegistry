@@ -10,9 +10,10 @@ Defines the desired state of Observal-managed hooks. The reconciler
 compares this spec against the user's current ~/.claude/settings.json
 and applies non-destructive updates.
 
-Session JSONL strategy: only 2 events are needed (UserPromptSubmit + Stop)
-since we read the JSONL file incrementally rather than parsing individual
-hook events.
+Session JSONL delivery uses UserPromptSubmit + Stop. A separate SessionStart
+hook starts a consent-gated detached worker; a fast UserPromptSubmit hook
+delivers its result as a user-visible systemMessage without model context.
+SessionEnd marks shutdown so no new installer can start after the host closes.
 
 Bump HOOKS_SPEC_VERSION whenever the hook definitions change.
 """
@@ -25,7 +26,7 @@ from pathlib import Path
 from observal_cli.shared.utils import OBSERVAL_METADATA_KEY
 
 # Bump this when hook definitions change.
-HOOKS_SPEC_VERSION = "11"
+HOOKS_SPEC_VERSION = "13"
 
 
 # Parent of the observal_cli package directory
@@ -47,19 +48,26 @@ def _python_cmd() -> str:
 
 
 def get_desired_hooks() -> dict[str, list[dict]]:
-    """Return the desired hooks spec for Claude Code settings.
-
-    Only 2 events: UserPromptSubmit and Stop.  Both invoke the session
-    push hook which reads the JSONL file incrementally.
-    """
+    """Return telemetry hooks plus a detached, consent-gated startup bridge."""
     meta = {OBSERVAL_METADATA_KEY: {"version": HOOKS_SPEC_VERSION}}
     cmd = f"{_python_cmd()} -m observal_cli.hooks.session_push --harness claude-code"
 
     hook_group: list[dict] = [{**meta, "hooks": [{"type": "command", "command": cmd}]}]
+    notice_cmd = f"{_python_cmd()} -m observal_cli.hooks.claude_updates"
 
     return {
-        "UserPromptSubmit": hook_group,
+        "SessionStart": [{**meta, "hooks": [{"type": "command", "command": notice_cmd, "timeout": 5}]}],
+        "UserPromptSubmit": [
+            {
+                **meta,
+                "hooks": [
+                    {"type": "command", "command": cmd},
+                    {"type": "command", "command": notice_cmd, "timeout": 5},
+                ],
+            },
+        ],
         "Stop": hook_group,
+        "SessionEnd": [{**meta, "hooks": [{"type": "command", "command": notice_cmd, "timeout": 5}]}],
     }
 
 

@@ -25,7 +25,7 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0"
   },
   "scripts": {
-    "test": "node --experimental-strip-types tests/acknowledged-delivery.test.ts && node --experimental-strip-types tests/capability-attribution.test.ts && node --experimental-strip-types tests/delegated-attribution.test.ts && node --experimental-strip-types tests/token-refresh.test.ts"
+    "test": "node --experimental-strip-types tests/acknowledged-delivery.test.ts && node --experimental-strip-types tests/capability-attribution.test.ts && node --experimental-strip-types tests/delegated-attribution.test.ts && node --experimental-strip-types tests/token-refresh.test.ts && node --experimental-strip-types tests/startup-update-notices.test.ts"
   },
   "files": [
     "extensions/",
