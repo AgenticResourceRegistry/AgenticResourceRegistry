@@ -21,8 +21,8 @@ export function ComponentReportFrame({ report, children }: { report: InsightRepo
         actionButtonsRight={
           report.component_id ? (
             <Link to="/components/$componentId" params={{ componentId: report.component_id }} search={{ type: componentType }}
-              className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back to component
+              className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" /> <span className="sm:hidden">Back</span><span className="hidden sm:inline">Back to component</span>
             </Link>
           ) : null
         }
@@ -57,5 +57,64 @@ export function ComponentReportFrame({ report, children }: { report: InsightRepo
         {report.status === "completed" && children}
       </main>
     </>
+  );
+}
+
+export function EvidencePanel({ summary, stats, children }: {
+  summary?: string;
+  stats: { label: string; value: ReactNode; note?: string }[];
+  children?: ReactNode;
+}) {
+  return (
+    <section aria-label="Evidence" className="space-y-5">
+      <div className="space-y-2">
+        <h3 className="text-lg font-semibold">What the data shows</h3>
+        <p className="max-w-[70ch] text-sm leading-relaxed text-muted-foreground">{summary || "No summary is available for this report."}</p>
+      </div>
+      <dl className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {stats.map(({ label, value, note }) => (
+          <div key={label} className="min-w-0 rounded-lg border border-border bg-card p-4">
+            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+            <dd className="mt-2 break-words text-xl font-semibold tabular-nums text-foreground sm:text-2xl">{value}</dd>
+            {note && <dd className="mt-1 text-xs text-muted-foreground">{note}</dd>}
+          </div>
+        ))}
+      </dl>
+      {children && <div className="space-y-2 text-sm text-muted-foreground">{children}</div>}
+    </section>
+  );
+}
+
+type CoverageFacts = {
+  presence: { present_sessions: number };
+  projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
+  attribution_state: string;
+  reasons: string[];
+  limitations: string[];
+};
+
+export function CoveragePanel({ coverage, children }: { coverage: CoverageFacts | null | undefined; children?: ReactNode }) {
+  return (
+    <section aria-label="Attribution coverage" className="space-y-4 rounded-lg border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-lg font-semibold">Attribution coverage</h3>
+        {coverage && <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">{coverage.attribution_state.replaceAll("_", " ")}</span>}
+      </div>
+      {!coverage ? <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p> : <>
+        <p className="text-sm">{coverage.projection.projection_complete_sessions} of {coverage.presence.present_sessions} verified-present {coverage.presence.present_sessions === 1 ? "session" : "sessions"} processed.
+          {coverage.projection.projection_pending_sessions > 0 && ` ${coverage.projection.projection_pending_sessions} pending.`}
+          {coverage.projection.projection_failed_sessions > 0 && ` ${coverage.projection.projection_failed_sessions} failed.`}
+          {coverage.projection.unsupported_present_sessions > 0 && ` ${coverage.projection.unsupported_present_sessions} on unsupported harnesses.`}
+        </p>
+        {children && <div className="space-y-2 text-sm text-muted-foreground">{children}</div>}
+        {coverage.reasons.length > 0 && <p className="text-sm text-muted-foreground">Evidence gaps: {coverage.reasons.map((reason) => reason.replaceAll("_", " ")).join(", ")}.</p>}
+        {coverage.limitations.length > 0 && <details className="text-sm text-muted-foreground">
+          <summary className="cursor-pointer rounded-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">How to interpret these counts</summary>
+          <ul className="mt-3 list-disc space-y-1 pl-5">
+            {coverage.limitations.map((note) => <li key={note}>{note.replaceAll("_", " ")}</li>)}
+          </ul>
+        </details>}
+      </>}
+    </section>
   );
 }
