@@ -109,12 +109,14 @@ def main(
     setup_optic(debug=debug, verbose=verbose)
     _check_package_conflict()
 
-    # Startup workers (Pi and Claude Code) must not run CLI startup migrations
-    # or rewrite bundled skills in the harness while a session is starting.
+    # Startup workers must not run CLI startup migrations or rewrite bundled
+    # skills in the harness while a session is starting.
     if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" or any(
-        cmd in sys.argv[1:] for cmd in ("_startup-check", "_startup-apply", "_startup-apply-claude")
+        cmd in sys.argv[1:]
+        for cmd in ("_startup-check", "_startup-apply", "_startup-apply-claude", "_startup-apply-hook")
     ):
         return
+    _show_startup_update_notices()
 
     if debug:
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
@@ -125,6 +127,41 @@ def main(
 
     # One-time local state migrations
     _try_lockfile_migration()
+
+
+def _show_startup_update_notices() -> None:
+    """Show Kiro and Cursor startup-update outcomes on the next interactive command.
+
+    Those hosts have no user-only hook output (their stdout reaches the model),
+    so the CLI is their notice channel. Human terminals only: never on JSON or
+    raw output, never when stderr is not a TTY, and never fatal.
+    """
+    from observal_cli.errors import machine_output_requested
+
+    if machine_output_requested(sys.argv[1:]) or not sys.stderr.isatty():
+        return
+    try:
+        from observal_cli import auto_update_policy
+        from observal_cli.hooks import claude_updates
+        from observal_cli.startup_harnesses import NOTICE_CHANNEL
+
+        registry = auto_update_policy.active_registry()
+        account = auto_update_policy.active_account()
+        ack: list = []
+        messages = [
+            message
+            for harness, channel in NOTICE_CHANNEL.items()
+            if channel == "cli"
+            for message in claude_updates._notices(registry, account, ack=ack, harness=harness)
+        ]
+        # Every session writes its own result; repeat refusals print once.
+        messages = list(dict.fromkeys(messages))
+        if messages:
+            print("\n".join(messages), file=sys.stderr, flush=True)
+        for delivered in ack:  # Acknowledge only after the message reached the terminal.
+            delivered.unlink(missing_ok=True)
+    except Exception:
+        return
 
 
 def _migrate_legacy_mcp_configs() -> None:
@@ -329,6 +366,19 @@ def startup_apply_claude(
     from observal_cli.startup_update_apply import apply_claude
 
     apply_claude(cwd, session_id, notice_key)
+
+
+@app.command("_startup-apply-hook", hidden=True)
+def startup_apply_hook(
+    harness: str = typer.Option(..., "--harness"),
+    cwd: str = typer.Option(..., "--cwd"),
+    session_id: str = typer.Option(..., "--session-id"),
+    notice_key: str = typer.Option(..., "--notice-key"),
+) -> None:
+    """Guarded Kiro, Cursor or Codex user-profile update worker."""
+    from observal_cli.startup_update_apply import apply_hooked
+
+    apply_hooked(harness, cwd, session_id, notice_key)
 
 
 @app.command("_startup-apply", hidden=True)

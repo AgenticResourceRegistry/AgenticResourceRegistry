@@ -29,7 +29,8 @@ def release_key(version: str, digest: str | None, version_id: str | None) -> str
     return f"skill:{version}:{digest or ''}:{version_id or ''}"
 
 
-SKILL_ROOTS = {"pi": (".pi", "agent", "skills"), "claude-code": (".claude", "skills")}
+# Must match cmd_skill._user_skill_dest for each harness (tests pin this).
+SKILL_ROOTS = {"pi": (".pi", "agent", "skills"), "claude-code": (".claude", "skills"), "codex": (".agents", "skills")}
 
 
 def destination(name: str, harness: str = "pi") -> Path:
@@ -58,33 +59,48 @@ def owned_files(root: Path) -> list[Path]:
 
 def unshared(registry: str, component_id: str, name: str, harness: str = "pi") -> None:
     """The lockfile may contain another owner even without its own baseline."""
-    from observal_cli.lockfile import normalize_server_url
+    from observal_cli.cmd_skill import _user_skill_dest
 
     target_name = sanitize_name(name)
+    target_dir = destination(name, harness)
     try:
         data = lockfile.read_lockfile()
         for url, section in data.get("registries", {}).items():
-            for entry in section.get("harnesses", {}).get(harness, {}).get("standalone", []):
-                if entry.get("type") != "skill" or entry.get("scope") != "user":
+            for other, block in section.get("harnesses", {}).items():
+                # Several harnesses default to one folder (~/.agents/skills):
+                # any of them can own this destination, not just this harness.
+                if other != harness and _user_skill_dest(other, target_name) != target_dir:
                     continue
-                # The normal installer writes using the registry-provided
-                # local_name, which can differ from the lockfile display name.
-                # Older entries may have only the display name. Neither entry
-                # needs its own baseline to claim the destination.
-                local_name = entry.get("local_name")
-                display_name = entry.get("name")
-                if (
-                    (isinstance(local_name, str) and sanitize_name(local_name) == target_name)
-                    or (isinstance(display_name, str) and sanitize_name(display_name) == target_name)
-                ) and (normalize_server_url(url) != normalize_server_url(registry) or entry.get("id") != component_id):
-                    raise SkillPlanError("Another installed skill uses this Pi path; update manually.")
+                for entry in block.get("standalone", []):
+                    if _claims(entry, target_name) and (
+                        other != harness
+                        or lockfile.normalize_server_url(url) != lockfile.normalize_server_url(registry)
+                        or entry.get("id") != component_id
+                    ):
+                        raise SkillPlanError("Another installed skill uses this skill folder; update manually.")
     except (OSError, RuntimeError, TypeError, KeyError) as error:
         raise SkillPlanError("Skill ownership cannot be checked; update manually.") from error
 
 
+def _claims(entry: dict, target_name: str) -> bool:
+    """A user skill entry claims the folder by local_name or, for older entries, display name.
+
+    The normal installer writes using the registry-provided local_name, which
+    can differ from the lockfile display name. Neither entry needs its own
+    baseline to claim the destination.
+    """
+    if entry.get("type") != "skill" or entry.get("scope") != "user":
+        return False
+    local_name = entry.get("local_name")
+    display_name = entry.get("name")
+    return (isinstance(local_name, str) and sanitize_name(local_name) == target_name) or (
+        isinstance(display_name, str) and sanitize_name(display_name) == target_name
+    )
+
+
 def verified_path(item: dict, *, registry: str) -> Path:
     if item.get("type") != "skill" or item.get("harness") not in SKILL_ROOTS or item.get("scope") != "user":
-        raise SkillPlanError("Only user-scoped Pi or Claude Code skills can be updated automatically.")
+        raise SkillPlanError("Only user-scoped Pi, Claude Code or Codex skills can be updated automatically.")
     if item.get("pin_known") is not True or item.get("requested_version"):
         raise SkillPlanError("Skill pin intent is unknown or explicitly pinned; update manually.")
     name = item.get("name")

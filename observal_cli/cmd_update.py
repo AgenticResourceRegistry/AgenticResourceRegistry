@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Guarded Pi and Claude Code startup runs that use the normal installers.
+"""Guarded startup runs (Pi, Claude Code, Kiro, Cursor, Codex) that use the normal installers.
 
 Startup requires consent, verified owned files, exact release pins, and a
 durable outcome journal. The installers invoked here are the ordinary
@@ -24,6 +24,7 @@ from observal_cli import (
     update_preflight,
 )
 from observal_cli.errors import CliError
+from observal_cli.startup_harnesses import updated_reason
 
 
 def _entries(harness: str | None) -> list[dict]:
@@ -138,13 +139,23 @@ def apply_startup_pi_agent(
     have partially written files and must leave that record unresolved.
     """
     import time
+    from functools import partial
 
-    if not callable(shutdown_requested) or harness not in {"pi", "claude-code"}:
+    from observal_cli import automatic_profile_plan
+    from observal_cli.startup_harnesses import AGENT_HARNESSES
+
+    if not callable(shutdown_requested) or harness not in AGENT_HARNESSES:
         raise ValueError("A supported harness and shutdown check are required")
-    install_lock = auto_update_policy.pi_install_lock if harness == "pi" else auto_update_policy.claude_install_lock
+    install_lock = auto_update_policy.install_lock_for(harness)
     preflight = (
-        update_preflight.pi_user_agent_candidate if harness == "pi" else update_preflight.claude_user_agent_candidate
+        update_preflight.pi_user_agent_candidate
+        if harness == "pi"
+        else update_preflight.claude_user_agent_candidate
+        if harness == "claude-code"
+        else partial(update_preflight.user_agent_candidate, harness=harness)
     )
+    # Merged configs no single agent owns are never part of its file evidence.
+    shared = automatic_profile_plan.shared_config_paths(harness, "user", item.get("directory") or "/")
     with auto_update_policy.registry_gate(registry, timeout=max(0, min(2, deadline - time.monotonic()))):
         if (
             shutdown_requested()
@@ -222,6 +233,7 @@ def apply_startup_pi_agent(
                         root=item["directory"],
                         version=item["current_version"],
                         lock_digest=item["lock_digest"],
+                        shared=shared,
                     )
                     install_recovery.discard(backup)
                     return True
@@ -247,6 +259,7 @@ def apply_startup_pi_agent(
                         root=item["directory"],
                         version=item["current_version"],
                         lock_digest=item["lock_digest"],
+                        shared=shared,
                     )
                     if backup.exists():
                         install_recovery.discard(backup)
@@ -286,6 +299,7 @@ def apply_startup_pi_agent(
                         root=item["directory"],
                         version=verified["latest_version"],
                         lock_digest=installed[0]["lock_digest"],
+                        shared=shared,
                     )
                 except (install_baseline.BaselineError, OSError, KeyError, TypeError):
                     pass
@@ -300,6 +314,8 @@ def apply_startup_pi_agent(
                             "Saved Pi profile updated; re-select it with `/agent` and reload."
                             if harness == "pi"
                             else "Saved Claude Code profile updated; start a new session and select this agent to load it."
+                            if harness == "claude-code"
+                            else updated_reason(harness, "agent")
                         ),
                     }
         if completed.returncode == 0 and restore_originals():
@@ -598,10 +614,11 @@ def apply_startup_pi_skill(
     import time
 
     from observal_cli import automatic_skill_plan
+    from observal_cli.startup_harnesses import SKILL_HARNESSES
 
-    if not callable(shutdown_requested) or harness not in {"pi", "claude-code"}:
+    if not callable(shutdown_requested) or harness not in SKILL_HARNESSES:
         raise ValueError("A supported harness and shutdown check are required")
-    install_lock = auto_update_policy.pi_install_lock if harness == "pi" else auto_update_policy.claude_install_lock
+    install_lock = auto_update_policy.install_lock_for(harness)
     with auto_update_policy.registry_gate(registry, timeout=max(0, min(2, deadline - time.monotonic()))):
         if (
             shutdown_requested()
@@ -703,11 +720,12 @@ def apply_startup_pi_skill(
                 ):
                     if backup.exists():
                         install_recovery.discard(backup)
-                    host = "Pi" if harness == "pi" else "Claude Code"
-                    return {
-                        "status": "updated",
-                        "reason": f"Saved {host} skill updated and verified; reload to use it.",
-                    }
+                    if harness in {"pi", "claude-code"}:
+                        host = "Pi" if harness == "pi" else "Claude Code"
+                        reason = f"Saved {host} skill updated and verified; reload to use it."
+                    else:
+                        reason = updated_reason(harness, "skill")
+                    return {"status": "updated", "reason": reason}
             except (OSError, ValueError, TypeError, KeyError):
                 pass
             if restore_originals():

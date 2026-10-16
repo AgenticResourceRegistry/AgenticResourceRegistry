@@ -728,13 +728,17 @@ class KiroAdapter(BaseAdapter):
 
     def patch_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _patch_kiro
+        from observal_cli.harness_specs import startup_update_hooks
 
-        return _patch_kiro(dry_run)
+        telemetry = _patch_kiro(dry_run)
+        return startup_update_hooks.patch("kiro", dry_run) or telemetry
 
     def cleanup_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _cleanup_kiro
+        from observal_cli.harness_specs import startup_update_hooks
 
-        return _cleanup_kiro(dry_run)
+        telemetry = _cleanup_kiro(dry_run)
+        return startup_update_hooks.cleanup("kiro", dry_run) or telemetry
 
     def requires_explicit_agent_id(self) -> bool:
         return True

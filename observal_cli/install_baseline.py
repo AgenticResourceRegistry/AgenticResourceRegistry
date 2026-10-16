@@ -161,9 +161,23 @@ def capture(
 
 
 def verified_manifest(
-    *, registry: str, harness: str, agent_id: str, scope: str, root: str, version: str, lock_digest: str
+    *,
+    registry: str,
+    harness: str,
+    agent_id: str,
+    scope: str,
+    root: str,
+    version: str,
+    lock_digest: str,
+    shared: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, str], list[str]]:
-    """Return verified file hashes and original paths from the same manifest read."""
+    """Return verified file hashes and original paths from the same manifest read.
+
+    ``shared`` names merged harness configs that no single agent owns (Codex
+    ``config.toml``, Cursor ``mcp.json`` ...). Older baselines recorded them;
+    they are neither verified nor returned, so the host or another install may
+    change them freely. A plan must then prove it leaves them untouched.
+    """
     try:
         raw = json.loads(_path(registry, harness, agent_id, scope, root).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -205,6 +219,12 @@ def verified_manifest(
         or any(type(mode) is not int or mode < 0 or mode & ~0o777 for mode in modes.values())
     ):
         raise BaselineError("The ownership baseline has no valid file modes; manually re-pull this version first")
+    if shared:
+        paths = [name for name in paths if name not in shared]
+        files = {name: digest for name, digest in files.items() if name not in shared}
+        modes = {name: mode for name, mode in modes.items() if name not in shared}
+        if not paths or not files:
+            raise BaselineError("The ownership baseline has no files of its own; manually re-pull this version first")
     try:
         _reject_shared_ownership(files, _path(registry, harness, agent_id, scope, root))
         # Also catches edits to unrelated keys in a shared JSON/TOML config.
@@ -219,7 +239,15 @@ def verified_manifest(
 
 
 def verified_files(
-    *, registry: str, harness: str, agent_id: str, scope: str, root: str, version: str, lock_digest: str
+    *,
+    registry: str,
+    harness: str,
+    agent_id: str,
+    scope: str,
+    root: str,
+    version: str,
+    lock_digest: str,
+    shared: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     """Return verified file hashes or refuse missing, dirty, or legacy installs."""
     files, _paths = verified_manifest(
@@ -230,6 +258,7 @@ def verified_files(
         root=root,
         version=version,
         lock_digest=lock_digest,
+        shared=shared,
     )
     return files
 

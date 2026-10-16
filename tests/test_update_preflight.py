@@ -158,3 +158,17 @@ def test_policy_and_lock_are_independent_guards(candidate: dict) -> None:
     candidate["lock_status"] = "partial"
     with pytest.raises(update_preflight.PreflightSkipError, match="complete component lock"):
         update_preflight.pi_user_agent_candidate(candidate, registry=REGISTRY)
+
+
+@pytest.mark.parametrize("harness", ["pi", "kiro", "cursor", "codex"])
+def test_folder_managed_agents_name_the_real_cause_before_pin_intent(candidate: dict, harness: str) -> None:
+    """Folder transactions record no pin intent; the folder is the reason, not the pin."""
+    candidate.update(harness=harness, folder_managed=True, pin_known=False)
+    with pytest.raises(update_preflight.PreflightSkipError, match="complete skill folders"):
+        update_preflight.user_agent_candidate(candidate, registry=REGISTRY, harness=harness)
+
+
+def test_unsupported_harnesses_are_refused_by_the_generic_candidate(candidate: dict) -> None:
+    candidate["harness"] = "goose"
+    with pytest.raises(update_preflight.PreflightSkipError, match="not updated automatically"):
+        update_preflight.user_agent_candidate(candidate, registry=REGISTRY, harness="goose")

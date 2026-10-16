@@ -41,6 +41,7 @@ from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
 from observal_cli.render import OutputMode, esc, output_json, spinner
+from observal_cli.startup_harnesses import AGENT_HARNESSES, PROFILE_PLAN_HARNESSES
 from observal_shared.harness_registry import get_scope_aware_harnesses
 
 # Hook script names used as placeholders in server-generated agent configs.
@@ -559,8 +560,8 @@ def _merge_toml_text(existing_text: str, content: dict, root_key: str) -> str:
     return f"{existing}\n\n{rendered}\n" if existing else f"{rendered}\n"
 
 
-def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: bool, merge: bool) -> str:
-    """Write a YAML config, merging one section into the file already on disk.
+def _render_yaml_config(path: Path, content: dict, root_key: str, *, existed: bool, merge: bool) -> str:
+    """Render a YAML config, merging one section into the file already on disk.
 
     Goose keeps providers, global settings, and MCP extensions in a single
     ``config.yaml``, so an install must only touch its own section. An existing
@@ -595,8 +596,55 @@ def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: boo
         payload = existing
     else:
         payload = {**existing, **content}
-    _atomic_write_text(path, yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
-    return "merged" if existed else "created"
+    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+
+
+def _render_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> tuple[str, bool]:
+    """Return the exact text the normal writer would put at *path*, and whether it merged.
+
+    Pure apart from reading an existing file to merge into. Guarded startup
+    plans call this too, so a plan can never disagree with the writer.
+    """
+    existed = path.exists()
+    if not isinstance(content, dict):
+        return content, False
+    # The merged section is the first mapping (mcpServers, hooks, ...). Configs
+    # such as Cursor's hooks.json start with a scalar ("version": 1), which
+    # must not be mistaken for the section.
+    root_key = next(
+        (key for key, value in content.items() if isinstance(value, dict)),
+        next(iter(content), "mcpServers"),
+    )
+    if path.suffix == ".toml":
+        if existed and merge_mcp:
+            return _merge_toml_text(path.read_text(encoding="utf-8"), content, root_key), True
+        return _dict_to_toml(content), False
+    if path.suffix in (".yaml", ".yml"):
+        # Historical status: an existing YAML config always reports "merged".
+        return _render_yaml_config(path, content, root_key, existed=existed, merge=merge_mcp), existed
+    if merge_mcp and existed:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            raise
+        except UnicodeError as error:
+            raise ValueError(f"cannot merge unreadable JSON: {path}") from error
+        try:
+            existing = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"cannot merge unreadable JSON: {path}") from error
+        if not isinstance(existing, dict):
+            raise ValueError(f"cannot merge JSON whose top level is not an object: {path}")
+        incoming_servers = content.get(root_key, {})
+        section = existing.setdefault(root_key, {})
+        if not isinstance(section, dict) or not isinstance(incoming_servers, dict):
+            raise ValueError(f"cannot merge non-object JSON section {root_key}: {path}")
+        section.update(incoming_servers)
+        for key, value in content.items():
+            if key != root_key and not isinstance(value, dict):
+                existing[key] = value
+        return json.dumps(existing, indent=2) + "\n", True
+    return json.dumps(content, indent=2) + "\n", False
 
 
 def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
@@ -610,52 +658,10 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
     optic.trace("path={}, len={}", path, len(str(content)))
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
-
-    if isinstance(content, dict):
-        # The merged section is the first mapping (mcpServers, hooks, ...). Configs
-        # such as Cursor's hooks.json start with a scalar ("version": 1), which
-        # must not be mistaken for the section.
-        root_key = next(
-            (key for key, value in content.items() if isinstance(value, dict)),
-            next(iter(content), "mcpServers"),
-        )
-        if path.suffix == ".toml":
-            toml_str = _dict_to_toml(content)
-            if existed and merge_mcp:
-                existing_text = path.read_text(encoding="utf-8")
-                _atomic_write_text(path, _merge_toml_text(existing_text, content, root_key))
-                return "merged"
-            _atomic_write_text(path, toml_str)
-        elif path.suffix in (".yaml", ".yml"):
-            return _merge_yaml_config(path, content, root_key, existed=existed, merge=merge_mcp)
-        else:
-            if merge_mcp and existed:
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except OSError:
-                    raise
-                except UnicodeError as error:
-                    raise ValueError(f"cannot merge unreadable JSON: {path}") from error
-                try:
-                    existing = json.loads(text)
-                except json.JSONDecodeError as error:
-                    raise ValueError(f"cannot merge unreadable JSON: {path}") from error
-                if not isinstance(existing, dict):
-                    raise ValueError(f"cannot merge JSON whose top level is not an object: {path}")
-                incoming_servers = content.get(root_key, {})
-                section = existing.setdefault(root_key, {})
-                if not isinstance(section, dict) or not isinstance(incoming_servers, dict):
-                    raise ValueError(f"cannot merge non-object JSON section {root_key}: {path}")
-                section.update(incoming_servers)
-                for key, value in content.items():
-                    if key != root_key and not isinstance(value, dict):
-                        existing[key] = value
-                _atomic_write_text(path, json.dumps(existing, indent=2) + "\n")
-                return "merged"
-            _atomic_write_text(path, json.dumps(content, indent=2) + "\n")
-    else:
-        _atomic_write_text(path, content)
-
+    text, merged = _render_file(path, content, merge_mcp=merge_mcp)
+    _atomic_write_text(path, text)
+    if merged:
+        return "merged"
     return "updated" if existed else "created"
 
 
@@ -2068,17 +2074,19 @@ def write_install_snippet(
 
 
 def _serialize_managed_pull(callback):
-    """Coordinate manual Pi/Claude Code pulls with guarded installs across processes."""
+    """Coordinate manual pulls with guarded startup installs across processes."""
 
     @wraps(callback)
     def wrapped(*args, **kwargs):
+        from observal_cli.startup_harnesses import AGENT_HARNESSES
+
         harness = kwargs.get("harness", args[1] if len(args) > 1 else None)
-        if harness not in {"pi", "claude-code"}:
+        if harness not in AGENT_HARNESSES:
             return callback(*args, **kwargs)
-        from observal_cli.auto_update_policy import claude_install_lock, pi_install_lock
+        from observal_cli.auto_update_policy import install_lock_for
         from observal_cli.lockfile import current_registry_url
 
-        install_lock = pi_install_lock if harness == "pi" else claude_install_lock
+        install_lock = install_lock_for(harness)
         with install_lock(current_registry_url()):
             cutoff = os.environ.get("OBSERVAL_AUTO_UPDATE_NETWORK_CUTOFF")
             if os.environ.get("OBSERVAL_AUTO_UPDATE_INSTALL") == "1" and cutoff is not None:
@@ -2585,7 +2593,7 @@ def register_pull(app: typer.Typer):
                 and row["directory"] == str(target_dir)
             ]
             if (
-                harness not in {"pi", "claude-code"}
+                harness not in AGENT_HARNESSES
                 or not is_user_scope
                 or len(existing) != 1
                 or (harness == "pi" and snippet.get("mcp_setup_commands"))
@@ -2641,6 +2649,10 @@ def register_pull(app: typer.Typer):
                     remediation="Inspect the release and update manually instead.",
                     detail=str(error),
                 )
+            from observal_cli import automatic_profile_plan
+
+            shared_configs = automatic_profile_plan.shared_config_paths(harness, "user", target_dir)
+            skip_shared: list[str] = []
             try:
                 old_files, automatic_paths = install_baseline.verified_manifest(
                     registry=current_registry_url(),
@@ -2650,9 +2662,18 @@ def register_pull(app: typer.Typer):
                     root=str(target_dir),
                     version=previous["current_version"],
                     lock_digest=previous["lock_digest"],
+                    shared=shared_configs,
                 )
                 if harness == "pi":
                     planned = automatic_pull_plan.plan_pi_files(snippet, previous, old_files)
+                elif harness in PROFILE_PLAN_HARNESSES:
+                    if result.get("warnings") or lock_warnings or conflict_warnings or snippet.get("_warnings"):
+                        raise automatic_profile_plan.ProfilePlanError(
+                            "Installing this release produced warnings; run `observal agent pull` manually to review them."
+                        )
+                    planned, claude_modes, skip_shared = automatic_profile_plan.plan(
+                        snippet, previous, old_files, harness=harness, agent_id=str(agent_detail.get("id", resolved))
+                    )
                 else:
                     from observal_cli import automatic_claude_plan
 
@@ -2677,7 +2698,7 @@ def register_pull(app: typer.Typer):
                 client.end_startup_network_budget()  # No alarm may interrupt a disk write.
                 expected_modes = {
                     path: claude_modes[path]
-                    if harness == "claude-code"
+                    if harness == "claude-code" or harness in PROFILE_PLAN_HARNESSES
                     else (
                         0o755 if path.suffix in {".sh", ".bash", ".py", ".rb"} else install_recovery.created_mode(path)
                     )
@@ -2704,9 +2725,15 @@ def register_pull(app: typer.Typer):
                     expected_modes=expected_modes,
                     deleted=removed_files,
                 )
+                # Shared configs were proven unchanged by the writer's own merge:
+                # never rewrite them, so the host's and other agents' edits stay.
+                for key in skip_shared:
+                    snippet.pop(key, None)
                 # Do not let the normal merge rewrite an identical owned MCP
                 # file. A changed, exactly planned config stays in the snippet.
-                if harness == "pi" and snippet.get("mcp_config"):
+                if harness in PROFILE_PLAN_HARNESSES:
+                    pass
+                elif harness == "pi" and snippet.get("mcp_config"):
                     mcp_path = next((path for path in planned if path.name == "mcp.json"), None)
                     if mcp_path is not None and planned[mcp_path] == mcp_path.read_bytes():
                         snippet.pop("mcp_config", None)
@@ -2972,7 +2999,7 @@ def register_pull(app: typer.Typer):
                 automatic_paths = [str(path) for path in planned]
                 if set(_files(automatic_paths)) != set(automatic_paths):
                     raise BaselineError("The managed path set changed during installation")
-                if harness == "claude-code" and any(
+                if (harness == "claude-code" or harness in PROFILE_PLAN_HARNESSES) and any(
                     path.read_bytes() != raw or path.stat().st_mode & 0o777 != expected_modes[path]
                     for path, raw in planned.items()
                 ):
@@ -3244,9 +3271,14 @@ def register_pull(app: typer.Typer):
             # pull may only refresh its existing, previously verified baseline;
             # legacy installations remain notice-only until manually re-pulled.
             try:
+                from observal_cli.automatic_profile_plan import shared_config_paths
                 from observal_cli.install_baseline import BaselineError, capture
                 from observal_cli.lockfile import current_registry_url
 
+                # A merged config shared by every agent of the harness is owned
+                # by none of them; recording it would block the next agent's
+                # evidence and break whenever the host edits that file.
+                shared_configs = shared_config_paths(harness, options.get("scope", "project"), target_dir)
                 capture(
                     registry=current_registry_url(),
                     harness=harness,
@@ -3255,7 +3287,8 @@ def register_pull(app: typer.Typer):
                     root=str(target_dir),
                     version=str(installed_version),
                     lock_digest=str(lock.get("digest") or ""),
-                    written_paths=automatic_paths or [path for path, _status in written],
+                    written_paths=automatic_paths
+                    or [path for path, _status in written if str(Path(path).resolve()) not in shared_configs],
                 )
             except (OSError, ValueError, BaselineError) as error:
                 if automatic_paths is not None:

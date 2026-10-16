@@ -19,6 +19,7 @@ from pathlib import Path
 
 from observal_cli import auto_update_policy, config, installed_updates
 from observal_cli.errors import CliError
+from observal_cli.startup_harnesses import AGENT_HARNESSES, MCP_HARNESSES, SKILL_HARNESSES
 
 NOTICE_DIR = config.CONFIG_DIR / "update-notices"
 CACHE_DIR = config.CONFIG_DIR / "update-check-cache"
@@ -130,15 +131,17 @@ def _message(item: dict, *, enabled: bool) -> dict | None:
             command += f" --dir {shlex.quote(str(root))}"
     elif (
         item.get("type") == "agent"
-        and item.get("harness") == "claude-code"
+        and item.get("harness") in AGENT_HARNESSES - {"pi"}
         and item.get("scope") == "user"
         and isinstance(root, str)
         and root
     ):
-        command = f"observal agent pull {target} --harness claude-code --scope user --dir {shlex.quote(root)} --upgrade"
-    elif item.get("type") == "skill" and item.get("scope") == "user" and item.get("harness") in {"pi", "claude-code"}:
+        command = (
+            f"observal agent pull {target} --harness {item['harness']} --scope user --dir {shlex.quote(root)} --upgrade"
+        )
+    elif item.get("type") == "skill" and item.get("scope") == "user" and item.get("harness") in SKILL_HARNESSES:
         command = f"observal registry skill install {target} --harness {item['harness']} --scope user"
-    elif item.get("type") == "mcp" and item.get("scope") == "user" and item.get("harness") in {"pi", "claude-code"}:
+    elif item.get("type") == "mcp" and item.get("scope") == "user" and item.get("harness") in MCP_HARNESSES:
         command = f"observal registry mcp install {target} --harness {item['harness']} --managed"
     else:
         command = None  # Unmanaged snippets and project installs need separate instructions.

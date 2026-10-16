@@ -238,13 +238,17 @@ class CursorAdapter(BaseAdapter):
 
     def patch_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _patch_cursor
+        from observal_cli.harness_specs import startup_update_hooks
 
-        return _patch_cursor(dry_run)
+        telemetry = _patch_cursor(dry_run)
+        return startup_update_hooks.patch("cursor", dry_run) or telemetry
 
     def cleanup_hooks(self, dry_run: bool) -> bool:
         from observal_cli.cmd_doctor import _cleanup_cursor
+        from observal_cli.harness_specs import startup_update_hooks
 
-        return _cleanup_cursor(dry_run)
+        telemetry = _cleanup_cursor(dry_run)
+        return startup_update_hooks.cleanup("cursor", dry_run) or telemetry
 
     # ── Headless delegation ──────────────────────────────────
 
