@@ -4,7 +4,7 @@
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import React from "react";
 import { Loader2 } from "lucide-react";
-import { ComponentReportFrame } from "@/components/insights/component-report-frame";
+import { ComponentReportFrame, CoveragePanel, EvidencePanel } from "@/components/insights/component-report-frame";
 import type {
   ComponentInsightCoverage,
   ComponentInsightMetrics,
@@ -21,20 +21,22 @@ import { useLegacyInsightReport } from "@/hooks/use-insights-api";
 
 function DistributionSection({ versions, harnesses }: { versions?: Record<string, number>; harnesses?: Record<string, number> }) {
   return (
-    <section aria-label="Present-session distribution" className="space-y-3 border-b border-border pb-6">
-      <h2 className="text-lg font-semibold">Present-session distribution</h2>
-      <p className="text-sm text-muted-foreground">A session can appear under more than one installed version.</p>
-      <div className="grid gap-6 sm:grid-cols-2">
-        <div><h3 className="mb-2 text-sm font-medium">Version</h3>
-          <dl className="space-y-1">{Object.entries(versions ?? {}).map(([version, count]) =>
-            <div key={version} className="flex justify-between gap-4 text-sm"><dt>{version}</dt><dd className="tabular-nums">{count} {count === 1 ? "session" : "sessions"}</dd></div>
-          )}</dl>
-        </div>
-        <div><h3 className="mb-2 text-sm font-medium">Harness</h3>
-          <dl className="space-y-1">{Object.entries(harnesses ?? {}).map(([harness, count]) =>
-            <div key={harness} className="flex justify-between gap-4 text-sm"><dt>{harness}</dt><dd className="tabular-nums">{count} {count === 1 ? "session" : "sessions"}</dd></div>
-          )}</dl>
-        </div>
+    <section aria-label="Present-session distribution" className="space-y-4">
+      <div>
+        <h3 className="text-lg font-semibold">Present-session distribution</h3>
+        <p className="text-sm text-muted-foreground">A session can appear under more than one installed version.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {([{ label: "Version", values: versions }, { label: "Harness", values: harnesses }] as const).map(({ label, values }) => (
+          <div key={label} className="min-w-0 rounded-lg border border-border bg-card p-5">
+            <h4 className="mb-3 text-sm font-medium">{label}</h4>
+            {Object.keys(values ?? {}).length === 0 ? <p className="text-sm text-muted-foreground">No verified distribution recorded.</p> : (
+              <dl className="space-y-2">{Object.entries(values ?? {}).map(([name, count]) => (
+                <div key={name} className="flex justify-between gap-4 text-sm"><dt className="min-w-0 break-words text-muted-foreground">{name}</dt><dd className="shrink-0 tabular-nums">{count} {count === 1 ? "session" : "sessions"}</dd></div>
+              ))}</dl>
+            )}
+          </div>
+        ))}
       </div>
     </section>
   );
@@ -58,31 +60,20 @@ function SkillReport({ report }: { report: InsightReport }) {
   ].filter(Boolean);
   return (
     <ComponentReportFrame report={report}>
-        <section aria-label="Evidence" className="space-y-4 border-b border-border pb-6">
-          <h2 className="text-lg font-semibold">What the data shows</h2>
-          <p className="max-w-[70ch] text-sm leading-relaxed">{narrative?.summary}</p>
-          <dl className="grid gap-4 sm:grid-cols-4">
-            <div><dt className="text-sm text-muted-foreground">Present sessions</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.present_sessions ?? "—"}</dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions with a confirmed load</dt><dd className="text-xl font-semibold tabular-nums"><SkillCount value={metrics?.loaded_sessions} measured={measured} /></dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions with an invocation</dt><dd className="text-xl font-semibold tabular-nums"><SkillCount value={metrics?.invoked_sessions} measured={measured} partial={coverage?.reasons.includes("invoked_not_recorded_on_some_harnesses")} /></dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions where offered</dt><dd className="text-xl font-semibold tabular-nums"><SkillCount value={metrics?.available_sessions} measured={measured} partial={coverage?.reasons.includes("available_not_recorded_on_some_harnesses")} /></dd></div>
-          </dl>
+        <EvidencePanel summary={narrative?.summary} stats={[
+          { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
+          { label: "Confirmed loads", value: <SkillCount value={metrics?.loaded_sessions} measured={measured} />, note: "Sessions where instructions entered context" },
+          { label: "Invocations", value: <SkillCount value={metrics?.invoked_sessions} measured={measured} partial={coverage?.reasons.includes("invoked_not_recorded_on_some_harnesses")} /> },
+          { label: "Offered", value: <SkillCount value={metrics?.available_sessions} measured={measured} partial={coverage?.reasons.includes("available_not_recorded_on_some_harnesses")} /> },
+        ]}>
           {measured && !!metrics?.load_attempts && <p className="text-sm text-muted-foreground">{metrics.load_attempts} load {metrics.load_attempts === 1 ? "attempt" : "attempts"} failed or had no confirmed result, and {metrics.load_attempts === 1 ? "is" : "are"} not counted as {metrics.load_attempts === 1 ? "a load" : "loads"}.</p>}
           {notRecorded.length > 0 && <p className="text-sm text-muted-foreground">The harnesses in this cohort do not record {notRecorded.join(" or ")}, so those counts are unknown rather than zero.</p>}
-          {!measured && <p className="text-sm text-muted-foreground">Skill evidence is unavailable for this period; missing measurements do not imply no use.</p>}
-        </section>
+          {!measured && <p>Skill evidence is unavailable for this period; missing measurements do not imply no use.</p>}
+        </EvidencePanel>
+        <CoveragePanel coverage={coverage}>
+          {coverage && <p>{coverage.observed_sessions} {coverage.observed_sessions === 1 ? "session" : "sessions"} had a confirmed load or an invocation. {coverage.evidence.collision_facts} ambiguous and {coverage.evidence.unmatched_facts} unmatched skill records were not counted.</p>}
+        </CoveragePanel>
         <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />
-        <section aria-label="Attribution coverage" className="space-y-3">
-          <h2 className="text-lg font-semibold">Attribution coverage</h2>
-          {coverage ? <>
-            <p className="text-sm">{coverage.projection.projection_complete_sessions} of {coverage.presence.present_sessions} present sessions processed. {coverage.observed_sessions} had a confirmed load or an invocation.</p>
-            <p className="text-sm text-muted-foreground">{coverage.evidence.collision_facts} ambiguous and {coverage.evidence.unmatched_facts} unmatched skill records could not be tied to this verified install, and are not counted.</p>
-            {coverage.reasons.length > 0 && <p className="text-sm text-muted-foreground">Gaps: {coverage.reasons.join(", ").replaceAll("_", " ")}.</p>}
-            <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-              {coverage.limitations.map((note) => <li key={note}>{note.replaceAll("_", " ")}</li>)}
-            </ul>
-          </> : <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p>}
-        </section>
     </ComponentReportFrame>
   );
 }
@@ -104,33 +95,22 @@ function HookReport({ report }: { report: InsightReport }) {
   const silentRuns = metrics?.silent_runs ?? null;
   return (
     <ComponentReportFrame report={report}>
-        <section aria-label="Evidence" className="space-y-4 border-b border-border pb-6">
-          <h2 className="text-lg font-semibold">What the data shows</h2>
-          <p className="max-w-[70ch] text-sm leading-relaxed">{narrative?.summary}</p>
-          <dl className="grid gap-4 sm:grid-cols-4">
-            <div><dt className="text-sm text-muted-foreground">Present sessions</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.present_sessions ?? "—"}</dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions where it could run</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.eligible_sessions ?? "—"}</dd></div>
-            <div><dt className="text-sm text-muted-foreground">Sessions with a recorded run</dt><dd className="text-xl font-semibold tabular-nums">{measured ? <>{metrics?.sessions_with_recorded_run}{lowerBound && <span className="block text-xs font-normal text-muted-foreground">At least; some harnesses do not record silent runs</span>}</> : notMeasured}</dd></div>
-            <div><dt className="text-sm text-muted-foreground">Failed or blocked runs</dt><dd className="text-xl font-semibold tabular-nums">{measured ? (metrics ? metrics.failures + metrics.blocks : "—") : notMeasured}</dd></div>
-          </dl>
+        <EvidencePanel summary={narrative?.summary} stats={[
+          { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
+          { label: "Could run", value: metrics?.eligible_sessions ?? "—", note: "Processed, eligible sessions" },
+          { label: "Recorded runs", value: measured ? metrics?.sessions_with_recorded_run ?? "—" : notMeasured, note: lowerBound ? "At least; silent runs may be unrecorded" : undefined },
+          { label: "Failed or blocked", value: measured ? (metrics ? metrics.failures + metrics.blocks : "—") : notMeasured },
+        ]}>
           {measured && metrics && <p className="text-sm text-muted-foreground">Recorded runs: {metrics.runs_with_output} succeeded with output, {silentRuns !== null && <>{silentRuns} succeeded silently, </>}{metrics.failures} failed, {metrics.blocks} blocked an action.</p>}
           {couldNotRun.length > 0 && <p className="text-sm text-muted-foreground">Excluded because the hook could not run: {couldNotRun.join("; ")}.</p>}
           {eligibility?.agent_unknown_sessions ? <p className="text-sm text-muted-foreground">Excluded because it is not known whether the hook could run: {eligibility.agent_unknown_sessions} subagent {eligibility.agent_unknown_sessions === 1 ? "session" : "sessions"} where neither the subagent nor its parent session recorded which agent ran.</p> : null}
           {eligibility?.version_unverified_sessions ? <p className="text-sm text-muted-foreground">Excluded because it is not known whether the hook could run: {eligibility.version_unverified_sessions} {eligibility.version_unverified_sessions === 1 ? "session was" : "sessions were"} recorded by a harness version whose hook records are not verified yet.</p> : null}
-          {!measured && <p className="text-sm text-muted-foreground">There were no processed sessions where this hook could run; missing measurements do not imply no use.</p>}
-        </section>
+          {!measured && <p>There were no processed sessions where this hook could run; missing measurements do not imply no use.</p>}
+        </EvidencePanel>
+        <CoveragePanel coverage={coverage}>
+          {coverage && <p>{coverage.observed_sessions} of {coverage.usage_rate_denominator_sessions} eligible {coverage.usage_rate_denominator_sessions === 1 ? "session" : "sessions"} had a recorded run. {coverage.evidence.collision_runs} ambiguous and {coverage.evidence.unmatched_runs} unmatched runs were not counted.</p>}
+        </CoveragePanel>
         <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />
-        <section aria-label="Attribution coverage" className="space-y-3">
-          <h2 className="text-lg font-semibold">Attribution coverage</h2>
-          {coverage ? <>
-            <p className="text-sm">{coverage.projection.projection_complete_sessions} of {coverage.presence.present_sessions} present sessions processed. {coverage.observed_sessions} of {coverage.usage_rate_denominator_sessions} sessions where it could run had a recorded run.</p>
-            <p className="text-sm text-muted-foreground">{coverage.evidence.collision_runs} ambiguous and {coverage.evidence.unmatched_runs} unmatched recorded runs could not be tied to this verified hook, and are not counted.</p>
-            {coverage.reasons.length > 0 && <p className="text-sm text-muted-foreground">Gaps: {coverage.reasons.join(", ").replaceAll("_", " ")}.</p>}
-            <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-              {coverage.limitations.map((note) => <li key={note}>{note.replaceAll("_", " ")}</li>)}
-            </ul>
-          </> : <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p>}
-        </section>
     </ComponentReportFrame>
   );
 }
@@ -146,8 +126,20 @@ function ComponentReport({ report }: { report: InsightReport }) {
   const canMeasureCalls = !!coverage && coverage.usage_rate_denominator_sessions > 0;
   return (
     <ComponentReportFrame report={report}>
-          <section aria-label="Interpretive insights" className="space-y-4 border-b border-border pb-7">
-            <h2 className="text-lg font-semibold">What the published calls suggest</h2>
+          <EvidencePanel summary={summary} stats={[
+            { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
+            { label: "Observed calls", value: canMeasureCalls ? metrics?.observed_calls ?? "—" : "Not measured" },
+            { label: "Sessions with calls", value: canMeasureCalls ? metrics?.observed_sessions ?? "—" : "Not measured" },
+            { label: "Known errors", value: canMeasureCalls ? metrics?.result_states.error ?? "—" : "Not measured", note: "Unknown results are not successes" },
+          ]}>
+            {!canMeasureCalls && <p>Attribution is unavailable for this period; missing measurements do not imply no use.</p>}
+          </EvidencePanel>
+          <CoveragePanel coverage={coverage}>
+            {coverage && <p>{coverage.observed_sessions} {coverage.observed_sessions === 1 ? "session" : "sessions"} had attributed calls. {metrics?.cohort_collision_calls ?? coverage.calls.collision_calls} collisions and {metrics?.cohort_unmatched_calls ?? coverage.calls.unmatched_calls} unmatched calls across the present-session cohort were not assigned to this MCP.</p>}
+          </CoveragePanel>
+          <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />
+          <section aria-label="Interpretive insights" className="space-y-4 rounded-lg border border-border bg-card p-5">
+            <h3 className="text-lg font-semibold">What the published calls suggest</h3>
             {!analysis ? (
               <p className="max-w-[70ch] text-sm text-muted-foreground">This report predates evidence-backed analysis. Generate a new report to assess sampled sessions.</p>
             ) : analysis.state !== "assessed" || analysis.findings.length === 0 ? (
@@ -156,46 +148,16 @@ function ComponentReport({ report }: { report: InsightReport }) {
               <ol className="space-y-5">
                 {analysis.findings.map((finding, index) => (
                   <li key={`${finding.kind}-${index}`} className="space-y-2">
-                    <p className="max-w-[70ch] text-sm leading-relaxed text-foreground">{finding.insight}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {`Interpretation of published calls · ${finding.kind.replaceAll("_", " ")}`}
-                      {` · ${finding.confidence} confidence`}
-                    </p>
+                    <p className="max-w-[70ch] text-sm leading-relaxed">{finding.insight}</p>
+                    <p className="text-xs text-muted-foreground">Interpretation of published calls · {finding.kind.replaceAll("_", " ")} · {finding.confidence} confidence</p>
                     <ul className="space-y-1 pl-4 text-xs text-muted-foreground">
-                      {finding.evidence_refs.map((ref) => (
-                        <li key={ref} className="list-disc break-words">
-                          <span className="font-medium text-foreground">{ref}</span>
-                          {analysis.evidence?.[ref] ? ` · ${analysis.evidence[ref]}` : " · Referenced excerpt unavailable"}
-                        </li>
-                      ))}
+                      {finding.evidence_refs.map((ref) => <li key={ref} className="list-disc break-words"><span className="font-medium text-foreground">{ref}</span>{analysis.evidence?.[ref] ? ` · ${analysis.evidence[ref]}` : " · Referenced excerpt unavailable"}</li>)}
                     </ul>
                   </li>
                 ))}
               </ol>
             )}
             {analysis && <p className="text-xs text-muted-foreground">Analysis considered {analysis.sampled_sessions} sampled sessions{analysis.truncated ? " (sample or excerpts truncated)" : ""}. Findings are interpretations, not cohort-wide conclusions.</p>}
-          </section>
-          <section aria-label="Evidence" className="space-y-3 border-b border-border pb-6">
-            <h2 className="text-lg font-semibold">What the data shows</h2>
-            <p className="max-w-[70ch] text-sm leading-relaxed">{summary}</p>
-            <dl className="grid gap-4 sm:grid-cols-3">
-              <div><dt className="text-sm text-muted-foreground">Present sessions</dt><dd className="text-xl font-semibold tabular-nums">{metrics?.present_sessions ?? "—"}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Observed calls</dt><dd className="text-xl font-semibold tabular-nums">{canMeasureCalls ? (metrics?.observed_calls ?? "—") : "Not measured"}</dd></div>
-              <div><dt className="text-sm text-muted-foreground">Known errors</dt><dd className="text-xl font-semibold tabular-nums">{canMeasureCalls ? (metrics?.result_states.error ?? "—") : "Not measured"}</dd></div>
-            </dl>
-            {!canMeasureCalls && <p className="text-sm text-muted-foreground">Attribution is unavailable for this period; missing measurements do not imply no use.</p>}
-          </section>
-          <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />
-          <section aria-label="Attribution coverage" className="space-y-3">
-            <h2 className="text-lg font-semibold">Attribution coverage</h2>
-            {coverage ? <>
-              <p className="text-sm">{coverage.projection.projection_complete_sessions} of {coverage.presence.present_sessions} present sessions processed. {coverage.observed_sessions} had attributed calls.</p>
-              <p className="text-sm text-muted-foreground">{metrics?.cohort_collision_calls ?? coverage.calls.collision_calls} collisions and {metrics?.cohort_unmatched_calls ?? coverage.calls.unmatched_calls} unmatched calls across the present-session cohort could not be assigned to this component or any other.</p>
-              {coverage.reasons.length > 0 && <p className="text-sm text-muted-foreground">Gaps: {coverage.reasons.join(", ").replaceAll("_", " ")}.</p>}
-              <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                {coverage.limitations.map((note) => <li key={note}>{note.replaceAll("_", " ")}</li>)}
-              </ul>
-            </> : <p className="text-sm text-muted-foreground">Coverage is unavailable for this report.</p>}
           </section>
     </ComponentReportFrame>
   );
