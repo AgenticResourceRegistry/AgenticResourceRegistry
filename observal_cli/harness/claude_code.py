@@ -46,6 +46,7 @@ class ClaudeCodeAdapter(BaseAdapter):
     home_markers = (".claude",)
     headless_binary = "claude"
     headless_task_on_stdin = True
+    caller_env_markers = ("CLAUDECODE",)
     managed_agent_profiles = ("user:agents/{name}.md", "project:.claude/agents/{name}.md")
     managed_skills = ("user:skills/{name}/SKILL.md",)
 

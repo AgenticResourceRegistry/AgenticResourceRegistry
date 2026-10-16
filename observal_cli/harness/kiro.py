@@ -136,6 +136,7 @@ class KiroAdapter(BaseAdapter):
 
     home_markers = (".kiro",)
     headless_binary = "kiro-cli"
+    caller_env_markers = ("KIRO_CLI_IS_CHILD_PROCESS", "KIRO_SESSION_ID")
     managed_agent_profiles = ("user:agents/{name}.json", "project:.kiro/agents/{name}.json")
     managed_skills = ("user:skills/{name}/SKILL.md",)
 

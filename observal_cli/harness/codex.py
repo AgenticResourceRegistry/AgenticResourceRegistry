@@ -52,6 +52,7 @@ class CodexAdapter(BaseAdapter):
 
     home_markers = (".codex",)
     headless_binary = "codex"
+    caller_env_markers = ("CODEX_THREAD_ID",)
     managed_agent_profiles = ("user:agents/{name}.toml", "project:.codex/agents/{name}.toml")
     managed_mcp_files = ("user:config.toml",)
 
