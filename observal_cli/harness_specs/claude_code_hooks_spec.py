@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Declarative hook specification for Claude Code settings.
@@ -19,31 +20,43 @@ Bump HOOKS_SPEC_VERSION whenever the hook definitions change.
 
 from __future__ import annotations
 
+import shlex
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from observal_cli.shared.utils import OBSERVAL_METADATA_KEY
 
 # Bump this when hook definitions change.
-HOOKS_SPEC_VERSION = "11"
+HOOKS_SPEC_VERSION = "12"
 
 
 # Parent of the observal_cli package directory
 _PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 
 
+def _shell_path(path: str) -> str:
+    """Quote a path for the shell Claude Code runs hooks in.
+
+    Claude Code runs hook commands through bash on every platform (Git Bash on
+    Windows), which strips the backslashes from a native Windows path, so
+    Windows paths are written with forward slashes.
+    """
+    if sys.platform == "win32":
+        path = PureWindowsPath(path).as_posix()
+    return shlex.quote(path)
+
+
 def _python_cmd() -> str:
     """Return python command with PYTHONPATH set if needed."""
+    interpreter = _shell_path(sys.executable)
     try:
         import importlib.util
 
         if importlib.util.find_spec("observal_cli") is not None:
-            return sys.executable
+            return interpreter
     except Exception:
         pass
-    if sys.platform == "win32":
-        return f'set "PYTHONPATH={_PKG_ROOT}" && {sys.executable}'
-    return f"PYTHONPATH={_PKG_ROOT} {sys.executable}"
+    return f"PYTHONPATH={_shell_path(_PKG_ROOT)} {interpreter}"
 
 
 def get_desired_hooks() -> dict[str, list[dict]]:
