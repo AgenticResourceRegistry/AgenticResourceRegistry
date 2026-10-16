@@ -270,6 +270,26 @@ async def test_bad_model_output_repairs_once_and_redacts_result(monkeypatch, rep
 
 
 @pytest.mark.asyncio
+async def test_model_with_more_findings_than_schema_allows_gets_a_bounded_repair(monkeypatch, report):
+    sample = (
+        [{"refs": ["s0-call0"], "excerpts": {"s0-call0": "search (result: unknown)"}}],
+        {"s0-call0": "search (result: unknown)"},
+        False,
+    )
+    monkeypatch.setattr(evidence, "_sample", AsyncMock(return_value=sample))
+    one = _result(report)
+    too_many = _result(report, findings=one["findings"] * 8)
+    model = AsyncMock(side_effect=[too_many, one])
+    monkeypatch.setattr(evidence, "get_call_model", lambda: model)
+
+    assert (await evidence.component_findings(report))["state"] == "assessed"
+    assert model.await_count == 2
+    assert "at most five findings" in model.await_args_list[0].args[0]
+    assert "with at most five findings" in model.await_args_list[1].args[0]
+    assert "The published search" not in model.await_args_list[1].args[0]
+
+
+@pytest.mark.asyncio
 async def test_missing_evidence_and_oversized_input_abstain(monkeypatch, report):
     model = AsyncMock()
     monkeypatch.setattr(evidence, "get_call_model", lambda: model)
@@ -307,6 +327,7 @@ async def test_prompt_states_every_rule_the_validator_enforces(monkeypatch, repo
         "never state a number of calls, sessions or users",
         "unused, never used, no use, cost, savings, saved, caused or responsible for",
         "friction only when a cited call has result:error",
+        "at most five findings",
         "result:unknown means the harness did not record",
     ):
         assert rule in prompt, rule
