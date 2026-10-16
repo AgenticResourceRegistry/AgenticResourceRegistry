@@ -25,7 +25,7 @@ from api.routes import component_activity as route
 from database import engine
 from models.insight_report import InsightReport
 from schemas.component_activity import ComponentRef
-from services.component_activity import projector
+from services.component_activity import mcp_projector
 from services.insights import component_evidence, configure_insights, generator, render_report_html
 from services.insights.component_report import generate_component_content
 from services.insights.registry_match import CatalogOffer
@@ -70,7 +70,9 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
         await _insert(
             "session_stats_agg", [{**_stats(project, user, same_id, datetime.now(UTC)), "agent_id": agent_id}]
         )
-    assert (await projector.project_session_activity(project, alice, "claude-code", same_id))["status"] == "complete"
+    assert (await mcp_projector.project_session_activity(project, alice, "claude-code", same_id))[
+        "status"
+    ] == "complete"
 
     # The API and report must consume the exact same scoped cohort and published
     # activity. Freeze the route window so it is byte-for-byte the report window.

@@ -120,7 +120,7 @@ async def test_unresolved_query_is_published_generation_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_snapshot_does_not_stop_page_and_init_fails_loudly(monkeypatch):
+async def test_failed_snapshot_does_not_stop_page(monkeypatch):
     monkeypatch.setattr(maintenance, "_layer_snapshot_page", AsyncMock(return_value=[_snapshot("p", "u", "h")]))
     monkeypatch.setattr(maintenance, "_layer_publications", AsyncMock(return_value={}))
     monkeypatch.setattr(
@@ -128,51 +128,16 @@ async def test_failed_snapshot_does_not_stop_page_and_init_fails_loudly(monkeypa
     )
     result = await maintenance.backfill_layer_components({}, batch_size=2)
     assert result["failed"] == 1 and result["next_cursor"] is None
-    job = AsyncMock(return_value=result)
-    monkeypatch.setattr(maintenance, "backfill_layer_components", job)
-    with pytest.raises(RuntimeError, match="backfill failed for 1 snapshot"):
-        await maintenance.initial_layer_component_backfill()
 
 
-@pytest.mark.asyncio
-async def test_init_continues_without_enqueue_and_counts_multiple_pages(monkeypatch):
-    job = AsyncMock(
-        side_effect=[
-            {
-                "scanned": 2,
-                "complete": 1,
-                "skipped": 1,
-                "missing": 0,
-                "failed": 0,
-                "reresolved": 0,
-                "next_cursor": ["p", "u", "h"],
-            },
-            {
-                "scanned": 1,
-                "complete": 1,
-                "skipped": 0,
-                "missing": 0,
-                "failed": 0,
-                "reresolved": 0,
-                "next_cursor": None,
-            },
-        ]
-    )
-    monkeypatch.setattr(maintenance, "backfill_layer_components", job)
-    totals = await maintenance.initial_layer_component_backfill()
-    assert totals["scanned"] == 3 and totals["complete"] == 2 and totals["skipped"] == 1
-    assert job.await_args_list[0].args == ({},)
-    assert job.await_args_list[1].kwargs == {"after": ["p", "u", "h"]}
-
-
-def test_worker_cron_and_init_invocation_after_migrations():
+def test_worker_cron_and_init_does_not_backfill_on_startup():
     from worker import WorkerSettings
 
     assert maintenance.backfill_layer_components in WorkerSettings.functions
     assert any(job.coroutine == maintenance.backfill_layer_components for job in WorkerSettings.cron_jobs)
     script = (Path(__file__).resolve().parents[1] / "docker/entrypoint.sh").read_text()
     assert script.index("python -m alembic upgrade head") < script.index("python -m services.clickhouse.migrations")
-    assert script.index("python -m services.clickhouse.migrations") < script.index("python -m jobs.maintenance")
+    assert "python -m jobs.maintenance" not in script
 
 
 @pytest.mark.asyncio

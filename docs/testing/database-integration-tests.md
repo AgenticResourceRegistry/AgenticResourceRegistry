@@ -24,7 +24,7 @@ They are **opt-in**. `make test` and CI exclude the directory, and every file al
 | `test_retention_component_cleanup.py` | Retention removes session-derived data per user and session, and keeps shared snapshots | ClickHouse `retention_proof` + PostgreSQL `retention_proof_pg` |
 | `test_user_deletion_postgres.py` | Deleted accounts become locked-out shells; concurrent deletes cannot remove the last admin | PostgreSQL `user_deletion_proof` |
 
-The Phase 2.2 to Phase 4 suites require the exact ports shown. The others accept any local port.
+The Phase 2.2 and Phase 4 suites require the exact ports shown. The Phase 2.5/Phase 3 activity and skill/hook suites default to 18123 (ClickHouse) and 15432 (PostgreSQL), but accept `OBSERVAL_CH_PHASE25_PORT` and `OBSERVAL_PG_PHASE25_PORT` for isolated containers on other local ports. Their database names, host and proof user checks remain mandatory. The remaining suites accept any local port.
 
 ## What they do not prove
 

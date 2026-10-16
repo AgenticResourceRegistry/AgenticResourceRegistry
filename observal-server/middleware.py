@@ -28,6 +28,10 @@ DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:3000"
 DEFAULT_MAX_REQUEST_SIZE_MB = "10"
 DEFAULT_MAX_SKILL_REQUEST_SIZE_MB = "10"
 DEFAULT_MAX_MIGRATION_REQUEST_SIZE_MB = "6144"
+# A snapshot contains at most 5 MiB of file content, plus bounded pins and drift.
+# Do not inherit MAX_REQUEST_SIZE_MB: operators may raise that for other routes.
+MAX_LAYER_SNAPSHOT_REQUEST_BYTES = 10 * 1024 * 1024
+LAYER_SNAPSHOT_UPLOAD_PATH = "/api/v1/layer-snapshots"
 SKILL_AUTHORING_PATHS = frozenset({"/api/v1/skills/submit", "/api/v1/skills/draft", "/api/v1/skills/folder-drafts"})
 MIGRATION_UPLOAD_PATHS = frozenset(
     {
@@ -73,11 +77,13 @@ class RequestSizeLimitMiddleware:
         max_request_size_bytes: int,
         max_migration_request_size_bytes: int,
         max_skill_request_size_bytes: int | None = None,
+        max_layer_snapshot_request_size_bytes: int = MAX_LAYER_SNAPSHOT_REQUEST_BYTES,
     ):
         self.app = app
         self.max_request_size_bytes = max_request_size_bytes
         self.max_migration_request_size_bytes = max_migration_request_size_bytes
         self.max_skill_request_size_bytes = max_skill_request_size_bytes or max_request_size_bytes
+        self.max_layer_snapshot_request_size_bytes = max_layer_snapshot_request_size_bytes
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -89,6 +95,8 @@ class RequestSizeLimitMiddleware:
         request_limit = (
             self.max_migration_request_size_bytes
             if request_path in MIGRATION_UPLOAD_PATHS
+            else self.max_layer_snapshot_request_size_bytes
+            if request_path == LAYER_SNAPSHOT_UPLOAD_PATH and scope.get("method") == "POST"
             else self.max_skill_request_size_bytes
             if request_path in SKILL_AUTHORING_PATHS
             or (request_path.startswith("/api/v1/skills/") and request_path.endswith("/draft"))

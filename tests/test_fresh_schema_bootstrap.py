@@ -115,7 +115,6 @@ def test_entrypoint_fresh_path_initializes_then_stamps_before_clickhouse(tmp_pat
         "-m services.schema_bootstrap init",
         "-m alembic stamp head",
         "-m services.clickhouse.migrations",
-        "-m jobs.maintenance",
     ]
 
 
@@ -126,7 +125,6 @@ def test_entrypoint_existing_path_upgrades_without_creating_or_stamping(tmp_path
         "-m services.schema_bootstrap state",
         "-m alembic upgrade head",
         "-m services.clickhouse.migrations",
-        "-m jobs.maintenance",
     ]
 
 

@@ -1093,8 +1093,28 @@ def skill_install(
                 remediation="Check the skill source and local filesystem, then retry.",
             )
 
+        from observal_cli.harness import ensure_loaded, get_adapter
+        from observal_cli.layer import skill_file_fingerprint
         from observal_cli.lockfile import upsert_standalone
 
+        skill_integrity = None
+        if managed_result is None and isinstance(installed_path, Path):
+            ensure_loaded()
+            active = get_adapter(harness).skill_location(scope, directory, local_name)
+            installed_file = installed_path if installed_path.name == "SKILL.md" else installed_path / "SKILL.md"
+            # Legacy delivery can write a canonical folder that is not active in
+            # this harness. Fingerprint only the file the harness actually loads.
+            if (
+                active
+                and installed_file.is_file()
+                and Path(active).is_file()
+                and installed_file.resolve() == Path(active).resolve()
+            ):
+                skill_integrity = skill_file_fingerprint(installed_file)
+            if not skill_integrity:
+                result.setdefault("warnings", []).append(
+                    "The installed skill is not at the active harness path; insight presence will remain unverified."
+                )
         try:
             if managed_result is None:
                 upsert_standalone(
@@ -1111,6 +1131,7 @@ def skill_install(
                     version_id=str(result["version_id"]) if result.get("version_id") else None,
                     digest=result.get("digest"),
                     requested_version=requested_version,
+                    skill_integrity=skill_integrity,
                 )
         except PermissionError as error:
             fail(
@@ -1381,6 +1402,9 @@ def _install_managed_folder(
             Path(bundle.skill_file_path).expanduser() if scope == "user" else Path.cwd() / bundle.skill_file_path
         ).parent.absolute()
         proof = managed_skill.receipt(bundle, target, harness, scope, registry_url=lockfile.current_registry_url())
+        # The bundle was validated against its digest; record its SKILL.md hash
+        # atomically with the ownership receipt, before the installed file can drift.
+        skill_integrity = next(f"sha256-{item.sha256}" for item in bundle.files if item.path == "SKILL.md")
         # Fetch an old reviewed version only when an existing, unreceipted
         # lock entry names it; never infer ownership from the directory name.
         old_bundle = None
@@ -1492,6 +1516,7 @@ def _install_managed_folder(
                     "version_id": bundle.version_id,
                     "digest": bundle.digest,
                     "folder_receipt": proof,
+                    "skill_integrity": skill_integrity,
                 }
             )
             if directory:

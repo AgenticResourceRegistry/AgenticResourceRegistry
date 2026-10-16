@@ -146,6 +146,10 @@ class BaseAdapter:
         """Return the safe file-manifest location needed to verify this MCP scope."""
         return None
 
+    def installed_mcp_manifest_path(self, scope: str, directory: str | None, alias: str) -> str | None:
+        """Return the actual hashed config file containing this installed MCP entry."""
+        return self.mcp_manifest_path(scope)
+
     def skill_manifest_path(self, scope: str, alias: str) -> str | None:
         """Manifest display path of the ACTIVE skill file this harness loads, if verifiable."""
         return None

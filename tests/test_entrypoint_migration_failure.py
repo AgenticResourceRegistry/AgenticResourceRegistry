@@ -26,7 +26,7 @@ def test_failed_alembic_upgrade_aborts_before_clickhouse_or_stamp(tmp_path):
     shim.write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$1\" >> '{calls}'\n"
-        'if [ "$1" = "-c" ]; then echo versioned; exit 0; fi\n'
+        'if [ "$1 $2 $3" = "-m services.schema_bootstrap state" ]; then echo existing; exit 0; fi\n'
         'if [ "$1" = "-m" ] && [ "$2" = "alembic" ]; then exit 19; fi\n'
         "exit 0\n"
     )
@@ -36,7 +36,7 @@ def test_failed_alembic_upgrade_aborts_before_clickhouse_or_stamp(tmp_path):
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, check=False)
     assert result.returncode == 1
     assert "Initialization complete" not in result.stdout
-    assert "no revision was stamped" in result.stdout
+    assert "Running database migrations on the versioned database" in result.stdout
     invocations = calls.read_text().splitlines()
     assert len(invocations) == 2
     assert invocations[1] == "-m"
@@ -66,7 +66,7 @@ def test_unversioned_existing_schema_refuses_without_upgrade(tmp_path):
     shim.write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$1\" >> '{calls}'\n"
-        'if [ "$1" = "-c" ]; then echo unversioned; exit 0; fi\n'
+        'if [ "$1 $2 $3" = "-m services.schema_bootstrap state" ]; then echo unversioned; exit 0; fi\n'
         "exit 0\n"
     )
     shim.chmod(0o755)
@@ -74,8 +74,8 @@ def test_unversioned_existing_schema_refuses_without_upgrade(tmp_path):
     script.write_text(source.replace("/app/.venv/bin/python", str(shim)))
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, check=False)
     assert result.returncode == 1
-    assert "refusing to stamp" in result.stdout
-    assert calls.read_text().splitlines() == ["-c"]
+    assert "refusing to stamp" in result.stderr
+    assert calls.read_text().splitlines() == ["-m"]
 
 
 @pytest.mark.asyncio
@@ -111,7 +111,9 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
         fresh = create_async_engine(fresh_url)
         try:
             async with fresh.connect() as conn:
-                assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "040_mcp_webhook_syncs"
+                assert (
+                    await conn.scalar(text("SELECT version_num FROM alembic_version")) == "046_component_insights_merge"
+                )
                 assert await conn.scalar(text("SELECT COUNT(*) FROM skill_versions")) == 0
                 assert await conn.scalar(text("SELECT COUNT(*) FROM agent_share_manifests")) == 0
                 assert (
@@ -146,6 +148,22 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
                     "uq_exec_dashboard_config_singleton",
                 ):
                     assert "UNIQUE INDEX" in indexes[name]
+            # Return the disposable schema to the common ancestor, then enter only
+            # the main skill-release chain before exercising its repair guards.
+            # A merged head carries a second Alembic row at intermediate revisions.
+            for operation, revision in (
+                ("downgrade", "030_agent_share_manifests"),
+                ("upgrade", "040_mcp_webhook_syncs"),
+            ):
+                prepared = subprocess.run(
+                    [sys.executable, "-m", "alembic", operation, revision],
+                    cwd=server,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                assert prepared.returncode == 0, prepared.stderr[-1500:]
             # Simulate an installation stamped by the earlier skill-only branch:
             # Alembic cannot revisit its newly inserted 029/030 parents, so
             # 037/038 must restore missing flags and share tables before use.
@@ -177,7 +195,9 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
             )
             assert repaired.returncode == 0, repaired.stderr[-1000:] + repaired.stdout[-1000:]
             async with fresh.connect() as conn:
-                assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "040_mcp_webhook_syncs"
+                assert (
+                    await conn.scalar(text("SELECT version_num FROM alembic_version")) == "046_component_insights_merge"
+                )
                 assert await conn.scalar(text("SELECT COUNT(*) FROM agent_share_items")) == 0
                 for table in recommended_tables:
                     assert (
@@ -204,8 +224,12 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
             assert downgraded.returncode == 0, downgraded.stderr[-1000:]
             async with fresh.connect() as conn:
                 assert (
-                    await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                    == "032_skill_stable_pointer_repair"
+                    await conn.scalar(
+                        text(
+                            "SELECT COUNT(*) FROM alembic_version WHERE version_num = '032_skill_stable_pointer_repair'"
+                        )
+                    )
+                    == 1
                 )
             upgraded = subprocess.run(
                 ["bash", str(script)], cwd=server, env=env, capture_output=True, text=True, check=False
@@ -213,7 +237,9 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
             assert upgraded.returncode == 0, upgraded.stderr[-1000:] + upgraded.stdout[-1000:]
             assert "Running database migrations" in upgraded.stdout
             async with fresh.connect() as conn:
-                assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "040_mcp_webhook_syncs"
+                assert (
+                    await conn.scalar(text("SELECT version_num FROM alembic_version")) == "046_component_insights_merge"
+                )
                 assert (
                     await conn.scalar(
                         text(
@@ -261,7 +287,10 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
                 assert blocked.returncode != 0
                 assert refusal in blocked.stderr, blocked.stderr[-1500:]
                 async with fresh.begin() as conn:
-                    assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "040_mcp_webhook_syncs"
+                    assert (
+                        await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                        == "046_component_insights_merge"
+                    )
                     await conn.execute(text(f"UPDATE skill_versions SET {clear} WHERE id = :id"), {"id": version_id})
             cleared = subprocess.run(
                 [sys.executable, "-m", "alembic", "downgrade", "028_agent_component_pins"],
@@ -290,7 +319,7 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
                 ["bash", str(script)], cwd=server, env=env, capture_output=True, text=True, check=False
             )
             assert failed.returncode == 1
-            assert "alembic upgrade failed" in failed.stdout
+            assert "alembic upgrade failed" in failed.stderr
             assert "Running ClickHouse migrations" not in failed.stdout
             async with fresh.connect() as conn:
                 assert (
@@ -303,7 +332,7 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
                 ["bash", str(script)], cwd=server, env=env, capture_output=True, text=True, check=False
             )
             assert interrupted.returncode == 1
-            assert "unversioned or incomplete schema" in interrupted.stdout
+            assert "refusing to stamp an unversioned or partially initialized database" in interrupted.stderr
             async with fresh.connect() as conn:
                 assert await conn.scalar(text("SELECT COUNT(*) FROM alembic_version")) == 0
         finally:

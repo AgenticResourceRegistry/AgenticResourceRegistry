@@ -33,6 +33,8 @@ from services.projection_generation import next_projection_generation
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
 
+    from .projector import SourceSnapshot
+
 from .projector import (
     ProjectionRaceError,
     _canonical_row,
@@ -62,6 +64,10 @@ class EvidenceSpec:
     match: Callable[[Any, Mapping[str, Sequence[dict]], Mapping[int, str]], Any]
     unknown_results: Callable[[Any], int]
     matcher_version: int
+    candidate_count: Callable[[Any], int] | None = None
+    default_evidence_kind: str = ""
+    decorate_result: Callable[[dict, str], dict] | None = None
+    race_message: str = ""
     # Optional: complete the extracted session context from other scoped sessions
     # (extraction, project, user, harness, session) -> extraction. It runs only once
     # the session will be matched, and may only add context, never facts.
@@ -81,7 +87,14 @@ def _row_time(fact_time: datetime | None, source_row: dict) -> str:
 
 
 async def project_session_evidence(
-    spec: EvidenceSpec, project_id: str, user_id: str, harness: str, session_id: str, *, force: bool = False
+    spec: EvidenceSpec,
+    project_id: str,
+    user_id: str,
+    harness: str,
+    session_id: str,
+    *,
+    force: bool = False,
+    source_snapshot: SourceSnapshot | None = None,
 ) -> dict:
     """Project one scoped session's evidence of one type; only an acknowledged attempt is visible."""
     version = publication_version()
@@ -91,7 +104,9 @@ async def project_session_evidence(
     if HARNESS_REGISTRY.get(harness, {}).get(spec.registry_key) is None:
         return {"status": "unsupported", "publication_version": version}
     params = _params(project_id, user_id, harness, session_id)
-    source = await _source_rows(params)
+    if source_snapshot is not None and source_snapshot.params != params:
+        raise ValueError("Shared source must match the fully scoped session key")
+    source = await (source_snapshot.load() if source_snapshot is not None else _source_rows(params))
     if source is None:
         return {"status": "source_too_large", "publication_version": version}
     revision = _source_revision(source)
@@ -100,9 +115,10 @@ async def project_session_evidence(
     extracted = spec.extract(harness, source)
     if extracted.status != "supported":
         return {"status": "unsupported", "publication_version": version}
+    count = spec.candidate_count(extracted) if spec.candidate_count is not None else len(extracted.evidence)
     unattributed = {
-        "candidate_count": len(extracted.evidence),
-        "unmatched_count": len(extracted.evidence),
+        "candidate_count": count,
+        "unmatched_count": count,
         "unknown_result_count": spec.unknown_results(extracted),
     }
     hashes = [row.get("layer_hash") or "" for row in source]
@@ -119,7 +135,7 @@ async def project_session_evidence(
         if status == "pending_mapping" and await _index_layer(project_id, user_id, layer_hash):
             status, generation, mapped = await _mapping(project_id, user_id, layer_hash, harness, kind)
         if status == "identity_conflict":
-            return await _publish_unattributable(params, version, revision, unattributed, layer_hash, kind)
+            return await _publish_unattributable(params, version, revision, source, unattributed, layer_hash, kind)
         if status != "complete":
             return {"status": status, "publication_version": version, "layer_hash": layer_hash, **unattributed}
         candidates[layer_hash] = mapped
@@ -138,6 +154,7 @@ async def project_session_evidence(
         rows.append(
             {
                 **match,
+                **({"evidence_kind": spec.default_evidence_kind} if spec.default_evidence_kind else {}),
                 "project_id": project_id,
                 "user_id": user_id,
                 "harness": harness,
@@ -173,12 +190,13 @@ async def project_session_evidence(
         if sorted(map(_canonical_row, old), key=ordering) == sorted(
             map(_canonical_row, rows), key=ordering
         ) and await _inputs_unchanged(params, revision, source, generations, project_id, user_id, harness, kind):
-            return {
+            result = {
                 "status": "already_complete",
                 "generation": int(previous["projection_generation"]),
                 "publication_version": version,
                 **counts,
             }
+            return spec.decorate_result(result, revision) if spec.decorate_result is not None else result
     generation = await next_projection_generation()
     try:
         if rows:
@@ -191,7 +209,9 @@ async def project_session_evidence(
                 data="\n".join(json.dumps(row | {"projection_generation": generation}) for row in rows),
             )
         if not await _inputs_unchanged(params, revision, source, generations, project_id, user_id, harness, kind):
-            raise ProjectionRaceError(f"Canonical source or published {kind} mapping changed during publication")
+            raise ProjectionRaceError(
+                spec.race_message or f"Canonical source or published {kind} mapping changed during publication"
+            )
         await _marker(params, version, generation, "complete", revision, counts, kind)
     except Exception:
         try:
@@ -199,4 +219,5 @@ async def project_session_evidence(
         except Exception as marker_error:
             optic.warning("failed to publish {} evidence failure: {}", kind, type(marker_error).__name__)
         raise
-    return {"status": "complete", "generation": generation, "publication_version": version, **counts}
+    result = {"status": "complete", "generation": generation, "publication_version": version, **counts}
+    return spec.decorate_result(result, revision) if spec.decorate_result is not None else result

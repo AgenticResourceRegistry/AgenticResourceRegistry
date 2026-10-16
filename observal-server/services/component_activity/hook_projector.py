@@ -18,6 +18,7 @@ anything unreadable, missing or disagreeing leaves the agent unknown.
 from __future__ import annotations
 
 import dataclasses
+from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
@@ -26,6 +27,9 @@ from services.session_parsers.hook_evidence import HookEvidenceExtraction, extra
 from .evidence_projector import EvidenceSpec, project_session_evidence
 from .hook_matcher import HOOK_MATCHER_VERSION, match_hook_evidence
 from .projector import _params, _query
+
+if TYPE_CHECKING:
+    from .projector import SourceSnapshot
 
 # Parent records that may mention one subagent id or its spawn calls. A real
 # session has a handful; more is not a session this lookup can read safely.
@@ -109,7 +113,15 @@ HOOK_SPEC = EvidenceSpec(
 
 
 async def project_session_hook_evidence(
-    project_id: str, user_id: str, harness: str, session_id: str, *, force: bool = False
+    project_id: str,
+    user_id: str,
+    harness: str,
+    session_id: str,
+    *,
+    force: bool = False,
+    source_snapshot: SourceSnapshot | None = None,
 ) -> dict:
     """Project one scoped session's hook evidence; only an acknowledged attempt is visible."""
-    return await project_session_evidence(HOOK_SPEC, project_id, user_id, harness, session_id, force=force)
+    return await project_session_evidence(
+        HOOK_SPEC, project_id, user_id, harness, session_id, force=force, source_snapshot=source_snapshot
+    )

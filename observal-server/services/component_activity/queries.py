@@ -33,9 +33,13 @@ from services.layer_components.queries import (
 
 MAX_REFERENCES_PER_SESSION = 20
 
-# Latest complete, non-failed MCP generation per scoped session at the current
-# version. Skill publications (evidence_type = 'skill') never count here.
-_LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_generation) AS generation,
+
+def latest_publication_sql(evidence_type: str) -> str:
+    """Latest complete, never-failed publication per scoped session for one evidence type."""
+    if evidence_type not in ("mcp", "skill", "hook"):
+        raise ValueError("unknown evidence type")
+    return (
+        """SELECT user_id, harness, session_id, max(projection_generation) AS generation,
            argMax(source_revision, projection_generation) AS source_revision,
            argMax(candidate_count, projection_generation) AS candidate_count,
            argMax(attributed_count, projection_generation) AS attributed_count,
@@ -44,21 +48,90 @@ _LATEST_PUBLICATION = """SELECT user_id, harness, session_id, max(projection_gen
            argMax(unknown_result_count, projection_generation) AS unknown_result_count
     FROM (
         SELECT user_id, harness, session_id, projection_generation,
-               any(source_revision) AS source_revision, max(candidate_count) AS candidate_count, max(attributed_count) AS attributed_count,
-               max(collision_count) AS collision_count, max(unmatched_count) AS unmatched_count,
-               max(unknown_result_count) AS unknown_result_count
+               any(source_revision) AS source_revision, max(candidate_count) AS candidate_count,
+               max(attributed_count) AS attributed_count, max(collision_count) AS collision_count,
+               max(unmatched_count) AS unmatched_count, max(unknown_result_count) AS unknown_result_count
         FROM component_activity_publications
         WHERE project_id = {project_id:String} AND projection_version = {projection_version:UInt16}
-          AND evidence_type = 'mcp'
+          AND evidence_type = '"""
+        + evidence_type
+        + """'
         GROUP BY user_id, harness, session_id, projection_generation
         HAVING countIf(status = 'complete') > 0 AND countIf(status = 'failed') = 0
     ) GROUP BY user_id, harness, session_id"""
+    )
 
-_MARKER_STATES = """SELECT user_id, harness, session_id,
+
+def marker_states_sql(evidence_type: str) -> str:
+    """Failed current markers and complete markers of another version, per scoped session."""
+    if evidence_type not in ("mcp", "skill", "hook"):
+        raise ValueError("unknown evidence type")
+    return (
+        """SELECT user_id, harness, session_id,
            countIf(status = 'failed' AND projection_version = {projection_version:UInt16}) AS failed_markers,
            countIf(status = 'complete' AND projection_version != {projection_version:UInt16}) AS other_complete
-    FROM component_activity_publications WHERE project_id = {project_id:String} AND evidence_type = 'mcp'
+    FROM component_activity_publications WHERE project_id = {project_id:String}
+      AND evidence_type = '"""
+        + evidence_type
+        + """'
     GROUP BY user_id, harness, session_id"""
+    )
+
+
+def projection_state_sql(supported: str = "{supported:Array(String)}") -> tuple[str, str]:
+    """(source_state, projection_state) expressions over c (cohort), s (source), p (latest), m (markers)."""
+    source = f"""multiIf(NOT has({supported}, c.harness), 'unsupported',
+                   s.records = 0, 'source_missing',
+                   s.records > {{max_source_records:UInt32}} OR s.bytes > {{max_source_bytes:UInt64}}, 'source_too_large',
+                   s.unavailable_records > 0, 'source_unavailable',
+                   s.max_offset + 1 != s.records OR s.invalid_hash_records > 0, 'source_incomplete',
+                   'available')"""
+    projection = f"""multiIf(NOT has({supported}, c.harness), 'unsupported',
+                   s.records = 0, 'source_missing',
+                   s.records > {{max_source_records:UInt32}} OR s.bytes > {{max_source_bytes:UInt64}}, 'source_too_large',
+                   s.unavailable_records > 0, 'source_unavailable',
+                   s.max_offset + 1 != s.records OR s.invalid_hash_records > 0, 'source_incomplete',
+                   p.generation > 0 AND s.revision != p.source_revision, 'stale',
+                   p.generation > 0, 'complete',
+                   m.failed_markers > 0, 'failed',
+                   m.other_complete > 0, 'stale',
+                   'pending')"""
+    return source, projection
+
+
+def cohort_session_joins_sql(publication: str, markers: str, evidence: str, alias: str) -> str:
+    """One scoped presence cohort, joined to source, publication and type-specific rows.
+
+    The caller supplies only its evidence columns and predicate. Keep the
+    publication and source joins identical across MCP, skill and hook reads.
+    """
+    if alias not in ("a", "e"):
+        raise ValueError("unknown evidence alias")
+    return (
+        """    FROM ("""
+        + PRESENCE_COHORT_SQL
+        + """) AS c
+    LEFT JOIN ("""
+        + publication
+        + """) AS p ON c.user_id = p.user_id AND c.harness = p.harness AND c.session_id = p.session_id
+    LEFT JOIN ("""
+        + markers
+        + """) AS m ON c.user_id = m.user_id AND c.harness = m.harness AND c.session_id = m.session_id
+    LEFT JOIN ("""
+        + _SOURCE_STATES
+        + """) AS s ON c.user_id = s.user_id AND c.harness = s.harness AND c.session_id = s.session_id
+    LEFT JOIN ("""
+        + evidence
+        + """) AS """
+        + alias
+        + f" ON c.user_id = {alias}.user_id AND c.harness = {alias}.harness AND c.session_id = {alias}.session_id"
+    )
+
+
+# All evidence types use the same published-generation selection rules.
+_LATEST_PUBLICATION = latest_publication_sql("mcp")
+_MARKER_STATES = marker_states_sql("mcp")
+_SOURCE_STATE, _PROJECTION_STATE = projection_state_sql()
 
 _COMPONENT_ACTIVITY = (
     """SELECT a.user_id AS user_id, a.harness AS harness, a.session_id AS session_id,
@@ -101,42 +174,19 @@ _SESSIONS = (
     """SELECT c.user_id AS user_id, c.harness AS harness, c.session_id AS session_id,
            c.last_event_time AS last_event_time,
            has({supported:Array(String)}, c.harness) AS supported,
-           multiIf(NOT has({supported:Array(String)}, c.harness), 'unsupported',
-                   s.records = 0, 'source_missing',
-                   s.records > {max_source_records:UInt32} OR s.bytes > {max_source_bytes:UInt64}, 'source_too_large',
-                   s.unavailable_records > 0, 'source_unavailable',
-                   s.max_offset + 1 != s.records OR s.invalid_hash_records > 0, 'source_incomplete',
-                   'available') AS source_state,
-           multiIf(NOT has({supported:Array(String)}, c.harness), 'unsupported',
-                   s.records = 0, 'source_missing',
-                   s.records > {max_source_records:UInt32} OR s.bytes > {max_source_bytes:UInt64}, 'source_too_large',
-                   s.unavailable_records > 0, 'source_unavailable',
-                   s.max_offset + 1 != s.records OR s.invalid_hash_records > 0, 'source_incomplete',
-                   p.generation > 0 AND s.revision != p.source_revision, 'stale',
-                   p.generation > 0, 'complete',
-                   m.failed_markers > 0, 'failed',
-                   m.other_complete > 0, 'stale',
-                   'pending') AS projection_state,
+           """
+    + _SOURCE_STATE
+    + """ AS source_state,
+           """
+    + _PROJECTION_STATE
+    + """ AS projection_state,
            p.candidate_count AS candidate_count, p.attributed_count AS attributed_count,
            p.collision_count AS collision_count, p.unmatched_count AS unmatched_count,
            p.unknown_result_count AS unknown_result_count,
            a.calls AS calls, a.successes AS successes, a.errors AS errors, a.unknowns AS unknowns,
            a.refs AS refs
-    FROM ("""
-    + PRESENCE_COHORT_SQL
-    + """) AS c
-    LEFT JOIN ("""
-    + _LATEST_PUBLICATION
-    + """) AS p ON c.user_id = p.user_id AND c.harness = p.harness AND c.session_id = p.session_id
-    LEFT JOIN ("""
-    + _MARKER_STATES
-    + """) AS m ON c.user_id = m.user_id AND c.harness = m.harness AND c.session_id = m.session_id
-    LEFT JOIN ("""
-    + _SOURCE_STATES
-    + """) AS s ON c.user_id = s.user_id AND c.harness = s.harness AND c.session_id = s.session_id
-    LEFT JOIN ("""
-    + _COMPONENT_ACTIVITY
-    + """) AS a ON c.user_id = a.user_id AND c.harness = a.harness AND c.session_id = a.session_id"""
+"""
+    + cohort_session_joins_sql(_LATEST_PUBLICATION, _MARKER_STATES, _COMPONENT_ACTIVITY, "a")
 )
 
 _SUMMARY = (

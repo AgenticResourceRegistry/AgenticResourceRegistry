@@ -66,6 +66,83 @@ def test_v2_hash_follows_byte_contract_and_is_order_independent():
         )
 
 
+def test_claude_local_mcp_pull_reads_private_project_registration_and_hashed_manifest(monkeypatch, tmp_path):
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    home, project = tmp_path / "home", tmp_path / "project"
+    home.mkdir()
+    project.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(layer, "_detect_active_harnesses", lambda: ["claude-code"])
+    entry = {"command": "inert", "args": ["fixture"], "env": {"TOKEN": "secret"}}
+    local = home / ".claude.json"
+    local.write_text(json.dumps({"projects": {str(project.resolve()): {"mcpServers": {"probe": entry}}}}))
+    adapter = get_adapter("claude-code")
+    assert adapter.prepare_mcp_setup_command(
+        ["claude", "mcp", "add", "--scope", "local", "probe", "--", "inert"], "project"
+    ) == ["claude", "mcp", "add", "--scope", "local", "probe", "--", "inert"]
+    status, fingerprint = layer.verify_installed_mcp("claude-code", "project", str(project), "probe")
+    assert (status, fingerprint) == ("verified", layer.mcp_entry_fingerprint(entry))
+    assert adapter.installed_mcp_manifest_path("project", str(project), "probe") == "user:.claude.json"
+    lock = {
+        "registries": {
+            "https://fixture.invalid": {
+                "harnesses": {
+                    "claude-code": {
+                        "agents": [
+                            {
+                                "id": SECOND,
+                                "name": "Agent",
+                                "version": "1.0",
+                                "scope": "project",
+                                "directory": str(project),
+                                "components": [
+                                    {
+                                        "type": "mcp",
+                                        "id": FIRST,
+                                        "name": "Probe",
+                                        "version": "1.0",
+                                        "scope": "project",
+                                        "directory": str(project),
+                                        "local_name": "probe",
+                                        "mcp_integrity": fingerprint,
+                                    },
+                                ],
+                            }
+                        ],
+                        "standalone": [],
+                    }
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(lockfile, "read_registry_lockfile", lambda: ({}, lock["registries"]["https://fixture.invalid"]))
+    payload = layer.build_upload_payload(project_dir=str(project))
+    assert payload["drift"]["mcp_verifications"][0]["status"] == "verified"
+    assert payload["drift"]["mcp_verifications"][0]["parent_agent_id"] == SECOND
+    assert next(f for f in payload["harnesses"]["claude-code"] if f["path"] == "user:.claude.json")["content"] == ""
+    entry["command"] = "edited"
+    local.write_text(json.dumps({"projects": {str(project.resolve()): {"mcpServers": {"probe": entry}}}}))
+    assert layer.build_upload_payload(project_dir=str(project))["drift"]["mcp_verifications"][0]["status"] == "drifted"
+    local.write_text(json.dumps({"projects": {str(project.resolve()): {"mcpServers": {}}}}))
+    assert layer.verify_installed_mcp("claude-code", "project", str(project), "probe")[0] == "missing"
+    # A readable entry is not enough if the shared file exceeds the hash cap.
+    entry["command"] = "inert"
+    local.write_text(
+        json.dumps(
+            {
+                "projects": {str(project.resolve()): {"mcpServers": {"probe": entry}}},
+                "padding": "x" * layer.MAX_FILE_SIZE,
+            }
+        )
+    )
+    assert (
+        layer.build_upload_payload(project_dir=str(project))["drift"]["mcp_verifications"][0]["status"] == "unverified"
+    )
+
+
 def test_genuine_project_mcp_installs_preserve_distinct_aliases_and_detect_drift(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()

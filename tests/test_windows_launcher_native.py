@@ -56,7 +56,7 @@ def test_claude_mcp_registration_starts_a_windows_cmd_shim(tmp_path, monkeypatch
     shim.write_text("@echo off\r\necho CLAUDE_SETUP_OK\r\n", encoding="utf-8")
     monkeypatch.setattr(shutil, "which", lambda name: str(shim) if name == "claude.cmd" else None)
     prepared = ClaudeCodeAdapter().prepare_mcp_setup_command(["claude", "mcp", "add", "srv"], "project")
-    assert prepared == [str(shim), "mcp", "add", "--scope", "project", "srv"]
+    assert prepared == [str(shim), "mcp", "add", "--scope", "local", "srv"]
     result = subprocess.run(prepared, cwd=tmp_path, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert "CLAUDE_SETUP_OK" in result.stdout
