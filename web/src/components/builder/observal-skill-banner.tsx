@@ -3,7 +3,7 @@
 
 import { useState, useSyncExternalStore } from "react";
 import { Link } from "@tanstack/react-router";
-import { Lightbulb, X } from "lucide-react";
+import { ArrowUpRight, Info } from "lucide-react";
 
 const DISMISSED_KEY = "observal_builder_skill_banner_dismissed";
 
@@ -39,36 +39,36 @@ export function ObservalSkillBanner() {
   return (
     <section
       aria-labelledby="observal-skill-recommendation-title"
-      className="mb-4 flex items-start gap-3 rounded-lg border border-info/20 bg-info/5 px-4 py-3"
+      className="mb-4 rounded-xl bg-card px-5 py-4 shadow-sm"
     >
-      <Lightbulb aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-info" />
-      <div className="min-w-0 flex-1 space-y-1 text-sm">
-        <h2 id="observal-skill-recommendation-title" className="font-medium text-foreground">
-          Recommended: create agents in your harness
-        </h2>
-        <p className="text-muted-foreground">
-          Let your harness use the Observal skill to create agents directly. Try:{" "}
-          <span className="font-medium text-foreground">“Create an agent that uses the GitHub MCP.”</span>
-        </p>
-        <p className="text-muted-foreground">
-          <Link
-            to="/wiki"
-            search={{ doc: "getting-started/observal-skill.md" }}
-            className="rounded-sm text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            Learn about the Observal skill
-          </Link>
-          {" "}You can also continue with the manual Builder below.
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+        <div className="min-w-0 flex-1">
+          <h2 id="observal-skill-recommendation-title" className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Info aria-hidden="true" className="h-4 w-4 shrink-0 text-info" />
+            Build your Agent File in your harness
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Ask your coding assistant to use the Observal skill to create an agent. Or keep using the builder below.
+          </p>
+        </div>
+        <Link
+          to="/wiki"
+          search={{ doc: "getting-started/observal-skill.md" }}
+          className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-md text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring sm:self-auto"
+        >
+          How to use the skill
+          <ArrowUpRight aria-hidden="true" className="h-3.5 w-3.5" />
+        </Link>
       </div>
-      <button
-        type="button"
-        onClick={dismiss}
-        aria-label="Dismiss Observal skill recommendation"
-        className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        <X aria-hidden="true" className="h-4 w-4" />
-      </button>
+      <div className="mt-3 border-t border-border pt-2">
+        <button
+          type="button"
+          onClick={dismiss}
+          className="rounded-md py-1 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Don’t show this again
+        </button>
+      </div>
     </section>
   );
 }

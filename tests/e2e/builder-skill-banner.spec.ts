@@ -4,7 +4,7 @@
 import { test, expect } from "@playwright/test";
 import { API_BASE, getAccessToken, loginToWebUI, waitForAPI } from "./helpers";
 
-const bannerName = "Recommended: create agents in your harness";
+const bannerName = "Build your Agent File in your harness";
 const dismissalKey = "observal_builder_skill_banner_dismissed";
 
 test.describe("Builder skill recommendation", () => {
@@ -53,10 +53,10 @@ test.describe("Builder skill recommendation", () => {
     await page.goto("/agents/builder");
     const banner = page.getByRole("region", { name: bannerName });
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("Create an agent that uses the GitHub MCP.");
+    await expect(banner).toContainText("Ask your coding assistant to use the Observal skill to create an agent.");
     await expect(page.getByRole("button", { name: "Continue to behavior" })).toBeEnabled();
     await page.screenshot({ path: testInfo.outputPath("create-desktop.png"), fullPage: true });
-    const link = banner.getByRole("link", { name: "Learn about the Observal skill" });
+    const link = banner.getByRole("link", { name: "How to use the skill" });
     await link.focus();
     await expect(link).toBeFocused();
     await page.keyboard.press("Enter");
@@ -65,13 +65,36 @@ test.describe("Builder skill recommendation", () => {
     await expect(page.getByRole("heading", { name: "Ask for an agent", exact: true })).toBeVisible();
   });
 
+  test("empty preview follows the name and description fields", async ({ page }, testInfo) => {
+    await page.goto("/agents/builder");
+    const preview = page.locator("aside");
+    const name = page.getByPlaceholder("e.g. code-reviewer", { exact: true });
+    const description = page.getByPlaceholder("e.g. Reviews pull requests for correctness and security.");
+
+    await expect(preview.getByText("Agent Name", { exact: true })).toBeVisible();
+    await expect(preview.getByText(/\/<agent-name> · v1\.0\.0/)).toBeVisible();
+    await expect(preview.getByText("Add a description to preview it here.")).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("empty-preview-desktop.png"), fullPage: true });
+    await name.fill("review-assistant");
+    await description.fill("Reviews pull requests for security issues.");
+    await expect(preview.getByText("review-assistant", { exact: true })).toBeVisible();
+    await expect(preview.getByText(/\/review-assistant · v1\.0\.0/)).toBeVisible();
+    await expect(preview.getByText("Reviews pull requests for security issues.")).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: testInfo.outputPath("filled-preview-mobile.png"), fullPage: true });
+    await name.clear();
+    await description.clear();
+    await expect(preview.getByText("Agent Name", { exact: true })).toBeVisible();
+    await expect(preview.getByText("Add a description to preview it here.")).toBeVisible();
+  });
+
   test("keyboard dismissal persists across reload and edit visits without changing form state", async ({ page }, testInfo) => {
     await page.goto("/agents/builder");
-    const name = page.getByPlaceholder("migration-guide", { exact: true });
+    const name = page.getByPlaceholder("e.g. code-reviewer", { exact: true });
     await name.fill("banner-example");
     const steps = page.getByRole("button", { name: /Identity Name and ownership/ }).locator("..");
     const before = await steps.boundingBox();
-    const dismiss = page.getByRole("button", { name: "Dismiss Observal skill recommendation" });
+    const dismiss = page.getByRole("button", { name: "Don’t show this again" });
     await dismiss.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("region", { name: bannerName })).toBeHidden();
@@ -93,7 +116,7 @@ test.describe("Builder skill recommendation", () => {
     test(`shown on ${mode} without blocking navigation`, async ({ page }, testInfo) => {
       await page.goto(`/agents/builder?${mode}=${agentId}`);
       await expect(page.getByRole("region", { name: bannerName })).toBeVisible();
-      await expect(page.getByPlaceholder("migration-guide", { exact: true })).toHaveValue(/banner-test-/);
+      await expect(page.getByPlaceholder("e.g. code-reviewer", { exact: true })).toHaveValue(/banner-test-/);
       await page.screenshot({ path: testInfo.outputPath(`${mode}-desktop.png`), fullPage: true });
       await page.getByRole("button", { name: "Continue to behavior" }).click();
       await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();
@@ -110,7 +133,7 @@ test.describe("Builder skill recommendation", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.getByRole("button", { name: "Discard", exact: true }).click();
     await expect(page.getByRole("region", { name: bannerName })).toBeVisible();
-    await page.getByRole("button", { name: "Dismiss Observal skill recommendation" }).click();
+    await page.getByRole("button", { name: "Don’t show this again" }).click();
     await page.getByRole("button", { name: "Continue to behavior" }).click();
     await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();
   });
@@ -125,7 +148,7 @@ test.describe("Builder skill recommendation", () => {
     });
     await page.goto("/agents/builder");
     await expect(page.getByRole("region", { name: bannerName })).toBeVisible();
-    await page.getByRole("button", { name: "Dismiss Observal skill recommendation" }).click();
+    await page.getByRole("button", { name: "Don’t show this again" }).click();
     await expect(page.getByRole("region", { name: bannerName })).toBeHidden();
     await page.getByRole("button", { name: "Continue to behavior" }).click();
     await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();

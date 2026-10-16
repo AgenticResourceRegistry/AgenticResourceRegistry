@@ -808,7 +808,7 @@ function IdentityStage(props: {
               props.setName(slugged);
               props.setNameError(slugged && !isValidAgentName(slugged) ? AGENT_NAME_ERROR : "");
             }}
-            placeholder="migration-guide"
+            placeholder="e.g. code-reviewer"
             disabled={props.isEditMode}
           />
           {props.nameError && <p className="text-2xs text-destructive">{props.nameError}</p>}
@@ -819,7 +819,7 @@ function IdentityStage(props: {
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label className="text-2xs font-medium">Description</Label>
-          <Textarea value={props.description} onChange={(e) => props.setDescription(e.target.value)} placeholder="Plans safe, reversible database and infrastructure migrations." rows={3} className="resize-y" />
+          <Textarea value={props.description} onChange={(e) => props.setDescription(e.target.value)} placeholder="e.g. Reviews pull requests for correctness and security." rows={3} className="resize-y" />
         </div>
         <div className="space-y-1.5">
           <Label className="text-2xs font-medium">Publish to</Label>
@@ -864,7 +864,7 @@ function IdentityStage(props: {
       </div>
 
       <div className="mt-4 rounded-[11px] bg-surface-raised p-3.5 text-2xs text-muted-foreground">
-        Install identity preview: <span className="font-mono">observal agent pull {props.namespace}/{props.name || "migration-guide"}</span>
+        Install identity preview: <span className="font-mono">observal agent pull {props.namespace}/{props.name || "<agent-name>"}</span>
       </div>
     </section>
   );
@@ -1194,15 +1194,15 @@ function SummaryPanel(props: {
         <div className="flex items-center gap-3">
           <EntityGlyph type="agent" size="md" />
           <div>
-            <div className="text-base font-semibold">{props.name || "migration-guide"}</div>
+            <div className="text-base font-semibold">{props.name || "Agent Name"}</div>
             <div className="font-mono text-[10px] text-muted-foreground">
-              {props.namespace}/{props.name || "migration-guide"} · v{props.version}
+              {props.namespace}/{props.name || "<agent-name>"} · v{props.version}
             </div>
           </div>
         </div>
 
         <p className="mt-3 text-2xs text-muted-foreground">
-          {props.description || "Plans safe, reversible database and infrastructure migrations."}
+          {props.description || "Add a description to preview it here."}
         </p>
 
         {/* Settings rows */}
