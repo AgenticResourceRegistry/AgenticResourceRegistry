@@ -8,6 +8,7 @@ import { ArrowRight, CheckCircle2, Eye, EyeOff, Loader2, ShieldCheck, AlertCircl
 import { toast } from "sonner";
 import { auth, setTokens, setUserRole, setUserName, setUserEmail, setUserUsername, setUserAvatar } from "@/lib/api";
 import { safeNext } from "@/lib/safe-next";
+import { isValidNamespace } from "@/lib/registry-name";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,7 @@ function RegisterContent() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
+  const [usernameTouched, setUsernameTouched] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -45,6 +47,7 @@ function RegisterContent() {
   const [loading, setLoading] = useState(false);
   const passwordStrong = passwordIsStrong(password);
   const passwordsMatch = password === confirmPassword;
+  const usernameInvalid = !!username.trim() && !isValidNamespace(username);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -55,6 +58,8 @@ function RegisterContent() {
 
   async function handleRegister() {
     setError("");
+    setUsernameTouched(true);
+    if (usernameInvalid) return;
     if (password !== confirmPassword) {
       setError("Passwords do not match");
       return;
@@ -69,7 +74,7 @@ function RegisterContent() {
       const res = await auth.register({
         email,
         name,
-        username: username.trim() || undefined,
+        username: username.trim().toLowerCase() || undefined,
         password,
       });
       setTokens(res.access_token, res.refresh_token);
@@ -182,7 +187,23 @@ function RegisterContent() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="username">Username <span className="text-muted-foreground">optional</span></Label>
-                <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="ada-lovelace" />
+                <Input
+                  id="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  onBlur={() => setUsernameTouched(true)}
+                  placeholder="ada-lovelace"
+                  aria-invalid={usernameTouched && usernameInvalid}
+                  aria-describedby={usernameTouched && usernameInvalid ? "username-hint username-error" : "username-hint"}
+                />
+                <p id="username-hint" className="text-xs text-muted-foreground">
+                  3–32 letters, numbers, hyphens or dots. Uppercase becomes lowercase. Start and end with a letter or number. No consecutive dots.
+                </p>
+                {usernameTouched && usernameInvalid && (
+                  <p id="username-error" role="alert" className="text-xs text-destructive">
+                    Enter a valid username using the characters shown above (no underscores).
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>

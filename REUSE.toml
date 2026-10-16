@@ -415,3 +415,8 @@ path = [
 ]
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "tests/e2e/screenshots/username-*.png"
+SPDX-FileCopyrightText = "2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
