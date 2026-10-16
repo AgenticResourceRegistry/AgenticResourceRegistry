@@ -32,7 +32,7 @@ from tests.integration_clickhouse.test_phase25_activity import (
 
 import services.clickhouse.client as clickhouse
 from database import engine
-from services.component_activity import projector, queries
+from services.component_activity import mcp_projector, projector, queries
 from services.projection_generation import next_projection_generation
 
 _URL = os.getenv("OBSERVAL_CH_PHASE25_URL")
@@ -45,9 +45,11 @@ def _isolated_databases_only():
         pytest.skip("isolated activity proof not configured")
     target = urlparse(_URL)
     pg = urlparse(os.environ.get("DATABASE_URL", ""))
-    assert target.hostname == "127.0.0.1" and target.port == 18123 and target.path == "/observal_phase22_ci"
-    assert clickhouse.CLICKHOUSE_DB == "observal_phase22_ci" and clickhouse.CLICKHOUSE_USER == "proof"
-    assert pg.hostname == "127.0.0.1" and pg.port == 15432 and pg.path == "/observal_phase14_ci"
+    assert target.hostname == "127.0.0.1" and target.port == int(os.getenv("OBSERVAL_CH_PHASE25_PORT", "18123"))
+    assert target.path == "/observal_phase22_ci" and clickhouse.CLICKHOUSE_DB == "observal_phase22_ci"
+    assert clickhouse.CLICKHOUSE_USER == "proof"
+    assert pg.hostname == "127.0.0.1" and pg.port == int(os.getenv("OBSERVAL_PG_PHASE25_PORT", "15432"))
+    assert pg.path == "/observal_phase14_ci"
 
 
 @pytest.fixture(autouse=True)
@@ -141,7 +143,7 @@ async def test_fixture_counts_match_projection_and_coverage_isolates_projects_an
             _stats(project, owner, "pi-only-session", when, harness="pi"),
         ],
     )
-    projected = await projector.project_session_activity(project, owner, "claude-code", session)
+    projected = await mcp_projector.project_session_activity(project, owner, "claude-code", session)
     assert projected["status"] == "complete" and projected["attributed_count"] == 6
     await _insert(
         "session_capabilities",
@@ -161,7 +163,7 @@ async def test_fixture_counts_match_projection_and_coverage_isolates_projects_an
             for version, mode in (("1.0.0", "context"), ("2.0.0", "next-session"))
         ],
     )
-    assert (await projector.project_session_activity(other_project, owner, "claude-code", session))[
+    assert (await mcp_projector.project_session_activity(other_project, owner, "claude-code", session))[
         "status"
     ] == "complete"
 
@@ -328,6 +330,53 @@ async def test_latency_on_synthetic_isolated_dataset(capsys):
             f"\nphase3 latency ({count} present sessions): summary median={statistics.median(summary_ms):.0f}ms "
             f"max={max(summary_ms):.0f}ms; sessions page(100) median={statistics.median(page_ms):.0f}ms "
             f"max={max(page_ms):.0f}ms"
+        )
+
+
+@pytest.mark.asyncio
+async def test_latest_generation_query_with_ten_historical_generations(capsys):
+    """Measure retained marker growth before adding a visibility-sensitive pointer table."""
+    project, owner = "phase3g-" + uuid.uuid4().hex, "latency-owner"
+    component = str(uuid.uuid4())
+    await _mapping(project, owner, [(_ALIAS_A, component, "verified")])
+    now = datetime.now(UTC) - timedelta(hours=2)
+    base = await next_projection_generation()
+    count, generations = 1000, 10
+    stats, markers = [], []
+    for index in range(count):
+        session = f"generation-{index:05d}"
+        stats.append(_stats(project, owner, session, now + timedelta(seconds=index)))
+        for old in range(generations):
+            markers.append(
+                {
+                    "project_id": project,
+                    "user_id": owner,
+                    "harness": "claude-code",
+                    "session_id": session,
+                    "projection_version": projector.publication_version(),
+                    "projection_generation": base + index * generations + old,
+                    "status": "complete",
+                    "candidate_count": 0,
+                    "attributed_count": 0,
+                    "source_revision": f"source-{old}",
+                    "evidence_type": "mcp",
+                }
+            )
+    await _insert("session_stats_agg", stats)
+    await _insert("component_activity_publications", markers)
+    params = queries._activity_params(project, "mcp", component, None, _period())
+    latest = await queries._rows(queries._LATEST_PUBLICATION + " FORMAT JSON", params)
+    assert len(latest) == count
+    assert all(row["source_revision"] == "source-9" for row in latest)
+    samples = []
+    for _ in range(5):
+        start = time.perf_counter()
+        await queries.activity_summary(project, "mcp", component, None, _period())
+        samples.append((time.perf_counter() - start) * 1000)
+    with capsys.disabled():
+        print(
+            f"\nphase3 retained generations ({count} sessions x {generations}): "
+            f"summary median={statistics.median(samples):.0f}ms max={max(samples):.0f}ms"
         )
 
 

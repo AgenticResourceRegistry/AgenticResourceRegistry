@@ -174,6 +174,8 @@ def test_initial_upgrade_preview_restore_and_prune(store):
     assert managed_skill.backups_list(backup_root=root)[0]["id"] == done["backup_id"]
     restored = managed_skill.restore_backup(done["backup_id"], backup_root=root)
     assert (target / "SKILL.md").read_bytes() == b"skill"
+    entry = lockfile.read_lockfile()["registries"]["https://example.org"]["harnesses"]["pi"]["standalone"][0]
+    assert entry["skill_integrity"] == "sha256-" + hashlib.sha256(b"skill").hexdigest()
     assert managed_skill.restore_backup(restored["current_backup"], backup_root=root, prune=True)
 
 

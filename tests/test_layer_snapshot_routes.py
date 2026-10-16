@@ -877,12 +877,17 @@ async def test_identity_check_failure_never_logs_credential_bearing_error_text(b
 def test_drift_verifications_are_bounded_before_extraction():
     ok = {"mcp_verifications": [{"harness": "claude-code", "alias": "a", "status": "verified"}], "extra": {"any": 1}}
     assert layer_snapshot.LayerSnapshotRequest(hash=HASH_A, drift=ok).drift == ok  # stored representation unchanged
-    too_many = {"mcp_verifications": [{}] * (layer_snapshot._MAX_MCP_VERIFICATIONS + 1)}
     for drift in (
-        too_many,
+        *(
+            {key: [{}] * (layer_snapshot._MAX_MCP_VERIFICATIONS + 1)}
+            for key in ("mcp_verifications", "skill_verifications", "hook_verifications")
+        ),
         {"mcp_verifications": "verified"},
         {"mcp_verifications": [{"alias": "x" * 301}]},
         {"mcp_verifications": [{"alias": ["nested"]}]},
+        {"hook_verifications": "verified"},
+        {"hook_verifications": [{"alias": "x" * 301}]},
+        {"hook_verifications": [{"alias": ["nested"]}]},
     ):
         with pytest.raises(ValueError):
             layer_snapshot.LayerSnapshotRequest(hash=HASH_A, drift=drift)

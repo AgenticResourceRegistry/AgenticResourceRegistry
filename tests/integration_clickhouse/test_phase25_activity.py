@@ -25,7 +25,7 @@ import xxhash
 
 import services.clickhouse.client as clickhouse
 from database import engine
-from services.component_activity import projector
+from services.component_activity import evidence_projector, mcp_projector, projector
 from services.layer_components import CURRENT_EXTRACTOR_VERSION
 from services.projection_generation import next_projection_generation
 
@@ -43,11 +43,13 @@ def _isolated_databases_only():
         pytest.skip("isolated activity proof not configured")
     target = urlparse(_URL)
     pg = urlparse(os.environ.get("DATABASE_URL", ""))
-    assert target.scheme == "http" and target.hostname == "127.0.0.1" and target.port == 18123
+    ch_port = int(os.environ.get("OBSERVAL_CH_PHASE25_PORT", "18123"))
+    pg_port = int(os.environ.get("OBSERVAL_PG_PHASE25_PORT", "15432"))
+    assert target.scheme == "http" and target.hostname == "127.0.0.1" and target.port == ch_port
     assert target.path == "/observal_phase22_ci" and not target.query and not target.fragment
-    assert clickhouse.CLICKHOUSE_HTTP == "http://127.0.0.1:18123"
+    assert f"http://127.0.0.1:{ch_port}" == clickhouse.CLICKHOUSE_HTTP
     assert clickhouse.CLICKHOUSE_DB == "observal_phase22_ci" and clickhouse.CLICKHOUSE_USER == "proof"
-    assert pg.hostname == "127.0.0.1" and pg.port == 15432 and pg.path == "/observal_phase14_ci"
+    assert pg.hostname == "127.0.0.1" and pg.port == pg_port and pg.path == "/observal_phase14_ci"
 
 
 @pytest.fixture(autouse=True)
@@ -200,6 +202,28 @@ async def _publication(project: str, user: str, session: str, version: int) -> t
 
 
 @pytest.mark.asyncio
+async def test_one_job_reuses_initial_source_but_rechecks_each_complete_marker(monkeypatch):
+    from jobs.activity import project_component_activity
+
+    project, session, user = "shared-" + uuid.uuid4().hex, "fixture-session", "fixture-owner"
+    await _insert("session_events", [_source(project, user, session, 0, _record([_call(_ALIAS_A, "call-id")]))])
+    await _mapping(project, user, [(_ALIAS_A, str(uuid.uuid4()), "verified")])
+    initial = projector._source_rows
+    fetches = []
+
+    async def counted(params):
+        fetches.append(params.copy())
+        return await initial(params)
+
+    monkeypatch.setattr(projector, "_source_rows", counted)
+    result = await project_component_activity({}, project, user, "claude-code", session)
+    assert result["status"] == "complete" and result["attributed_count"] == 1
+    assert result["skill"]["status"] == "complete" and result["hook"]["status"] == "complete"
+    assert len(fetches) == 4  # one initial source, three fresh pre-publication rechecks
+    assert all(row["param_project_id"] == project and row["param_user_id"] == user for row in fetches)
+
+
+@pytest.mark.asyncio
 async def test_real_derived_parallel_records_and_constructed_multiblock_publish_exact_counts():
     project, session, user = "phase25-" + uuid.uuid4().hex, "fixture-session", "fixture-owner"
     fixture = _FIXTURE.read_text().splitlines()
@@ -218,7 +242,7 @@ async def test_real_derived_parallel_records_and_constructed_multiblock_publish_
     )
     first_id, second_id = str(uuid.uuid4()), str(uuid.uuid4())
     await _mapping(project, user, [(_ALIAS_A, first_id, "verified"), (_ALIAS_B, second_id, "verified")])
-    first = await projector.project_session_activity(project, user, "claude-code", session)
+    first = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert first["status"] == "complete"
     assert (
         first["candidate_count"],
@@ -253,10 +277,10 @@ async def test_real_derived_parallel_records_and_constructed_multiblock_publish_
         second_id,
         first_id,
     ]
-    assert (await projector.project_session_activity(project, user, "claude-code", session))[
+    assert (await mcp_projector.project_session_activity(project, user, "claude-code", session))[
         "status"
     ] == "already_complete"
-    forced = await projector.project_session_activity(project, user, "claude-code", session, force=True)
+    forced = await mcp_projector.project_session_activity(project, user, "claude-code", session, force=True)
     assert forced["status"] == "complete" and forced["generation"] > first["generation"]
     optimized = await clickhouse._query("OPTIMIZE TABLE component_activity FINAL")
     optimized.raise_for_status()
@@ -267,7 +291,7 @@ async def test_real_derived_parallel_records_and_constructed_multiblock_publish_
     assert republished["generation"] == forced["generation"] and len(republished["rows"]) == 6
     # Identical session ID/hash in another user's source cannot inherit this mapping.
     await _insert("session_events", [_source(project, "other", session, 0, _record([_call(_ALIAS_A, "other")]))])
-    assert (await projector.project_session_activity(project, "other", "claude-code", session))[
+    assert (await mcp_projector.project_session_activity(project, "other", "claude-code", session))[
         "status"
     ] == "pending_mapping"
     assert (await _publication(project, "other", session, projector.publication_version()))[0] == {}
@@ -279,18 +303,19 @@ async def test_collision_failed_attempt_and_source_rewind_never_leave_stale_publ
     first_id = str(uuid.uuid4())
     await _insert("session_events", [_source(project, user, session, 0, _record([_call(_ALIAS_A, "first")]))])
     await _mapping(project, user, [(_ALIAS_A, first_id, "verified")])
-    first = await projector.project_session_activity(project, user, "claude-code", session)
+    first = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert first["attributed_count"] == 1
     await _mapping(project, user, [(_ALIAS_A, first_id, "verified"), (_ALIAS_A, str(uuid.uuid4()), "unverified")])
-    original_check = projector._inputs_unchanged
-    monkeypatch.setattr(projector, "_inputs_unchanged", AsyncMock(return_value=False))
+    original_check = evidence_projector._inputs_unchanged
+    failed_check = AsyncMock(return_value=False)
+    monkeypatch.setattr(evidence_projector, "_inputs_unchanged", failed_check)
     with pytest.raises(RuntimeError, match="Canonical source or published layer mapping changed"):
-        await projector.project_session_activity(project, user, "claude-code", session)
+        await mcp_projector.project_session_activity(project, user, "claude-code", session)
     previous, markers = await _publication(project, user, session, projector.publication_version())
     assert [marker["status"] for marker in markers] == ["complete", "failed"]
     assert previous["generation"] == first["generation"] and len(previous["rows"]) == 1
-    monkeypatch.setattr(projector, "_inputs_unchanged", original_check)
-    collision = await projector.project_session_activity(project, user, "claude-code", session)
+    monkeypatch.setattr(evidence_projector, "_inputs_unchanged", original_check)
+    collision = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert collision["status"] == "complete" and collision["collision_count"] == 1
     assert (collision["attributed_count"], collision["candidate_count"]) == (0, 1)
     published, _ = await _publication(project, user, session, projector.publication_version())
@@ -298,12 +323,12 @@ async def test_collision_failed_attempt_and_source_rewind_never_leave_stale_publ
     # Simulate the NEXT matcher revision, relative to the real current one.
     monkeypatch.setattr(projector, "MATCHER_VERSION", projector.MATCHER_VERSION + 1)
     next_version = projector.publication_version()
-    bumped = await projector.project_session_activity(project, user, "claude-code", session)
+    bumped = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert bumped["status"] == "complete" and bumped["publication_version"] == next_version
     assert (await _publication(project, user, session, next_version))[0]["rows"] == []
     repaired = _source(project, user, session, 0, _record([{"type": "text"}]), repaired=True)
     await _insert("session_events", [repaired])
-    zero = await projector.project_session_activity(project, user, "claude-code", session)
+    zero = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert zero["status"] == "complete" and zero["candidate_count"] == 0
     assert zero["source_revision"] != bumped["source_revision"]
     assert (await _publication(project, user, session, next_version))[0]["rows"] == []
@@ -314,21 +339,21 @@ async def test_late_mapping_retry_zero_call_and_version_bump_are_not_unknown_zer
     project, user = "phase25-" + uuid.uuid4().hex, "fixture-owner"
     session = "late-mapping"
     await _insert("session_events", [_source(project, user, session, 0, _record([_call(_ALIAS_A, "late")]))])
-    pending = await projector.project_session_activity(project, user, "claude-code", session)
+    pending = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert pending["status"] == "pending_mapping" and pending["candidate_count"] == 1
     assert (await _publication(project, user, session, projector.publication_version())) == ({}, [])
     await _mapping(project, user, [(_ALIAS_A, str(uuid.uuid4()), "verified")])
-    accepted = await projector.project_session_activity(project, user, "claude-code", session)
+    accepted = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert accepted["status"] == "complete" and accepted["attributed_count"] == 1
     empty = "supported-zero-call"
     await _insert("session_events", [_source(project, user, empty, 0, _record([{"type": "text"}]))])
-    completed = await projector.project_session_activity(project, user, "claude-code", empty)
+    completed = await mcp_projector.project_session_activity(project, user, "claude-code", empty)
     assert completed["status"] == "complete" and completed["candidate_count"] == completed["attributed_count"] == 0
     assert (await _publication(project, user, empty, projector.publication_version()))[0]["rows"] == []
     # Simulate the NEXT matcher revision, relative to the real current one.
     monkeypatch.setattr(projector, "MATCHER_VERSION", projector.MATCHER_VERSION + 1)
     next_version = projector.publication_version()
-    revised = await projector.project_session_activity(project, user, "claude-code", empty)
+    revised = await mcp_projector.project_session_activity(project, user, "claude-code", empty)
     assert revised["status"] == "complete" and revised["generation"] > completed["generation"]
     assert revised["publication_version"] == next_version
     assert len((await _publication(project, user, empty, next_version))[1]) == 1
@@ -338,7 +363,7 @@ async def test_late_mapping_retry_zero_call_and_version_bump_are_not_unknown_zer
     unsupported = next(
         name for name, entry in sorted(HARNESS_REGISTRY.items()) if not entry.get("invocation_extractor")
     )
-    assert (await projector.project_session_activity(project, user, unsupported, empty))["status"] == "unsupported"
+    assert (await mcp_projector.project_session_activity(project, user, unsupported, empty))["status"] == "unsupported"
 
 
 @pytest.mark.asyncio
@@ -346,11 +371,11 @@ async def test_later_snapshot_conflict_invalidates_earlier_complete_mapping():
     project, user, session = "phase25-" + uuid.uuid4().hex, "fixture-owner", "conflict-after-complete"
     await _insert("session_events", [_source(project, user, session, 0, _record([_call(_ALIAS_A, "c")]))])
     await _mapping(project, user, [(_ALIAS_A, str(uuid.uuid4()), "verified")])
-    first = await projector.project_session_activity(project, user, "claude-code", session)
+    first = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert first["status"] == "complete" and first["attributed_count"] == 1
     # A later conflicting upload is stored, but its re-extraction never ran.
     await _snapshot(project, user, conflict=True)
-    replay = await projector.project_session_activity(project, user, "claude-code", session)
+    replay = await mcp_projector.project_session_activity(project, user, "claude-code", session)
     assert replay["status"] == "identity_conflict" and replay["generation"] > first["generation"]
     assert (replay["attributed_count"], replay["candidate_count"], replay["unmatched_count"]) == (0, 1, 1)
     published, markers = await _publication(project, user, session, projector.publication_version())

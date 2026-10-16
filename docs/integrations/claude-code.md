@@ -179,6 +179,12 @@ observal agent pull alice/reviewer --harness claude-code --hooks=frontmatter   #
 
 Each gated hook adds startup time on every matching event (about 40 ms on an Apple M1), even when the agent isn't active; the dry run measures it on your machine. Hook timeouts are not changed. The agent file no longer contains those hooks, so update any script that reads them there. The opt-in is POSIX-only. It was tested on Claude Code 2.1.286; other versions are allowed with a warning, and their sessions' hook evidence is reported as unverified rather than counted. See the [pull reference](../cli/pull.md#agent-hooks-in-headless-sessions) for ownership, conflicts and the `--on-unknown` policy.
 
+### Maintainer review boundary: gated Agent hooks
+
+Review this opt-in independently of ordinary telemetry hooks. `cmd_pull.py` validates flags, remembers placement, asks the server for hook bindings and **plans settings changes before writing installation files**. `agent_hooks.py` maps each binding to exactly one pinned component, reconciles only owned groups and preserves edited groups unless `--force-hooks` is explicit. `hook_gate.py` checks the harness-written `agent_type`; absent agent identity in a valid plain-session event skips, and malformed/unknown input skips by default (the explicit `--on-unknown=run` policy trades isolation for fail-open execution). Doctor must not delete these Agent-owned groups. The layer verifier must accept only the exact unedited installed group, not just a lockfile claim. Projection eligibility must separate frontmatter/headless, gated/active, unknown agent and untested Claude Code version; an unverified version is **not a zero-use session**.
+
+Start review with `tests/test_agent_hooks_pull.py`, `tests/test_hook_gate.py`, `tests/test_agent_hooks.py`, and the hook-verification and projection suites. Check that dry runs write nothing, invalid settings reject before install, a default pull never adds a settings group, an explicit return to frontmatter removes only owned groups, and an edited group stays intact. These tests verify the implementation against recorded inputs; they do not prove that a future Claude Code release preserves hook-input semantics. Expand the tested version range only after new recordings.
+
 ---
 
 ## Session push behavior

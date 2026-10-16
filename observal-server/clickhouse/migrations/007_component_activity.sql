@@ -1,6 +1,5 @@
 -- SPDX-FileCopyrightText: 2026 Naraen Rammoorthi
 -- SPDX-License-Identifier: Apache-2.0
--- The activity projection must match the Phase 0 pinned publication proof DDL.
 CREATE TABLE IF NOT EXISTS component_activity (
     project_id String, user_id String, harness LowCardinality(String), session_id String,
     projection_version UInt16, projection_generation UInt64,

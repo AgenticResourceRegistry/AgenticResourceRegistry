@@ -47,9 +47,10 @@ def _isolated_databases_only():
         pytest.skip("isolated skill proof not configured")
     target = urlparse(_URL)
     pg = urlparse(os.environ.get("DATABASE_URL", ""))
-    assert target.hostname == "127.0.0.1" and target.port == 18123 and target.path == "/observal_phase22_ci"
-    assert clickhouse.CLICKHOUSE_DB == "observal_phase22_ci"
-    assert pg.hostname == "127.0.0.1" and pg.port == 15432 and pg.path == "/observal_phase14_ci"
+    assert target.hostname == "127.0.0.1" and target.port == int(os.getenv("OBSERVAL_CH_PHASE25_PORT", "18123"))
+    assert target.path == "/observal_phase22_ci" and clickhouse.CLICKHOUSE_DB == "observal_phase22_ci"
+    assert pg.hostname == "127.0.0.1" and pg.port == int(os.getenv("OBSERVAL_PG_PHASE25_PORT", "15432"))
+    assert pg.path == "/observal_phase14_ci"
 
 
 @pytest.fixture(autouse=True)

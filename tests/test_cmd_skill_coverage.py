@@ -902,6 +902,7 @@ def test_install_command_registry_direct_tracks_project_metadata(monkeypatch):
         version_id=None,
         digest=None,
         requested_version="2.0.0",
+        skill_integrity=None,
     )
 
 
@@ -1476,7 +1477,114 @@ def test_skill_install_json_reports_local_write(tmp_path, monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["write_performed"] is True
     assert payload["installed_path"] == str(installed)
+    assert upsert.call_args.kwargs["skill_integrity"] is None
+    assert any("unverified" in warning for warning in payload["warnings"])
     upsert.assert_called_once()
+
+
+def test_standalone_claude_skill_install_records_active_fingerprint_and_detects_edit(tmp_path, monkeypatch):
+    from observal_cli import layer
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    listing = _skill_item()
+    skill_info = {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "name": "Review Skill",
+        "version": "1.0.0",
+        "delivery_mode": "registry_direct",
+        "skill_md_content": "# Review",
+    }
+    monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(skill.client, "get", Mock(return_value=listing))
+    monkeypatch.setattr(skill.client, "post", Mock(return_value={"config_snippet": {"skill": skill_info}}))
+    monkeypatch.setattr(lockfile, "local_registry_name", Mock(return_value="review-skill"))
+    upsert = Mock()
+    monkeypatch.setattr(lockfile, "upsert_standalone", upsert)
+    result = runner.invoke(
+        app, ["registry", "skill", "install", "alice/review", "--harness", "claude-code", "--output", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    installed = home / ".claude" / "skills" / "review-skill" / "SKILL.md"
+    fingerprint = layer.skill_file_fingerprint(installed)
+    assert upsert.call_args.kwargs["skill_integrity"] == fingerprint
+    entry = {
+        "type": "skill",
+        "id": skill_info["id"],
+        "name": "Review Skill",
+        "version": "1.0.0",
+        "scope": "user",
+        "local_name": "review-skill",
+        "skill_integrity": fingerprint,
+    }
+    registry = {"harnesses": {"claude-code": {"agents": [], "standalone": [entry]}}}
+    manifest = {"claude-code": layer.build_layer_manifest("claude-code", str(tmp_path), registry_data=registry)}
+    assert (
+        layer._compute_drift(registry, manifest, project_dir=str(tmp_path))["skill_verifications"][0]["status"]
+        == "verified"
+    )
+    installed.write_text("# Edited")
+    manifest = {"claude-code": layer.build_layer_manifest("claude-code", str(tmp_path), registry_data=registry)}
+    assert (
+        layer._compute_drift(registry, manifest, project_dir=str(tmp_path))["skill_verifications"][0]["status"]
+        == "drifted"
+    )
+
+
+def test_managed_standalone_skill_records_bundle_fingerprint_atomically(tmp_path, monkeypatch):
+    import base64
+
+    from observal_cli import managed_skill
+    from tests.test_managed_skill import bundle
+
+    reviewed = bundle("version-1")
+    response = {
+        "listing_id": reviewed.listing_id,
+        "version_id": reviewed.version_id,
+        "digest": reviewed.digest,
+        "skill_file_path": reviewed.skill_file_path,
+        "files": [
+            {
+                "path": item.path,
+                "content": base64.b64encode(item.content).decode(),
+                "sha256": item.sha256,
+                "size": item.size,
+                "mode": f"{item.mode:04o}",
+                "version_id": item.version_id,
+            }
+            for item in reviewed.files
+        ],
+    }
+    monkeypatch.setattr(lockfile, "current_registry_url", lambda: "https://example.org")
+    seen = []
+
+    def transact(_bundle, target, _proof, *, record, **_kwargs):
+        data = {}
+        record(data)
+        seen.append((target, data))
+        return {"action": "install"}
+
+    monkeypatch.setattr(managed_skill, "transact", transact)
+    installed, _ = skill._install_managed_folder(
+        response,
+        {"version": "1.0", "version_id": reviewed.version_id, "digest": reviewed.digest},
+        {"namespace": "alice", "slug": "example"},
+        "pi",
+        "project",
+        str(tmp_path),
+        reviewed.listing_id,
+        None,
+        upgrade=False,
+        check=False,
+        backup_root=None,
+    )
+    assert installed == seen[0][0] / "SKILL.md"
+    entry = seen[0][1]["registries"]["https://example.org"]["harnesses"]["pi"]["standalone"][0]
+    expected = next(item.sha256 for item in reviewed.files if item.path == "SKILL.md")
+    assert entry["skill_integrity"] == f"sha256-{expected}"
+    assert entry["folder_receipt"]["version_id"] == reviewed.version_id
 
 
 def test_skill_install_does_not_record_failed_write(monkeypatch):

@@ -72,10 +72,24 @@ def test_windows_claude_mcp_commands_use_native_cmd_shim(monkeypatch: pytest.Mon
         "mcp",
         "add",
         "--scope",
-        "project",
+        "local",
         "srv",
         "--",
         "python",
+    ]
+    assert adapter.prepare_mcp_setup_command(
+        ["claude", "mcp", "add", "srv", "--", "runner", "--scope", "internal"], "user"
+    ) == [
+        "C:/Apps/Claude CLI/claude.cmd",
+        "mcp",
+        "add",
+        "--scope",
+        "user",
+        "srv",
+        "--",
+        "runner",
+        "--scope",
+        "internal",
     ]
     assert adapter.prepare_mcp_setup_command(["claude", "mcp", "remove", "srv"], "project") == [
         "C:/Apps/Claude CLI/claude.cmd",

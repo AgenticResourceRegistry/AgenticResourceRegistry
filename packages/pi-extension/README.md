@@ -25,6 +25,10 @@ Alternatively, register this package in `~/.pi/agent/settings.json`:
 
 The two modes are mutually exclusive. With the npm package registered, Observal never writes the local file; it only reports when a pinned version has fallen behind the CLI. Pi loads both channels if both are present, which sends every session twice, so doctor removes a local copy it recognizes as its own once npm is configured (keeping it as `observal.ts.bak`). A local file Observal did not write is always left alone.
 
+## Maintainer packaging constraint
+
+`extensions/observal.ts` is the Pi entrypoint **and** the file the Python wheel bundles and `observal doctor patch --harness pi` copies to a user's extensions directory. The npm install mode also loads it. Do not extract runtime helpers into imported source files without changing both delivery paths: a local CLI install receives only this file, so relative imports would fail there. A future source-module split needs a reproducible single-file build artifact, a wheel packaging check, an npm packaging check, and tests of the copied local file as well as the npm entrypoint. Keep the artifact's zero-runtime-dependency and fail-open behavior; never solve the duplication by loading both install modes at once. The extension's current boundaries are agent-switch transactions, registry hook execution, layer/pin verification, and acknowledged session delivery; keep those contracts distinct when extracting modules.
+
 ## Prerequisites
 
 1. An Observal account (run `observal auth login` to authenticate)

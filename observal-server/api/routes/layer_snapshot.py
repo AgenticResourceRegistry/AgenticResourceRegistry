@@ -87,7 +87,7 @@ class LayerSnapshotRequest(BaseModel):
     @classmethod
     def bound_drift(cls, value: dict) -> dict:
         """Bound the drift fields the extractor reads; the rest is opaque, stored metadata."""
-        for key in ("mcp_verifications", "skill_verifications"):
+        for key in ("mcp_verifications", "skill_verifications", "hook_verifications"):
             verifications = value.get(key)
             if verifications is None:
                 continue
@@ -144,13 +144,11 @@ class BaselinePinResponse(BaseModel):
 
 
 async def _ensure_layer_components(project_id: str, user_id: str, layer_hash: str) -> None:
-    """Index best-effort once Phase 1.5's extractor is installed; never block uploads."""
-    try:
-        from services.layer_components.extractor import ensure_layer_components
+    """Index the uploaded snapshot best-effort; never block uploads."""
+    from services.layer_components.extractor import ensure_layer_components
 
+    try:
         await ensure_layer_components(project_id, user_id, layer_hash)
-    except ImportError as error:
-        optic.debug("layer component extractor unavailable: {}", type(error).__name__)
     except Exception as error:
         # HTTP client exceptions may include credential-bearing URLs in str(error).
         optic.warning("layer component extraction failed for hash={}: {}", layer_hash, type(error).__name__)

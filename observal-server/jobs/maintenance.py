@@ -317,26 +317,3 @@ async def backfill_layer_components(
         )
     optic.info("layer component backfill: counts={} continuing={}", counts, next_cursor is not None)
     return {**counts, "next_cursor": next_cursor}
-
-
-async def initial_layer_component_backfill() -> dict:
-    """Run once in the init container, after both database migration runners."""
-    totals = {"scanned": 0, "complete": 0, "skipped": 0, "missing": 0, "failed": 0, "reresolved": 0}
-    cursor = None
-    while True:
-        result = await backfill_layer_components({}, after=cursor)
-        for field in totals:
-            totals[field] += result[field]
-        cursor = result["next_cursor"]
-        if cursor is None:
-            break
-    if totals["failed"]:
-        raise RuntimeError(f"Layer component backfill failed for {totals['failed']} snapshot(s)")
-    optic.info("initial layer component backfill: {}", totals)
-    return totals
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(initial_layer_component_backfill())

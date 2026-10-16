@@ -839,6 +839,14 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
                 def update(data: dict) -> None:
                     records = _records(data, target)
                     records[0][1]["folder_receipt"] = state["old"]
+                    # Restoring a verified older folder must also restore the
+                    # matching skill fingerprint; otherwise its next session
+                    # would be incorrectly reported as locally drifted.
+                    restored_skill = next(
+                        (file for file in state["old"]["files"] if file.get("path") == "SKILL.md"), None
+                    )
+                    if restored_skill:
+                        records[0][1]["skill_integrity"] = f"sha256-{restored_skill['sha256']}"
                     records[0][1]["version_id"] = state["old"]["version_id"]
                     records[0][1]["digest"] = state["old"]["digest"]
                     if state.get("old_version"):

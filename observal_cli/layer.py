@@ -1191,7 +1191,9 @@ def _compute_drift(
                             from observal_cli.harness import get_adapter
 
                             scope = comp.get("scope", parent.get("scope", ""))
-                            config_path = get_adapter(harness_name).mcp_manifest_path(scope)
+                            config_path = get_adapter(harness_name).installed_mcp_manifest_path(
+                                scope, comp.get("directory", parent.get("directory")), safe_alias
+                            )
                             if config_path and config_path not in actual_hashes:
                                 # Oversize/inaccessible shared settings are not represented in v2.
                                 status = "unverified"

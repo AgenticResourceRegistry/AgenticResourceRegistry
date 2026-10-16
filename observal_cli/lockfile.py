@@ -478,6 +478,7 @@ def upsert_standalone(
     digest: str | None = None,
     requested_version: str | None = None,
     mcp_integrity: str | None = None,
+    skill_integrity: str | None = None,
     hook_binding: dict | None = None,
 ) -> None:
     """Add or update a standalone component (MCP, skill, hook, etc.) in the lock file.
@@ -500,6 +501,8 @@ def upsert_standalone(
         entry["integrity"] = integrity
     if mcp_integrity:
         entry["mcp_integrity"] = mcp_integrity
+    if skill_integrity:
+        entry["skill_integrity"] = skill_integrity
     if namespace:
         entry["namespace"] = namespace
     if slug:

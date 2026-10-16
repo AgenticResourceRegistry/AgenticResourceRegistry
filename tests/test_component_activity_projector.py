@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from services.component_activity import projector
+from services.component_activity import evidence_projector, mcp_projector, projector
 from services.component_activity.matcher import match_invocations
 from services.session_parsers.invocation_types import SourceInvocation
 
@@ -24,6 +24,12 @@ _CANDIDATE = {
     "verification_status": "verified",
 }
 _TIME = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _mock_shared_rail(monkeypatch, name, value):
+    """MCP tests replace both the read/match rails and the fresh-check helpers."""
+    monkeypatch.setattr(projector, name, value)
+    monkeypatch.setattr(evidence_projector, name, value)
 
 
 def _source(offset: int, blocks: list[dict], layer_hash: str = _HASH_A, line_hash: str | None = None) -> dict:
@@ -127,12 +133,12 @@ async def test_rows_acknowledged_before_complete_marker_and_never_store_content(
         writes.append((sql, data))
         return []
 
-    monkeypatch.setattr(projector, "_query", fake_query)
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=sources))
-    monkeypatch.setattr(projector, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
-    monkeypatch.setattr(projector, "_latest_complete", AsyncMock(return_value=None))
-    monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(return_value=21))
-    result = await projector.project_session_activity("p", "u", "claude-code", "s")
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(return_value=sources))
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
+    _mock_shared_rail(monkeypatch, "_latest_complete", AsyncMock(return_value=None))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=21))
+    result = await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert result["status"] == "complete" and result["candidate_count"] == 1
     assert result["attributed_count"] == 1 and result["unknown_result_count"] == 1
     assert result["layer_stability"] == "sender_cached_hash_not_proven_stable"
@@ -154,10 +160,11 @@ async def test_rows_acknowledged_before_complete_marker_and_never_store_content(
 async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without_rows(monkeypatch):
     sources = [_source(0, [{"type": "text"}])]
     writes = []
-    # Publication versions pack (projection << 8 | matcher); derive them so a
-    # projection-version bump does not invalidate what this test checks.
-    v_matcher2 = projector.PROJECTION_VERSION << 8 | 2
-    v_matcher3 = projector.PROJECTION_VERSION << 8 | 3
+    # Derive the composite version after a matcher-only bump.
+    monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
+    v_matcher2 = projector.publication_version()
+    monkeypatch.setattr(projector, "MATCHER_VERSION", 3)
+    v_matcher3 = projector.publication_version()
     previous = {v_matcher2: None, v_matcher3: None}
     monkeypatch.setattr(projector, "MATCHER_VERSION", 2)
 
@@ -165,16 +172,17 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
         writes.append(json.loads(data))
         return []
 
-    async def latest(_params, version):
+    async def latest(_params, version, evidence_type="mcp"):
+        assert evidence_type == "mcp"
         return previous[version]
 
-    monkeypatch.setattr(projector, "_query", fake_query)
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=sources))
-    monkeypatch.setattr(projector, "_mapping", AsyncMock(return_value=("complete", 8, [])))
-    monkeypatch.setattr(projector, "_latest_complete", latest)
-    monkeypatch.setattr(projector, "_published_rows", AsyncMock(return_value=[]))
-    monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(side_effect=[21, 22]))
-    first = await projector.project_session_activity("p", "u", "claude-code", "s")
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(return_value=sources))
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("complete", 8, [])))
+    _mock_shared_rail(monkeypatch, "_latest_complete", latest)
+    _mock_shared_rail(monkeypatch, "_published_rows", AsyncMock(return_value=[]))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(side_effect=[21, 22]))
+    first = await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     previous[v_matcher2] = {
         "projection_generation": 21,
         "source_revision": first["source_revision"],
@@ -189,9 +197,9 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
             )
         },
     }
-    assert (await projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "already_complete"
+    assert (await mcp_projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "already_complete"
     monkeypatch.setattr(projector, "MATCHER_VERSION", 3)
-    bumped = await projector.project_session_activity("p", "u", "claude-code", "s")
+    bumped = await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert first["publication_version"] == v_matcher2 and bumped["publication_version"] == v_matcher3
     assert [marker["status"] for marker in writes] == ["complete", "complete"]
     assert [marker["attributed_count"] for marker in writes] == [0, 0]
@@ -200,27 +208,44 @@ async def test_zero_call_publication_and_matcher_only_bump_rebuilds_even_without
         projector.publication_version()
 
 
+def test_skill_and_hook_matcher_bumps_invalidate_readers_and_full_replay(monkeypatch):
+    from jobs import activity
+    from services.component_activity import hook_matcher, queries, skill_matcher
+
+    current = projector.publication_version()
+    assert activity.publication_version() == current  # replay checkpoint follows the readers
+    assert queries.publication_version() == current  # readers use the same version
+    monkeypatch.setattr(skill_matcher, "SKILL_MATCHER_VERSION", skill_matcher.SKILL_MATCHER_VERSION + 1)
+    skill_bump = projector.publication_version()
+    assert skill_bump != current and queries.publication_version() == activity.publication_version() == skill_bump
+    monkeypatch.setattr(hook_matcher, "HOOK_MATCHER_VERSION", hook_matcher.HOOK_MATCHER_VERSION + 1)
+    assert projector.publication_version() not in (current, skill_bump)
+    monkeypatch.setattr(hook_matcher, "HOOK_MATCHER_VERSION", 16)
+    with pytest.raises(ValueError, match="UInt4"):
+        projector.publication_version()
+
+
 @pytest.mark.asyncio
 async def test_missing_mapping_and_unstable_or_legacy_hashes_do_not_publish(monkeypatch):
     source = [_source(0, [_call("super-probe", "safe")])]
     writes = AsyncMock()
-    monkeypatch.setattr(projector, "_query", writes)
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=source))
-    monkeypatch.setattr(projector, "_mapping", AsyncMock(return_value=("pending_mapping", 0, [])))
+    _mock_shared_rail(monkeypatch, "_query", writes)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(return_value=source))
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("pending_mapping", 0, [])))
     index = AsyncMock(return_value=False)
-    monkeypatch.setattr(projector, "_index_layer", index)
-    pending = await projector.project_session_activity("p", "u", "claude-code", "s")
+    _mock_shared_rail(monkeypatch, "_index_layer", index)
+    pending = await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert pending["status"] == "pending_mapping"
     index.assert_awaited_once_with("p", "u", _HASH_A)
     assert pending["candidate_count"] == pending["unmatched_count"] == 1
     assert writes.await_count == 0
-    assert (await projector.project_session_activity("p", "u", "cursor", "s"))["status"] == "unsupported"
+    assert (await mcp_projector.project_session_activity("p", "u", "cursor", "s"))["status"] == "unsupported"
     assert writes.await_count == 0
     source[0]["layer_hash"] = "legacy"
-    assert (await projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "legacy_layer"
+    assert (await mcp_projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "legacy_layer"
     source[0]["layer_hash"] = _HASH_A
     source.append(_source(1, [], ""))
-    assert (await projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "unstable_layer"
+    assert (await mcp_projector.project_session_activity("p", "u", "claude-code", "s"))["status"] == "unstable_layer"
     assert writes.await_count == 0
 
 
@@ -234,15 +259,51 @@ async def test_late_source_repair_marks_generation_failed_not_complete(monkeypat
         writes.append((sql, json.loads(data)))
         return []
 
-    monkeypatch.setattr(projector, "_query", fake_query)
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(side_effect=[source, repaired]))
-    monkeypatch.setattr(projector, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
-    monkeypatch.setattr(projector, "_latest_complete", AsyncMock(return_value=None))
-    monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(return_value=55))
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(side_effect=[source, repaired]))
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
+    _mock_shared_rail(monkeypatch, "_latest_complete", AsyncMock(return_value=None))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=55))
     with pytest.raises(RuntimeError, match="Canonical source or published layer mapping changed"):
-        await projector.project_session_activity("p", "u", "claude-code", "s")
+        await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert len(writes) == 2
     assert writes[1][1]["status"] == "failed" and writes[1][1]["projection_generation"] == 55
+
+
+@pytest.mark.asyncio
+async def test_shared_snapshot_caches_oversized_source_and_rejects_different_session(monkeypatch):
+    load = AsyncMock(return_value=None)
+    _mock_shared_rail(monkeypatch, "_source_rows", load)
+    snapshot = projector.SourceSnapshot("p", "u", "claude-code", "s")
+    assert await snapshot.load() is None and await snapshot.load() is None
+    load.assert_awaited_once_with(projector._params("p", "u", "claude-code", "s"))
+    with pytest.raises(ValueError, match="fully scoped session key"):
+        await mcp_projector.project_session_activity("p", "other", "claude-code", "s", source_snapshot=snapshot)
+    load.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shared_initial_snapshot_never_replaces_fresh_publication_check(monkeypatch):
+    source = [_source(0, [_call("super-probe", "safe")])]
+    repaired = [source[0] | {"layer_hash": _HASH_B}]
+    writes = []
+
+    async def fake_query(sql, params=None, *, data=None):
+        writes.append(json.loads(data))
+        return []
+
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    fetch = AsyncMock(side_effect=[source, repaired])
+    _mock_shared_rail(monkeypatch, "_source_rows", fetch)
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
+    _mock_shared_rail(monkeypatch, "_latest_complete", AsyncMock(return_value=None))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=57))
+    snapshot = projector.SourceSnapshot("p", "u", "claude-code", "s")
+    with pytest.raises(projector.ProjectionRaceError):
+        await mcp_projector.project_session_activity("p", "u", "claude-code", "s", source_snapshot=snapshot)
+    assert await snapshot.load() is source
+    assert fetch.await_count == 2  # one shared read and one fresh publication check
+    assert writes[-1]["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -255,13 +316,13 @@ async def test_source_layer_change_during_publication_fails_even_when_line_hash_
         writes.append((sql, json.loads(data)))
         return []
 
-    monkeypatch.setattr(projector, "_query", fake_query)
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(side_effect=[[original], [changed]]))
-    monkeypatch.setattr(projector, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
-    monkeypatch.setattr(projector, "_latest_complete", AsyncMock(return_value=None))
-    monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(return_value=56))
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(side_effect=[[original], [changed]]))
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("complete", 8, [_CANDIDATE])))
+    _mock_shared_rail(monkeypatch, "_latest_complete", AsyncMock(return_value=None))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=56))
     with pytest.raises(RuntimeError, match="Canonical source or published layer mapping changed"):
-        await projector.project_session_activity("p", "u", "claude-code", "s")
+        await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert writes[-1][1]["status"] == "failed" and writes[-1][1]["projection_generation"] == 56
     assert not any(data["status"] == "complete" for sql, data in writes if "publications" in sql)
 
@@ -281,12 +342,12 @@ async def test_two_verified_source_line_hashes_split_only_with_scoped_mapping(mo
     async def mapping(_project, _user, layer_hash, _harness, _component_type="mcp"):
         return "complete", 8 if layer_hash == _HASH_A else 9, [_CANDIDATE | {"component_id": layer_hash}]
 
-    monkeypatch.setattr(projector, "_query", fake_query)
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=source))
-    monkeypatch.setattr(projector, "_mapping", mapping)
-    monkeypatch.setattr(projector, "_latest_complete", AsyncMock(return_value=None))
-    monkeypatch.setattr(projector, "next_projection_generation", AsyncMock(return_value=55))
-    result = await projector.project_session_activity("p", "u", "claude-code", "s")
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(return_value=source))
+    _mock_shared_rail(monkeypatch, "_mapping", mapping)
+    _mock_shared_rail(monkeypatch, "_latest_complete", AsyncMock(return_value=None))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=55))
+    result = await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert result["status"] == "complete" and result["attributed_count"] == 2
     assert [row["layer_hash"] for row in writes[:2]] == [_HASH_A, _HASH_B]
     assert [row["component_id"] for row in writes[:2]] == [_HASH_A, _HASH_B]
@@ -311,8 +372,8 @@ async def test_oversized_source_is_declined_before_raw_lines_are_loaded(monkeypa
         queries.append(sql)
         return [{"records": 10, "bytes": projector.MAX_SOURCE_BYTES + 1}]
 
-    monkeypatch.setattr(projector, "_query", fake_query)
-    result = await projector.project_session_activity("p", "u", "claude-code", "s")
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    result = await mcp_projector.project_session_activity("p", "u", "claude-code", "s")
     assert result["status"] == "source_too_large"
     assert len(queries) == 1 and "sum(content_length)" in queries[0]
     assert "SELECT line_offset" not in queries[0]
@@ -332,23 +393,84 @@ async def test_current_snapshot_conflict_invalidates_an_earlier_complete_mapping
                 return rows
         raise AssertionError("candidates must not be loaded for a conflicted snapshot")
 
-    monkeypatch.setattr(projector, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
     assert await projector._mapping("p", "u", _HASH_A, "claude-code") == ("identity_conflict", 8, [])
     responses["layer_snapshots"] = []
     assert (await projector._mapping("p", "u", _HASH_A, "claude-code"))[0] == "pending_mapping"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("evidence_type", ["mcp", "skill", "hook"])
+@pytest.mark.parametrize("change", ["source", "mapping"])
+async def test_conflict_zero_marker_fails_when_inputs_change_before_publication(monkeypatch, evidence_type, change):
+    source = [_source(0, [_call("super-probe", "safe")])]
+    current = source if change == "mapping" else [source[0] | {"layer_hash": _HASH_B}]
+    writes = []
+
+    async def fake_query(sql, params=None, *, data=None):
+        writes.append(json.loads(data))
+        return []
+
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    fresh_source = AsyncMock(return_value=current)
+    fresh_mapping = AsyncMock(return_value=("complete" if change == "mapping" else "identity_conflict", 9, []))
+    _mock_shared_rail(monkeypatch, "_source_rows", fresh_source)
+    _mock_shared_rail(monkeypatch, "_mapping", fresh_mapping)
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=71))
+    with pytest.raises(projector.ProjectionRaceError, match="conflicted mapping changed"):
+        await projector._publish_unattributable(
+            projector._params("p", "u", "claude-code", "s"),
+            projector.publication_version(),
+            projector._source_revision(source),
+            source,
+            {"candidate_count": 1, "unmatched_count": 1, "unknown_result_count": 0},
+            _HASH_A,
+            evidence_type,
+        )
+    fresh_source.assert_awaited_once()
+    if change == "mapping":
+        fresh_mapping.assert_awaited_once_with("p", "u", _HASH_A, "claude-code", evidence_type)
+    assert [row["status"] for row in writes] == ["failed"]
+    assert writes[0]["evidence_type"] == evidence_type
+
+
+@pytest.mark.asyncio
+async def test_conflict_zero_marker_rechecks_stable_source_and_conflict(monkeypatch):
+    source = [_source(0, [_call("super-probe", "safe")])]
+    writes = []
+
+    async def fake_query(sql, params=None, *, data=None):
+        writes.append(json.loads(data))
+        return []
+
+    _mock_shared_rail(monkeypatch, "_query", fake_query)
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(return_value=source))
+    _mock_shared_rail(monkeypatch, "_mapping", AsyncMock(return_value=("identity_conflict", 8, [])))
+    _mock_shared_rail(monkeypatch, "next_projection_generation", AsyncMock(return_value=72))
+    result = await projector._publish_unattributable(
+        projector._params("p", "u", "claude-code", "s"),
+        projector.publication_version(),
+        projector._source_revision(source),
+        source,
+        {"candidate_count": 1, "unmatched_count": 1, "unknown_result_count": 0},
+        _HASH_A,
+    )
+    assert result["status"] == "identity_conflict"
+    assert [row["status"] for row in writes] == ["complete"]
+    assert writes[0]["attributed_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_pending_mapping_indexes_a_snapshot_the_upload_could_not_see(monkeypatch):
     """Async inserts hide a fresh snapshot from its upload's extraction; the projector indexes it."""
     source = [_source(0, [_call("super-probe", "safe")])]
-    monkeypatch.setattr(projector, "_source_rows", AsyncMock(return_value=source))
+    _mock_shared_rail(monkeypatch, "_source_rows", AsyncMock(return_value=source))
     mapping = AsyncMock(side_effect=[("pending_mapping", 0, []), ("identity_conflict", 4, [])])
-    monkeypatch.setattr(projector, "_mapping", mapping)
-    monkeypatch.setattr(projector, "_index_layer", AsyncMock(return_value=True))
+    _mock_shared_rail(monkeypatch, "_mapping", mapping)
+    _mock_shared_rail(monkeypatch, "_index_layer", AsyncMock(return_value=True))
     published = AsyncMock(return_value={"status": "complete"})
-    monkeypatch.setattr(projector, "_publish_unattributable", published)
-    assert (await projector.project_session_activity("p", "u", "claude-code", "s")) == {"status": "complete"}
+    _mock_shared_rail(monkeypatch, "_publish_unattributable", published)
+    assert (await mcp_projector.project_session_activity("p", "u", "claude-code", "s")) == {"status": "complete"}
     assert mapping.await_count == 2
 
 

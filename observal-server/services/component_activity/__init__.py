@@ -7,7 +7,8 @@ MCP calls, skill evidence and hook evidence are separate projections on the same
 """
 
 from .hook_projector import project_session_hook_evidence
-from .projector import MATCHER_VERSION, PROJECTION_VERSION, project_session_activity, publication_version
+from .mcp_projector import project_session_activity
+from .projector import MATCHER_VERSION, PROJECTION_VERSION, publication_version
 from .skill_projector import project_session_skill_evidence
 
 __all__ = (

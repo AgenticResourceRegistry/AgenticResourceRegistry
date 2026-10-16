@@ -9,10 +9,15 @@ Rows are ``evidence_kind = 'skill_*'`` and publications ``evidence_type =
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from services.session_parsers.skill_evidence import extract_skill_evidence
 
 from .evidence_projector import EvidenceSpec, project_session_evidence
 from .skill_matcher import SKILL_MATCHER_VERSION, match_skill_evidence
+
+if TYPE_CHECKING:
+    from .projector import SourceSnapshot
 
 SKILL_SPEC = EvidenceSpec(
     evidence_type="skill",
@@ -27,7 +32,15 @@ SKILL_SPEC = EvidenceSpec(
 
 
 async def project_session_skill_evidence(
-    project_id: str, user_id: str, harness: str, session_id: str, *, force: bool = False
+    project_id: str,
+    user_id: str,
+    harness: str,
+    session_id: str,
+    *,
+    force: bool = False,
+    source_snapshot: SourceSnapshot | None = None,
 ) -> dict:
     """Project one scoped session's skill evidence; only an acknowledged attempt is visible."""
-    return await project_session_evidence(SKILL_SPEC, project_id, user_id, harness, session_id, force=force)
+    return await project_session_evidence(
+        SKILL_SPEC, project_id, user_id, harness, session_id, force=force, source_snapshot=source_snapshot
+    )

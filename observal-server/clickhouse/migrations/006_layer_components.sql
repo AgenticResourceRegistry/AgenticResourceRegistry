@@ -1,6 +1,5 @@
 -- SPDX-FileCopyrightText: 2026 Naraen Rammoorthi
 -- SPDX-License-Identifier: Apache-2.0
--- The layer projection must match the Phase 0 pinned publication proof DDL.
 CREATE TABLE IF NOT EXISTS layer_components (
     project_id String, user_id String, layer_hash String, hash_schema_version UInt8,
     extractor_version UInt16, extraction_generation UInt64, occurrence_key String,
