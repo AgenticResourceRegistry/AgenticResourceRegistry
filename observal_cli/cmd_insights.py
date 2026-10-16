@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from urllib.parse import quote
 from uuid import UUID
 
 import typer
@@ -156,17 +157,37 @@ def _activity_path(component: tuple[str, str]) -> str:
     return _component_route(component, "components") + "/activity"
 
 
+def _component_version_id(component: tuple[str, str], version: str) -> str:
+    try:
+        Version(version)
+    except InvalidVersion:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Invalid component version: {version}.",
+            operation="Select component version",
+            remediation="Use the exact semantic version from the component's version history.",
+        )
+    kind, _ = component
+    listing_id = _component_path(component).rsplit("/", 1)[-1]
+    details = client.get(f"/api/v1/{kind}s/{listing_id}/versions/{quote(version, safe='')}")
+    return str(details["id"])
+
+
 @insights_app.command(name="activity")
 def insights_activity(
     component: tuple[str, str] = typer.Option(
         ..., "--component", help="Component type and ref: mcp|skill|hook NAMESPACE/SLUG"
     ),
     period_days: int = typer.Option(14, "--period", "-p", min=1, max=90),
+    version: str | None = typer.Option(None, "--version", "-v", help="Exact component version"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
 ):
     """Show current verified presence, usage and coverage before generating a report."""
     with _progress(output, "Fetching component activity..."):
-        data = client.get(f"{_activity_path(component)}/summary", params={"period_days": period_days})
+        params = {"period_days": period_days}
+        if version:
+            params["component_version_id"] = _component_version_id(component, version)
+        data = client.get(f"{_activity_path(component)}/summary", params=params)
     if output == "json":
         output_json(data)
         return
@@ -218,12 +239,15 @@ def insights_sessions(
         ..., "--component", help="Component type and ref: mcp|skill|hook NAMESPACE/SLUG"
     ),
     period_days: int = typer.Option(14, "--period", "-p", min=1, max=90),
+    version: str | None = typer.Option(None, "--version", "-v", help="Exact component version"),
     limit: int = typer.Option(50, "--limit", min=1, max=100),
     cursor: str | None = typer.Option(None, "--cursor", help="Opaque cursor returned by the previous page"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
 ):
     """List verified-present sessions and their published component evidence."""
     params: dict[str, str | int] = {"period_days": period_days, "limit": limit}
+    if version:
+        params["component_version_id"] = _component_version_id(component, version)
     if cursor:
         params["cursor"] = cursor
     with _progress(output, "Fetching component sessions..."):
@@ -1056,7 +1080,7 @@ _RENDERERS = {
 def insights_generate(
     agent_id: str = typer.Argument("", help="Agent ID, name, or @alias (omit with --component)"),
     period_days: int = typer.Option(14, "--period", "-p", min=1, max=365, help="Analysis period in days"),
-    agent_version: str | None = typer.Option(None, "--version", "-v", help="Agent version to analyze"),
+    agent_version: str | None = typer.Option(None, "--version", "-v", help="Agent or component version to analyze"),
     compare_version: str | None = typer.Option(None, "--compare", help="Baseline agent version for A/B comparison"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
     wait: bool = typer.Option(False, "--wait", help="Poll until the report completes"),
@@ -1075,10 +1099,10 @@ def insights_generate(
         raise typer.BadParameter("Provide an agent or --component")
     if (component and agent_id) or (not component and not agent_id):
         fail(ErrorCategory.VALIDATION, "Provide either an agent or --component.", operation="Generate insight report")
-    if component and (agent_version or compare_version):
+    if component and compare_version:
         fail(
             ErrorCategory.VALIDATION,
-            "Agent version flags do not apply to component reports.",
+            "--compare applies to Agent reports only.",
             operation="Generate component insight report",
         )
     if component and period_days > 90:
@@ -1087,7 +1111,8 @@ def insights_generate(
             "Component reports support at most 90 days.",
             operation="Generate component insight report",
         )
-    agent_version = _version(agent_version, "agent version")
+    component_version = agent_version if component else None
+    agent_version = _version(agent_version, "agent version") if not component else None
     compare_version = _version(compare_version, "comparison version")
 
     # Evidence-backed component reports degrade to deterministic facts without a configured LLM.
@@ -1108,6 +1133,8 @@ def insights_generate(
         resolved = _resolve_agent_id(agent_id) if not component else ""
         component_path = _component_path(component) if component else ""
         body = {"period_days": period_days}
+        if component_version:
+            body["component_version_id"] = _component_version_id(component, component_version)
         if agent_version:
             body["agent_version"] = agent_version
         if compare_version:
