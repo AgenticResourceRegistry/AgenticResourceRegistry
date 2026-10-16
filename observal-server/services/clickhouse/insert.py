@@ -232,14 +232,17 @@ async def insert_session_capabilities(
 
 
 async def insert_layer_snapshot(row: dict):
-    """Insert a single layer snapshot row into ClickHouse."""
+    """Insert a snapshot durably before the upload route re-reads it for extraction."""
     optic.trace("inserting layer snapshot: hash={}", row.get("hash", "?"))
     columns = "hash, project_id, user_id, harness, content, file_count, total_size, lockfile_hash"
     if "uploaded_at" in row:
         columns += ", uploaded_at"
     sql = f"INSERT INTO layer_snapshots ({columns}) FORMAT JSONEachRow"
     try:
-        r = await _client._query(sql, data=_dumps(row))
+        # ClickHouse may buffer async inserts after acknowledging the request.
+        # Without this, the immediate extractor sees no snapshot and publishes
+        # nothing until a retry or the daily backfill (observed on a live upload).
+        r = await _client._query(sql, {"wait_for_async_insert": "1"}, data=_dumps(row))
         r.raise_for_status()
     except Exception as e:
         optic.error("failed to insert layer snapshot: {}", e)

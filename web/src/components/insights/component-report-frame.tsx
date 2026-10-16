@@ -86,7 +86,7 @@ export function EvidencePanel({ summary, stats, children }: {
 }
 
 type CoverageFacts = {
-  presence: { present_sessions: number };
+  presence: { present_sessions: number; legacy_hash_sessions?: number; snapshot_missing_sessions?: number };
   projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
   attribution_state: string;
   reasons: string[];
@@ -107,6 +107,15 @@ export function CoveragePanel({ coverage, children }: { coverage: CoverageFacts 
           {coverage.projection.unsupported_present_sessions > 0 && ` ${coverage.projection.unsupported_present_sessions} on unsupported harnesses.`}
         </p>
         {children && <div className="space-y-2 text-sm text-muted-foreground">{children}</div>}
+        {(!!coverage.presence.legacy_hash_sessions || !!coverage.presence.snapshot_missing_sessions) &&
+          <div role="note" className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-sm">
+            <p className="font-medium">Some sessions lack installation evidence</p>
+            <ul className="list-disc pl-5 text-muted-foreground">
+              {!!coverage.presence.legacy_hash_sessions && <li>{coverage.presence.legacy_hash_sessions} project {coverage.presence.legacy_hash_sessions === 1 ? "session has a" : "sessions have"} legacy layer {coverage.presence.legacy_hash_sessions === 1 ? "hash" : "hashes"}.</li>}
+              {!!coverage.presence.snapshot_missing_sessions && <li>{coverage.presence.snapshot_missing_sessions} project {coverage.presence.snapshot_missing_sessions === 1 ? "session has" : "sessions have"} no installation snapshot.</li>}
+            </ul>
+            <p className="text-muted-foreground">These are project-wide gaps, not proof that this component was installed or used. They are excluded from verified presence, use rates, and distinct-user counts. A missing v2 snapshot may arrive late if its original matching evidence still exists. For older sessions, replaying a transcript or checking today's install cannot prove what was installed then.</p>
+          </div>}
         {coverage.reasons.length > 0 && <p className="text-sm text-muted-foreground">Evidence gaps: {coverage.reasons.map((reason) => reason.replaceAll("_", " ")).join(", ")}.</p>}
         {coverage.limitations.length > 0 && <details className="text-sm text-muted-foreground">
           <summary className="cursor-pointer rounded-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">How to interpret these counts</summary>
