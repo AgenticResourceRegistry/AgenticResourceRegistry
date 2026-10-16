@@ -67,6 +67,7 @@ All notable changes to this project will be documented in this file.
 - publish from maintained `release/X.Y` branches with alpha, beta, RC, stable, and backport workflows; deploy and update Homebrew only after verifying the newest stable release
 - format dev log diagnostics positionally instead of structlog-style keyword args so their values reach the console and file sinks
 - merge duplicate Unreleased sections into one heading
+- remove the unused NEXT_PUBLIC_API_URL variable from the AWS and GCP modules
 
 ## [1.13.1] - 2026-09-05
 
