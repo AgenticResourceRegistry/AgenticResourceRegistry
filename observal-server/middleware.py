@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -11,6 +12,7 @@ from loguru import logger as optic
 from redis.exceptions import RedisError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 
@@ -230,15 +232,22 @@ async def redis_error_handler(request: Request, exc: RedisError):
     return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable"})
 
 
+class RateLimitStateMiddleware:
+    """Give every request slowapi's ``view_rate_limit`` state before routing."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            scope.setdefault("state", {})["view_rate_limit"] = None
+        await self.app(scope, receive, send)
+
+
 def configure_rate_limit_handlers(app: FastAPI) -> None:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-    async def set_rate_limit_defaults(request: Request, call_next):
-        request.state.view_rate_limit = None
-        return await call_next(request)
-
-    app.middleware("http")(set_rate_limit_defaults)
+    app.add_middleware(RateLimitStateMiddleware)
 
 
 def _should_require_cli_version_header(request: Request) -> bool:
@@ -295,36 +304,58 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
     )
 
 
-def configure_version_middleware(app: FastAPI) -> None:
-    async def version_middleware(request: Request, call_next):
+class VersionMiddleware:
+    """Reject mismatched CLI versions and stamp server/effective versions on responses."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         from packaging.version import InvalidVersion, Version
 
         from version import get_server_version
 
+        request = Request(scope)
         server_ver = get_server_version()
         cli_ver_str = request.headers.get("x-observal-cli-version")
         effective = server_ver
 
+        rejection = None
         if server_ver != "dev":
             if not cli_ver_str and _should_require_cli_version_header(request):
-                return _cli_version_response(server_ver, None)
-            if cli_ver_str:
+                rejection = _cli_version_response(server_ver, None)
+            elif cli_ver_str:
                 try:
                     client_ver = Version(cli_ver_str)
                     server_version = Version(server_ver)
                     if client_ver != server_version:
-                        return _cli_version_response(server_ver, cli_ver_str)
-                    effective = str(server_version)
+                        rejection = _cli_version_response(server_ver, cli_ver_str)
+                    else:
+                        effective = str(server_version)
                 except InvalidVersion:
-                    return _cli_version_response(server_ver, cli_ver_str)
+                    rejection = _cli_version_response(server_ver, cli_ver_str)
+        if rejection is not None:
+            await rejection(scope, receive, send)
+            return
 
         request.state.effective_version = effective
-        response = await call_next(request)
-        response.headers["X-Observal-Server"] = server_ver
-        response.headers["X-Observal-Effective"] = effective
-        return response
 
-    app.middleware("http")(version_middleware)
+        async def send_with_versions(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-Observal-Server"] = server_ver
+                headers["X-Observal-Effective"] = effective
+            await send(message)
+
+        await self.app(scope, receive, send_with_versions)
+
+
+def configure_version_middleware(app: FastAPI) -> None:
+    app.add_middleware(VersionMiddleware)
 
 
 def configure_middleware(app: FastAPI) -> None:

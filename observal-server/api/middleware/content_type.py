@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Content-Type validation and JSON depth protection middleware.
@@ -11,15 +12,10 @@ header and guards against deeply-nested JSON payloads (JSON bomb mitigation).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 from fastapi.responses import JSONResponse
 from loguru import logger as optic
-from starlette.middleware.base import BaseHTTPMiddleware
-
-if TYPE_CHECKING:
-    from starlette.requests import Request
-
+from starlette.requests import Request
 
 # Methods that carry a request body and therefore require Content-Type validation.
 _BODY_METHODS = {"POST", "PUT", "PATCH"}
@@ -82,29 +78,41 @@ def _content_type_base(header: str | None) -> str:
     return header.split(";")[0].strip().lower()
 
 
-class ContentTypeMiddleware(BaseHTTPMiddleware):
+class ContentTypeMiddleware:
     """Validate Content-Type and JSON payload depth."""
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
         method = request.method.upper()
 
         # Only validate body-bearing methods.
         if method not in _BODY_METHODS:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         path = request.url.path.rstrip("/")
 
         # Skip exempt paths.
         if path in _SKIP_PATHS or any(path.startswith(p) for p in _SKIP_PREFIXES):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # If there is no body to validate, skip Content-Type enforcement.
         content_length = request.headers.get("content-length")
         ct_header = request.headers.get("content-type")
         if content_length is not None and int(content_length) == 0:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
         if content_length is None and not ct_header:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
         ct = _content_type_base(request.headers.get("content-type"))
 
         # Determine allowed set based on path.
@@ -117,32 +125,58 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
                 path,
                 request.headers.get("content-type"),
             )
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=415,
                 content={"detail": f"Unsupported media type: {ct or '(none)'}. Expected application/json."},
             )
+            await response(scope, receive, send)
+            return
 
         # JSON depth check - only for application/json bodies.
         if ct == "application/json":
-            try:
-                body = await request.body()
-                if body:
-                    parsed = json.loads(body)
-                    if _check_depth(parsed):
-                        optic.warning("Rejected {} {}: JSON nesting exceeds {} levels", method, path, MAX_JSON_DEPTH)
-                        return JSONResponse(
-                            status_code=400,
-                            content={"detail": f"JSON payload exceeds maximum nesting depth of {MAX_JSON_DEPTH}"},
-                        )
-                    if _has_nul(parsed):
-                        return JSONResponse(
-                            status_code=422,
-                            content={"detail": "Text fields must not contain NUL characters"},
-                        )
-            except json.JSONDecodeError:
+            body = await request.body()
+            error = _json_body_error(body, method, path)
+            if error is not None:
+                await error(scope, receive, send)
+                return
+            receive = _replay_body(body, receive)
+
+        await self.app(scope, receive, send)
+
+
+def _json_body_error(body: bytes, method: str, path: str) -> JSONResponse | None:
+    """Return the rejection for an unacceptable JSON body, or None when it may proceed."""
+    try:
+        if body:
+            parsed = json.loads(body)
+            if _check_depth(parsed):
+                optic.warning("Rejected {} {}: JSON nesting exceeds {} levels", method, path, MAX_JSON_DEPTH)
                 return JSONResponse(
                     status_code=400,
-                    content={"detail": "Malformed JSON in request body"},
+                    content={"detail": f"JSON payload exceeds maximum nesting depth of {MAX_JSON_DEPTH}"},
                 )
+            if _has_nul(parsed):
+                return JSONResponse(
+                    status_code=422,
+                    content={"detail": "Text fields must not contain NUL characters"},
+                )
+    except json.JSONDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Malformed JSON in request body"},
+        )
+    return None
 
-        return await call_next(request)
+
+def _replay_body(body: bytes, receive):
+    """Hand the already-read body to the downstream app, then defer to the client."""
+    replayed = False
+
+    async def replay():
+        nonlocal replayed
+        if not replayed:
+            replayed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+
+    return replay
