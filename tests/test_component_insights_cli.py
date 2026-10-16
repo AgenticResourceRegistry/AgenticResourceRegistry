@@ -5,10 +5,13 @@
 
 import json
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
+from observal_cli.client import _handle_error
 from observal_cli.cmd_insights import insights_app
+from observal_cli.errors import CliError, ErrorCategory
 
 runner = CliRunner()
 COMPONENT_ID = "11111111-1111-4111-8111-111111111111"
@@ -74,3 +77,27 @@ def test_sessions_passes_cursor_and_keeps_nullable_evidence(monkeypatch):
             {"period_days": 20, "limit": 10, "cursor": "first-page"},
         )
     ]
+
+
+def test_empty_presence_generation_error_preserves_coverage_without_raw_json():
+    path = f"/api/v1/insights/components/mcp/{COMPONENT_ID}/generate"
+    coverage = {
+        "presence": {"eligible_sessions": 63, "legacy_hash_sessions": 60, "snapshot_missing_sessions": 1},
+        "reasons": ["no_present_sessions"],
+    }
+    request = httpx.Request("POST", "https://example.test" + path)
+    response = httpx.Response(
+        422, json={"detail": {"message": "No verified present sessions", "coverage": coverage}}, request=request
+    )
+    error = httpx.HTTPStatusError("unprocessable", request=request, response=response)
+
+    with pytest.raises(CliError) as failure:
+        _handle_error(error, path)
+
+    assert failure.value.category is ErrorCategory.VALIDATION
+    assert failure.value.http_status == 422
+    assert failure.value.result == {"coverage": coverage}
+    assert "legacy hashes: 60" in failure.value.message
+    assert "missing snapshots: 1" in failure.value.message
+    assert "{" not in failure.value.message
+    assert "Legacy Agent traces alone do not prove" in failure.value.remediation
