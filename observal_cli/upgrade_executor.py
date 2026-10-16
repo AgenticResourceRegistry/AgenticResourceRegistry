@@ -14,7 +14,6 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,7 +24,7 @@ from rich import print as rprint
 
 from observal_cli import config
 from observal_cli.constants import REDIRECT_ALLOWLIST
-from observal_cli.install_detector import SOURCE_SPEC, InstallInfo, InstallMethod, install_spec
+from observal_cli.install_detector import SOURCE_SPEC, InstallInfo, InstallMethod, install_spec, pip_install_prefix
 
 GITHUB_REPO = "Observal/Observal"
 
@@ -52,7 +51,7 @@ def execute(
     elif install_info.method == InstallMethod.PIPX:
         _install_via_pipx(target_version, direction, spinner)
     elif install_info.method == InstallMethod.PIP:
-        _install_via_pip(target_version, direction, spinner)
+        _install_via_pip(target_version, direction, spinner, install_info)
     elif install_info.method == InstallMethod.BINARY:
         _install_binary(install_info, target_version, direction, spinner, interactive=interactive)
     else:
@@ -73,12 +72,9 @@ def _install_via_pipx(target_version: str, direction: str, spinner) -> None:
     _install_with_source_fallback(lambda spec: ["pipx", "install", spec, "--force"], target_version, direction, spinner)
 
 
-def _install_via_pip(target_version: str, direction: str, spinner) -> None:
-    # Uses sys.executable to target the current Python environment. If the CLI
-    # is installed via uv or pipx, those paths are used instead.
-    _install_with_source_fallback(
-        lambda spec: [sys.executable, "-m", "pip", "install", spec, "--quiet"], target_version, direction, spinner
-    )
+def _install_via_pip(target_version: str, direction: str, spinner, install_info: InstallInfo) -> None:
+    prefix = pip_install_prefix(install_info)
+    _install_with_source_fallback(lambda spec: [*prefix, spec, "--quiet"], target_version, direction, spinner)
 
 
 def _install_with_source_fallback(

@@ -103,11 +103,9 @@ def test_execute_selects_installer_then_verifies(
     installer_args = (
         (info, "2.4.1", "upgrade", spinner)
         if method == InstallMethod.BINARY
-        else (
-            "2.4.1",
-            "upgrade",
-            spinner,
-        )
+        else ("2.4.1", "upgrade", spinner, info)
+        if method == InstallMethod.PIP
+        else ("2.4.1", "upgrade", spinner)
     )
     installer_kwargs = {"interactive": True} if method == InstallMethod.BINARY else {}
     assert events == [
@@ -181,7 +179,7 @@ def test_package_installers_build_exact_commands_and_progress(
 ) -> None:
     events: list[object] = []
     spinner = RecordingSpinner(events)
-    monkeypatch.setattr(executor.sys, "executable", "/venv/bin/python")
+    monkeypatch.setattr(executor, "pip_install_prefix", lambda _: ["/venv/bin/python", "-m", "pip", "install"])
     monkeypatch.setenv("PIP_INDEX_URL", "https://packages.example.test/simple")
 
     def run(command: list[str], **kwargs: object) -> SimpleNamespace:
@@ -190,7 +188,8 @@ def test_package_installers_build_exact_commands_and_progress(
 
     monkeypatch.setattr(executor.subprocess, "run", run)
 
-    result = getattr(executor, installer_name)("2.4.1", direction, spinner)
+    args = (install_info(InstallMethod.PIP),) if installer_name == "_install_via_pip" else ()
+    result = getattr(executor, installer_name)("2.4.1", direction, spinner, *args)
 
     assert result is None
     assert events == [
@@ -223,9 +222,11 @@ def test_package_installer_failure_tries_release_tag_then_fails_loudly(
 ) -> None:
     run = MagicMock(return_value=completed(returncode, stderr=stderr))
     monkeypatch.setattr(executor.subprocess, "run", run)
+    monkeypatch.setattr(executor, "pip_install_prefix", lambda _: ["/venv/bin/python", "-m", "pip", "install"])
 
+    args = (install_info(InstallMethod.PIP),) if installer_name == "_install_via_pip" else ()
     with pytest.raises(typer.Exit) as error:
-        getattr(executor, installer_name)("2.4.1", direction, RecordingSpinner())
+        getattr(executor, installer_name)("2.4.1", direction, RecordingSpinner(), *args)
 
     assert error.value.exit_code == 1
     assert run.call_count == 2
@@ -254,9 +255,11 @@ def test_package_installer_boundary_exceptions_propagate_unchanged(
 ) -> None:
     spinner = RecordingSpinner()
     monkeypatch.setattr(executor.subprocess, "run", MagicMock(side_effect=failure))
+    monkeypatch.setattr(executor, "pip_install_prefix", lambda _: ["/venv/bin/python", "-m", "pip", "install"])
 
+    args = (install_info(InstallMethod.PIP),) if installer_name == "_install_via_pip" else ()
     with pytest.raises(type(failure)) as error:
-        getattr(executor, installer_name)("2.4.1", "upgrade", spinner)
+        getattr(executor, installer_name)("2.4.1", "upgrade", spinner, *args)
 
     assert error.value is failure
     assert spinner.events == [
