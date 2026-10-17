@@ -3075,3 +3075,35 @@ def test_kiro_agent_pull_installs_skill_folder(pull_app_boundary, registry, tmp_
     pulled = _invoke(pull_app_boundary, target, "--output", "json", harness="kiro")
     assert pulled.exit_code == 0, pulled.output
     assert (target / ".kiro/skills/demo/SKILL.md").read_text() == "---\nname: demo\n---\n"
+
+
+def test_pull_refuses_an_unsupported_harness_before_prompting_or_installing(
+    pull_app_boundary: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path
+) -> None:
+    # OBS-1421: the pull used to install for any harness and leave a partial install.
+    boundaries.get.return_value = _agent_detail(supported_harnesses=["claude-code", "kiro"])
+    result = _invoke(pull_app_boundary, tmp_path, "--output", "json", harness="pi")
+    assert result.exit_code != 0 and result.stdout == ""
+    error = json.loads(result.stderr)["error"]
+    assert error["message"] == "Agent acme/reviewer 1.4.0 does not support pi; it supports claude-code, kiro."
+    assert "--allow-unsupported-harness" in error["remediation"]
+    boundaries.post.assert_not_called()
+
+
+def test_pull_allow_unsupported_harness_asks_the_server_to_install_anyway(
+    pull_app: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path
+) -> None:
+    boundaries.get.return_value = _agent_detail(supported_harnesses=["claude-code"])
+    result = _invoke(pull_app, tmp_path, "--output", "json", "--allow-unsupported-harness", harness="pi")
+    assert result.exit_code == 0, result.output
+    assert boundaries.post.call_args.args[1]["allow_unsupported_harness"] is True
+
+
+@pytest.mark.parametrize("supported", [["claude-code"], []])
+def test_pull_for_a_supported_or_unrestricted_harness_sends_no_override(
+    pull_app: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path, supported: list[str]
+) -> None:
+    boundaries.get.return_value = _agent_detail(supported_harnesses=supported)
+    result = _invoke(pull_app, tmp_path, "--output", "json")
+    assert result.exit_code == 0, result.output
+    assert "allow_unsupported_harness" not in boundaries.post.call_args.args[1]

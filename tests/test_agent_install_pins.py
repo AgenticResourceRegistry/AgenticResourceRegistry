@@ -151,6 +151,7 @@ async def test_http_pinned_agent_returns_complete_binary_folder_and_refuses_old_
     pinned.extra_files = [{"path": "assets/icon.bin", "content": "AP8=", "encoding": "base64"}]
     pinned.content_revision = skill_content_revision(listing, pinned)
     version = (await session.execute(select(AgentVersion))).scalar_one()
+    version.supported_harnesses = ["pi"]
     await lock_agent_version(session, agent, version)
     await session.commit()
 
@@ -227,6 +228,7 @@ async def test_agent_bundle_preserves_pinned_tree_for_every_skill_harness(sessio
     ]
     pinned.content_revision = skill_content_revision(listing, pinned)
     version = (await session.execute(select(AgentVersion))).scalar_one()
+    version.supported_harnesses = [harness]
     await lock_agent_version(session, agent, version)
     await session.commit()
 
@@ -287,6 +289,7 @@ async def test_bundle_refuses_harness_without_verified_skills_capability(session
     pinned.extra_files = [{"path": "templates/a.txt", "content": "first"}]
     pinned.content_revision = skill_content_revision(listing, pinned)
     version = (await session.execute(select(AgentVersion))).scalar_one()
+    version.supported_harnesses = [harness]
     await lock_agent_version(session, agent, version)
     await session.commit()
     with pytest.raises(HTTPException, match="does not support complete skill folders") as refused:

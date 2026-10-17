@@ -60,6 +60,42 @@ from services.skill_validator import SkillValidationError
 from ._router import router
 from .helpers import _load_agent, _resolve_component_names
 
+_CAPABILITY_FOR_COMPONENT = {"mcp": "mcp_servers", "hook": "hooks", "skill": "skills"}
+
+
+def _unsupported_harness_warnings(name: str, version, harness: str, *, allowed: bool) -> list[str]:
+    """Refuse a harness the agent version does not list as supported, unless the caller allows it.
+
+    The author's ``supported_harnesses`` is authoritative; an empty list puts no limit on
+    harnesses. Generating config for any other harness used to succeed silently and leave a
+    partial install: components the harness has no place for, or puts where it never loads them.
+    """
+    supported = list(version.supported_harnesses or [])
+    if not supported or harness in supported:
+        return []
+    label = f"{name} {version.version}"
+    if not allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Agent {label} does not support {harness}; it supports {', '.join(supported)}. "
+                "Install it for one of those, or set allow_unsupported_harness (observal agent pull "
+                "--allow-unsupported-harness) to install it anyway; some components may be missing or not loaded."
+            ),
+        )
+    from schemas.constants import HARNESS_CAPABILITIES
+
+    capabilities = HARNESS_CAPABILITIES.get(harness, set())
+    types = {c.component_type for c in version.components or []}
+    lost = sorted(
+        t for t, capability in _CAPABILITY_FOR_COMPONENT.items() if t in types and capability not in capabilities
+    )
+    return [
+        f"Agent {label} does not list {harness} as supported (it supports {', '.join(supported)}). "
+        + (f"{harness} cannot install its {', '.join(lost)} components. " if lost else "")
+        + "Components may be missing or not loaded; check the install before relying on it."
+    ]
+
 
 @router.post("/{agent_id}/install", response_model=AgentInstallResponse)
 async def install_agent(
@@ -112,6 +148,9 @@ async def install_agent(
     else:
         install_version = agent.latest_version
 
+    harness_warnings = _unsupported_harness_warnings(
+        agent.name, install_version, req.harness, allowed=req.allow_unsupported_harness
+    )
     install_components = list(install_version.components or [])
     component_target_team_id = agent.team_id if agent.is_private else None
 
@@ -491,7 +530,7 @@ async def install_agent(
             },
         )
 
-    warnings = pins.warnings + archived_warnings + setup_warnings + snippet.pop("_warnings", [])
+    warnings = harness_warnings + pins.warnings + archived_warnings + setup_warnings + snippet.pop("_warnings", [])
     lock = {
         "lock_version": LOCK_VERSION,
         "status": pins.status,
