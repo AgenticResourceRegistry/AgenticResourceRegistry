@@ -105,7 +105,7 @@ variable "image_repo_api" {
 }
 
 variable "image_repo_web" {
-  description = "Container image repository for the Next.js web frontend."
+  description = "Container image repository for the web frontend."
   type        = string
   default     = "ghcr.io/observal/observal-web"
 }
