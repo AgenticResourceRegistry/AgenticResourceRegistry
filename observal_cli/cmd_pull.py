@@ -932,6 +932,26 @@ def _locked_version_detail(
         )
 
 
+def _require_supported_harness(harness: str, supported: list[str], *, allow: bool, label: str) -> None:
+    """Refuse, before any prompt, a harness the agent version does not list as supported.
+
+    The server refuses too; checking here first keeps the user from typing MCP secrets for an
+    install that will not happen. An empty list puts no limit on harnesses.
+    """
+    if allow or not supported or harness in supported:
+        return
+    fail(
+        ErrorCategory.VALIDATION,
+        f"Agent {label} does not support {harness}; it supports {', '.join(supported)}.",
+        operation="Pull agent",
+        resource="harness",
+        remediation=(
+            f"Pull it for a supported harness (--harness {supported[0]}), or add --allow-unsupported-harness "
+            "to install it anyway; some components may be missing or not loaded."
+        ),
+    )
+
+
 def _target_version(
     *, requested: str | None, upgrade: bool, project_locked: dict | None, installed: dict | None
 ) -> tuple[str | None, str]:
@@ -2879,6 +2899,11 @@ def register_pull(app: typer.Typer):
             "--force-hooks",
             help="Replace or remove Observal-owned agent hooks in settings.json that were edited locally.",
         ),
+        allow_unsupported_harness: bool = typer.Option(
+            False,
+            "--allow-unsupported-harness",
+            help="Install even when the agent version does not list --harness as supported (warns)",
+        ),
         output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
     ):
         """Fetch agent config and write harness files to disk.
@@ -2897,6 +2922,9 @@ def register_pull(app: typer.Typer):
         pinned. Components without a lock (agents released before pinning) fall
         back to their latest version with a warning; use --strict, or set
         OBSERVAL_STRICT=1, to refuse instead. The flag wins over the variable.
+
+        The harness must be one the agent version lists as supported; pass
+        --allow-unsupported-harness to install for another one anyway.
 
         Use --env KEY=VALUE and --header Header-Name=value only for non-secret
         settings because command arguments are visible to other processes. For
@@ -3023,11 +3051,13 @@ def register_pull(app: typer.Typer):
 
         # MCP env vars and headers come from the versions that will be installed
         plan = agent_detail
+        supported = agent_detail.get("supported_harnesses") or []
         if version:
             with _progress(output, f"Fetching agent version {version}..."):
                 version_detail = _locked_version_detail(
                     resolved, version, resolved_from, qualified_name=qualified_name, directory=target_dir
                 )
+            supported = version_detail.get("supported_harnesses", supported) or []
             plan = {
                 "component_links": [
                     {
@@ -3039,6 +3069,13 @@ def register_pull(app: typer.Typer):
                     for component in version_detail.get("components", [])
                 ]
             }
+
+        _require_supported_harness(
+            harness,
+            list(supported),
+            allow=allow_unsupported_harness,
+            label=f"{qualified_name} {version or agent_detail.get('version', '')}".strip(),
+        )
 
         spec_cache: dict = {}
         missing_inputs: list[dict[str, str]] = []
@@ -3135,6 +3172,8 @@ def register_pull(app: typer.Typer):
                 install_body["version"] = version
             if strict:
                 install_body["strict"] = True
+            if allow_unsupported_harness:
+                install_body["allow_unsupported_harness"] = True
             result = client.post_public(
                 f"/api/v1/agents/{resolved}/install",
                 install_body,

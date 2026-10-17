@@ -342,6 +342,9 @@ class AgentInstallRequest(BaseModel):
     # locked, or pinned to a version that is not approved.
     strict: bool = False
     supported_features: list[str] = []
+    # Install for a harness the agent version does not list as supported, with a warning,
+    # instead of refusing.
+    allow_unsupported_harness: bool = False
 
 
 class AgentInstallResponse(BaseModel):
