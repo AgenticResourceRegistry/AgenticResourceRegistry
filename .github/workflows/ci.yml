@@ -197,7 +197,7 @@ jobs:
           # Fork pull requests cannot access repository secrets, so Codecov authenticates those tokenlessly.
           fail_ci_if_error: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
 
-# ── Job 4: Next.js lint + typecheck ───────────────────────────────────────────
+# ── Job 4: Web lint + typecheck ───────────────────────────────────────────────
   web-lint:
     name: web-lint
     runs-on: ubuntu-latest
