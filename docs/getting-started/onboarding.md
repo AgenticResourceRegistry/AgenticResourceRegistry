@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Setup guide
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Setup guide"
+---
 
 Connect your machine to Observal with two commands. It takes about two minutes and does not need Python or Docker.
 

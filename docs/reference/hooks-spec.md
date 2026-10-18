@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Hooks specification
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Hooks specification"
+---
 
 The schema Observal uses for hook definitions -- both the registry hook type (`observal registry hook`) and hooks wired into harness configs by `observal agent pull` / `observal doctor patch`.
 
@@ -156,5 +157,5 @@ A sync test (`tests/test_constants_sync.py`) ensures CLI and server stay in lock
 
 ## Related
 
-* [`observal registry hook`](../cli/registry.md)
-* [Session tracking and reconciliation](../core-concepts/session-tracking.md)
+* [`observal registry hook`](/cli/registry)
+* [Session tracking and reconciliation](/core-concepts/session-tracking)

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Adding a New Harness to Observal
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Adding a New Harness to Observal"
+---
 
 This guide covers everything needed to add full harness support. Observal manages
 four component types per harness: **MCP servers**, **skills**, **hooks**, and

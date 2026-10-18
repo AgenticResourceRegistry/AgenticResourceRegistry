@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Sandboxes
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Sandboxes"
+---
 
 Sandboxes are versioned execution environments registered in Observal. When an agent has a sandbox component, Observal installs an `observal-sandbox` MCP server that exposes one callable tool per sandbox.
 

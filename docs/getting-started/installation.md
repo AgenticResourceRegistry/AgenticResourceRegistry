@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Installation
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Installation"
+---
 
 Observal has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
 
@@ -30,7 +31,7 @@ cp .env.example .env
 make up
 ```
 
-For deployment options, see [Self-Hosting](../self-hosting/docker-compose.md) and [Production deployment](../self-hosting/production-deploy.md).
+For deployment options, see [Self-Hosting](/self-hosting/docker-compose) and [Production deployment](/self-hosting/production-deploy).
 
 ## Install the CLI
 
@@ -54,7 +55,7 @@ irm https://raw.githubusercontent.com/Observal/Observal/main/install.ps1 | iex
 
 This downloads the latest release binary for your platform and places it on your `PATH`. On Windows it installs to `%LOCALAPPDATA%\Programs\Observal` and updates your user `PATH` (open a new terminal afterwards). Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to pin a version or change the install directory.
 
-Connecting to a server your team already runs? See the [Setup guide](onboarding.md).
+Connecting to a server your team already runs? See the [Setup guide](/getting-started/onboarding).
 
 Verify it worked:
 
@@ -149,4 +150,4 @@ rm -rf ~/.observal
 
 ## Next
 
--> [Quickstart](quickstart.md)
+-> [Quickstart](/getting-started/quickstart)

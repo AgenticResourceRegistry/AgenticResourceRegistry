@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Sync an MCP server from GitHub or GitLab
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Sync an MCP server from GitHub or GitLab"
+---
 
 An MCP server listed with a git repository can publish new versions on its own. Add a webhook to the repository on GitHub or GitLab, and Observal re-reads the repository and publishes a new version whenever you push or publish a release. You no longer have to run `observal registry mcp edit` after every change.
 
@@ -108,7 +109,7 @@ Deliveries that are ignored, such as a push to another branch, do not change the
 
 github.com and gitlab.com deliver webhooks over the public internet, so an Observal install inside a private network needs one public path for them. Expose only the webhook receivers, `POST /api/v1/webhooks/github/mcp/<id>` and `POST /api/v1/webhooks/gitlab/mcp/<id>`, through a public gateway, load balancer or reverse proxy that answers `404` to every other path. Each delivery is authenticated by its signature or secret token, so a source IP allowlist is optional. Then set `WEBHOOK_PUBLIC_URL` on the API to that public address, for example `https://hooks.observal.example.com`. The **Sync** tab shows webhook URLs under it, while everything else keeps using the private address.
 
-* **AWS Terraform:** set `enable_webhook_ingress = true` and list your providers in `webhook_providers` to add an API Gateway endpoint that does this. See [Git webhooks on a private install](../self-hosting/aws-terraform.md#git-webhooks-on-a-private-install).
+* **AWS Terraform:** set `enable_webhook_ingress = true` and list your providers in `webhook_providers` to add an API Gateway endpoint that does this. See [Git webhooks on a private install](/self-hosting/aws-terraform#git-webhooks-on-a-private-install).
 * **GitHub Enterprise Server or self-managed GitLab** on the same network can reach Observal directly and needs none of this. Self-managed GitLab blocks webhooks to private addresses by default; an administrator allows them under **Admin > Settings > Network > Outbound requests**. If GitLab reports `URL is blocked: Host cannot be resolved or invalid`, the GitLab server cannot resolve Observal's hostname.
 
 ## Private repositories

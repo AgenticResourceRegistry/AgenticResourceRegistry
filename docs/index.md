@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Subramania Raja <dhanpraja231@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Installation
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Subramania Raja <dhanpraja231@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Installation"
+---
 
 Observal has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
 
@@ -31,7 +32,7 @@ cp .env.example .env
 make up
 ```
 
-For deployment options, see [Self-Hosting](self-hosting/docker-compose.md) and [Production deployment](self-hosting/production-deploy.md).
+For deployment options, see [Self-Hosting](/self-hosting/docker-compose) and [Production deployment](/self-hosting/production-deploy).
 
 ## Install the CLI
 
@@ -142,4 +143,4 @@ rm -rf ~/.observal
 
 ## Next
 
--> [Quickstart](getting-started/quickstart.md)
+-> [Quickstart](/getting-started/quickstart)

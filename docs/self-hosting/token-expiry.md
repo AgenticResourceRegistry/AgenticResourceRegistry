@@ -1,10 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-
-# Token Expiry Settings
+---
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Token Expiry Settings"
+---
 
 Most deployments don't need to change these. The defaults (60-minute access tokens, 30-day refresh tokens) work well for typical teams. Read on if you have compliance requirements, high-security needs, or users complaining about session behavior.
 

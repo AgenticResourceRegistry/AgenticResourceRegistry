@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal share`
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal share"
+---
 
 Create and consume expiring links for version-pinned Agents installed in a repository. Share links preserve Registry authorization: recipients must sign in to the same Observal deployment and can only see and pull Agents available in their current public or teamspace scope.
 

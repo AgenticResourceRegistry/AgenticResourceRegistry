@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# observal registry
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry"
+---
 
 Publish and manage registry components. The registry has five component types: MCP servers, skills, hooks, prompts, and sandboxes.
 
@@ -332,7 +333,7 @@ observal registry mcp transfer-owner my-server @alice -y
 
 ### `observal registry mcp sync`
 
-Publish a new MCP version automatically when the listing's GitHub or GitLab repository changes. See [Sync an MCP server from GitHub or GitLab](../use-cases/mcp-repo-sync.md) for the full setup.
+Publish a new MCP version automatically when the listing's GitHub or GitLab repository changes. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync) for the full setup.
 
 | Command | Description |
 | --- | --- |
@@ -869,10 +870,10 @@ observal registry sandbox edit @env --runtime-type docker --version 2.0.0 --outp
 
 Use `observal registry version publish` and `observal registry version list` for all five component types. Publication supports direct JSON results; history supports explicit pagination.
 
-See [`observal registry version`](component.md) for the complete contract.
+See [`observal registry version`](/cli/component) for the complete contract.
 
 ## Personalized recommendations
 
 Use `observal registry recommend` to rank visible components against the signed-in user's sessions and to dismiss or mark recommendations as installed.
 
-See [`observal registry recommend`](recommend.md) for the JSON schema and feedback actions.
+See [`observal registry recommend`](/cli/recommend) for the JSON schema and feedback actions.

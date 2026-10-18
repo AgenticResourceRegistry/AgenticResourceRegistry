@@ -1,12 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# AWS deployment with Terraform
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "AWS deployment with Terraform"
+---
 
 End state: an Observal install running in your own AWS account, fronted by an Application Load Balancer with HTTPS, with managed Postgres + Redis, ECS Fargate for the stateless app tier, and a single EC2 host for ClickHouse. Prometheus and Grafana are optional through `observability_stack`.
 
-This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Observal, use [Docker Compose setup](docker-compose.md) instead.
+This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Observal, use [Docker Compose setup](/self-hosting/docker-compose) instead.
 
 ## What gets provisioned
 
@@ -37,9 +38,9 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 | Terraform ≥ 1.6                                                                                                                         | `brew install terraform` or use [tenv](https://tofuutils.github.io/tenv/)  |
 | AWS CLI v2                                                                                                                              | `brew install awscli` - also used by the one-shot init task runner         |
 | [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | shell access into the data host                                            |
-| IAM principal with sufficient rights                                                                                                    | see [Required IAM permissions](aws-terraform.md#required-iam-permissions)  |
+| IAM principal with sufficient rights                                                                                                    | see [Required IAM permissions](/self-hosting/aws-terraform#required-iam-permissions)  |
 | (Optional) Route 53 hosted zone                                                                                                         | required for HTTPS on a custom domain                                      |
-| (Recommended) S3 bucket + DynamoDB table                                                                                                | remote Terraform state - see [Remote state](aws-terraform.md#remote-state) |
+| (Recommended) S3 bucket + DynamoDB table                                                                                                | remote Terraform state - see [Remote state](/self-hosting/aws-terraform#remote-state) |
 
 ## Quickstart
 
@@ -159,7 +160,7 @@ log_retention_days  = 30             # CloudWatch log group retention
 image_tag           = "v1.4.0"       # specific Observal release; "latest" pulls main
 ```
 
-See [Configuration](configuration.md) for the meaning of each application setting.
+See [Configuration](/self-hosting/configuration) for the meaning of each application setting.
 
 ### Bring Your Own VPC
 
@@ -199,7 +200,7 @@ A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://
 
 ### Git webhooks on a private install
 
-[MCP repository sync](../use-cases/mcp-repo-sync.md) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Observal, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
+[MCP repository sync](/use-cases/mcp-repo-sync) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Observal, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
 
 ```hcl
 alb_scheme             = "internal"
@@ -230,7 +231,7 @@ Things to know:
 
 ## Required IAM permissions
 
-The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](aws-terraform.md#hardened-iam-policy).
+The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](/self-hosting/aws-terraform#hardened-iam-policy).
 
 | Service                             | Managed policy                    |
 | ----------------------------------- | --------------------------------- |
@@ -382,8 +383,8 @@ The defaults are safe but conservative. Before pointing real traffic at this:
 * [ ] Add CloudWatch alarms on RDS `CPUUtilization`, `FreeableMemory`, ECS service CPU, ALB `HTTPCode_Target_5XX_Count`
 * [ ] Attach AWS WAF to the ALB
 * [ ] Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
-* [ ] Configure Observal SSO. See [Authentication and SSO](authentication.md)
-* [ ] Test the [backup and restore](backup-and-restore.md) procedure end-to-end
+* [ ] Configure Observal SSO. See [Authentication and SSO](/self-hosting/authentication)
+* [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 * [ ] Replace the GitHub tarball download in `user-data.sh.tftpl` with an artifact URL you control
 
 ## Troubleshooting
@@ -417,4 +418,4 @@ To re-run by hand: `$(terraform output -raw init_run_task_command)`.
 
 **RDS storage is full.** `max_allocated_storage` autoscales up to 500 GB by default. Raise `db_max_allocated_storage_gb` if you have heavier audit-log volume.
 
-For application-level issues (login fails, traces missing) see [Troubleshooting](troubleshooting.md).
+For application-level issues (login fails, traces missing) see [Troubleshooting](/self-hosting/troubleshooting).

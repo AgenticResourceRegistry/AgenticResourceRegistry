@@ -1,9 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# `observal doctor support`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal doctor support"
+---
 
 Generate and inspect redacted diagnostic support bundles.
 
@@ -127,6 +126,6 @@ Inspection never extracts files. It rejects traversal paths, links requested thr
 
 ## Related
 
-* [`observal doctor`](doctor.md): diagnose and repair telemetry instrumentation
-* [`observal ops telemetry status`](ops.md): check telemetry flow
-* [Troubleshooting](../self-hosting/troubleshooting.md): deployment diagnosis
+* [`observal doctor`](/cli/doctor): diagnose and repair telemetry instrumentation
+* [`observal ops telemetry status`](/cli/ops): check telemetry flow
+* [Troubleshooting](/self-hosting/troubleshooting): deployment diagnosis

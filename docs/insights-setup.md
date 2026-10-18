@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Insights LLM Setup
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Insights LLM Setup"
+---
 
 The insights engine uses [LiteLLM](https://docs.litellm.ai/docs/providers) to call LLMs for report generation. This means any LiteLLM-compatible provider works out of the box.
 

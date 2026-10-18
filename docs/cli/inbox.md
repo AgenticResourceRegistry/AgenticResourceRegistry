@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal inbox`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal inbox"
+---
 
 View and update the signed-in user's work and event feed. Inbox items cover reviews, decisions, teamspace activity, update notices, completed insights, and system notices.
 
@@ -121,5 +122,5 @@ In JSON mode, stdout contains only the successful result. Failures leave stdout 
 
 ## Related
 
-* [`observal outdated`](outdated.md): report installed updates to Inbox
-* [`observal registry`](registry.md): inspect Registry subjects referenced by Inbox items
+* [`observal outdated`](/cli/outdated): report installed updates to Inbox
+* [`observal registry`](/cli/registry): inspect Registry subjects referenced by Inbox items

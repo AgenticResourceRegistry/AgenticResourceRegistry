@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Usage reporting
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Usage reporting"
+---
 
 Observal can send aggregate usage reports to the Observal-operated collector at `https://usage.observal.io/api/v1/usage-pings`. Reporting is enabled by default with a six-hour cadence and starts on new installations without any setup. Until a super administrator sets a company name, reports identify the installation as `unknown-` followed by a six-digit number derived from its installation ID. Once a name is set, the next report carries it under the same installation ID. The collector and reporting dashboard are maintained separately in [Observal Usage](https://github.com/Observal/observal_usage).
 

@@ -1,9 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# Resource Tuning
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Resource Tuning"
+---
 
 Connection pool sizes, query limits, and timeout configuration. These settings control how Observal connects to its backing stores (PostgreSQL, Redis, ClickHouse). Most deployments work fine with defaults. Tune when you see connection timeouts, pool exhaustion, or slow queries under load.
 
@@ -14,9 +13,9 @@ Connection pool sizes, query limits, and timeout configuration. These settings c
 - **OOM kills** on the API container (decrease pool sizes, each connection uses memory)
 - **ClickHouse query timeouts** on large trace datasets (increase timeout)
 
-## PostgreSQL {#postgresql}
+## PostgreSQL
 
-### DB Pool Size {#db-pool-size}
+### DB Pool Size
 
 Number of persistent database connections maintained in the connection pool.
 
@@ -32,7 +31,7 @@ Number of persistent database connections maintained in the connection pool.
 
 **When to decrease:** Running on memory-constrained containers, or your PostgreSQL instance has a low `max_connections` limit.
 
-### DB Max Overflow {#db-max-overflow}
+### DB Max Overflow
 
 Temporary connections created when the pool is full. These are closed after use.
 
@@ -44,9 +43,9 @@ Temporary connections created when the pool is full. These are closed after use.
 
 **Total max connections** = pool_size + max_overflow. Ensure your PostgreSQL `max_connections` is at least this value plus a buffer for admin connections.
 
-## Redis {#redis}
+## Redis
 
-### Redis Max Connections {#redis-max-connections}
+### Redis Max Connections
 
 Maximum concurrent connections to Redis.
 
@@ -58,7 +57,7 @@ Maximum concurrent connections to Redis.
 
 **When to increase:** "Connection pool exhausted" errors in Redis client logs, or high latency on GraphQL subscriptions.
 
-### Redis Timeout {#redis-timeout}
+### Redis Timeout
 
 Socket timeout in seconds for Redis operations.
 
@@ -70,9 +69,9 @@ Socket timeout in seconds for Redis operations.
 
 **When to increase:** Redis is in a different availability zone or region, causing occasional timeout errors on valid operations.
 
-## ClickHouse {#clickhouse}
+## ClickHouse
 
-### ClickHouse Max Connections {#clickhouse-max-connections}
+### ClickHouse Max Connections
 
 Maximum HTTP connections to ClickHouse for analytics queries.
 
@@ -82,7 +81,7 @@ Maximum HTTP connections to ClickHouse for analytics queries.
 | `50` | Heavy analytics usage with many concurrent dashboard viewers |
 | `10` | Small deployments or shared ClickHouse clusters |
 
-### ClickHouse Keepalive {#clickhouse-keepalive}
+### ClickHouse Keepalive
 
 Persistent connections kept alive between requests.
 
@@ -92,7 +91,7 @@ Persistent connections kept alive between requests.
 | `5` | Lower memory usage, slightly higher latency on first query per burst |
 | `20` | Faster response for sustained dashboard usage |
 
-### ClickHouse Query Timeout {#clickhouse-query-timeout}
+### ClickHouse Query Timeout
 
 Maximum seconds a single ClickHouse query can run before cancellation.
 
@@ -104,7 +103,7 @@ Maximum seconds a single ClickHouse query can run before cancellation.
 
 **When to increase:** Dashboard "query timeout" errors on wide time ranges or high-cardinality group-by queries.
 
-### Skip DDL on Startup {#skip-ddl-on-startup}
+### Skip DDL on Startup
 
 Skip ClickHouse schema migrations on server startup.
 
@@ -115,7 +114,7 @@ Skip ClickHouse schema migrations on server startup.
 
 **When to enable:** Large ClickHouse clusters where DDL operations are slow or require coordination, or when running multiple API replicas (only one should run migrations).
 
-### Query Memory Limit {#query-memory-limit}
+### Query Memory Limit
 
 Maximum memory a single ClickHouse query can use (in bytes).
 
@@ -125,7 +124,7 @@ Maximum memory a single ClickHouse query can use (in bytes).
 | `5000000000` / 5GB | Conservative; prevents a single query from consuming all memory |
 | `20000000000` / 20GB | For dedicated ClickHouse instances with abundant RAM |
 
-### GROUP BY Spill Threshold {#group-by-spill-threshold}
+### GROUP BY Spill Threshold
 
 Row count at which GROUP BY operations spill to disk instead of keeping everything in memory.
 
@@ -135,7 +134,7 @@ Row count at which GROUP BY operations spill to disk instead of keeping everythi
 | `500000` | More aggressive spilling; lower memory usage but slower |
 | `5000000` | Keep more in memory; faster but higher peak memory usage |
 
-### ORDER BY Spill Threshold {#order-by-spill-threshold}
+### ORDER BY Spill Threshold
 
 Row count at which ORDER BY operations spill to disk.
 
@@ -143,7 +142,7 @@ Row count at which ORDER BY operations spill to disk.
 |-------|--------|
 | `1000000` (default) | Same tradeoff as GROUP BY threshold |
 
-### JOIN Memory Limit {#join-memory-limit}
+### JOIN Memory Limit
 
 Maximum memory for JOIN operations (in bytes).
 

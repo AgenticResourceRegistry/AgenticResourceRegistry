@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Quickstart
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Quickstart"
+---
 
 Go from zero to "my first trace in the Observal dashboard" in about five minutes. This assumes you have Docker running.
 
@@ -59,7 +60,7 @@ curl http://localhost/health
 # → {"status": "ok"}
 ```
 
-Hitting a port conflict? See [Self-Hosting → Ports and volumes](../self-hosting/ports-and-volumes.md).
+Hitting a port conflict? See [Self-Hosting → Ports and volumes](/self-hosting/ports-and-volumes).
 
 ## 3. Log in
 
@@ -158,8 +159,8 @@ Observal indexes session transcript records into canonical events and aggregates
 
 | You want to...                      | Go to                             |
 | ----------------------------------- | --------------------------------- |
-| Understand registry identity        | [Core concepts](../core-concepts/) |
-| Understand session tracking         | [Session tracking and reconciliation](../core-concepts/session-tracking.md) |
-| Learn what to do with traces        | [Use Cases](../use-cases/)        |
-| Configure the server for production | [Self-Hosting](../self-hosting/)  |
-| Deep-dive on a CLI command          | [CLI Reference](../cli/)          |
+| Understand registry identity        | [Core concepts](/core-concepts) |
+| Understand session tracking         | [Session tracking and reconciliation](/core-concepts/session-tracking) |
+| Learn what to do with traces        | [Use Cases](/use-cases)        |
+| Configure the server for production | [Self-Hosting](/self-hosting)  |
+| Deep-dive on a CLI command          | [CLI Reference](/cli)          |

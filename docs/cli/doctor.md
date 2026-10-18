@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal doctor`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal doctor"
+---
 
 Diagnose local Observal state, repair managed telemetry instrumentation, remove managed instrumentation, and work with redacted support bundles.
 
@@ -120,7 +121,7 @@ observal doctor support bundle --output json
 observal doctor support inspect ./observal-support.tar.gz --output json
 ```
 
-See [Support bundles](support.md) for archive contents, redaction, offline behavior, and inspection limits.
+See [Support bundles](/cli/support) for archive contents, redaction, offline behavior, and inspection limits.
 
 ## Exit codes
 
@@ -134,6 +135,6 @@ See [Support bundles](support.md) for archive contents, redaction, offline behav
 
 ## Related
 
-* [`observal scan`](scan.md): read-only harness inventory
-* [`observal agent pull`](pull.md): install a complete Agent
-* [Session tracking](../core-concepts/session-tracking.md): telemetry delivery architecture
+* [`observal scan`](/cli/scan): read-only harness inventory
+* [`observal agent pull`](/cli/pull): install a complete Agent
+* [Session tracking](/core-concepts/session-tracking): telemetry delivery architecture

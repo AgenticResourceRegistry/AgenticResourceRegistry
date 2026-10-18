@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Copilot
+---
+# SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Copilot"
+---
 
 Copilot is a first-class Observal harness integration. Observal can install
 GitHub Copilot agents, configure MCP servers, expose skills, and bridge

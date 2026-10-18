@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# GCP deployment with Terraform
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "GCP deployment with Terraform"
+---
 
 End state: Observal running in your GCP project on Cloud Run, backed by Cloud SQL Postgres, Memorystore Redis, and a GCE instance for ClickHouse — with a Global HTTPS Load Balancer, managed SSL certificate, Secret Manager for credentials, and GCS for backups.
 
-For the overall deployment strategy and comparison with AWS, see [Production deployment](production-deploy.md). If you want a simpler single-VM setup, see [Single-node deployment](single-node-deploy.md).
+For the overall deployment strategy and comparison with AWS, see [Production deployment](/self-hosting/production-deploy). If you want a simpler single-VM setup, see [Single-node deployment](/self-hosting/single-node-deploy).
 
 ## What gets provisioned
 
@@ -226,8 +227,8 @@ Cloud Run scales to zero when idle (if `min_instances = 0`), which can significa
 - [ ] Enable Cloud Armor (WAF) on the Global HTTPS Load Balancer
 - [ ] Enable Security Command Center in the project
 - [ ] Set up alerting on Cloud SQL CPU, memory, and Cloud Run error rates
-- [ ] Configure [SSO](authentication.md)
-- [ ] Test [backup and restore](backup-and-restore.md) end-to-end
+- [ ] Configure [SSO](/self-hosting/authentication)
+- [ ] Test [backup and restore](/self-hosting/backup-and-restore) end-to-end
 - [ ] Set up Terraform remote state in GCS
 
 ## Troubleshooting
@@ -249,11 +250,11 @@ The managed SSL certificate takes 10–30 minutes to provision. Check: **Network
 **Cloud SQL connection refused from Cloud Run.**
 The VPC Access Connector must be in the same region as Cloud Run. Verify `connector_cidr` doesn't overlap with your VPC subnet.
 
-For application-level issues, see [Troubleshooting](troubleshooting.md).
+For application-level issues, see [Troubleshooting](/self-hosting/troubleshooting).
 
 ## Next
 
-- [Production deployment](production-deploy.md) — overview of both clouds
-- [Configuration](configuration.md) — environment variables
-- [Upgrades](upgrades.md) — upgrade and rollback procedures
-- [Backup and restore](backup-and-restore.md) — restore procedures
+- [Production deployment](/self-hosting/production-deploy) — overview of both clouds
+- [Configuration](/self-hosting/configuration) — environment variables
+- [Upgrades](/self-hosting/upgrades) — upgrade and rollback procedures
+- [Backup and restore](/self-hosting/backup-and-restore) — restore procedures

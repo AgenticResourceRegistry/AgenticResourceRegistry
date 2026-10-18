@@ -1,9 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# Okta SSO Setup for Observal (Managed Customer Instance)
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Okta SSO Setup for Observal (Managed Customer Instance)"
+---
 
 Step-by-step runbook for Observal operators setting up **Okta OIDC** for a **new Observal instance** deployed for another company (managed solution). Follow every step in order; each step assumes the previous one is complete.
 
@@ -413,7 +412,7 @@ Only after Steps 14–16 succeed:
 
 ## Related documentation
 
-- [Authentication and SSO](authentication.md) - JWT, RBAC, SSO behavior
-- [Configuration](configuration.md) - `.env` reference
+- [Authentication and SSO](/self-hosting/authentication) - JWT, RBAC, SSO behavior
+- [Configuration](/self-hosting/configuration) - `.env` reference
 - `docs/self-hosting/oidc-setup.md` - OIDC reference (multi-IdP)
 - `docs/self-hosting/cli-sso.md` - CLI login when SSO-only is enabled

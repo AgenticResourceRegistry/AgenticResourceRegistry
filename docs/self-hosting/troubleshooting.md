@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Troubleshooting
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Troubleshooting"
+---
 
 Common failure modes and their fixes. If none of these match, open a [GitHub Discussion](https://github.com/Observal/Observal/discussions) with the output of `observal auth status` and relevant logs from `docker compose logs`.
 
@@ -40,7 +41,7 @@ POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 \
   docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-Full list in [Ports and volumes](ports-and-volumes.md).
+Full list in [Ports and volumes](/self-hosting/ports-and-volumes).
 
 ### Service stuck in `starting`
 

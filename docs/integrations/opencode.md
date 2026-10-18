@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# OpenCode
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "OpenCode"
+---
 
 OpenCode is a first-class Observal harness integration. Observal can install
 OpenCode agents, configure MCP servers, expose skills, install hook plugins, and

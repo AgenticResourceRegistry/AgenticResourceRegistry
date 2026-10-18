@@ -4,8 +4,8 @@
 root: ./docs/
 
 structure:
-  readme: README.md
+  readme: index.md
   summary: SUMMARY.md
 
 redirects:
-  cli: cli/README.md
+  cli: cli/index.md

@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Share agent configs across harnesses
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Share agent configs across harnesses"
+---
 
 Your team has a reviewer agent that works great in Claude Code. Now someone wants to use it in Kiro. Then Cursor. Then they want to tweak the skills. Copy-pasting config snippets across tools doesn't scale.
 
@@ -98,4 +99,4 @@ Useful when onboarding a new machine or swapping between "work setup" and "perso
 
 ## Next
 
-→ [Run a team-wide agent registry](team-registry.md): once publishing is routine, you need governance.
+→ [Run a team-wide agent registry](/use-cases/team-registry): once publishing is routine, you need governance.

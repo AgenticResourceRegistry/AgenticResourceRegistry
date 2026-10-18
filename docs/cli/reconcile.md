@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal reconcile`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal reconcile"
+---
 
 Backfill local session records missed by automatic hook or extension delivery.
 
@@ -115,6 +116,6 @@ Per-session source read failures and checkpoint mismatches are explicit result i
 
 ## Related
 
-* [`observal doctor`](doctor.md): configure and verify automatic telemetry instrumentation
-* [`observal ops telemetry status`](ops.md): inspect server and durable outbox health
-* [Session tracking](../core-concepts/session-tracking.md): automatic and recovery delivery architecture
+* [`observal doctor`](/cli/doctor): configure and verify automatic telemetry instrumentation
+* [`observal ops telemetry status`](/cli/ops): inspect server and durable outbox health
+* [Session tracking](/core-concepts/session-tracking): automatic and recovery delivery architecture

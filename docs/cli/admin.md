@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal admin`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal admin"
+---
 
 Manage server settings, users, security policy, SSO, audit data, and the submission review queue.
 
@@ -268,6 +269,6 @@ Settings are scoped. Admins edit the organization settings (used for public item
 
 ## Related
 
-* [`observal auth`](auth.md): inspect the active account and role
-* [`observal inbox`](inbox.md): review and security notifications
-* [`observal ops`](ops.md): sessions, telemetry, logs, and insights
+* [`observal auth`](/cli/auth): inspect the active account and role
+* [`observal inbox`](/cli/inbox): review and security notifications
+* [`observal ops`](/cli/ops): sessions, telemetry, logs, and insights

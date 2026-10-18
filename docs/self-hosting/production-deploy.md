@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Production deployment
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Production deployment"
+---
 
 Deploy Observal as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
 
@@ -9,7 +10,7 @@ Deploy Observal as a distributed, highly available stack on AWS or GCP using Ter
 
 ## When to use this vs. single-node
 
-| | [Single-node](single-node-deploy.md) | Production (this guide) |
+| | [Single-node](/self-hosting/single-node-deploy) | Production (this guide) |
 |---|---|---|
 | **Best for** | Small/mid teams, internal use, POCs | Enterprise, SLA-bound, high-traffic |
 | **Infra** | 1 VM, any cloud or on-prem | ~100 managed cloud resources |
@@ -70,7 +71,7 @@ flowchart TB
 | Backups | S3 + RDS snapshots | Lifecycle: Standard → IA → Glacier → expire |
 | DNS | Route 53 | Optional; works without a custom domain |
 
-**Full walkthrough:** [AWS deployment with Terraform](aws-terraform.md)
+**Full walkthrough:** [AWS deployment with Terraform](/self-hosting/aws-terraform)
 
 **Quick start:**
 
@@ -142,7 +143,7 @@ flowchart TB
 | DNS | Cloud DNS | Optional |
 | Shell access | IAP SSH tunnel | No public SSH, no SSH keys |
 
-**Full walkthrough:** [GCP deployment with Terraform](gcp-terraform.md)
+**Full walkthrough:** [GCP deployment with Terraform](/self-hosting/gcp-terraform)
 
 **Quick start:**
 
@@ -271,14 +272,14 @@ Applies to both clouds. See the cloud-specific guides for implementation details
 - [ ] Set up alerting on database CPU, memory, and 5xx error rates
 - [ ] Attach a WAF to the load balancer
 - [ ] Enable Redis transit encryption
-- [ ] Configure [SSO](authentication.md) (SAML or OIDC)
-- [ ] Test the [backup and restore](backup-and-restore.md) procedure end-to-end
+- [ ] Configure [SSO](/self-hosting/authentication) (SAML or OIDC)
+- [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 - [ ] Replace the GitHub tarball pull in the data host bootstrap with an artifact you control
 
 ## Next
 
-- [AWS deployment with Terraform](aws-terraform.md) — full AWS walkthrough
-- [GCP deployment with Terraform](gcp-terraform.md) — full GCP walkthrough
-- [Configuration](configuration.md) — environment variables reference
-- [Upgrades](upgrades.md) — upgrade and rollback procedures
-- [Backup and restore](backup-and-restore.md) — detailed restore procedures
+- [AWS deployment with Terraform](/self-hosting/aws-terraform) — full AWS walkthrough
+- [GCP deployment with Terraform](/self-hosting/gcp-terraform) — full GCP walkthrough
+- [Configuration](/self-hosting/configuration) — environment variables reference
+- [Upgrades](/self-hosting/upgrades) — upgrade and rollback procedures
+- [Backup and restore](/self-hosting/backup-and-restore) — detailed restore procedures
