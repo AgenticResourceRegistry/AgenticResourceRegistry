@@ -62,7 +62,8 @@ observal discover use urn:air:observal.acme.com:mcp:9a1b... --harness kiro --out
 ```
 
 - Skills and prompts (`obs:availability: now`): the response has `activated: true`, `mode: context`, and `content` holding the exact approved version. Read `content` and follow it for the current task. `truncated: true` means the artifact was cut at `--max-chars`; fetch `artifact_url` only if the remainder is needed.
-- MCP servers, agents, sandboxes (`next-session`) and hooks (`explicit-install`): the response has `activated: false` and `next_step`, the existing install command. It confirms before writing harness config and takes effect after a restart. Run it only with the user's agreement, then tell the user a restart is needed.
+- Sandboxes (`next-session`) have no install command. `next_step` is `observal agent add sandbox <uuid>`, run inside an Agent directory (`observal agent init`); the Agent must then be published and pulled (`observal agent pull`) before the sandbox is on the machine. Say this to the user and run it only with their agreement.
+- MCP servers, agents (`next-session`) and hooks (`explicit-install`): the response has `activated: false` and `next_step`, the existing install command. It confirms before writing harness config and takes effect after a restart. Run it only with the user's agreement, then tell the user a restart is needed.
 - `--harness` is detected from `OBSERVAL_HARNESS` or the single installed harness; pass it explicitly when several harnesses are installed.
 - Unapproved resources are refused unless `--yes` is given; use that only for the user's own drafts and say so.
 

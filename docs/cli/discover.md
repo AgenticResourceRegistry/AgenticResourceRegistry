@@ -68,7 +68,8 @@ observal discover use urn:air:observal.acme.com:mcp:9a1b... --harness kiro --out
 What happens depends on the kind:
 
 - **Skills and prompts** are text. The exact approved version is fetched from its permanent URL and printed (JSON: `content`, `activated: true`, `mode: context`). The use is recorded in the capability lock.
-- **MCP servers, agents, sandboxes, and hooks** change your setup. Nothing is written; the response carries `next_step`, the existing install command (`observal registry mcp install …`, `observal agent pull …`), which confirms before touching harness config and takes effect after a restart. JSON: `activated: false`, `mode: next-session`.
+- **MCP servers, agents, and hooks** change your setup. Nothing is written; the response carries `next_step`, the existing install command (`observal registry mcp install …`, `observal agent pull …`), which confirms before touching harness config and takes effect after a restart. JSON: `activated: false`, `mode: next-session`.
+- **Sandboxes** have no install command; they reach a machine only inside an Agent. `next_step` is `observal agent add sandbox <uuid> [--version V]`, run in an Agent directory (`observal agent init`); `reason` says to then `observal agent publish` and `observal agent pull <agent> --harness <harness>`. JSON: `activated: false`, `mode: next-session`.
 
 Unapproved resources are refused without `--yes`. A resource whose `obs:supportedHarnesses` excludes the detected harness is refused; pass `--harness` to override the detection.
 
