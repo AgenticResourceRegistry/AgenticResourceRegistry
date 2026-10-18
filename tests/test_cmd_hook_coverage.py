@@ -814,9 +814,8 @@ def test_edit_from_file_and_parse_failures(tmp_path, monkeypatch):
     assert "not found" in missing.output
     assert "not valid JSON" in broken.output
     put.assert_called_once_with("/api/v1/hooks/resolved/draft", valid_updates)
-    # A pending hook is under review, so the edit is also submitted as the author's revision.
-    assert post.call_args_list[0].args == ("/api/v1/hooks/resolved/start-edit",)
-    assert post.call_args_list[1].args == ("/api/v1/hooks/resolved/submit",)
+    # The pending save pushed no revision (nothing changed), so it is not resubmitted.
+    post.assert_called_once_with("/api/v1/hooks/resolved/start-edit")
 
 
 def test_edit_no_changes_conflict_and_failed_save_cancellation(monkeypatch):

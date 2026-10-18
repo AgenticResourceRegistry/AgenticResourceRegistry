@@ -18,9 +18,14 @@ UNDER_REVIEW = ("pending", "changes_requested")
 _REVIEW_FIELDS = ("status", "review_number", "review_url")
 
 
+def needs_resubmission(result: dict) -> bool:
+    """A pending save that pushed no revision changed nothing; submitting it again would be refused."""
+    return not (result.get("status") == "pending" and result.get("review_revision") is None)
+
+
 def submit_edit_under_review(kind: str, plural: str, resolved: str, result: dict, message: str | None = None) -> dict:
     """Submit the saved edit when the item is under review; return the save result with review fields."""
-    if result.get("status") not in UNDER_REVIEW:
+    if result.get("status") not in UNDER_REVIEW or not needs_resubmission(result):
         return result
     operation = f"Submit {kind} revision"
     query = f"?message={quote(message)}" if message else ""

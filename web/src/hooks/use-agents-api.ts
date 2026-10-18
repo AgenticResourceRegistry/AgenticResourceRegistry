@@ -226,6 +226,7 @@ export function useSubmitDraft() {
     mutationFn: (id: string) => registry.submitDraft(id),
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
+      qc.invalidateQueries({ queryKey: ["pr-review"] });
       qc.invalidateQueries({ queryKey: ["pr-reviews"] });
       reviewToast("Agent File submitted for review", result);
     },

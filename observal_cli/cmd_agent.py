@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json as _json
 import re
 from contextlib import nullcontext
@@ -30,6 +31,7 @@ from rich.table import Table
 from observal_cli import client, config
 from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import AGENT_NAME_REGEX, VALID_HARNESSES
+from observal_cli.draft_submit import needs_resubmission
 from observal_cli.errors import CliError, ErrorCategory, exit_partial, fail
 from observal_cli.prompts import fuzzy_select, select_many, select_one, text_input
 from observal_cli.render import (
@@ -1922,9 +1924,17 @@ def agent_edit(
             remediation=f"Release a new version: observal agent release {name} --bump patch",
         )
     client.post(f"/api/v1/agents/{agent['id']}/start-edit")
-    with _progress(output, "Saving changes..."):
-        result = client.put(f"/api/v1/agents/{agent['id']}/draft", updates)
-    if agent.get("status") in ("pending", "changes_requested"):
+    try:
+        with _progress(output, "Saving changes..."):
+            result = client.put(f"/api/v1/agents/{agent['id']}/draft", updates)
+    except BaseException:
+        # A failed save must not leave the edit lock blocking other editors for its full timeout.
+        with contextlib.suppress(Exception):
+            client.post(f"/api/v1/agents/{agent['id']}/cancel-edit")
+        raise
+    if agent.get("status") in ("pending", "changes_requested") and needs_resubmission(
+        {**result, "status": agent.get("status")}
+    ):
         # Saving under review is the author's resubmission; it answers requested changes.
         with _progress(output, "Submitting revision..."):
             submitted = client.post(

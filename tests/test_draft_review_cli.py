@@ -247,3 +247,40 @@ def test_skill_edit_under_review_submits_by_version(monkeypatch):
     )
     assert posts == [("/api/v1/skills/s1/versions/v2/submit", {"observed_revision": "rev-9"})]
     assert result["status"] == "pending"
+
+
+# CodeRabbit follow-ups.
+
+
+def test_unchanged_pending_save_is_not_resubmitted(monkeypatch):
+    from observal_cli import draft_submit
+
+    monkeypatch.setattr(draft_submit.client, "post", lambda *a, **k: pytest.fail("must not submit"))
+    saved = {"status": "pending", "review_revision": None}
+    assert draft_submit.submit_edit_under_review("mcp", "mcps", "c1", saved) == saved
+
+
+def test_changed_pending_save_is_resubmitted(monkeypatch):
+    from observal_cli import draft_submit
+
+    posts = []
+    monkeypatch.setattr(draft_submit.client, "post", lambda url, *a, **k: posts.append(url) or {"status": "pending"})
+    draft_submit.submit_edit_under_review("mcp", "mcps", "c1", {"status": "pending", "review_revision": 3})
+    assert posts == ["/api/v1/mcps/c1/submit"]
+
+
+def test_agent_edit_releases_the_edit_lock_when_the_save_fails(monkeypatch):
+    import observal_cli.cmd_agent as agent
+
+    posts = []
+    monkeypatch.setattr(agent.client, "resolve_registry_reference", lambda kind, ref: "a1")
+    monkeypatch.setattr(agent.client, "get", lambda url, **kwargs: _agent("pending"))
+    monkeypatch.setattr(agent.client, "post", lambda url, *a, **k: posts.append(url) or {})
+
+    def failing_put(url, body, **kwargs):
+        raise RuntimeError("server unavailable")
+
+    monkeypatch.setattr(agent.client, "put", failing_put)
+    result = runner.invoke(app, ["agent", "edit", "helper", "--description", "x"])
+    assert result.exit_code != 0
+    assert posts == ["/api/v1/agents/a1/start-edit", "/api/v1/agents/a1/cancel-edit"]
