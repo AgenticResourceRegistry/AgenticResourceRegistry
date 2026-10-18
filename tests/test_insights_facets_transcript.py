@@ -128,3 +128,48 @@ async def test_build_session_transcript_summarizes_long_sessions(monkeypatch):
     assert "[Long session summarized]" in result
     assert "summary 1" in result
     assert "[...truncated...]" not in result
+
+
+@pytest.mark.asyncio
+async def test_extract_facets_batch_never_uses_db_concurrently(monkeypatch):
+    import asyncio
+
+    from services.insights import generator
+
+    class SingleUseSession:
+        """Raises like an AsyncSession when two tasks use it at once."""
+
+        def __init__(self) -> None:
+            self.busy = False
+            self.stored: list[str] = []
+
+        async def store(self, session_id: str) -> None:
+            if self.busy:
+                raise RuntimeError("concurrent operations are not permitted")
+            self.busy = True
+            await asyncio.sleep(0)
+            self.stored.append(session_id)
+            self.busy = False
+
+    async def extract(session_id: str, _transcript: str, _meta: dict) -> dict:
+        await asyncio.sleep(0)
+        return {"brief_summary": session_id}
+
+    async def store(session_id: str, _agent_id: str, _facets: dict, db) -> None:
+        await db.store(session_id)
+
+    monkeypatch.setattr(generator, "extract_facets", extract)
+    monkeypatch.setattr(generator, "store_facets", store)
+
+    db = SingleUseSession()
+    transcripts = {f"s{i}": "transcript" for i in range(14)}
+    facets = await generator._extract_facets_batch(
+        transcripts=transcripts,
+        session_metas={},
+        agent_id="",
+        db=db,
+        max_concurrent=5,
+    )
+
+    assert set(facets) == set(transcripts)
+    assert sorted(db.stored) == sorted(transcripts)

@@ -24,7 +24,7 @@ import structlog
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 
 from ._deps import get_db_session
-from .facets import aggregate_facets, extract_and_cache_facets, load_cached_facets_batch
+from .facets import aggregate_facets, extract_facets, load_cached_facets_batch, store_facets
 from .registry_match import (
     RegistryScope,
     build_catalog,
@@ -537,18 +537,18 @@ async def _extract_facets_batch(
     db,
     max_concurrent: int = 5,
 ) -> dict[str, dict]:
-    """Extract facets with concurrency limit."""
+    """Extract facets with concurrency limit.
+
+    Only the LLM calls run concurrently. ``db`` is one AsyncSession, which
+    does not allow concurrent use, so results are stored sequentially after
+    the gather. Callers load cached facets beforehand and pass only the
+    sessions that still need extraction.
+    """
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def _one(sid: str, transcript: str) -> dict:
         async with semaphore:
-            return await extract_and_cache_facets(
-                session_id=sid,
-                transcript=transcript,
-                meta=session_metas.get(sid, {}),
-                agent_id=agent_id,
-                db=db,
-            )
+            return await extract_facets(sid, transcript, session_metas.get(sid, {}))
 
     session_ids = list(transcripts)
     tasks = [_one(sid, transcripts[sid]) for sid in session_ids]
@@ -559,6 +559,7 @@ async def _extract_facets_batch(
         if isinstance(result, Exception):
             logger.warning("facet_task_exception", session_id=sid, error=str(result), type=type(result).__name__)
         elif isinstance(result, dict) and result:
+            await store_facets(sid, agent_id, result, db)
             facets_by_session[sid] = result
 
     return facets_by_session
