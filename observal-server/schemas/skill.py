@@ -162,6 +162,8 @@ class SkillListingResponse(BaseModel):
     warnings: list[str] = []
     review_number: int | None = None
     review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str

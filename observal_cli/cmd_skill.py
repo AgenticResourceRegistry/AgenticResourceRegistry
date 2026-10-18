@@ -43,7 +43,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
-from observal_cli.review_display import print_review_link
+from observal_cli.review_display import print_draft_save, print_review_link
 from observal_cli.shared.utils import sanitize_name as _sanitize_name
 from observal_cli.skill_folder import (
     SUPPORTED_FEATURE as SKILL_FOLDER_FEATURE,
@@ -260,7 +260,9 @@ def skill_submit(
     slash_command: str | None = typer.Option(None, "--slash-command", help="Slash command name"),
     supported_harnesses: list[str] | None = typer.Option(None, "--harness", help="Supported harness (repeatable)"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (skill ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (skill ID)"
+    ),
     version_id: str | None = typer.Option(None, "--version-id", help="Exact saved draft UUID for --submit"),
     message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
@@ -1754,6 +1756,7 @@ def skill_edit(
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry skill submit --submit {result.get('id', '<id>')}")
 
 
 # ── Version lifecycle commands ──────────────────────────────────────────────

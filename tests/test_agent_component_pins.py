@@ -248,8 +248,7 @@ async def test_draft_cannot_pin_and_render_another_users_unreviewed_release(regi
     assert any("UNREVIEWED TEMPLATE" in (snapshot or "") for snapshot in snapshots)
 
 
-async def test_publish_requires_approved_pins_and_freezes_the_lock(registry):
-    from fastapi import HTTPException
+async def test_unapproved_pin_is_advisory_and_publish_freezes_the_lock(registry):
 
     from models.user import UserRole
     from services.review.decisions import open_or_push, publish, submit_verdict
@@ -296,9 +295,10 @@ async def test_publish_requires_approved_pins_and_freezes_the_lock(registry):
     reviewer = await ds.user(db, role=UserRole.admin)
     review = await open_or_push(db, "agent", agent, candidate, owner.id)
     await submit_verdict(db, review, reviewer, "approve")
-    with pytest.raises(HTTPException) as blocked:
-        await publish(db, review, reviewer)
-    assert blocked.value.status_code == 422
+    # Only approvals block publishing; an unapproved pin is listed for reviewers but does not block.
+    from services.review.decisions import gate
+
+    assert "pinned_components" in (await gate(db, review)).requirements
     pending.status = ListingStatus.approved
     await db.commit()
     await publish(db, review, reviewer)
@@ -331,6 +331,11 @@ async def test_publish_refuses_public_agent_with_private_skill():
             with pytest.raises(HTTPException) as blocked:
                 await publish(db, review, reviewer)
             assert blocked.value.status_code == 422
+            # Even a super admin override cannot expose a team-private skill.
+            reviewer.role = UserRole.super_admin
+            with pytest.raises(HTTPException) as overridden:
+                await publish(db, review, reviewer, override_reason="urgent")
+            assert overridden.value.status_code == 422
     finally:
         await engine.dispose()
 

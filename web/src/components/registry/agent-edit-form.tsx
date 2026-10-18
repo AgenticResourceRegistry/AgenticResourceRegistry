@@ -41,6 +41,7 @@ import {
   useAgentValidation,
   useCreateAgentVersion,
   useUpdateAgent,
+  useUpdateDraft,
   useVersionSuggestions,
 } from "@/hooks/use-api";
 import type {
@@ -61,6 +62,7 @@ import { ValidationPanel } from "@/components/builder/validation-panel";
 import { COMPONENT_TYPES, REVERSE_TYPE_MAP, TYPE_MAP } from "@/components/registry/agent-component-constants";
 import { ComponentPicker } from "@/components/registry/component-picker";
 import { VersionBumpDialog } from "@/components/registry/version-bump-dialog";
+import { AUTO_MODEL } from "@/lib/agent-model";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -113,7 +115,7 @@ export function AgentEditForm({
   // Merge version-specific fields over base agent data
   const vd = versionDetail;
   const initialDescription = vd?.description ?? agent.description ?? "";
-  const initialModelName = vd?.model_name ?? agent.model_name ?? "";
+  const initialModelName = (vd?.model_name ?? agent.model_name ?? "").trim() || AUTO_MODEL;
   const initialModelsByIde = (vd?.models_by_harness ?? agent.models_by_harness ?? {}) as Record<string, string>;
   const initialPrompt = vd?.prompt ?? agent.prompt ?? "";
 
@@ -156,6 +158,12 @@ export function AgentEditForm({
 
   // ── Mutations ─────────────────────────────────────────────────
   const createVersion = useCreateAgentVersion();
+  const updateDraft = useUpdateDraft();
+  // An unpublished version (draft, under review, changes requested, rejected) is amended in place:
+  // the version number stays and an open review gets the change as a new revision. Only an
+  // approved version needs a new release.
+  const amendInPlace = ["draft", "pending", "changes_requested", "rejected"].includes(agent.status ?? "");
+  const underReview = agent.status === "pending" || agent.status === "changes_requested";
   const updateAgent = useUpdateAgent();
   const { data: versionSuggestions } = useVersionSuggestions(agentId);
 
@@ -343,7 +351,7 @@ export function AgentEditForm({
       version,
       description: description.trim(),
       prompt: prompt.trim(),
-      model_name: modelName,
+      model_name: modelName.trim() || AUTO_MODEL,
       model_config_json: {},
       models_by_harness: modelsByHarness,
       external_mcps: [],
@@ -377,6 +385,30 @@ export function AgentEditForm({
         selectedComponents,
         successCriteria,
       };
+      setIsDirty(false);
+      onSuccess?.();
+    } catch {
+      // toast handled by mutation
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleAmend() {
+    const criteriaError = validateSuccessCriteria(successCriteria);
+    if (criteriaError) {
+      toast.error(criteriaError);
+      return;
+    }
+    setPublishing(true);
+    try {
+      const { description: d, prompt: p, model_name, models_by_harness, components, success_criteria } =
+        buildVersionBody(currentVersion);
+      await updateDraft.mutateAsync({
+        id: agentId,
+        body: { description: d, prompt: p, model_name, models_by_harness, components, success_criteria },
+      });
+      initialStateRef.current = { description, modelName, modelsByHarness, prompt, selectedComponents, successCriteria };
       setIsDirty(false);
       onSuccess?.();
     } catch {
@@ -574,7 +606,19 @@ export function AgentEditForm({
       <Separator />
 
       {/* Actions */}
+      {amendInPlace && (
+        <p className="text-xs text-muted-foreground">
+          v{currentVersion} is not published yet, so changes are saved to it in place
+          {underReview ? " and reviewers see them as a new revision of the same review" : ""}. No new version is created.
+        </p>
+      )}
       <div className="flex items-center gap-3">
+        {amendInPlace ? (
+          <Button onClick={handleAmend} disabled={publishing || !isDirty} className="min-w-[160px]">
+            {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            {underReview ? "Save & update review" : "Save changes"}
+          </Button>
+        ) : (<>
         <Button
           onClick={() => setShowVersionDialog(true)}
           disabled={publishing || savingDraft || !isDirty}
@@ -601,6 +645,7 @@ export function AgentEditForm({
           )}
           Save Draft
         </Button>
+        </>)}
 
         <Button
           variant="ghost"

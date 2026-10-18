@@ -89,7 +89,14 @@ def test_help_table_and_json_yaml_round_trip(tmp_path, monkeypatch):
 
     put = Mock(return_value={"id": data["id"], "version": "2.0.0"})
     monkeypatch.setattr(agent.client, "put", put)
-    get = Mock(side_effect=AssertionError("Draft lookup must use agent_id, not public search"))
+
+    def get_by_id_only(url, **kwargs):
+        # The status read uses the draft's agent_id; a public name search would be wrong.
+        if url != f"/api/v1/agents/{data['id']}" or kwargs.get("params"):
+            raise AssertionError("Draft lookup must use agent_id, not public search")
+        return {"id": data["id"], "version": "2.0.0", "status": "draft"}
+
+    get = Mock(side_effect=get_by_id_only)
     monkeypatch.setattr(agent.client, "get", get)
     updated = runner.invoke(agent.agent_app, ["publish", "--dir", str(tmp_path), "--update", "--output", "json"])
     assert updated.exit_code == 0, updated.output
@@ -99,7 +106,7 @@ def test_help_table_and_json_yaml_round_trip(tmp_path, monkeypatch):
     assert payload["components"] == definition["components"]
     assert payload["model_config_json"] == definition["model_config_json"]
     assert payload["external_mcps"] == definition["external_mcps"]
-    get.assert_not_called()
+    get.assert_called_once_with(f"/api/v1/agents/{data['id']}")
 
     table_result = runner.invoke(agent.agent_app, ["fork", "acme/original"])
     assert table_result.exit_code == 0, table_result.output

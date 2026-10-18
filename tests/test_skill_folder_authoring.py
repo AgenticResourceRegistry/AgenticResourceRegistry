@@ -462,8 +462,8 @@ async def test_submission_refuses_folder_whose_name_cannot_install(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approval_refuses_folder_whose_name_cannot_install(monkeypatch):
-    """Any route that produced the version (generic publish, pre-fix drafts) hits this last gate."""
+async def test_uninstallable_folder_is_flagged_and_override_still_publishes(monkeypatch):
+    """A folder that cannot install shows as a failing check; a super admin override publishes anyway."""
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     try:
@@ -483,13 +483,14 @@ async def test_approval_refuses_folder_whose_name_cannot_install(monkeypatch):
             review = await open_or_push(db, "skill", listing, version, owner.id)
             monkeypatch.setattr("services.review.decisions._ds.get_bool", AsyncMock(return_value=True))
             await submit_verdict(db, review, admin, "approve")
-            # Even a super admin override cannot publish a folder that cannot install.
+            from services.review.decisions import gate
+
+            result = await gate(db, review)
+            assert "required_checks" in result.requirements
+            assert any(check["id"] == "skill_folder" for check in result.blocking_checks)
+            # Only approvals block publishing; the override path publishes past everything.
             admin.role = UserRole.super_admin
-            with pytest.raises(HTTPException) as exc:
-                await publish(db, review, admin, override_reason="Emergency")
-            assert exc.value.status_code == 409
-            assert "skill_folder" in exc.value.detail
-            await db.rollback()
-            assert (await db.get(SkillVersion, manifest.version_id)).status == ListingStatus.pending
+            await publish(db, review, admin, override_reason="Emergency")
+            assert review.state.value == "published"
     finally:
         await engine.dispose()

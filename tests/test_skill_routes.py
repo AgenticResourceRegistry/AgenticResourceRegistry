@@ -29,6 +29,8 @@ from schemas.skill import (
 from services.skill_validator import SkillAnalysis, SkillValidationError
 from services.teamspace import PublishTarget
 
+pytestmark = pytest.mark.usefixtures("no_open_review")
+
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 LISTING_ID = uuid.UUID(int=101)
 VERSION_ID = uuid.UUID(int=102)
@@ -367,6 +369,7 @@ class TestSubmitSkill:
             "warnings": [],
             "review_number": 42,
             "review_url": "/review/42",
+            "review_revision": None,
         }
         assert events == [
             "add:SkillListing",

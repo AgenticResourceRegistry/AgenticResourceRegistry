@@ -80,6 +80,7 @@ OPERATION_LABELS = {
     "agent_list": "List agents",
     "agent_my": "List owned agents",
     "agent_outdated": "Check agent component pins",
+    "agent_edit": "Edit agent",
     "agent_publish": "Publish agent",
     "agent_release": "Release agent version",
     "agent_show": "Show agent",

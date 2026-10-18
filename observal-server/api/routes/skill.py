@@ -52,7 +52,7 @@ from schemas.skill_commands import normalize_slash_command
 from schemas.skill_resources import SkillVersionManifest
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.registry_namespace import identity_exists
-from services.review.cutover import lock_review_for_edit, submit_for_review
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.skill_bundle import needs_bundle_delivery, validate_skill_bundle
 from services.skill_folder_edit import _validate_new_md
 from services.skill_revisions import skill_content_revision, verified_skill_revision
@@ -853,9 +853,12 @@ async def update_skill_draft(
 
     if ver.content_revision is not None or needs_bundle_delivery(ver):
         ver.content_revision = skill_content_revision(listing, ver)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = await push_draft_edit(db, "skill", listing, ver, current_user.id)
     await commit_or_name_conflict(db, "skill")
     await db.refresh(listing)
-    return await component_response(listing, "skill", current_user, db)
+    response = await component_response(listing, "skill", current_user, db)
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.post("/{listing_id}/start-edit")

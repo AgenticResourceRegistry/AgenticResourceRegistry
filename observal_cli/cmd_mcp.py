@@ -45,7 +45,8 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
-from observal_cli.review_display import print_review_link
+from observal_cli.review_display import print_draft_save, print_review_link
+from observal_shared.mcp_analysis import docker_image_from_args
 
 mcp_app = typer.Typer(
     help=(
@@ -425,12 +426,10 @@ def _parse_direct_config(cfg: dict) -> dict:
         cmd = inner["command"]
         if cmd == "docker":
             parsed["framework"] = "docker"
-            # Extract docker_image: last non-flag arg
-            args = parsed["args"]
-            for arg in reversed(args):
-                if not arg.startswith("-"):
-                    parsed["docker_image"] = arg
-                    break
+            # The image is the first positional after `docker run` options, not a trailing container arg.
+            image = docker_image_from_args(parsed["args"])
+            if image:
+                parsed["docker_image"] = image
         elif cmd in ("python", "python3"):
             parsed["framework"] = "python"
         elif cmd in ("npx", "node"):
@@ -850,10 +849,7 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
                 # Re-derive framework
                 if _command == "docker":
                     _framework = "docker"
-                    for arg in reversed(_args):
-                        if not arg.startswith("-"):
-                            _docker_image = arg
-                            break
+                    _docker_image = docker_image_from_args(_args) or _docker_image
                 elif _command in ("python", "python3"):
                     _framework = "python"
                 elif _command in ("npx", "node"):
@@ -867,10 +863,7 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
                 _args = raw_args.split() if raw_args.strip() else []
                 if _command == "docker":
                     _framework = "docker"
-                    for arg in reversed(_args):
-                        if not arg.startswith("-"):
-                            _docker_image = arg
-                            break
+                    _docker_image = docker_image_from_args(_args) or _docker_image
                 elif _command in ("python", "python3"):
                     _framework = "python"
                 elif _command in ("npx", "node"):
@@ -1311,7 +1304,9 @@ def submit(
     yes: bool = typer.Option(False, "--yes", "-y", help="Accept JSON-derived defaults"),
     config: bool = typer.Option(False, "--config", hidden=True, help="(deprecated) JSON paste is now the default"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (MCP ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (MCP ID)"
+    ),
     message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
@@ -1801,3 +1796,4 @@ def edit_mcp(
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry mcp submit --submit {result.get('id', '<id>')}")

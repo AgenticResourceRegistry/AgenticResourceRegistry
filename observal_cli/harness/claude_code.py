@@ -34,6 +34,7 @@ from observal_cli.shared.utils import (
     first_content_line,
     parse_frontmatter_field,
 )
+from observal_shared.agent_model import is_auto_model
 
 if TYPE_CHECKING:
     from observal_cli.discovery.bounded_walk import AggregateDiscoveryBudget
@@ -640,7 +641,8 @@ class ClaudeCodeAdapter(BaseAdapter):
         if saved or not agent_detail:
             return saved
         legacy = agent_detail.get("model_name")
-        return legacy.strip() if isinstance(legacy, str) and legacy.strip() else None
+        # "auto" (or blank) leaves the choice to Claude Code's own default.
+        return None if is_auto_model(legacy) else legacy.strip()
 
     def apply_install_options(self, options: dict, tools: str | None) -> None:
         if tools:

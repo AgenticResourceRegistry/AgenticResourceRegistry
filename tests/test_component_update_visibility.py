@@ -29,6 +29,8 @@ from api.deps import get_current_user, get_db
 from models.mcp import ListingStatus
 from models.user import User, UserRole
 
+pytestmark = pytest.mark.usefixtures("no_open_review")
+
 # ── Helpers ──────────────────────────────────────────────
 
 

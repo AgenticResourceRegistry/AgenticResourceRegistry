@@ -18,7 +18,7 @@ from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
-from services.review.decisions import close, dismiss, gate, open_or_push, publish, submit_verdict, sync_state
+from services.review.decisions import close, dismiss, gate, open_or_push, publish, submit_verdict
 from services.review.policy import ApprovalPolicy, parse_policy, policy_for
 
 
@@ -96,7 +96,7 @@ async def test_version_rounds_gate_publish_and_author_denial(db):
 
 
 @pytest.mark.asyncio
-async def test_unresolved_change_request_remains_visible_after_other_reviewer_approves(db):
+async def test_unresolved_change_request_stays_visible_but_only_approvals_block(db):
     author, reviewer, _, listing, version, review = await fixture_review(db)
     second = User(id=uuid.uuid4(), username="second", email="second@x.test", name="Second", role=UserRole.reviewer)
     db.add(second)
@@ -106,10 +106,12 @@ async def test_unresolved_change_request_remains_visible_after_other_reviewer_ap
     await open_or_push(db, "skill", listing, version, author.id)
     assert review.state == ReviewState.changes_requested
     await submit_verdict(db, review, second, "approve", policy=ApprovalPolicy())
-    assert review.state == ReviewState.changes_requested
-    assert version.status == ListingStatus.changes_requested
-    await submit_verdict(db, review, reviewer, "approve", policy=ApprovalPolicy())
+    # The approval count is met, so a person may publish; the open request stays visible as advisory.
+    result = await gate(db, review, policy=ApprovalPolicy())
+    assert result.ready and not result.clear and "changes_requested" in result.requirements
     assert review.state == ReviewState.approved
+    await submit_verdict(db, review, reviewer, "approve", policy=ApprovalPolicy())
+    assert (await gate(db, review, policy=ApprovalPolicy())).clear
 
 
 @pytest.mark.asyncio
@@ -162,7 +164,7 @@ async def test_private_team_can_count_own_approval(db):
 
 
 @pytest.mark.asyncio
-async def test_agent_waits_for_pinned_release_and_lock(db):
+async def test_unpublished_pinned_component_is_advisory_for_agent_publish(db):
     author, reviewer, admin, listing, component, component_review = await fixture_review(db)
     agent = Agent(name="Agent", namespace="tests", slug="test-agent", owner="author", created_by=author.id)
     db.add(agent)
@@ -191,14 +193,14 @@ async def test_agent_waits_for_pinned_release_and_lock(db):
     await db.flush()
     review = await open_or_push(db, "agent", agent, ver, author.id)
     await submit_verdict(db, review, reviewer, "approve", policy=ApprovalPolicy())
-    assert "pinned_components" in (await gate(db, review, policy=ApprovalPolicy())).requirements
-    with pytest.raises(HTTPException) as error:
-        await publish(db, review, reviewer, policy=ApprovalPolicy())
-    assert error.value.status_code == 422
+    result = await gate(db, review, policy=ApprovalPolicy())
+    assert "pinned_components" in result.requirements and result.ready and not result.clear
     await submit_verdict(db, component_review, reviewer, "approve", policy=ApprovalPolicy())
     await publish(db, component_review, reviewer, policy=ApprovalPolicy())
-    await sync_state(db, review, policy=ApprovalPolicy())
-    assert review.state == ReviewState.approved
+    assert "pinned_components" not in (await gate(db, review, policy=ApprovalPolicy())).requirements
+    # Only approvals block a person: the agent publishes once approved.
+    await publish(db, review, reviewer, policy=ApprovalPolicy())
+    assert review.state == ReviewState.published
 
 
 @pytest.mark.asyncio

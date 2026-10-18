@@ -67,7 +67,7 @@ test.describe("Builder skill recommendation", () => {
 
   test("keyboard dismissal persists across reload and edit visits without changing form state", async ({ page }, testInfo) => {
     await page.goto("/agents/builder");
-    const name = page.getByPlaceholder("migration-guide", { exact: true });
+    const name = page.getByPlaceholder("e.g. code-reviewer", { exact: true });
     await name.fill("banner-example");
     const steps = page.getByRole("button", { name: /Identity Name and ownership/ }).locator("..");
     const before = await steps.boundingBox();
@@ -93,7 +93,7 @@ test.describe("Builder skill recommendation", () => {
     test(`shown on ${mode} without blocking navigation`, async ({ page }, testInfo) => {
       await page.goto(`/agents/builder?${mode}=${agentId}`);
       await expect(page.getByRole("region", { name: bannerName })).toBeVisible();
-      await expect(page.getByPlaceholder("migration-guide", { exact: true })).toHaveValue(/banner-test-/);
+      await expect(page.getByPlaceholder("e.g. code-reviewer", { exact: true })).toHaveValue(/banner-test-/);
       await page.screenshot({ path: testInfo.outputPath(`${mode}-desktop.png`), fullPage: true });
       await page.getByRole("button", { name: "Continue to behavior" }).click();
       await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();

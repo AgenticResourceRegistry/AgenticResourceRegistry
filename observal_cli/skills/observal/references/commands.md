@@ -55,6 +55,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal agent bulk-create`: Bulk-create agents from a JSON file.
 - `observal agent create`: Create a new agent (interactive wizard, from file, or via flags).
 - `observal agent delete`: Archive an agent. Prefer the archive command.
+- `observal agent edit`: Amend an unpublished agent version in place.
 - `observal agent fork`: Fork an approved agent release into your own editable draft.
 - `observal agent init`: Scaffold an observal-agent.yaml definition file.
 - `observal agent install`: Get install config for an agent.
@@ -257,10 +258,10 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal review dismiss`: Dismiss a verdict (admin or team owner, reason required).
 - `observal review draft`: View or discard your pending review comments.
 - `observal review files`: List changed virtual files.
-- `observal review gate`: Show publication requirements.
+- `observal review gate`: Show approvals (the only publish blocker) and advisory open items.
 - `observal review list`: List reviews visible to you; row numbers work with other review commands.
 - `observal review mute`: Mute review activity except final outcomes.
-- `observal review publish`: Publish once the gate is ready (super admins can override with a reason).
+- `observal review publish`: Publish once required approvals are met; super admins can override anything with a reason.
 - `observal review reply`: Reply to a conversation.
 - `observal review request-changes`: Request changes on a review.
 - `observal review request-reviewer`: Request a reviewer by user UUID.

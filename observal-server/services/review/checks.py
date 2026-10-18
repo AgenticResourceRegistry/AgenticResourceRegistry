@@ -44,7 +44,8 @@ def snapshot_checks(files: dict, version=None, *, subject_type=None, base_files=
     if version is None or subject_type is None:
         return checks
     required = {
-        "agent": ("description", "prompt", "model_name"),
+        # model_name is guaranteed at creation (blank becomes "auto"), so it never blocks publication.
+        "agent": ("description", "prompt"),
         "mcp": ("description",),
         "skill": ("description", "task_type"),
         "hook": ("description", "event", "handler_type"),

@@ -30,6 +30,8 @@ from models.agent import AgentStatus
 from models.team import Team, TeamRole
 from models.user import User, UserRole
 
+pytestmark = pytest.mark.usefixtures("no_open_review")
+
 # ── Helpers ──────────────────────────────────────────────
 
 

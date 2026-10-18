@@ -99,6 +99,30 @@ def list_reviews(
         rprint("[dim]More reviews available; narrow your filters to find them.[/dim]")
 
 
+def _print_gate(gate: dict) -> None:
+    """Only approvals block publishing; every other open item is advisory."""
+    approvals = f"{gate['approvals']}/{gate['required']} approvals"
+    if gate["ready"]:
+        rprint(f"Publish: [green]allowed[/green] · {approvals}")
+    else:
+        rprint(f"Publish: [red]needs approvals[/red] · {approvals}")
+    failing = {check.get("id"): check for check in gate.get("blocking_checks") or []}
+    advisory = [item for item in gate["requirements"] if item != "required_approvals"]
+    if advisory:
+        rprint("Open items [dim](do not block publishing)[/dim]:")
+    for requirement in advisory:
+        if requirement == "required_checks" and failing:
+            for check in failing.values():
+                details = check.get("details") or []
+                details = ", ".join(map(str, details)) if isinstance(details, list) else str(details)
+                suffix = f": {details}" if details else ""
+                rprint(
+                    f"  [yellow]• {esc(str(check.get('name')))} {esc(str(check.get('status')))}{esc(suffix)}[/yellow]"
+                )
+        else:
+            rprint(f"  [yellow]• {esc(str(requirement).replace('_', ' '))}[/yellow]")
+
+
 @review_app.command("show")
 def show_review(ref: str, output: OutputMode = typer.Option("table", "--output", "-o")):
     """Show a review and its publication gate."""
@@ -109,9 +133,7 @@ def show_review(ref: str, output: OutputMode = typer.Option("table", "--output",
     rprint(f"[bold]{esc(detail['title'])}[/bold] [dim]#{detail['number']}[/dim] · {detail['state']}")
     rprint(f"{detail['subject_type']} v{detail['version']} · revision {detail['head_revision']}")
     gate = detail["gate"]
-    rprint(f"Gate: {'ready' if gate['ready'] else 'blocked'} · {gate['approvals']}/{gate['required']} approvals")
-    for requirement in gate["requirements"]:
-        rprint(f"  [yellow]• {esc(str(requirement))}[/yellow]")
+    _print_gate(gate)
     if detail.get("body"):
         rprint(f"\n{esc(detail['body'])}")
     rprint(f"\n[dim]Open: /review/{detail['number']}[/dim]")
@@ -186,8 +208,12 @@ def checks(ref: str, output: OutputMode = typer.Option("table", "--output", "-o"
 
 @review_app.command("gate")
 def gate(ref: str, output: OutputMode = typer.Option("table", "--output", "-o")):
-    """Show publication requirements."""
-    _result(client.get(_url(ref, "/gate")), output, "Publication gate")
+    """Show approvals (the only publish blocker) and advisory open items."""
+    result = client.get(_url(ref, "/gate"))
+    if output == "json":
+        output_json(result)
+        return
+    _print_gate(result)
 
 
 @review_app.command("threads")
@@ -354,9 +380,32 @@ def publish(
     override_reason: str | None = typer.Option(None, "--override-reason"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
 ):
-    """Publish once the gate is ready (super admins can override with a reason)."""
+    """Publish once required approvals are met; super admins can override anything with a reason."""
+    override = (override_reason or "").strip() or None
+    gate_state = client.get(_url(ref, "/gate"))
+    if not override and not gate_state["ready"]:
+        missing = gate_state["required"] - gate_state["approvals"]
+        fail(
+            ErrorCategory.CONFLICT,
+            f"Publishing needs {missing} more approval{'s' if missing != 1 else ''} "
+            f"({gate_state['approvals']} of {gate_state['required']} on the latest revision).",
+            operation="Publish review",
+            resource=ref,
+            remediation=(
+                f"Ask a reviewer to run observal review approve {ref}, "
+                "or have a super admin publish with --override-reason."
+            ),
+        )
+    advisory = [item for item in gate_state["requirements"] if item != "required_approvals"]
+    if advisory and output != "json":
+        rprint(f"[yellow]Publishing with open items (advisory): {esc(', '.join(advisory).replace('_', ' '))}[/yellow]")
     _result(
-        client.post(_url(ref, "/publish"), {"category": category, "override_reason": override_reason}),
+        client.post(
+            _url(ref, "/publish"),
+            {"category": category, "override_reason": override},
+            operation="Publish review",
+            resource=ref,
+        ),
         output,
         "Version published",
     )

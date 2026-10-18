@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from observal_shared.agent_model import is_auto_model
 from observal_shared.harness_registry import HARNESS_REGISTRY, has_model_selection
 from services.harness import ensure_loaded, get_adapter
 
@@ -26,6 +27,8 @@ def _format_for_harness(model: str, provider: str, harness: str) -> str:
 def _candidate_for_harness(harness: str, models_by_harness: dict | None, model_name: str | None) -> str | None:
     if models_by_harness and models_by_harness.get(harness):
         return models_by_harness[harness]
+    if is_auto_model(model_name):
+        return None  # "auto": the harness picks its own default model.
     return _adapter_for(harness).default_model_candidate(model_name)
 
 

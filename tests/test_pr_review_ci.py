@@ -318,3 +318,61 @@ async def test_automated_checks_do_nothing_and_never_block_while_experiment_is_o
     assert ci.visible(revision.checks, False) == [c for c in revision.checks if c.get("kind") != "automated"]
     policy = ApprovalPolicy(required_approvals=dict.fromkeys(ApprovalPolicy().required_approvals, 0))
     assert "required_checks" not in (await gate(db, review, policy=policy)).requirements
+
+
+@pytest.mark.asyncio
+async def test_built_in_check_failure_blocks_and_is_reported_while_experiment_is_off(world, monkeypatch):
+    db, _ = world
+    review, _ = await make_prompt_review(db, {}, monkeypatch)
+    revision = await db.get(__import__("models").ReviewRevision, review.head_revision_id)
+    revision.checks = [
+        {"id": "secrets", "name": "Secret scan", "status": "pass", "required": True, "details": []},
+        {"id": "schema", "name": "Required fields", "status": "fail", "required": True, "details": ["description"]},
+    ]
+    await db.commit()
+    monkeypatch.setattr(check_config, "enabled", AsyncMock(return_value=False))
+    policy = ApprovalPolicy(required_approvals=dict.fromkeys(ApprovalPolicy().required_approvals, 0))
+    result = await gate(db, review, policy=policy)
+    assert result.requirements == ("required_checks",)
+    assert result.blocking_checks == (
+        {"id": "schema", "name": "Required fields", "status": "fail", "details": ["description"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_draft_save_pushes_a_revision_reviewers_can_see(world, monkeypatch):
+    from models import ReviewRevision
+    from services.review.cutover import DRAFT_EDIT_MESSAGE, push_draft_edit, submit_for_review
+
+    db, _ = world
+    review, _ = await make_prompt_review(db, {}, monkeypatch)
+    version = await db.get(PromptVersion, review.version_id)
+    listing = await db.get(PromptListing, version.listing_id)
+    monkeypatch.setattr(ci.check_config, "effective", AsyncMock(return_value=check_config.resolve({})))
+    assert await push_draft_edit(db, "prompt", listing, version, version.released_by) is None  # Unchanged.
+    version.description = "A full sentence written after submission."
+    pushed = await push_draft_edit(db, "prompt", listing, version, version.released_by)
+    assert pushed == {"review_number": review.number, "review_url": f"/review/{review.number}", "review_revision": 2}
+    head = await db.get(ReviewRevision, review.head_revision_id)
+    assert head.number == 2 and head.message == DRAFT_EDIT_MESSAGE
+    policy = ApprovalPolicy(required_approvals=dict.fromkeys(ApprovalPolicy().required_approvals, 0))
+    assert "unsubmitted_changes" not in (await gate(db, review, policy=policy)).requirements
+    # Submitting what reviewers already see is accepted and keeps the same head revision.
+    await submit_for_review(db, "prompt", listing, version, version.released_by, message="Clarified description")
+    head = await db.get(ReviewRevision, review.head_revision_id)
+    assert head.number == 2 and head.message == "Clarified description"
+
+
+@pytest.mark.asyncio
+async def test_draft_save_without_an_open_review_pushes_nothing(world, monkeypatch):
+    from services.review.cutover import push_draft_edit
+
+    db, _ = world
+    review, reviewer = await make_prompt_review(db, {}, monkeypatch)
+    version = await db.get(PromptVersion, review.version_id)
+    listing = await db.get(PromptListing, version.listing_id)
+    from models.review import ReviewState
+
+    review.state = ReviewState.closed
+    version.description = "edited after withdrawal"
+    assert await push_draft_edit(db, "prompt", listing, version, version.released_by) is None

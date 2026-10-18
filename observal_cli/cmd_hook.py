@@ -44,7 +44,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
-from observal_cli.review_display import print_review_link
+from observal_cli.review_display import print_draft_save, print_review_link
 
 hook_app = typer.Typer(
     help=(
@@ -101,7 +101,9 @@ def _validate_timeout(execution_mode: str, handler_config: dict) -> None:
 def hook_submit(
     from_file: str | None = typer.Option(None, "--from-file", "-f", help="Create from JSON file"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (hook ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (hook ID)"
+    ),
     message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     script: str | None = typer.Option(None, "--script", help="Path to hook script file (content stored in registry)"),
     source_url: str | None = typer.Option(None, "--source-url", help="Git repo containing hook scripts"),
@@ -823,3 +825,4 @@ def hook_edit(
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry hook submit --submit {result.get('id', '<id>')}")
