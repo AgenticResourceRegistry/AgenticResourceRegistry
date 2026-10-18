@@ -1083,33 +1083,33 @@ export default function InboxPage() {
 								/>
 							) : (
 								<>
-								{resolvedUnreadNote && (
-									<div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-surface-raised px-3 py-2 text-2xs text-muted-foreground">
-										<span>
-											{`${resolvedUnread} resolved ${resolvedUnread === 1 ? "item" : "items"} you haven't opened`}
-										</span>
-										<span className="flex flex-wrap">{resolvedActions}</span>
-									</div>
-								)}
-								{groups.map((section) => (
-									<div key={section.label || "all"} className="mt-3 first:mt-0">
-										{section.label && <GroupHeading>{section.label}</GroupHeading>}
+									{resolvedUnreadNote && (
+										<div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-surface-raised px-3 py-2 text-2xs text-muted-foreground">
+											<span>
+												{`${resolvedUnread} resolved ${resolvedUnread === 1 ? "item" : "items"} you haven't opened`}
+											</span>
+											<span className="flex flex-wrap">{resolvedActions}</span>
+										</div>
+									)}
+									{groups.map((section) => (
+										<div key={section.label || "all"} className="mt-3 first:mt-0">
+											{section.label && <GroupHeading>{section.label}</GroupHeading>}
 
-										<ul className="grid min-w-0 gap-1">
-											{section.items.map((item) => (
-												<ItemRow
-													key={item.id}
-													item={item}
-													checked={selected.has(item.id)}
-													bulkActive={visibleSelected.length > 0}
-													selected={item.id === selectedId}
-													onCheck={(value) => toggleOne(item.id, value)}
-													onSelect={() => openItem(item)}
-												/>
-											))}
-										</ul>
-									</div>
-								))}
+											<ul className="grid min-w-0 gap-1">
+												{section.items.map((item) => (
+													<ItemRow
+														key={item.id}
+														item={item}
+														checked={selected.has(item.id)}
+														bulkActive={visibleSelected.length > 0}
+														selected={item.id === selectedId}
+														onCheck={(value) => toggleOne(item.id, value)}
+														onSelect={() => openItem(item)}
+													/>
+												))}
+											</ul>
+										</div>
+									))}
 								</>
 							)}
 						</div>
