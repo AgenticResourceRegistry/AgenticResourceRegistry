@@ -28,9 +28,15 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, or_, select, true
 
-from models.discovery_entry import DiscoveryEntry, DiscoveryLifecycle, DiscoveryVisibility
+from models.discovery_entry import (
+    DiscoveryEntry,
+    DiscoveryLifecycle,
+    DiscoverySourceKind,
+    DiscoveryVisibility,
+)
 from models.team import Team, TeamMembership
 from models.user import UserRole
+from services.discovery.adapters import NATIVE_MODELS
 from services.teamspace import REVIEWING_TEAM_ROLES, TEAM_REVIEW_UNLOCKED
 
 if TYPE_CHECKING:
@@ -137,14 +143,40 @@ def lifecycle_predicate(user: Any | None, lifecycles: tuple[DiscoveryLifecycle, 
     return or_(*clauses)
 
 
+def source_exists_predicate():
+    """Local entries only while the listing and the version they point at still exist.
+
+    The reprojection hook tombstones entries on ORM deletes, but a delete that
+    bypasses the ORM (a cascade, a bulk delete, manual SQL) leaves the entry live
+    until the periodic safety net runs. Reads must not advertise it meanwhile:
+    inspect and the artifact URL would 404.
+    """
+    per_kind = []
+    for kind, (listing_model, version_model, _fk) in NATIVE_MODELS.items():
+        listing_ok = select(listing_model.id).where(listing_model.id == DiscoveryEntry.local_entity_id)
+        if hasattr(listing_model, "deleted_at"):
+            listing_ok = listing_ok.where(listing_model.deleted_at.is_(None))
+        version_ok = select(version_model.id).where(version_model.id == DiscoveryEntry.local_version_id)
+        # A NULL pointer (historical row) cannot be checked, so it stays readable until the safety net decides.
+        per_kind.append(
+            and_(
+                DiscoveryEntry.kind == kind,
+                or_(DiscoveryEntry.local_entity_id.is_(None), listing_ok.correlate(DiscoveryEntry).exists()),
+                or_(DiscoveryEntry.local_version_id.is_(None), version_ok.correlate(DiscoveryEntry).exists()),
+            )
+        )
+    return or_(DiscoveryEntry.source_kind != DiscoverySourceKind.local, *per_kind)
+
+
 def visible_entries_predicate(
     user: Any | None,
     *,
     lifecycles: tuple[DiscoveryLifecycle, ...] = DEFAULT_LIFECYCLES,
 ):
-    """Complete predicate: live, allowed to see, and in a permitted lifecycle."""
+    """Complete predicate: live, backed by its source, allowed to see, and in a permitted lifecycle."""
     return and_(
         DiscoveryEntry.tombstoned_at.is_(None),
+        source_exists_predicate(),
         privacy_predicate(user),
         lifecycle_predicate(user, lifecycles),
     )

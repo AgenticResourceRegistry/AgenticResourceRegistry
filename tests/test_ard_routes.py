@@ -20,18 +20,19 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.pool import NullPool
 
 import services.dynamic_settings as ds
 from api.deps import get_db
 from api.ratelimit import limiter
 from api.routes import ard, artifacts
-from models.discovery_entry import DiscoveryKind
+from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle, DiscoveryVisibility
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership
 from models.user import UserRole
+from services.discovery.adapters import NATIVE_MODELS
 from services.discovery.projection import project_entity, reproject_all
 from services.discovery.serialize import availability
 from tests import discovery_support as fx
@@ -640,6 +641,95 @@ async def test_stale_approved_artifact_cannot_bypass_global_re_review(sessions, 
         result = await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")
         assert result.status_code == 200
         assert result.headers["Cache-Control"].startswith("private")
+
+
+# "listing" removes the versions too (a real cascade); "listing-only" leaves them, so each EXISTS is tested alone.
+_REMOVALS = [(kind, drop) for kind in NATIVE_MODELS for drop in ("listing", "listing-only", "version")] + [
+    (DiscoveryKind.agent, "soft-delete")  # only agents have deleted_at
+]
+
+
+async def _list_identifiers(client) -> set[str]:
+    body = (await client.get("/api/v1/ard/agents", params={"pageSize": 50})).json()
+    assert body["total"] == len(body["items"])  # one page, so the count and the items must agree
+    return {item["identifier"] for item in body["items"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "drop"), _REMOVALS, ids=[f"{k.value}-{d}" for k, d in _REMOVALS])
+async def test_entry_whose_source_was_removed_outside_the_orm_is_not_served(sessions, settings, kind, drop):
+    """A cascade or manual SQL write skips the reprojection hook; reads must not advertise the entry."""
+    owner, _, _ = await _seed(sessions)
+    listing_model, version_model, fk = NATIVE_MODELS[kind]
+    async with sessions() as db:
+        entry = (
+            (
+                await db.execute(
+                    select(DiscoveryEntry)
+                    .where(
+                        DiscoveryEntry.kind == kind,
+                        DiscoveryEntry.lifecycle_status == DiscoveryLifecycle.approved,
+                        DiscoveryEntry.visibility == DiscoveryVisibility.public,
+                    )
+                    .order_by(DiscoveryEntry.display_name)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        urn, name, entity_id, version = entry.ard_identifier, entry.display_name, entry.local_entity_id, entry.version
+    async with _client(_app(sessions, owner)) as client:
+        before = await _list_identifiers(client)
+        assert urn in before
+        assert (await client.get(f"/api/v1/artifacts/{kind.value}/{entity_id}/{version}")).status_code == 200
+
+    async with sessions() as db:
+        if drop == "soft-delete":
+            await db.execute(update(listing_model).where(listing_model.id == entity_id).values(deleted_at=fx.NOW))
+        else:
+            if drop != "listing-only":
+                await db.execute(delete(version_model).where(getattr(version_model, fk) == entity_id))
+            if drop.startswith("listing"):
+                await db.execute(delete(listing_model).where(listing_model.id == entity_id))
+        await db.commit()
+        entry = (
+            await db.execute(select(DiscoveryEntry).where(DiscoveryEntry.local_entity_id == entity_id))
+        ).scalar_one()
+        assert entry.tombstoned_at is None  # the index was never told
+
+    async with _client(_app(sessions, owner)) as client:
+        found = await client.post("/api/v1/ard/search", json={"query": {"text": name}, "pageSize": 25})
+        assert urn not in {r["identifier"] for r in found.json()["results"]}
+        assert (await client.get(f"/api/v1/ard/entries/{urn}")).status_code == 404
+        assert (await client.get(f"/api/v1/artifacts/{kind.value}/{entity_id}/{version}")).status_code == 404
+        assert await _list_identifiers(client) == before - {urn}  # nothing else was hidden
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "nulled", [("local_entity_id",), ("local_version_id",), ("local_entity_id", "local_version_id")]
+)
+@pytest.mark.parametrize("kind", list(NATIVE_MODELS))
+async def test_local_entry_without_source_ids_is_not_hidden(sessions, settings, kind, nulled):
+    """Pre-pointer rows (NULL ids) cannot be checked against the registry, so they are left to the safety net."""
+    owner, _, _ = await _seed(sessions)
+    async with sessions() as db:
+        entry = (
+            (
+                await db.execute(
+                    select(DiscoveryEntry)
+                    .where(DiscoveryEntry.kind == kind, DiscoveryEntry.lifecycle_status == DiscoveryLifecycle.approved)
+                    .order_by(DiscoveryEntry.display_name)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        urn = entry.ard_identifier
+        await db.execute(update(DiscoveryEntry).where(DiscoveryEntry.id == entry.id).values({c: None for c in nulled}))
+        await db.commit()
+    async with _client(_app(sessions, owner)) as client:
+        assert urn in await _list_identifiers(client)
 
 
 @pytest.mark.asyncio
