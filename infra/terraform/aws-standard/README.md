@@ -21,7 +21,7 @@ Private subnets:
     +-- Data host EC2 (t3.medium) running:
         - Postgres 18 (port 5432)
         - Redis 8 (port 6379)
-        - ClickHouse 26.5 (ports 8123, 9000)
+        - ClickHouse 26.6 (ports 8123, 9000)
         - Grafana (port 3001)
         - Prometheus (port 9090)
 ```
