@@ -22,7 +22,7 @@ Pass the task as one shell-escaped argument (single-quote it and escape any embe
 | Option | Description |
 | --- | --- |
 | `--type`, `-t` | Restrict to `agent`, `mcp`, `skill`, `hook`, `prompt`, or `sandbox` |
-| `--harness`, `-i` | Only resources that list this harness as supported |
+| `--harness`, `-i` | Only resources that explicitly list this harness as supported. Resources that declare no harnesses are left out (support is unknown, not implied); drop the flag to see them. Remote A2A agents are kept, since they run elsewhere. |
 | `--limit`, `-n` | Number of results, 1 through 25 (default 5) |
 | `--include-unapproved` | Also return your own pending or rejected submissions |
 | `--output`, `-o` | Table or JSON output |
@@ -38,7 +38,7 @@ JSON returns `query`, `harness`, `count`, and `results[]`. Important result fiel
 | `obs:nativeRef` | `namespace/slug@version`, usable with the registry and agent commands |
 | `obs:approval` | `approved`, `pending`, `rejected`, `archived`, `draft` |
 | `obs:availability` | `now`, `next-session`, `explicit-install`, `not-approved`, `archived`, `unsupported-in-harness` |
-| `obs:supportedHarnesses` | Harnesses the publisher declared; empty means unrestricted |
+| `obs:supportedHarnesses` | Harnesses the publisher declared; empty means support is unknown (not unrestricted). Policy: `--harness` search needs positive evidence, so it leaves out resources that declare no harnesses; `inspect` and `use` only refuse a resource that declares other harnesses, so a resource that declares none stays usable. |
 | `obs:artifactDigest` | SHA-256 of the exact artifact bytes |
 
 An empty `results` array is a successful answer: nothing matched. Try fewer or different words before concluding the resource does not exist.

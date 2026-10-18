@@ -752,3 +752,11 @@ def test_printed_sandbox_step_really_adds_the_sandbox_to_the_agent_yaml(monkeypa
     assert result.exit_code == 0, result.output
     saved = yaml.safe_load((tmp_path / "observal-agent.yaml").read_text())
     assert saved["components"] == [{"component_type": "sandbox", "component_id": ENTITY, "version": "3.1.0"}]
+
+
+def test_inspect_does_not_call_undeclared_harnesses_unrestricted(monkeypatch):
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=_entry(**{"obs:supportedHarnesses": []})))
+    result = _invoke("inspect", URN)
+    assert result.exit_code == 0, result.output
+    assert "not declared" in result.output
+    assert "any" not in " ".join(line for line in result.output.split("\n") if "Harnesses" in line).split()
