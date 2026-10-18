@@ -50,7 +50,7 @@ import type {
   SuccessCriteria,
   ValidationResult,
 } from "@/lib/types";
-import type { RegistryType } from "@/lib/api";
+import { registry, type RegistryType } from "@/lib/api";
 import { ModelPicker } from "@/components/builder/model-picker";
 import { SortableComponentList } from "@/components/builder/sortable-component-list";
 import {
@@ -408,6 +408,8 @@ export function AgentEditForm({
         id: agentId,
         body: { description: d, prompt: p, model_name, models_by_harness, components, success_criteria },
       });
+      // Under review, saving here is the author's resubmission: it answers requested changes.
+      if (underReview) await registry.submitDraft(agentId);
       initialStateRef.current = { description, modelName, modelsByHarness, prompt, selectedComponents, successCriteria };
       setIsDirty(false);
       onSuccess?.();

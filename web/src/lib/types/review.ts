@@ -93,6 +93,8 @@ export interface ReviewTimelineEntry {
   verdict?: ReviewVerdict;
   body?: string;
   state?: string;
+  /** Revision a verdict was submitted on. */
+  revision_id?: string;
 }
 
 export type CheckStatus = "pass" | "fail" | "warn" | "skipped" | "queued" | "running" | "error";

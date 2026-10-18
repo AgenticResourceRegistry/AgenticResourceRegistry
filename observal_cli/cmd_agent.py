@@ -1863,13 +1863,15 @@ def agent_edit(
     prompt: str | None = typer.Option(None, "--prompt", help="New system prompt"),
     prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read the new system prompt from a file"),
     model_name: str | None = typer.Option(None, "--model", "-m", help="New default model (blank = auto)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note for the review"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Amend an unpublished agent version in place.
 
     Works while the latest version is a draft, pending review, changes
-    requested, or rejected. The version number stays the same; if a review is
-    open, reviewers see the change as a new revision of that same review.
+    requested, or rejected. The version number stays the same. Under review,
+    the edit is submitted as a new revision of the same review, which answers
+    requested changes (like Save & update review in the web Edit tab).
     An approved version is immutable: use `observal agent release` instead.
 
     Examples:
@@ -1922,6 +1924,13 @@ def agent_edit(
     client.post(f"/api/v1/agents/{agent['id']}/start-edit")
     with _progress(output, "Saving changes..."):
         result = client.put(f"/api/v1/agents/{agent['id']}/draft", updates)
+    if agent.get("status") in ("pending", "changes_requested"):
+        # Saving under review is the author's resubmission; it answers requested changes.
+        with _progress(output, "Submitting revision..."):
+            submitted = client.post(
+                f"/api/v1/agents/{agent['id']}/submit" + (f"?message={quote(message)}" if message else "")
+            )
+        result = {**result, **{k: v for k, v in submitted.items() if k in ("status", "review_number", "review_url")}}
     if output == "json":
         output_json(result)
         return

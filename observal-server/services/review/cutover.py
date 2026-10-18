@@ -7,7 +7,7 @@ from sqlalchemy import select
 from models.agent import AgentStatus
 from models.mcp import ListingStatus
 from models.review import Review, ReviewState
-from services.review.decisions import _head, open_or_push, sync_state
+from services.review.decisions import DRAFT_EDIT_MESSAGE, _head, open_or_push, sync_state
 from services.review.notifications import deliver_event
 
 
@@ -33,9 +33,10 @@ async def submit_for_review(db, subject_type, subject, version, actor_id, *, mes
         # just marks the version ready for review again instead of failing as "no changes".
         if version.status in (ListingStatus.draft, ListingStatus.rejected, ListingStatus.changes_requested):
             version.status = AgentStatus.pending if subject_type == "agent" else ListingStatus.pending
+        # The author now submits this revision: it answers outstanding change requests.
         head = await _head(db, already_current)
-        if message and head.message == DRAFT_EDIT_MESSAGE:
-            head.message = message
+        head.message = message
+        await sync_state(db, already_current, actor_id=actor_id)
         return already_current
     review = await open_or_push(db, subject_type, subject, version, actor_id, message=message)
     # open_or_push starts the revision and may then mark an outstanding change
@@ -89,9 +90,6 @@ async def resubmit_if_changed(db, subject_type, subject, version, message, *, ac
     if _hash(await render_files(subject_type, version, db)) == head.content_hash:
         return None
     return await submit_for_review(db, subject_type, subject, version, actor_id or version.released_by, message=message)
-
-
-DRAFT_EDIT_MESSAGE = "Draft updated after submission"
 
 
 async def push_draft_edit(db, subject_type, subject, version, actor_id) -> dict | None:

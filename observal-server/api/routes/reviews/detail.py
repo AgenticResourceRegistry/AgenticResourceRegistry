@@ -236,6 +236,7 @@ async def timeline(
             "verdict": s.verdict,
             "body": s.body,
             "state": s.state,
+            "revision_id": s.revision_id,
         }
         for s in submissions
     ]

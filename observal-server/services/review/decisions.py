@@ -49,6 +49,11 @@ from services.versioning import parse_semver
 _PRERELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")
 
 
+# Revision note of a draft save pushed automatically (services.review.cutover.push_draft_edit).
+# Such a revision shows reviewers the change but is not the author's resubmission.
+DRAFT_EDIT_MESSAGE = "Draft updated after submission"
+
+
 def _now():
     return datetime.now(UTC)
 
@@ -176,7 +181,11 @@ async def open_or_push(
             and not visibility_requeue
             and not (review.state == ReviewState.closed and review.closed_reason == "withdrawn")
         ):
-            raise HTTPException(409, "No content changes since the previous revision")
+            raise HTTPException(
+                409,
+                f"Already under review as #{review.number} with no changes since revision {head.number}. "
+                "Edit the resource first; saving it adds a new revision to the same review.",
+            )
         if visibility_requeue:
             # Team-private approvals must not count toward a public decision,
             # including when policy permits approvals from earlier revisions.
@@ -349,12 +358,15 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
     approvals = sum(
         s.verdict == "approve" and (not s.self_review or policy.self_approval == "counted") for s in latest.values()
     )
-    revisions = {
-        r.id: r.number
-        for r in (await db.execute(select(ReviewRevision).where(ReviewRevision.review_id == review.id))).scalars().all()
-    }
+    revision_rows = (
+        (await db.execute(select(ReviewRevision).where(ReviewRevision.review_id == review.id))).scalars().all()
+    )
+    revisions = {r.id: r.number for r in revision_rows}
+    # Newest revision the author explicitly submitted (automatic draft pushes do not count).
+    resubmitted = max((r.number for r in revision_rows if r.message != DRAFT_EDIT_MESSAGE), default=0)
     # Submissions are chronological. A change request stays outstanding until the
-    # same reviewer later approves that revision or a newer one.
+    # same reviewer later approves that revision or a newer one, or the author
+    # resubmits a newer revision answering it (the reviewer can request again).
     requests = {}
     for s in submissions:
         if s.verdict == "request_changes":
@@ -365,6 +377,7 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
             and revisions[s.revision_id] >= revisions[requests[s.reviewer_id].revision_id]
         ):
             del requests[s.reviewer_id]
+    requests = {reviewer: s for reviewer, s in requests.items() if revisions[s.revision_id] >= resubmitted}
     blockers = []
     if approvals < policy.required_approvals[review.subject_type]:
         blockers.append("required_approvals")

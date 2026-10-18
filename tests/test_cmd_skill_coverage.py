@@ -1241,6 +1241,8 @@ def test_edit_from_file_and_file_failures(tmp_path, monkeypatch):
     resolve = Mock(return_value="resolved")
     monkeypatch.setattr(skill.client, "resolve_registry_reference", resolve)
     monkeypatch.setattr(skill.client, "post", Mock(return_value={}))
+    # Submission under review is covered in test_draft_review_cli; this test is about file handling.
+    monkeypatch.setattr(skill, "submit_edit_under_review", lambda kind, plural, resolved, result: result)
     put = Mock(return_value={"name": "file-edit", "status": "pending"})
     monkeypatch.setattr(skill.client, "put", put)
     updates = {"name": "file-edit", "description": "From file"}
@@ -1497,6 +1499,7 @@ def test_skill_install_does_not_record_failed_write(monkeypatch):
 def test_skill_edit_json_returns_server_result(monkeypatch):
     monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
     monkeypatch.setattr(skill.client, "post", Mock(return_value={}))
+    monkeypatch.setattr(skill, "submit_edit_under_review", lambda kind, plural, resolved, result: result)
     monkeypatch.setattr(
         skill.client,
         "put",

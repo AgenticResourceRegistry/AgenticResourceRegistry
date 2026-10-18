@@ -22,5 +22,9 @@ def print_draft_save(result: dict, submit_hint: str) -> None:
             "[dim]Approvals on earlier revisions follow the review's stale-approval policy.[/dim]"
         )
         print_review_link(result)
+        if result.get("status") == "changes_requested":
+            rprint(
+                f"[dim]When the requested changes are done, submit them to return the review: {escape(submit_hint)}[/dim]"
+            )
     elif result.get("status") in ("draft", "rejected"):
         rprint(f"[dim]Not under review yet. Submit it with: {escape(submit_hint)}[/dim]")

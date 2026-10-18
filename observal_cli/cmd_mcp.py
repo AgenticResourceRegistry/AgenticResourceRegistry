@@ -28,6 +28,7 @@ from observal_cli import client, config
 from observal_cli.analyzer import analyze_local
 from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_MCP_CATEGORIES
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import fuzzy_select, select_one, text_input
 from observal_cli.render import (
@@ -1792,6 +1793,8 @@ def edit_mcp(
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/mcps/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("mcp", "mcps", resolved, result)
     if output == "json":
         output_json(result)
     else:
