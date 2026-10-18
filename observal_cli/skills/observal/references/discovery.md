@@ -42,7 +42,7 @@ observal discover search 'generate playwright tests' --harness pi --output json
 observal discover search 'release notes' --include-unapproved --output json   # your own drafts too
 ```
 
-Pass the task as one shell-escaped argument (single-quote it and escape any embedded `'` as `'\''`); the words are user text, not shell syntax. `--type` accepts `agent`, `mcp`, `skill`, `hook`, `prompt`, `sandbox`. `--harness` restricts to resources that list that harness. Results are `results[]`, ranked by `score` (relevance only, 0-100), each with `matchedOn` explaining the match. An empty `results` is a successful answer: nothing matched.
+Pass the task as one shell-escaped argument (single-quote it and escape any embedded `'` as `'\''`); the words are user text, not shell syntax. `--type` accepts `agent`, `mcp`, `skill`, `hook`, `prompt`, `sandbox`. `--harness` restricts to resources that list that harness. A name, slug, `namespace/slug`, or `slug@version` query finds that resource; `-` and `_` are interchangeable. Results are `results[]`, ranked by `score` (relevance only, 0-100), each with `matchedOn` explaining the match. An empty `results` is a successful answer: nothing matched.
 
 Signed-in discovery covers resources in your personal namespace and every teamspace you currently belong to; it does not search other people's public namespaces. A resource elsewhere may still be installable by reference. Admins and global reviewers retain their broader access, and anonymous public discovery is controlled by the deployment's public registry switch. Retry once with fewer or different words before concluding nothing exists within your scope.
 
