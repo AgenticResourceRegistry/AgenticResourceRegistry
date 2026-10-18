@@ -662,6 +662,7 @@ export const prReviews = {
   ),
   close: (ref: string, reason: string) => post(`/reviews/${encodeURIComponent(ref)}/close`, { reason }),
   withdraw: (ref: string) => post(`/reviews/${encodeURIComponent(ref)}/withdraw`),
+  reopen: (ref: string, message?: string) => post(`/reviews/${encodeURIComponent(ref)}/reopen`, { message }),
   subscribe: (ref: string, mode: "watching" | "muted") => put(
     `/reviews/${encodeURIComponent(ref)}/subscription`, { mode },
   ),

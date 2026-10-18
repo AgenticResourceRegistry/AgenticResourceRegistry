@@ -44,3 +44,13 @@ def test_review_verdict_does_not_call_publish_and_legacy_admin_group_is_absent(m
     assert approved.exit_code == 0, approved.output
     assert posted == [("/api/v1/reviews/%2342/submissions", {"verdict": "approve", "body": ""})]
     assert runner.invoke(app, ["admin", "review", "list"]).exit_code == 2
+
+
+def test_review_reopen_posts_to_the_review(monkeypatch):
+    posted = []
+    monkeypatch.setattr(
+        cmd_review.client, "post", lambda url, body=None: posted.append((url, body)) or {"state": "open", "number": 14}
+    )
+    result = runner.invoke(app, ["review", "reopen", "#14", "--message", "Back", "--output", "json"])
+    assert result.exit_code == 0, result.output
+    assert posted == [("/api/v1/reviews/%2314/reopen", {"message": "Back"})]
