@@ -33,6 +33,7 @@ from services.clickhouse import (
 from services.secrets_redactor import redact_secrets
 from services.session_parsers.base import token_count, uncached_input_tokens
 from services.session_parsers.ingest_classify import extract_timestamp, get_classifier, get_extra_rows
+from services.session_parsers.kiro import extract_usage as _usage_kiro
 
 # ---------------------------------------------------------------------------
 # Per-harness token usage extraction (dispatch pattern)
@@ -40,7 +41,7 @@ from services.session_parsers.ingest_classify import extract_timestamp, get_clas
 
 
 def _usage_claude_code(parsed: dict) -> dict:
-    """Claude Code / Cursor / Kiro: usage.input_tokens, usage.output_tokens, etc."""
+    """Claude Code / Cursor: usage.input_tokens, usage.output_tokens, etc."""
     msg = parsed.get("message", {})
     usage = msg.get("usage") or {}
     return {
@@ -166,7 +167,7 @@ _UsageFn = Callable[[dict], dict]
 _USAGE_EXTRACTORS: dict[str, _UsageFn] = {
     "claude-code": _usage_claude_code,
     "codex": _usage_codex,
-    "kiro": _usage_claude_code,
+    "kiro": _usage_kiro,
     "cursor": _usage_claude_code,
     "goose": _usage_goose,
     "pi": _usage_pi,
