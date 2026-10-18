@@ -47,6 +47,8 @@ flowchart TB
 | `observal-worker`     | built from `docker/Dockerfile.api`  | (internal) | Background async jobs     |
 | `observal-grafana`    | `grafana/grafana-oss:13.0.2`        | 3001       | Dashboards (optional)     |
 
+This table applies to the default Docker Compose deployment. Other deployment routes pin their own versions — the [AWS deployment](/self-hosting/aws-terraform), for example, uses RDS PostgreSQL 16, ElastiCache Redis 7.1, and optional Grafana 11.6.5, with ClickHouse 26.6.
+
 All services run on a private `observal-net` bridge network. Named volumes (`pgdata`, `chdata`, `redisdata`, `grafanadata`, `apidata`) hold persistent data.
 
 ## Deployment tiers
