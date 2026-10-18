@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Participant-only review snapshots, timeline and structured file diffs."""
 
@@ -23,9 +24,10 @@ from models.user import User
 from schemas.review import ReviewEdit
 from services.registry_fork import provenance_for
 from services.review import check_config, ci
-from services.review.decisions import _own_work, _target, gate
+from services.review.decisions import _lock_review, _own_work, _target, gate
 from services.review.diff import diff_files
 from services.review.policy import policy_for
+from services.review.requests import ensure_request_threads, request_lifecycle_status, review_decisions
 from services.teamspace import can_review, review_scope
 
 router = APIRouter()
@@ -44,6 +46,9 @@ async def detail(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    await _lock_review(db, review)
+    if await ensure_request_threads(db, review):
+        await notify_update(review, "gate")
     revisions = (
         await db.scalars(
             select(ReviewRevision).where(ReviewRevision.review_id == review.id).order_by(ReviewRevision.number)
@@ -69,6 +74,7 @@ async def detail(
     base = await db.get(type(version), review.base_version_id) if review.base_version_id else None
     policy = await policy_for(review, db=db)
     self_approval_allowed = subject.is_private and policy.source == "teamspace" and policy.self_approval == "counted"
+    _, latest_decisions, request_statuses = await review_decisions(db, review)
     return {
         **await summary(db, review, user),
         "body": review.body,
@@ -93,6 +99,15 @@ async def detail(
         ],
         "requested_reviewers": requested,
         "reviewer_names": reviewer_names,
+        "reviewer_decisions": {
+            str(uid): {
+                "verdict": row.verdict,
+                "status": request_lifecycle_status(review, row, request_statuses)
+                if row.verdict == "request_changes"
+                else row.state,
+            }
+            for uid, row in latest_decisions.items()
+        },
         "my_subscription": subscription.mode if subscription else None,
         "self_approval_allowed": self_approval_allowed,
         "forked_from": await provenance_for(subject, user, db) if getattr(subject, "is_fork", True) else None,
@@ -191,6 +206,9 @@ async def checks(review: Review = Depends(get_review), db: AsyncSession = Depend
 
 @router.get("/{ref}/gate")
 async def gate_detail(review: Review = Depends(get_review), db: AsyncSession = Depends(get_db)):
+    await _lock_review(db, review)
+    if await ensure_request_threads(db, review):
+        await notify_update(review, "gate")
     result = await gate(db, review)
     return {
         "ready": result.ready,

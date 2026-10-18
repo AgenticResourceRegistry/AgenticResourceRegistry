@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Additive review endpoints: participant ACL, draft isolation and inbox fan-out."""
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -22,11 +24,13 @@ from models import Base
 from models.agent import AgentStatus, AgentVersion
 from models.inbox import InboxItem, InboxKind, InboxState
 from models.mcp import ListingStatus, McpListing, McpVersion
-from models.review import Review, ReviewComment, ReviewSubmission
+from models.review import Review, ReviewComment, ReviewState, ReviewSubmission, ReviewThread
 from models.skill import SkillListing, SkillVersion
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
+from services.review import notifications
 from services.review.decisions import open_or_push
+from services.review.policy import ApprovalPolicy
 
 
 @pytest.fixture
@@ -621,6 +625,224 @@ async def test_org_policy_change_rechecks_approved_review(api, monkeypatch):
         review = await db.get(Review, rid)
         assert review.state == ReviewState.open
     assert (await client.get(f"/api/v1/reviews/{number}/gate")).json()["required"] == 2
+
+
+@pytest.mark.asyncio
+async def test_team_owner_cannot_clear_global_only_change_request(api):
+    client, current, (author, reviewer, outsider, _), (rid, number), factory = api
+    async with factory() as db:
+        team = Team(name="Public QA", handle="public-qa", created_by=author.id, is_private=False)
+        db.add(team)
+        await db.flush()
+        db.add(TeamMembership(team_id=team.id, user_id=outsider.id, role=TeamRole.owner))
+        review = await db.get(Review, rid)
+        listing = await db.get(SkillListing, review.subject_id)
+        version = await db.get(SkillVersion, review.version_id)
+        listing.team_id = team.id
+        review.team_id = team.id
+        version.requires_global_review = True
+        await db.commit()
+    base = f"/api/v1/reviews/{number}"
+    current[0] = reviewer
+    request = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Global concern"})
+    assert request.status_code == 201, request.text
+    current[0] = outsider
+    for action in ("dismiss", "withdraw-request"):
+        response = await client.post(base + f"/submissions/{request.json()['id']}/{action}", json={"reason": "No"})
+        assert response.status_code == 403, response.text
+    current[0] = reviewer
+    assert (await client.get(base + "/gate")).json()["outstanding_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reopening_withdrawn_review_reopens_blocking_request_thread(api):
+    client, current, (author, reviewer, _, _), (rid, number), factory = api
+    base = f"/api/v1/reviews/{number}"
+    current[0] = reviewer
+    request = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Still needed"})
+    assert request.status_code == 201
+    current[0] = author
+    assert (await client.post(base + "/withdraw")).status_code == 200
+    thread = next(row for row in (await client.get(base + "/threads")).json() if row["change_request"])
+    assert thread["resolved_at"] is not None
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        listing = await db.get(SkillListing, review.subject_id)
+        version = await db.get(SkillVersion, review.version_id)
+        version.skill_md_content = "# Updated\n"
+        await open_or_push(db, "skill", listing, version, author.id, message="Reopen for review")
+        await db.commit()
+    current[0] = reviewer
+    reopened = next(row for row in (await client.get(base + "/threads")).json() if row["id"] == thread["id"])
+    assert reopened["change_request"]["status"] == "blocking"
+    assert reopened["resolved_at"] is None
+    assert (await client.get(base + "/gate")).json()["outstanding_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_disputed_request_can_be_withdrawn_without_a_revision(api):
+    client, current, (author, reviewer, outsider, second), (rid, number), factory = api
+    base = f"/api/v1/reviews/{number}"
+    current[0] = reviewer
+    original_head = (await client.get(base)).json()["head_revision_id"]
+    first = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Is this needed?"})
+    assert first.status_code == 201, first.text
+    first_id = first.json()["id"]
+    thread = next(row for row in (await client.get(base + "/threads")).json() if row["change_request"])
+    assert thread["change_request"]["submission_id"] == first_id
+    assert thread["change_request"]["status"] == "blocking"
+    thread_id = thread["id"]
+    current[0] = author
+    assert (
+        await client.post(base + f"/threads/{thread_id}/comments", json={"body": "No change needed"})
+    ).status_code == 201
+    assert (await client.post(base + f"/threads/{thread_id}/resolve")).status_code == 409
+    assert (
+        await client.post(base + f"/submissions/{first_id}/withdraw-request", json={"reason": "Agreed"})
+    ).status_code == 403
+    current[0] = outsider
+    assert (
+        await client.post(base + f"/submissions/{first_id}/withdraw-request", json={"reason": "Agreed"})
+    ).status_code == 404
+    current[0] = second
+    second_request = await client.post(
+        base + "/submissions", json={"verdict": "request_changes", "body": "Another issue"}
+    )
+    assert second_request.status_code == 201
+    current[0] = reviewer
+    withdrawn = await client.post(
+        base + f"/submissions/{first_id}/withdraw-request", json={"reason": "Question answered"}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert (
+        await client.post(base + f"/submissions/{first_id}/withdraw-request", json={"reason": "retry"})
+    ).status_code == 409
+    assert (await client.patch(base + f"/submissions/{first_id}", json={"body": "new text"})).status_code == 409
+    assert (
+        await client.patch(base + f"/comments/{thread['comments'][0]['id']}", json={"body": "new text"})
+    ).status_code == 409
+    assert (await client.delete(base + f"/comments/{thread['comments'][0]['id']}")).status_code == 409
+    assert (await client.post(base + f"/threads/{thread_id}/unresolve")).status_code == 409
+    gate = (await client.get(base + "/gate")).json()
+    assert gate["outstanding_requests"] == 1 and "changes_requested" in gate["requirements"]
+    linked = next(row for row in (await client.get(base + "/threads")).json() if row["id"] == thread_id)
+    assert linked["resolved_at"] is not None and linked["change_request"]["status"] == "withdrawn"
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        assert str(review.head_revision_id) == original_head
+    current[0] = second
+    assert (
+        await client.post(
+            base + f"/submissions/{second_request.json()['id']}/withdraw-request", json={"reason": "Answered"}
+        )
+    ).status_code == 200
+    assert "changes_requested" not in (await client.get(base + "/gate")).json()["requirements"]
+
+
+@pytest.mark.asyncio
+async def test_newer_withdrawn_request_does_not_resurrect_old_decisions(api):
+    client, current, (_, reviewer, _, _), (_, number), _ = api
+    base = f"/api/v1/reviews/{number}"
+    current[0] = reviewer
+    assert (await client.post(base + "/submissions", json={"verdict": "approve"})).status_code == 201
+    old = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "First"})
+    newer = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Second"})
+    assert newer.status_code == 201, newer.text
+    assert (
+        await client.post(base + f"/submissions/{newer.json()['id']}/withdraw-request", json={"reason": "Resolved"})
+    ).status_code == 200
+    gate = (await client.get(base + "/gate")).json()
+    assert gate["approvals"] == 0 and gate["outstanding_requests"] == 0
+    detail = (await client.get(base)).json()
+    assert detail["reviewer_decisions"][str(reviewer.id)] == {"verdict": "request_changes", "status": "withdrawn"}
+    assert number in [
+        row["number"] for row in (await client.get("/api/v1/reviews?needs=my_review&state=all")).json()["items"]
+    ]
+    threads = (await client.get(base + "/threads")).json()
+    assert (
+        next(t for t in threads if t["change_request"]["submission_id"] == old.json()["id"])["change_request"]["status"]
+        == "superseded"
+    )
+
+
+@pytest.mark.asyncio
+async def test_old_worker_approval_reconciles_existing_linked_request(api, monkeypatch):
+    client, current, (_, reviewer, _, _), (rid, number), factory = api
+    current[0] = reviewer
+    base = f"/api/v1/reviews/{number}"
+    request = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Please clarify"})
+    assert request.status_code == 201
+    thread = next(row for row in (await client.get(base + "/threads")).json() if row["change_request"])
+    assert thread["resolved_at"] is None
+    # Simulate an old worker writing a newer verdict without reconciling its existing thread.
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        db.add(
+            ReviewSubmission(
+                review_id=rid,
+                revision_id=review.head_revision_id,
+                reviewer_id=reviewer.id,
+                verdict="approve",
+                state="submitted",
+                submitted_at=datetime.now(UTC),
+            )
+        )
+        await db.commit()
+    delivery = AsyncMock(wraps=notifications.deliver_gate_change)
+    broadcast = AsyncMock()
+    monkeypatch.setattr(notifications, "deliver_gate_change", delivery)
+    monkeypatch.setattr("api.routes.reviews.detail.notify_update", broadcast)
+    ready = (await client.get(base + "/gate")).json()
+    delivery.assert_awaited_once()
+    broadcast.assert_awaited_once()
+    assert ready["outstanding_requests"] == 0
+    updated = next(row for row in (await client.get(base + "/threads")).json() if row["id"] == thread["id"])
+    assert updated["change_request"]["status"] == "cleared"
+    assert updated["resolved_at"] is not None
+    async with factory() as db:
+        assert (await db.get(ReviewThread, uuid.UUID(thread["id"]))).resolved_at is not None
+        review = await db.get(Review, rid)
+        if ready["ready"]:
+            assert review.state.value in ("approved", "published")
+
+
+@pytest.mark.asyncio
+async def test_terminal_review_repair_sends_no_actionable_ready_notice(api, monkeypatch):
+    client, current, (_, reviewer, _, _), (rid, number), factory = api
+    current[0] = reviewer
+    base = f"/api/v1/reviews/{number}"
+    request = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Old request"})
+    assert request.status_code == 201
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        review.state = ReviewState.closed
+        review.closed_reason = "rejected"
+        db.add(
+            ReviewSubmission(
+                review_id=rid,
+                revision_id=review.head_revision_id,
+                reviewer_id=reviewer.id,
+                verdict="approve",
+                state="submitted",
+                submitted_at=datetime.now(UTC),
+            )
+        )
+        await db.commit()
+    monkeypatch.setattr(
+        "services.review.decisions.policy_for",
+        AsyncMock(return_value=ApprovalPolicy(require_resolved_threads=True)),
+    )
+    delivery = AsyncMock(wraps=notifications.deliver_gate_change)
+    monkeypatch.setattr(notifications, "deliver_gate_change", delivery)
+    assert (await client.get(base + "/gate")).status_code == 200
+    delivery.assert_not_awaited()
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        assert review.state == ReviewState.closed
+        thread = await db.scalar(
+            select(ReviewThread).where(ReviewThread.change_request_id == uuid.UUID(request.json()["id"]))
+        )
+        assert thread.resolved_at is not None
 
 
 @pytest.mark.asyncio

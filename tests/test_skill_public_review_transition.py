@@ -18,6 +18,8 @@ from models.team import TeamMembership, TeamRole
 from models.user import UserRole
 from services import teamspace
 from services.review.cutover import submit_for_review
+from services.review.decisions import gate, submit_verdict
+from services.review.requests import request_lifecycle_status
 from tests import discovery_support as ds
 
 
@@ -129,8 +131,14 @@ async def test_flip_resolves_team_notice_and_routes_each_round_to_correct_audien
                 db, "skill", listing, await db.get(SkillVersion, listing.latest_version_id), owner.id
             )
             await db.flush()
+            review = await db.scalar(select(Review).where(Review.subject_id == listing.id))
+            request = await submit_verdict(db, review, team_reviewer, "request_changes", body="Team-only concern")
+            assert (await gate(db, review)).outstanding_requests == 1
             listing.is_private = False
             await teamspace.review_publication_to_public(listing, owner, db, was_private=True)
+            assert request.state == "dismissed"
+            assert request_lifecycle_status(review, request, {request.id: "withdrawn"}) == "invalidated"
+            assert (await gate(db, review)).outstanding_requests == 0
             await db.commit()
             rows = (
                 (await db.execute(select(InboxItem).where(InboxItem.kind == InboxKind.review_requested)))

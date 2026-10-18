@@ -1,0 +1,154 @@
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# SPDX-License-Identifier: Apache-2.0
+"""Link change requests to conversations and backfill historical review feedback.
+
+Revision ID: 046_review_request_threads
+Revises: 045_usage_ping_default_on
+"""
+
+import uuid
+from datetime import UTC, datetime
+
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql as pg
+
+from alembic import op
+
+revision = "046_review_request_threads"
+down_revision = "045_usage_ping_default_on"
+branch_labels = None
+depends_on = None
+
+U = pg.UUID(as_uuid=True)
+
+
+def backfill() -> None:
+    """May be rerun after old API workers stop writing during a rolling rollout."""
+    db = op.get_bind()
+    requests = (
+        db.execute(
+            sa.text("""
+            SELECT s.id, s.review_id, s.reviewer_id, s.body, s.submitted_at,
+                   s.state, s.dismissed_at, s.dismissed_by, r.state AS review_state
+              FROM review_submissions s JOIN reviews r ON r.id = s.review_id
+             WHERE s.verdict = 'request_changes' AND s.state != 'draft'
+               AND NOT EXISTS (SELECT 1 FROM review_threads t WHERE t.change_request_id = s.id)
+             ORDER BY s.submitted_at, s.id
+        """)
+        )
+        .mappings()
+        .all()
+    )
+    for row in requests:
+        later = db.execute(
+            sa.text("""
+                SELECT 1 FROM review_submissions
+                 WHERE review_id = :review_id AND reviewer_id = :reviewer_id
+                   AND verdict IN ('approve', 'request_changes') AND state != 'draft'
+                   AND (submitted_at > :at OR (submitted_at = :at AND id > :id))
+                 LIMIT 1
+            """),
+            {
+                "review_id": row["review_id"],
+                "reviewer_id": row["reviewer_id"],
+                "at": row["submitted_at"],
+                "id": row["id"],
+            },
+        ).first()
+        cleared = row["state"] == "dismissed" or bool(later) or row["review_state"] in ("closed", "published")
+        created_at = row["submitted_at"] or datetime.now(UTC)
+        # A downgraded database retains the original conversation and its
+        # submission-linked first comment. Recover that link on re-upgrade
+        # instead of creating an unresolvable duplicate blocking conversation.
+        prior = db.execute(
+            sa.text("""
+                SELECT t.id FROM review_threads t
+                  JOIN review_comments c ON c.thread_id = t.id
+                 WHERE t.review_id = :review_id AND t.change_request_id IS NULL
+                   AND t.path IS NULL AND t.created_by = :reviewer_id
+                   AND c.submission_id = :request_id AND c.author_id = :reviewer_id
+                   AND c.body = :body
+                 LIMIT 2
+            """),
+            {
+                "review_id": row["review_id"],
+                "request_id": row["id"],
+                "reviewer_id": row["reviewer_id"],
+                "body": row["body"] or "",
+            },
+        ).all()
+        if len(prior) == 1:
+            db.execute(
+                sa.text("""
+                    UPDATE review_threads SET change_request_id = :request_id,
+                        resolved_at = CASE WHEN :cleared THEN COALESCE(resolved_at, :resolved_at) ELSE NULL END,
+                        resolved_by = CASE WHEN :cleared THEN COALESCE(resolved_by, :resolved_by) ELSE NULL END
+                     WHERE id = :thread_id
+                """),
+                {
+                    "request_id": row["id"],
+                    "thread_id": prior[0].id,
+                    "cleared": cleared,
+                    "resolved_at": row["dismissed_at"] or created_at,
+                    "resolved_by": row["dismissed_by"] or row["reviewer_id"],
+                },
+            )
+            continue
+        thread_id = uuid.uuid4()
+        db.execute(
+            sa.text("""
+                INSERT INTO review_threads
+                    (id, review_id, change_request_id, path, side, start_line, end_line,
+                     revision_id, anchor_text, outdated, resolved_at, resolved_by, created_by, created_at, updated_at)
+                VALUES (:id, :review_id, :request_id, NULL, NULL, NULL, NULL, NULL, NULL,
+                        false, :resolved_at, :resolved_by, :reviewer_id, :created_at, :created_at)
+            """),
+            {
+                "id": thread_id,
+                "review_id": row["review_id"],
+                "request_id": row["id"],
+                "resolved_at": row["dismissed_at"] or created_at if cleared else None,
+                "resolved_by": row["dismissed_by"] or row["reviewer_id"] if cleared else None,
+                "reviewer_id": row["reviewer_id"],
+                "created_at": created_at,
+            },
+        )
+        db.execute(
+            sa.text("""
+                INSERT INTO review_comments
+                    (id, thread_id, review_id, submission_id, author_id, body, suggestion, created_at)
+                VALUES (:id, :thread_id, :review_id, :request_id, :reviewer_id, :body, NULL, :created_at)
+            """),
+            {
+                "id": uuid.uuid4(),
+                "thread_id": thread_id,
+                "review_id": row["review_id"],
+                "request_id": row["id"],
+                "reviewer_id": row["reviewer_id"],
+                "body": row["body"] or "",
+                "created_at": created_at,
+            },
+        )
+
+
+def upgrade() -> None:
+    op.add_column("review_threads", sa.Column("change_request_id", U, nullable=True))
+    op.create_foreign_key(
+        "fk_review_threads_change_request",
+        "review_threads",
+        "review_submissions",
+        ["change_request_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+    op.create_unique_constraint("uq_review_threads_change_request", "review_threads", ["change_request_id"])
+    backfill()
+
+
+def downgrade() -> None:
+    # Preserve comments/replies as ordinary conversations on rollback.
+    op.drop_constraint("uq_review_threads_change_request", "review_threads", type_="unique")
+    op.drop_constraint("fk_review_threads_change_request", "review_threads", type_="foreignkey")
+    op.drop_column("review_threads", "change_request_id")
