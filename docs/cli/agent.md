@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal agent`
+---
+# SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal agent"
+---
 
 Create, compose, publish, install, and govern agents. An agent bundles MCP servers, skills, hooks, prompts, and sandboxes into one versioned Registry object.
 
@@ -147,7 +148,7 @@ observal agent install alice/reviewer --harness kiro --output json
 
 JSON returns the complete server installation result. Legacy `--raw` prints only `config_snippet`; new automation should use the shared output option.
 
-Use [`observal agent pull`](pull.md) to write and track the generated installation.
+Use [`observal agent pull`](/cli/pull) to write and track the generated installation.
 
 ## Archive, delete, and restore
 
@@ -185,7 +186,7 @@ observal agent init --from-capabilities --since 3d --name data-helper --output j
 
 `--from-capabilities` pre-fills `components` and `supported_harnesses` from the
 resources recorded in the capability lock for the current directory (see
-[`observal discover`](discover.md)): everything loaded with `discover use` and
+[`observal discover`](/cli/discover)): everything loaded with `discover use` and
 every component installed here in the last 24 hours (`--since` accepts `45m`,
 `2h`, `3d`, `1w`). In JSON mode a default description and prompt are filled in
 when omitted. Agents cannot nest other agents, so a pulled agent is reported
@@ -309,7 +310,7 @@ List returns the standard list envelope. Add returns the added user. Remove requ
 observal agent pull alice/reviewer --harness kiro --no-prompt --output json
 ```
 
-Pull writes harness files, records the exact Agent and component versions in `observal.lock` and the local lockfile, and reports every file and setup action. Later pulls keep the locked version until `--upgrade` or `--version`. See the [Pull reference](pull.md) for pinning, strict mode, path, secret, merge, dry-run, and JSON behavior.
+Pull writes harness files, records the exact Agent and component versions in `observal.lock` and the local lockfile, and reports every file and setup action. Later pulls keep the locked version until `--upgrade` or `--version`. See the [Pull reference](/cli/pull) for pinning, strict mode, path, secret, merge, dry-run, and JSON behavior.
 
 ## Exit codes
 
@@ -329,6 +330,6 @@ Common Agent failures use:
 
 ## Related
 
-* [`observal agent pull`](pull.md): install into a harness
-* [`observal registry`](registry.md): manage Agent components
-* [`observal registry models`](models.md): inspect exact harness model IDs
+* [`observal agent pull`](/cli/pull): install into a harness
+* [`observal registry`](/cli/registry): manage Agent components
+* [`observal registry models`](/cli/models): inspect exact harness model IDs

@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Dheirav <dheirav2005@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Pi
+---
+# SPDX-FileCopyrightText: 2026 Dheirav <dheirav2005@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Pi"
+---
 
 Pi is a first-class Observal harness integration. Observal can install Pi agent
 profiles, configure MCP servers, expose skills, install the telemetry extension,

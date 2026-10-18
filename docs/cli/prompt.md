@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Gokulkrishnan <gokulkri247@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal registry prompt`
+---
+# SPDX-FileCopyrightText: 2026 Gokulkrishnan <gokulkri247@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry prompt"
+---
 
 Manage reusable prompt templates in the Registry. Prompts can be submitted, listed, rendered, edited, archived, restored, transferred, and shared with co-authors. Standalone prompt installation has been removed; attach prompts to agents instead.
 
@@ -89,5 +90,5 @@ observal agent build
 
 ## Related
 
-* [`observal registry`](registry.md): complete Registry reference
-* [`observal agent`](agent.md): compose and publish agents
+* [`observal registry`](/cli/registry): complete Registry reference
+* [`observal agent`](/cli/agent): compose and publish agents

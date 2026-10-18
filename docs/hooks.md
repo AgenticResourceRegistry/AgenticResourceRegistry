@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Hooks
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Hooks"
+---
 
 Hooks are event-driven commands that fire at specific points in the AI agent lifecycle. They let you guard, log, or extend agent behavior without modifying the agent itself.
 

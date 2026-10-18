@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Ports and volumes
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Ports and volumes"
+---
 
 Every exposed port and persistent volume, at a glance.
 
@@ -50,7 +51,7 @@ All volumes are named and managed by Docker. They survive `docker compose down` 
 | `grafanadata`, optional | `/var/lib/grafana` | Grafana dashboards and config | Medium - custom dashboards lost; defaults are re-provisioned |
 | `apidata` | `/data` (API container) | **JWT signing keys** | Catastrophic - every session invalidated, users must re-login; backup/restore required |
 
-**Back up `apidata` and `pgdata` before any upgrade.** See [Backup and restore](backup-and-restore.md).
+**Back up `apidata` and `pgdata` before any upgrade.** See [Backup and restore](/self-hosting/backup-and-restore).
 
 ## Security posture defaults
 
@@ -58,7 +59,7 @@ The stack uses hardened defaults out of the box:
 
 * **Read-only root filesystem** on `observal-api`, `observal-worker`, `observal-web` (tmpfs for `/tmp`).
 * **`no-new-privileges`** on every service.
-* **Memory limits** on all services (see [Requirements](requirements.md#hardware)).
+* **Memory limits** on all services (see [Requirements](/self-hosting/requirements#hardware)).
 * **Health checks** on Postgres, ClickHouse, Redis, API.
 * **Bridge network** (`observal-net`) isolates inter-service traffic.
 
@@ -77,4 +78,4 @@ The CLI running on your host machine resolves via `localhost:<host port>`.
 
 ## Next
 
-→ [Databases](databases.md)
+→ [Databases](/self-hosting/databases)

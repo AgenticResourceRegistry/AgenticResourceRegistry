@@ -114,7 +114,7 @@ This downloads a Docker Compose package, generates operator-owned secret files w
 Deployment docs are linked directly from this README:
 
 - [Setup guide](SETUP.md): fastest path from zero to a working stack
-- [Self-hosting overview](docs/self-hosting/README.md): deployment models and operator docs
+- [Self-hosting overview](docs/self-hosting/index.md): deployment models and operator docs
 - [Production deployment](docs/self-hosting/production-deploy.md): hardened production topology
 - [Databases](docs/self-hosting/databases.md): Postgres, ClickHouse, migrations, retention
 - [Upgrades](docs/self-hosting/upgrades.md): safe upgrade and rollback flow
@@ -306,7 +306,7 @@ Start here for deployment and operations:
 | Need | Link |
 |------|------|
 | Fast local or source setup | [SETUP.md](SETUP.md) |
-| Self-hosting overview | [docs/self-hosting/README.md](docs/self-hosting/README.md) |
+| Self-hosting overview | [docs/self-hosting/index.md](docs/self-hosting/index.md) |
 | Production deployment | [docs/self-hosting/production-deploy.md](docs/self-hosting/production-deploy.md) |
 | Single-node deployment | [docs/self-hosting/single-node-deploy.md](docs/self-hosting/single-node-deploy.md) |
 | Docker Compose setup | [docs/self-hosting/docker-compose.md](docs/self-hosting/docker-compose.md) |

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Rishika Kaur <kaurrishika377@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Claude Code
+---
+# SPDX-FileCopyrightText: 2026 Rishika Kaur <kaurrishika377@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Claude Code"
+---
 
 Claude Code is a first-class Observal harness integration. Observal can install Claude Code agents, register MCP servers, add hooks, install skills, and collect session telemetry.
 

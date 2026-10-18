@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Requirements
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Requirements"
+---
 
 Minimum and recommended specs for running the Observal stack.
 
@@ -79,8 +80,8 @@ observal.your-company.internal {
 
 Set `OBSERVAL_BIND_ADDRESS` to a non-loopback address only when an external TLS proxy cannot reach loopback, or when plaintext access is an intentional private-network risk. Existing server-package installations retain their previous bind address during setup upgrades.
 
-See the [security assurance case](../security/assurance-case.md) for trust boundaries and residual network risks.
+See the [security assurance case](/security/assurance-case) for trust boundaries and residual network risks.
 
 ## Next
 
-→ [Docker Compose setup](docker-compose.md)
+→ [Docker Compose setup](/self-hosting/docker-compose)

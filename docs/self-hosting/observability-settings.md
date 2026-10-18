@@ -1,13 +1,12 @@
-<!--
-SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# Observability Settings
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Observability Settings"
+---
 
 Configure server logging, API documentation exposure, and Prometheus metrics.
 
-## Log Level {#log-level}
+## Log Level
 
 Controls server log verbosity.
 
@@ -23,7 +22,7 @@ Controls server log verbosity.
 
 **When to use TRACE:** Only during short, targeted investigations where DEBUG is not enough. TRACE can include high-volume request, hook, parser, and internal execution details. Enable briefly, capture the needed logs, then return to INFO.
 
-## Log Format {#log-format}
+## Log Format
 
 Controls whether logs are structured JSON or human-readable console output.
 
@@ -32,7 +31,7 @@ Controls whether logs are structured JSON or human-readable console output.
 | `json` | Best for Datadog, Loki, CloudWatch, and other log aggregators |
 | `console` | Best for local development and manual log reading |
 
-## Enable OpenAPI {#enable-openapi}
+## Enable OpenAPI
 
 Expose interactive API documentation endpoints.
 
@@ -43,7 +42,7 @@ Expose interactive API documentation endpoints.
 
 **Production recommendation:** Disable unless your admins actively use these endpoints. It reduces public attack surface and avoids exposing schema details to unauthenticated users.
 
-## Enable Metrics {#enable-metrics}
+## Enable Metrics
 
 Expose Prometheus-compatible metrics.
 

@@ -1,14 +1,15 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Upgrades
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Upgrades"
+---
 
 Safe upgrade flow for the Observal server stack.
 
 > [!IMPORTANT]
-> When upgrading into the release that introduces complete-folder skill delivery, follow the [skill-folder rollout procedure](../skill-folder-rollout.md) instead of using the quick, standard, or blue/green instructions below unchanged. Those paths do not guarantee that old API and worker processes have stopped before the new init container runs PostgreSQL migrations. Keep folder delivery off, back up and rehearse the historical upgrade, and schedule a maintenance window to drain old processes **before** migration; enable delivery only after a homogeneous rollout and separate approval.
+> When upgrading into the release that introduces complete-folder skill delivery, follow the [skill-folder rollout procedure](/skill-folder-rollout) instead of using the quick, standard, or blue/green instructions below unchanged. Those paths do not guarantee that old API and worker processes have stopped before the new init container runs PostgreSQL migrations. Keep folder delivery off, back up and rehearse the historical upgrade, and schedule a maintenance window to drain old processes **before** migration; enable delivery only after a homogeneous rollout and separate approval.
 
 ## Quick upgrade (recommended)
 
@@ -21,13 +22,13 @@ observal server upgrade --version 0.9.0 --force --output json
 
 This pulls new Docker images, backs up PostgreSQL, recreates containers, and runs health checks. If the health check fails, it requests the previous image version again. Local shell and Docker access authorize the operation; the command does not require a reachable API or API role.
 
-See [`observal server upgrade`](../cli/server.md#observal-server-upgrade) for full details.
+See [`observal server upgrade`](/cli/server#observal-server-upgrade) for full details.
 
 ### Server-package upgrades
 
 If you installed with `install-server.sh`, back up `.env`, `secrets/`, and the `apidata` and `pgdata` volumes before rerunning the installer for the target release. Setup detects the existing `.env`. Choose the default **No** response to preserve custom values and existing direct credentials. **This only stages the new package and retains a backup: no containers restart and no migrations run.** An exit code of zero means staging succeeded, not that the server has been upgraded. The installer records the prior bind address when an older install has no `OBSERVAL_BIND_ADDRESS` setting.
 
-For the complete-folder release, follow the [supervised rollout](../skill-folder-rollout.md): keep the delivery gate off, stop *all* old API and worker processes before starting the new init container, then run Compose from the installed package with the same optional observability overlay/profile used by the old deployment. For a core-only package installation, after staging the package and verifying backups and the gate:
+For the complete-folder release, follow the [supervised rollout](/skill-folder-rollout): keep the delivery gate off, stop *all* old API and worker processes before starting the new init container, then run Compose from the installed package with the same optional observability overlay/profile used by the old deployment. For a core-only package installation, after staging the package and verifying backups and the gate:
 
 ```bash
 cd /opt/observal  # or the directory passed to --install-dir
@@ -45,7 +46,7 @@ Add `-f docker-compose.observability.yml` and `--profile grafana` if those were 
 
 ## Before a manual upgrade
 
-1. **Back up `pgdata`** and **`apidata`**. See [Backup and restore](backup-and-restore.md). Backing up `chdata` is nice-to-have; losing telemetry is painful but not catastrophic.
+1. **Back up `pgdata`** and **`apidata`**. See [Backup and restore](/self-hosting/backup-and-restore). Backing up `chdata` is nice-to-have; losing telemetry is painful but not catastrophic.
 2. **Read the [CHANGELOG](https://github.com/Observal/Observal/blob/main/CHANGELOG.md)** for the releases you're jumping across. Note any breaking changes.
 3. **Pin the version you're upgrading to**: don't `git pull main` blindly. Check out a release tag or a known-good commit.
 
@@ -135,4 +136,4 @@ The web UI is a static Vite build and restarts instantly. Users see a brief relo
 
 ## Next
 
-→ [Backup and restore](backup-and-restore.md)
+→ [Backup and restore](/self-hosting/backup-and-restore)

@@ -1,14 +1,15 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Core concepts
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Core concepts"
+---
 
 The vocabulary you need to be productive with Observal.
 
 ## The registry
 
-The registry stores users, agents, components, review state, and alert rules in PostgreSQL. Session events and aggregates are stored separately in ClickHouse. See [Session tracking and reconciliation](session-tracking.md) for the complete session data flow.
+The registry stores users, agents, components, review state, and alert rules in PostgreSQL. Session events and aggregates are stored separately in ClickHouse. See [Session tracking and reconciliation](/core-concepts/session-tracking) for the complete session data flow.
 
 ## Registry components
 
@@ -39,7 +40,7 @@ Every agent version pins each of its components to one exact version, recorded w
 
 Installs are pinned too. The first `observal agent pull` in a project records the agent version it installed in `observal.lock`, a file meant to be committed. Later pulls, by anyone in that project, install the same agent version until someone moves it with `--upgrade` or `--version`. `~/.observal/lockfile.json` is each machine's record of what it has installed where. `--strict` refuses any install that does not match its lock.
 
-See [`observal agent pull`](../cli/pull.md#pinned-versions) and [`observal agent release`](../cli/agent.md#release-and-versions).
+See [`observal agent pull`](/cli/pull#pinned-versions) and [`observal agent release`](/cli/agent#release-and-versions).
 
 ## Deployment mode
 
@@ -54,5 +55,5 @@ Most self-hosters use `deployment.sso_only=false`.
 
 ## Next
 
-* [Session tracking and reconciliation](session-tracking.md)
-* [Use cases](../use-cases/README.md)
+* [Session tracking and reconciliation](/core-concepts/session-tracking)
+* [Use cases](/use-cases)

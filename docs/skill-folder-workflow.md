@@ -1,13 +1,14 @@
-<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Complete skill folders: developer workflow
+---
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Complete skill folders: developer workflow"
+---
 
 > In a fully rolled-out deployment, authors do not manage a feature switch:
 > save a draft, explicitly submit it for review, then install the approved
 > release. If this deployment has not enabled complete-folder delivery yet,
 > authors can save drafts but cannot finish review or installation. Ask the
-> operator to complete the [one-time rollout](skill-folder-rollout.md); do not
+> operator to complete the [one-time rollout](/skill-folder-rollout); do not
 > turn the gate on as part of authoring.
 
 A complete skill contains a UTF-8 `SKILL.md` at its root and optional scripts,

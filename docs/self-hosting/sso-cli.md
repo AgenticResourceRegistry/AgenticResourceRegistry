@@ -1,11 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Observal SSO, SCIM, and Audit API Reference"
+---
 
-# Observal SSO, SCIM, and Audit API Reference
-
-
-For the core CLI reference, see [docs/cli/README.md](../../docs/cli/README.md). For setup instructions, see [docs/self-hosting/README.md](../../docs/self-hosting/README.md).
+For the core CLI reference, see [docs/cli/index.md](/cli). For setup instructions, see [docs/self-hosting/index.md](/self-hosting).
 
 ---
 
@@ -78,7 +78,7 @@ Authentication uses a shared bearer token stored as a SHA-256 hash in the scim_t
 | `PUT` | `/api/v1/scim/Users/{id}` | Update a user |
 | `DELETE` | `/api/v1/scim/Users/{id}` | Deprovision a user |
 
-For detailed setup instructions, see [scim-setup.md](scim-setup.md).
+For detailed setup instructions, see [scim-setup.md](/self-hosting/scim-setup).
 
 ---
 
@@ -92,7 +92,7 @@ SAML endpoints for identity providers that don't support OIDC.
 | `POST` | `/api/v1/sso/saml/acs` | Receives IdP response |
 | `GET` | `/api/v1/sso/saml/metadata` | SP metadata XML |
 
-For detailed setup instructions, see [saml-setup.md](saml-setup.md).
+For detailed setup instructions, see [saml-setup.md](/self-hosting/saml-setup).
 
 ---
 
@@ -108,7 +108,7 @@ observal auth login --sso
 For CI/CD environments without a browser, set the `OBSERVAL_TOKEN`
 environment variable instead.
 
-For detailed instructions, see [cli-sso.md](cli-sso.md).
+For detailed instructions, see [cli-sso.md](/self-hosting/cli-sso).
 
 ---
 

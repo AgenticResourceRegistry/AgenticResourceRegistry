@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal registry recommend`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry recommend"
+---
 
 List Registry components ranked for the signed-in user and record recommendation feedback.
 
@@ -64,5 +65,5 @@ Invalid component types and actions use validation exit code 7. Authentication, 
 
 ## Related
 
-* [`observal registry`](registry.md): browse components directly
-* [`observal outdated`](outdated.md): check installed versions
+* [`observal registry`](/cli/registry): browse components directly
+* [`observal outdated`](/cli/outdated): check installed versions

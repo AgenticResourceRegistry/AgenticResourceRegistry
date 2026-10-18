@@ -1,13 +1,12 @@
-<!--
-SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# Miscellaneous Settings
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Miscellaneous Settings"
+---
 
 Settings that control platform-wide behavior, harness restrictions, and display preferences.
 
-## Appearance {#appearance}
+## Appearance
 
 Controls the product name and images shown in the web UI.
 
@@ -21,7 +20,7 @@ Controls the product name and images shown in the web UI.
 
 **When to set:** Self-hosted deployments that need company branding in the admin UI.
 
-## harness Allowlist {#harness-allowlist}
+## harness Allowlist
 
 Restrict which harnesses are available in the platform. When set, only the listed harnesses appear in install dropdowns, agent compatibility tags, and `observal agent pull` target selection.
 
@@ -39,7 +38,7 @@ Restrict which harnesses are available in the platform. When set, only the liste
 
 **CLI behavior:** `observal agent pull` still requires `--harness`. The selected harness must be allowed by the server.
 
-## Default harness {#default-harness}
+## Default harness
 
 The harness pre-selected in web installation controls. The CLI still requires an explicit `--harness`.
 
@@ -51,7 +50,7 @@ The harness pre-selected in web installation controls. The CLI still requires an
 
 **Affects:** UI dropdown default selection, CLI default when `--harness` is omitted, and the install command shown on agent detail pages.
 
-## Git Mirror Path {#git-mirror-path}
+## Git Mirror Path
 
 Directory used for cloned repository mirrors during component analysis and source discovery.
 
@@ -62,7 +61,7 @@ Directory used for cloned repository mirrors during component analysis and sourc
 
 **When to set:** Multi-instance deployments where repeated clone work should be shared, or production deployments where temporary storage is small.
 
-## Registered Agents Only {#registered-agents-only}
+## Registered Agents Only
 
 Limits telemetry to agents that are registered in the Observal registry.
 
@@ -75,7 +74,7 @@ Limits telemetry to agents that are registered in the Observal registry.
 
 **When to enable:** Deployments that want stricter control over which agents produce telemetry, for compliance or cost control.
 
-## Trace Privacy {#trace-privacy}
+## Trace Privacy
 
 Restricts trace visibility by user.
 

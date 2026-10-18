@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal api`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal api"
+---
 
 Call an authenticated JSON endpoint when no dedicated high-level command exists.
 
@@ -28,6 +29,6 @@ Table mode renders arbitrary objects as field and value rows. JSON mode preserve
 
 ## Errors and retries
 
-The command uses the shared categorized error contract and preserves server request IDs. Automatic transient retries apply only to `GET`. After an uncertain mutation failure, read endpoint state before retrying. See [Mutation retries and idempotency](idempotency.md).
+The command uses the shared categorized error contract and preserves server request IDs. Automatic transient retries apply only to `GET`. After an uncertain mutation failure, read endpoint state before retrying. See [Mutation retries and idempotency](/cli/idempotency).
 
 Prefer dedicated commands when they exist because they provide stronger validation, safer confirmation, and domain-specific output.

@@ -15,6 +15,7 @@ in every staged file that already has an SPDX header.
 - Idempotent: does nothing if the email is already in the header
 """
 
+import json
 import subprocess
 import sys
 from datetime import date
@@ -193,6 +194,34 @@ def _starts_with_comment(lines: list[str]) -> bool:
     return False
 
 
+def is_docs_page(path: Path) -> bool:
+    """Pages under docs/ are MDX on the docs site, where an HTML comment is a syntax error."""
+    return path.suffix.lower() == ".md" and "docs" in path.parts
+
+
+def docs_frontmatter_header(text: str, name: str, email: str, year: int, nl: str) -> str:
+    """Put the SPDX header in YAML frontmatter as ``#`` comments.
+
+    An existing frontmatter block keeps its keys. Without one, a leading H1
+    becomes the page title, matching how the other docs pages are written.
+    """
+    header = f"# SPDX-FileCopyrightText: {year} {name} <{email}>{nl}"
+    # REUSE-IgnoreStart
+    header += f"# SPDX-License-Identifier: Apache-2.0{nl}"
+    # REUSE-IgnoreEnd
+    if text.startswith("---"):
+        first_eol = text.index("\n") + 1
+        return text[:first_eol] + header + text[first_eol:]
+
+    body = text.lstrip("\r\n")
+    title = ""
+    first, _, rest = body.partition("\n")
+    if first.startswith("# "):
+        title = f"title: {json.dumps(first[2:].strip().replace('`', ''))}{nl}"
+        body = rest.lstrip("\r\n")
+    return f"---{nl}{header}{title}---{nl}{nl}{body}"
+
+
 def add_fresh_header(path: Path, name: str, email: str, year: int):
     """Add a complete SPDX header to a file that doesn't have one yet."""
     style = comment_prefix(path)
@@ -210,6 +239,10 @@ def add_fresh_header(path: Path, name: str, email: str, year: int):
     nl = "\r\n" if eol == b"\r\n" else "\n"
 
     text = raw.decode("utf-8", errors="replace")
+
+    if is_docs_page(path):
+        path.write_bytes(docs_frontmatter_header(text, name, email, year, nl).encode("utf-8", errors="replace"))
+        return
 
     header = copyright_line + nl + license_line + nl + nl
 

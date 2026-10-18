@@ -1,13 +1,12 @@
-<!--
-SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# SAML 2.0 SSO Configuration
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "SAML 2.0 SSO Configuration"
+---
 
 Configure SAML-based Single Sign-On to allow users to authenticate via your organization's identity provider (Okta, Azure AD, OneLogin, Google Workspace, etc.).
 
-> For a step-by-step Okta setup guide, see the [Okta Setup Guide](okta-setup.md).
+> For a step-by-step Okta setup guide, see the [Okta Setup Guide](/self-hosting/okta-setup).
 
 ## Prerequisites
 
@@ -26,7 +25,7 @@ Configure SAML-based Single Sign-On to allow users to authenticate via your orga
 
 ## Field Reference
 
-### IdP Entity ID {#idp-entity-id}
+### IdP Entity ID
 
 The unique identifier of your identity provider, found in the IdP's SAML metadata.
 
@@ -36,13 +35,13 @@ The unique identifier of your identity provider, found in the IdP's SAML metadat
 | Azure AD | `https://sts.windows.net/{tenant-id}/` |
 | Google | `https://accounts.google.com/o/saml2?idpid=C01234567` |
 
-### IdP SSO URL {#idp-sso-url}
+### IdP SSO URL
 
 The URL where Observal redirects users to authenticate. This is the SingleSignOnService Location with HTTP-Redirect binding from your IdP's metadata.
 
 **Affects:** The redirect target when a user clicks "Sign in with SSO". If incorrect, users see a 404 or error page at the IdP.
 
-### IdP SLO URL {#idp-slo-url}
+### IdP SLO URL
 
 The URL for SAML Single Logout (optional).
 
@@ -50,7 +49,7 @@ The URL for SAML Single Logout (optional).
 
 **When to set:** Deployments that require centralized session termination, for example when an employee is offboarded and all sessions must end immediately.
 
-### IdP Certificate {#idp-certificate}
+### IdP Certificate
 
 The IdP's public X.509 certificate in PEM format, used to verify SAML assertion signatures.
 
@@ -60,7 +59,7 @@ The IdP's public X.509 certificate in PEM format, used to verify SAML assertion 
 
 **Certificate rotation:** When your IdP rotates certificates, update this field immediately. Some IdPs publish both old and new certificates during a transition period. Observal validates against the configured certificate only.
 
-### IdP Metadata URL {#idp-metadata-url}
+### IdP Metadata URL
 
 URL to your IdP's SAML metadata XML document (optional).
 
@@ -68,7 +67,7 @@ URL to your IdP's SAML metadata XML document (optional).
 
 **When to set:** If your IdP publishes metadata at a stable URL and you want automatic certificate rotation handling.
 
-### SP Entity ID {#sp-entity-id}
+### SP Entity ID
 
 The entity ID that identifies Observal to your identity provider.
 
@@ -76,7 +75,7 @@ The entity ID that identifies Observal to your identity provider.
 
 **Affects:** Must exactly match what you configured in your IdP's SAML application settings. A mismatch causes "Audience validation failed" errors.
 
-### SP ACS URL {#sp-acs-url}
+### SP ACS URL
 
 The Assertion Consumer Service endpoint where your IdP sends SAML responses after authentication.
 
@@ -84,7 +83,7 @@ The Assertion Consumer Service endpoint where your IdP sends SAML responses afte
 
 **Affects:** Must exactly match the ACS URL registered in your IdP. A mismatch causes authentication to silently fail (the IdP sends the response to the wrong URL).
 
-### JIT Provisioning {#jit-provisioning}
+### JIT Provisioning
 
 Automatically create Observal user accounts when someone authenticates via SAML for the first time.
 
@@ -95,7 +94,7 @@ Automatically create Observal user accounts when someone authenticates via SAML 
 
 **When to disable:** Deployments that want explicit control over who can access Observal and prefer manual user creation.
 
-### Default Role {#default-role}
+### Default Role
 
 The role assigned to users created via JIT provisioning.
 
@@ -107,7 +106,7 @@ The role assigned to users created via JIT provisioning.
 
 **Best practice:** Use `user` and promote individuals manually. Assigning `admin` via JIT means anyone with an IdP account gets admin access.
 
-### SP Key Password {#sp-key-password}
+### SP Key Password
 
 Password used to encrypt the auto-generated SP private key at rest in the database.
 

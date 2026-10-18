@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Adding a CLI Command
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Adding a CLI Command"
+---
 
 Read this guide before adding a command, subcommand, or directly executable command group under `observal`.
 A CLI command is an agent-facing API. Its help, output, errors, exit status, side effects, documentation, and bundled-skill instructions are one contract and must change together.

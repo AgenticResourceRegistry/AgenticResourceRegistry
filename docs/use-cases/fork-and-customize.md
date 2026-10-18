@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Fork and customize an agent or component
+---
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Fork and customize an agent or component"
+---
 
 Fork an **approved release** when you want to build on a registry item without editing its owner's copy. A fork is a new listing with its own owner, namespace, releases, reviews, downloads, ratings, and telemetry. Agent forks retain **pinned references** to approved components; they do not fork those components.
 

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal ops`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal ops"
+---
 
 Inspect current session telemetry, Registry usage, feedback, logs, and Agent insight reports.
 
@@ -243,7 +244,7 @@ Report sections include:
 
 ## Related
 
-* [`observal inbox`](inbox.md): completed insight notifications
-* [`observal agent`](agent.md): apply insight recommendations
-* [`observal registry`](registry.md): inspect rated or recommended components
-* [Debug Agent failures](../use-cases/debug-agent-failures.md)
+* [`observal inbox`](/cli/inbox): completed insight notifications
+* [`observal agent`](/cli/agent): apply insight recommendations
+* [`observal registry`](/cli/registry): inspect rated or recommended components
+* [Debug Agent failures](/use-cases/debug-agent-failures)

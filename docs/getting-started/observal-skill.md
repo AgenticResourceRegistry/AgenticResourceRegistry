@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 SK Akram <skcodewizard786@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Create agents with the Observal skill
+---
+# SPDX-FileCopyrightText: 2026 SK Akram <skcodewizard786@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Create agents with the Observal skill"
+---
 
 We recommend creating agents from your coding harness using the bundled Observal skill. It gives your coding assistant instructions for using the Observal CLI to find registry components and create agents from your request.
 

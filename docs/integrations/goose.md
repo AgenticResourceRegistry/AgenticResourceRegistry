@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Goose
+---
+# SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Goose"
+---
 
 [Goose](https://goose-docs.ai/) is a first-class Observal harness integration.
 Observal can install Goose custom agents, configure MCP extensions, expose

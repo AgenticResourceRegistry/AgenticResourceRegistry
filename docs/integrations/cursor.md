@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Cursor
+---
+# SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Cursor"
+---
 
 Cursor is a first-class Observal harness integration. Observal can install Cursor agents,
 configure MCP servers, and collect Cursor session telemetry.

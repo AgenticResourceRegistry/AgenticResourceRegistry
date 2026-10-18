@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal discover`
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal discover"
+---
 
 Find approved registry resources for the task at hand and use them in the current session, without building an Agent first.
 
@@ -75,7 +76,7 @@ Unapproved resources are refused without `--yes`. A resource whose `obs:supporte
 
 Every activation appends one line to `~/.observal/capability_lock.jsonl`: timestamp, harness, working directory, identifier, kind, version, digest, and mode. `agent pull` and the component install commands append too. Session upload (`session_push` hooks and `observal reconcile`) attaches the lines that fall inside a session's harness, directory, and time window as `capabilities_used`, which is how Observal knows which resources a session relied on. Nothing secret is stored.
 
-Entries older than 30 days are pruned. Related: [`observal agent init --from-capabilities`](agent.md) turns the resources used in a directory into a draft Agent.
+Entries older than 30 days are pruned. Related: [`observal agent init --from-capabilities`](/cli/agent) turns the resources used in a directory into a draft Agent.
 
 ## Exit codes
 

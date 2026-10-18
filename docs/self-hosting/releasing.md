@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Releasing
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Releasing"
+---
 
 Observal develops on `main` and publishes only from protected `release/X.Y` branches. Each minor line has one branch for alpha, beta, release candidates, stable, and subsequent patches. There is no `develop` branch, per-channel branch, or SLA database.
 
@@ -113,7 +114,7 @@ A release-branch push is inspected for a single release metadata commit. Branch 
 5. Publish GitHub assets and verify the registries and installed CLI.
 6. For the newest stable release only, promote GitHub latest and invoke the EC2 workflow. EC2 checks out the validated tagged commit, not `main`.
 
-The release workflow is globally serialized across lines with GitHub's `queue: max` setting, which keeps up to 100 pending runs rather than replacing an earlier pending release. Publishing jobs recompute alias eligibility from current tags, including on failed-job retries. Signing and attestation verification use `refs/heads/release/X.Y`, not `main` or a wildcard. See [release verification](../security/release-verification.md).
+The release workflow is globally serialized across lines with GitHub's `queue: max` setting, which keeps up to 100 pending runs rather than replacing an earlier pending release. Publishing jobs recompute alias eligibility from current tags, including on failed-job retries. Signing and attestation verification use `refs/heads/release/X.Y`, not `main` or a wildcard. See [release verification](/security/release-verification).
 
 An existing tag is accepted only if it points to the exact validated commit and verifies with the expected signature. A later published version on the same line makes an older preparation ineligible for republication. Use failed-job reruns for partial failures and never replace immutable package versions or tags. Correct released code with a new patch.
 

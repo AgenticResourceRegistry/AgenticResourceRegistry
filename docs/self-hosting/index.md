@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Overview
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Overview"
+---
 
 Run Observal entirely on your own infrastructure. No SaaS, no egress, every byte of telemetry stays inside your network.
 
@@ -52,7 +53,7 @@ All services run on a private `observal-net` bridge network. Named volumes (`pgd
 
 Choose the deployment model that fits your team:
 
-|                    | [Single-node](single-node-deploy.md) | [Kubernetes](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](production-deploy.md)    |
+|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
 | ------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | **How**            | Docker Compose on one VM             | Official Helm chart                                                                                 | Terraform on AWS or GCP               |
 | **Best for**       | ≤50 users, internal tools, POCs      | Cloud-native teams, existing K8s infra                                                              | Enterprise, SLA-bound, 50+ users      |
@@ -64,26 +65,26 @@ Choose the deployment model that fits your team:
 
 | If you want to...                | Read                                                                                                                     |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Deploy on a single VM (simplest) | [Single-node deployment](single-node-deploy.md)                                                                          |
+| Deploy on a single VM (simplest) | [Single-node deployment](/self-hosting/single-node-deploy)                                                                          |
 | Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) |
-| Deploy a production HA stack     | [Production deployment](production-deploy.md)                                                                            |
-| Deploy on AWS specifically       | [AWS deployment with Terraform](aws-terraform.md)                                                                        |
-| Deploy on GCP specifically       | [GCP deployment with Terraform](gcp-terraform.md)                                                                        |
+| Deploy a production HA stack     | [Production deployment](/self-hosting/production-deploy)                                                                            |
+| Deploy on AWS specifically       | [AWS deployment with Terraform](/self-hosting/aws-terraform)                                                                        |
+| Deploy on GCP specifically       | [GCP deployment with Terraform](/self-hosting/gcp-terraform)                                                                        |
 
 **Then configure and operate:**
 
 | If you want to...                     | Read                                        |
 | ------------------------------------- | ------------------------------------------- |
-| Confirm your machine can run Observal | [Requirements](requirements.md)             |
-| Get the stack running locally for dev | [Docker Compose setup](docker-compose.md)   |
-| Know every env var that matters       | [Configuration](configuration.md)           |
-| See every port and volume at a glance | [Ports and volumes](ports-and-volumes.md)   |
-| Understand the DBs and retention      | [Databases](databases.md)                   |
-| Set up SSO, JWT keys, demo accounts   | [Authentication and SSO](authentication.md) |
-| Understand session delivery           | [Session tracking and reconciliation](../core-concepts/session-tracking.md) |
-| Upgrade safely                        | [Upgrades](upgrades.md)                     |
-| Back up and restore                   | [Backup and restore](backup-and-restore.md) |
-| Fix something that's broken           | [Troubleshooting](troubleshooting.md)       |
+| Confirm your machine can run Observal | [Requirements](/self-hosting/requirements)             |
+| Get the stack running locally for dev | [Docker Compose setup](/self-hosting/docker-compose)   |
+| Know every env var that matters       | [Configuration](/self-hosting/configuration)           |
+| See every port and volume at a glance | [Ports and volumes](/self-hosting/ports-and-volumes)   |
+| Understand the DBs and retention      | [Databases](/self-hosting/databases)                   |
+| Set up SSO, JWT keys, demo accounts   | [Authentication and SSO](/self-hosting/authentication) |
+| Understand session delivery           | [Session tracking and reconciliation](/core-concepts/session-tracking) |
+| Upgrade safely                        | [Upgrades](/self-hosting/upgrades)                     |
+| Back up and restore                   | [Backup and restore](/self-hosting/backup-and-restore) |
+| Fix something that's broken           | [Troubleshooting](/self-hosting/troubleshooting)       |
 
 ## Production checklist
 
@@ -98,4 +99,4 @@ Before putting Observal in front of real users:
 7. **Back up the JWT key volume** (`apidata`): losing it invalidates every session.
 8. **Remove demo accounts**: remove `DEMO_*` variables and generated demo password files before a real deployment, then delete any already-seeded demo users.
 
-Each of these is covered in the linked deep-dive below. Start with [Requirements](requirements.md).
+Each of these is covered in the linked deep-dive below. Start with [Requirements](/self-hosting/requirements).

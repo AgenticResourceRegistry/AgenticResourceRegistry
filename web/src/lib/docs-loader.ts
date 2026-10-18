@@ -7,7 +7,7 @@
  */
 
 const VISIBLE_DOC_PATHS = [
-	"core-concepts/README.md",
+	"core-concepts/index.md",
 	"core-concepts/session-tracking.md",
 	"getting-started/installation.md",
 	"getting-started/quickstart.md",
@@ -23,7 +23,7 @@ const VISIBLE_DOC_PATHS = [
 	"registry-hook-helper.md",
 	"registry-sandbox-helper.md",
 	"licensing.md",
-	"self-hosting/README.md",
+	"self-hosting/index.md",
 	"self-hosting/authentication.md",
 	"self-hosting/configuration.md",
 	"self-hosting/deployment-settings.md",
@@ -55,7 +55,7 @@ const VISIBLE_DOC_PATHS = [
 ];
 
 const docModules = import.meta.glob<string>([
-	"../../../docs/core-concepts/README.md",
+	"../../../docs/core-concepts/index.md",
 	"../../../docs/core-concepts/session-tracking.md",
 	"../../../docs/getting-started/installation.md",
 	"../../../docs/getting-started/quickstart.md",
@@ -71,7 +71,7 @@ const docModules = import.meta.glob<string>([
 	"../../../docs/registry-hook-helper.md",
 	"../../../docs/registry-sandbox-helper.md",
 	"../../../docs/licensing.md",
-	"../../../docs/self-hosting/README.md",
+	"../../../docs/self-hosting/index.md",
 	"../../../docs/self-hosting/authentication.md",
 	"../../../docs/self-hosting/configuration.md",
 	"../../../docs/self-hosting/deployment-settings.md",

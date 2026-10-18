@@ -1,10 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-
-# Agent Insights Configuration
+---
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Agent Insights Configuration"
+---
 
 Configure a LiteLLM-compatible provider so Observal can generate trace summaries, detect anomalies, and explain agent behavior in natural language.
 
@@ -30,7 +28,7 @@ Expected: `{"status":"ok",...}` or `{"status":"degraded",...}` with component st
 
 ## Field Reference
 
-### API Key {#api-key}
+### API Key
 
 The secret key used to authenticate with your selected LiteLLM provider.
 
@@ -58,7 +56,7 @@ The secret key used to authenticate with your selected LiteLLM provider.
 | `401` in worker logs | Key revoked or expired | Generate and save a new key |
 | `429` in worker logs | Rate limit hit | Reduce batch size or upgrade plan |
 
-### API Base URL {#api-base-url}
+### API Base URL
 
 Override the default provider endpoint. Leave blank to use the provider's standard URL.
 
@@ -81,7 +79,7 @@ Override the default provider endpoint. Leave blank to use the provider's standa
 - Including a trailing slash. The SDK appends paths like `/messages`, so a trailing slash produces `//messages`.
 - Pointing to an HTML page instead of the API root. The URL should respond to POST, not return a webpage.
 
-### Model Configuration {#model-configuration}
+### Model Configuration
 
 | Field | Purpose | Default |
 |-------|---------|---------|
@@ -91,7 +89,7 @@ Override the default provider endpoint. Leave blank to use the provider's standa
 
 **When to adjust temperature:** Almost never. The default `0.1` gives consistent, reproducible summaries. Raise it only if summaries feel too repetitive across similar traces.
 
-#### Sections Model {#sections-model}
+#### Sections Model
 
 The model (or model role) that breaks a trace into logical sections and summarizes each one individually.
 
@@ -107,7 +105,7 @@ The model (or model role) that breaks a trace into logical sections and summariz
 
 **When to set:** On initial configuration, or when optimizing cost vs. quality for your workload volume.
 
-#### Synthesis Model {#synthesis-model}
+#### Synthesis Model
 
 The model that combines all section summaries into a single narrative explanation of the entire trace.
 
@@ -123,7 +121,7 @@ The model that combines all section summaries into a single narrative explanatio
 
 **When to set:** When you want to use a different model for synthesis than for sections (cost optimization), or when synthesis quality is insufficient for your trace complexity.
 
-#### Facets Model {#facets-model}
+#### Facets Model
 
 The model used for facet-level analysis. Facets are structured data points extracted from each session. They identify anomalies, extract key attributes, and classify event behavior within each section. For example: "tool_call_failed: true", "response_latency: slow", "user_sentiment: frustrated". These are then aggregated across sessions to surface patterns in Insight reports.
 
@@ -139,7 +137,7 @@ The model used for facet-level analysis. Facets are structured data points extra
 
 **When to set:** When anomaly detection is missing issues you care about (upgrade), or when you're paying too much for facet analysis on simple traces (downgrade).
 
-#### Batch Processing {#batch-processing}
+#### Batch Processing
 
 Whether Insights report generation runs periodically (batched) or is disabled.
 
@@ -154,7 +152,7 @@ Whether Insights report generation runs periodically (batched) or is disabled.
 
 **When to set:** Disable if you want to control exactly when Insights reports are generated. Enable (default) for automatic periodic report generation.
 
-#### Batch Period {#batch-period}
+#### Batch Period
 
 How often (in days) the system checks for and generates new insight reports. This is the `insights.batch_period_days` setting.
 
@@ -170,7 +168,7 @@ How often (in days) the system checks for and generates new insight reports. Thi
 
 **When to set:** You want more frequent insight reports (shorten), or you want to reduce LLM API costs (lengthen).
 
-#### Min Sessions {#min-sessions}
+#### Min Sessions
 
 Minimum number of sessions that must accumulate since the last report before a new report is generated.
 
@@ -186,7 +184,7 @@ Minimum number of sessions that must accumulate since the last report before a n
 
 **When to set:** Low-traffic deployments where sessions accumulate slowly (lower so reports aren't skipped repeatedly), or high-volume deployments where you want reports only when meaningful data exists (raise).
 
-#### Max Facet Calls {#max-facet-calls}
+#### Max Facet Calls
 
 Maximum number of LLM API calls allowed per trace for facet analysis.
 
@@ -202,7 +200,7 @@ Maximum number of LLM API calls allowed per trace for facet analysis.
 
 **When to set:** You see "Facet analysis truncated" warnings in Insights output (increase), or LLM costs are higher than expected due to complex traces (decrease).
 
-### Concurrency {#concurrency}
+### Concurrency
 
 Controls how many facets (trace sections) are processed in parallel when generating Insights.
 
@@ -210,7 +208,7 @@ Controls how many facets (trace sections) are processed in parallel when generat
 |-------|---------|---------|
 | Facet concurrency | Parallel facet processing threads | `25` |
 
-#### Facet Concurrency {#facet-concurrency}
+#### Facet Concurrency
 
 Number of parallel LLM requests the Insights worker makes when processing facets within a batch.
 

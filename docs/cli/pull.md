@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal agent pull`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal agent pull"
+---
 
 Install a complete Agent into a harness. Pull resolves the Agent version to install, asks the server for harness-native config built from the exact component versions that Agent version pinned, merges generated files safely, installs bundled skills and hooks, runs required harness setup, and records exact installed state in `observal.lock` and the local lockfile.
 
@@ -51,7 +52,7 @@ Unknown harnesses, unsupported scopes, malformed assignments, unused harness mod
 
 Pulls are pinned at two levels.
 
-**Components.** Every Agent version pins each of its MCP servers, skills, hooks, prompts, and sandboxes to one exact component version, identified by its version id and a content digest. Pull always installs those pinned versions. A component that ships a newer version never changes what an existing Agent version installs; the Agent's author releases a new Agent version to move it (see [`observal agent release --refresh-components`](agent.md#release-and-versions)).
+**Components.** Every Agent version pins each of its MCP servers, skills, hooks, prompts, and sandboxes to one exact component version, identified by its version id and a content digest. Pull always installs those pinned versions. A component that ships a newer version never changes what an existing Agent version installs; the Agent's author releases a new Agent version to move it (see [`observal agent release --refresh-components`](/cli/agent#release-and-versions)).
 
 **The Agent version.** Pull chooses the Agent version in this order:
 
@@ -212,8 +213,8 @@ Human mode lists every created, updated, merged, installed, cloned, or planned p
 
 ## Related
 
-* [`observal agent`](agent.md): create and publish Agents
-* [`observal scan`](scan.md): inspect installed harness content
-* [`observal outdated`](outdated.md): compare installed Agent versions
-* [`observal agent outdated`](agent.md#check-component-pins): see which components an Agent version pins behind their latest release
-* [`observal doctor`](doctor.md): verify hooks and local installation state
+* [`observal agent`](/cli/agent): create and publish Agents
+* [`observal scan`](/cli/scan): inspect installed harness content
+* [`observal outdated`](/cli/outdated): compare installed Agent versions
+* [`observal agent outdated`](/cli/agent#check-component-pins): see which components an Agent version pins behind their latest release
+* [`observal doctor`](/cli/doctor): verify hooks and local installation state

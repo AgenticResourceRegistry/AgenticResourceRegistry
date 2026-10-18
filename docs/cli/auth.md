@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal auth`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal auth"
+---
 
 Authentication and account management.
 
@@ -117,9 +118,9 @@ The username is the user's registry namespace. It must follow the namespace rule
 
 Password and token variables support a corresponding `_FILE` form. Do not set a direct value and its file form together.
 
-Full list: [Environment variables](../reference/environment-variables.md).
+Full list: [Environment variables](/reference/environment-variables).
 
 ## Related
 
-* [`observal config`](config.md): local configuration
-* [Self-hosting authentication](../self-hosting/authentication.md): server authentication and SSO
+* [`observal config`](/cli/config): local configuration
+* [Self-hosting authentication](/self-hosting/authentication): server authentication and SSO

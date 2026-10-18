@@ -36,7 +36,7 @@ cp .env.example .env
 
 `.env.example` ships with working defaults; you don't need to edit anything for local development. Demo accounts (`super@demo.example` / `super-changeme`, etc.) are seeded automatically on first start.
 
-> **Before a real deployment from source:** change `SECRET_KEY`, `POSTGRES_PASSWORD`, `CLICKHOUSE_PASSWORD`, and unset all `DEMO_*` variables. Server-package installs generate these credentials as files automatically. See the [Self-hosting overview](docs/self-hosting/README.md), [Configuration](docs/self-hosting/configuration.md), [Databases](docs/self-hosting/databases.md), and [Upgrades](docs/self-hosting/upgrades.md).
+> **Before a real deployment from source:** change `SECRET_KEY`, `POSTGRES_PASSWORD`, `CLICKHOUSE_PASSWORD`, and unset all `DEMO_*` variables. Server-package installs generate these credentials as files automatically. See the [Self-hosting overview](docs/self-hosting/index.md), [Configuration](docs/self-hosting/configuration.md), [Databases](docs/self-hosting/databases.md), and [Upgrades](docs/self-hosting/upgrades.md).
 
 ---
 
@@ -229,7 +229,7 @@ Deployment and operations:
 
 | Topic | Link |
 | ----- | ---- |
-| Self-hosting overview | [Self-Hosting](docs/self-hosting/README.md) |
+| Self-hosting overview | [Self-Hosting](docs/self-hosting/index.md) |
 | Single-node deployment | [Single-node deployment](docs/self-hosting/single-node-deploy.md) |
 | Docker Compose deployment | [Docker Compose setup](docs/self-hosting/docker-compose.md) |
 | Production hardening | [Configuration](docs/self-hosting/configuration.md) |

@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Development Guide
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Development Guide"
+---
 
 > [!IMPORTANT]
 > **Discord is the primary place to ask questions.** Join at [discord.observal.io](https://discord.observal.io).
@@ -19,47 +20,47 @@
 
 ## Table of Contents
 
-* [Community Standards](DEVELOPMENT_GUIDE.md#community-standards)
-* [Prerequisites](DEVELOPMENT_GUIDE.md#prerequisites)
-* [Git Setup](DEVELOPMENT_GUIDE.md#git-setup)
-  * [SSH authentication](DEVELOPMENT_GUIDE.md#ssh-authentication)
-  * [Git identity](DEVELOPMENT_GUIDE.md#git-identity)
-  * [Fork and clone](DEVELOPMENT_GUIDE.md#fork-and-clone)
-* [First-time Setup](DEVELOPMENT_GUIDE.md#first-time-setup)
-  * [Install pre-commit hooks](DEVELOPMENT_GUIDE.md#install-pre-commit-hooks)
-  * [Start the Docker stack](DEVELOPMENT_GUIDE.md#start-the-docker-stack)
-  * [Install the CLI](DEVELOPMENT_GUIDE.md#install-the-cli)
-  * [Demo accounts](DEVELOPMENT_GUIDE.md#demo-accounts)
-* [Make Targets Reference](DEVELOPMENT_GUIDE.md#make-targets-reference)
-* [Architecture Overview](DEVELOPMENT_GUIDE.md#architecture-overview)
-* [Git Workflow](DEVELOPMENT_GUIDE.md#git-workflow)
-  * [Making a new branch](DEVELOPMENT_GUIDE.md#making-a-new-branch)
-  * [Keeping your branch up to date](DEVELOPMENT_GUIDE.md#keeping-your-branch-up-to-date)
-  * [Dealing with merge conflicts](DEVELOPMENT_GUIDE.md#dealing-with-merge-conflicts)
-  * [Submitting a pull request](DEVELOPMENT_GUIDE.md#submitting-a-pull-request)
-  * [After review feedback](DEVELOPMENT_GUIDE.md#after-review-feedback)
-* [Working on the Backend](DEVELOPMENT_GUIDE.md#working-on-the-backend)
-  * [Running tests](DEVELOPMENT_GUIDE.md#running-tests)
-  * [Testing conventions](DEVELOPMENT_GUIDE.md#testing-conventions)
-  * [Running a single test](DEVELOPMENT_GUIDE.md#running-a-single-test)
-  * [Code coverage](DEVELOPMENT_GUIDE.md#code-coverage)
-  * [Adding a database migration](DEVELOPMENT_GUIDE.md#adding-a-database-migration)
-  * [Connecting to PostgreSQL directly](DEVELOPMENT_GUIDE.md#connecting-to-postgresql-directly)
-  * [Connecting to ClickHouse directly](DEVELOPMENT_GUIDE.md#connecting-to-clickhouse-directly)
-  * [Debugging the API](DEVELOPMENT_GUIDE.md#debugging-the-api)
-* [Working on the Frontend](DEVELOPMENT_GUIDE.md#working-on-the-frontend)
-  * [Running the frontend in isolation](DEVELOPMENT_GUIDE.md#running-the-frontend-in-isolation)
-  * [Design system](DEVELOPMENT_GUIDE.md#design-system)
-  * [Adding a new API endpoint to the frontend](DEVELOPMENT_GUIDE.md#adding-a-new-api-endpoint-to-the-frontend)
-  * [Screenshots for UI changes](DEVELOPMENT_GUIDE.md#screenshots-for-ui-changes)
-* [Working on the CLI](DEVELOPMENT_GUIDE.md#working-on-the-cli)
-  * [Reinstalling after changes](DEVELOPMENT_GUIDE.md#reinstalling-after-changes)
-* [Harness Recommendations](DEVELOPMENT_GUIDE.md#harness-recommendations)
-  * [VS Code](DEVELOPMENT_GUIDE.md#vs-code)
-  * [PyCharm / IntelliJ](DEVELOPMENT_GUIDE.md#pycharm--intellij)
-* [Pre-commit Hooks](DEVELOPMENT_GUIDE.md#pre-commit-hooks)
-* [Pull Request Checklist](DEVELOPMENT_GUIDE.md#pull-request-checklist)
-* [Getting Help](DEVELOPMENT_GUIDE.md#getting-help)
+* [Community Standards](/DEVELOPMENT_GUIDE#community-standards)
+* [Prerequisites](/DEVELOPMENT_GUIDE#prerequisites)
+* [Git Setup](/DEVELOPMENT_GUIDE#git-setup)
+  * [SSH authentication](/DEVELOPMENT_GUIDE#ssh-authentication)
+  * [Git identity](/DEVELOPMENT_GUIDE#git-identity)
+  * [Fork and clone](/DEVELOPMENT_GUIDE#fork-and-clone)
+* [First-time Setup](/DEVELOPMENT_GUIDE#first-time-setup)
+  * [Install pre-commit hooks](/DEVELOPMENT_GUIDE#install-pre-commit-hooks)
+  * [Start the Docker stack](/DEVELOPMENT_GUIDE#start-the-docker-stack)
+  * [Install the CLI](/DEVELOPMENT_GUIDE#install-the-cli)
+  * [Demo accounts](/DEVELOPMENT_GUIDE#demo-accounts)
+* [Make Targets Reference](/DEVELOPMENT_GUIDE#make-targets-reference)
+* [Architecture Overview](/DEVELOPMENT_GUIDE#architecture-overview)
+* [Git Workflow](/DEVELOPMENT_GUIDE#git-workflow)
+  * [Making a new branch](/DEVELOPMENT_GUIDE#making-a-new-branch)
+  * [Keeping your branch up to date](/DEVELOPMENT_GUIDE#keeping-your-branch-up-to-date)
+  * [Dealing with merge conflicts](/DEVELOPMENT_GUIDE#dealing-with-merge-conflicts)
+  * [Submitting a pull request](/DEVELOPMENT_GUIDE#submitting-a-pull-request)
+  * [After review feedback](/DEVELOPMENT_GUIDE#after-review-feedback)
+* [Working on the Backend](/DEVELOPMENT_GUIDE#working-on-the-backend)
+  * [Running tests](/DEVELOPMENT_GUIDE#running-tests)
+  * [Testing conventions](/DEVELOPMENT_GUIDE#testing-conventions)
+  * [Running a single test](/DEVELOPMENT_GUIDE#running-a-single-test)
+  * [Code coverage](/DEVELOPMENT_GUIDE#code-coverage)
+  * [Adding a database migration](/DEVELOPMENT_GUIDE#adding-a-database-migration)
+  * [Connecting to PostgreSQL directly](/DEVELOPMENT_GUIDE#connecting-to-postgresql-directly)
+  * [Connecting to ClickHouse directly](/DEVELOPMENT_GUIDE#connecting-to-clickhouse-directly)
+  * [Debugging the API](/DEVELOPMENT_GUIDE#debugging-the-api)
+* [Working on the Frontend](/DEVELOPMENT_GUIDE#working-on-the-frontend)
+  * [Running the frontend in isolation](/DEVELOPMENT_GUIDE#running-the-frontend-in-isolation)
+  * [Design system](/DEVELOPMENT_GUIDE#design-system)
+  * [Adding a new API endpoint to the frontend](/DEVELOPMENT_GUIDE#adding-a-new-api-endpoint-to-the-frontend)
+  * [Screenshots for UI changes](/DEVELOPMENT_GUIDE#screenshots-for-ui-changes)
+* [Working on the CLI](/DEVELOPMENT_GUIDE#working-on-the-cli)
+  * [Reinstalling after changes](/DEVELOPMENT_GUIDE#reinstalling-after-changes)
+* [Harness Recommendations](/DEVELOPMENT_GUIDE#harness-recommendations)
+  * [VS Code](/DEVELOPMENT_GUIDE#vs-code)
+  * [PyCharm / IntelliJ](/DEVELOPMENT_GUIDE#pycharm--intellij)
+* [Pre-commit Hooks](/DEVELOPMENT_GUIDE#pre-commit-hooks)
+* [Pull Request Checklist](/DEVELOPMENT_GUIDE#pull-request-checklist)
+* [Getting Help](/DEVELOPMENT_GUIDE#getting-help)
 
 ***
 
@@ -79,7 +80,7 @@ Maintainers volunteer their time. Treat them accordingly.
 
 ### A note on autonomous coding agents
 
-**Autonomous coding agents (Devin, SWE-agent, OpenHands, etc.) are not permitted to submit PRs.** This is a legal constraint, not a quality judgment. The US Copyright Office's 2025 guidance confirms that purely AI-generated code has no copyright owner, which breaks our CLA and our ability to license and enforce the project. See the [AI Policy](../AI_POLICY.md) for the full explanation.
+**Autonomous coding agents (Devin, SWE-agent, OpenHands, etc.) are not permitted to submit PRs.** This is a legal constraint, not a quality judgment. The US Copyright Office's 2025 guidance confirms that purely AI-generated code has no copyright owner, which breaks our CLA and our ability to license and enforce the project. See the [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md) for the full explanation.
 
 ***
 
@@ -407,7 +408,7 @@ uv run --with pytest --with pytest-asyncio --with hypothesis --with pyarrow pyte
 
 ### Testing conventions
 
-New Python tests should follow the [Testing Guide](testing/Testing_Guide.md). The current suite has mixed historical patterns, so do not rewrite old tests only for style. When adding or touching tests, prefer the clean pattern documented there: one behavior area per file, small local helper factories, hermetic CLI and API test setup, explicit async mocks, and behavior-focused assertions.
+New Python tests should follow the [Testing Guide](/testing/Testing_Guide). The current suite has mixed historical patterns, so do not rewrite old tests only for style. When adding or touching tests, prefer the clean pattern documented there: one behavior area per file, small local helper factories, hermetic CLI and API test setup, explicit async mocks, and behavior-focused assertions.
 
 ### Running a single test
 
@@ -647,8 +648,8 @@ Before opening a PR:
 * [ ] PR template is filled in completely and reviewed by the accountable human contributor
 * [ ] CHANGELOG.md updated under `[Unreleased]` for user-facing changes
 * [ ] Frontend changes include screenshots in the PR body
-* [ ] AI-assisted contributions labelled with tool name and version (see [AI Policy](../AI_POLICY.md))
-* [ ] No unattended agent submissions without meaningful human direction and review (see [AI Policy](../AI_POLICY.md))
+* [ ] AI-assisted contributions labelled with tool name and version (see [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md))
+* [ ] No unattended agent submissions without meaningful human direction and review (see [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md))
 
 ***
 

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Databases
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Databases"
+---
 
 Observal runs two DBs with very different jobs.
 
@@ -119,7 +120,7 @@ Remove the `observal-clickhouse` service from `docker-compose.yml` or ignore it.
 
 ## Backup
 
-See [Backup and restore](backup-and-restore.md). Short version:
+See [Backup and restore](/self-hosting/backup-and-restore). Short version:
 
 * Postgres: `pg_dump` from a running container.
 * ClickHouse: snapshot the `chdata` volume, or use ClickHouse's native `BACKUP` command.
@@ -127,4 +128,4 @@ See [Backup and restore](backup-and-restore.md). Short version:
 
 ## Next
 
-→ [Authentication and SSO](authentication.md)
+→ [Authentication and SSO](/self-hosting/authentication)

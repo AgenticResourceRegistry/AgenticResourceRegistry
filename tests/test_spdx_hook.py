@@ -218,3 +218,60 @@ def test_json_files_get_no_comment_header(hook):
     # A "#" line in package.json breaks npm; JSON licensing lives in REUSE.toml.
     assert hook.comment_prefix(Path("packages/pi-extension/package.json")) is None
     assert hook.comment_prefix(Path("observal_cli/delegation/service.py")) == ("# ", "")
+
+
+def test_new_docs_page_gets_a_frontmatter_header(hook, tmp_path):
+    path = tmp_path / "docs" / "guide.md"
+    path.parent.mkdir()
+    path.write_text("# `observal guide`\n\nBody text.\n")
+
+    hook.add_fresh_header(path, "New Committer", "new@example.com", 2026)
+
+    # REUSE-IgnoreStart
+    assert path.read_text() == (
+        "---\n"
+        "# SPDX-FileCopyrightText: 2026 New Committer <new@example.com>\n"
+        "# SPDX-License-Identifier: Apache-2.0\n"
+        'title: "observal guide"\n'
+        "---\n"
+        "\n"
+        "Body text.\n"
+    )
+    # REUSE-IgnoreEnd
+
+
+def test_new_docs_page_keeps_existing_frontmatter(hook, tmp_path):
+    path = tmp_path / "docs" / "guide.md"
+    path.parent.mkdir()
+    path.write_text('---\ntitle: "Guide"\n---\n\nBody text.\n')
+
+    hook.add_fresh_header(path, "New Committer", "new@example.com", 2026)
+
+    lines = path.read_text().splitlines()
+    # REUSE-IgnoreStart
+    assert lines[:5] == [
+        "---",
+        "# SPDX-FileCopyrightText: 2026 New Committer <new@example.com>",
+        "# SPDX-License-Identifier: Apache-2.0",
+        'title: "Guide"',
+        "---",
+    ]
+    # REUSE-IgnoreEnd
+
+
+def test_docs_frontmatter_header_gets_attribution(hook, tmp_path):
+    path = tmp_path / "docs" / "guide.md"
+    path.parent.mkdir()
+    # REUSE-IgnoreStart
+    path.write_text(
+        "---\n"
+        "# SPDX-FileCopyrightText: 2026 Original Author <original@example.com>\n"
+        "# SPDX-License-Identifier: Apache-2.0\n"
+        'title: "Guide"\n'
+        "---\n"
+    )
+    # REUSE-IgnoreEnd
+
+    hook.inject_copyright(path, "New Committer", "new@example.com", 2026)
+
+    assert path.read_text().splitlines()[2] == "# SPDX-FileCopyrightText: 2026 New Committer <new@example.com>"

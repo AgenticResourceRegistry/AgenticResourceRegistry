@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# API endpoints
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "API endpoints"
+---
 
 REST and GraphQL surface of the Observal server. Unless noted, endpoints require authentication via Bearer token or API key (`Authorization: Bearer <token>` or `X-API-Key: <key>`).
 
@@ -47,7 +48,7 @@ All `{id}` parameters accept a UUID or a name.
 
 ### MCP webhook sync
 
-Owner routes manage GitHub or GitLab webhook sync for one MCP listing. See [Sync an MCP server from GitHub or GitLab](../use-cases/mcp-repo-sync.md).
+Owner routes manage GitHub or GitLab webhook sync for one MCP listing. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync).
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -69,7 +70,7 @@ Only authenticated users can fork an approved listing and an approved base relea
 | `GET` | `/agents/{id}/forks` or `/{type}/{id}/forks` | Paginated, public approved direct forks only; `limit` and `offset` query parameters |
 | `GET` | `/agents/{id}/fork-diff?version=…` or `/{type}/{id}/fork-diff?version=…` | Unified `diff` and `unchanged` relative to the fork's approved base; defaults to the latest fork version visible to the caller |
 
-Diff access follows normal fork-version permissions. If the upstream is no longer visible or its approved base is gone, comparison returns `404`, never a saved source reference. Component diffs omit secret environment/header values and use a digest marker for install content excluded from public version responses. [Fork and customize](../use-cases/fork-and-customize.md) describes the workflow.
+Diff access follows normal fork-version permissions. If the upstream is no longer visible or its approved base is gone, comparison returns `404`, never a saved source reference. Component diffs omit secret environment/header values and use a digest marker for install content excluded from public version responses. [Fork and customize](/use-cases/fork-and-customize) describes the workflow.
 
 ### Agent versions and locks
 
@@ -109,7 +110,7 @@ callers see public, approved resources only when `deployment.public_registry_ena
 is on; authenticated callers see what the registry's visibility rules
 already grant them (public, their teams', and their own drafts). Errors use the
 ARD envelope `{"errorCode": "INVALID_ARGUMENT", "message": "..."}`. See
-[ADR 0001](../adr/0001-agentic-resource-discovery.md).
+[ADR 0001](/adr/0001-agentic-resource-discovery).
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -136,7 +137,7 @@ Remote agents are registered by Agent Card URL and reviewed before anyone can
 delegate to them. They then appear in search as `type:
 application/a2a-agent-card+json` with the reviewed card pinned in the entry
 (`obs:agentCard`, `obs:a2aInterface`). Clients call the agent directly; the
-server does not proxy A2A traffic. See [ADR 0002](../adr/0002-a2a-delegation.md).
+server does not proxy A2A traffic. See [ADR 0002](/adr/0002-a2a-delegation).
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -229,5 +230,5 @@ Auth endpoints are subject to `RATE_LIMIT_AUTH` and `RATE_LIMIT_AUTH_STRICT`. No
 
 ## Related
 
-* [Authentication and SSO](../self-hosting/authentication.md)
-* [Hooks specification](hooks-spec.md)
+* [Authentication and SSO](/self-hosting/authentication)
+* [Hooks specification](/reference/hooks-spec)

@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Docker Compose setup
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Docker Compose setup"
+---
 
 Step-by-step bring-up of the Observal stack. End state: the core services are healthy, API responding at `http://localhost/health`, web UI at `http://localhost`. Prometheus and Grafana are optional.
 
@@ -15,7 +16,7 @@ cd Observal
 cp .env.example .env
 ```
 
-The `.env.example` ships with working direct-value defaults for local source development, including demo account credentials. You do not need to edit it for local development. Production server-package installs use generated files under `secrets/` instead; see [Configuration](configuration.md#secret-files).
+The `.env.example` ships with working direct-value defaults for local source development, including demo account credentials. You do not need to edit it for local development. Production server-package installs use generated files under `secrets/` instead; see [Configuration](/self-hosting/configuration#secret-files).
 
 > [!NOTE]
 > You need Docker Engine ≥ 24.0 with Compose v2 (`docker compose`, not `docker-compose`). Homebrew's Docker formula is outdated. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages. Verify with `docker version` and `docker compose version`.
@@ -59,7 +60,7 @@ curl http://localhost/health
 
 ## 4. Configure TLS (production only)
 
-For local dev, `http://localhost` is fine. For production, put a TLS-terminating reverse proxy in front of the nginx LB. See [Requirements → TLS / HTTPS](requirements.md#tls--https).
+For local dev, `http://localhost` is fine. For production, put a TLS-terminating reverse proxy in front of the nginx LB. See [Requirements → TLS / HTTPS](/self-hosting/requirements#tls--https).
 
 ## 5. Bootstrap the first user
 
@@ -149,8 +150,8 @@ POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 \
   docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-Every host port is configurable. See [Ports and volumes](ports-and-volumes.md) for the full list.
+Every host port is configurable. See [Ports and volumes](/self-hosting/ports-and-volumes) for the full list.
 
 ## Next
 
-→ [Configuration](configuration.md): which env vars to change for production.
+→ [Configuration](/self-hosting/configuration): which env vars to change for production.
