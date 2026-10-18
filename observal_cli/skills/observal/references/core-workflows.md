@@ -1,5 +1,6 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Core workflows
@@ -132,7 +133,7 @@ observal api GET /api/v1/agents --param limit=10 --param tag=review --param tag=
 observal api POST /api/v1/teams --from-file team.json --output json
 ```
 
-Mutation bodies accept any valid JSON value from a file or standard input, including arrays, scalars, and `null`. Repeated `--param` keys are preserved in order. Full URLs and arbitrary authorization headers are rejected. Prefer dedicated commands for validation and confirmations.
+Mutation bodies accept any valid JSON value from a file or standard input, including arrays, scalars, and `null`. Repeated `--param` keys are preserved in order. Full URLs and arbitrary authorization headers are rejected. Prefer dedicated commands for validation and confirmations. In Git Bash on Windows, write the path without the leading slash (`api/v1/teams`) so the shell does not rewrite it into a Windows path.
 
 ## Error handling
 

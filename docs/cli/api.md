@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal api"
 ---
@@ -15,7 +16,9 @@ observal api POST /api/v1/teams --from-file team.json --output json
 cat team.json | observal api POST /api/v1/teams --output json
 ```
 
-Methods are `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`. Paths must be canonical relative `/api/v1/` paths. Full URLs, encoded or plain traversal segments, fragments, and inline query strings are rejected. Use repeatable `--param KEY=VALUE` options for query parameters; repeated keys preserve their original order.
+Methods are `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`. Paths must be canonical relative `/api/v1/` paths; the leading slash is optional, so `api/v1/teams` works too. Full URLs, encoded or plain traversal segments, fragments, and inline query strings are rejected. Use repeatable `--param KEY=VALUE` options for query parameters; repeated keys preserve their original order.
+
+Git Bash on Windows rewrites an argument that starts with `/` into a Windows path, so `/api/v1/teams` reaches the CLI as `C:/Program Files/Git/api/v1/teams`. The CLI recognizes this, calls `/api/v1/teams`, and prints a note on standard error. Writing `api/v1/teams` without the leading slash avoids the rewrite.
 
 The command uses the configured bearer token. It does not accept arbitrary authorization headers, so it cannot forward credentials to another host.
 
