@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """The review CLI uses only the new review API and does not publish on approval."""
 
@@ -12,7 +13,7 @@ from observal_cli.main import app
 runner = CliRunner()
 
 
-def test_review_list_caches_review_ids_and_renders_queue(monkeypatch):
+def test_review_list_does_not_cache_rows(monkeypatch):
     calls, cache = [], []
     row = {
         "id": "1f1c41e5-9dd4-409f-a356-000000000001",
@@ -31,8 +32,23 @@ def test_review_list_caches_review_ids_and_renders_queue(monkeypatch):
     result = runner.invoke(app, ["review", "list", "--type", "skill", "--output", "json"])
     assert result.exit_code == 0, result.output
     assert calls == [("/api/v1/reviews", {"state": "open", "limit": "100", "type": "skill"})]
-    assert cache == [([row], "review")]
+    assert cache == []
     assert json.loads(result.stdout)["items"][0]["number"] == 42
+
+
+def test_bare_number_is_the_review_number_even_after_a_review_list(monkeypatch):
+    """A bare number used to mean a row of the last list, so `show 2` could open review #7."""
+    monkeypatch.setattr(
+        cmd_review.config,
+        "load_last_results",
+        lambda: {"item_type": "review", "ids": ["review-7-uuid", "review-5-uuid"], "names": {}},
+    )
+    fetched = []
+    monkeypatch.setattr(cmd_review.client, "get", lambda url, params=None: fetched.append(url) or {"number": 2})
+    for ref in ("2", "#2"):
+        result = runner.invoke(app, ["review", "show", ref, "--output", "json"])
+        assert result.exit_code == 0, result.output
+    assert fetched == ["/api/v1/reviews/2", "/api/v1/reviews/%232"]
 
 
 def test_review_verdict_does_not_call_publish_and_legacy_admin_group_is_absent(monkeypatch):

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """PR-style version review commands for authors and reviewers."""
 
@@ -22,13 +23,9 @@ review_app.add_typer(policy_app, name="policy")
 
 
 def _ref(value: str) -> str:
-    """Row positions are shortcuts; #number is always an explicit review number."""
+    """A number, with or without #, is always the review number; list rows are never references."""
     if value.startswith("@"):
-        value = config.resolve_alias(value, expected_type="review")
-    elif value.isdigit():
-        cache = config.load_last_results()
-        if cache.get("item_type") == "review" and int(value) <= len(cache["ids"]) and int(value) > 0:
-            value = cache["ids"][int(value) - 1]
+        value = config.resolve_alias(value)
     if "/" in value:
         value = str(client.get("/api/v1/reviews/resolve", params={"ref": value})["number"])
     return quote(value, safe="")
@@ -60,7 +57,7 @@ def list_reviews(
     team_id: str | None = typer.Option(None, "--team-id"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
 ):
-    """List reviews visible to you; row numbers work with other review commands."""
+    """List reviews visible to you; pass the review number to other review commands."""
     params: dict[str, str] = {"state": state, "limit": "100"}
     if needs:
         if needs not in ("my-review", "ready-to-publish"):
@@ -75,19 +72,17 @@ def list_reviews(
     if team_id:
         params["team_id"] = team_id
     result = client.get("/api/v1/reviews", params=params)
-    items = result["items"]
-    config.save_last_results(items, "review")
     if output == "json":
         output_json(result)
         return
     table = Table(title="Reviews")
-    for column in ("Row", "Review", "Type", "Version", "State", "Approvals", "Threads"):
+    for column in ("#", "Title", "Type", "Version", "State", "Approvals", "Threads"):
         table.add_column(column)
-    for index, item in enumerate(items, 1):
+    for item in result["items"]:
         gate = item["gate"]
         table.add_row(
-            str(index),
-            f"#{item['number']} {item['title']}",
+            f"#{item['number']}",
+            item["title"],
             item["subject_type"],
             item["version"],
             item["state"],
