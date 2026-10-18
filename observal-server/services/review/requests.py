@@ -1,7 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-
-# SPDX-License-Identifier: Apache-2.0
 """One chronological source of truth for reviewer decisions and request conversations."""
 
 from datetime import UTC, datetime

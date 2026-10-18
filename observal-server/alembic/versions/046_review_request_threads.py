@@ -1,7 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-
-# SPDX-License-Identifier: Apache-2.0
 """Link change requests to conversations and backfill historical review feedback.
 
 Revision ID: 046_review_request_threads
@@ -30,10 +28,21 @@ def backfill() -> None:
     requests = (
         db.execute(
             sa.text("""
+            WITH ordered AS (
+                SELECT s.id, s.review_id, s.reviewer_id, s.body, s.submitted_at,
+                       s.state, s.verdict, s.dismissed_at, s.dismissed_by,
+                       lead(s.id) OVER (
+                           PARTITION BY s.review_id, s.reviewer_id
+                           ORDER BY s.submitted_at NULLS FIRST, s.id
+                       ) AS later_id
+                  FROM review_submissions s
+                 WHERE s.verdict IN ('approve', 'request_changes') AND s.state != 'draft'
+            )
             SELECT s.id, s.review_id, s.reviewer_id, s.body, s.submitted_at,
-                   s.state, s.dismissed_at, s.dismissed_by, r.state AS review_state
-              FROM review_submissions s JOIN reviews r ON r.id = s.review_id
-             WHERE s.verdict = 'request_changes' AND s.state != 'draft'
+                   s.state, s.dismissed_at, s.dismissed_by, s.later_id,
+                   r.state AS review_state
+              FROM ordered s JOIN reviews r ON r.id = s.review_id
+             WHERE s.verdict = 'request_changes'
                AND NOT EXISTS (SELECT 1 FROM review_threads t WHERE t.change_request_id = s.id)
              ORDER BY s.submitted_at, s.id
         """)
@@ -42,26 +51,16 @@ def backfill() -> None:
         .all()
     )
     for row in requests:
-        later = db.execute(
-            sa.text("""
-                SELECT 1 FROM review_submissions
-                 WHERE review_id = :review_id AND reviewer_id = :reviewer_id
-                   AND verdict IN ('approve', 'request_changes') AND state != 'draft'
-                   AND (submitted_at > :at OR (submitted_at = :at AND id > :id))
-                 LIMIT 1
-            """),
-            {
-                "review_id": row["review_id"],
-                "reviewer_id": row["reviewer_id"],
-                "at": row["submitted_at"],
-                "id": row["id"],
-            },
-        ).first()
-        cleared = row["state"] == "dismissed" or bool(later) or row["review_state"] in ("closed", "published")
+        cleared = (
+            row["state"] == "dismissed" or row["later_id"] is not None or row["review_state"] in ("closed", "published")
+        )
         created_at = row["submitted_at"] or datetime.now(UTC)
         # A downgraded database retains the original conversation and its
         # submission-linked first comment. Recover that link on re-upgrade
         # instead of creating an unresolvable duplicate blocking conversation.
+        # Draft comments can share the submission ID but predate the verdict.
+        # Request-opening threads and comments are written after submission,
+        # whether or not their text was subsequently edited.
         prior = db.execute(
             sa.text("""
                 SELECT t.id FROM review_threads t
@@ -69,14 +68,14 @@ def backfill() -> None:
                  WHERE t.review_id = :review_id AND t.change_request_id IS NULL
                    AND t.path IS NULL AND t.created_by = :reviewer_id
                    AND c.submission_id = :request_id AND c.author_id = :reviewer_id
-                   AND c.body = :body
+                   AND t.created_at >= :submitted_at AND c.created_at >= t.created_at
                  LIMIT 2
             """),
             {
                 "review_id": row["review_id"],
                 "request_id": row["id"],
                 "reviewer_id": row["reviewer_id"],
-                "body": row["body"] or "",
+                "submitted_at": row["submitted_at"],
             },
         ).all()
         if len(prior) == 1:
@@ -144,11 +143,13 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
     op.create_unique_constraint("uq_review_threads_change_request", "review_threads", ["change_request_id"])
+    op.create_index("ix_review_comments_submission_id", "review_comments", ["submission_id"])
     backfill()
 
 
 def downgrade() -> None:
     # Preserve comments/replies as ordinary conversations on rollback.
+    op.drop_index("ix_review_comments_submission_id", table_name="review_comments")
     op.drop_constraint("uq_review_threads_change_request", "review_threads", type_="unique")
     op.drop_constraint("fk_review_threads_change_request", "review_threads", type_="foreignkey")
     op.drop_column("review_threads", "change_request_id")

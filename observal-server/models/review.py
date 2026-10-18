@@ -164,7 +164,7 @@ class ReviewComment(Base):
         UUID(as_uuid=True), ForeignKey("reviews.id", ondelete="CASCADE"), nullable=False
     )
     submission_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("review_submissions.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("review_submissions.id", ondelete="SET NULL"), index=True
     )
     author_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
