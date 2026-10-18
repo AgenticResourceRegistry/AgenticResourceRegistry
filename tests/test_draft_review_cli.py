@@ -140,7 +140,8 @@ def test_agent_edit_amends_pending_release_and_reports_the_revision(monkeypatch)
     )
     result = runner.invoke(app, ["agent", "edit", "helper", "--description", "Fixed"], terminal_width=200)
     assert result.exit_code == 0, result.output
-    assert posts == ["/api/v1/agents/a1/start-edit"]
+    # Under review, the edit is also submitted, which answers requested changes (like the web Edit tab).
+    assert posts == ["/api/v1/agents/a1/start-edit", "/api/v1/agents/a1/submit"]
     assert puts == [("/api/v1/agents/a1/draft", {"description": "Fixed"})]
     assert "Review #21 now shows this change as revision 2" in _plain(result.output)
 
@@ -203,3 +204,46 @@ async def test_server_refuses_new_version_over_pending_first_release():
     # With an approved release already published, releasing alongside a pending version stays allowed.
     db = SimpleNamespace(scalar=AsyncMock(return_value=1))
     await _refuse_release_over_unpublished_first_release(db, agent)
+
+
+# PR review follow-ups: component edits answer change requests like agent edit.
+
+
+@pytest.mark.parametrize(("kind", "plural"), [("mcp", "mcps"), ("hook", "hooks"), ("prompt", "prompts")])
+def test_component_edit_under_review_submits_the_revision(monkeypatch, kind, plural):
+    from observal_cli import draft_submit
+
+    posts = []
+    monkeypatch.setattr(
+        draft_submit.client,
+        "post",
+        lambda url, *a, **k: posts.append(url) or {"status": "pending", "review_number": 4},
+    )
+    result = draft_submit.submit_edit_under_review(kind, plural, "c1", {"status": "changes_requested", "id": "c1"})
+    assert posts == [f"/api/v1/{plural}/c1/submit"]
+    assert result["status"] == "pending" and result["review_number"] == 4
+
+
+def test_component_edit_outside_review_does_not_submit(monkeypatch):
+    from observal_cli import draft_submit
+
+    monkeypatch.setattr(draft_submit.client, "post", lambda *a, **k: pytest.fail("must not submit"))
+    assert draft_submit.submit_edit_under_review("mcp", "mcps", "c1", {"status": "draft"}) == {"status": "draft"}
+
+
+def test_skill_edit_under_review_submits_by_version(monkeypatch):
+    from observal_cli import draft_submit
+
+    def get(url, **kwargs):
+        if url.endswith("/versions"):
+            return {"items": [{"id": "v2", "version": "1.1.0", "status": "changes_requested"}]}
+        return {"revision": "rev-9"}
+
+    posts = []
+    monkeypatch.setattr(draft_submit.client, "get", get)
+    monkeypatch.setattr(draft_submit.client, "post", lambda url, body=None, **k: posts.append((url, body)) or {})
+    result = draft_submit.submit_edit_under_review(
+        "skill", "skills", "s1", {"status": "changes_requested", "version": "1.1.0"}
+    )
+    assert posts == [("/api/v1/skills/s1/versions/v2/submit", {"observed_revision": "rev-9"})]
+    assert result["status"] == "pending"

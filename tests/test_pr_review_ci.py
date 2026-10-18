@@ -361,6 +361,12 @@ async def test_draft_save_pushes_a_revision_reviewers_can_see(world, monkeypatch
     await submit_for_review(db, "prompt", listing, version, version.released_by, message="Clarified description")
     head = await db.get(ReviewRevision, review.head_revision_id)
     assert head.number == 2 and head.message == "Clarified description"
+    # Submitting again with nothing new says the version is already under review.
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as unchanged:
+        await submit_for_review(db, "prompt", listing, version, version.released_by)
+    assert unchanged.value.status_code == 409 and f"Already under review as #{review.number}" in unchanged.value.detail
 
 
 @pytest.mark.asyncio

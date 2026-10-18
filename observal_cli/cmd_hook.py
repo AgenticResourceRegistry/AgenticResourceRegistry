@@ -29,6 +29,7 @@ from observal_cli.constants import (
     VALID_HOOK_HANDLER_TYPES,
     VALID_HOOK_SCOPES,
 )
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import select_one, text_input
 from observal_cli.render import (
@@ -821,6 +822,8 @@ def hook_edit(
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/hooks/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("hook", "hooks", resolved, result)
     if output == "json":
         output_json(result)
     else:
