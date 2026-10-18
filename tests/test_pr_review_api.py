@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Additive review endpoints: participant ACL, draft isolation and inbox fan-out."""
 
@@ -49,6 +50,7 @@ async def api(monkeypatch):
             released_by=author.id,
             released_at=datetime.now(UTC),
             task_type="other",
+            delivery_mode="registry_direct",
             skill_md_content="# Hello\n",
         )
         db.add(version)

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Tests for agent listing endpoint access.
 
@@ -123,6 +124,7 @@ async def test_agent_list_applies_parameterized_search_filters():
         search="review",
         namespace="Alice",
         category="Testing",
+        harness=None,
         limit=50,
         offset=0,
         db=mock,

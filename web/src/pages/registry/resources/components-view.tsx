@@ -3,16 +3,15 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { Link, useRouter } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Puzzle, FileEdit, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PickerSelect } from "@/components/ui/picker-select";
 import {
-  useRegistryList,
-  useMyComponents,
+  useResourcePage,
   useComponentSubmit,
   useComponentSaveDraft,
   useComponentSubmitDraft,
@@ -52,6 +51,7 @@ import {
   ResourceList,
   ResourceRow,
   ResourceToolbar,
+  ResourcePager,
   SubmissionRow,
   StatusBadges,
   SubmissionsPanel,
@@ -64,7 +64,7 @@ import {
 import type { ResourcesSearch } from "@/routes/_authed/resources/$type";
 import type { FilterField } from "@/components/registry/filter-bar";
 
-const TABS = ["discover", "my", "pending"] as const;
+const TABS = ["discover", "my", "drafts", "pending"] as const;
 type FilterKey = "category" | "task_type" | "event" | "scope" | "runtime_type";
 type TypeFilter = { key: FilterKey & keyof ResourcesSearch; label: string; options: string[] };
 
@@ -127,14 +127,18 @@ function ComponentCatalogCard({
 function ComponentListRow({
   item,
   registryType,
-  onClick,
 }: {
   item: RegistryItem;
   registryType: RegistryType;
-  onClick: () => void;
 }) {
+  const canonical = canonicalRouteParts(item.namespace, item.slug);
   return (
-    <ResourceRow item={item} glyph={registryType} columns={LIST_COLUMNS} onClick={onClick}>
+    <ResourceRow item={item} glyph={registryType} columns={LIST_COLUMNS}
+      renderLink={(content) => canonical ? (
+        <Link to="/components/$type/$namespace/$slug" params={{ type: registryType, ...canonical }} className="flex min-w-0 items-center gap-[11px] rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:underline">{content}</Link>
+      ) : (
+        <Link to="/components/$componentId" params={{ componentId: item.id }} search={{ type: registryType }} className="flex min-w-0 items-center gap-[11px] rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:underline">{content}</Link>
+      )}>
       <span className={monoCell}>{(item.version as string | undefined) ?? "-"}</span>
       <span className="text-[10px] text-muted-foreground">{usageLabel(item) ?? "-"}</span>
       <StatusBadges item={item} />
@@ -143,7 +147,6 @@ function ComponentListRow({
 }
 
 export default function ComponentsView({ type: activeType }: { type: RegistryType }) {
-  const router = useRouter();
   const f = useResourceFilters();
   const { ready: authReady, role } = useOptionalAuth();
   const { isAuthenticated } = f;
@@ -177,6 +180,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
 
   const typeFilters = TYPE_FILTERS[activeType] ?? [];
   const noun = NOUNS[activeType] ?? activeType;
+  const singular = activeType === "sandboxes" ? "Sandbox" : noun.slice(0, -1);
   const registryFilters: Record<string, string> = {
     ...(f.debouncedSearch ? { search: f.debouncedSearch } : {}),
     ...(f.searchParams.namespace ? { namespace: f.searchParams.namespace } : {}),
@@ -187,20 +191,18 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     if (value) registryFilters[filter.key] = value;
   }
 
-  const { data, isLoading, isError, error, refetch } = useRegistryList(activeType, registryFilters);
-
-  const { data: myItems } = useMyComponents(activeType, isAuthenticated);
-  const myDrafts = useMemo(
-    () =>
-      isAuthenticated
-        ? (myItems ?? []).filter((i) => activeType === "skills" || ["draft", "pending", "rejected", "archived"].includes(i.status ?? ""))
-        : [],
-    [isAuthenticated, myItems, activeType],
+  const page = (f.searchParams.page ?? 1) - 1;
+  const publicPage = useResourcePage(activeType, false, registryFilters, page, discoveryTab === "discover" && !f.unresolvedTeam);
+  const ownerPage = useResourcePage(
+    activeType, true,
+    { ...registryFilters, ...(discoveryTab === "drafts" ? { status: "draft" } : discoveryTab === "pending" ? { status: "pending" } : {}) },
+    page, isAuthenticated && discoveryTab !== "discover" && !f.unresolvedTeam,
   );
-  const pendingItems = useMemo(
-    () => (isAuthenticated ? (myItems ?? []).filter((i) => i.status === "pending") : []),
-    [isAuthenticated, myItems],
-  );
+  const activePage = discoveryTab === "discover" ? publicPage : ownerPage;
+  const { isLoading, isError, error, refetch } = activePage;
+  const myItems = ownerPage.data?.items ?? [];
+  const myDrafts = myItems.filter((item) => ["draft", "pending", "rejected", "changes_requested"].includes(item.status ?? "") ||
+    (activeType === "skills" && item.status === "approved"));
 
   const submitMutation = useComponentSubmit(activeType);
   const saveDraftMutation = useComponentSaveDraft(activeType);
@@ -220,7 +222,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     attemptedFolderLink.current = key;
     let active = true;
     if (linkedDraft.id !== linkedVersionId || linkedDraft.version !== linkedVersion ||
-        !["draft", "rejected"].includes(linkedDraft.status) || linkedListing.user_permission !== "owner") {
+        !["draft", "rejected", "changes_requested"].includes(linkedDraft.status) || linkedListing.user_permission !== "owner") {
       setFolderLinkError("The exact draft is not editable or no longer belongs to this listing. Refresh its Versions tab.");
       return;
     }
@@ -264,13 +266,15 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [activeType]);
 
-  const visibleItems = { discover: data ?? [], my: myDrafts, pending: pendingItems }[discoveryTab];
+  const visibleItems = activePage.data?.items ?? [];
+  const total = activePage.data?.total ?? 0;
 
   const fields: FilterField[] = [
     ...commonFields(f, [
       { value: "discover", label: "Discover" },
-      { value: "my", label: "My submissions", count: myDrafts.length },
-      { value: "pending", label: "Pending review", count: pendingItems.length },
+      { value: "my", label: "My submissions", count: discoveryTab === "my" ? total : undefined },
+      { value: "drafts", label: activeType === "skills" ? "Listing drafts" : "My drafts", count: discoveryTab === "drafts" ? total : undefined },
+      { value: "pending", label: "Pending review", count: discoveryTab === "pending" ? total : undefined },
     ]),
     ...typeFilters.map((filter) => ({
       key: filter.key,
@@ -280,10 +284,6 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     })),
   ];
 
-  const handleRowClick = useCallback(
-    (id: string) => router.navigate({ to: "/components/$componentId", params: { componentId: id }, search: { type: activeType } }),
-    [router, activeType],
-  );
 
   async function openSubmission(item: RegistryItem, action: "edit" | "submit") {
     if (activeType === "skills") {
@@ -303,7 +303,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
           return;
         }
         const folders = allVersions.filter((version) =>
-          version.delivery_mode === "registry_direct" && ["draft", "rejected"].includes(version.status),
+          version.delivery_mode === "registry_direct" && ["draft", "rejected", "changes_requested"].includes(version.status),
         );
         if (folders.length > 0) {
           setFolderSelection({ item, action, versions: folders, versionId: folders[0].id });
@@ -327,9 +327,17 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     if (action === "submit") {
       submitDraftMutation.mutate(item.id);
     } else if (item.status === "pending") {
-      startEditMutation.mutate(item.id, {
-        onSuccess: () => { setEditItem(item); setSubmitOpen(true); },
-      });
+      let acquired = false;
+      try {
+        await startEditMutation.mutateAsync(item.id);
+        acquired = true;
+        const fullItem = await registry.get(activeType, item.id);
+        setEditItem(fullItem);
+        setSubmitOpen(true);
+      } catch (error) {
+        if (acquired) cancelEditMutation.mutate(item.id);
+        toast.error(error instanceof Error ? error.message : "Could not load the full submission for editing");
+      }
     } else {
       setEditItem(item);
       setSubmitOpen(true);
@@ -380,35 +388,40 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
         onLayoutChange={setLayout}
         actions={
           authReady && role && (
-            <Button
-              size="sm"
-              className="h-[34px] shrink-0 rounded-[9px] bg-primary px-3.5 text-xs font-medium text-primary-foreground"
-              onClick={() => {
-                setEditItem(null);
-                setSubmitOpen(true);
-              }}
-            >
-              Create
+            <Button asChild size="sm" className="h-[34px] shrink-0 rounded-[9px] bg-primary px-3.5 text-xs font-medium text-primary-foreground">
+              <Link to="/build" search={{ kind: activeType }}>Create {singular}</Link>
             </Button>
           )
         }
       />
 
-      {discoveryTab === "discover" && isLoading ? (
+      {activeType === "skills" && discoveryTab === "drafts" && (
+        <p role="note" className="mb-4 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          Drafts of an approved Skill’s folder versions are under <button type="button" className="font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => f.update({ view: "my" })}>My submissions</button> → Manage drafts.
+        </p>
+      )}
+      {f.unresolvedTeam ? (
+        <EmptyState icon={Puzzle} title="Teamspace unavailable"
+          description="This teamspace is still loading or is no longer accessible to your account. Clear the team filter to browse other resources."
+          actionLabel="Clear team filter" onAction={() => f.update({ team: undefined })} />
+      ) : isLoading ? (
         <ListSkeleton view={layout} />
-      ) : discoveryTab === "discover" && isError ? (
+      ) : isError ? (
         <ErrorState message={error?.message} onRetry={() => refetch()} />
       ) : visibleItems.length === 0 ? (
         <EmptyState
           icon={Puzzle}
-          title={`No ${noun.toLowerCase()} found`}
+          title={discoveryTab === "drafts" ? "No drafts yet" : `No ${noun.toLowerCase()} found`}
           description={
-            hasFilters
-              ? `No ${noun.toLowerCase()} match the active search and filters.`
-              : `No ${noun.toLowerCase()} have been registered yet.`
+            discoveryTab === "drafts"
+              ? `Save a ${singular} draft to continue it here later.`
+              : hasFilters
+                ? `No ${noun.toLowerCase()} match the active search and filters.`
+                : `No ${noun.toLowerCase()} have been registered yet.`
           }
-          actionLabel="Back to Registry"
-          actionHref="/"
+          actionLabel={hasFilters ? "Clear filters" : authReady && role ? undefined : "Browse Agent Files"}
+          actionHref={!hasFilters && !(authReady && role) ? "/resources/agents" : undefined}
+          onAction={hasFilters ? f.clear : undefined}
         />
       ) : layout === "grid" ? (
         <CatalogGrid className="animate-in">
@@ -425,17 +438,19 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
         <ResourceList
           title="Component catalogue"
           subtitle="Reusable building blocks matching the current type and filters"
-          count={`${compactNumber(visibleItems.length)} ${noun.toLowerCase()}`}
+          count={`${compactNumber(total)} ${noun.toLowerCase()}`}
           columns={LIST_COLUMNS}
           headers={["Component", "Version", "Installs", "Status"]}
         >
           {visibleItems.map((item) => (
-            <ComponentListRow key={item.id} item={item} registryType={activeType} onClick={() => handleRowClick(item.id)} />
+            <ComponentListRow key={item.id} item={item} registryType={activeType} />
           ))}
         </ResourceList>
       )}
 
-      {discoveryTab === "my" && myDrafts.length > 0 && (
+      {!f.unresolvedTeam && !isLoading && !isError && <ResourcePager page={page} total={total} onPageChange={(next) => f.update({ page: next + 1 > 1 ? next + 1 : undefined })} />}
+
+      {(discoveryTab === "my" || discoveryTab === "drafts") && myDrafts.length > 0 && (
         <SubmissionsPanel title="Drafts &amp; submissions">
           {myDrafts.map((item) => (
             <SubmissionRow
@@ -444,19 +459,21 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
               glyph={activeType}
               actions={
                 <>
-                  {(item.status === "draft" || item.status === "rejected" || item.status === "pending" || (activeType === "skills" && item.status === "approved")) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
+                  {(["draft", "rejected", "changes_requested"].includes(item.status ?? "")) ? (
+                    <Button asChild variant="outline" size="sm" className="h-7 text-xs">
+                      <Link to="/build" search={{ kind: activeType, draft: item.id }}>
+                        <FileEdit className="h-3 w-3 mr-1" /> {item.status === "draft" ? "Continue draft" : "Address review"}
+                      </Link>
+                    </Button>
+                  ) : (item.status === "pending" || (activeType === "skills" && item.status === "approved")) && (
+                    <Button variant="outline" size="sm" className="h-7 text-xs"
                       disabled={findingFolder || startEditMutation.isPending || loadFolderMutation.isPending}
-                      onClick={() => void openSubmission(item, "edit")}
-                    >
+                      onClick={() => void openSubmission(item, "edit")}>
                       <FileEdit className="h-3 w-3 mr-1" />
                       {item.status === "approved" ? "Manage drafts" : "Edit"}
                     </Button>
                   )}
-                  {(item.status === "draft" || item.status === "rejected" || (activeType === "skills" && item.status === "approved")) && (
+                  {activeType === "skills" && item.status === "approved" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -465,7 +482,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
                       disabled={findingFolder || submitDraftMutation.isPending || submitFolderMutation.isPending}
                     >
                       <Send className="h-3 w-3 mr-1" />
-                      {item.status === "rejected" ? "Resubmit" : item.status === "approved" ? "Submit draft" : "Submit"}
+                      Submit draft
                     </Button>
                   )}
                 </>

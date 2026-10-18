@@ -7,6 +7,7 @@
 <!-- SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -17,6 +18,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Improve the existing six-kind Agentic Resources workspace with URL-backed task discovery, searchable owner submissions, pagination, and a focused draft view.
+- Build Agent Files and five standalone resource kinds through a dedicated authoring workflow with saved drafts, validation, and review submission.
 - add revision-based, participant-scoped reviews with publication gates, conversations, inbox notifications, web review pages, and `observal review` commands
 - add opt-in, local-only harness inventory to `observal scan`
 - Fork approved agents and registry components into independently owned drafts with visibility-safe provenance, public fork lists, CLI and web workflows.

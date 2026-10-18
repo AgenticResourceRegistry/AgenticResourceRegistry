@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -10,6 +11,7 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { FilterBar, type FilterField } from "@/components/registry/filter-bar";
+import { Button } from "@/components/ui/button";
 import { CardSkeleton, TableSkeleton } from "@/components/shared/skeleton-layouts";
 import { StatusBadge } from "@/components/registry/status-badge";
 import { RecommendedBadge } from "@/components/registry/recommended-badge";
@@ -24,6 +26,20 @@ import type { RegistryItem } from "@/lib/types";
 import type { ResourcesSearch } from "@/routes/_authed/resources/$type";
 
 export type ViewMode = "grid" | "list";
+
+export const RESOURCE_PAGE_SIZE = 20;
+
+export function ResourcePager({ page, total, onPageChange }: { page: number; total: number; onPageChange: (page: number) => void }) {
+  if (total <= RESOURCE_PAGE_SIZE && page === 0) return null;
+  const pages = Math.max(1, Math.ceil(total / RESOURCE_PAGE_SIZE));
+  return (
+    <nav aria-label="Resource pages" className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4">
+      <Button type="button" variant="outline" size="sm" disabled={page === 0} onClick={() => onPageChange(Math.min(page - 1, pages - 1))}>Previous</Button>
+      <span role="status" className="text-xs text-muted-foreground">{page < pages ? `Page ${page + 1} of ${pages}` : `Page ${page + 1} is no longer available`} · {total} results</span>
+      <Button type="button" variant="outline" size="sm" disabled={page >= pages - 1} onClick={() => onPageChange(page + 1)}>Next</Button>
+    </nav>
+  );
+}
 
 export function formatOption(value: string): string {
   return value.replaceAll("-", " ").replace(/\b\w/g, (l) => l.toUpperCase());
@@ -52,7 +68,8 @@ export function useResourceFilters() {
   const navigate = useNavigate({ from: "/resources/$type" });
   const { isAuthenticated } = useOptionalAuth();
   const { data: teams = [] } = useTeams(isAuthenticated);
-  const [search, setSearch] = useState(searchParams.search ?? "");
+  // Owner endpoints accept at most 200 characters; preserve a usable view for long bookmarks.
+  const [search, setSearch] = useState((searchParams.search ?? "").slice(0, 200));
   const debounced = useDebouncedValue(search);
   // The last search value this page wrote to the URL. A different URL value means
   // it changed from outside (back/forward, a pushed link), so the input must follow.
@@ -60,7 +77,7 @@ export function useResourceFilters() {
   useEffect(() => {
     if (searchParams.search === pushedSearch.current) return;
     pushedSearch.current = searchParams.search;
-    setSearch(searchParams.search ?? "");
+    setSearch((searchParams.search ?? "").slice(0, 200));
   }, [searchParams.search]);
 
   return {
@@ -68,16 +85,18 @@ export function useResourceFilters() {
     isAuthenticated,
     teams,
     selectedTeam: teams.find((t) => t.handle === searchParams.team),
+    unresolvedTeam: !!searchParams.team && !teams.some((t) => t.handle === searchParams.team),
     search,
     changeSearch: (text: string) => {
-      setSearch(text);
-      pushedSearch.current = text || undefined;
-      navigate({ search: (cur) => ({ ...cur, search: text || undefined }), replace: true });
+      const term = text.slice(0, 200);
+      setSearch(term);
+      pushedSearch.current = term || undefined;
+      navigate({ search: (cur) => ({ ...cur, search: term || undefined, page: undefined }), replace: true });
     },
     // Cleared immediately so "Clear all" doesn't refetch with the stale term.
     debouncedSearch: search ? debounced : "",
     update: (next: Partial<ResourcesSearch>) =>
-      navigate({ search: (cur) => ({ ...cur, ...next }), replace: true }),
+      navigate({ search: (cur) => ({ ...cur, ...next, page: "page" in next ? next.page : undefined }), replace: !("page" in next) }),
     clear: () => {
       setSearch("");
       pushedSearch.current = undefined;
@@ -252,37 +271,34 @@ export function ResourceRow({
   glyph,
   columns,
   subtitle,
-  onClick,
+  renderLink,
   children,
 }: {
   item: RegistryItem;
   glyph: string;
   columns: string;
   subtitle?: string;
-  onClick: () => void;
+  renderLink: (content: ReactNode) => ReactNode;
   /** The cells after the identity column. */
   children: ReactNode;
 }) {
   return (
     <div
-      className="grid min-h-[66px] cursor-pointer items-center gap-3 border-t border-border px-[22px] py-3 transition-colors first:border-t-0 hover:bg-surface-raised"
+      className="grid min-h-[66px] items-center gap-3 border-t border-border px-[22px] py-3 first:border-t-0"
       style={{ gridTemplateColumns: columns }}
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onClick();
-      }}
     >
-      <div className="flex items-center gap-[11px] min-w-0">
-        <EntityGlyph type={glyph} size="sm" labelled={false} />
-        <div className="min-w-0">
-          <strong className="block truncate text-xs font-medium">{item.name}</strong>
-          <span className="block truncate mt-0.5 font-mono text-[9px] text-muted-foreground">
-            {subtitle ?? itemHandle(item)}
+      {renderLink(
+        <>
+          <EntityGlyph type={glyph} size="sm" labelled={false} />
+          <span className="min-w-0">
+            <strong className="block truncate text-xs font-medium">{item.name}</strong>
+            <span className="sr-only">{item.status ? `, ${item.status}` : ""}{item.version ? `, version ${item.version}` : ""}</span>
+            <span className="block truncate mt-0.5 font-mono text-[9px] text-muted-foreground">
+              {subtitle ?? itemHandle(item)}
+            </span>
           </span>
-        </div>
-      </div>
+        </>,
+      )}
       {children}
     </div>
   );
@@ -313,7 +329,7 @@ export function SubmissionRow({
   actions: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-4 py-3">
+    <div className="flex flex-wrap items-center gap-3 py-3 sm:gap-4">
       <EntityGlyph type={glyph} size="sm" labelled={false} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2">
@@ -325,7 +341,7 @@ export function SubmissionRow({
         )}
         {item.description && <p className="truncate text-[10px] text-muted-foreground mt-0.5">{item.description}</p>}
       </div>
-      <div className="flex items-center gap-2 shrink-0">{actions}</div>
+      <div className="flex w-full flex-wrap items-center gap-2 pl-10 sm:w-auto sm:shrink-0 sm:pl-0">{actions}</div>
     </div>
   );
 }

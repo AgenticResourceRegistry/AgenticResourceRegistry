@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for Pydantic field validators on all registry submit schemas."""
@@ -180,7 +181,13 @@ class TestHookValidation:
         from schemas.hook import HookSubmitRequest
 
         r = HookSubmitRequest(
-            name="h", version="1.0", description="d", owner="o", event="PreToolUse", handler_type="command"
+            name="h",
+            version="1.0",
+            description="d",
+            owner="o",
+            event="PreToolUse",
+            handler_type="command",
+            handler_config={"command": "echo ok"},
         )
         assert r.event == "PreToolUse"
 
@@ -228,12 +235,51 @@ class TestHookValidation:
                 scope="workspace",
             )
 
+    def test_malformed_http_url_is_validation_error(self):
+        from schemas.hook import HookSubmitRequest
+
+        with pytest.raises(ValueError, match="valid host"):
+            HookSubmitRequest(
+                name="h",
+                version="1.0.0",
+                description="d",
+                owner="o",
+                event="PreToolUse",
+                handler_type="http",
+                handler_config={"url": "http://["},
+            )
+
+    @pytest.mark.parametrize("filename", [" ", "../escape.sh", "subdir/hook.sh", "..", "../hook.sh"])
+    def test_hook_script_filename_must_be_a_safe_basename(self, filename):
+        from schemas.hook import HookSubmitRequest
+
+        with pytest.raises(ValueError, match="safe filename"):
+            HookSubmitRequest(
+                name="h",
+                version="1.0.0",
+                description="d",
+                owner="o",
+                event="PreToolUse",
+                handler_type="command",
+                handler_config={},
+                script_content="echo hi",
+                script_filename=filename,
+            )
+
     def test_all_valid_events(self):
         from schemas.constants import VALID_HOOK_EVENTS
         from schemas.hook import HookSubmitRequest
 
         for ev in VALID_HOOK_EVENTS:
-            r = HookSubmitRequest(name="h", version="1.0", description="d", owner="o", event=ev, handler_type="command")
+            r = HookSubmitRequest(
+                name="h",
+                version="1.0",
+                description="d",
+                owner="o",
+                event=ev,
+                handler_type="command",
+                handler_config={"command": "echo ok"},
+            )
             assert r.event == ev
 
 

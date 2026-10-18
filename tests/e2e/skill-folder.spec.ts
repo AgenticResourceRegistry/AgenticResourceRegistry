@@ -66,26 +66,26 @@ test("browser creates a complete draft without submitting it for review", async 
 	const name = skillName("e2e-browser-folder");
 	await loginToWebUI(page);
 	await page.goto("/resources/skills");
-	await page.getByRole("button", { name: "Create", exact: true }).click();
-	const dialog = page.getByRole("dialog");
-	await dialog.getByRole("tab", { name: "Upload" }).click();
-	await expect(dialog.locator("#comp-version")).toHaveValue("1.0.0");
+	await page.getByRole("link", { name: "Create Skill", exact: true }).click();
+	const editor = page.getByRole("region", { name: "Skill editor" });
+	await editor.getByRole("tab", { name: "Upload" }).click();
+	await expect(editor.locator("#comp-version")).toHaveValue("1.0.0");
 	if (process.env.OBSERVAL_SKILL_FOLDER_DELIVERY_ENABLED !== "true") {
-		await expect(dialog.getByRole("status").filter({ hasText: "Complete-folder review and installation are not enabled" })).toBeVisible();
+		await expect(editor.getByRole("status").filter({ hasText: "Complete-folder review and installation are not enabled" })).toBeVisible();
 	}
-	await expect(dialog.getByRole("button", { name: "Choose Folder" })).toBeVisible();
-	await expect(dialog.getByRole("button", { name: "Save Draft", exact: true })).toHaveCount(0);
-	await expect(dialog.getByRole("button", { name: "Save folder draft" })).toBeDisabled();
-	await expect(dialog.getByRole("status").filter({ hasText: "Name is required" })).toBeVisible();
-	await dialog.locator("#skill-file-upload").setInputFiles([
+	await expect(editor.getByRole("button", { name: "Choose Folder" })).toBeVisible();
+	await expect(editor.getByRole("button", { name: "Save Draft", exact: true })).toHaveCount(0);
+	await editor.getByRole("button", { name: "Save folder draft" }).click();
+	await expect(editor.getByRole("alert")).toContainText("Name is required");
+	await editor.locator("#skill-file-upload").setInputFiles([
 		{ name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.from(skillMd(name)) },
 		{ name: "run.sh", mimeType: "text/plain", buffer: Buffer.from("echo browser\n") },
 		{ name: "icon.bin", mimeType: "application/octet-stream", buffer: Buffer.from([0, 255]) },
 	]);
-	await expect(dialog.locator("#comp-name")).toHaveValue(name);
-	await expect(dialog.getByRole("button", { name: "Replace Whole Folder" })).toBeVisible();
+	await expect(editor.locator("#comp-name")).toHaveValue(name);
+	await expect(editor.getByRole("button", { name: "Replace Whole Folder" })).toBeVisible();
 	const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/v1/skills/folder-drafts") && response.request().method() === "POST");
-	await dialog.getByRole("button", { name: "Save folder draft" }).click();
+	await editor.getByRole("button", { name: "Save folder draft" }).click();
 	const response = await responsePromise;
 	expect(response.status(), await response.text()).toBe(200);
 	const draft = await response.json();
@@ -154,10 +154,9 @@ test("browser resumes and saves the exact existing folder version", async ({ pag
 	await page.goto("/resources/skills?view=my");
 	const row = page.locator("section .divide-y > div").filter({ hasText: name });
 	await expect(row).toBeVisible();
-	await row.getByRole("button", { name: "Edit" }).click();
-	const choice = page.getByRole("dialog");
-	await expect(choice.getByText("Choose the exact folder version")).toBeVisible();
-	await choice.getByRole("button", { name: "Edit selected version" }).click();
+	await row.getByRole("link", { name: "Continue draft" }).click();
+	await expect(page.getByRole("heading", { name: "Edit the exact Skill version" })).toBeVisible();
+	await page.getByRole("link", { name: "Open versioned Skill editor" }).click();
 	const editor = page.getByRole("dialog");
 	await expect(editor.getByRole("tab", { name: "Upload" })).toHaveAttribute("data-state", "active");
 	await expect(editor.getByText("assets/icon.bin")).toBeVisible();
@@ -178,14 +177,7 @@ test("browser resumes and saves the exact existing folder version", async ({ pag
 	expect((await textRes.json()).content).toBe("after\n");
 	const binaryRes = await fetch(`${API_BASE}/api/v1/skills/${draft.listing_id}/versions/${draft.version_id}/files/assets/icon.bin`, { headers: auth });
 	expect(Buffer.from(await binaryRes.arrayBuffer())).toEqual(Buffer.from([0, 255]));
-	await row.getByRole("button", { name: "Submit", exact: true }).click();
-	await expect(page.getByRole("dialog").getByText("Choose the exact folder version")).toBeVisible();
-	if (process.env.OBSERVAL_SKILL_FOLDER_DELIVERY_ENABLED === "true") {
-		await expect(page.getByRole("dialog").getByRole("button", { name: "Submit selected version" })).toBeEnabled();
-	} else {
-		await expect(page.getByRole("dialog").getByRole("status")).toContainText("Complete-folder review is not enabled");
-		await expect(page.getByRole("dialog").getByRole("button", { name: "Submit selected version" })).toBeDisabled();
-	}
+	// Saving the selected folder version does not automatically submit it for review.
 	const current = await fetch(`${API_BASE}/api/v1/skills/${draft.listing_id}/versions`, { headers: auth });
 	expect((await current.json()).items[0].status).toBe("draft");
 });

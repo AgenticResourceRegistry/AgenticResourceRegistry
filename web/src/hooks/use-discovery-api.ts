@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQuery } from "@tanstack/react-query";
@@ -14,12 +15,12 @@ const MIN_QUERY_LENGTH = 2;
  * identifier, so showing another query's results while this one loads could
  * hand the user a command for a resource that does not match what they typed.
  */
-export function useDiscoverySearch(text: string, filter: DiscoverySearchFilter = {}, pageSize = 10) {
+export function useDiscoverySearch(text: string, filter: DiscoverySearchFilter = {}, pageSize = 10, enabled = true) {
 	const trimmed = text.trim();
 	return useQuery({
 		queryKey: ["discovery", "search", trimmed, filter.kind ?? "all", filter.harness ?? "any", !!filter.includeUnapproved, pageSize],
 		queryFn: () => discovery.search(trimmed, filter, pageSize),
-		enabled: trimmed.length >= MIN_QUERY_LENGTH,
+		enabled: enabled && trimmed.length >= MIN_QUERY_LENGTH,
 		staleTime: 60 * 1000,
 		retry: false,
 	});

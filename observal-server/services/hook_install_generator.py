@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Generic hook install config generator for all supported harnesses.
@@ -82,7 +83,16 @@ def generate_hook_install_config(
     # Build handler info
     handler_type = str(getattr(hook_listing, "handler_type", "command") or "command")
     handler_config = getattr(hook_listing, "handler_config", {}) or {}
-    command = handler_config.get("command", "")
+    if handler_type == "http" and not adapter.supports_http_hooks:
+        return {
+            "config_snippet": {},
+            "config_path": "",
+            "files": [],
+            "requirements": [],
+            "source_fetch": None,
+            "notes": [f"HTTP hooks are not supported by {ide_info['display_name']}; choose a compatible harness."],
+        }
+    command = handler_config.get("url", "") if handler_type == "http" else handler_config.get("command", "")
     timeout = handler_config.get("timeout")
     script_content = getattr(hook_listing, "script_content", None)
     script_filename = getattr(hook_listing, "script_filename", None)
@@ -96,7 +106,7 @@ def generate_hook_install_config(
     files: list[dict] = []
     actual_command = command
 
-    if script_content and script_filename:
+    if handler_type == "command" and script_content and script_filename:
         # Tier 2: single-file script - write to harness's hooks dir
         script_path = f"{hook_scripts_dir}/{script_filename}"
         actual_command = script_path
@@ -110,7 +120,7 @@ def generate_hook_install_config(
 
     # Build source_fetch for Tier 3 (multi-file git-sourced)
     source_fetch = None
-    if source_url and source_path and not script_content:
+    if handler_type == "command" and source_url and source_path and not script_content:
         source_fetch = {
             "url": source_url,
             "path": source_path,

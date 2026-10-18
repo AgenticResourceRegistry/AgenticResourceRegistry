@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, field_validator, model_serializer
+from pydantic import BaseModel, field_validator, model_serializer, model_validator
 
 from models.agent import AgentStatus
 from schemas.constants import AGENT_NAME_REGEX, RecommendedFlag, Visibility, make_name_validator
@@ -143,14 +143,19 @@ class AgentCreateRequest(BaseModel):
             raise ValueError(f"Invalid version '{v}'. Must be semver format: x.y.z (e.g. 1.0.0)")
         return v
 
-    @field_validator("prompt", mode="after")
-    @classmethod
-    def _require_prompt_or_prompt_component(cls, v: str, info) -> str:
-        components = (info.data or {}).get("components", [])
-        has_prompt_component = any(c.component_type == "prompt" for c in components)
-        if not v and not has_prompt_component:
+    @model_validator(mode="after")
+    def _require_prompt_or_prompt_component(self):
+        if not self.prompt.strip() and not any(component.component_type == "prompt" for component in self.components):
             raise ValueError("A system prompt is required. Either set a custom prompt or add a Prompt component.")
-        return v
+        return self
+
+
+class AgentDraftCreateRequest(AgentCreateRequest):
+    """An incomplete prompt is allowed until the owner submits the draft for review."""
+
+    @model_validator(mode="after")
+    def _require_prompt_or_prompt_component(self):
+        return self
 
 
 class AgentUpdateRequest(BaseModel):
@@ -262,6 +267,7 @@ class AgentResponse(BaseModel):
 
 
 class AgentSummary(BaseModel):
+    review_number: int | None = None
     id: uuid.UUID
     name: str
     namespace: str

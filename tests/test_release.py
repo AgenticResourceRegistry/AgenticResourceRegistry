@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
@@ -347,7 +348,11 @@ def test_release_ci_and_terraform_keep_branch_coverage():
 
     for name in ("ci", "codeql", "dependency-review", "terraform", "e2e-frontend"):
         workflow = yaml.safe_load((ROOT / f".github/workflows/{name}.yml").read_text())
-        assert workflow[True]["pull_request"]["branches"] == ["main", "release/**"]
+        branches = workflow[True]["pull_request"]["branches"]
+        # The frontend E2E workflow also runs on a temporary stacked-PR base.
+        assert branches[:2] == ["main", "release/**"]
+        if name != "e2e-frontend":
+            assert branches == ["main", "release/**"]
     terraform = yaml.safe_load((ROOT / ".github/workflows/terraform.yml").read_text())
     assert "merge_group" in terraform[True]
     assert terraform[True]["push"]["branches"] == ["main", "release/**"]

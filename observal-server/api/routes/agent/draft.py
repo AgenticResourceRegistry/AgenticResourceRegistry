@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent draft workflow routes: save, update, start/cancel edit, submit."""
@@ -15,7 +16,7 @@ from models.agent_component import AgentComponent
 from models.skill import SkillListing
 from models.team import Team, TeamRole
 from models.user import User, UserRole
-from schemas.agent import AgentCreateRequest, AgentResponse, AgentUpdateRequest
+from schemas.agent import AgentDraftCreateRequest, AgentResponse, AgentUpdateRequest
 from services.config_generator import validate_mcp_command
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
@@ -105,7 +106,7 @@ async def _reject_components_outside_target(
 
 @router.post("/draft", response_model=AgentResponse)
 async def save_draft(
-    req: AgentCreateRequest,
+    req: AgentDraftCreateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
@@ -480,6 +481,8 @@ async def submit_draft(
         raise HTTPException(status_code=400, detail="Agent is not a draft")
     if not agent.description:
         raise HTTPException(status_code=400, detail="Description is required before submitting")
+    if not (agent.prompt or "").strip() and not any(c.component_type == "prompt" for c in agent.components):
+        raise HTTPException(status_code=400, detail="Add a system prompt or Prompt component before submitting")
 
     # Validate components exist
     if agent.components:

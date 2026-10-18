@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
@@ -18,6 +19,9 @@ export type CodeEditorLanguage = "bash" | "javascript" | "json" | "plain" | "pyt
 
 interface CodeEditorProps {
 	id?: string;
+	label?: string;
+	invalid?: boolean;
+	errorId?: string;
 	value: string;
 	onChange: (value: string) => void;
 	language?: CodeEditorLanguage;
@@ -127,6 +131,9 @@ function languageExtension(language: CodeEditorLanguage): Extension | null {
 
 export function CodeEditor({
 	id,
+	label,
+	invalid,
+	errorId,
 	value,
 	onChange,
 	language = "json",
@@ -171,6 +178,16 @@ export function CodeEditor({
 		if (!view || view.state.doc.toString() === value) return;
 		view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
 	}, [value]);
+
+	useEffect(() => {
+		const input = viewRef.current?.contentDOM;
+		if (!input) return;
+		input.setAttribute("aria-label", label ?? id ?? "Code editor");
+		if (invalid) input.setAttribute("aria-invalid", "true");
+		else input.removeAttribute("aria-invalid");
+		if (invalid && errorId) input.setAttribute("aria-describedby", errorId);
+		else input.removeAttribute("aria-describedby");
+	}, [label, id, invalid, errorId]);
 
 	return (
 		<div

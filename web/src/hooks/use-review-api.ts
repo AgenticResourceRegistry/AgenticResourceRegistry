@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useRef } from "react";
@@ -11,6 +12,16 @@ export function useTeamReviewQueue(teamId: string | undefined, enabled: boolean)
     queryKey: ["pr-reviews", "team", teamId],
     enabled: !!teamId && enabled,
     queryFn: () => prReviews.list({ team_id: teamId!, state: "open", limit: "100" }).then(result => result.items),
+  });
+}
+
+/** Resolve the current review by subject ID, including requested changes. */
+export function useSubjectReview(subjectId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["pr-review", "subject", subjectId],
+    queryFn: () => prReviews.detail(subjectId!),
+    enabled: enabled && !!subjectId,
+    retry: false,
   });
 }
 

@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Team publishing review rules.
@@ -307,6 +308,8 @@ class TestSkillSubmitStatus:
                         "description": "d",
                         "owner": "o",
                         "task_type": "code-review",
+                        "delivery_mode": "registry_direct",
+                        "skill_md_content": "# Review\n",
                         "team_id": str(team_id),
                         "visibility": visibility,
                     },

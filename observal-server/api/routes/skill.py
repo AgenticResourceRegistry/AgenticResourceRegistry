@@ -52,6 +52,7 @@ from schemas.skill_commands import normalize_slash_command
 from schemas.skill_resources import SkillVersionManifest
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.registry_namespace import identity_exists
+from services.registry_owner_search import owner_page
 from services.review.cutover import lock_review_for_edit, submit_for_review
 from services.skill_bundle import needs_bundle_delivery, validate_skill_bundle
 from services.skill_folder_edit import _validate_new_md
@@ -121,6 +122,8 @@ async def submit_skill(
     slash_command = req.slash_command
     skill_path = req.skill_path
     delivery_mode = req.delivery_mode or "git_fetch"
+    if delivery_mode == "git_fetch" and (not isinstance(req.git_url, str) or not req.git_url.strip()):
+        raise HTTPException(status_code=422, detail="A Git skill requires a nonempty git_url before submission")
     script_content = req.script_content
     script_filename = req.script_filename
 
@@ -302,7 +305,7 @@ async def list_skills(
         public_only=public_only,
     )
     total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
-    order_by = [SkillListing.created_at.desc()]
+    order_by = [SkillListing.created_at.desc(), SkillListing.id.desc()]
     if search_rank is not None:
         order_by.insert(0, search_rank.desc())
     result = await db.execute(_summary_options(stmt.order_by(*order_by).limit(limit).offset(offset)))
@@ -313,22 +316,34 @@ async def list_skills(
 
 @router.get("/my", response_model=list[SkillListingSummary])
 async def my_skills(
+    response: Response,
+    search: str | None = Query(None, max_length=200),
+    task_type: str | None = Query(None),
+    status: ListingStatus | None = Query(None),
+    namespace: str | None = Query(None, max_length=200),
+    team_id: uuid.UUID | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
-    optic.debug("my_skills called")
-    stmt = (
-        select(SkillListing)
-        .where(SkillListing.submitted_by == current_user.id)
-        .order_by(SkillListing.created_at.desc())
+    rows, total = await owner_page(
+        db,
+        SkillListing,
+        SkillVersion,
+        current_user,
+        apply_visibility_filter,
+        search=search,
+        status=status,
+        namespace=namespace,
+        team_id=team_id,
+        conditions=(SkillVersion.task_type == task_type,) if task_type else (),
+        limit=limit,
+        offset=offset,
+        options=_summary_options,
     )
-    # Authorship is not a standing grant: a member removed from a teamspace keeps
-    # the author column on its listings but must not keep reading them.
-    stmt = apply_visibility_filter(stmt, SkillListing, current_user)
-
-    result = await db.execute(_summary_options(stmt))
-    listings = await component_responses(result.scalars().all(), "skill", current_user, db)
-    return listings
+    response.headers["X-Total-Count"] = str(total)
+    return await component_responses(rows, "skill", current_user, db)
 
 
 @router.post("/folder-drafts", response_model=SkillVersionManifest)
@@ -957,6 +972,8 @@ async def submit_skill_draft(
         raise HTTPException(status_code=409, detail="Submit this saved draft by version UUID and observed revision")
     if ver.requires_global_review or ver.pre_public_status is not None:
         raise HTTPException(status_code=409, detail="Global public re-review is not yet available")
+    if ver.delivery_mode == "git_fetch" and (not isinstance(ver.git_url, str) or not ver.git_url.strip()):
+        raise HTTPException(status_code=422, detail="A Git skill requires a nonempty git_url before submission")
     _validate_effective_bundle(
         ver.delivery_mode,
         ver.skill_md_content,

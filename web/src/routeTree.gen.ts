@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 /* eslint-disable */
 
 // @ts-nocheck
@@ -15,6 +18,7 @@ import { Route as AuthedTeamspacesRouteImport } from './routes/_authed/teamspace
 import { Route as AuthedReviewRouteImport } from './routes/_authed/review'
 import { Route as AuthedLeaderboardRouteImport } from './routes/_authed/leaderboard'
 import { Route as AuthedDiscoverRouteImport } from './routes/_authed/discover'
+import { Route as AuthedBuildRouteImport } from './routes/_authed/build'
 import { Route as AuthedUserRouteImport } from './routes/_authed/_user'
 import { Route as AuthedAdminRouteImport } from './routes/_authed/_admin'
 import { Route as authRegisterRouteImport } from './routes/(auth)/register'
@@ -76,6 +80,11 @@ const AuthedLeaderboardRoute = AuthedLeaderboardRouteImport.update({
 const AuthedDiscoverRoute = AuthedDiscoverRouteImport.update({
   id: '/discover',
   path: '/discover',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedBuildRoute = AuthedBuildRouteImport.update({
+  id: '/build',
+  path: '/build',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedUserRoute = AuthedUserRouteImport.update({
@@ -253,6 +262,7 @@ export interface FileRoutesByFullPath {
   '/device': typeof authDeviceRoute
   '/login': typeof authLoginRoute
   '/register': typeof authRegisterRoute
+  '/build': typeof AuthedBuildRoute
   '/discover': typeof AuthedDiscoverRoute
   '/leaderboard': typeof AuthedLeaderboardRoute
   '/review': typeof AuthedReviewRoute
@@ -291,6 +301,7 @@ export interface FileRoutesByTo {
   '/login': typeof authLoginRoute
   '/register': typeof authRegisterRoute
   '/': typeof AuthedIndexRoute
+  '/build': typeof AuthedBuildRoute
   '/discover': typeof AuthedDiscoverRoute
   '/leaderboard': typeof AuthedLeaderboardRoute
   '/review': typeof AuthedReviewRoute
@@ -332,6 +343,7 @@ export interface FileRoutesById {
   '/(auth)/register': typeof authRegisterRoute
   '/_authed/_admin': typeof AuthedAdminRouteWithChildren
   '/_authed/_user': typeof AuthedUserRouteWithChildren
+  '/_authed/build': typeof AuthedBuildRoute
   '/_authed/discover': typeof AuthedDiscoverRoute
   '/_authed/leaderboard': typeof AuthedLeaderboardRoute
   '/_authed/review': typeof AuthedReviewRoute
@@ -373,6 +385,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/login'
     | '/register'
+    | '/build'
     | '/discover'
     | '/leaderboard'
     | '/review'
@@ -411,6 +424,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/'
+    | '/build'
     | '/discover'
     | '/leaderboard'
     | '/review'
@@ -451,6 +465,7 @@ export interface FileRouteTypes {
     | '/(auth)/register'
     | '/_authed/_admin'
     | '/_authed/_user'
+    | '/_authed/build'
     | '/_authed/discover'
     | '/_authed/leaderboard'
     | '/_authed/review'
@@ -535,6 +550,13 @@ declare module '@tanstack/react-router' {
       path: '/discover'
       fullPath: '/discover'
       preLoaderRoute: typeof AuthedDiscoverRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/build': {
+      id: '/_authed/build'
+      path: '/build'
+      fullPath: '/build'
+      preLoaderRoute: typeof AuthedBuildRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/_user': {
@@ -843,6 +865,7 @@ const AuthedAgentsAgentIdRouteWithChildren =
 interface AuthedRouteChildren {
   AuthedAdminRoute: typeof AuthedAdminRouteWithChildren
   AuthedUserRoute: typeof AuthedUserRouteWithChildren
+  AuthedBuildRoute: typeof AuthedBuildRoute
   AuthedDiscoverRoute: typeof AuthedDiscoverRoute
   AuthedLeaderboardRoute: typeof AuthedLeaderboardRoute
   AuthedReviewRoute: typeof AuthedReviewRoute
@@ -866,6 +889,7 @@ interface AuthedRouteChildren {
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminRoute: AuthedAdminRouteWithChildren,
   AuthedUserRoute: AuthedUserRouteWithChildren,
+  AuthedBuildRoute: AuthedBuildRoute,
   AuthedDiscoverRoute: AuthedDiscoverRoute,
   AuthedLeaderboardRoute: AuthedLeaderboardRoute,
   AuthedReviewRoute: AuthedReviewRoute,

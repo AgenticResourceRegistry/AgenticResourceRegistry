@@ -19,16 +19,14 @@
  */
 
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { useRouter, useSearch } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useRouter, useSearch } from "@tanstack/react-router";
 import {
-  Trash2,
   Loader2,
   ArrowRight,
   ArrowLeft,
   Save,
-  Info,
   HelpCircle,
-  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { reviewToast } from "@/lib/review-toast";
@@ -49,13 +47,14 @@ import { BuilderStepNav } from "@/components/registry/registry-primitives";
 import { EntityGlyph } from "@/components/registry/entity-glyph";
 import { useRegistryItem, useAgentValidation, useTeams, useWhoami, useSaveDraft, useUpdateDraft, useStartEdit } from "@/hooks/use-api";
 import { useAuthGuard } from "@/hooks/use-auth";
+import { useSubjectReview } from "@/hooks/use-review-api";
 import { registry, type RegistryType } from "@/lib/api";
 import { isValidAgentName, normalizeAgentName, slugifyRegistryText } from "@/lib/registry-name";
 import { cn } from "@/lib/utils";
 import type { RegistryItem, SuccessCriteria } from "@/lib/types";
 import type { ValidationResult } from "@/lib/types";
 
-const DRAFT_STORAGE_KEY = "observal_agent_draft";
+const draftStorageKey = (userId: string) => `observal_agent_draft:${userId}`;
 
 import { SortableComponentList } from "@/components/builder/sortable-component-list";
 import {
@@ -66,7 +65,6 @@ import {
 } from "@/components/builder/success-criteria-section";
 import { SubmitComponentDialog } from "@/components/registry/submit-component-dialog";
 import { ValidationPanel } from "@/components/builder/validation-panel";
-import { PreviewPanel } from "@/components/builder/preview-panel";
 import { ModelPicker } from "@/components/builder/model-picker";
 import { ObservalSkillBanner } from "@/components/builder/observal-skill-banner";
 import { COMPONENT_TYPES, REVERSE_TYPE_MAP, TYPE_MAP } from "@/components/registry/agent-component-constants";
@@ -74,6 +72,7 @@ import { ComponentPicker } from "@/components/registry/component-picker";
 import { VersionBumpDialog } from "@/components/registry/version-bump-dialog";
 
 const AGENT_NAME_ERROR = "Must start with a letter/digit, only lowercase letters, digits, hyphens, underscores.";
+const UNAPPROVED_COMPONENT_STATUSES = new Set(["draft", "pending", "rejected", "changes_requested"]);
 const CATEGORIES = [
   "Code Review",
   "Testing",
@@ -101,9 +100,10 @@ const BUILDER_STEPS = [
 type StepId = (typeof BUILDER_STEPS)[number]["id"];
 
 export default function AgentBuilderPage() {
+  const { edit, draft, team } = useSearch({ from: "/_authed/agents/builder" });
   return (
     <Suspense>
-      <AgentBuilderInner />
+      <AgentBuilderInner key={`${edit ?? ""}/${draft ?? ""}/${team ?? ""}`} />
     </Suspense>
   );
 }
@@ -112,15 +112,25 @@ function AgentBuilderInner() {
   const { ready } = useAuthGuard();
   const helpCtx = useHelp();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { edit: editId, draft: draftParam, team: teamParam } = useSearch({ from: "/_authed/agents/builder" });
   const isEditMode = !!editId;
 
   const { data: whoami } = useWhoami();
   const { data: teams = [] } = useTeams();
-  const { data: existingAgent } = useRegistryItem("agents", editId ?? draftParam ?? undefined);
+  const existing = useRegistryItem("agents", editId ?? draftParam ?? undefined);
+  const existingAgent = existing.data;
+  const localDraftKey = whoami?.id ? draftStorageKey(whoami.id) : null;
 
   /* ── Step state ── */
   const [activeStep, setActiveStep] = useState<StepId>("identity");
+  const stepMainRef = useRef<HTMLElement>(null);
+  const previousStepRef = useRef(activeStep);
+  useEffect(() => {
+    if (previousStepRef.current === activeStep) return;
+    previousStepRef.current = activeStep;
+    stepMainRef.current?.querySelector<HTMLElement>("h2")?.focus();
+  }, [activeStep]);
 
   /* ── Form state ── */
   const [name, setName] = useState("");
@@ -151,20 +161,15 @@ function AgentBuilderInner() {
   const [draftId, setDraftId] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
-  const [pendingComponents, setPendingComponents] = useState<Array<{
-    id: string;
-    type: RegistryType;
-    name: string;
-    body: Record<string, unknown>;
-  }>>([]);
   const [createDialogType, setCreateDialogType] = useState<RegistryType | null>(null);
+  const [creatingComponent, setCreatingComponent] = useState(false);
   const saveDraft = useSaveDraft();
   const updateDraft = useUpdateDraft();
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const editLoadedRef = useRef(false);
 
   const [selectedComponents, setSelectedComponents] = useState<
-    Record<string, RegistryItem[]>
+    Record<string, (RegistryItem & { version_ref?: string; config_override?: Record<string, unknown> })[]>
   >({
     mcps: [],
     skills: [],
@@ -205,9 +210,10 @@ function AgentBuilderInner() {
 
     if (draftParam) setDraftId(draftParam);
 
-    const agentComponents = (existingAgent as Record<string, unknown>).components;
+    const links = (existingAgent as Record<string, unknown>).component_links;
+    const agentComponents = Array.isArray(links) ? links : (existingAgent as Record<string, unknown>).components;
     if (Array.isArray(agentComponents)) {
-      const grouped: Record<string, RegistryItem[]> = {
+      const grouped: Record<string, (RegistryItem & { version_ref?: string; config_override?: Record<string, unknown> })[]> = {
         mcps: [], skills: [], hooks: [], prompts: [], sandboxes: [],
       };
       for (const comp of agentComponents) {
@@ -216,8 +222,11 @@ function AgentBuilderInner() {
         if (grouped[pluralType]) {
           grouped[pluralType].push({
             id: c.component_id as string,
-            name: (c.name as string) ?? (c.component_id as string),
+            name: (c.component_name as string) || (c.name as string) || (c.component_id as string),
             description: c.description as string | undefined,
+            version_ref: (c.version_ref as string) || (c.version as string | undefined),
+            config_override: c.config_override as Record<string, unknown> | undefined,
+            status: c.status as string | undefined,
           });
         }
       }
@@ -235,6 +244,8 @@ function AgentBuilderInner() {
 
   /* ── Edit lock ── */
   const agentIdParam = editId ?? draftParam;
+  const needsFeedback = existingAgent?.status === "rejected" || existingAgent?.status === "changes_requested";
+  const { data: activeReview } = useSubjectReview(agentIdParam, !!needsFeedback);
   const startEdit = useStartEdit("agents");
   const editLockAcquiredRef = useRef(false);
 
@@ -325,16 +336,18 @@ function AgentBuilderInner() {
 
   /* ── Local draft restore ── */
   useEffect(() => {
-    if (isEditMode) return;
+    if (isEditMode || draftParam || !localDraftKey) {
+      setShowRestoreBanner(false);
+      return;
+    }
     try {
-      const stored = localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (stored) setShowRestoreBanner(true);
+      setShowRestoreBanner(!!localStorage.getItem(localDraftKey));
     } catch { /* ignore */ }
-  }, [isEditMode]);
+  }, [isEditMode, draftParam, localDraftKey]);
 
   /* ── Auto-save ── */
   useEffect(() => {
-    if (isEditMode) return;
+    if (isEditMode || draftParam || !localDraftKey || showRestoreBanner) return;
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
 
     autoSaveTimerRef.current = setTimeout(() => {
@@ -347,7 +360,7 @@ function AgentBuilderInner() {
       if (!hasContent) return;
       try {
         const draft = {
-          name, description, version,
+          name, description, version, category,
           model_name: modelName,
           models_by_harness: modelsByHarness,
           components: selectedComponents,
@@ -358,23 +371,24 @@ function AgentBuilderInner() {
           visibility,
           saved_at: new Date().toISOString(),
         };
-        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        localStorage.setItem(localDraftKey, JSON.stringify(draft));
       } catch { /* ignore */ }
     }, 2000);
 
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
-  }, [name, description, version, modelName, modelsByHarness, selectedComponents, systemPrompt, successCriteria, draftId, teamId, visibility, isEditMode]);
+  }, [name, description, version, category, modelName, modelsByHarness, selectedComponents, systemPrompt, successCriteria, draftId, teamId, visibility, isEditMode, draftParam, localDraftKey, showRestoreBanner]);
 
   function restoreLocalDraft() {
     try {
-      const stored = localStorage.getItem(DRAFT_STORAGE_KEY);
+      const stored = localDraftKey && localStorage.getItem(localDraftKey);
       if (!stored) return;
       const draft = JSON.parse(stored);
       if (draft.name) setName(draft.name);
       if (draft.description) setDescription(draft.description);
       if (draft.version) setVersion(draft.version);
+      if (typeof draft.category === "string") setCategory(draft.category);
       if (draft.model_name) setModelName(draft.model_name);
       if (draft.models_by_harness && typeof draft.models_by_harness === "object") {
         setModelsByIde(draft.models_by_harness);
@@ -384,7 +398,6 @@ function AgentBuilderInner() {
       if (draft.success_criteria && typeof draft.success_criteria === "object") {
         setSuccessCriteria(draft.success_criteria as SuccessCriteria);
       }
-      if (draft.draft_id) setDraftId(draft.draft_id);
       if (typeof draft.team_id === "string") setTeamId(draft.team_id);
       if (draft.visibility === "public" || draft.visibility === "team") setVisibility(draft.visibility);
       setShowRestoreBanner(false);
@@ -393,7 +406,7 @@ function AgentBuilderInner() {
   }
 
   function discardLocalDraft() {
-    try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch { /* ignore */ }
+    try { if (localDraftKey) localStorage.removeItem(localDraftKey); } catch { /* ignore */ }
     setShowRestoreBanner(false);
   }
 
@@ -436,11 +449,14 @@ function AgentBuilderInner() {
 
   /* ── Build request body ── */
   function buildRequestBody(versionOverride?: string) {
-    const components: { component_type: string; component_id: string }[] = [];
+    const components: { component_type: string; component_id: string; version?: string; config_override?: Record<string, unknown> }[] = [];
     for (const [type, items] of Object.entries(selectedComponents)) {
       const singularType = TYPE_MAP[type] ?? type;
       for (const item of items) {
-        components.push({ component_type: singularType, component_id: item.id });
+        components.push({ component_type: singularType, component_id: item.id,
+          ...(item.version_ref ? { version: item.version_ref } : {}),
+          ...(item.config_override ? { config_override: item.config_override } : {}),
+        });
       }
     }
     const normalizedCriteria = normalizeSuccessCriteria(successCriteria);
@@ -463,27 +479,30 @@ function AgentBuilderInner() {
 
   /* ── Draft save ── */
   async function handleSaveDraft() {
-    if (!name.trim()) { toast.error("Agent File name is required"); return; }
-    if (!isValidAgentName(name)) { toast.error(`Invalid Agent File name. ${AGENT_NAME_ERROR}`); return; }
-    const hasPromptComponent = (selectedComponents.prompts ?? []).length > 0;
-    if (!systemPrompt.trim() && !hasPromptComponent) {
-      setPromptError("An Agent File prompt is required.");
-      toast.error("An Agent File prompt is required.");
+    if (isEditMode && existingAgent?.status === "approved") {
+      toast.error("Approved releases are immutable. Submit a new version for review instead.");
       return;
     }
+    if (!name.trim()) { setActiveStep("identity"); toast.error("Agent File name is required to save a draft"); return; }
+    if (!isValidAgentName(name)) { setActiveStep("identity"); toast.error(`Invalid Agent File name. ${AGENT_NAME_ERROR}`); return; }
     const criteriaError = validateSuccessCriteria(successCriteria);
     if (criteriaError) { toast.error(criteriaError); return; }
 
     setSavingDraft(true);
     try {
       const body = buildRequestBody();
-      if (draftId) {
-        await updateDraft.mutateAsync({ id: draftId, body });
+      let savedId = draftId ?? editId ?? null;
+      if (savedId) {
+        await updateDraft.mutateAsync({ id: savedId, body });
       } else {
         const created = await saveDraft.mutateAsync(body);
-        setDraftId(created.id);
+        savedId = created.id;
+        setDraftId(savedId);
       }
-      try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch { /* ignore */ }
+      if (savedId && !isEditMode && draftParam !== savedId) {
+        await router.navigate({ to: "/agents/builder", search: { draft: savedId }, replace: true });
+      }
+      try { if (localDraftKey) localStorage.removeItem(localDraftKey); } catch { /* ignore */ }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save draft";
       toast.error(msg);
@@ -494,42 +513,35 @@ function AgentBuilderInner() {
 
   /* ── Publish ── */
   async function handlePublish() {
-    if (!name.trim()) { toast.error("Agent File name is required"); return; }
+    if (!name.trim()) { setActiveStep("identity"); toast.error("Agent File name is required"); return; }
+    if (!isValidAgentName(name)) { setActiveStep("identity"); toast.error(`Invalid Agent File name. ${AGENT_NAME_ERROR}`); return; }
+    if (!description.trim()) { setActiveStep("identity"); toast.error("A description is required before review"); return; }
     const hasPromptComponent = (selectedComponents.prompts ?? []).length > 0;
     if (!systemPrompt.trim() && !hasPromptComponent) {
       setPromptError("An Agent File prompt is required.");
-      toast.error("An Agent File prompt is required.");
+      setActiveStep("behavior");
+      toast.error("Add an Agent File prompt or a Prompt component before review.");
       return;
     }
-    if (!isValidAgentName(name)) { toast.error(`Invalid Agent File name. ${AGENT_NAME_ERROR}`); return; }
     const criteriaError = validateSuccessCriteria(successCriteria);
     if (criteriaError) { toast.error(criteriaError); return; }
 
-    if (isEditMode) { setShowVersionDialog(true); return; }
+    if (isEditMode && existingAgent?.status === "approved") { setShowVersionDialog(true); return; }
 
     setPublishing(true);
     try {
-      const flushedIds: { type: RegistryType; id: string; name: string }[] = [];
-      for (const pc of pendingComponents) {
-        const created = await registry.submit(pc.type, pc.body);
-        flushedIds.push({ type: pc.type, id: created.id, name: created.name });
-      }
-      if (flushedIds.length) {
-        for (const { type, id, name } of flushedIds) {
-          const plural = type as string;
-          selectedComponents[plural] = [...(selectedComponents[plural] ?? []), { id, name }];
-        }
-        setPendingComponents([]);
-      }
       const body = buildRequestBody();
-      if (draftId) {
-        await updateDraft.mutateAsync({ id: draftId, body });
-        const review = await registry.submitDraft(draftId);
+      const savedId = draftId ?? editId;
+      if (savedId) {
+        await updateDraft.mutateAsync({ id: savedId, body });
+        const review = await registry.submitDraft(savedId);
         reviewToast("Agent File revision submitted for review", review);
-        router.navigate({ to: "/agents/$agentId", params: { agentId: draftId } });
+        if (localDraftKey) localStorage.removeItem(localDraftKey);
+        router.navigate({ to: "/agents/$agentId", params: { agentId: savedId } });
       } else {
         const created = await registry.create("agents", body);
         reviewToast("Agent File submitted for review", created);
+        if (localDraftKey) localStorage.removeItem(localDraftKey);
         router.navigate({ to: "/agents/$agentId", params: { agentId: created.id } });
       }
     } catch (e) {
@@ -548,8 +560,7 @@ function AgentBuilderInner() {
     setPublishing(true);
     try {
       const body = buildRequestBody(selectedVersion);
-      await registry.updateDraft(editId, body);
-      const review = await registry.submitDraft(editId);
+      const review = await registry.createVersion(editId, body);
       setVersion(selectedVersion);
       setShowVersionDialog(false);
       reviewToast("Agent File revision submitted for review", review);
@@ -562,23 +573,50 @@ function AgentBuilderInner() {
     }
   }
 
+  async function handleCreateComponent(body: Record<string, unknown>, submitForReview: boolean) {
+    if (!createDialogType || creatingComponent) return;
+    const type = createDialogType;
+    setCreatingComponent(true);
+    try {
+      const result = type === "skills" && Array.isArray(body.extra_files)
+        ? await registry.folderDraft(body as unknown as Parameters<typeof registry.folderDraft>[0])
+        : submitForReview ? await registry.submit(type, body) : await registry.draft(body, type);
+      const id = "id" in result ? result.id : result.listing_id;
+      if (typeof id !== "string") throw new Error("Component saved, but its listing ID was not returned. Find it in My submissions.");
+      const item: RegistryItem & { version_ref: string } = { id, name: String(body.name), version_ref: String(body.version), status: submitForReview ? "pending" : "draft" };
+      setSelectedComponents((prev) => ({ ...prev, [type]: [...(prev[type] ?? []), item] }));
+      void queryClient.invalidateQueries({ queryKey: ["registry", type, "my"] });
+      setCreateDialogType(null);
+      toast.success(submitForReview && !(type === "skills" && Array.isArray(body.extra_files))
+        ? `${item.name} submitted for review and added to your Agent File.`
+        : `${item.name} saved as a draft and added to your Agent File. Submit its version for review before the Agent File can be approved.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create component. Your form is unchanged.");
+    } finally {
+      setCreatingComponent(false);
+    }
+  }
+
   /* ── Computed values ── */
   const totalComponents = Object.values(selectedComponents).reduce((sum, items) => sum + items.length, 0);
   const mcpCount = (selectedComponents.mcps ?? []).length;
   const skillCount = (selectedComponents.skills ?? []).length;
   const namespace = teamId
     ? (teams.find((t) => t.id === teamId)?.handle ?? "team")
-    : (whoami?.username || whoami?.email || "acme");
+    : (whoami?.username || whoami?.email || "your-namespace");
 
   const identityComplete = Boolean(name.trim() && description.trim());
   const behaviorComplete = Boolean(systemPrompt.trim() || (selectedComponents.prompts ?? []).length > 0);
   const componentsComplete = totalComponents > 0;
-  const componentsValid = componentsComplete && validationResult?.valid === true;
+  const componentsValid = !componentsComplete || validationResult?.valid === true;
   const readinessPercent = Math.round(
     ([identityComplete, behaviorComplete, componentsValid].filter(Boolean).length / 3) * 100,
   );
 
   if (!ready) return null;
+  if (agentIdParam && (existing.isLoading || existing.isPending)) return <p role="status" className="p-6 text-sm text-muted-foreground">Loading Agent File…</p>;
+  if (agentIdParam && (existing.isError || !existingAgent)) return <div role="alert" className="p-6 text-sm text-destructive">This Agent File is unavailable. Check your access or return to My submissions.</div>;
+  if (draftParam && existingAgent?.status === "approved") return <div role="alert" className="p-6 text-sm text-foreground">This Agent File is approved and cannot be edited as a draft. Open its version controls to release changes.</div>;
 
   /* ────────────────────────────────────────────────── */
   /*  Render                                            */
@@ -606,6 +644,24 @@ function AgentBuilderInner() {
       />
 
       <div className="page-body w-full mx-auto">
+        {agentIdParam && needsFeedback && (
+          <div className="mb-4 rounded-lg border border-warning/40 bg-warning/5 px-4 py-3 text-sm text-foreground">
+            <p className="font-medium">Reviewer feedback needs your attention</p>
+            <p className="mt-1 text-muted-foreground">Read the requested changes before editing, then save and resubmit this Agent File.</p>
+            {activeReview ? (
+              <Link to="/review/$number" params={{ number: String(activeReview.number) }}
+                className="mt-2 inline-flex font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Read reviewer feedback</Link>
+            ) : (
+              <Link to="/agents/$agentId" params={{ agentId: agentIdParam }}
+                className="mt-2 inline-flex font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Open Agent File review</Link>
+            )}
+          </div>
+        )}
+        {isEditMode && existingAgent?.status === "approved" && (
+          <p className="mb-4 rounded-lg border border-info/30 bg-info/5 px-4 py-3 text-sm text-foreground">
+            This release is immutable. Submit a new version for review when ready; this editor cannot save changes to an approved release.
+          </p>
+        )}
         <ObservalSkillBanner />
         {/* Restore draft banner */}
         {showRestoreBanner && (
@@ -626,7 +682,7 @@ function AgentBuilderInner() {
         {/* ── Workspace: main + sidebar ── */}
         <div className="grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_310px]">
           {/* ── Main content area ── */}
-          <main className="min-w-0 animate-in">
+          <main ref={stepMainRef} className="min-w-0 animate-in">
             {activeStep === "identity" && (
               <IdentityStage
                 name={name} setName={setName}
@@ -640,6 +696,7 @@ function AgentBuilderInner() {
                 visibilityOptions={visibilityOptions}
                 selectedTeam={selectedTeam}
                 isEditMode={isEditMode}
+                isApprovedEdit={isEditMode && existingAgent?.status === "approved"}
                 namespace={namespace}
               />
             )}
@@ -663,8 +720,6 @@ function AgentBuilderInner() {
                 removeComponent={removeComponent}
                 handleReorder={handleReorder}
                 setCreateDialogType={setCreateDialogType}
-                pendingComponents={pendingComponents}
-                setPendingComponents={setPendingComponents}
                 validationResult={validationResult}
                 isValidating={validation.isPending}
                 teamId={teamId} visibility={visibility}
@@ -679,6 +734,7 @@ function AgentBuilderInner() {
                 selectedComponents={selectedComponents}
                 totalComponents={totalComponents}
                 mcpCount={mcpCount} skillCount={skillCount}
+                visibility={visibility}
                 onEditStep={setActiveStep}
                 validationResult={validationResult}
                 componentsValid={componentsValid}
@@ -692,13 +748,14 @@ function AgentBuilderInner() {
             <SummaryPanel
               name={name} namespace={namespace} version={version}
               description={description}
-              visibility={visibility}
+              isTeam={!!teamId} visibility={visibility}
+              isApprovedEdit={isEditMode && existingAgent?.status === "approved"}
               modelName={modelName}
               totalComponents={totalComponents}
-              mcpCount={mcpCount} skillCount={skillCount}
               identityComplete={identityComplete}
               behaviorComplete={behaviorComplete}
               componentsValid={componentsValid}
+              componentsPending={componentsComplete && validationResult === null}
               readinessPercent={readinessPercent}
             />
           </aside>
@@ -717,32 +774,18 @@ function AgentBuilderInner() {
         />
       </div>
 
-      {/* Create in-memory component dialog */}
+      {/* Components are saved independently before they are linked to the Agent File. */}
       {createDialogType && (
         <SubmitComponentDialog
           key={createDialogType}
           open={!!createDialogType}
-          onOpenChange={(v) => { if (!v) setCreateDialogType(null); }}
+          onOpenChange={(v) => { if (!v && !creatingComponent) setCreateDialogType(null); }}
           type={createDialogType}
           editItem={null}
-          onSubmit={(body) => {
-            const tempId = Math.random().toString(36).slice(2);
-            const cname = (body.name as string) || createDialogType.replace(/s$/, "");
-            const targetBody = teamId && !body.team_id ? { ...body, team_id: teamId, visibility } : body;
-            setPendingComponents((prev) => [...prev, { id: tempId, type: createDialogType!, name: cname, body: targetBody }]);
-            setCreateDialogType(null);
-            toast.success(`${cname} added, will be submitted with the Agent File.`);
-          }}
-          onSaveDraft={(body) => {
-            const tempId = Math.random().toString(36).slice(2);
-            const cname = (body.name as string) || createDialogType.replace(/s$/, "");
-            const targetBody = teamId && !body.team_id ? { ...body, team_id: teamId, visibility } : body;
-            setPendingComponents((prev) => [...prev, { id: tempId, type: createDialogType!, name: cname, body: targetBody }]);
-            setCreateDialogType(null);
-            toast.success(`${cname} added, will be submitted with the Agent File.`);
-          }}
-          isSubmitting={false}
-          isSavingDraft={false}
+          onSubmit={(body) => void handleCreateComponent(body, true)}
+          onSaveDraft={(body) => void handleCreateComponent(body, false)}
+          isSubmitting={creatingComponent}
+          isSavingDraft={creatingComponent}
           fixedTeamId={teamId || undefined}
           fixedVisibility={visibility}
         />
@@ -751,6 +794,9 @@ function AgentBuilderInner() {
       <VersionBumpDialog
         open={showVersionDialog}
         onOpenChange={setShowVersionDialog}
+        title="Submit a new Agent File version"
+        description="The current release stays installable while this new version awaits review."
+        confirmLabel="Submit for review"
         currentVersion={version}
         suggestions={undefined}
         onConfirm={handleUpdateWithVersion}
@@ -778,13 +824,14 @@ function IdentityStage(props: {
   visibilityOptions: Array<{ value: string; label: string }>;
   selectedTeam: { visibility?: string } | undefined;
   isEditMode: boolean;
+  isApprovedEdit: boolean;
   namespace: string;
 }) {
   return (
     <section className="rounded-xl bg-card p-5 shadow-sm">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium">Give the Agent File a stable identity</h2>
+          <h2 tabIndex={-1} className="text-sm font-medium focus:outline-none">Give the Agent File a stable identity</h2>
           <p className="mt-0.5 text-2xs text-muted-foreground">
             This becomes the install name developers use from the CLI.
           </p>
@@ -799,8 +846,9 @@ function IdentityStage(props: {
 
       <div className="grid gap-3.5 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-2xs font-medium">Agent File name</Label>
+          <Label htmlFor="agent-file-name" className="text-2xs font-medium">Agent File name</Label>
           <Input
+            id="agent-file-name"
             className="font-mono"
             value={props.name}
             onChange={(e) => {
@@ -814,12 +862,13 @@ function IdentityStage(props: {
           {props.nameError && <p className="text-2xs text-destructive">{props.nameError}</p>}
         </div>
         <div className="space-y-1.5">
-          <Label className="text-2xs font-medium">Version</Label>
-          <Input className="font-mono" value={props.version} onChange={(e) => props.setVersion(e.target.value)} placeholder="0.4.0" />
+          <Label htmlFor="agent-file-version" className="text-2xs font-medium">Version</Label>
+          <Input id="agent-file-version" className="font-mono" value={props.version} onChange={(e) => props.setVersion(e.target.value)} placeholder="0.4.0" disabled={props.isApprovedEdit} />
+          {props.isApprovedEdit && <p className="text-2xs text-muted-foreground">Choose the new version when you submit for review.</p>}
         </div>
         <div className="space-y-1.5 sm:col-span-2">
-          <Label className="text-2xs font-medium">Description</Label>
-          <Textarea value={props.description} onChange={(e) => props.setDescription(e.target.value)} placeholder="Plans safe, reversible database and infrastructure migrations." rows={3} className="resize-y" />
+          <Label htmlFor="agent-file-description" className="text-2xs font-medium">Description</Label>
+          <Textarea id="agent-file-description" value={props.description} onChange={(e) => props.setDescription(e.target.value)} placeholder="Plans safe, reversible database and infrastructure migrations." rows={3} className="resize-y" />
         </div>
         <div className="space-y-1.5">
           <Label className="text-2xs font-medium">Publish to</Label>
@@ -864,7 +913,7 @@ function IdentityStage(props: {
       </div>
 
       <div className="mt-4 rounded-[11px] bg-surface-raised p-3.5 text-2xs text-muted-foreground">
-        Install identity preview: <span className="font-mono">observal agent pull {props.namespace}/{props.name || "migration-guide"}</span>
+        Install identity preview: <span className="break-all font-mono">observal agent pull {props.namespace}/{props.name || "your-agent-name"}</span>
       </div>
     </section>
   );
@@ -883,7 +932,7 @@ function BehaviorStage(props: {
       <section className="rounded-xl bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-medium">Define how the Agent File should behave</h2>
+            <h2 tabIndex={-1} className="text-sm font-medium focus:outline-none">Define how the Agent File should behave</h2>
             <p className="mt-0.5 text-2xs text-muted-foreground">
               Keep the operating instructions specific, testable, and clear about when to stop.
             </p>
@@ -897,8 +946,11 @@ function BehaviorStage(props: {
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-2xs font-medium">Agent File prompt</Label>
+          <Label htmlFor="agent-file-prompt" className="text-2xs font-medium">Agent File prompt</Label>
           <Textarea
+            id="agent-file-prompt"
+            aria-invalid={!!props.promptError}
+            aria-describedby={props.promptError ? "agent-file-prompt-error" : undefined}
             value={props.systemPrompt}
             onChange={(e) => { props.setSystemPrompt(e.target.value); if (e.target.value.trim()) props.setPromptError(""); }}
             placeholder="You are a migration planning Agent File for production systems…"
@@ -906,7 +958,7 @@ function BehaviorStage(props: {
             className={cn("min-h-[210px] resize-y font-mono text-2xs", props.promptError && "border-destructive")}
           />
           {props.promptError ? (
-            <p className="text-2xs text-destructive">{props.promptError}</p>
+            <p id="agent-file-prompt-error" className="text-2xs text-destructive">{props.promptError}</p>
           ) : (
             <p className="text-[10px] text-muted-foreground">Required. You can also link a Prompt component in the next step.</p>
           )}
@@ -947,8 +999,6 @@ function ComponentsStage(props: {
   removeComponent: (type: string, id: string) => void;
   handleReorder: (type: string) => (items: { id: string; name: string }[]) => void;
   setCreateDialogType: (v: RegistryType | null) => void;
-  pendingComponents: Array<{ id: string; type: RegistryType; name: string; body: Record<string, unknown> }>;
-  setPendingComponents: (fn: (prev: Array<{ id: string; type: RegistryType; name: string; body: Record<string, unknown> }>) => Array<{ id: string; type: RegistryType; name: string; body: Record<string, unknown> }>) => void;
   validationResult: ValidationResult | null;
   isValidating: boolean;
   teamId: string; visibility: string;
@@ -957,18 +1007,11 @@ function ComponentsStage(props: {
     <section className="rounded-xl bg-card p-5 shadow-sm">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium">Choose building blocks</h2>
+          <h2 tabIndex={-1} className="text-sm font-medium focus:outline-none">Choose building blocks</h2>
           <p className="mt-0.5 text-2xs text-muted-foreground">
-            Add only what this Agent File needs. You can reorder selected components before review.
+            Choose approved resources or create one here. Saved component drafts need their own review before the Agent File can be approved.
           </p>
         </div>
-        <button
-          type="button"
-          className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
-          onClick={() => props.setCreateDialogType(props.activeTab)}
-        >
-          Create component
-        </button>
       </div>
 
       <Tabs value={props.activeTab} onValueChange={(v) => props.setActiveTab(v as RegistryType)}>
@@ -998,17 +1041,6 @@ function ComponentsStage(props: {
               onCreateNew={() => props.setCreateDialogType(ct.value)}
               targetTeamId={props.visibility === "team" ? props.teamId || undefined : undefined}
             />
-            {props.pendingComponents.filter((p) => p.type === ct.value).map((p) => (
-              <div key={p.id} className="mt-2 flex items-center gap-2 rounded border border-dashed border-border px-3 py-1.5 text-xs">
-                <span className="font-medium">{p.name}</span>
-                <span className="text-muted-foreground italic">not yet submitted</span>
-                <button
-                  type="button"
-                  className="ml-auto text-muted-foreground hover:text-destructive"
-                  onClick={() => props.setPendingComponents((prev) => prev.filter((x) => x.id !== p.id))}
-                >✕</button>
-              </div>
-            ))}
             {(props.selectedComponents[ct.value] ?? []).length > 0 && (
               <div className="mt-3">
                 <SortableComponentList
@@ -1037,15 +1069,20 @@ function ReviewStage(props: {
   selectedComponents: Record<string, RegistryItem[]>;
   totalComponents: number;
   mcpCount: number; skillCount: number;
+  visibility: "public" | "team";
   onEditStep: (step: StepId) => void;
   validationResult: ValidationResult | null;
   componentsValid: boolean;
   buildRequestBody: () => Record<string, unknown>;
 }) {
+  const waitingForReview = Object.values(props.selectedComponents).flat().filter((item) => UNAPPROVED_COMPONENT_STATUSES.has(item.status ?? ""));
+  const waitingKinds = Object.entries(props.selectedComponents)
+    .filter(([, items]) => items.some((item) => UNAPPROVED_COMPONENT_STATUSES.has(item.status ?? "")))
+    .map(([type]) => type as RegistryType);
   const checks = [
     {
       label: "Identity",
-      detail: `${props.namespace}/${props.name || "—"} · v${props.version} · Public`,
+      detail: `${props.namespace}/${props.name || "—"} · v${props.version} · ${props.visibility === "team" ? "Team only" : "Public after approval"}`,
       ok: Boolean(props.name && props.description),
       step: "identity" as StepId,
     },
@@ -1061,11 +1098,13 @@ function ReviewStage(props: {
     },
     {
       label: "Components",
-      detail: props.componentsValid
-        ? `${props.mcpCount} MCP Clients · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""} · validation passed`
-        : props.totalComponents > 0
-          ? "Run component validation before submission."
-          : "Add at least one component.",
+      detail: props.totalComponents === 0
+        ? "No components selected. You can submit instructions alone."
+        : props.validationResult === null
+          ? "Checking component compatibility…"
+          : props.componentsValid
+            ? `${props.totalComponents} linked · compatibility check passed`
+            : "Component compatibility needs attention before submission.",
       ok: props.componentsValid,
       step: "components" as StepId,
     },
@@ -1085,6 +1124,9 @@ visibility: ${body.visibility || "public"}
 components:
   mcps: ${props.mcpCount}
   skills: ${props.skillCount}
+  hooks: ${(props.selectedComponents.hooks ?? []).length}
+  prompts: ${(props.selectedComponents.prompts ?? []).length}
+  sandboxes: ${(props.selectedComponents.sandboxes ?? []).length}
 review: required`;
 
   return (
@@ -1092,7 +1134,7 @@ review: required`;
       <section className="rounded-xl bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-medium">Review the package</h2>
+            <h2 tabIndex={-1} className="text-sm font-medium focus:outline-none">Review the package</h2>
             <p className="mt-0.5 text-2xs text-muted-foreground">
               Confirm identity, behavior, compatibility, and ownership before submission.
             </p>
@@ -1102,10 +1144,17 @@ review: required`;
             isReady ? "text-success" : "text-warning",
           )}>
             <span className={cn("h-1.5 w-1.5 rounded-full", isReady ? "bg-success" : "bg-warning")} />
-            {isReady ? "Ready to submit" : "Needs attention"}
+            {isReady ? "Ready for review" : "Needs attention"}
           </span>
         </div>
 
+        {waitingForReview.length > 0 && <div className="mb-4 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-foreground">
+          <p>{waitingForReview.length} linked component{waitingForReview.length === 1 ? " is" : "s are"} not yet approved. Submit saved component drafts for review; this Agent File cannot be approved until its linked components are approved.</p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            {waitingKinds.map((type) => <Link key={type} to="/resources/$type" params={{ type }} search={{ view: "my" }}
+              className="font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Open {COMPONENT_TYPES.find((kind) => kind.value === type)?.label ?? type} submissions</Link>)}
+          </div>
+        </div>}
         <div className="grid gap-px overflow-hidden rounded-[11px] bg-border">
           {checks.map((c) => (
             <div key={c.label} className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 bg-card p-3">
@@ -1141,17 +1190,11 @@ review: required`;
       <section className="mt-3 rounded-xl bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-medium">Package preview</h2>
+            <h2 className="text-sm font-medium">Configuration summary</h2>
             <p className="mt-0.5 text-2xs text-muted-foreground">
-              The exact version that will enter the review queue.
+              An overview of this draft, not generated install files. The server checks submission requirements.
             </p>
           </div>
-          <button
-            type="button"
-            className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
-          >
-            View YAML
-          </button>
         </div>
         <pre className="min-h-[150px] rounded-[11px] border border-border bg-surface-raised p-4 font-mono text-2xs leading-relaxed whitespace-pre-wrap">
           {previewYaml}
@@ -1169,12 +1212,14 @@ function SummaryPanel(props: {
   name: string; namespace: string; version: string;
   description: string;
   visibility: string;
+  isTeam: boolean;
+  isApprovedEdit: boolean;
   modelName: string;
   totalComponents: number;
-  mcpCount: number; skillCount: number;
   identityComplete: boolean;
   behaviorComplete: boolean;
   componentsValid: boolean;
+  componentsPending: boolean;
   readinessPercent: number;
 }) {
   return (
@@ -1183,34 +1228,34 @@ function SummaryPanel(props: {
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium">Agent File at a glance</h3>
-            <p className="mt-0.5 text-2xs text-muted-foreground">What reviewers will see</p>
+            <p className="mt-0.5 text-2xs text-muted-foreground">Draft summary</p>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-raised px-2.5 py-1 text-2xs font-medium text-warning">
             <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-            Draft
+            {props.isApprovedEdit ? "New version" : "Draft"}
           </span>
         </div>
 
         <div className="flex items-center gap-3">
           <EntityGlyph type="agent" size="md" />
           <div>
-            <div className="text-base font-semibold">{props.name || "migration-guide"}</div>
-            <div className="font-mono text-[10px] text-muted-foreground">
-              {props.namespace}/{props.name || "migration-guide"} · v{props.version}
+            <div className="min-w-0 break-all text-base font-semibold">{props.name || "Name not set"}</div>
+            <div className="break-all font-mono text-[10px] text-muted-foreground">
+              {props.namespace}/{props.name || "your-agent-name"} · v{props.version}
             </div>
           </div>
         </div>
 
         <p className="mt-3 text-2xs text-muted-foreground">
-          {props.description || "Plans safe, reversible database and infrastructure migrations."}
+          {props.description || "Add a description to explain what this Agent File does."}
         </p>
 
         {/* Settings rows */}
         <div className="mt-3 space-y-0 divide-y divide-border">
-          <SettingRow label="Publish to" sub="Personal namespace" value={`${props.namespace}/`} />
+          <SettingRow label="Publish to" sub={props.isTeam ? "Team namespace" : "Personal namespace"} value={`${props.namespace}/`} />
           <SettingRow label="Visibility" sub="Available after approval" value={props.visibility === "team" ? "Team only" : "Public"} />
           <SettingRow label="Model" sub="Default across harnesses" value={props.modelName || "Harness default"} />
-          <SettingRow label="Components" sub={`${props.mcpCount} MCP Clients · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""}`} value={String(props.totalComponents)} />
+          <SettingRow label="Components" sub="Across all five component kinds" value={String(props.totalComponents)} />
         </div>
       </section>
 
@@ -1219,7 +1264,7 @@ function SummaryPanel(props: {
         <div className="mt-3 space-y-2">
           <ReadinessRow label="Identity and description" ok={props.identityComplete} />
           <ReadinessRow label="Prompt" ok={props.behaviorComplete} />
-          <ReadinessRow label="Component validation" ok={props.componentsValid} />
+          <ReadinessRow label="Component validation" ok={props.componentsValid} skipped={!props.totalComponents} pending={props.componentsPending} />
         </div>
         {/* Progress bar */}
         <div className="mt-3 h-1 overflow-hidden rounded-full bg-surface-raised">
@@ -1245,12 +1290,12 @@ function SettingRow({ label, sub, value }: { label: string; sub: string; value: 
   );
 }
 
-function ReadinessRow({ label, ok }: { label: string; ok: boolean }) {
+function ReadinessRow({ label, ok, skipped = false, pending = false }: { label: string; ok: boolean; skipped?: boolean; pending?: boolean }) {
   return (
     <div className="flex items-center justify-between text-2xs">
       <span>{label}</span>
-      <span className={ok ? "font-semibold text-success" : "font-semibold text-destructive"}>
-        {ok ? "Passed" : "Needs target"}
+      <span className={skipped || pending ? "font-medium text-muted-foreground" : ok ? "font-semibold text-success" : "font-semibold text-destructive"}>
+        {skipped ? "Not needed" : pending ? "Checking…" : ok ? "Passed" : "Needs attention"}
       </span>
     </div>
   );
@@ -1285,6 +1330,7 @@ function BuilderFooter({
   const prev = idx > 0 ? STEP_ORDER[idx - 1] : null;
   const next = idx < STEP_ORDER.length - 1 ? STEP_ORDER[idx + 1] : null;
   const isLast = idx === STEP_ORDER.length - 1;
+  const canSave = !(isEditMode && existingStatus === "approved");
 
   const nextLabels: Record<string, string> = {
     identity: "Continue to behavior",
@@ -1295,32 +1341,32 @@ function BuilderFooter({
   return (
     <footer className="mt-3.5 flex flex-wrap items-center gap-2 rounded-xl bg-card px-5 py-3.5 shadow-sm">
       <p className="flex-1 text-2xs text-muted-foreground">
-        Nothing is published until review.
+        Agent File approval is separate from review of any components you create here.
       </p>
       {prev ? (
         <Button variant="outline" size="sm" onClick={() => setActiveStep(prev)}>
           <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
           Back
         </Button>
-      ) : (
-        <Button variant="outline" size="sm" onClick={onSaveDraft} disabled={savingDraft}>
+      ) : canSave ? (
+        <Button variant="outline" size="sm" onClick={onSaveDraft} disabled={savingDraft || publishing}>
           {savingDraft ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
           Save draft
         </Button>
-      )}
+      ) : null}
       {next ? (
         <Button size="sm" onClick={() => setActiveStep(next)}>
           {nextLabels[activeStep] ?? "Next"} <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
         </Button>
       ) : (
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onSaveDraft} disabled={savingDraft}>
+          {canSave && <Button variant="outline" size="sm" onClick={onSaveDraft} disabled={savingDraft || publishing}>
             {savingDraft ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
             Save draft
-          </Button>
-          <Button size="sm" onClick={onPublish} disabled={publishing}>
+          </Button>}
+          <Button size="sm" onClick={onPublish} disabled={publishing || savingDraft}>
             {publishing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
-            {isEditMode || existingStatus === "pending" ? "Submit revision" : "Submit for review"}
+            {isEditMode && existingStatus === "approved" ? "Submit new version" : isEditMode || existingStatus === "pending" || existingStatus === "changes_requested" ? "Submit revision" : "Submit for review"}
           </Button>
         </div>
       )}

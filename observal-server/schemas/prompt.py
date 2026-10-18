@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from models.mcp import ListingStatus
 from schemas.constants import (
@@ -35,6 +36,14 @@ class PromptSubmitRequest(BaseModel):
 
     _validate_category = field_validator("category")(make_option_validator("category", VALID_PROMPT_CATEGORIES))
     _validate_ides = field_validator("supported_harnesses")(make_harness_list_validator())
+
+    @model_validator(mode="after")
+    def _validate_complete_prompt(self):
+        if not self.description.strip():
+            raise ValueError("description is required before submitting")
+        if not self.template.strip():
+            raise ValueError("template is required before submitting")
+        return self
 
 
 class PromptDraftRequest(BaseModel):

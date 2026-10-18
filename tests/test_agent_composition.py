@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for agent composition and resolver (issue #80).
@@ -71,6 +72,25 @@ class TestComponentLinkResponseSchema:
 
 
 class TestAgentCreateRequestWithComponents:
+    def test_prompt_component_can_replace_inline_prompt(self):
+        from schemas.agent import AgentCreateRequest, ComponentRef
+
+        base = {
+            "name": "prompt-backed-agent",
+            "version": "0.1.0",
+            "owner": "test",
+            "model_name": "claude-sonnet-4-6",
+        }
+        prompt_ref = ComponentRef(component_type="prompt", component_id=uuid.uuid4())
+        agent = AgentCreateRequest(**base, components=[prompt_ref])
+        assert agent.prompt == ""
+        assert agent.components == [prompt_ref]
+
+        with pytest.raises(ValidationError, match="A system prompt is required"):
+            AgentCreateRequest(**base, components=[ComponentRef(component_type="skill", component_id=uuid.uuid4())])
+        with pytest.raises(ValidationError, match="A system prompt is required"):
+            AgentCreateRequest(**base, prompt="   ")
+
     def test_create_request_accepts_components(self):
         from schemas.agent import AgentCreateRequest, ComponentRef
 

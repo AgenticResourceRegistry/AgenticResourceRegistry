@@ -25,6 +25,7 @@ from api.deps import (
     resolve_visible_listing,
 )
 from api.routes._component_archive import archive_listing, unarchive_listing
+from api.routes._draft_submission import require_submittable_draft
 from api.routes.component_forks import component_response, component_responses, create_fork_router
 from api.routes.component_versions import create_version_router
 from api.search import keyword_search
@@ -40,6 +41,7 @@ from schemas.sandbox import (
 )
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.registry_namespace import identity_exists
+from services.registry_owner_search import owner_page
 from services.review.cutover import lock_review_for_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
@@ -157,7 +159,7 @@ async def list_sandboxes(
         public_only=public_only,
     )
     total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
-    order_by = [SandboxListing.created_at.desc()]
+    order_by = [SandboxListing.created_at.desc(), SandboxListing.id.desc()]
     if search_rank is not None:
         order_by.insert(0, search_rank.desc())
     result = await db.execute(stmt.order_by(*order_by).limit(limit).offset(offset))
@@ -168,22 +170,33 @@ async def list_sandboxes(
 
 @router.get("/my", response_model=list[SandboxListingSummary])
 async def my_sandboxes(
+    response: Response,
+    search: str | None = Query(None, max_length=200),
+    runtime_type: str | None = Query(None),
+    status: ListingStatus | None = Query(None),
+    namespace: str | None = Query(None, max_length=200),
+    team_id: uuid.UUID | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
-    optic.debug("my_sandboxes called")
-    stmt = (
-        select(SandboxListing)
-        .where(SandboxListing.submitted_by == current_user.id)
-        .order_by(SandboxListing.created_at.desc())
+    rows, total = await owner_page(
+        db,
+        SandboxListing,
+        SandboxVersion,
+        current_user,
+        apply_visibility_filter,
+        search=search,
+        status=status,
+        namespace=namespace,
+        team_id=team_id,
+        conditions=(SandboxVersion.runtime_type == runtime_type,) if runtime_type else (),
+        limit=limit,
+        offset=offset,
     )
-    # Authorship is not a standing grant: a member removed from a teamspace keeps
-    # the author column on its listings but must not keep reading them.
-    stmt = apply_visibility_filter(stmt, SandboxListing, current_user)
-
-    result = await db.execute(stmt)
-    listings = await component_responses(result.scalars().all(), "sandbox", current_user, db)
-    return listings
+    response.headers["X-Total-Count"] = str(total)
+    return await component_responses(rows, "sandbox", current_user, db)
 
 
 @router.get("/{listing_id}", response_model=SandboxListingResponse)
@@ -419,10 +432,7 @@ async def submit_sandbox_draft(
     ):
         raise HTTPException(status_code=400, detail="Listing is not a draft")
 
-    if not listing.description:
-        raise HTTPException(status_code=400, detail="Description is required before submitting")
-    if not listing.image:
-        raise HTTPException(status_code=400, detail="Image is required before submitting")
+    require_submittable_draft(SandboxSubmitRequest, listing)
 
     review = await submit_for_review(db, "sandbox", listing, listing.latest_version, current_user.id, message=message)
     await commit_or_name_conflict(db, "sandbox")
