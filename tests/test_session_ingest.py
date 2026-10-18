@@ -446,6 +446,32 @@ async def test_identity_metadata_and_source_accounting_survive_redaction(externa
     assert row["source_sha256"] == hashlib.sha256(line.encode()).hexdigest()
 
 
+async def test_kiro_cli_model_id_is_persisted_on_assistant_row(external_calls):
+    line = json.dumps(
+        {
+            "kind": "AssistantMessage",
+            "data": {
+                "content": [
+                    {"kind": "text", "data": {"text": "hello", "modelId": "claude-opus-5.5"}},
+                    {"kind": "toolUse", "data": {"toolUseId": "t1", "name": "read", "modelId": "claude-opus-5.5"}},
+                ]
+            },
+        }
+    )
+    await _ingest([line], harness="kiro")
+
+    row = external_calls.insert.await_args.args[0][0]
+    assert row["model"] == "claude-opus-5.5"
+    assert row["input_tokens"] == row["output_tokens"] == 0
+    external_calls.refresh.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, "kiro")
+
+
+async def test_kiro_model_extractor_ignores_malformed_blocks_and_does_not_invent_auto(external_calls):
+    line = json.dumps({"kind": "Prompt", "data": {"content": [{"kind": "text", "data": "hello"}]}})
+    await _ingest([line], harness="kiro")
+    assert external_calls.insert.await_args.args[0][0]["model"] == ""
+
+
 async def test_empty_kiro_input_writes_only_credit_metadata(external_calls):
     result = await _ingest([], harness="kiro", total_credits=1.25, agent_id="agent", agent_version="1.0.0")
 
