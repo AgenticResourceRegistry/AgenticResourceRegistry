@@ -130,6 +130,15 @@ def test_search_include_unapproved_drops_lifecycle_filter(monkeypatch):
     assert "Nothing in Observal matches" in result.output
 
 
+def test_empty_search_says_discovery_is_scoped_to_your_teamspaces(monkeypatch):
+    monkeypatch.setattr(discover.client, "post", Mock(return_value={"results": []}))
+    result = _invoke("search", "anything")
+    assert result.exit_code == 0, result.output
+    assert "teamspaces you belong to" in " ".join(result.output.split())
+    assert "observal registry <type> list" in " ".join(result.output.split())
+    assert "observal agent list" in " ".join(result.output.split())
+
+
 def test_search_rejects_unknown_type_and_harness(monkeypatch):
     monkeypatch.setattr(discover.client, "post", Mock(return_value={"results": []}))
     bad_type = _invoke("search", "x", "--type", "spaceship")
