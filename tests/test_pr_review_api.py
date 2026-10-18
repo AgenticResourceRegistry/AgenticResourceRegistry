@@ -486,6 +486,9 @@ async def test_draft_private_until_submitted_and_invalid_anchor_rejected(api):
     assert submitted.status_code == 201, submitted.text
     current[0] = author
     assert (await client.get(base + "/threads")).json()[0]["comments"][0]["body"] == "private feedback"
+    detail = (await client.get(base)).json()
+    assert str(reviewer.id) in detail["commented_reviewers"]
+    assert str(reviewer.id) not in detail["reviewer_decisions"]
     async with factory() as db:
         row = await db.get(ReviewSubmission, uuid.UUID(submitted.json()["id"]))
         assert row.state == "submitted"

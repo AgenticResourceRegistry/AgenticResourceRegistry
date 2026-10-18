@@ -380,15 +380,18 @@ for (const subject_type of ["agent", "mcp"] as const) {
     const requestId = "33333333-3333-4333-8333-333333333333";
     const secondId = "44444444-4444-4444-8444-444444444444";
     const threadId = "55555555-5555-4555-8555-555555555555";
+    const generalId = "77777777-7777-4777-8777-777777777777";
+    const commenterId = "88888888-8888-4888-8888-888888888888";
     let withdrawn = false;
     const posts: unknown[] = [];
     const detail = { ...summary(42, "Disputed review", "agent"), subject_type, author_id: id,
       state: "changes_requested", body: "Please review", opened_at: now, closed_at: null, closed_reason: null,
       published_at: null, published_by: null, base_version_id: null, head_revision_id: id, my_subscription: null,
       self_approval_allowed: false, revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false }],
-      requested_reviewers: [], reviewer_names: { [reviewerId]: "reviewer" },
+      requested_reviewers: [commenterId], reviewer_names: { [reviewerId]: "reviewer", [commenterId]: "commenter" },
+      commented_reviewers: [commenterId],
       reviewer_decisions: { [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking" }, [secondId]: { verdict: "request_changes", status: "blocking" } },
-      threads: { total: 2, unresolved: 2 },
+      threads: { total: 3, unresolved: 3 },
       gate: { ready: false, approvals: 0, required: 1, policy_source: "organization", requirements: ["changes_requested", "required_approvals"], outstanding_requests: 2 },
     };
     const thread = (submissionId: string, threadKey: string, reviewerKey: string, status: string, can_withdraw: boolean) => ({
@@ -408,9 +411,12 @@ for (const subject_type of ["agent", "mcp"] as const) {
         return route.fulfill({ json: { state: "changes_requested", withdrawn: true } });
       }
       const data = suffix === "/timeline" ? route.request().url().includes("cursor=")
-        ? { items: [requestId, secondId].map((key, index) => ({ id: key, kind: "verdict", actor_id: index ? secondId : reviewerId, created_at: now, verdict: "request_changes", body: "Is this change required?", state: "submitted" })), next_cursor: null }
+        ? { items: [...[requestId, secondId].map((key, index) => ({ id: key, kind: "verdict", actor_id: index ? secondId : reviewerId, created_at: now, verdict: "request_changes", body: "Is this change required?", state: "submitted" })), { id: commenterId, kind: "comment", actor_id: commenterId, created_at: now, payload: { thread_id: generalId } }], next_cursor: null }
         : { items: [{ id: "66666666-6666-4666-8666-666666666666", kind: "comment", actor_id: id, created_at: now, payload: { thread_id: threadId } }], next_cursor: "page-2" }
-        : suffix === "/threads" ? [thread(requestId, threadId, reviewerId, withdrawn ? "withdrawn" : "blocking", !author && !withdrawn), thread(secondId, secondId, secondId, "blocking", false)]
+        : suffix === "/threads" ? [thread(requestId, threadId, reviewerId, withdrawn ? "withdrawn" : "blocking", !author && !withdrawn), thread(secondId, secondId, secondId, "blocking", false), {
+          id: generalId, path: null, side: null, start_line: null, end_line: null, outdated: false, resolved_at: null, revision_id: null,
+          change_request: null, comments: [{ id: commenterId, thread_id: generalId, author_id: commenterId, body: "General note", created_at: now }],
+        }]
         : suffix === "/gate" ? { ...detail.gate, outstanding_requests: withdrawn ? 1 : 2 }
         : suffix === "/files" || suffix === "/diff" ? []
         : { ...detail, reviewer_decisions: { ...detail.reviewer_decisions, [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking" } } };
@@ -420,11 +426,17 @@ for (const subject_type of ["agent", "mcp"] as const) {
     const request = page.locator(`#thread-${threadId}`);
     await expect(request.getByText("Changes requested · blocks publication")).toBeVisible();
     await expect(request).toHaveCount(1);
+    await expect(page.getByText("Commented", { exact: true })).toBeVisible();
+    const general = page.locator(`#thread-${generalId}`);
+    await general.getByRole("textbox", { name: "Reply" }).fill("Unsent general reply");
     await request.getByRole("textbox", { name: "Reply" }).fill("Unsent answer stays here");
     await page.getByRole("button", { name: "Load more activity" }).click();
     await expect(page.getByRole("button", { name: "Load more activity" })).toHaveCount(0);
     await expect(request).toHaveCount(1);
     await expect(request.getByRole("textbox", { name: "Reply" })).toHaveValue("Unsent answer stays here");
+    await expect(general).toHaveCount(1);
+    await expect(general.getByRole("textbox", { name: "Reply" })).toHaveValue("Unsent general reply");
+    await expect(page.getByRole("link", { name: "View conversation", exact: true })).toBeVisible();
     await expect(request.getByRole("button", { name: "Resolve conversation" })).toHaveCount(0);
     if (author) {
       await expect(request.getByText("Awaiting the reviewer or a moderator.", { exact: false })).toBeVisible();

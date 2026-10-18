@@ -74,7 +74,7 @@ async def detail(
     base = await db.get(type(version), review.base_version_id) if review.base_version_id else None
     policy = await policy_for(review, db=db)
     self_approval_allowed = subject.is_private and policy.source == "teamspace" and policy.self_approval == "counted"
-    _, latest_decisions, request_statuses = await review_decisions(db, review)
+    submissions, latest_decisions, request_statuses = await review_decisions(db, review)
     return {
         **await summary(db, review, user),
         "body": review.body,
@@ -99,6 +99,9 @@ async def detail(
         ],
         "requested_reviewers": requested,
         "reviewer_names": reviewer_names,
+        "commented_reviewers": sorted(
+            {str(row.reviewer_id) for row in submissions if row.verdict == "comment" and row.state == "submitted"}
+        ),
         "reviewer_decisions": {
             str(uid): {
                 "verdict": row.verdict,
