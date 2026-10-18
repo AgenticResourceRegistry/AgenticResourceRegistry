@@ -209,9 +209,9 @@ def docs_frontmatter_header(text: str, name: str, email: str, year: int, nl: str
     # REUSE-IgnoreStart
     header += f"# SPDX-License-Identifier: Apache-2.0{nl}"
     # REUSE-IgnoreEnd
-    if text.startswith("---"):
-        first_eol = text.index("\n") + 1
-        return text[:first_eol] + header + text[first_eol:]
+    first_line, eol, rest = text.partition("\n")
+    if eol and first_line in ("---", "---\r") and any(line in ("---", "---\r") for line in rest.split("\n")):
+        return first_line + eol + header + rest
 
     body = text.lstrip("\r\n")
     title = ""

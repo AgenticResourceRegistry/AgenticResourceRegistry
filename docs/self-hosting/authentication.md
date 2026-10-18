@@ -262,7 +262,7 @@ Users can generate API keys for scripts and CI. The key inherits the user's role
 ```bash
 # Get a key - flow depends on your setup (web UI usually)
 # Then in CI:
-export OBSERVAL_API_KEY=<key>
+export OBSERVAL_API_KEY='replace-with-your-key'
 export OBSERVAL_SERVER_URL=https://observal.your-company.internal
 
 observal ops traces --limit 100 --output json | jq

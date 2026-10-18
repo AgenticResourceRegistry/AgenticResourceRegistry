@@ -259,6 +259,51 @@ def test_new_docs_page_keeps_existing_frontmatter(hook, tmp_path):
     # REUSE-IgnoreEnd
 
 
+# REUSE-IgnoreStart
+@pytest.mark.parametrize(
+    "content",
+    [
+        "---",
+        "---\n",
+        '---\ntitle: "Guide"\nBody without a closing delimiter.\n',
+        "--- not frontmatter\nBody.\n",
+    ],
+)
+# REUSE-IgnoreEnd
+def test_new_docs_page_with_incomplete_frontmatter_gets_fresh_header(hook, tmp_path, content):
+    path = tmp_path / "docs" / "guide.md"
+    path.parent.mkdir()
+    path.write_text(content)
+
+    hook.add_fresh_header(path, "New Committer", "new@example.com", 2026)
+
+    # REUSE-IgnoreStart
+    assert path.read_text() == (
+        "---\n"
+        "# SPDX-FileCopyrightText: 2026 New Committer <new@example.com>\n"
+        "# SPDX-License-Identifier: Apache-2.0\n"
+        "---\n\n" + content
+    )
+    # REUSE-IgnoreEnd
+
+
+def test_new_docs_page_keeps_crlf_frontmatter(hook, tmp_path):
+    path = tmp_path / "docs" / "guide.md"
+    path.parent.mkdir()
+    path.write_bytes(b'---\r\ntitle: "Guide"\r\n---\r\n')
+
+    hook.add_fresh_header(path, "New Committer", "new@example.com", 2026)
+
+    # REUSE-IgnoreStart
+    assert path.read_bytes() == (
+        b"---\r\n"
+        b"# SPDX-FileCopyrightText: 2026 New Committer <new@example.com>\r\n"
+        b"# SPDX-License-Identifier: Apache-2.0\r\n"
+        b'title: "Guide"\r\n---\r\n'
+    )
+    # REUSE-IgnoreEnd
+
+
 def test_docs_frontmatter_header_gets_attribution(hook, tmp_path):
     path = tmp_path / "docs" / "guide.md"
     path.parent.mkdir()

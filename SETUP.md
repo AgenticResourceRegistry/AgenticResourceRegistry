@@ -8,7 +8,7 @@
 
 Everything you need to get Observal running locally for development or self-hosted production.
 
-> **Full operator docs** live at [observal.gitbook.io](https://observal.gitbook.io/observal) ([`/docs`](docs/) in this repo). This file covers the fastest path from zero to a working stack.
+> **Full operator docs** live at [docs.observal.io](https://docs.observal.io/) ([`/docs`](docs/) in this repo). This file covers the fastest path from zero to a working stack.
 >
 > The steps below use the source Compose stack for development. The one-line server-package installer instead generates restricted files under `secrets/`, stores only `NAME_FILE` paths in `.env`, and binds published ports to loopback. The same install command runs guided setup with a terminal or safe defaults without one, so CI and coding agents need no special flag. See [Configuration](docs/self-hosting/configuration.md#secret-files) for the packaged layout and rotation rules.
 
