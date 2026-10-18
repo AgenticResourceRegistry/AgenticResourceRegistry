@@ -1438,3 +1438,30 @@ def test_hook_install_format_is_owned_by_adapter(harness, expected_snippet):
 
     result = generate_hook_install_config(listing, harness)
     assert result["config_snippet"] == expected_snippet
+
+
+def test_http_hook_installs_only_where_native_url_hooks_are_supported():
+    from services.hook_install_generator import generate_hook_install_config
+
+    listing = MagicMock(
+        event="PreToolUse",
+        handler_type="http",
+        handler_config={"url": "https://example.com/hook"},
+        script_content=None,
+        script_filename=None,
+        source_url=None,
+        source_path=None,
+        source_ref=None,
+        resolved_sha=None,
+        requirements=[],
+    )
+    listing.name = "webhook"
+
+    claude = generate_hook_install_config(listing, "claude-code")
+    entry = claude["config_snippet"]["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert entry == {"type": "http", "url": "https://example.com/hook"}
+    assert claude["files"] == []
+
+    kiro = generate_hook_install_config(listing, "kiro")
+    assert kiro["config_snippet"] == {}
+    assert "not supported" in kiro["notes"][0]

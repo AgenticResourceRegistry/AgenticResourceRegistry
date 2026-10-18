@@ -81,6 +81,9 @@ class HarnessAdapter(Protocol):
 
     def default_model_candidate(self, model_name: str | None) -> str | None: ...
 
+    @property
+    def supports_http_hooks(self) -> bool: ...
+
     def format_hook_install_snippet(self, event: str, handler_type: str, command: str, timeout: int | None) -> dict: ...
 
     def hook_install_notes(self) -> list[str]: ...
@@ -98,6 +101,8 @@ class HarnessAdapter(Protocol):
 
 class BaseHarnessAdapter:
     """Shared defaults for harness adapters."""
+
+    supports_http_hooks = False
 
     def format_mcp_config(self, ctx: McpConfigContext) -> dict:
         return {"mcpServers": {ctx.name: ctx.standard_entry()}}

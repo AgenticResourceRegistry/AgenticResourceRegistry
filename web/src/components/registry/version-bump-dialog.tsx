@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -38,6 +39,7 @@ interface VersionBumpDialogProps {
   publishing: boolean;
   title?: string;
   description?: string;
+  confirmLabel?: string;
   /**
    * Agent releases keep every component at the version the current release pins.
    * When provided, the dialog lets the author move them to their latest approved
@@ -58,6 +60,7 @@ export function VersionBumpDialog({
   publishing,
   title = "Release New Version",
   description = "Choose how to bump the version for this release.",
+  confirmLabel = "Release",
   refreshComponents,
 }: VersionBumpDialogProps) {
   const [selection, setSelection] = useState<BumpType>("patch");
@@ -161,7 +164,7 @@ export function VersionBumpDialog({
             ) : (
               <ArrowRight className="mr-2 h-4 w-4" />
             )}
-            Release
+            {confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 import uuid
 from datetime import datetime
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from models.mcp import ListingStatus
 from schemas.constants import (
@@ -57,6 +60,32 @@ class HookSubmitRequest(BaseModel):
     )
     _validate_scope = field_validator("scope")(make_option_validator("scope", VALID_HOOK_SCOPES))
     _validate_ides = field_validator("supported_harnesses")(make_harness_list_validator())
+
+    @model_validator(mode="after")
+    def _validate_complete_handler(self):
+        if not self.description.strip():
+            raise ValueError("description is required before submitting")
+        if self.script_filename and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", self.script_filename):
+            raise ValueError("script_filename must be a safe filename without directories")
+        if self.handler_type == "command":
+            command = self.handler_config.get("command")
+            script_ready = bool(self.script_content and self.script_content.strip() and self.script_filename)
+            if not ((isinstance(command, str) and command.strip()) or script_ready):
+                raise ValueError(
+                    "command handler requires handler_config.command or script_content with script_filename"
+                )
+        elif self.handler_type == "http":
+            url = self.handler_config.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise ValueError("http handler requires handler_config.url")
+            try:
+                parsed = urlsplit(url)
+                host = parsed.hostname
+            except ValueError as exc:
+                raise ValueError("http handler URL must use http or https with a valid host") from exc
+            if parsed.scheme not in {"http", "https"} or not host:
+                raise ValueError("http handler URL must use http or https with a host")
+        return self
 
 
 class HookDraftRequest(BaseModel):

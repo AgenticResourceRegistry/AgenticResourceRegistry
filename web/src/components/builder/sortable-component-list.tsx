@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -57,19 +58,21 @@ function SortableItem({
     >
       <button
         type="button"
-        className="text-muted-foreground cursor-grab"
+        className="flex size-10 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
         {...attributes}
         {...listeners}
+        aria-label={`Reorder ${item.name}`}
       >
-        <GripVertical className="h-4 w-4" />
+        <GripVertical className="h-4 w-4" aria-hidden="true" />
       </button>
       <span className="min-w-0 flex-1 truncate">{item.name}</span>
       <button
         type="button"
         onClick={() => onRemove(item.id)}
-        className="text-muted-foreground hover:text-destructive transition-colors"
+        className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Remove ${item.name}`}
       >
-        <X className="h-3.5 w-3.5" />
+        <X className="h-4 w-4" aria-hidden="true" />
       </button>
     </div>
   );

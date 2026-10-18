@@ -85,7 +85,8 @@ const registryNav: NavItem[] = [
 	},
 	{
 		title: "Builder",
-		href: "/agents/builder",
+		href: "/build",
+		alsoActive: ["/agents/builder"],
 		icon: Hammer,
 		requiresAuth: true,
 	},
@@ -177,6 +178,7 @@ export function RegistrySidebar() {
 
 	function isActive({ href, alsoActive = [] }: NavItem) {
 		if (href === "/") return pathname === "/";
+		if (href === "/resources" && pathname.startsWith("/agents/builder")) return false;
 		if (pathname === href) return true;
 		// Only treat as active if no *more-specific* sibling nav item matches.
 		// e.g. /agents should NOT be active when /agents/builder matches.

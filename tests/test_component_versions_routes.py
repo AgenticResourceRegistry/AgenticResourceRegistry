@@ -88,7 +88,7 @@ VERSION_FIELDS = {
         "handler_type": "command",
         "handler_config": {"command": "python guard.py"},
         "scope": "agent",
-        "tool_filter": {"tools": ["Bash"]},
+        "tool_filter": ["Bash"],
         "source_url": "https://github.com/acme/hooks",
         "source_ref": "v1",
         "source_path": "hooks/guard.py",
@@ -396,6 +396,22 @@ def test_version_serialization_supports_legacy_string_status_and_missing_extras(
         "created_at": NOW,
         "task_type": "review",
     }
+
+
+def test_skill_version_detail_exposes_exact_review_binding_without_leaking_into_summary():
+    row = _listing("skill").latest_version
+    row.requires_global_review = False
+    row.content_revision = "abc123"
+    row.review_epoch = 2
+    row.base_version_id = OLD_VERSION_ID
+
+    detail = versions._version_to_dict(row, "skill")
+    assert detail["content_revision"] == "abc123"
+    assert detail["review_epoch"] == 2
+    assert detail["base_version_id"] == str(OLD_VERSION_ID)
+    summary = versions._version_to_dict(row, "skill", summary=True)
+    assert "content_revision" not in summary
+    assert "base_version_id" not in summary
 
 
 @pytest.mark.asyncio
@@ -1125,3 +1141,68 @@ async def test_router_authentication_and_reviewer_role_fail_before_handlers(monk
         removed = await client.post(f"/api/v1/mcps/{LISTING_ID}/versions/2.0.0/review", json={"action": "approve"})
 
     assert removed.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("component_type", "field", "invalid"),
+    [("hook", "handler_config", {}), ("prompt", "template", "  "), ("sandbox", "image", "")],
+)
+async def test_incomplete_new_version_cannot_enter_review(monkeypatch, component_type, field, invalid):
+    listing_model, version_model, _ = COMPONENTS[component_type]
+    listing = _listing(component_type, owner_id=OWNER_ID)
+    setattr(listing.latest_version, field, invalid)
+    if component_type == "hook":
+        listing.latest_version.script_content = None
+        listing.latest_version.script_filename = None
+    db = _db()
+    db.execute.return_value = _result()
+    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
+    review = AsyncMock()
+    monkeypatch.setattr(versions, "submit_for_review", review)
+
+    with pytest.raises(HTTPException) as exc:
+        await versions._publish_version(
+            str(LISTING_ID),
+            VersionPublishRequest(version="2.0.0", description="Still incomplete"),
+            listing_model,
+            version_model,
+            component_type,
+            db,
+            _user(user_id=OWNER_ID),
+        )
+
+    assert exc.value.status_code in {400, 422}
+    review.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_git_skill_version_without_source_cannot_enter_review(monkeypatch):
+    listing = _listing("skill", owner_id=OWNER_ID)
+    listing.latest_version.delivery_mode = "git_fetch"
+    listing.latest_version.git_url = None
+    db = _db()
+    db.execute.return_value = _result()
+    monkeypatch.setattr(versions, "resolve_visible_listing", AsyncMock(return_value=listing))
+    monkeypatch.setattr(
+        versions, "lock_skill_version", AsyncMock(return_value=(OLD_VERSION_ID, listing.latest_version))
+    )
+    monkeypatch.setattr(versions, "check_listing_visibility_async", AsyncMock(return_value=True))
+    review = AsyncMock()
+    monkeypatch.setattr(versions, "submit_for_review", review)
+
+    with pytest.raises(HTTPException) as exc:
+        await versions._publish_version(
+            str(LISTING_ID),
+            VersionPublishRequest(version="2.0.0", description="Still missing Git source"),
+            SkillListing,
+            SkillVersion,
+            "skill",
+            db,
+            _user(user_id=OWNER_ID),
+        )
+
+    assert exc.value.status_code == 422
+    assert "git_url" in exc.value.detail
+    review.assert_not_awaited()

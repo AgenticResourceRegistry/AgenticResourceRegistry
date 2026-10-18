@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Claude Code harness adapter for agent config generation."""
@@ -42,12 +43,14 @@ def _claude_mcp_add_command(name: str, entry: dict, scope: str | None = None) ->
 class ClaudeCodeAdapter(BaseHarnessAdapter):
     """Claude Code harness adapter."""
 
+    supports_http_hooks = True
+
     @property
     def harness_name(self) -> str:
         return "claude-code"
 
     def format_hook_install_snippet(self, event: str, handler_type: str, command: str, timeout: int | None) -> dict:
-        entry: dict = {"type": handler_type, "command": command}
+        entry: dict = {"type": handler_type, "url" if handler_type == "http" else "command": command}
         if timeout:
             entry["timeout"] = timeout
         return {"hooks": {event: [{"matcher": "*", "hooks": [entry]}]}}

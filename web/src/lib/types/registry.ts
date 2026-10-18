@@ -205,6 +205,11 @@ export interface ComponentVersionSummary {
 	description: string;
 	changelog: string | null;
 	status: string;
+	/** Server-verified skill revision and whether the exact version requires revision-bound review. */
+	revision?: string;
+	content_revision?: string | null;
+	review_epoch?: number;
+	base_version_id?: string | null;
 	requires_global_review?: boolean;
 	rejection_reason: string | null;
 	review_number?: number | null;

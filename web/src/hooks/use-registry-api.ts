@@ -96,6 +96,16 @@ export function useArchivedAgentPage(filters: Record<string, string>, page: numb
   });
 }
 
+export function useComposableOwnerComponents(type: RegistryType, search: string) {
+  return useQuery({
+    queryKey: ["registry", type, "my", "composable", search],
+    queryFn: ({ signal }) => registry.myPage(type, {
+      ...(search ? { search } : {}),
+      limit: "200", offset: "0",
+    }, signal),
+  });
+}
+
 export function useMyComponents(type: RegistryType, enabled = true) {
   return useQuery({
     queryKey: ["registry", type, "my"],
@@ -538,9 +548,9 @@ export function useSubmitSkillFolderDraft() {
       qc.invalidateQueries({ queryKey: ["registry", "skills"] });
       qc.invalidateQueries({ queryKey: ["component-versions", "skills", vars.listingId] });
       qc.invalidateQueries({ queryKey: ["review"] });
-      toast.success("Submitted exact folder version for review");
+      toast.success("Submitted exact Skill version for review");
     },
-    onError: (err: Error) => toast.error(err.message || "Failed to submit folder version"),
+    onError: (err: Error) => toast.error(err.message || "Failed to submit Skill version"),
   });
 }
 

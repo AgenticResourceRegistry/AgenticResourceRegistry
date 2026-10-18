@@ -283,6 +283,20 @@ class TestDraftSave:
     @pytest.mark.asyncio
     @patch("services.agent_snapshot.build_yaml_snapshot", new=AsyncMock(return_value="snapshot"))
     @patch("api.routes.agent.draft._load_agent")
+    async def test_incomplete_prompt_can_be_saved(self, mock_load):
+        user = _user()
+        app, db, _ = _app_with(user=user)
+        mock_load.return_value = _agent_mock(status=AgentStatus.draft, created_by=user.id, prompt="")
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            r = await ac.post("/api/v1/agents/draft", json=_draft_request_body(prompt="", description=""))
+
+        assert r.status_code == 200
+        db.commit.assert_awaited()
+
+    @pytest.mark.asyncio
+    @patch("services.agent_snapshot.build_yaml_snapshot", new=AsyncMock(return_value="snapshot"))
+    @patch("api.routes.agent.draft._load_agent")
     async def test_response_includes_agent_fields(self, mock_load):
         """Draft response includes id, name, and status fields."""
         user = _user()
@@ -674,6 +688,21 @@ class TestDraftSubmit:
         assert r.status_code == 200
         assert agent.status == AgentStatus.pending
         db.commit.assert_awaited()
+
+    @pytest.mark.asyncio
+    @patch("api.routes.agent.draft._load_agent")
+    async def test_incomplete_prompt_cannot_be_submitted(self, mock_load):
+        user = _user()
+        app, db, _ = _app_with(user=user)
+        agent = _agent_mock(status=AgentStatus.draft, created_by=user.id, prompt="", components=[])
+        mock_load.return_value = agent
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            r = await ac.post(f"/api/v1/agents/{agent.id}/submit")
+
+        assert r.status_code == 400
+        assert "system prompt or Prompt component" in r.json()["detail"]
+        db.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
     @patch("services.agent_snapshot.build_yaml_snapshot", new=AsyncMock(return_value="snapshot"))

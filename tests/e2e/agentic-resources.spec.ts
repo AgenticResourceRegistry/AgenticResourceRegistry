@@ -159,8 +159,9 @@ test.describe("Agentic Resources wayfinding", () => {
     }));
     await page.goto("/resources/prompts?view=my");
     await expect(page.getByText("Needs changes").first()).toBeVisible();
-    await expect(page.getByRole("button", { name: "Resubmit" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Address review" })).toHaveAttribute(
+      "href", "/build?kind=prompts&draft=00000000-0000-4000-8000-000000000042",
+    );
     await page.route("**/api/v1/agents/my?**", (request) => request.fulfill({
       status: 200, contentType: "application/json", headers: { "X-Total-Count": "1" },
       body: JSON.stringify([{ id: "00000000-0000-4000-8000-000000000044", name: "Agent needs changes",
@@ -238,7 +239,7 @@ test.describe("Agentic Resources wayfinding", () => {
         await expect(page.getByRole("link", { name: "Create Agent File" })).toBeVisible();
       } else {
         const name = kind === "sandboxes" ? "Sandbox" : kind === "mcps" ? "MCP Client" : label.slice(0, -1);
-        await expect(page.getByRole("button", { name: `Create ${name}`, exact: true })).toBeVisible();
+        await expect(page.getByRole("link", { name: `Create ${name}`, exact: true })).toHaveAttribute("href", `/build?kind=${kind}`);
       }
     }
     await page.evaluate(() => localStorage.setItem("observal-mode", "dark"));

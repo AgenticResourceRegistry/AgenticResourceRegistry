@@ -139,6 +139,8 @@ def _submit_request(**overrides):
         "description": "Review changes",
         "owner": "alice",
         "task_type": "code-review",
+        "delivery_mode": "registry_direct",
+        "skill_md_content": "# Review\n",
     }
     values.update(overrides)
     return SkillSubmitRequest(**values)
@@ -411,6 +413,8 @@ class TestSubmitSkill:
         request = _submit_request(
             name="",
             description="",
+            delivery_mode="git_fetch",
+            skill_md_content=None,
             git_url="https://github.com/acme/skills",
             git_ref=None,
             skill_path="/",
@@ -476,7 +480,9 @@ class TestSubmitSkill:
 
         with pytest.raises(HTTPException) as mismatch:
             await skill.submit_skill(
-                _submit_request(git_url="https://github.com/acme/review", slash_command="requested"),
+                _submit_request(
+                    delivery_mode="git_fetch", git_url="https://github.com/acme/review", slash_command="requested"
+                ),
                 db,
                 _user(),
             )
@@ -484,9 +490,24 @@ class TestSubmitSkill:
 
         validate.side_effect = SkillValidationError("SKILL.md not found")
         with pytest.raises(HTTPException) as invalid:
-            await skill.submit_skill(_submit_request(git_url="https://github.com/acme/missing"), db, _user())
+            await skill.submit_skill(
+                _submit_request(delivery_mode="git_fetch", git_url="https://github.com/acme/missing"), db, _user()
+            )
         _http_error(invalid, 422, "SKILL.md not found")
         target.assert_not_awaited()
+        db.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_git_submit_requires_source_url_before_fetching(self, monkeypatch):
+        db = _db()
+        validate = AsyncMock()
+        monkeypatch.setattr(skill, "validate_skill_md", validate)
+        with pytest.raises(HTTPException) as exc:
+            await skill.submit_skill(
+                _submit_request(delivery_mode="git_fetch", git_url=" ", skill_md_content=None), db, _user()
+            )
+        _http_error(exc, 422, "A Git skill requires a nonempty git_url before submission")
+        validate.assert_not_awaited()
         db.add.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1495,6 +1516,24 @@ class TestSubmitDraftAndLifecycle:
         _http_error(exc, code, detail)
         publish.assert_not_awaited()
         commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_submit_git_draft_requires_source_before_review(self, monkeypatch):
+        db = _db()
+        listing = _listing(status=ListingStatus.draft, submitted_by=USER_ID)
+        listing.latest_version.delivery_mode = "git_fetch"
+        listing.latest_version.git_url = "  "
+        _mock_skill_lock(monkeypatch, listing)
+        monkeypatch.setattr(skill, "resolve_listing", AsyncMock(return_value=listing))
+        submit = AsyncMock()
+        monkeypatch.setattr(skill, "submit_for_review", submit)
+
+        with pytest.raises(HTTPException) as exc:
+            await skill.submit_skill_draft(str(LISTING_ID), db=db, current_user=_user())
+
+        _http_error(exc, 422, "A Git skill requires a nonempty git_url before submission")
+        assert listing.status == ListingStatus.draft
+        submit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_submit_draft_invalid_stored_content_preserves_rejected_state(self, monkeypatch):

@@ -6,13 +6,18 @@ name: E2E Frontend
 
 on:
   pull_request:
-    branches: [main, 'release/**']
+    branches: [main, 'release/**', 'feat/agentic-resources-unified']
     paths:
       - 'web/**'
       - 'tests/e2e/**'
-      - 'observal-server/api/routes/skill_files.py'
+      - 'observal-server/api/routes/agent/**'
       - 'observal-server/api/routes/component_versions.py'
-      - 'observal-server/api/routes/config.py'
+      - 'observal-server/api/routes/*.py'
+      - 'observal-server/api/routes/_draft_submission.py'
+      - 'observal-server/schemas/**'
+      - 'observal-server/services/harness/**'
+      - 'observal-server/services/registry_owner_search.py'
+      - 'observal-server/services/hook_install_generator.py'
       - '.github/workflows/e2e-frontend.yml'
 
 concurrency:
@@ -97,7 +102,7 @@ jobs:
           # This runner builds a fresh disposable stack; never point this job
           # at a long-lived server when enabling the draft-creating tests.
           OBSERVAL_ISOLATED_STACK: 'true'
-        run: pnpm exec playwright test frontend-flows agentic-resources skill-folder
+        run: pnpm exec playwright test frontend-flows agentic-resources resource-builder resource-lifecycle skill-folder agent-builder-hardening builder-skill-banner
 
       - name: Show API errors on failure
         if: failure()

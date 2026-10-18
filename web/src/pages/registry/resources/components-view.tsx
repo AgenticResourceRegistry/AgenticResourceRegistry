@@ -327,9 +327,17 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     if (action === "submit") {
       submitDraftMutation.mutate(item.id);
     } else if (item.status === "pending") {
-      startEditMutation.mutate(item.id, {
-        onSuccess: () => { setEditItem(item); setSubmitOpen(true); },
-      });
+      let acquired = false;
+      try {
+        await startEditMutation.mutateAsync(item.id);
+        acquired = true;
+        const fullItem = await registry.get(activeType, item.id);
+        setEditItem(fullItem);
+        setSubmitOpen(true);
+      } catch (error) {
+        if (acquired) cancelEditMutation.mutate(item.id);
+        toast.error(error instanceof Error ? error.message : "Could not load the full submission for editing");
+      }
     } else {
       setEditItem(item);
       setSubmitOpen(true);
@@ -380,15 +388,8 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
         onLayoutChange={setLayout}
         actions={
           authReady && role && (
-            <Button
-              size="sm"
-              className="h-[34px] shrink-0 rounded-[9px] bg-primary px-3.5 text-xs font-medium text-primary-foreground"
-              onClick={() => {
-                setEditItem(null);
-                setSubmitOpen(true);
-              }}
-            >
-              Create {singular}
+            <Button asChild size="sm" className="h-[34px] shrink-0 rounded-[9px] bg-primary px-3.5 text-xs font-medium text-primary-foreground">
+              <Link to="/build" search={{ kind: activeType }}>Create {singular}</Link>
             </Button>
           )
         }
@@ -458,19 +459,21 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
               glyph={activeType}
               actions={
                 <>
-                  {(item.status === "draft" || item.status === "rejected" || item.status === "changes_requested" || item.status === "pending" || (activeType === "skills" && item.status === "approved")) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
+                  {(["draft", "rejected", "changes_requested"].includes(item.status ?? "")) ? (
+                    <Button asChild variant="outline" size="sm" className="h-7 text-xs">
+                      <Link to="/build" search={{ kind: activeType, draft: item.id }}>
+                        <FileEdit className="h-3 w-3 mr-1" /> {item.status === "draft" ? "Continue draft" : "Address review"}
+                      </Link>
+                    </Button>
+                  ) : (item.status === "pending" || (activeType === "skills" && item.status === "approved")) && (
+                    <Button variant="outline" size="sm" className="h-7 text-xs"
                       disabled={findingFolder || startEditMutation.isPending || loadFolderMutation.isPending}
-                      onClick={() => void openSubmission(item, "edit")}
-                    >
+                      onClick={() => void openSubmission(item, "edit")}>
                       <FileEdit className="h-3 w-3 mr-1" />
                       {item.status === "approved" ? "Manage drafts" : "Edit"}
                     </Button>
                   )}
-                  {(item.status === "draft" || item.status === "rejected" || item.status === "changes_requested" || (activeType === "skills" && item.status === "approved")) && (
+                  {activeType === "skills" && item.status === "approved" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -479,7 +482,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
                       disabled={findingFolder || submitDraftMutation.isPending || submitFolderMutation.isPending}
                     >
                       <Send className="h-3 w-3 mr-1" />
-                      {item.status === "rejected" || item.status === "changes_requested" ? "Resubmit" : item.status === "approved" ? "Submit draft" : "Submit"}
+                      Submit draft
                     </Button>
                   )}
                 </>

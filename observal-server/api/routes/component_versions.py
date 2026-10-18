@@ -31,12 +31,16 @@ from api.deps import (
     require_role,
     resolve_visible_listing,
 )
+from api.routes._draft_submission import require_submittable_version
 from api.routes._skill_lock import approved_skill_base_id, lock_skill_version
 from api.routes.skill_files import _BODY_FREE_LISTING, _authorized_version
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
 from schemas.component_version import VersionPublishRequest  # noqa: TC001
+from schemas.hook import HookSubmitRequest
+from schemas.prompt import PromptSubmitRequest
+from schemas.sandbox import SandboxSubmitRequest
 from services.agent_lock import INSTALLABLE_STATUSES
 from services.component_version_extras import ALLOWED_FIELDS, REQUIRED_FIELDS, validate_and_extract
 from services.registry_fork import VERSION_MANAGED_FIELDS as _VERSION_MANAGED_FIELDS
@@ -74,6 +78,10 @@ def _version_to_dict(v, component_type: str, *, summary: bool = False) -> dict:
     }
     if component_type == "skill" and hasattr(v, "requires_global_review"):
         d["requires_global_review"] = bool(v.requires_global_review)
+        if not summary:
+            d["content_revision"] = v.content_revision
+            d["review_epoch"] = v.review_epoch or 0
+            d["base_version_id"] = str(v.base_version_id) if v.base_version_id else None
     for attr in ALLOWED_FIELDS.get(component_type, set()):
         if summary and component_type == "skill" and attr in {"extra_files", "skill_md_content", "script_content"}:
             continue
@@ -328,7 +336,13 @@ async def _publish_version(
     for field_name, value in extra_fields.items():
         setattr(ver, field_name, deepcopy(value))
 
+    if component_type in {"hook", "prompt", "sandbox"}:
+        submit_schemas = {"hook": HookSubmitRequest, "prompt": PromptSubmitRequest, "sandbox": SandboxSubmitRequest}
+        require_submittable_version(submit_schemas[component_type], listing, ver)
+
     if component_type == "skill":
+        if ver.delivery_mode == "git_fetch" and (not isinstance(ver.git_url, str) or not ver.git_url.strip()):
+            raise HTTPException(status_code=422, detail="A Git skill requires a nonempty git_url before submission")
         ver.base_version_id = approved_base.id if approved_base is not None else None
         if approved_base is not None:
             try:

@@ -26,6 +26,7 @@ from api.deps import (
     resolve_visible_listing,
 )
 from api.routes._component_archive import archive_listing, archived_install_warning, unarchive_listing
+from api.routes._draft_submission import require_submittable_draft
 from api.routes.component_forks import component_response, component_responses, create_fork_router
 from api.routes.component_versions import create_version_router
 from api.search import keyword_search
@@ -508,8 +509,7 @@ async def submit_hook_draft(
     ):
         raise HTTPException(status_code=400, detail="Listing is not a draft")
 
-    if not listing.description:
-        raise HTTPException(status_code=400, detail="Description is required before submitting")
+    require_submittable_draft(HookSubmitRequest, listing)
 
     review = await submit_for_review(db, "hook", listing, listing.latest_version, current_user.id, message=message)
     await commit_or_name_conflict(db, "hook")

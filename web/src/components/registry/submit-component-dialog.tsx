@@ -157,6 +157,9 @@ interface SubmitComponentDialogProps {
 	editItem?: Record<string, unknown> | null;
 	fixedTeamId?: string;
 	fixedVisibility?: "public" | "team";
+	/** Render the same stateful editor in a spacious, routed workspace. */
+	surface?: "dialog" | "page";
+	onDirtyChange?: (dirty: boolean) => void;
 }
 
 export function SubmitComponentDialog({
@@ -171,6 +174,8 @@ export function SubmitComponentDialog({
 	editItem,
 	fixedTeamId,
 	fixedVisibility,
+	surface = "dialog",
+	onDirtyChange,
 }: SubmitComponentDialogProps) {
 	const d = editItem as Record<string, unknown> | null;
 	const helpCtx = useHelp();
@@ -186,6 +191,8 @@ export function SubmitComponentDialog({
 
 	// ── Common ──────────────────────────────────────────────
 	const [name, setName] = useState((d?.name as string) ?? "");
+	const [validationError, setValidationError] = useState<string | null>(null);
+	const validationSummaryRef = useRef<HTMLDivElement>(null);
 	const [version, setVersion] = useState((d?.version as string) ?? (type === "skills" ? "1.0.0" : "0.1.0"));
 	useEffect(() => {
 		if (!open && !editItem) setVersion(type === "skills" ? "1.0.0" : "0.1.0");
@@ -472,6 +479,18 @@ export function SubmitComponentDialog({
 	const [sandboxSourceUrl, setSandboxSourceUrl] = useState((d?.source_url as string) ?? "");
 	const [sandboxSourceRef, setSandboxSourceRef] = useState((d?.source_ref as string) ?? "");
 	const [sandboxPath, setSandboxPath] = useState((d?.sandbox_path as string) ?? "");
+	const initialFormRender = useRef(true);
+	useEffect(() => {
+		if (initialFormRender.current) { initialFormRender.current = false; return; }
+		onDirtyChange?.(true);
+	}, [onDirtyChange, name, version, description, teamId, visibility, supportedHarnesses,
+		mcpMode, jsonInput, category, gitUrl, command, args, mcpUrl, transport, framework,
+		dockerImage, envVars, setupInstructions, taskType, skillGitUrl, skillPath,
+		skillGitRef, skillMdContent, skillScriptContent, skillScriptFilename, skillMode,
+		skillExtraFiles, event, handlerType, executionMode, hookScope, handlerConfig,
+		scriptContent, scriptFilename, promptCategory, template, runtimeType, image,
+		networkPolicy, entrypoint, sandboxResourceLimits, sandboxRuntimeConfig,
+		sandboxSourceUrl, sandboxSourceRef, sandboxPath]);
 
 	function bumpPatchVersion(ver: string): string {
 		const parts = ver.split(".");
@@ -694,8 +713,10 @@ export function SubmitComponentDialog({
 	}
 
 	function validateForSubmit(): string | null {
-		if (!name) return "Name is required";
-		if (!description) return "Description is required";
+		if (!name.trim()) return "Name is required";
+		if (!description.trim()) return "Description is required";
+		const draftError = validateForDraft();
+		if (draftError) return draftError;
 		if (type === "skills" && skillMode === "upload" && pendingSkillUploads > 0) {
 			return "Wait for all skill files to finish uploading";
 		}
@@ -703,7 +724,7 @@ export function SubmitComponentDialog({
 			return "SKILL.md is required for a folder draft";
 		}
 
-		if (type === "mcps") {
+		if (type === "mcps" && !gitUrl.trim()) {
 			if (mcpMode === "json" && !jsonParsed && !isEditMode) {
 				return "Paste a valid server config JSON";
 			}
@@ -713,33 +734,95 @@ export function SubmitComponentDialog({
 					return "Paste a new server config JSON to update";
 				}
 			}
-			if (mcpMode === "manual" && !command && !mcpUrl) {
+			if (mcpMode === "manual" && !command.trim() && !mcpUrl.trim()) {
 				return "Command or Server URL is required";
 			}
 		}
-		if (type === "prompts" && !template) {
-			return "Template is required";
+		if (type === "skills" && skillMode === "git" && !skillGitUrl.trim()) return "Git URL is required";
+		if (type === "hooks") {
+			let config: Record<string, unknown> = {};
+			try {
+				if (handlerConfig.trim()) {
+					const parsed: unknown = JSON.parse(handlerConfig);
+					if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "Handler config must be a JSON object";
+					config = parsed as Record<string, unknown>;
+				}
+			} catch {
+				return "Handler config must be valid JSON";
+			}
+			if (handlerType === "command" && !(typeof config.command === "string" && config.command.trim()) &&
+				!(scriptContent.trim() && scriptFilename.trim())) return "Command handler needs a command or named script";
+			if (handlerType === "http" && !(typeof config.url === "string" && /^https?:\/\/[^/]+/i.test(config.url)))
+				return "HTTP handler needs an HTTP or HTTPS URL";
 		}
-		if (type === "sandboxes" && !image) {
-			return "Image is required";
-		}
+		if (type === "prompts" && !template.trim()) return "Template is required";
 		if (type === "sandboxes") {
+			let config: Record<string, unknown>;
 			try {
 				JSON.parse(sandboxResourceLimits || "{}");
-				JSON.parse(sandboxRuntimeConfig || "{}");
+				config = JSON.parse(sandboxRuntimeConfig || "{}");
+				if (!config || typeof config !== "object" || Array.isArray(config)) return "Sandbox runtime config must be a JSON object";
 			} catch {
 				return "Sandbox resource limits and runtime config must be valid JSON";
+			}
+			if ((runtimeType === "docker" || runtimeType === "lxc") && !image.trim()) return "Image is required";
+			if (runtimeType === "firecracker" && !(config.config_path || (config.kernel_image_path && config.rootfs_path)))
+				return "Firecracker needs a config path or kernel and rootfs paths";
+			if (runtimeType === "wasm" && !(image.trim() || config.module)) return "WASM needs a module or image";
+		}
+		return null;
+	}
+
+	function validateForDraft(): string | null {
+		if (!name.trim()) return "Name is required";
+		if (type === "hooks" && scriptFilename && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(scriptFilename))
+			return "Script filename must be a safe filename without directories";
+		if (type === "hooks" && handlerConfig.trim()) {
+			try {
+				const parsed: unknown = JSON.parse(handlerConfig);
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "Handler config must be a JSON object";
+			} catch { return "Handler config must be valid JSON"; }
+		}
+		if (type === "sandboxes") {
+			for (const [label, value] of [["Resource limits", sandboxResourceLimits], ["Runtime config", sandboxRuntimeConfig]]) {
+				try {
+					const parsed: unknown = JSON.parse(value || "{}");
+					if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return `${label} must be a JSON object`;
+				} catch { return `${label} must be valid JSON`; }
 			}
 		}
 		return null;
 	}
 
+	function reportValidationError(message: string) {
+		setValidationError(message);
+		const target = message.startsWith("Name") ? "comp-name"
+			: message.startsWith("Description") ? "comp-desc"
+			: message.startsWith("Paste") ? "mcp-json"
+			: message.startsWith("Command or Server") ? "mcp-command"
+			: message.startsWith("Git URL") ? "skill-git-url"
+			: message.startsWith("SKILL.md") ? "skill-md-content"
+			: message.startsWith("Script filename") ? "hook-script-filename"
+			: message.includes("handler") || message.startsWith("Handler") ? "hook-config"
+			: message.startsWith("Template") ? "prompt-template"
+			: message.startsWith("Image") ? "sandbox-image"
+			: message.startsWith("Resource limits") ? "sandbox-limits"
+			: message.includes("JSON") || message.startsWith("Runtime config") || message.startsWith("Firecracker") || message.startsWith("WASM") ? "sandbox-runtime-config" : null;
+		requestAnimationFrame(() => {
+			const input = target ? document.getElementById(target) : null;
+			const focusable = ["mcp-json", "sandbox-limits", "sandbox-runtime-config"].includes(target ?? "")
+				? input?.querySelector<HTMLElement>("[contenteditable=true]") : input;
+			(focusable ?? validationSummaryRef.current)?.focus();
+		});
+	}
+
 	function handleSubmit() {
 		const err = validateForSubmit();
 		if (err) {
-			toast.error(err);
+			reportValidationError(err);
 			return;
 		}
+		setValidationError(null);
 		if (type === "skills" && skillMode === "upload") {
 			onSaveDraft(buildBody());
 			return;
@@ -748,11 +831,12 @@ export function SubmitComponentDialog({
 	}
 
 	function handleDraft() {
-		const err = type === "skills" && skillMode === "upload" ? validateForSubmit() : !name ? "Name is required" : null;
+		const err = type === "skills" && skillMode === "upload" ? validateForSubmit() : validateForDraft();
 		if (err) {
-			toast.error(err);
+			reportValidationError(err);
 			return;
 		}
+		setValidationError(null);
 		onSaveDraft(buildBody());
 	}
 
@@ -784,6 +868,15 @@ export function SubmitComponentDialog({
 	}
 
 	const busy = isSubmitting || isSavingDraft;
+	const saveFocusRef = useRef<HTMLButtonElement | null>(null);
+	useEffect(() => {
+		if (busy || !saveFocusRef.current) return;
+		const button = saveFocusRef.current;
+		saveFocusRef.current = null;
+		requestAnimationFrame(() => {
+			if (button.isConnected && document.activeElement === document.body) button.focus();
+		});
+	}, [busy]);
 	const typeLabel =
 		type === "mcps"
 			? "MCP Client"
@@ -797,26 +890,8 @@ export function SubmitComponentDialog({
 	const skillScriptLanguageName = codeLanguageLabel(skillScriptLanguage);
 	const helpDoc = COMPONENT_HELP_DOCS[type as keyof typeof COMPONENT_HELP_DOCS];
 
-	return (
-		<Dialog
-			modal={false}
-			open={open}
-			onOpenChange={(v) => {
-				if (!v) reset();
-				onOpenChange(v);
-			}}
-		>
-			<DialogContent
-				className={type === "skills" && skillMode === "upload"
-					? "sm:max-w-3xl max-h-[90vh] overflow-y-auto"
-					: "max-w-lg max-h-[85vh] overflow-y-auto"}
-				onPointerDownOutside={(event) => {
-					const target = event.target;
-					if (target instanceof Node && document.querySelector('[data-help-panel="true"]')?.contains(target)) {
-						event.preventDefault();
-					}
-				}}
-			>
+	const formBody = (
+		<>
 				{helpDoc && (
 					<Button
 						type="button"
@@ -834,13 +909,15 @@ export function SubmitComponentDialog({
 						<HelpCircle className="h-4 w-4" />
 					</Button>
 				)}
-				<DialogHeader>
-					<DialogTitle>
-						{isEditMode ? `Edit ${typeLabel}` : `Submit ${typeLabel}`}
-					</DialogTitle>
-				</DialogHeader>
+				{surface === "page" ? (
+					<h2 className="text-lg font-semibold tracking-tight">Resource details</h2>
+				) : (
+					<DialogHeader><DialogTitle>{isEditMode ? `Edit ${typeLabel}` : `Submit ${typeLabel}`}</DialogTitle></DialogHeader>
+				)}
 
-				<div className="space-y-4 pt-2">
+				<div className="space-y-4 pt-2" inert={busy}>
+					{validationError && <div id="component-form-error" ref={validationSummaryRef} tabIndex={-1} role="alert"
+						className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{validationError}</div>}
 					<div className="flex items-start gap-2 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
 						<Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
 						<span>
@@ -855,6 +932,8 @@ export function SubmitComponentDialog({
 							<Label htmlFor="comp-name">Name *</Label>
 							<Input
 								id="comp-name"
+								aria-invalid={validationError?.startsWith("Name") || undefined}
+								aria-describedby={validationError?.startsWith("Name") ? "component-form-error" : undefined}
 								value={name}
 								onChange={(e) => setName(e.target.value)}
 								placeholder="my-component"
@@ -877,6 +956,8 @@ export function SubmitComponentDialog({
 						<Label htmlFor="comp-desc">Description *</Label>
 						<Textarea
 							id="comp-desc"
+							aria-invalid={validationError?.startsWith("Description") || undefined}
+							aria-describedby={validationError?.startsWith("Description") ? "component-form-error" : undefined}
 							value={description}
 							onChange={(e) => setDescription(e.target.value)}
 							placeholder="What does this component do?"
@@ -890,7 +971,7 @@ export function SubmitComponentDialog({
 							<PickerSelect
 								id="component-publish-to"
 								value={(fixedTeamId ?? teamId) || "personal"}
-								disabled={isFolderVersion || fixedTeamId !== undefined || fixedVisibility !== undefined}
+								disabled={isEditMode || fixedTeamId !== undefined || fixedVisibility !== undefined}
 								onValueChange={(value) => {
 									const next = value === "personal" ? "" : value;
 									setTeamId(next);
@@ -901,7 +982,7 @@ export function SubmitComponentDialog({
 									}
 								}}
 								options={[
-									{ value: "personal", label: `Personal (${whoami?.username || whoami?.email || "me"})` },
+									{ value: "personal", label: "Personal" },
 									...teams.map((team) => ({ value: team.id, label: `Team: ${team.name}` })),
 								]}
 							/>
@@ -911,7 +992,7 @@ export function SubmitComponentDialog({
 							<PickerSelect
 								id="component-visibility"
 								value={fixedVisibility ?? visibility}
-								disabled={isFolderVersion || fixedVisibility !== undefined || teamRequiresPrivate}
+								disabled={isEditMode || fixedVisibility !== undefined || teamRequiresPrivate}
 								onValueChange={(value) => {
 									if (value === "team" && !(fixedTeamId ?? teamId)) {
 										toast.error("Team visibility requires a teamspace");
@@ -979,6 +1060,9 @@ export function SubmitComponentDialog({
 										</div>
 										<CodeEditor
 											id="mcp-json"
+											label="Server Config (JSON)"
+											invalid={validationError?.startsWith("Paste")}
+											errorId="component-form-error"
 											value={jsonInput}
 											onChange={handleJsonInput}
 											language="json"
@@ -1186,8 +1270,9 @@ export function SubmitComponentDialog({
 								<TabsList className="grid w-full grid-cols-3">
 									<TabsTrigger value="git" disabled={isFolderVersion}>Git</TabsTrigger>
 									<TabsTrigger value="paste" disabled={isFolderVersion}>Paste</TabsTrigger>
-									<TabsTrigger value="upload">Upload</TabsTrigger>
+									<TabsTrigger value="upload" disabled={isEditMode && !isFolderVersion}>Upload</TabsTrigger>
 								</TabsList>
+								{isEditMode && !isFolderVersion && <p className="pt-2 text-xs text-muted-foreground">To switch to a folder, use the versioned Skill workflow in My submissions; its review is bound to the exact saved revision.</p>}
 
 								<TabsContent value="git" className="space-y-3 pt-3">
 									<div className="grid grid-cols-2 gap-3">
@@ -1195,6 +1280,8 @@ export function SubmitComponentDialog({
 											<Label htmlFor="skill-git-url">Git URL *</Label>
 											<Input
 												id="skill-git-url"
+												aria-invalid={validationError?.startsWith("Git URL") || undefined}
+												aria-describedby={validationError?.startsWith("Git URL") ? "component-form-error" : undefined}
 												value={skillGitUrl}
 												onChange={(e) => handleSkillGitUrl(e.target.value)}
 												placeholder="https://github.com/org/skills"
@@ -1485,6 +1572,7 @@ export function SubmitComponentDialog({
 								</div>
 								<div className="space-y-1.5">
 									<Label>Handler Type</Label>
+									{handlerType === "http" && <p className="text-xs text-muted-foreground">Native HTTP hooks are supported by Claude Code. Use a command handler for other harnesses.</p>}
 									<PickerSelect
 										value={handlerType}
 										onValueChange={setHandlerType}
@@ -1514,6 +1602,8 @@ export function SubmitComponentDialog({
 								<Label htmlFor="hook-config">Handler Config (JSON)</Label>
 								<Textarea
 									id="hook-config"
+									aria-invalid={validationError?.toLowerCase().includes("handler") || undefined}
+									aria-describedby={validationError?.toLowerCase().includes("handler") ? "component-form-error" : undefined}
 									value={handlerConfig}
 									onChange={(e) => setHandlerConfig(e.target.value)}
 									placeholder='{"command": "./my-hook.sh"}'
@@ -1572,6 +1662,8 @@ export function SubmitComponentDialog({
 								<Label htmlFor="prompt-template">Template *</Label>
 								<Textarea
 									id="prompt-template"
+									aria-invalid={validationError?.startsWith("Template") || undefined}
+									aria-describedby={validationError?.startsWith("Template") ? "component-form-error" : undefined}
 									value={template}
 									onChange={(e) => setTemplate(e.target.value)}
 									placeholder={
@@ -1607,9 +1699,11 @@ export function SubmitComponentDialog({
 							</div>
 							<div className="grid grid-cols-2 gap-3">
 								<div className="space-y-1.5">
-									<Label htmlFor="sandbox-image">Image / Artifact Ref *</Label>
+									<Label htmlFor="sandbox-image">Image / Artifact Ref {runtimeType === "docker" || runtimeType === "lxc" ? "*" : "(optional)"}</Label>
 									<Input
 										id="sandbox-image"
+										aria-invalid={validationError?.startsWith("Image") || undefined}
+										aria-describedby={validationError?.startsWith("Image") ? "component-form-error" : undefined}
 										value={image}
 										onChange={(e) => setImage(e.target.value)}
 										placeholder="ubuntu:22.04"
@@ -1630,6 +1724,9 @@ export function SubmitComponentDialog({
 									<Label htmlFor="sandbox-limits">Resource Limits JSON</Label>
 									<CodeEditor
 										id="sandbox-limits"
+										label="Resource Limits JSON"
+										invalid={validationError?.startsWith("Resource limits")}
+										errorId="component-form-error"
 										value={sandboxResourceLimits}
 										onChange={setSandboxResourceLimits}
 										language="json"
@@ -1641,6 +1738,9 @@ export function SubmitComponentDialog({
 									<Label htmlFor="sandbox-runtime-config">Runtime Config JSON</Label>
 									<CodeEditor
 										id="sandbox-runtime-config"
+										label="Runtime Config JSON"
+										invalid={!!validationError && (validationError.includes("JSON") || validationError.startsWith("Runtime config") || validationError.startsWith("Firecracker") || validationError.startsWith("WASM"))}
+										errorId="component-form-error"
 										value={sandboxRuntimeConfig}
 										onChange={setSandboxRuntimeConfig}
 										language="json"
@@ -1678,18 +1778,19 @@ export function SubmitComponentDialog({
 						</div>
 					</div>
 
-					{/* ── Actions ───────────────────────────────────── */}
-					{type === "skills" && skillMode === "upload" && submitError && (
-						<p role="status" className="text-xs text-muted-foreground">{submitError}</p>
-					)}
-					<div className="flex justify-end gap-2 pt-2">
+				</div>
+				{/* Keep the save control focused while editable fields are locked in flight. */}
+				{type === "skills" && skillMode === "upload" && submitError && (
+					<p role="status" className="mt-4 text-xs text-muted-foreground">{submitError}</p>
+				)}
+				<div className="mt-4 flex justify-end gap-2 pt-2">
 						{isEditMode ? (
 							<>
 								{isFolderVersion ? (
 									<Button
 										onClick={() => {
 										const err = validateForSubmit();
-										if (err) { toast.error(err); return; }
+										if (err) { reportValidationError(err); return; }
 										onUpdateDraft?.(String(d?.id), buildBody());
 									}}
 										disabled={busy || pendingSkillUploads > 0}
@@ -1702,7 +1803,7 @@ export function SubmitComponentDialog({
 										onClick={() => {
 											const err = validateForSubmit();
 											if (err) {
-												toast.error(err);
+												reportValidationError(err);
 												return;
 											}
 											onUpdateDraft?.(
@@ -1710,7 +1811,7 @@ export function SubmitComponentDialog({
 												buildBody(),
 											);
 										}}
-										disabled={busy || !!submitError}
+										disabled={busy}
 										title={submitError ?? undefined}
 									>
 										{isSavingDraft && (
@@ -1723,16 +1824,14 @@ export function SubmitComponentDialog({
 										<Button
 											variant="outline"
 											onClick={() => {
-												if (!name) {
-													toast.error("Name is required");
-													return;
-												}
+												const err = validateForDraft();
+												if (err) { reportValidationError(err); return; }
 												onUpdateDraft?.(
 													(editItem as Record<string, unknown>).id as string,
 													buildBody(),
 												);
 											}}
-											disabled={busy || !name}
+											disabled={busy}
 										>
 											{isSavingDraft && (
 												<Loader2 className="h-4 w-4 animate-spin mr-1.5" />
@@ -1743,18 +1842,18 @@ export function SubmitComponentDialog({
 											onClick={() => {
 												const err = validateForSubmit();
 												if (err) {
-													toast.error(err);
+													reportValidationError(err);
 													return;
 												}
 												onSubmit(buildBody());
 											}}
-											disabled={busy || !!submitError}
+											disabled={busy}
 											title={submitError ?? undefined}
 										>
 											{isSubmitting && (
 												<Loader2 className="h-4 w-4 animate-spin mr-1.5" />
 											)}
-											Save & Resubmit
+											{d?.status === "draft" ? "Save & Submit for Review" : "Save & Resubmit"}
 										</Button>
 									</>
 								)}
@@ -1764,7 +1863,7 @@ export function SubmitComponentDialog({
 								{!(type === "skills" && skillMode === "upload") && <Button
 									variant="outline"
 									onClick={handleDraft}
-									disabled={busy || !name || pendingSkillUploads > 0}
+									disabled={busy || pendingSkillUploads > 0}
 								>
 									{isSavingDraft && (
 										<Loader2 className="h-4 w-4 animate-spin mr-1.5" />
@@ -1773,7 +1872,7 @@ export function SubmitComponentDialog({
 								</Button>}
 								<Button
 									onClick={handleSubmit}
-									disabled={busy || !!submitError || pendingSkillUploads > 0}
+									disabled={busy || pendingSkillUploads > 0}
 									title={submitError ?? undefined}
 								>
 									{(isSubmitting || (type === "skills" && skillMode === "upload" && isSavingDraft)) && (
@@ -1783,9 +1882,32 @@ export function SubmitComponentDialog({
 								</Button>
 							</>
 						)}
-					</div>
 				</div>
-			</DialogContent>
+		</>
+	);
+	if (surface === "page") {
+		return <section aria-label={`${typeLabel} editor`} aria-busy={busy}
+			onClickCapture={(event) => {
+				const target = event.target;
+				const button = target instanceof HTMLElement ? target.closest("button") : null;
+				if (button?.textContent?.includes("Save Changes")) saveFocusRef.current = button;
+			}}
+			className="relative mx-auto w-full max-w-4xl rounded-xl border border-border bg-card p-5 sm:p-8">{formBody}</section>;
+	}
+	return (
+		<Dialog modal={false} open={open} onOpenChange={(value) => {
+			if (!value) reset();
+			onOpenChange(value);
+		}}>
+			<DialogContent
+				className={type === "skills" && skillMode === "upload"
+					? "sm:max-w-3xl max-h-[90vh] overflow-y-auto"
+					: "max-w-lg max-h-[85vh] overflow-y-auto"}
+				onPointerDownOutside={(event) => {
+					const target = event.target;
+					if (target instanceof Node && document.querySelector('[data-help-panel="true"]')?.contains(target)) event.preventDefault();
+				}}
+			>{formBody}</DialogContent>
 		</Dialog>
 	);
 }

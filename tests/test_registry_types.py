@@ -197,7 +197,13 @@ class TestSchemas:
         from schemas.hook import HookSubmitRequest
 
         r = HookSubmitRequest(
-            name="h", version="1.0", description="desc", owner="o", event="PreToolUse", handler_type="command"
+            name="h",
+            version="1.0",
+            description="desc",
+            owner="o",
+            event="PreToolUse",
+            handler_type="command",
+            handler_config={"command": "echo ok"},
         )
         assert r.execution_mode == "async"
         assert r.priority == 100
@@ -313,7 +319,15 @@ class TestSkillRoutes:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.post(
                     "/api/v1/skills/submit",
-                    json={"name": "s", "version": "1.0", "description": "d", "owner": "o", "task_type": "code-review"},
+                    json={
+                        "name": "s",
+                        "version": "1.0",
+                        "description": "d",
+                        "owner": "o",
+                        "task_type": "code-review",
+                        "delivery_mode": "registry_direct",
+                        "skill_md_content": "# Review\n",
+                    },
                 )
         assert r.status_code == 200
         assert db.add.call_count == 2  # listing + version
@@ -452,6 +466,7 @@ class TestHookRoutes:
                     "owner": "o",
                     "event": "PreToolUse",
                     "handler_type": "command",
+                    "handler_config": {"command": "echo ok"},
                 },
             )
         assert r.status_code == 200

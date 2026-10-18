@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 SK Akram <skcodewizard786@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
@@ -85,7 +86,7 @@ test.describe("Builder skill recommendation", () => {
     await expect(page.getByRole("button", { name: "Continue to behavior" })).toBeVisible();
     await expect(page.getByRole("region", { name: bannerName })).toBeHidden();
     await page.goto(`/agents/builder?edit=${agentId}`);
-    await expect(page.getByRole("heading", { name: "Edit Agent", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Edit Agent File", exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: bannerName })).toBeHidden();
   });
 
@@ -96,13 +97,16 @@ test.describe("Builder skill recommendation", () => {
       await expect(page.getByPlaceholder("migration-guide", { exact: true })).toHaveValue(/banner-test-/);
       await page.screenshot({ path: testInfo.outputPath(`${mode}-desktop.png`), fullPage: true });
       await page.getByRole("button", { name: "Continue to behavior" }).click();
-      await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Define how the Agent File should behave" })).toBeVisible();
     });
   }
 
   test("draft recovery and recommendation dismissal are independent on mobile", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.evaluate(() => localStorage.setItem("observal_agent_draft", JSON.stringify({ name: "saved-example" })));
+    const identity = await page.request.get(`${API_BASE}/api/v1/auth/whoami`, { headers: { Authorization: `Bearer ${token}` } });
+    expect(identity.ok()).toBeTruthy();
+    const userId = (await identity.json()).id as string;
+    await page.evaluate((id) => localStorage.setItem(`observal_agent_draft:${id}`, JSON.stringify({ name: "saved-example" })), userId);
     await page.goto("/agents/builder");
     await expect(page.getByRole("region", { name: bannerName })).toBeVisible();
     await expect(page.getByText("You have an unsaved draft.")).toBeVisible();
@@ -112,7 +116,7 @@ test.describe("Builder skill recommendation", () => {
     await expect(page.getByRole("region", { name: bannerName })).toBeVisible();
     await page.getByRole("button", { name: "Dismiss Observal skill recommendation" }).click();
     await page.getByRole("button", { name: "Continue to behavior" }).click();
-    await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Define how the Agent File should behave" })).toBeVisible();
   });
 
   test("storage failure still permits dismissal for this visit", async ({ page }) => {
@@ -128,6 +132,6 @@ test.describe("Builder skill recommendation", () => {
     await page.getByRole("button", { name: "Dismiss Observal skill recommendation" }).click();
     await expect(page.getByRole("region", { name: bannerName })).toBeHidden();
     await page.getByRole("button", { name: "Continue to behavior" }).click();
-    await expect(page.getByRole("heading", { name: "Define how the agent should behave" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Define how the Agent File should behave" })).toBeVisible();
   });
 });

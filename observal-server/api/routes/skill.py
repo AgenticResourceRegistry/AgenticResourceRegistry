@@ -122,6 +122,8 @@ async def submit_skill(
     slash_command = req.slash_command
     skill_path = req.skill_path
     delivery_mode = req.delivery_mode or "git_fetch"
+    if delivery_mode == "git_fetch" and (not isinstance(req.git_url, str) or not req.git_url.strip()):
+        raise HTTPException(status_code=422, detail="A Git skill requires a nonempty git_url before submission")
     script_content = req.script_content
     script_filename = req.script_filename
 
@@ -970,6 +972,8 @@ async def submit_skill_draft(
         raise HTTPException(status_code=409, detail="Submit this saved draft by version UUID and observed revision")
     if ver.requires_global_review or ver.pre_public_status is not None:
         raise HTTPException(status_code=409, detail="Global public re-review is not yet available")
+    if ver.delivery_mode == "git_fetch" and (not isinstance(ver.git_url, str) or not ver.git_url.strip()):
+        raise HTTPException(status_code=422, detail="A Git skill requires a nonempty git_url before submission")
     _validate_effective_bundle(
         ver.delivery_mode,
         ver.skill_md_content,
