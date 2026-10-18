@@ -28,10 +28,25 @@ import services.dynamic_settings as ds
 from api.deps import require_role
 from database import async_session
 from models.user import User, UserRole
+from observal_shared.harness_registry import get_harness_display_names
 from services.clickhouse import _query
 from services.user_search import clickhouse_in_condition, resolve_user_filter_values
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+
+_PLATFORM_NAMES = get_harness_display_names()
+
+
+def _harness_id(value: str) -> str:
+    """Accept both canonical ids and display labels from bookmarked trace searches."""
+    normalized = value.strip().casefold()
+    for harness in _PLATFORM_NAMES:
+        if normalized == harness.casefold():
+            return harness
+    for harness, label in _PLATFORM_NAMES.items():
+        if normalized == label.casefold():
+            return harness
+    return value
 
 
 async def _ch_json(sql: str, params: dict | None = None) -> list[dict]:
@@ -148,15 +163,6 @@ async def list_sessions(
         except Exception:
             optic.opt(exception=True).warning("User name resolution failed")
 
-    _platform_names = {
-        "kiro": "Kiro",
-        "claude-code": "Claude Code",
-        "cursor": "Cursor",
-        "copilot-cli": "Copilot CLI",
-        "codex-cli": "Codex CLI",
-        "opencode": "OpenCode",
-    }
-
     # Resolve agent names from PostgreSQL
     from models.agent import Agent
 
@@ -209,7 +215,7 @@ async def list_sessions(
         uid = row.get("user_id", "")
         row["user_name"] = uid_to_name.get(uid, current_user.name)
         harness = row.pop("harness", "") or ""
-        row["platform"] = _platform_names.get(harness, harness.replace("-", " ").title() if harness else "Claude Code")
+        row["platform"] = _PLATFORM_NAMES.get(harness, harness.replace("-", " ").title() if harness else "Claude Code")
         row["service_name"] = harness
         row["is_active"] = bool(int(row.get("is_active", 0)))
         agent_id = row.get("agent_id") or None
@@ -258,7 +264,7 @@ async def _list_sessions_query(
         where_parts.append(f"last_event_time > now() - INTERVAL {int(days)} DAY")
     if platform:
         where_parts.append("harness = {platform:String}")
-        params["param_platform"] = platform
+        params["param_platform"] = _harness_id(platform)
     if user_ids:
         condition = clickhouse_in_condition("user_id", user_ids, "user", params)
         if condition:

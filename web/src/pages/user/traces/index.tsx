@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useHelp } from "@/components/wiki/help-context";
+import { useHarnesses } from "@/hooks/use-harnesses";
 import {
 	useAllSessions2,
 	useSessionsSummary,
@@ -455,6 +456,7 @@ export default function TracesPage() {
 		days: serverQuery.filters.days && !isNaN(parseInt(serverQuery.filters.days, 10)) ? parseInt(serverQuery.filters.days, 10) : undefined,
 	});
 	const { data: summary } = useSessionsSummary();
+	const { data: availableHarnesses = [] } = useHarnesses();
 	const { data: whoami } = useWhoami();
 	useSessionSubscription();
 
@@ -666,13 +668,22 @@ export default function TracesPage() {
 	const rows = sortedRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
 	// ── Toolbar state derived from the query / sort ──────────────────
-	const harnesses = useMemo(() => {
-		const set = new Set<string>();
-		for (const s of allSessions) set.add(derivePlatform(s));
-		return Array.from(set).sort();
-	}, [allSessions]);
+	// Values are stable registry ids; display names belong only in the menu.
+	// Deriving options from filtered sessions would erase them on selection.
+	const harnesses = useMemo(
+		() => [...availableHarnesses].sort((a, b) => a.display_name.localeCompare(b.display_name)),
+		[availableHarnesses],
+	);
 
-	const harnessValue = serverQuery.filters.platform ?? "all";
+	const rawPlatform = serverQuery.filters.platform?.trim();
+	const matchedHarness = rawPlatform
+		? harnesses.find(
+				(h) =>
+					h.name.toLowerCase() === rawPlatform.toLowerCase() ||
+					h.display_name.toLowerCase() === rawPlatform.toLowerCase(),
+			)
+		: undefined;
+	const harnessValue = matchedHarness?.name ?? rawPlatform ?? "all";
 
 	const sortValue = useMemo(() => {
 		const s = sorting[0];
@@ -881,12 +892,12 @@ export default function TracesPage() {
 									{/* A `platform:` token typed by hand may not match any
 									    harness on this page; keep it selectable so the control
 									    still reflects the query it is bound to. */}
-									{harnessValue !== "all" && !harnesses.includes(harnessValue) && (
+									{harnessValue !== "all" && !harnesses.some((h) => h.name === harnessValue) && (
 										<SelectItem value={harnessValue}>{harnessValue}</SelectItem>
 									)}
 									{harnesses.map((h) => (
-										<SelectItem key={h} value={h}>
-											{h}
+										<SelectItem key={h.name} value={h.name}>
+											{h.display_name}
 										</SelectItem>
 									))}
 								</SelectContent>
