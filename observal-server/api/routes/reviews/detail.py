@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import get_current_user, get_db
+from api.deps import (
+    get_current_user,
+    get_db,
+    get_effective_agent_permission,
+    get_effective_component_permission,
+)
 from api.routes.reviews.common import get_review, head, notify_update, participant
 from api.routes.reviews.queue import summary
 from models.review import (
@@ -21,7 +26,7 @@ from models.review import (
     ReviewSubmission,
     ReviewSubscription,
 )
-from models.user import User
+from models.user import User, UserRole
 from schemas.review import ReviewEdit
 from services.registry_fork import provenance_for
 from services.review import check_config, ci
@@ -141,6 +146,15 @@ async def detail(
         },
         "my_subscription": subscription.mode if subscription else None,
         "self_approval_allowed": self_approval_allowed,
+        "is_own_work": own,
+        "can_approve": active and eligible and (not own or self_approval_allowed),
+        "can_request_changes": active and eligible and not own,
+        "can_comment": active,
+        "can_publish": active and eligible and (not own or self_approval_allowed),
+        "can_override_publish": active and eligible and user.role == UserRole.super_admin,
+        "can_close": active and eligible and not own,
+        "can_withdraw": active and can_withdraw,
+        "can_edit": active and can_edit,
         "forked_from": await provenance_for(subject, user, db) if getattr(subject, "is_fork", True) else None,
     }
 
