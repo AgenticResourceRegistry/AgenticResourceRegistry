@@ -143,7 +143,7 @@ Example CI usage:
 
 ```bash
 export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-export OBSERVAL_API_KEY=<key>
+export OBSERVAL_API_KEY='replace-with-your-key'
 
 observal ops traces --limit 100 --output json | jq
 ```

@@ -143,7 +143,7 @@ function resolveDocHref(href: string | undefined, basePath?: string): string | u
 		else normalized.push(part);
 	}
 	const joined = normalized.join("/");
-	const route = isMarkdownFile ? joined.replace(/\.md$/, "").replace(/(^|\/)index$/, "") : joined;
+	const route = (isMarkdownFile ? joined.replace(/\.md$/, "").replace(/(^|\/)index$/, "") : joined).replace(/\/$/, "");
 	const fragment = hash ? `#${hash}` : "";
 	const docPath = routeToDocPath(route, listDocPaths());
 	// The wiki bundles a curated subset of pages. Send the rest to the docs site.
