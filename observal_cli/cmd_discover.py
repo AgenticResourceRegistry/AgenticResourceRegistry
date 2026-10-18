@@ -254,6 +254,12 @@ def discover_search(
         rprint(
             "[dim]Try fewer or different words, or drop --type/--harness. If it truly does not exist, build it and consider publishing it.[/dim]"
         )
+        rprint(
+            "[dim]For most users, discovery only covers your own listings and the teamspaces you belong to, not other "
+            "people's public listings. Browse those with `observal registry <type> list` or `observal agent list`, and "
+            "install registry agents and components by reference. Remote A2A agents are not installed: run them "
+            "with `observal delegate run`.[/dim]"
+        )
         return
 
     table = Table(title=f"Resources for: {esc(text)}", show_lines=False, padding=(0, 1))
