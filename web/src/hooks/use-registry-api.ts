@@ -63,6 +63,39 @@ export function useComponentForks(type: RegistryType, id: string, page: number, 
   });
 }
 
+export function useResourcePage(
+  type: RegistryType,
+  owner: boolean,
+  filters: Record<string, string>,
+  page: number,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["registry", type, owner ? "my" : "catalog", filters, page],
+    queryFn: ({ signal }) => {
+      const params = { ...filters, limit: "20", offset: String(page * 20) };
+      return owner ? registry.myPage(type, params, signal) : registry.listPage(type, params, signal);
+    },
+    enabled,
+  });
+}
+
+export function useAgentSubmissionCount(status: "pending" | "rejected", enabled = true) {
+  return useQuery({
+    queryKey: ["registry", "agents", "my", "status-count", status],
+    queryFn: ({ signal }) => registry.myPage("agents", { status, limit: "1", offset: "0" }, signal),
+    enabled,
+  });
+}
+
+export function useArchivedAgentPage(filters: Record<string, string>, page: number, enabled = true) {
+  return useQuery({
+    queryKey: ["registry", "agents", "archived", filters, page],
+    queryFn: ({ signal }) => registry.archivedPage({ ...filters, limit: "20", offset: String(page * 20) }, signal),
+    enabled,
+  });
+}
+
 export function useMyComponents(type: RegistryType, enabled = true) {
   return useQuery({
     queryKey: ["registry", type, "my"],

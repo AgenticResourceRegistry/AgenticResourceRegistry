@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Suspense } from "react";
@@ -30,6 +31,7 @@ export default function ResourcesPage() {
       />
       <div className="page-body w-full mx-auto">
         <TypeTabs
+          changesPage
           tabs={TABS}
           active={type}
           onTabChange={(v) =>

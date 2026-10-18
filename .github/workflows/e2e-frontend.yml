@@ -97,7 +97,7 @@ jobs:
           # This runner builds a fresh disposable stack; never point this job
           # at a long-lived server when enabling the draft-creating tests.
           OBSERVAL_ISOLATED_STACK: 'true'
-        run: pnpm exec playwright test frontend-flows skill-folder
+        run: pnpm exec playwright test frontend-flows agentic-resources skill-folder
 
       - name: Show API errors on failure
         if: failure()

@@ -9,6 +9,12 @@
 
 // ── Registry ────────────────────────────────────────────────────────
 
+/** Server-filtered result page; total counts matches before offset/limit. */
+export interface RegistryPage<T> {
+	items: T[];
+	total: number;
+}
+
 /** GET /registry/resolve: canonical identity for a UUID or namespace/slug reference. */
 export interface RegistryResolution {
 	id: string;

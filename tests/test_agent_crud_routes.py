@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused unit coverage for the agent CRUD routes."""
@@ -533,6 +534,7 @@ async def test_list_agents_builds_scoped_search_queries_and_maps_batch_data(boun
         search="review",
         namespace=" Alice ",
         category="testing",
+        harness=None,
         team_id=TEAM_ID,
         composable_for_team_id=None,
         public_only=False,
@@ -558,8 +560,15 @@ async def test_list_agents_builds_scoped_search_queries_and_maps_batch_data(boun
         assert "agents.category = 'testing'" in sql
         assert f"agents.team_id = '{TEAM_ID.hex}'" in sql
         assert "lower(agents.name) LIKE lower('%review%')" in sql
-    assert "ORDER BY" in list_sql
+    assert "agents.created_at DESC, agents.id DESC" in list_sql
     assert "LIMIT 25 OFFSET 5" in list_sql
+
+
+async def test_agent_harness_filter_matches_explicit_or_inferred_and_escapes_like():
+    sql = _sql(crud._harness_condition("pi_%"))
+    assert "supported_harnesses" in sql
+    assert "inferred_supported_harnesses" in sql
+    assert r"pi\_\%" in sql
 
 
 async def test_list_agents_empty_page_skips_batch_queries(boundaries):
@@ -571,6 +580,7 @@ async def test_list_agents_empty_page_skips_batch_queries(boundaries):
         search=None,
         namespace=None,
         category=None,
+        harness=None,
         team_id=None,
         composable_for_team_id=TEAM_ID,
         public_only=True,
@@ -592,7 +602,19 @@ async def test_my_agents_filters_owner_and_maps_rating(boundaries):
     agent = _agent()
     db = _db(_result(scalar_rows=[agent]), _result(rows=[(AGENT_ID, 3.555)]), _result(rows=[]))
 
-    result = await crud.my_agents(db=db, current_user=_user())
+    result = await crud.my_agents(
+        response=Response(),
+        search=None,
+        status=None,
+        namespace=None,
+        team_id=None,
+        category=None,
+        harness=None,
+        limit=None,
+        offset=3,
+        db=db,
+        current_user=_user(),
+    )
 
     assert len(result) == 1
     assert result[0].average_rating == 3.56
@@ -601,7 +623,35 @@ async def test_my_agents_filters_owner_and_maps_rating(boundaries):
     sql = _sql(db.execute.await_args_list[0].args[0])
     assert f"agents.created_by = '{USER_ID.hex}'" in sql
     assert "agents.deleted_at IS NULL" in sql
-    assert "ORDER BY agents.created_at DESC" in sql
+    assert "ORDER BY agents.created_at DESC, agents.id DESC" in sql
+    assert "OFFSET 3" in sql
+
+
+async def test_my_agents_includes_current_review_for_requested_changes(boundaries):
+    agent = _agent(status=AgentStatus.changes_requested)
+    db = _db(
+        _result(scalar_rows=[agent]),
+        _result(rows=[]),
+        _result(rows=[]),
+        _result(rows=[(AGENT_ID, 342)]),
+    )
+    result = await crud.my_agents(
+        response=Response(),
+        search=None,
+        status=AgentStatus.changes_requested,
+        namespace=None,
+        team_id=None,
+        category=None,
+        harness=None,
+        limit=20,
+        offset=0,
+        db=db,
+        current_user=_user(),
+    )
+    assert result[0].review_number == 342
+    sql = _sql(db.execute.await_args_list[-1].args[0])
+    assert "reviews.subject_type = 'agent'" in sql
+    assert f"reviews.version_id IN ('{VERSION_ID.hex}')" in sql
 
 
 async def test_archived_agents_maps_creators_and_ratings(boundaries):
@@ -612,7 +662,18 @@ async def test_archived_agents_maps_creators_and_ratings(boundaries):
         _result(rows=[(USER_ID, "archiver@example.com", None)]),
     )
 
-    result = await crud.archived_agents(db=db, current_user=_user(role=UserRole.admin))
+    result = await crud.archived_agents(
+        response=Response(),
+        search=None,
+        namespace=None,
+        category=None,
+        harness=None,
+        team_id=None,
+        limit=None,
+        offset=3,
+        db=db,
+        current_user=_user(role=UserRole.admin),
+    )
 
     assert result[0].status == AgentStatus.archived
     assert result[0].average_rating == 2.0
@@ -620,6 +681,8 @@ async def test_archived_agents_maps_creators_and_ratings(boundaries):
     sql = _sql(db.execute.await_args_list[0].args[0])
     assert "agent_versions.status = 'archived'" in sql
     assert "agents.deleted_at IS NULL" in sql
+    assert "ORDER BY agents.created_at DESC, agents.id DESC" in sql
+    assert "OFFSET 3" in sql
 
 
 @pytest.mark.parametrize(("role", "owner_filter"), [(UserRole.user, True), (UserRole.admin, False)])

@@ -262,6 +262,7 @@ class AgentResponse(BaseModel):
 
 
 class AgentSummary(BaseModel):
+    review_number: int | None = None
     id: uuid.UUID
     name: str
     namespace: str

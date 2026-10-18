@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { createFileRoute, redirect } from "@tanstack/react-router";
@@ -12,8 +13,10 @@ export const RESOURCE_TYPES: RegistryType[] = ["agents", "mcps", "skills", "hook
 
 /** Filters shared across types plus the type-specific ones; irrelevant keys are ignored per type. */
 export type ResourcesSearch = {
-  /** Which slice to list: discover (default), my, pending, archived. */
+  /** Which slice to list: discover (default), my, drafts, pending, archived. */
   view?: string;
+  /** One-based page number; absent means the first page. */
+  page?: number;
   search?: string;
   namespace?: string;
   team?: string;
@@ -58,6 +61,8 @@ export const Route = createFileRoute("/_authed/resources/$type")({
   validateSearch: (search: Record<string, unknown>): ResourcesSearch =>
     ({
       ...Object.fromEntries(SEARCH_KEYS.map((k) => [k, typeof search[k] === "string" && search[k] ? search[k] : undefined])),
+      page: typeof search.page === "number" && Number.isSafeInteger(search.page) && search.page > 1 && search.page < 100000
+        ? search.page : typeof search.page === "string" && /^(?:[2-9]|[1-9]\d{1,4})$/.test(search.page) ? Number(search.page) : undefined,
       folderListingId: asMatch(search.folderListingId, UUID),
       folderVersionId: asMatch(search.folderVersionId, UUID),
       folderVersion: asMatch(search.folderVersion, SEMVER),
