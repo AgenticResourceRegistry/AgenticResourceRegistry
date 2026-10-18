@@ -292,8 +292,13 @@ async def _rescope_review(db: AsyncSession, review, entity, actor_id: uuid.UUID)
     await deliver_event(db, review, "opened", actor_id, revision=(await _head(db, review)).number)
 
 
-async def _dismiss_team_approvals(db: AsyncSession, review, actor_id: uuid.UUID) -> None:
+async def _dismiss_team_approvals(
+    db: AsyncSession, review, actor_id: uuid.UUID, *, reason="Visibility changed to public"
+) -> None:
+    from models.inbox import InboxKind
     from models.review import ReviewSubmission
+    from services.review.notifications import resolve_review_work
+    from services.review.requests import reconcile_request_threads
 
     await db.execute(
         update(ReviewSubmission)
@@ -302,9 +307,12 @@ async def _dismiss_team_approvals(db: AsyncSession, review, actor_id: uuid.UUID)
             state="dismissed",
             dismissed_by=actor_id,
             dismissed_at=datetime.now(UTC),
-            dismissed_reason="Visibility changed to public",
+            dismissed_reason=reason,
         )
     )
+    await db.flush()
+    await reconcile_request_threads(db, review, actor_id=actor_id)
+    await resolve_review_work(db, review, actor_id, kinds=(InboxKind.change_requested,))
 
 
 async def _restore_published_review(db: AsyncSession, version, actor_id: uuid.UUID) -> None:
@@ -317,6 +325,7 @@ async def _restore_published_review(db: AsyncSession, version, actor_id: uuid.UU
     )
     if review is None or review.state == ReviewState.published:
         return
+    await _dismiss_team_approvals(db, review, actor_id, reason="Visibility changed to private")
     from models.inbox import InboxKind
     from services.review.notifications import resolve_review_work
 
@@ -373,7 +382,7 @@ async def _review_skill_visibility(
                 row.reviewed_by = None
                 row.reviewed_at = None
                 requeued = True
-            if row.status != ListingStatus.pending:
+            if row.status not in (ListingStatus.pending, ListingStatus.changes_requested):
                 continue
             existing = await db.scalar(
                 select(Review).where(Review.subject_type == "skill", Review.version_id == row.id).with_for_update()
@@ -383,6 +392,9 @@ async def _review_skill_visibility(
                 # not count toward the global decision.
                 await _dismiss_team_approvals(db, existing, user.id)
                 await _rescope_review(db, existing, entity, user.id)
+                from services.review.decisions import sync_state
+
+                await sync_state(db, existing, actor_id=user.id)
                 continue
             review = await open_or_push(
                 db, "skill", entity, row, user.id, message="Re-review for public visibility", visibility_requeue=True
@@ -418,7 +430,11 @@ async def _review_skill_visibility(
                 )
             )
         ).all():
+            await _dismiss_team_approvals(db, open_review, user.id, reason="Visibility changed to private")
             await _rescope_review(db, open_review, entity, user.id)
+            from services.review.decisions import sync_state
+
+            await sync_state(db, open_review, actor_id=user.id)
 
     # A former pointer can still point at a pending candidate. Never demote an
     # already-cleared newer release when choosing the private default.

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Review aggregates and immutable revision snapshots (not yet wired to legacy routes)."""
 
@@ -95,6 +96,7 @@ class ReviewRevision(Base):
 
 class ReviewThread(Base):
     __tablename__ = "review_threads"
+    __table_args__ = (UniqueConstraint("change_request_id", name="uq_review_threads_change_request"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     review_id: Mapped[uuid.UUID] = mapped_column(
@@ -106,6 +108,10 @@ class ReviewThread(Base):
     end_line: Mapped[int | None] = mapped_column(Integer)
     revision_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("review_revisions.id", ondelete="SET NULL")
+    )
+    change_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("review_submissions.id", name="fk_review_threads_change_request", ondelete="SET NULL"),
     )
     anchor_text: Mapped[str | None] = mapped_column(Text)
     outdated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

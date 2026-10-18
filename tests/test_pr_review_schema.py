@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Migration and metadata smoke tests without Docker."""
 
@@ -9,7 +10,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, inspect
 
-from models import Base, Review, ReviewRevision
+from models import Base, Review, ReviewRevision, ReviewThread
 
 
 def test_review_schema_upgrades_twice_from_legacy_sqlite():
@@ -45,18 +46,23 @@ def test_review_schema_upgrades_twice_from_legacy_sqlite():
         for table in Base.metadata.sorted_tables:
             if table.name != "reviews" and not table.name.startswith("review_"):
                 continue
+            # This SQLite smoke stops at 044; 046's PostgreSQL constraint
+            # migration is exercised on PostgreSQL, not via SQLite table rebuild.
             expected = {
                 (tuple(fk.parent.name for fk in c.elements), c.elements[0].column.table.name, c.ondelete)
                 for c in table.foreign_key_constraints
+                if table.name != "review_threads" or c.name != "fk_review_threads_change_request"
             }
             actual = {
                 (tuple(fk["constrained_columns"]), fk["referred_table"], fk.get("options", {}).get("ondelete"))
                 for fk in migrated.get_foreign_keys(table.name)
             }
             assert actual == expected, table.name
-            assert {c.name: c.nullable for c in table.columns} == {
-                c["name"]: c["nullable"] for c in migrated.get_columns(table.name)
-            }, table.name
+            assert {
+                c.name: c.nullable
+                for c in table.columns
+                if table.name != "review_threads" or c.name != "change_request_id"
+            } == {c["name"]: c["nullable"] for c in migrated.get_columns(table.name)}, table.name
         orphan.downgrade()
         cutover.downgrade()
         module.downgrade()
@@ -67,3 +73,5 @@ def test_review_schema_upgrades_twice_from_legacy_sqlite():
 def test_number_sequence_and_unique_revision():
     assert Review.__table__.c.number.default.name == "review_number_seq"
     assert any(c.name == "uq_review_revision_number" for c in ReviewRevision.__table__.constraints)
+    assert any(c.name == "uq_review_threads_change_request" for c in ReviewThread.__table__.constraints)
+    assert any(c.name == "fk_review_threads_change_request" for c in ReviewThread.__table__.foreign_key_constraints)

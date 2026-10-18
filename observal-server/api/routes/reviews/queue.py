@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Visible review queue. Always filter before paginating to avoid leaking metadata."""
 
@@ -194,11 +195,26 @@ async def list_reviews(
     if cursor is not None:
         stmt = stmt.where(Review.number < cursor)
     if needs == "my_review":
+        # The latest decision (including a terminal dismissal) wins. Comment-only
+        # submissions do not complete a reviewer request; a withdrawn request
+        # must not resurrect an earlier approval on the same head.
+        latest_decision = (
+            select(ReviewSubmission.id)
+            .where(
+                ReviewSubmission.review_id == Review.id,
+                ReviewSubmission.reviewer_id == user.id,
+                ReviewSubmission.state != "draft",
+                ReviewSubmission.verdict.in_(("approve", "request_changes")),
+            )
+            .order_by(ReviewSubmission.submitted_at.desc(), ReviewSubmission.id.desc())
+            .limit(1)
+            .correlate(Review)
+            .scalar_subquery()
+        )
         stmt = stmt.where(
             ~exists(
                 select(1).where(
-                    ReviewSubmission.review_id == Review.id,
-                    ReviewSubmission.reviewer_id == user.id,
+                    ReviewSubmission.id == latest_decision,
                     ReviewSubmission.revision_id == Review.head_revision_id,
                     ReviewSubmission.state == "submitted",
                 )

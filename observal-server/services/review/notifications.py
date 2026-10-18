@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Transactional inbox fan-out for PR reviews; legacy notices remain untouched."""
 
@@ -61,7 +62,8 @@ async def deliver_gate_change(db, review, was_ready: bool, actor_id, *, revision
         return
     is_ready = (await gate(db, review, policy=policy)).ready
     if is_ready:
-        await resolve_review_work(db, review, actor_id, kinds=(InboxKind.review_requested, InboxKind.change_requested))
+        # Gate readiness does not mean every individually requested reviewer has acted.
+        await resolve_review_work(db, review, actor_id, kinds=(InboxKind.change_requested,))
     elif was_ready:
         await resolve_review_work(db, review, actor_id, kinds=(InboxKind.review_ready,))
     if was_ready != is_ready:

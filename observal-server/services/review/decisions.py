@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Transactional review rules. Not called by legacy routes until the API/UI cutover."""
 
@@ -42,6 +43,7 @@ from services.review.anchors import reanchor
 from services.review.checks import pinned_component_blockers, snapshot_checks
 from services.review.files import render_files
 from services.review.policy import ApprovalPolicy, policy_for
+from services.review.requests import ensure_request_threads, reconcile_request_threads, review_decisions
 from services.skill_bundle import needs_bundle_delivery
 from services.teamspace import can_review, review_scope
 from services.versioning import parse_semver
@@ -213,6 +215,12 @@ async def open_or_push(
                     dismissed_reason="Visibility changed to public",
                 )
             )
+            await db.flush()
+            await reconcile_request_threads(db, review, actor_id=actor_id)
+            from models.inbox import InboxKind
+            from services.review.notifications import resolve_review_work
+
+            await resolve_review_work(db, review, actor_id, kinds=(InboxKind.change_requested,))
             review.published_at = None
             review.published_by = None
             review.is_private = subject.is_private
@@ -299,6 +307,9 @@ async def open_or_push(
     if not backfill:
         version.status = AgentStatus.pending if subject_type == "agent" else ListingStatus.pending
         if next_number > 1:
+            # A withdrawn review may reopen a request that was nonblocking while
+            # closed. Reopen its conversation before evaluating the new gate.
+            await reconcile_request_threads(db, review, actor_id=actor_id)
             # Approvals that still count under the policy can make the new head publishable.
             await sync_state(db, review, actor_id=actor_id, policy=policy)
     return review
@@ -356,54 +367,19 @@ async def _skill_blockers(db, review, version) -> list[str]:
 async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
     policy = policy or await policy_for(review, db=db)
     head = await _head(db, review)
-    submissions = (
-        (
-            await db.execute(
-                select(ReviewSubmission)
-                .where(ReviewSubmission.review_id == review.id, ReviewSubmission.state == "submitted")
-                .order_by(ReviewSubmission.submitted_at, ReviewSubmission.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    # A reviewer may submit several verdicts. The last relevant verdict wins;
-    # old approvals only count if policy explicitly permits them.
-    latest = {}
-    for submission in submissions:
-        if (submission.revision_id == head.id or not policy.dismiss_stale_approvals) and submission.verdict in (
-            "approve",
-            "request_changes",
-        ):
-            latest[submission.reviewer_id] = submission
+    _, latest, _ = await review_decisions(db, review)
+    # Dismissed decisions are terminal; neither an earlier approval nor an
+    # earlier change request may silently reappear after withdrawal.
     approvals = sum(
-        s.verdict == "approve" and (not s.self_review or policy.self_approval == "counted") for s in latest.values()
+        s.state == "submitted"
+        and s.verdict == "approve"
+        and (s.revision_id == head.id or not policy.dismiss_stale_approvals)
+        and (not s.self_review or policy.self_approval == "counted")
+        for s in latest.values()
     )
-    # Only the metadata: full rows carry every revision's files and checks.
-    revision_rows = (
-        await db.execute(
-            select(ReviewRevision.id, ReviewRevision.number, ReviewRevision.message).where(
-                ReviewRevision.review_id == review.id
-            )
-        )
-    ).all()
-    revisions = {r.id: r.number for r in revision_rows}
-    # Newest revision the author explicitly submitted (system-pushed revisions do not count).
-    resubmitted = max((r.number for r in revision_rows if r.message not in SYSTEM_REVISION_MESSAGES), default=0)
-    # Submissions are chronological. A change request stays outstanding until the
-    # same reviewer later approves that revision or a newer one, or the author
-    # resubmits a newer revision answering it (the reviewer can request again).
-    requests = {}
-    for s in submissions:
-        if s.verdict == "request_changes":
-            requests[s.reviewer_id] = s
-        elif (
-            s.verdict == "approve"
-            and s.reviewer_id in requests
-            and revisions[s.revision_id] >= revisions[requests[s.reviewer_id].revision_id]
-        ):
-            del requests[s.reviewer_id]
-    requests = {reviewer: s for reviewer, s in requests.items() if revisions[s.revision_id] >= resubmitted}
+    # A change request remains blocking until its reviewer approves or withdraws it;
+    # an author resubmitting new content does not silently clear the request.
+    requests = {uid: s for uid, s in latest.items() if s.state == "submitted" and s.verdict == "request_changes"}
     blockers = []
     if approvals < policy.required_approvals[review.subject_type]:
         blockers.append("required_approvals")
@@ -587,17 +563,75 @@ async def submit_verdict(db, review, user, verdict, body="", *, policy=None):
         )
     _event(db, review, "submission", user.id, verdict=verdict)
     await db.flush()
+    if verdict == "request_changes":
+        thread = ReviewThread(review_id=review.id, change_request_id=submission.id, created_by=user.id)
+        db.add(thread)
+        await db.flush()
+        db.add(
+            ReviewComment(
+                review_id=review.id,
+                thread_id=thread.id,
+                submission_id=submission.id,
+                author_id=user.id,
+                body=body,
+            )
+        )
+        await db.flush()
+    await reconcile_request_threads(db, review, actor_id=user.id)
     await sync_state(db, review, actor_id=user.id, policy=policy)
     return submission
 
 
-async def dismiss(db, review, submission, user, reason, *, policy=None):
+async def may_withdraw_request(db, review, submission, user):
+    subject, version = await _target(db, review)
+    if _own_work(subject, version, user.id):
+        return False
+    scope = await review_scope(db, user)
+    if submission.reviewer_id == user.id:
+        return can_review(subject, scope) and (
+            not getattr(version, "requires_global_review", False) or scope.is_global_reviewer
+        )
+    if user.role in (UserRole.admin, UserRole.super_admin):
+        return True
+    if not can_review(subject, scope) or (
+        getattr(version, "requires_global_review", False) and not scope.is_global_reviewer
+    ):
+        return False
+    from models.team import TeamMembership, TeamRole
+
+    return bool(
+        await db.scalar(
+            select(TeamMembership.user_id).where(
+                TeamMembership.team_id == subject.team_id,
+                TeamMembership.user_id == user.id,
+                TeamMembership.role == TeamRole.owner,
+            )
+        )
+    )
+
+
+async def dismiss(db, review, submission, user, reason, *, policy=None, withdraw_request=False):
     await _lock_review(db, review)
+    await db.refresh(submission, with_for_update=True)
     if review.state in (ReviewState.closed, ReviewState.published):
         raise HTTPException(409, "Review is closed")
     if not reason.strip():
         raise HTTPException(422, "A dismissal reason is required")
-    if user.role not in (UserRole.admin, UserRole.super_admin):
+    if submission.review_id != review.id or submission.state != "submitted":
+        raise HTTPException(409, "Submission is not active")
+    if withdraw_request and submission.verdict != "request_changes":
+        raise HTTPException(409, "Only change requests can be withdrawn")
+    if submission.verdict == "request_changes":
+        _, latest, _ = await review_decisions(db, review)
+        if latest.get(submission.reviewer_id) is None or latest[submission.reviewer_id].id != submission.id:
+            raise HTTPException(409, "Change request is no longer outstanding")
+        if not await may_withdraw_request(db, review, submission, user):
+            raise HTTPException(403, "Only the reviewer or a disinterested moderator may clear this request")
+        if not withdraw_request and submission.reviewer_id == user.id:
+            raise HTTPException(403, "Use withdraw-request to retract your own change request")
+    elif withdraw_request:
+        raise HTTPException(409, "Only change requests can be withdrawn")
+    elif user.role not in (UserRole.admin, UserRole.super_admin):
         from models.team import TeamMembership, TeamRole
 
         subject, _ = await _target(db, review)
@@ -610,13 +644,20 @@ async def dismiss(db, review, submission, user, reason, *, policy=None):
         )
         if row is None:
             raise HTTPException(403, "Only admins and team owners may dismiss reviews")
-    if submission.review_id != review.id or submission.state != "submitted":
-        raise HTTPException(409, "Submission is not active")
     submission.state = "dismissed"
     submission.dismissed_by = user.id
     submission.dismissed_at = _now()
     submission.dismissed_reason = reason
-    _event(db, review, "approval_dismissed", user.id, submission_id=str(submission.id), reason=reason)
+    _event(
+        db,
+        review,
+        "request_withdrawn" if submission.verdict == "request_changes" else "approval_dismissed",
+        user.id,
+        submission_id=str(submission.id),
+        reason=reason,
+    )
+    await db.flush()
+    await reconcile_request_threads(db, review, actor_id=user.id)
     return await sync_state(db, review, actor_id=user.id, policy=policy)
 
 
@@ -643,6 +684,7 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
             and not override
         ):
             raise HTTPException(403, "Authors and co-authors cannot publish their own work")
+    await ensure_request_threads(db, review, persist=False, update_state=False)
     if review.subject_type == "agent":
         # Confidentiality, not review quality: a public agent must never expose a team-private
         # skill. Unlike the advisory gate items, no publish path (including an override) skips this.
@@ -787,6 +829,11 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
             older_version.status = AgentStatus.rejected if review.subject_type == "agent" else ListingStatus.rejected
             older_version.rejection_reason = f"Superseded by v{version.version}"
             _event(db, older, "superseded", user.id if user else None, by=review.number)
+            await reconcile_request_threads(db, older, actor_id=user.id if user else None)
+            from models.inbox import InboxKind
+            from services.review.notifications import resolve_review_work
+
+            await resolve_review_work(db, older, user.id if user else None, kinds=(InboxKind.change_requested,))
     if review.subject_type != "agent":
         dependent_ids = (
             (
