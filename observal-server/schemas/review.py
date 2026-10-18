@@ -61,6 +61,10 @@ class Reason(_Text):
     reason: str = Field(min_length=1, max_length=100_000)
 
 
+class ReopenRequest(_Text):
+    message: str | None = Field(default=None, max_length=5000)
+
+
 class PublishRequest(_Text):
     category: str | None = None
     override_reason: str | None = None

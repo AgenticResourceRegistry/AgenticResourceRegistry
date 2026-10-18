@@ -729,3 +729,28 @@ async def test_notifications_skip_actor_and_mute_except_final(api, monkeypatch):
         assert author.id not in captured[-1]["recipients"]
         await deliver_event(db, review, "published", reviewer.id)
         assert author.id in captured[-1]["recipients"]
+
+
+@pytest.mark.asyncio
+async def test_author_reopens_a_withdrawn_review_from_the_review(api):
+    """OBS-1448: a withdrawn review can be reopened from the review itself, not only from the drafts list."""
+    client, current, (author, reviewer, _, _), (rid, number), factory = api
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        listing = await db.get(SkillListing, review.subject_id)
+        listing.latest_version_id = review.version_id
+        await db.commit()
+    current[0] = author
+    assert (await client.post(f"/api/v1/reviews/{number}/reopen", json={})).status_code == 409  # Still open.
+    assert (await client.post(f"/api/v1/reviews/{number}/withdraw")).status_code == 200
+    current[0] = reviewer
+    assert (await client.post(f"/api/v1/reviews/{number}/reopen", json={})).status_code == 403  # Not the owner.
+    current[0] = author
+    reopened = await client.post(f"/api/v1/reviews/{number}/reopen", json={"message": "Back for review"})
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json() == {"state": "open", "number": number}
+    detail = (await client.get(f"/api/v1/reviews/{number}")).json()
+    assert detail["state"] == "open" and detail["revisions"][-1]["message"] == "Back for review"
+    async with factory() as db:
+        version = await db.get(SkillVersion, (await db.get(Review, rid)).version_id)
+        assert version.status == ListingStatus.pending

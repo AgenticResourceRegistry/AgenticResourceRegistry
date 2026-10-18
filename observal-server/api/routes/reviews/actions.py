@@ -12,7 +12,7 @@ from api.routes.reviews.common import get_review, notify_update, require_open
 from models.inbox import InboxKind
 from models.review import Review, ReviewReviewerRequest, ReviewSubscription
 from models.user import User
-from schemas.review import PublishRequest, Reason, ReviewerRequest, SubscriptionUpdate
+from schemas.review import PublishRequest, Reason, ReopenRequest, ReviewerRequest, SubscriptionUpdate
 from services.audit import audit_detail
 from services.review import check_config, ci, notifications
 from services.review.decisions import _event, _lock_review, _target, close, publish, withdraw
@@ -155,6 +155,65 @@ async def withdraw_review(
     await db.commit()
     await notify_update(review, "state")
     return {"state": review.state.value}
+
+
+@router.post("/{ref}/reopen")
+async def reopen_review(
+    request: Request,
+    data: ReopenRequest | None = None,
+    review: Review = Depends(get_review),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Reopen a withdrawn review by resubmitting its version, from the review page or CLI.
+
+    Delegates to the resource's own submit route, so ownership, validation and
+    notifications are exactly those of submitting the draft from its listing.
+    """
+    from fastapi import Response
+
+    from models.review import ReviewState
+
+    if review.state != ReviewState.closed or review.closed_reason != "withdrawn":
+        raise HTTPException(409, "Only a withdrawn review can be reopened")
+    subject, version = await _target(db, review)
+    message = data.message if data else None
+    if review.subject_type == "skill" and version.content_revision is not None:
+        from api.routes.skill_files import submit_skill_version_draft
+        from schemas.skill_resources import SkillVersionRevisionRequest
+
+        await submit_skill_version_draft(
+            str(subject.id),
+            version.id,
+            SkillVersionRevisionRequest(observed_revision=version.content_revision, message=message),
+            Response(),
+            db,
+            user,
+        )
+    else:
+        if subject.latest_version_id != version.id:
+            raise HTTPException(409, "A newer version of this resource exists; submit that version instead")
+        submit = _listing_submit_route(review.subject_type)
+        await submit(str(subject.id), message=message, db=db, current_user=user)
+    audit_detail(
+        request,
+        action="review.reopened",
+        resource_type="review",
+        resource_id=review.id,
+        resource_name=f"#{review.number}",
+    )
+    await db.refresh(review)
+    await notify_update(review, "state")
+    return {"state": review.state.value, "number": review.number}
+
+
+def _listing_submit_route(subject_type: str):
+    if subject_type == "agent":
+        from api.routes.agent.draft import submit_draft
+
+        return submit_draft
+    module = __import__(f"api.routes.{subject_type}", fromlist=[f"submit_{subject_type}_draft"])
+    return getattr(module, f"submit_{subject_type}_draft")
 
 
 @router.post("/{ref}/checks/rerun")

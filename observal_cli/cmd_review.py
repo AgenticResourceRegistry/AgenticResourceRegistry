@@ -425,6 +425,16 @@ def withdraw(ref: str, output: OutputMode = typer.Option("table", "--output", "-
     _result(client.post(_url(ref, "/withdraw")), output, "Review withdrawn")
 
 
+@review_app.command("reopen")
+def reopen(
+    ref: str,
+    message: str | None = typer.Option(None, "--message", help="Revision note"),
+    output: OutputMode = typer.Option("table", "--output", "-o"),
+):
+    """Reopen a review you withdrew by resubmitting its version."""
+    _result(client.post(_url(ref, "/reopen"), {"message": message}), output, "Review reopened")
+
+
 @review_app.command("mute")
 def mute(ref: str, output: OutputMode = typer.Option("table", "--output", "-o")):
     """Mute review activity except final outcomes."""

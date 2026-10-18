@@ -166,6 +166,7 @@ OPERATION_LABELS = {
     "unresolve": "Reopen review thread",
     "watch": "Watch review",
     "withdraw": "Withdraw review",
+    "reopen": "Reopen review",
     "review_approve": "Approve review",
     "review_list": "List pending reviews",
     "review_reject": "Reject review",

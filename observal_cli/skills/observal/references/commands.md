@@ -262,6 +262,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal review list`: List reviews visible to you; row numbers work with other review commands.
 - `observal review mute`: Mute review activity except final outcomes.
 - `observal review publish`: Publish once required approvals are met; super admins can override anything with a reason.
+- `observal review reopen`: Reopen a review you withdrew by resubmitting its version.
 - `observal review reply`: Reply to a conversation.
 - `observal review request-changes`: Request changes on a review.
 - `observal review request-reviewer`: Request a reviewer by user UUID.
