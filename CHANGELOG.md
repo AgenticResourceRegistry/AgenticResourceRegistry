@@ -69,6 +69,7 @@ All notable changes to this project will be documented in this file.
 - correct the live log viewer command to `observal ops logs`
 - correct stale Next.js references and the removed API URL env var after the Vite migration
 - clear the remaining Next.js references in the Terraform variables, CI job headers, and nginx config
+- align documented Postgres, ClickHouse, Redis, and Grafana versions with the pinned images
 
 ### Maintenance
 
