@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 export type ReviewState = "open" | "changes_requested" | "approved" | "published" | "closed";
@@ -66,6 +67,7 @@ export interface ReviewDetail extends ReviewSummary {
   revisions: Array<{ id: string; number: number; message: string | null; created_by: string | null; created_at: string; pruned: boolean }>;
   requested_reviewers: string[];
   reviewer_names?: Record<string, string>;
+  reviewer_decisions?: Record<string, { verdict: ReviewVerdict; status: string }>;
   my_subscription: "watching" | "muted" | null;
   self_approval_allowed: boolean;
 }
@@ -92,6 +94,14 @@ export interface ReviewThread {
   outdated: boolean;
   resolved_at: string | null;
   comments: Array<{ id: string; body: string; author_id: string; created_at: string; suggestion?: string | null; pending?: boolean }>;
+  change_request?: {
+    submission_id: string;
+    reviewer_id: string;
+    status: "blocking" | "withdrawn" | "superseded" | "cleared" | "invalidated" | "closed";
+    can_withdraw: boolean;
+    dismissed_by: string | null;
+    dismissed_reason: string | null;
+  } | null;
 }
 
 export interface ReviewTimelineEntry {

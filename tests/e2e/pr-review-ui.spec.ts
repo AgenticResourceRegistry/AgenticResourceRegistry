@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, test } from "@playwright/test";
@@ -368,3 +369,77 @@ test("close review asks for a reason in a dialog", async ({ page }) => {
   expect(closed[0]).toEqual({ reason: "Duplicate of #41" });
   await expect(dialog).toHaveCount(0);
 });
+
+for (const subject_type of ["agent", "mcp"] as const) {
+  for (const author of [true, false]) test(`${subject_type} ${author ? "author" : "reviewer"} sees linked change request`, async ({ page }) => {
+    await page.addInitScript(role => {
+      sessionStorage.setItem("observal_access_token", "review-ui-test");
+      localStorage.setItem("observal_user_role", role);
+    }, author ? "user" : "reviewer");
+    const reviewerId = "22222222-2222-4222-8222-222222222222";
+    const requestId = "33333333-3333-4333-8333-333333333333";
+    const secondId = "44444444-4444-4444-8444-444444444444";
+    const threadId = "55555555-5555-4555-8555-555555555555";
+    let withdrawn = false;
+    const posts: unknown[] = [];
+    const detail = { ...summary(42, "Disputed review", "agent"), subject_type, author_id: id,
+      state: "changes_requested", body: "Please review", opened_at: now, closed_at: null, closed_reason: null,
+      published_at: null, published_by: null, base_version_id: null, head_revision_id: id, my_subscription: null,
+      self_approval_allowed: false, revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false }],
+      requested_reviewers: [], reviewer_names: { [reviewerId]: "reviewer" },
+      reviewer_decisions: { [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking" }, [secondId]: { verdict: "request_changes", status: "blocking" } },
+      threads: { total: 2, unresolved: 2 },
+      gate: { ready: false, approvals: 0, required: 1, policy_source: "organization", requirements: ["changes_requested", "required_approvals"], outstanding_requests: 2 },
+    };
+    const thread = (submissionId: string, threadKey: string, reviewerKey: string, status: string, can_withdraw: boolean) => ({
+      id: threadKey, path: null, side: null, start_line: null, end_line: null, outdated: false,
+      resolved_at: status === "blocking" ? null : now, revision_id: null,
+      change_request: { submission_id: submissionId, reviewer_id: reviewerKey, status, can_withdraw, dismissed_by: status === "blocking" ? null : reviewerKey, dismissed_reason: status === "blocking" ? null : "Question answered" },
+      comments: [{ id: submissionId, thread_id: threadKey, author_id: reviewerKey, body: "Is this change required?", created_at: now }],
+    });
+    await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
+    await page.route("**/api/v1/config/public", route => route.fulfill({ json: { experimental_review_checks: false } }));
+    await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id: author ? id : reviewerId, username: author ? "author" : "reviewer", role: author ? "user" : "reviewer" } }));
+    await page.route("**/api/v1/reviews/42**", route => {
+      const suffix = new URL(route.request().url()).pathname.replace("/api/v1/reviews/42", "");
+      if (suffix === `/submissions/${requestId}/withdraw-request` && route.request().method() === "POST") {
+        posts.push(route.request().postDataJSON());
+        withdrawn = true;
+        return route.fulfill({ json: { state: "changes_requested", withdrawn: true } });
+      }
+      const data = suffix === "/timeline" ? route.request().url().includes("cursor=")
+        ? { items: [requestId, secondId].map((key, index) => ({ id: key, kind: "verdict", actor_id: index ? secondId : reviewerId, created_at: now, verdict: "request_changes", body: "Is this change required?", state: "submitted" })), next_cursor: null }
+        : { items: [{ id: "66666666-6666-4666-8666-666666666666", kind: "comment", actor_id: id, created_at: now, payload: { thread_id: threadId } }], next_cursor: "page-2" }
+        : suffix === "/threads" ? [thread(requestId, threadId, reviewerId, withdrawn ? "withdrawn" : "blocking", !author && !withdrawn), thread(secondId, secondId, secondId, "blocking", false)]
+        : suffix === "/gate" ? { ...detail.gate, outstanding_requests: withdrawn ? 1 : 2 }
+        : suffix === "/files" || suffix === "/diff" ? []
+        : { ...detail, reviewer_decisions: { ...detail.reviewer_decisions, [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking" } } };
+      return route.fulfill({ json: data });
+    });
+    await page.goto("/review/42");
+    const request = page.locator(`#thread-${threadId}`);
+    await expect(request.getByText("Changes requested · blocks publication")).toBeVisible();
+    await expect(request).toHaveCount(1);
+    await request.getByRole("textbox", { name: "Reply" }).fill("Unsent answer stays here");
+    await page.getByRole("button", { name: "Load more activity" }).click();
+    await expect(page.getByRole("button", { name: "Load more activity" })).toHaveCount(0);
+    await expect(request).toHaveCount(1);
+    await expect(request.getByRole("textbox", { name: "Reply" })).toHaveValue("Unsent answer stays here");
+    await expect(request.getByRole("button", { name: "Resolve conversation" })).toHaveCount(0);
+    if (author) {
+      await expect(request.getByText("Awaiting the reviewer or a moderator.", { exact: false })).toBeVisible();
+      await expect(request.getByRole("button", { name: "Withdraw change request" })).toHaveCount(0);
+    } else {
+      await request.getByRole("button", { name: "Withdraw change request" }).click();
+      await request.getByRole("textbox", { name: "Withdrawal reason" }).fill("Question answered");
+      page.once("dialog", dialog => dialog.accept());
+      await request.getByRole("button", { name: "Confirm withdrawal" }).click();
+      await expect(request.getByText("Change request withdrawn · no longer blocks publication")).toBeVisible();
+      await expect(page.getByText("Request withdrawn", { exact: true })).toBeVisible();
+      await expect(page.getByText("Changes requested · blocks publication")).toHaveCount(1);
+      expect(posts).toEqual([{ reason: "Question answered" }]);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}

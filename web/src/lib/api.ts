@@ -678,8 +678,8 @@ export const prReviews = {
   gate: (ref: string) => get<ReviewGate>(`/reviews/${encodeURIComponent(ref)}/gate`),
   checks: (ref: string) => get<ReviewCheck[]>(`/reviews/${encodeURIComponent(ref)}/checks`),
   threads: (ref: string) => get<ReviewThread[]>(`/reviews/${encodeURIComponent(ref)}/threads`),
-  timeline: (ref: string) => get<{ items: ReviewTimelineEntry[]; next_cursor: string | null }>(
-    `/reviews/${encodeURIComponent(ref)}/timeline`,
+  timeline: (ref: string, cursor?: string) => get<{ items: ReviewTimelineEntry[]; next_cursor: string | null }>(
+    `/reviews/${encodeURIComponent(ref)}/timeline${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
   ),
   submit: (ref: string, verdict: string, body: string) => post(
     `/reviews/${encodeURIComponent(ref)}/submissions`, { verdict, body },
@@ -693,6 +693,9 @@ export const prReviews = {
   ),
   resolve: (ref: string, threadId: string, resolved: boolean) => post(
     `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/${resolved ? "resolve" : "unresolve"}`,
+  ),
+  withdrawRequest: (ref: string, submissionId: string, reason: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/submissions/${encodeURIComponent(submissionId)}/withdraw-request`, { reason },
   ),
   publish: (ref: string, category?: string, overrideReason?: string) => post(
     `/reviews/${encodeURIComponent(ref)}/publish`, { category, override_reason: overrideReason },
