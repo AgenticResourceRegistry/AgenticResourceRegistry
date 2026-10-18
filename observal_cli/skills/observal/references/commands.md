@@ -3,6 +3,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Observal CLI Command Reference
@@ -259,7 +260,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal review draft`: View or discard your pending review comments.
 - `observal review files`: List changed virtual files.
 - `observal review gate`: Show what blocks publishing and which open items are advisory.
-- `observal review list`: List reviews visible to you; row numbers work with other review commands.
+- `observal review list`: List reviews visible to you; pass the review number to other review commands.
 - `observal review mute`: Mute review activity except final outcomes.
 - `observal review publish`: Publish once the gate allows it; super admins can override approvals and checks with a reason.
 - `observal review reopen`: Reopen a review you withdrew by resubmitting its version.
