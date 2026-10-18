@@ -52,6 +52,10 @@ _PRERELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")
 # Revision note of a draft save pushed automatically (services.review.cutover.push_draft_edit).
 # Such a revision shows reviewers the change but is not the author's resubmission.
 DRAFT_EDIT_MESSAGE = "Draft updated after submission"
+# Revision note of a revision pushed by MCP validation (services.mcp_validator).
+MCP_VALIDATION_MESSAGE = "Updated by MCP validation"
+# Revisions the system pushed; none of them is the author's resubmission.
+SYSTEM_REVISION_MESSAGES = frozenset({DRAFT_EDIT_MESSAGE, MCP_VALIDATION_MESSAGE})
 
 
 def _now():
@@ -358,12 +362,17 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
     approvals = sum(
         s.verdict == "approve" and (not s.self_review or policy.self_approval == "counted") for s in latest.values()
     )
+    # Only the metadata: full rows carry every revision's files and checks.
     revision_rows = (
-        (await db.execute(select(ReviewRevision).where(ReviewRevision.review_id == review.id))).scalars().all()
-    )
+        await db.execute(
+            select(ReviewRevision.id, ReviewRevision.number, ReviewRevision.message).where(
+                ReviewRevision.review_id == review.id
+            )
+        )
+    ).all()
     revisions = {r.id: r.number for r in revision_rows}
-    # Newest revision the author explicitly submitted (automatic draft pushes do not count).
-    resubmitted = max((r.number for r in revision_rows if r.message != DRAFT_EDIT_MESSAGE), default=0)
+    # Newest revision the author explicitly submitted (system-pushed revisions do not count).
+    resubmitted = max((r.number for r in revision_rows if r.message not in SYSTEM_REVISION_MESSAGES), default=0)
     # Submissions are chronological. A change request stays outstanding until the
     # same reviewer later approves that revision or a newer one, or the author
     # resubmits a newer revision answering it (the reviewer can request again).

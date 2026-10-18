@@ -136,12 +136,13 @@ async def _refresh_review_snapshot(listing: McpListing, db: AsyncSession) -> Non
     """Validation fills in derived fields (framework, command, image). Reviewers must see them, so a changed
     version becomes a new review revision instead of leaving the review permanently out of date."""
     from services.review.cutover import resubmit_if_changed
+    from services.review.decisions import MCP_VALIDATION_MESSAGE
 
     version = listing.latest_version
     if version is None:
         return
     try:
-        if await resubmit_if_changed(db, "mcp", listing, version, "Updated by MCP validation"):
+        if await resubmit_if_changed(db, "mcp", listing, version, MCP_VALIDATION_MESSAGE):
             await db.commit()
     except Exception:
         await db.rollback()

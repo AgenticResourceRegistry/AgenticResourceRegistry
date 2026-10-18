@@ -21,8 +21,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { ReviewAvatar, ReviewStatePill, reviewDate, reviewPerson } from "@/components/review/review-primitives";
 
 const activeStates = new Set(["open", "changes_requested", "approved"]);
-// Mirrors services.review.decisions.DRAFT_EDIT_MESSAGE: a revision pushed by a draft save, not a resubmission.
-const DRAFT_EDIT_MESSAGE = "Draft updated after submission";
+// Mirrors services.review.decisions.SYSTEM_REVISION_MESSAGES: revisions the system pushed (draft saves,
+// MCP validation), which are not the author's resubmission.
+const SYSTEM_REVISION_MESSAGES = new Set(["Draft updated after submission", "Updated by MCP validation"]);
 const markdownClass = "prose prose-sm dark:prose-invert max-w-[75ch] break-words prose-a:text-primary";
 const componentTypes = { mcp: "mcps", skill: "skills", hook: "hooks", prompt: "prompts", sandbox: "sandboxes" } as const;
 
@@ -216,7 +217,7 @@ export default function ReviewDetailPage() {
     const ids = new Set([...(review?.requested_reviewers ?? []), ...verdicts.map(entry => entry.actor_id!).filter(Boolean)]);
     // A change request is answered once the author resubmits a newer revision (automatic draft pushes do not count).
     const revisionNumber = new Map((review?.revisions ?? []).map(rev => [rev.id, rev.number]));
-    const resubmitted = Math.max(0, ...(review?.revisions ?? []).filter(rev => rev.message !== DRAFT_EDIT_MESSAGE).map(rev => rev.number));
+    const resubmitted = Math.max(0, ...(review?.revisions ?? []).filter(rev => !SYSTEM_REVISION_MESSAGES.has(rev.message ?? "")).map(rev => rev.number));
     return [...ids].map(id => {
       const latest = [...verdicts].reverse().find(entry => entry.actor_id === id);
       const answered = latest?.verdict === "request_changes" && (revisionNumber.get(latest.revision_id ?? "") ?? Infinity) < resubmitted;

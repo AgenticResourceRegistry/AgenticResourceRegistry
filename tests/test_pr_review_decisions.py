@@ -110,6 +110,12 @@ async def test_unresolved_change_request_stays_visible_but_only_approvals_block(
     await open_or_push(db, "skill", listing, version, author.id, message=DRAFT_EDIT_MESSAGE)
     assert review.state == ReviewState.changes_requested
     assert version.status == ListingStatus.changes_requested  # Still editable while answering.
+    from services.review.decisions import MCP_VALIDATION_MESSAGE
+
+    version.skill_md_content = "# Derived fields filled in\n"
+    # A system-pushed revision (e.g. MCP validation) is not the author's answer either.
+    await open_or_push(db, "skill", listing, version, author.id, message=MCP_VALIDATION_MESSAGE)
+    assert review.state == ReviewState.changes_requested
     version.skill_md_content = "# New revision\n"
     await open_or_push(db, "skill", listing, version, author.id, message="Addressed feedback")
     assert review.state == ReviewState.open  # The resubmission answered the request.

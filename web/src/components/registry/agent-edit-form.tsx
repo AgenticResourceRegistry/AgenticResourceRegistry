@@ -40,6 +40,7 @@ import {
 import {
   useAgentValidation,
   useCreateAgentVersion,
+  useSubmitDraft,
   useUpdateAgent,
   useUpdateDraft,
   useVersionSuggestions,
@@ -50,7 +51,7 @@ import type {
   SuccessCriteria,
   ValidationResult,
 } from "@/lib/types";
-import { registry, type RegistryType } from "@/lib/api";
+import type { RegistryType } from "@/lib/api";
 import { ModelPicker } from "@/components/builder/model-picker";
 import { SortableComponentList } from "@/components/builder/sortable-component-list";
 import {
@@ -159,6 +160,7 @@ export function AgentEditForm({
   // ── Mutations ─────────────────────────────────────────────────
   const createVersion = useCreateAgentVersion();
   const updateDraft = useUpdateDraft();
+  const submitDraft = useSubmitDraft();
   // An unpublished version (draft, under review, changes requested, rejected) is amended in place:
   // the version number stays and an open review gets the change as a new revision. Only an
   // approved version needs a new release.
@@ -404,12 +406,14 @@ export function AgentEditForm({
     try {
       const { description: d, prompt: p, model_name, models_by_harness, components, success_criteria } =
         buildVersionBody(currentVersion);
-      await updateDraft.mutateAsync({
+      const saved = await updateDraft.mutateAsync({
         id: agentId,
         body: { description: d, prompt: p, model_name, models_by_harness, components, success_criteria },
       });
       // Under review, saving here is the author's resubmission: it answers requested changes.
-      if (underReview) await registry.submitDraft(agentId);
+      // A pending save that pushed no revision changed nothing, so there is nothing to resubmit.
+      const unchangedPending = agent.status === "pending" && saved.review_revision == null;
+      if (underReview && !unchangedPending) await submitDraft.mutateAsync(agentId);
       initialStateRef.current = { description, modelName, modelsByHarness, prompt, selectedComponents, successCriteria };
       setIsDirty(false);
       onSuccess?.();
