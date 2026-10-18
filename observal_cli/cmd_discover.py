@@ -217,7 +217,12 @@ def discover_search(
     kind: str | None = typer.Option(
         None, "--type", "-t", help="Restrict to one kind: agent, mcp, skill, hook, prompt, sandbox"
     ),
-    harness: str | None = typer.Option(None, "--harness", "-i", help="Only resources that work in this harness"),
+    harness: str | None = typer.Option(
+        None,
+        "--harness",
+        "-i",
+        help="Only resources that declare support for this harness (undeclared ones are left out)",
+    ),
     limit: int = typer.Option(DEFAULT_LIMIT, "--limit", "-n", min=1, max=MAX_LIMIT, help="How many results"),
     unapproved: bool = typer.Option(False, "--include-unapproved", help="Also show your own pending/rejected items"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -328,7 +333,7 @@ def discover_inspect(
         ("Version", entry.get("version")),
         ("Status", entry.get("obs:lifecycle")),
         ("Visibility", entry.get("obs:visibility")),
-        ("Harnesses", ", ".join(entry.get("obs:supportedHarnesses") or []) or "any"),
+        ("Harnesses", ", ".join(entry.get("obs:supportedHarnesses") or []) or "not declared"),
         ("Usable now", "yes" if entry.get("obs:activatable") else "no"),
         ("Capabilities", ", ".join(entry.get("capabilities") or [])),
         ("Artifact", entry.get("url")),

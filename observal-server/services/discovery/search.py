@@ -23,12 +23,12 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import String, and_, cast, or_, select
 
 from api.sanitize import escape_like
 from api.search import keyword_tokens
-from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle
-from services.discovery.identity import normalize_media_type
+from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle, DiscoverySourceKind
+from services.discovery.identity import MEDIA_TYPE_A2A, normalize_media_type
 from services.discovery.visibility import DEFAULT_LIFECYCLES, visible_entries_predicate
 
 if TYPE_CHECKING:
@@ -353,14 +353,32 @@ def _apply_filters(stmt, filters: SearchFilters):
         stmt = stmt.where(DiscoveryEntry.version.in_(filters.versions))
     if filters.activatable_only:
         stmt = stmt.where(DiscoveryEntry.activatable.is_(True))
+    if filters.harnesses:
+        # In SQL so the candidate LIMIT never drops declared entries behind newer undeclared ones.
+        # Undeclared harnesses mean "unknown", never "all". Remote A2A agents run elsewhere, so
+        # they need no harness (mirrors serialize.is_a2a).
+        declared = cast(DiscoveryEntry.supported_harnesses, String)
+        stmt = stmt.where(
+            or_(
+                and_(
+                    DiscoveryEntry.source_kind == DiscoverySourceKind.imported,
+                    DiscoveryEntry.media_type == MEDIA_TYPE_A2A,
+                ),
+                *(
+                    declared.like(f"%{escape_like(json.dumps(h))}%", escape="\\")
+                    for h in dict.fromkeys(filters.harnesses)
+                ),
+            )
+        )
     return stmt
 
 
 def _post_filter(entry: DiscoveryEntry, filters: SearchFilters) -> bool:
-    """Filters over JSON list columns, applied in Python for dialect portability."""
+    """Harness, tag and capability filters over JSON list columns, applied in Python for dialect portability."""
     if filters.harnesses:
-        supported = set(entry.supported_harnesses or [])
-        if supported and not (supported & set(filters.harnesses)):
+        # The SQL LIKE is only a prefilter (case-insensitive on SQLite); ids match exactly, as availability() does.
+        remote_a2a = entry.source_kind == DiscoverySourceKind.imported and entry.media_type == MEDIA_TYPE_A2A
+        if not remote_a2a and not (set(entry.supported_harnesses or []) & set(filters.harnesses)):
             return False
     if filters.tags:
         tags = {t.lower() for t in (entry.tags or [])}
