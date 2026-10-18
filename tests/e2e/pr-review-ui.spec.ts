@@ -159,6 +159,8 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
     ...summary(42, "Skill: verify source", "skill"), body: "Check the **permission boundary** before publishing.",
     opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
     base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    is_own_work: false, can_approve: true, can_request_changes: true, can_comment: true,
+    can_publish: true, can_override_publish: false, can_close: true, can_withdraw: false, can_edit: false,
     revisions: [{ id, number: 1, message: "Initial release", created_by: id, created_at: now, pruned: false }],
     requested_reviewers: [id], reviewer_names: { [id]: "harish" },
     reviewer_decisions: { [id]: { verdict: "approve", status: "submitted", revision_id: "10000000-0000-4000-8000-000000000009" } },
@@ -191,7 +193,7 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
       verdicts.push(route.request().postDataJSON());
       return route.fulfill({ json: { state: "approved" } });
     }
-    const value = suffix === "/gate" ? detail.gate : suffix === "/timeline" ? { items: [
+    const value = suffix === "/submissions/draft" ? { submission_id: null, comments: [] } : suffix === "/gate" ? detail.gate : suffix === "/timeline" ? { items: [
       { id, kind: "opened", actor_id: id, actor_name: "harish", created_at: now },
       { id: "10000000-0000-4000-8000-000000000001", kind: "verdict", actor_id: id, actor_name: "harish", created_at: now, verdict: "comment", body: "Please verify permissions.", state: "submitted" },
       { id: "10000000-0000-4000-8000-000000000002", kind: "comment", actor_id: id, actor_name: "harish", created_at: now, payload: { thread_id: "20000000-0000-4000-8000-000000000001" } },
@@ -277,6 +279,8 @@ for (const override of [false, true]) test(`publish confirmation ${override ? "e
     ...summary(42, "Skill: verify source", "skill"), state: "approved", gate,
     body: "", opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
     base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    is_own_work: true, can_approve: false, can_request_changes: false, can_comment: true,
+    can_publish: false, can_override_publish: true, can_close: false, can_withdraw: true, can_edit: true,
     revisions: [{ id, number: 1, message: "First release", created_by: id, created_at: now, pruned: false }],
     requested_reviewers: [], reviewer_names: {},
     threads: { total: 1, unresolved: 1 },
@@ -375,6 +379,8 @@ test("close review asks for a reason in a dialog", async ({ page }) => {
     ...summary(42, "Skill: verify source", "skill"), gate,
     body: "", opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
     base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    is_own_work: false, can_approve: true, can_request_changes: true, can_comment: true,
+    can_publish: true, can_override_publish: false, can_close: true, can_withdraw: false, can_edit: false,
     revisions: [{ id, number: 1, message: "First release", created_by: id, created_at: now, pruned: false }],
     requested_reviewers: [], reviewer_names: {},
     checks: { pass: 0, fail: 0, warn: 0, skipped: 0, queued: 0, running: 0, error: 0 },
