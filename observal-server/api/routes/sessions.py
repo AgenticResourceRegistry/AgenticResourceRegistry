@@ -260,8 +260,12 @@ async def _list_sessions_query(
     if mine or not is_admin:
         where_parts.append("user_id = {uid:String}")
         params["param_uid"] = uid
+    # Kiro CLI records have prompt timestamps only. Its source-record arrival
+    # time captures tool activity in a long turn without rewriting the trace
+    # timeline. Other harnesses continue to use event time as before.
+    activity_time = "if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time)"
     if days is not None and days > 0:
-        where_parts.append(f"last_event_time > now() - INTERVAL {int(days)} DAY")
+        where_parts.append(f"{activity_time} > now() - INTERVAL {int(days)} DAY")
     if platform:
         where_parts.append("harness = {platform:String}")
         params["param_platform"] = _harness_id(platform)
@@ -278,7 +282,7 @@ async def _list_sessions_query(
         "if(first_event_time > '2020-01-01 00:00:00' AND first_event_time < '2099-01-01 00:00:00', "
         "   first_event_time, last_event_time) AS first_event_time, "
         "if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) AS last_event_time, "
-        "(if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) > now() - INTERVAL 5 MINUTE) AS is_active, "
+        f"({activity_time} > now() - INTERVAL 5 MINUTE) AS is_active, "
         "prompt_count, "
         "0                   AS api_request_count, "
         "tool_result_count, "
@@ -292,7 +296,7 @@ async def _list_sessions_query(
         "agent_id, "
         "agent_version, "
         "user_id "
-        "FROM session_stats_agg FINAL " + where_clause + "ORDER BY last_event_time DESC "
+        "FROM session_stats_agg FINAL " + where_clause + f"ORDER BY {activity_time} DESC "
         f"LIMIT {int(limit)} OFFSET {int(offset)}",
         params or None,
     )
