@@ -47,7 +47,7 @@ That's it. The `.env.example` ships with working defaults. The core services com
 | `observal-api`        | internal                | FastAPI backend                |
 | `observal-worker`     | internal                | Background jobs (arq)          |
 | `observal-init`       | internal                | Runs DB migrations, then exits |
-| `observal-db`         | `localhost:5432`        | PostgreSQL 16                  |
+| `observal-db`         | `localhost:5432`        | PostgreSQL 18                  |
 | `observal-clickhouse` | `localhost:8123`        | ClickHouse                     |
 | `observal-redis`      | `localhost:6379`        | Redis                          |
 

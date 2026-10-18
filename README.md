@@ -322,7 +322,7 @@ Start here for deployment and operations:
 |-------|-----------|
 | Frontend | Vite 8, React 19, TanStack Router, Tailwind CSS 4, shadcn/ui |
 | Backend | Python 3.11+, FastAPI, Strawberry GraphQL |
-| Databases | PostgreSQL 16 (registry), ClickHouse (telemetry) |
+| Databases | PostgreSQL 18 (registry), ClickHouse (telemetry) |
 | Queue | Redis + arq |
 | CLI | Python, Typer, Rich |
 | Telemetry | Session hooks, local transcript reconciliation, push-based ingest |
