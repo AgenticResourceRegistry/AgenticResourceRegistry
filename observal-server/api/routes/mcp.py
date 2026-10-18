@@ -49,7 +49,7 @@ from services.config_generator import generate_config
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.mcp_validator import analyze_repo, run_validation
 from services.registry_namespace import identity_exists
-from services.review.cutover import lock_review_for_edit, submit_for_review
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
 router = APIRouter(prefix="/api/v1/mcps", tags=["mcp"])
@@ -538,9 +538,12 @@ async def update_mcp_draft(
         if val is not None:
             setattr(listing, field, val)
 
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = await push_draft_edit(db, "mcp", listing, ver, current_user.id)
     await commit_or_name_conflict(db, "listing")
     await db.refresh(listing)
-    return await component_response(listing, "mcp", current_user, db)
+    response = await component_response(listing, "mcp", current_user, db)
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.post("/{listing_id}/start-edit")

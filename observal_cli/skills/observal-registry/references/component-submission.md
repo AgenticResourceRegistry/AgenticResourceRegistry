@@ -117,4 +117,4 @@ observal registry skill submit --skill-md ./SKILL.md --delivery-mode registry_di
 observal registry skill submit --submit NAMESPACE/SLUG --message 'Address reviewer feedback' --output json
 ```
 
-After submitting, use the returned `review_number` / `review_url` (or the Review #N link in human output) to open `observal review show N` and address threads. MCP, hook, prompt, sandbox, skill and agent draft resubmissions accept `--message` for the revision note. Report draft, pending, changes requested, approved, rejected, or archived accurately; a pending review is not a publication.
+After submitting, use the returned `review_number` / `review_url` (or the Review #N link in human output) to open `observal review show N` and address threads. `--submit` (alias `--submit-draft`) works for MCP, hook, prompt, sandbox and skill submissions, and `agent publish`; each accepts `--message` for the revision note. Edits to an item under review already reach that review as a new revision. Report draft, pending, changes requested, approved, rejected, or archived accurately; a pending review is not a publication.

@@ -35,7 +35,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
-from observal_cli.review_display import print_review_link
+from observal_cli.review_display import print_draft_save, print_review_link
 
 sandbox_app = typer.Typer(
     help=(
@@ -92,7 +92,12 @@ def sandbox_submit(
     source_ref: str | None = typer.Option(None, "--source-ref", help="Source branch/tag"),
     sandbox_path: str | None = typer.Option(None, "--sandbox-path", help="Path in source repo"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (sandbox ID)"),
+    submit_draft: str | None = typer.Option(
+        None,
+        "--submit",
+        "--submit-draft",
+        help="Submit the current draft for review, or as a new revision (sandbox ID)",
+    ),
     message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
@@ -509,3 +514,4 @@ def sandbox_edit(
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry sandbox submit --submit {result.get('id', '<id>')}")

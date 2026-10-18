@@ -17,6 +17,7 @@ from typing import Literal
 from pydantic import BaseModel, field_validator, model_serializer
 
 from models.agent import AgentStatus
+from observal_shared.agent_model import AUTO_MODEL, normalize_model_name
 from schemas.constants import AGENT_NAME_REGEX, RecommendedFlag, Visibility, make_name_validator
 from schemas.fork import ForkProvenance
 from schemas.skill_resources import SkillInstallFolder
@@ -117,7 +118,7 @@ class AgentCreateRequest(BaseModel):
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     prompt: str = ""
-    model_name: str
+    model_name: str = AUTO_MODEL
     model_config_json: dict = {}
     models_by_harness: dict[str, str] = {}
     supported_harnesses: list[str] = []
@@ -127,6 +128,8 @@ class AgentCreateRequest(BaseModel):
     success_criteria: SuccessCriteria | None = None
 
     _validate_name = field_validator("name")(make_name_validator("name"))
+    # Every Agent has a model: a missing or blank one becomes "auto" (each harness's default).
+    _normalize_model = field_validator("model_name", mode="before")(lambda v: normalize_model_name(v))
 
     @field_validator("components")
     @classmethod
@@ -171,6 +174,12 @@ class AgentUpdateRequest(BaseModel):
     components: list[ComponentRef] | None = None  # new: all component types
     external_mcps: list[ExternalMcp] | None = None
     success_criteria: SuccessCriteria | None = None
+
+    @field_validator("model_name", mode="before")
+    @classmethod
+    def _normalize_model(cls, v: object) -> object:
+        # Omitted keeps the current model; an explicit blank resets it to "auto".
+        return v if v is None else normalize_model_name(v)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -220,6 +229,8 @@ class ComponentLinkResponse(BaseModel):
 class AgentResponse(BaseModel):
     review_number: int | None = None
     review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -353,7 +364,7 @@ class AgentVersionCreateRequest(BaseModel):
     version: str
     description: str = ""
     prompt: str = ""
-    model_name: str
+    model_name: str = AUTO_MODEL
     model_config_json: dict = {}
     models_by_harness: dict[str, str] = {}
     external_mcps: list[ExternalMcp] = []
@@ -367,6 +378,8 @@ class AgentVersionCreateRequest(BaseModel):
     # component pin from the agent's current release unless a component names a
     # version. With it, unversioned components move to their latest approved release.
     refresh_components: bool = False
+
+    _normalize_model = field_validator("model_name", mode="before")(lambda v: normalize_model_name(v))
 
     @field_validator("version")
     @classmethod

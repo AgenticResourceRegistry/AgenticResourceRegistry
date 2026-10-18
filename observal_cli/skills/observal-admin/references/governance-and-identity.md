@@ -51,7 +51,7 @@ observal review diff 123 --file SKILL.md --output json
 observal review checks 123 --output json
 ```
 
-Inspect the complete payload, pinned Agent dependencies, and checks before submitting a verdict. Approval does not publish by default; an eligible actor publishes only after the gate is ready:
+Inspect the complete payload, pinned Agent dependencies, and checks before submitting a verdict. Approval does not publish by default. Only the required approvals block publishing; failing checks, change requests, unresolved conversations and unsubmitted draft changes are advisory open items to review and discuss, not blockers. A super admin may publish past anything with `--override-reason` (audited):
 
 ```bash
 observal review approve 123 --output json

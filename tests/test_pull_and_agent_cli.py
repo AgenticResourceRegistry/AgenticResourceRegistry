@@ -1255,7 +1255,13 @@ class TestAgentPublish:
         search_results = [{"id": "existing-uuid", "name": "test-agent"}]
         put_result = {"id": "existing-uuid", "name": "test-agent"}
 
-        with _patch_config(), _patch_get(search_results) as mock_get_fn, _patch_put(put_result) as mock_put_fn:
+        # Search by name, then read the agent's status: --update amends an unpublished version in place.
+        detail = {"id": "existing-uuid", "name": "test-agent", "version": "1.0.0", "status": "pending"}
+        with (
+            _patch_config(),
+            patch("observal_cli.client.get", side_effect=[search_results, detail]) as mock_get_fn,
+            _patch_put(put_result) as mock_put_fn,
+        ):
             result = runner.invoke(
                 cli_app,
                 ["agent", "publish", "--dir", str(tmp_path), "--update"],
@@ -1265,10 +1271,10 @@ class TestAgentPublish:
         assert "Agent updated" in result.output
         assert "existing-uuid" in result.output
 
-        # Verify GET was called with search param
-        mock_get_fn.assert_called_once()
-        get_call = mock_get_fn.call_args
-        assert get_call[1].get("params", {}).get("search") == "test-agent"
+        # Verify the lookup searched by name, then read the matched agent's status
+        assert mock_get_fn.call_count == 2
+        assert mock_get_fn.call_args_list[0][1].get("params", {}).get("search") == "test-agent"
+        assert mock_get_fn.call_args_list[1][0][0] == "/api/v1/agents/existing-uuid"
 
         # Verify PUT was called with correct endpoint
         mock_put_fn.assert_called_once()

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
+from observal_shared.agent_model import is_auto_model
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from schemas.constants import HARNESS_CAPABILITIES
 from services.shared.utils import registry_item_slug
@@ -241,8 +242,8 @@ def _model_name_to_frontmatter(model_name: str) -> str:
          'claude-opus-4-6-20250725'   -> 'opus'
          'gpt-4o'                     -> 'gpt-4o'  (passthrough)
     """
-    if not model_name:
-        return ""
+    if is_auto_model(model_name):
+        return ""  # "auto" leaves the choice to Claude Code's own default.
     lower = model_name.lower()
     for keyword, short in _MODEL_SHORT_NAMES.items():
         if keyword in lower:

@@ -162,9 +162,13 @@ async def test_requested_changes_can_be_edited_and_resubmitted_as_revision(api):
         },
     )
     assert edited.status_code == 200, edited.text
+    # The save reached the open review as revision 2, so the reviewer sees it immediately.
+    assert edited.json()["review_number"] == number and edited.json()["review_revision"] == 2
     async with factory() as db:
         version = await db.scalar(select(SkillVersion).where(SkillVersion.listing_id == uuid.UUID(listing_id)))
         revision, version_id = version.content_revision, version.id
+        # The author can keep answering the requested changes until they resubmit.
+        assert version.status == ListingStatus.changes_requested
     pushed = await client.post(
         f"/api/v1/skills/{listing_id}/versions/{version_id}/submit",
         json={"observed_revision": revision, "message": "Clarified"},
@@ -180,13 +184,12 @@ async def test_requested_changes_can_be_edited_and_resubmitted_as_revision(api):
 
 
 @pytest.mark.asyncio
-async def test_unsubmitted_draft_edit_cannot_be_published(api):
+async def test_unsubmitted_draft_edit_is_advisory_and_approvals_unlock_publish(api):
     client, current, (author, reviewer, _, _), (rid, number), factory = api
     current[0] = author
     async with factory() as db:
         review = await db.get(Review, rid)
-        listing_id = review.subject_id
-        listing = await db.get(SkillListing, listing_id)
+        listing = await db.get(SkillListing, review.subject_id)
         listing.latest_version_id = review.version_id
         await db.commit()
     # The route refuses edits of a pending skill version, so model a racing writer directly.
@@ -196,35 +199,29 @@ async def test_unsubmitted_draft_edit_cannot_be_published(api):
         await db.commit()
 
     current[0] = reviewer
+    gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
+    assert "unsubmitted_changes" in gate["requirements"] and not gate["ready"]
+    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 409  # Needs approvals.
     assert (
         await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
     ).status_code == 201
     gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
-    assert "unsubmitted_changes" in gate["requirements"]
-    publish = await client.post(f"/api/v1/reviews/{number}/publish", json={})
-    assert publish.status_code == 409, publish.text
+    # Still listed so reviewers can see and discuss it, but it no longer blocks publishing.
+    assert "unsubmitted_changes" in gate["requirements"] and gate["ready"]
+    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
+
+
+async def test_super_admin_override_publishes_without_approvals(api):
+    client, current, (author, reviewer, _, _), (rid, number), factory = api
     async with factory() as db:
-        review = await db.get(Review, rid)
-        version = await db.get(SkillVersion, review.version_id)
-        assert version.status == ListingStatus.pending
         admin = User(id=uuid.uuid4(), username="admin", email="admin@x.test", name="Admin", role=UserRole.super_admin)
         db.add(admin)
         await db.commit()
+    current[0] = reviewer
+    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={"override_reason": "x"})).status_code == 403
     current[0] = admin
     override = await client.post(f"/api/v1/reviews/{number}/publish", json={"override_reason": "Emergency"})
-    assert override.status_code == 409, override.text
-
-    current[0] = author
-    assert (await client.post(f"/api/v1/reviews/{number}/withdraw")).status_code == 200
-    submitted = await client.post(f"/api/v1/skills/{listing_id}/submit?message=Updated")
-    assert submitted.status_code == 200, submitted.text
-    current[0] = reviewer
-    assert (
-        await client.post(
-            f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "Reviewed update"}
-        )
-    ).status_code == 201
-    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
+    assert override.status_code == 200, override.text
 
 
 @pytest.mark.asyncio

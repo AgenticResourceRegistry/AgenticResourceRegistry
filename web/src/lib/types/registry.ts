@@ -66,6 +66,8 @@ export interface RegistryItem {
 	rejection_reason?: string;
 	review_number?: number | null;
 	review_url?: string | null;
+	/** Set when a draft save pushed a new revision to the open review. */
+	review_revision?: number | null;
 	created_at?: string;
 	updated_at?: string;
 	is_recommended?: boolean;

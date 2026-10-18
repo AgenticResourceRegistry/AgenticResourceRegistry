@@ -43,7 +43,7 @@ from services.harness_capability_inference import compute_supported_harnesses, i
 from services.registry_fork import agent_fork_counts, provenance_for, provenance_for_many
 from services.registry_namespace import identity_exists, slugify
 from services.registry_telemetry import emit_registry_event
-from services.review.cutover import lock_review_for_edit, submit_for_review
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
 from ._router import router
@@ -864,6 +864,12 @@ async def update_agent(
 
         await lock_agent_version(db, agent, agent.latest_version)
         agent.latest_version.yaml_snapshot = await build_yaml_snapshot(agent.latest_version, db)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = (
+        await push_draft_edit(db, "agent", agent, agent.latest_version, current_user.id)
+        if edits_version and agent.latest_version is not None
+        else None
+    )
 
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
@@ -878,9 +884,10 @@ async def update_agent(
         resource_name=agent.name,
     )
 
-    return _agent_to_response(
+    response = _agent_to_response(
         agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
     )
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.delete("/{agent_id}")

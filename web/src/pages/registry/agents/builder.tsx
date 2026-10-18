@@ -72,6 +72,7 @@ import { ObservalSkillBanner } from "@/components/builder/observal-skill-banner"
 import { COMPONENT_TYPES, REVERSE_TYPE_MAP, TYPE_MAP } from "@/components/registry/agent-component-constants";
 import { ComponentPicker } from "@/components/registry/component-picker";
 import { VersionBumpDialog } from "@/components/registry/version-bump-dialog";
+import { AUTO_MODEL } from "@/lib/agent-model";
 
 const AGENT_NAME_ERROR = "Must start with a letter/digit, only lowercase letters, digits, hyphens, underscores.";
 const CATEGORIES = [
@@ -129,7 +130,9 @@ function AgentBuilderInner() {
   const [description, setDescription] = useState("");
   const [version, setVersion] = useState("1.0.0");
   const [category, setCategory] = useState("");
-  const [modelName, setModelName] = useState("");
+  // Every Agent File has a model; "auto" lets each harness use its own default.
+  const [modelName, setModelName] = useState(AUTO_MODEL);
+  const [editStatus, setEditStatus] = useState<string | null>(null);
   const [modelsByHarness, setModelsByIde] = useState<Record<string, string>>({});
   const [publishing, setPublishing] = useState(false);
   const [activeTab, setActiveTab] = useState<RegistryType>("mcps");
@@ -190,8 +193,10 @@ function AgentBuilderInner() {
     setDescription(existingAgent.description ?? "");
     const agentVersion = (existingAgent as Record<string, unknown>).version;
     if (typeof agentVersion === "string") setVersion(agentVersion);
+    const agentStatus = (existingAgent as Record<string, unknown>).status;
+    if (typeof agentStatus === "string") setEditStatus(agentStatus);
     const agentModel = (existingAgent as Record<string, unknown>).model_name;
-    if (typeof agentModel === "string") setModelName(agentModel);
+    if (typeof agentModel === "string") setModelName(agentModel.trim() || AUTO_MODEL);
     const agentModelsByIde = (existingAgent as Record<string, unknown>).models_by_harness;
     if (agentModelsByIde && typeof agentModelsByIde === "object" && !Array.isArray(agentModelsByIde)) {
       setModelsByIde(agentModelsByIde as Record<string, string>);
@@ -338,7 +343,7 @@ function AgentBuilderInner() {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
 
     autoSaveTimerRef.current = setTimeout(() => {
-      const hasContent = name || description || modelName || version !== "1.0.0" ||
+      const hasContent = name || description || (modelName.trim() && modelName.trim() !== AUTO_MODEL) || version !== "1.0.0" ||
         Object.keys(modelsByHarness).length > 0 ||
         Object.values(selectedComponents).some((items) => items.length > 0) ||
         systemPrompt.trim().length > 0 ||
@@ -451,7 +456,7 @@ function AgentBuilderInner() {
       category: category || undefined,
       owner: whoami?.username || whoami?.email || "unknown",
       prompt: systemPrompt.trim(),
-      model_name: modelName,
+      model_name: modelName.trim() || AUTO_MODEL,
       models_by_harness: modelsByHarness,
       components: components.length > 0 ? components : [],
       visibility,
@@ -505,6 +510,9 @@ function AgentBuilderInner() {
     const criteriaError = validateSuccessCriteria(successCriteria);
     if (criteriaError) { toast.error(criteriaError); return; }
 
+    // An unpublished version is amended in place (a new revision of its open review); only an
+    // approved version needs a version bump.
+    if (isEditMode && editStatus && editStatus !== "approved") { await handleUpdateWithVersion(version); return; }
     if (isEditMode) { setShowVersionDialog(true); return; }
 
     setPublishing(true);
@@ -808,7 +816,7 @@ function IdentityStage(props: {
               props.setName(slugged);
               props.setNameError(slugged && !isValidAgentName(slugged) ? AGENT_NAME_ERROR : "");
             }}
-            placeholder="migration-guide"
+            placeholder="e.g. code-reviewer"
             disabled={props.isEditMode}
           />
           {props.nameError && <p className="text-2xs text-destructive">{props.nameError}</p>}
@@ -819,7 +827,7 @@ function IdentityStage(props: {
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label className="text-2xs font-medium">Description</Label>
-          <Textarea value={props.description} onChange={(e) => props.setDescription(e.target.value)} placeholder="Plans safe, reversible database and infrastructure migrations." rows={3} className="resize-y" />
+          <Textarea value={props.description} onChange={(e) => props.setDescription(e.target.value)} placeholder="e.g. Reviews pull requests for correctness and security." rows={3} className="resize-y" />
         </div>
         <div className="space-y-1.5">
           <Label className="text-2xs font-medium">Publish to</Label>
@@ -864,7 +872,7 @@ function IdentityStage(props: {
       </div>
 
       <div className="mt-4 rounded-[11px] bg-surface-raised p-3.5 text-2xs text-muted-foreground">
-        Install identity preview: <span className="font-mono">observal agent pull {props.namespace}/{props.name || "migration-guide"}</span>
+        Install identity preview: <span className="font-mono">observal agent pull {props.namespace}/{props.name || "<agent-name>"}</span>
       </div>
     </section>
   );
@@ -1080,7 +1088,7 @@ function ReviewStage(props: {
   const isReady = checks.slice(0, 3).every((check) => check.ok);
   const body = props.buildRequestBody();
   const previewYaml = `${props.namespace}/${props.name || "agent"}@${props.version}
-model: ${body.model_name || "<harness default>"}
+model: ${body.model_name || AUTO_MODEL}
 visibility: ${body.visibility || "public"}
 components:
   mcps: ${props.mcpCount}
@@ -1194,22 +1202,22 @@ function SummaryPanel(props: {
         <div className="flex items-center gap-3">
           <EntityGlyph type="agent" size="md" />
           <div>
-            <div className="text-base font-semibold">{props.name || "migration-guide"}</div>
+            <div className="text-base font-semibold">{props.name || "Agent Name"}</div>
             <div className="font-mono text-[10px] text-muted-foreground">
-              {props.namespace}/{props.name || "migration-guide"} · v{props.version}
+              {props.namespace}/{props.name || "<agent-name>"} · v{props.version}
             </div>
           </div>
         </div>
 
         <p className="mt-3 text-2xs text-muted-foreground">
-          {props.description || "Plans safe, reversible database and infrastructure migrations."}
+          {props.description || "Add a description to preview it here."}
         </p>
 
         {/* Settings rows */}
         <div className="mt-3 space-y-0 divide-y divide-border">
           <SettingRow label="Publish to" sub="Personal namespace" value={`${props.namespace}/`} />
           <SettingRow label="Visibility" sub="Available after approval" value={props.visibility === "team" ? "Team only" : "Public"} />
-          <SettingRow label="Model" sub="Default across harnesses" value={props.modelName || "Harness default"} />
+          <SettingRow label="Model" sub="Default across harnesses" value={props.modelName.trim() || AUTO_MODEL} />
           <SettingRow label="Components" sub={`${props.mcpCount} MCP Clients · ${props.skillCount} skill${props.skillCount !== 1 ? "s" : ""}`} value={String(props.totalComponents)} />
         </div>
       </section>

@@ -40,7 +40,7 @@ from schemas.skill_resources import (
 from services import dynamic_settings as _ds
 from services.agent_lock import INSTALLABLE_STATUSES, release_key
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
-from services.review.cutover import submit_for_review
+from services.review.cutover import push_draft_edit, submit_for_review
 from services.review.decisions import withdraw as withdraw_review
 from services.review.notifications import deliver_event
 from services.skill_bundle import (
@@ -208,12 +208,15 @@ async def _save_file_edit(listing, version, edit, db: AsyncSession, *, replace: 
     release_edit_lock(version, actor_id, force=True)
     await db.flush()
     version.content_revision = skill_content_revision(listing, version)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = await push_draft_edit(db, "skill", listing, version, actor_id)
     await db.commit()
     return SkillVersionManifest(
         listing_id=listing.id,
         version_id=version.id,
         revision=version.content_revision,
         files=[file.declaration for file in edit.files],
+        **(pushed or {}),
     )
 
 
@@ -663,6 +666,8 @@ async def update_skill_version_draft(
     release_edit_lock(version, current_user.id, force=True)
     await db.flush()
     version.content_revision = skill_content_revision(listing, version)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = await push_draft_edit(db, "skill", listing, version, current_user.id)
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -671,6 +676,7 @@ async def update_skill_version_draft(
         version_id=version.id,
         revision=version.content_revision,
         files=[file.declaration for file in files],
+        **(pushed or {}),
     )
 
 

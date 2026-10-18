@@ -16,7 +16,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { reviewToast } from "@/lib/review-toast";
+import { draftSavedToast, reviewToast } from "@/lib/review-toast";
 import {
   dashboard,
   registry,
@@ -194,9 +194,10 @@ export function useUpdateDraft() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { id: string; body: unknown }) => registry.updateDraft(vars.id, vars.body),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success("Draft updated");
+      qc.invalidateQueries({ queryKey: ["pr-review"] });
+      draftSavedToast(result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to update draft");

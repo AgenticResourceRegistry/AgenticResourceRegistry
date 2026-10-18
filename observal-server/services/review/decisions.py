@@ -48,8 +48,6 @@ from services.versioning import parse_semver
 
 _PRERELEASE_RE = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")
 
-_HARD_BLOCKERS = frozenset({"unsubmitted_changes", "skill_folder_rollout", "approved_base_changed"})
-
 
 def _now():
     return datetime.now(UTC)
@@ -285,12 +283,23 @@ async def open_or_push(
 
 @dataclass(frozen=True)
 class Gate:
+    """Publication state of a review.
+
+    ``ready`` means a person may publish: only the required approvals block that.
+    ``requirements`` lists every open item (failing checks, change requests, unsubmitted
+    draft changes, ...). They are shown to reviewers and discussed, but do not block a
+    manual publish. ``clear`` is True when nothing is open; unattended auto-publish needs it.
+    """
+
     ready: bool
     approvals: int
     required: int
     policy_source: str
     requirements: tuple[str, ...]
     outstanding_requests: int
+    # Required checks that are failing, so clients can say which check failed and why.
+    blocking_checks: tuple[dict, ...] = ()
+    clear: bool = False
 
 
 async def _skill_blockers(db, review, version) -> list[str]:
@@ -361,14 +370,21 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
         blockers.append("required_approvals")
     if requests:
         blockers.append("changes_requested")
-    if any(
-        check.get("required") and check.get("status") in ci.BLOCKING
+    blocking_checks = tuple(
+        {
+            "id": check.get("id"),
+            "name": check.get("name"),
+            "status": check.get("status"),
+            "details": check.get("details"),
+        }
         for check in ci.visible(head.checks, await check_config.enabled())
-    ):
+        if check.get("required") and check.get("status") in ci.BLOCKING
+    )
+    if blocking_checks:
         blockers.append("required_checks")
     _, version = await _target(db, review)
-    # Saving a draft does not create a revision. Never approve/publish mutable
-    # version content that differs from the frozen head reviewers inspected.
+    # Draft saves push a new revision (cutover.push_draft_edit), so this only shows when
+    # content changed by another path. It is advisory: reviewers see it, it does not block.
     if _hash(await render_files(review.subject_type, version, db)) != head.content_hash:
         blockers.append("unsubmitted_changes")
     if is_actively_editing(version):
@@ -403,12 +419,14 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
         if threads:
             blockers.append("unresolved_threads")
     return Gate(
-        not blockers,
+        "required_approvals" not in blockers,
         approvals,
         policy.required_approvals[review.subject_type],
         policy.source,
         tuple(blockers),
         len(requests),
+        blocking_checks,
+        not blockers,
     )
 
 
@@ -427,11 +445,12 @@ async def sync_state(db, review, *, actor_id=None, policy=None):
         _, version = await _target(db, review)
         version.status = AgentStatus.pending if review.subject_type == "agent" else ListingStatus.pending
         _event(db, review, "gate_ready", actor_id)
-        if _auto_publish_allowed(policy or await policy_for(review, db=db), version):
+        # Unattended publishing still needs every open item cleared; only people may publish past them.
+        if result.clear and _auto_publish_allowed(policy or await policy_for(review, db=db), version):
             await publish(db, review, None, auto=True, policy=policy)
     elif result.ready and review.state == ReviewState.approved:
         _, version = await _target(db, review)
-        if _auto_publish_allowed(policy or await policy_for(review, db=db), version):
+        if result.clear and _auto_publish_allowed(policy or await policy_for(review, db=db), version):
             await publish(db, review, None, auto=True, policy=policy)
     elif not result.ready and review.state == ReviewState.approved:
         review.state = ReviewState.changes_requested if result.outstanding_requests else ReviewState.open
@@ -539,6 +558,12 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
         raise HTTPException(409, "Review is closed")
     subject, version = await _target(db, review)
     policy = policy or await policy_for(review, db=db)
+    if override_reason is not None and not override_reason.strip():
+        override_reason = None
+    if override_reason and (auto or user is None or user.role != UserRole.super_admin):
+        raise HTTPException(403, "Only a super admin may publish with an override reason")
+    # A super admin override publishes regardless of approvals or any open item.
+    override = bool(override_reason)
     if not auto:
         if user is None:
             raise HTTPException(403, "Publisher required")
@@ -546,30 +571,34 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
         if (
             _own_work(subject, version, user.id)
             and not (subject.is_private and policy.source == "teamspace" and policy.self_approval == "counted")
-            and not (user.role == UserRole.super_admin and override_reason)
+            and not override
         ):
             raise HTTPException(403, "Authors and co-authors cannot publish their own work")
-    if is_actively_editing(version):
-        raise HTTPException(409, "Version is being edited")
-    if review.subject_type == "agent" and await pinned_component_blockers(db, version.id):
-        raise HTTPException(422, "Pinned components must be published first")
+    if review.subject_type == "agent":
+        # Confidentiality, not review quality: a public agent must never expose a team-private
+        # skill. Unlike the advisory gate items, no publish path (including an override) skips this.
+        private = [b for b in await pinned_component_blockers(db, version.id) if b.get("status") == "not_public"]
+        if private:
+            names = ", ".join(str(b.get("name") or b["component_id"]) for b in private)
+            raise HTTPException(
+                422,
+                f"A public agent cannot pin team-private skills ({names}). "
+                "Make the agent team-visible or pin public skills, then submit a new revision.",
+            )
     result = await gate(db, review, policy=policy)
-    # An administrative policy override cannot approve bytes that have never
-    # been submitted as a revision; this is a snapshot-integrity invariant.
-    hard = [r for r in result.requirements if r in _HARD_BLOCKERS]
-    if review.subject_type == "skill" and any(
-        c.get("id") == "skill_folder" and c.get("status") != "pass" for c in (await _head(db, review)).checks
-    ):
-        hard.append("skill_folder")
-    if hard:
-        # Integrity rules (snapshot match, installable folder, rollout, approved base) are never overridable.
-        raise HTTPException(409, f"Review gate blocked: {', '.join(hard)}")
-    if not result.ready and not (
-        user and user.role == UserRole.super_admin and override_reason and override_reason.strip()
-    ):
-        raise HTTPException(409, f"Review gate blocked: {', '.join(result.requirements)}")
-    if override_reason and (auto or user.role != UserRole.super_admin or not override_reason.strip()):
-        raise HTTPException(403, "Only a super admin may override with a reason")
+    if auto:
+        # Unattended publishing never skips an open item.
+        if not result.clear:
+            raise HTTPException(409, f"Auto-publish waits for every open item: {', '.join(result.requirements)}")
+    elif not override and not result.ready:
+        # Only approvals block a person; other open items are advisory.
+        missing = result.required - result.approvals
+        raise HTTPException(
+            409,
+            f"Publishing needs {missing} more approval{'s' if missing != 1 else ''} "
+            f"({result.approvals} of {result.required} on the latest revision). "
+            "Other open items are advisory. A super admin can publish now with an override reason.",
+        )
     re_review = review.subject_type == "skill" and version.pre_public_status is not None
     version.status = (
         AgentStatus.approved
@@ -622,7 +651,12 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
             promote = subject.latest_version_id is None or await should_promote_skill_version(
                 db, subject.latest_version_id, version
             )
-            if not promote and ("-" not in version.version or not _PRERELEASE_RE.fullmatch(version.version)):
+            # An override still publishes; it just leaves the newer release as the default.
+            if (
+                not promote
+                and not override
+                and ("-" not in version.version or not _PRERELEASE_RE.fullmatch(version.version))
+            ):
                 raise HTTPException(409, "Newer approved skill release exists; refresh before publishing")
     else:
         promote = current is None or (new_key is not None and (old_key is None or new_key >= old_key))

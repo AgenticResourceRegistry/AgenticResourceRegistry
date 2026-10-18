@@ -77,6 +77,7 @@ async def test_resubmit_does_not_write_through_unloaded_latest_version(monkeypat
             raise AssertionError("Must set the submitted version, not the listing")
 
     review = SimpleNamespace(number=42, state=ReviewState.changes_requested)
+    monkeypatch.setattr(cutover, "_draft_already_under_review", AsyncMock(return_value=None))
     monkeypatch.setattr(cutover, "open_or_push", AsyncMock(return_value=review))
     monkeypatch.setattr(cutover, "_head", AsyncMock(return_value=SimpleNamespace(number=2)))
     monkeypatch.setattr(cutover, "deliver_event", AsyncMock())

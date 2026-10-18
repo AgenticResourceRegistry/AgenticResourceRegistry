@@ -11,6 +11,14 @@ export interface ReviewGate {
   policy_source: string;
   requirements: string[];
   outstanding_requests?: number;
+  blocking_checks?: ReviewGateCheck[];
+}
+
+export interface ReviewGateCheck {
+  id: string;
+  name: string;
+  status: string;
+  details?: string[] | string | null;
 }
 
 export interface ReviewSummary {

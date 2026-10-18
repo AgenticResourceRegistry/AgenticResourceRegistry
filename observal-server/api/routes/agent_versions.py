@@ -212,6 +212,44 @@ async def _get_agent_version(
     return detail
 
 
+async def _refuse_release_over_unpublished_first_release(db: AsyncSession, agent) -> None:
+    """A first release still under review is amended in place, never superseded by a new version.
+
+    Releasing would open a second review and, while the agent's own components are still
+    pending, fail on component approval. The author should edit the pending release instead:
+    the save becomes a new revision of the same review.
+    """
+    from models.review import Review, ReviewState
+
+    latest = agent.latest_version
+    if latest is None or latest.status not in (AgentStatus.pending, AgentStatus.changes_requested):
+        return
+    approved = await db.scalar(
+        select(func.count(AgentVersion.id)).where(
+            AgentVersion.agent_id == agent.id, AgentVersion.status == AgentStatus.approved
+        )
+    )
+    if approved:
+        return  # Not a first release: releasing alongside a pending version stays allowed.
+    number = await db.scalar(
+        select(Review.number).where(
+            Review.subject_type == "agent",
+            Review.version_id == latest.id,
+            Review.state.notin_((ReviewState.closed, ReviewState.published)),
+        )
+    )
+    review = f" (review #{number})" if number else ""
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"v{latest.version} is not published yet{review}, so there is nothing to release a new version from. "
+            "Edit v" + latest.version + " in place instead: the change becomes a new revision of the same review. "
+            f"CLI: observal agent edit {agent.namespace}/{agent.slug} --description ... or "
+            "observal agent publish --update --dir DIR. Web: the agent's Edit tab, Save & update review."
+        ),
+    )
+
+
 async def _create_agent_version(
     agent_id: str,
     req: AgentVersionCreateRequest,
@@ -230,6 +268,8 @@ async def _create_agent_version(
     perm = get_effective_agent_permission(agent, current_user)
     if perm != "owner":
         raise HTTPException(status_code=403, detail="Not authorized to release versions")
+
+    await _refuse_release_over_unpublished_first_release(db, agent)
 
     # Duplicate check
     dup_stmt = select(AgentVersion).where(

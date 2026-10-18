@@ -68,7 +68,7 @@ Use for a complete one-call Agent without local component authoring:
 observal agent create --name reviewer --description 'Reviews pull requests' --prompt 'Review changes for correctness and risk' --model claude-sonnet-4-6 --harness kiro --output json
 ```
 
-Name, description, and prompt keep creation noninteractive. Use `--prompt-file` for long prompts. Verify with the returned UUID or `qualified_name`:
+Name, description, and prompt keep creation noninteractive. Use `--prompt-file` for long prompts. `--model` is optional: every Agent has a model, and a missing or blank one is saved as `auto` (each harness uses its own default). Pass a model only when the user asks for one. Verify with the returned UUID or `qualified_name`:
 
 ```bash
 observal agent show NAMESPACE/REVIEWER --output json
@@ -123,7 +123,15 @@ observal agent publish --dir ./my-agent --team platform-tools --visibility publi
 
 ## Update in place
 
-Use only when the user wants to change the current listing without a reviewed version, and only while its latest version is a draft, pending, changes requested, or rejected. An approved version is immutable; the update fails with a conflict that points to `agent release`. Use [Release a version](#release-a-version) instead.
+Use while the latest version is not published yet: a draft, pending review, changes requested, or rejected. This is the way to correct a **pending first release** (for example a wrong description on v1.0.0 under review): do not wait for rejection or a change request, and do not run `agent release`. The version number stays the same and, when a review is open, reviewers see the change as a **new revision of the same review**, not a new agent version. `agent release` refuses while the first release is still under review and points here. An approved version is immutable; the update fails with a conflict that points to `agent release`. Use [Release a version](#release-a-version) instead.
+
+For one field, `agent edit` needs no YAML:
+
+```bash
+observal agent edit NAMESPACE/AGENT_SLUG --description 'Reviews pull requests for risk' --output json
+```
+
+The response carries `review_number` and `review_revision` when the edit reached an open review. `publish --update` never bumps the version unless `--bump` is passed.
 
 1. Read current state with `agent show`.
 2. Preserve required fields in `observal-agent.yaml`, including `model_config_json: {}` and `external_mcps: []`.

@@ -57,7 +57,7 @@ observal registry prompt edit NAMESPACE/SLUG --template 'New template body' --ou
 observal registry sandbox edit NAMESPACE/SLUG --image python:3.12-slim --output json
 ```
 
-Verify the returned status and version. On an edit-lock conflict, do not overwrite blindly. Wait or ask the current editor to release it.
+Verify the returned status and version. When the item has an open review, the edit is pushed to it as a new revision automatically: the response carries `review_number` and `review_revision`, and reviewers see the change at once (approvals on earlier revisions follow the review's stale-approval policy). No separate resubmission is needed; `submit --submit` afterwards only adds a revision note and marks the version ready again. On an edit-lock conflict, do not overwrite blindly. Wait or ask the current editor to release it.
 
 ## Publish a version
 

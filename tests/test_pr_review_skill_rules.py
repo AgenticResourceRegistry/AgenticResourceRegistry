@@ -87,21 +87,25 @@ async def test_resource_files_are_in_snapshot_and_change_its_hash(db):
 
 
 @pytest.mark.asyncio
-async def test_bundle_skill_needs_rollout_and_is_never_auto_published(db, monkeypatch):
+async def test_bundle_skill_is_never_auto_published_but_override_publishes(db, monkeypatch):
     users = await people(db)
     listing, row = await skill(db, users, extra_files=[{"path": "a.txt", "content": "x", "encoding": "utf-8"}])
     review = await open_or_push(db, "skill", listing, row, users["author"].id)
     monkeypatch.setattr("services.review.decisions._ds.get_bool", AsyncMock(return_value=False))
     auto = ApprovalPolicy(required_approvals={**ApprovalPolicy().required_approvals, "skill": 0}, auto_publish=True)
-    assert "skill_folder_rollout" in (await gate(db, review, policy=auto)).requirements
-    # Super admin override may not publish a folder the installers cannot deliver.
+    result = await gate(db, review, policy=auto)
+    assert "skill_folder_rollout" in result.requirements and not result.clear
+    # Unattended publishing never skips an open item.
     with pytest.raises(HTTPException) as blocked:
-        await publish(db, review, users["admin"], override_reason="urgent", policy=auto)
+        await publish(db, review, None, auto=True, policy=auto)
     assert blocked.value.status_code == 409 and "skill_folder_rollout" in blocked.value.detail
     monkeypatch.setattr("services.review.decisions._ds.get_bool", AsyncMock(return_value=True))
     await approve(db, review, users)
     await db.refresh(review)
     assert review.state != ReviewState.published  # Even with zero approvals required, a human publishes.
+    # A super admin override publishes past every open item.
+    await publish(db, review, users["admin"], override_reason="urgent", policy=auto)
+    assert review.state == ReviewState.published
 
 
 @pytest.mark.asyncio
@@ -131,7 +135,7 @@ async def test_prerelease_publishes_without_replacing_stable_latest(db):
 
 
 @pytest.mark.asyncio
-async def test_candidate_is_blocked_when_its_approved_base_moved(db):
+async def test_moved_approved_base_is_advisory(db):
     users = await people(db)
     listing, base = await skill(db, users, version="1.0.0", status=ListingStatus.approved)
     _, moved = await skill(db, users, version="1.1.0", status=ListingStatus.approved, listing=listing)
@@ -139,9 +143,10 @@ async def test_candidate_is_blocked_when_its_approved_base_moved(db):
     _, candidate = await skill(db, users, version="1.2.0", listing=listing, base_version_id=base.id)
     review = await open_or_push(db, "skill", listing, candidate, users["author"].id)
     await approve(db, review, users)
-    assert "approved_base_changed" in (await gate(db, review)).requirements
-    with pytest.raises(HTTPException):
-        await publish(db, review, users["admin"], override_reason="urgent")
+    result = await gate(db, review)
+    assert "approved_base_changed" in result.requirements and result.ready and not result.clear
+    await publish(db, review, users["admin"], override_reason="urgent")
+    assert review.state == ReviewState.published
 
 
 @pytest.mark.asyncio

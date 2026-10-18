@@ -346,8 +346,9 @@ async function request<T = unknown>(
 					} else if (Array.isArray(parsed.detail)) {
 						detail = parsed.detail
 							.map(
-								(e: { msg?: string }) =>
-									e.msg?.replace(/^Value error, /i, "") || "Validation error",
+								// Pydantic items carry msg; component checks carry reason.
+								(e: { msg?: string; reason?: string }) =>
+									(e.msg ?? e.reason)?.replace(/^Value error, /i, "") || "Validation error",
 							)
 							.join(". ");
 					} else {

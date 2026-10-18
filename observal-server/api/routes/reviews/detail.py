@@ -199,6 +199,7 @@ async def gate_detail(review: Review = Depends(get_review), db: AsyncSession = D
         "policy_source": result.policy_source,
         "requirements": result.requirements,
         "outstanding_requests": result.outstanding_requests,
+        "blocking_checks": result.blocking_checks,
     }
 
 

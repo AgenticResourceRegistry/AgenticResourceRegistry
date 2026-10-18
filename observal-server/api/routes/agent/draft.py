@@ -22,7 +22,7 @@ from services.harness_capability_inference import compute_supported_harnesses, i
 from services.inbox import sources as inbox
 from services.registry_fork import provenance_for
 from services.registry_telemetry import emit_registry_event
-from services.review.cutover import lock_review_for_edit, submit_for_review
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.teamspace import (
     is_admin,
     resolve_publish_target,
@@ -392,15 +392,18 @@ async def update_draft(
 
     await lock_agent_version(db, agent, version)
     version.yaml_snapshot = await build_yaml_snapshot(version, db)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = await push_draft_edit(db, "agent", agent, version, current_user.id)
 
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
-    return _agent_to_response(
+    response = _agent_to_response(
         agent,
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
     )
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.post("/{agent_id}/start-edit")

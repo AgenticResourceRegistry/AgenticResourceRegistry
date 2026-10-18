@@ -33,6 +33,8 @@ from schemas.agent import (
 )
 from services.teamspace import PublishTarget
 
+pytestmark = pytest.mark.usefixtures("no_open_review")
+
 NOW = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
 USER_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
 OTHER_USER_ID = uuid.UUID("10000000-0000-0000-0000-000000000002")

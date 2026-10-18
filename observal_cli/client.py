@@ -94,6 +94,10 @@ def _safe_detail(response: httpx.Response) -> str | None:
         return None
     # FastAPI errors use ``detail``; ARD routes use ``{"errorCode", "message"}``.
     detail = (data.get("detail") or data.get("message")) if isinstance(data, dict) else None
+    if isinstance(detail, list):
+        # Validation lists: pydantic items carry ``msg``; component checks carry ``reason``.
+        parts = [item.get("reason") or item.get("msg") for item in detail if isinstance(item, dict)]
+        detail = "; ".join(str(part).removeprefix("Value error, ") for part in parts if part)
     return detail.strip()[:500] if isinstance(detail, str) and detail.strip() else None
 
 
