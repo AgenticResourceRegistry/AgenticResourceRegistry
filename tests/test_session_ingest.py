@@ -472,6 +472,23 @@ async def test_kiro_model_extractor_ignores_malformed_blocks_and_does_not_invent
     assert external_calls.insert.await_args.args[0][0]["model"] == ""
 
 
+async def test_kiro_tool_lines_keep_prompt_time_in_event_timeline(external_calls):
+    prompt = json.dumps(
+        {"kind": "Prompt", "data": {"meta": {"timestamp": 1_767_225_600}, "content": [{"kind": "text", "data": "hi"}]}}
+    )
+    tool = json.dumps(
+        {
+            "kind": "AssistantMessage",
+            "data": {"content": [{"kind": "toolUse", "data": {"name": "read", "toolUseId": "t1"}}]},
+        }
+    )
+    await _ingest([prompt, tool], harness="kiro")
+
+    rows = external_calls.insert.await_args.args[0]
+    assert rows[0]["timestamp"] == rows[1]["timestamp"] == "2026-01-01 00:00:00.000"
+    assert all(row["is_source_record"] == 1 for row in rows)
+
+
 async def test_empty_kiro_input_writes_only_credit_metadata(external_calls):
     result = await _ingest([], harness="kiro", total_credits=1.25, agent_id="agent", agent_version="1.0.0")
 
