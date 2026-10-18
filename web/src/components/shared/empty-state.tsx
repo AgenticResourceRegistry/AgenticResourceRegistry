@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import type { LucideIcon } from "lucide-react";
@@ -33,16 +34,16 @@ export function EmptyState({
       )}
       {actionLabel && (actionHref || onAction) && (
         actionHref ? (
-          <a
-            href={actionHref}
-            {...(actionHref.startsWith("http")
-              ? { target: "_blank", rel: "noopener noreferrer" }
-              : {})}
-          >
-            <Button variant="outline" size="sm" className="mt-4">
+          <Button variant="outline" size="sm" className="mt-4" asChild>
+            <a
+              href={actionHref}
+              {...(actionHref.startsWith("http")
+                ? { target: "_blank", rel: "noopener noreferrer" }
+                : {})}
+            >
               {actionLabel}
-            </Button>
-          </a>
+            </a>
+          </Button>
         ) : (
           <Button variant="outline" size="sm" className="mt-4" onClick={onAction}>
             {actionLabel}

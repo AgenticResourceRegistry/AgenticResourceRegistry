@@ -44,6 +44,7 @@ from schemas.hook import (
 )
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.registry_namespace import identity_exists
+from services.registry_owner_search import owner_page
 from services.review.cutover import lock_review_for_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
@@ -168,7 +169,7 @@ async def list_hooks(
         public_only=public_only,
     )
     total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
-    order_by = [HookListing.created_at.desc()]
+    order_by = [HookListing.created_at.desc(), HookListing.id.desc()]
     if search_rank is not None:
         order_by.insert(0, search_rank.desc())
     result = await db.execute(stmt.order_by(*order_by).limit(limit).offset(offset))
@@ -179,20 +180,34 @@ async def list_hooks(
 
 @router.get("/my", response_model=list[HookListingSummary])
 async def my_hooks(
+    response: Response,
+    search: str | None = Query(None, max_length=200),
+    event: str | None = Query(None),
+    scope: str | None = Query(None),
+    status: ListingStatus | None = Query(None),
+    namespace: str | None = Query(None, max_length=200),
+    team_id: uuid.UUID | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
-    optic.debug("my_hooks called")
-    # Authorship is not a standing grant: a member removed from a teamspace keeps
-    # submitted_by on its listings but must not keep reading them, so /my is
-    # scoped like every other list rather than trusting the author column.
-    stmt = (
-        select(HookListing).where(HookListing.submitted_by == current_user.id).order_by(HookListing.created_at.desc())
+    rows, total = await owner_page(
+        db,
+        HookListing,
+        HookVersion,
+        current_user,
+        apply_visibility_filter,
+        search=search,
+        status=status,
+        namespace=namespace,
+        team_id=team_id,
+        conditions=([HookVersion.event == event] if event else []) + ([HookVersion.scope == scope] if scope else []),
+        limit=limit,
+        offset=offset,
     )
-    stmt = apply_visibility_filter(stmt, HookListing, current_user)
-    result = await db.execute(stmt)
-    listings = await component_responses(result.scalars().all(), "hook", current_user, db)
-    return listings
+    response.headers["X-Total-Count"] = str(total)
+    return await component_responses(rows, "hook", current_user, db)
 
 
 @router.get("/{listing_id}", response_model=HookListingResponse)

@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   BookOpenCheck,
   Bot,
@@ -31,6 +32,7 @@ import { useHarnesses } from "@/hooks/use-harnesses";
 import { registryItemPath } from "@/lib/registry-name";
 import { RecommendedBadge } from "@/components/registry/recommended-badge";
 import type { DiscoveryAvailability, DiscoveryKind, DiscoverySearchResult } from "@/lib/types";
+import type { RegistryType } from "@/lib/api";
 
 const EXAMPLES = [
   "review a pull request for security vulnerabilities",
@@ -42,12 +44,16 @@ const EXAMPLES = [
 
 const KIND_META: Record<DiscoveryKind, { label: string; icon: LucideIcon; color: string }> = {
   agent: { label: "Agent File", icon: Bot, color: "text-primary" },
-  mcp: { label: "MCP", icon: PlugZap, color: "text-component-mcp" },
+  mcp: { label: "MCP Client", icon: PlugZap, color: "text-component-mcp" },
   skill: { label: "Skill", icon: BookOpenCheck, color: "text-component-skill" },
   hook: { label: "Hook", icon: GitBranch, color: "text-component-hook" },
   prompt: { label: "Prompt", icon: MessageSquareText, color: "text-component-prompt" },
   sandbox: { label: "Sandbox", icon: Box, color: "text-component-sandbox" },
   external: { label: "A2A agent", icon: Network, color: "text-primary" },
+};
+
+const CATALOG_KIND: Partial<Record<DiscoveryKind, RegistryType>> = {
+  agent: "agents", mcp: "mcps", skill: "skills", hook: "hooks", prompt: "prompts", sandbox: "sandboxes",
 };
 
 const KIND_OPTIONS: { value: DiscoveryKind | "all"; label: string }[] = [
@@ -99,6 +105,10 @@ function nativeIdentity(result: DiscoverySearchResult) {
   return { namespace, slug, qualified_name: qualified };
 }
 
+function shellArg(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -120,14 +130,15 @@ function CopyCommand({ command }: { command: string }) {
     <button
       type="button"
       onClick={copy}
-      className="group flex w-full items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted"
+      aria-label={`Copy command: ${command}`}
+      className="group flex w-full items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title="Copy command"
     >
       <span className="truncate">{command}</span>
       {copied ? (
         <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-success" />
       ) : (
-        <Copy className="ml-auto h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100" />
+        <Copy className="ml-auto h-3.5 w-3.5 shrink-0 text-foreground opacity-60 group-hover:opacity-100 group-focus-visible:opacity-100" />
       )}
     </button>
   );
@@ -145,8 +156,8 @@ function ResultCard({ result, harness }: { result: DiscoverySearchResult; harnes
   // Remote agents are only ever delegated to; registry agents can be pulled or delegated to.
   const command =
     kind === "external"
-      ? `observal delegate run ${result.identifier} "<task>"`
-      : `observal discover use ${result.identifier}${harness ? ` --harness ${harness}` : ""}`;
+      ? `observal delegate run ${shellArg(result.identifier)} '<task>'`
+      : `observal discover use ${shellArg(result.identifier)}${harness ? ` --harness ${shellArg(harness)}` : ""}`;
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
@@ -215,22 +226,47 @@ function ResultCard({ result, harness }: { result: DiscoverySearchResult; harnes
       )}
 
       <CopyCommand command={command} />
+      {CATALOG_KIND[kind] && (
+        <Link to="/resources/$type" params={{ type: CATALOG_KIND[kind] }} className="self-start text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Browse {kind === "sandbox" ? "Sandboxes" : `${meta.label}s`} in Agentic Resources
+        </Link>
+      )}
     </div>
   );
 }
 
 export default function DiscoverPage() {
-  const [input, setInput] = useState("");
-  const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<DiscoveryKind | "all">("all");
-  const [harness, setHarness] = useState<string>("any");
-  const [includeUnapproved, setIncludeUnapproved] = useState(false);
-  const { data: harnesses } = useHarnesses();
+  const search = useSearch({ from: "/_authed/discover" });
+  const navigate = useNavigate({ from: "/discover" });
+  const [input, setInput] = useState(search.q ?? "");
+  const [query, setQuery] = useState(search.q ?? "");
+  const pushedQuery = useRef(search.q);
+  const kind: DiscoveryKind | "all" = search.kind ?? "all";
+  const harnessQuery = useHarnesses();
+  const harnesses = harnessQuery.data;
+  // URL search params are untrusted. Never run an unfiltered query while validating a bookmarked harness.
+  const selectedHarness = harnesses?.find((entry) => entry.name === search.harness);
+  const harness = selectedHarness?.name ?? "any";
+  const harnessPending = !!search.harness && harnessQuery.isPending;
+  const harnessInvalid = !!search.harness && !harnessQuery.isPending && !selectedHarness;
+  const includeUnapproved = !!search.unapproved;
+
+  useEffect(() => {
+    if (search.q === pushedQuery.current) return;
+    pushedQuery.current = search.q;
+    setInput(search.q ?? "");
+  }, [search.q]);
 
   useEffect(() => {
     const timer = setTimeout(() => setQuery(input), 300);
     return () => clearTimeout(timer);
   }, [input]);
+
+  function updateInput(value: string) {
+    setInput(value);
+    pushedQuery.current = value || undefined;
+    navigate({ search: (current) => ({ ...current, q: value || undefined }), replace: true });
+  }
 
   const filter = useMemo(
     () => ({
@@ -240,7 +276,7 @@ export default function DiscoverPage() {
     }),
     [kind, harness, includeUnapproved],
   );
-  const { data, isFetching, isError, error } = useDiscoverySearch(query, filter, 10);
+  const { data, isFetching, isError, error } = useDiscoverySearch(query, filter, 10, !harnessPending && !harnessInvalid);
   const results = data?.results ?? [];
   const active = query.trim().length >= 2;
 
@@ -255,14 +291,17 @@ export default function DiscoverPage() {
           <Input
             autoFocus
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(event) => updateInput(event.target.value)}
             placeholder="What are you trying to do?"
             className="h-12 pl-9 text-base"
             aria-label="Describe the task"
+            aria-describedby="discover-query-limit"
+            maxLength={500}
           />
+          <span id="discover-query-limit" className="sr-only">Up to 500 characters</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={kind} onValueChange={(value) => setKind(value as DiscoveryKind | "all")}>
+          <Select value={kind} onValueChange={(value) => navigate({ search: (current) => ({ ...current, kind: value === "all" ? undefined : value as DiscoveryKind }), replace: true })}>
             <SelectTrigger className="w-40" aria-label="Resource kind">
               <SelectValue />
             </SelectTrigger>
@@ -274,7 +313,7 @@ export default function DiscoverPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={harness} onValueChange={setHarness}>
+          <Select value={harness} onValueChange={(value) => navigate({ search: (current) => ({ ...current, harness: value === "any" ? undefined : value }), replace: true })}>
             <SelectTrigger className="w-44" aria-label="Harness">
               <SelectValue />
             </SelectTrigger>
@@ -291,14 +330,14 @@ export default function DiscoverPage() {
             type="button"
             variant={includeUnapproved ? "secondary" : "outline"}
             size="sm"
-            onClick={() => setIncludeUnapproved((value) => !value)}
+            onClick={() => navigate({ search: (current) => ({ ...current, unapproved: !includeUnapproved || undefined }), replace: true })}
             aria-pressed={includeUnapproved}
           >
             {includeUnapproved ? "Including my drafts" : "Approved only"}
           </Button>
           {active && (
             <span className="ml-auto text-xs text-muted-foreground">
-              {isFetching ? "Searching…" : `${results.length} result${results.length === 1 ? "" : "s"}`}
+              {harnessPending ? "Checking harness…" : harnessInvalid ? "Harness filter unavailable" : isFetching ? "Searching…" : `${results.length} result${results.length === 1 ? "" : "s"}`}
             </span>
           )}
         </div>
@@ -307,12 +346,15 @@ export default function DiscoverPage() {
       {!active && (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Search every approved Agent File, remote A2A agent, MCP Client, skill, hook, prompt and sandbox at once. Results are ranked by
-            relevance; whether something is approved and whether it can be used right now are shown separately.
+            Describe a task to find matching Agent Files, MCP Clients, skills, hooks, prompts, sandboxes and remote A2A agents.
+            Results show approval and availability separately. Remote agents are delegated to, not installed as native resources.
           </p>
+          <Link to="/resources/$type" params={{ type: "agents" }} className="inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Browse Agentic Resources by kind instead
+          </Link>
           <div className="flex flex-wrap gap-2">
             {EXAMPLES.map((example) => (
-              <Button key={example} type="button" variant="outline" size="sm" onClick={() => setInput(example)}>
+              <Button key={example} type="button" variant="outline" size="sm" onClick={() => updateInput(example)}>
                 {example}
               </Button>
             ))}
@@ -320,7 +362,16 @@ export default function DiscoverPage() {
         </div>
       )}
 
-      {active && isError && (
+      {active && harnessPending && (
+        <p role="status" className="text-sm text-muted-foreground">Checking the selected harness…</p>
+      )}
+      {active && harnessInvalid && (
+        <EmptyState icon={Search} title={harnessQuery.isError ? "Harnesses unavailable" : "Unknown harness"}
+          description={harnessQuery.isError ? "Could not check this saved harness filter. Retry loading the harness list." : "This harness is no longer available. Choose another harness or remove the filter."}
+          actionLabel={harnessQuery.isError ? "Retry" : "Clear harness filter"}
+          onAction={harnessQuery.isError ? () => { void harnessQuery.refetch(); } : () => navigate({ search: (current) => ({ ...current, harness: undefined }), replace: true })} />
+      )}
+      {active && !harnessPending && !harnessInvalid && isError && (
         <EmptyState
           icon={Search}
           title="Search failed"
@@ -328,17 +379,22 @@ export default function DiscoverPage() {
         />
       )}
 
-      {active && !isError && !data && isFetching && <TableSkeleton rows={3} />}
+      {active && !harnessPending && !harnessInvalid && !isError && !data && isFetching && <TableSkeleton rows={3} />}
 
-      {active && !isError && data && results.length === 0 && (
-        <EmptyState
-          icon={Search}
-          title="Nothing matches yet"
-          description="Try fewer or different words, or clear the kind and harness filters. If it truly does not exist, build it and consider publishing it."
-        />
+      {active && !harnessPending && !harnessInvalid && !isError && data && results.length === 0 && (
+        <div className="space-y-3 text-center">
+          <EmptyState
+            icon={Search}
+            title="Nothing matches yet"
+            description="Try fewer words or another kind. You can also browse the catalogue without a task query."
+          />
+          <Link to="/resources/$type" params={{ type: kind === "all" ? "agents" : CATALOG_KIND[kind] ?? "agents" }} className="inline-flex rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Browse {kind === "all" || kind === "external" ? "Agentic Resources" : kind === "sandbox" ? "Sandboxes" : `${KIND_META[kind].label}s`} instead
+          </Link>
+        </div>
       )}
 
-      {active && results.length > 0 && (
+      {active && !harnessPending && !harnessInvalid && results.length > 0 && (
         <div className="grid gap-3">
           {results.map((result) => (
             <ResultCard key={result.identifier} result={result} harness={harness === "any" ? undefined : harness} />

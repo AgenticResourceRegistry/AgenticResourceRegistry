@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent CRUD routes: create, list, get, update, delete, archive, unarchive."""
@@ -9,7 +10,7 @@ from datetime import UTC, datetime
 
 from fastapi import Depends, HTTPException, Query, Response
 from loguru import logger as optic
-from sqlalchemy import func, select, update
+from sqlalchemy import String, cast, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from api.deps import (
     get_registry_user,
     require_role,
 )
+from api.sanitize import escape_like
 from api.search import keyword_search
 from models.agent import (
     Agent,
@@ -28,6 +30,7 @@ from models.agent import (
     AgentVersion,
 )
 from models.agent_component import AgentComponent
+from models.review import Review
 from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.agent import (
@@ -249,12 +252,21 @@ async def create_agent(
     ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
+def _harness_condition(harness: str):
+    """Match explicit harnesses, or inference when no override exists."""
+    pattern = f'%"{escape_like(harness)}"%'
+    explicit = cast(AgentVersion.supported_harnesses, String)
+    inferred = cast(AgentVersion.inferred_supported_harnesses, String)
+    return explicit.ilike(pattern, escape="\\") | ((explicit == "[]") & inferred.ilike(pattern, escape="\\"))
+
+
 @router.get("", response_model=list[AgentSummary])
 async def list_agents(
     response: Response,
     search: str | None = Query(None),
     namespace: str | None = Query(None),
     category: str | None = Query(None),
+    harness: str | None = Query(None, pattern=r"^[a-z0-9-]{1,64}$"),
     team_id: uuid.UUID | None = Query(None, description="Only agents owned by this teamspace"),
     composable_for_team_id: uuid.UUID | None = Query(
         None, description="Public agents plus this teamspace's private ones"
@@ -295,6 +307,8 @@ async def list_agents(
         filters.append(Agent.namespace == namespace.strip().lower())
     if category:
         filters.append(Agent.category == category)
+    if harness:
+        filters.append(_harness_condition(harness))
     count_stmt = apply_registry_scope(
         count_stmt.where(*filters),
         Agent,
@@ -315,7 +329,7 @@ async def list_agents(
         composable_for_team_id=composable_for_team_id,
         public_only=public_only,
     )
-    order_by = [Agent.created_at.desc()]
+    order_by = [Agent.created_at.desc(), Agent.id.desc()]
     if search_rank is not None:
         order_by.insert(0, search_rank.desc())
     result = await db.execute(stmt.order_by(*order_by).offset(offset).limit(limit))
@@ -380,6 +394,15 @@ async def list_agents(
 
 @router.get("/my", response_model=list[AgentSummary])
 async def my_agents(
+    response: Response,
+    search: str | None = Query(None, max_length=200),
+    category: str | None = Query(None),
+    harness: str | None = Query(None, pattern=r"^[a-z0-9-]{1,64}$"),
+    status: AgentStatus | None = Query(None),
+    namespace: str | None = Query(None, max_length=200),
+    team_id: uuid.UUID | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
@@ -388,10 +411,35 @@ async def my_agents(
 
     stmt = (
         select(Agent)
+        .join(AgentVersion, Agent.latest_version_id == AgentVersion.id)
         .where(Agent.created_by == current_user.id, Agent.deleted_at.is_(None))
-        .order_by(Agent.created_at.desc())
     )
     stmt = apply_registry_scope(stmt, Agent, current_user)
+    if status is not None:
+        stmt = stmt.where(AgentVersion.status == status)
+    if namespace is not None:
+        stmt = stmt.where(Agent.namespace == namespace)
+    if team_id is not None:
+        stmt = stmt.where(Agent.team_id == team_id)
+    if category:
+        stmt = stmt.where(Agent.category == category)
+    if harness:
+        stmt = stmt.where(_harness_condition(harness))
+    if search and search.strip():
+        term = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        term = f"%{term}%"
+        stmt = stmt.where(
+            Agent.name.ilike(term, escape="\\")
+            | Agent.slug.ilike(term, escape="\\")
+            | AgentVersion.description.ilike(term, escape="\\")
+        )
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+    response.headers["X-Total-Count"] = str(total or 0)
+    stmt = stmt.order_by(Agent.created_at.desc(), Agent.id.desc())
+    if offset:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
     agents = (await db.execute(stmt)).scalars().all()
 
     agent_ids = [a.id for a in agents]
@@ -406,9 +454,21 @@ async def my_agents(
 
     fork_counts = await agent_fork_counts(db, agent_ids)
     provenance = await provenance_for_many(agents, current_user, db)
+    requested = [a for a in agents if a.status == AgentStatus.changes_requested]
+    review_numbers: dict[uuid.UUID, int] = {}
+    if requested:
+        # Match the current release, not an older review for the same Agent.
+        rows = await db.execute(
+            select(Review.subject_id, Review.number).where(
+                Review.subject_type == "agent",
+                Review.version_id.in_([a.latest_version_id for a in requested]),
+            )
+        )
+        review_numbers = dict(rows.all())
     return [
         AgentSummary(
             id=a.id,
+            review_number=review_numbers.get(a.id),
             name=a.name,
             namespace=a.namespace,
             slug=a.slug,
@@ -441,6 +501,14 @@ async def my_agents(
 
 @router.get("/archived", response_model=list[AgentSummary])
 async def archived_agents(
+    response: Response,
+    search: str | None = Query(None, max_length=200),
+    namespace: str | None = Query(None, max_length=200),
+    category: str | None = Query(None),
+    harness: str | None = Query(None, pattern=r"^[a-z0-9-]{1,64}$"),
+    team_id: uuid.UUID | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
@@ -451,8 +519,30 @@ async def archived_agents(
         select(Agent)
         .join(AgentVersion, Agent.latest_version_id == AgentVersion.id)
         .where(AgentVersion.status == AgentStatus.archived, Agent.deleted_at.is_(None))
-        .order_by(Agent.created_at.desc())
     )
+    if namespace:
+        stmt = stmt.where(Agent.namespace == namespace.strip().lower())
+    if team_id is not None:
+        stmt = stmt.where(Agent.team_id == team_id)
+    if category:
+        stmt = stmt.where(Agent.category == category)
+    if harness:
+        stmt = stmt.where(_harness_condition(harness))
+    if search and search.strip():
+        term = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        term = f"%{term}%"
+        stmt = stmt.where(
+            Agent.name.ilike(term, escape="\\")
+            | Agent.slug.ilike(term, escape="\\")
+            | AgentVersion.description.ilike(term, escape="\\")
+        )
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+    response.headers["X-Total-Count"] = str(total or 0)
+    stmt = stmt.order_by(Agent.created_at.desc(), Agent.id.desc())
+    if offset:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
     agents = (await db.execute(stmt)).scalars().all()
 
     agent_ids = [a.id for a in agents]

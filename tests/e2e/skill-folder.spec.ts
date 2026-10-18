@@ -66,7 +66,7 @@ test("browser creates a complete draft without submitting it for review", async 
 	const name = skillName("e2e-browser-folder");
 	await loginToWebUI(page);
 	await page.goto("/resources/skills");
-	await page.getByRole("button", { name: "Create", exact: true }).click();
+	await page.getByRole("button", { name: "Create Skill", exact: true }).click();
 	const dialog = page.getByRole("dialog");
 	await dialog.getByRole("tab", { name: "Upload" }).click();
 	await expect(dialog.locator("#comp-version")).toHaveValue("1.0.0");

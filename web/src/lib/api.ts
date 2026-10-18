@@ -47,6 +47,7 @@ import type {
 	ReviewPolicy,
 	CheckSettings,
 	RegistryItem,
+	RegistryPage,
 	ForkRequest,
 	ForkDiff,
 	ForksResponse,
@@ -251,11 +252,17 @@ export async function refreshAccessTokenWithReason(): Promise<RefreshResult> {
 	return _tryRefreshToken();
 }
 
-async function decodeResponse<T>(response: Response, fileResponse: boolean): Promise<T> {
+async function decodeResponse<T>(response: Response, fileResponse: boolean, withTotal = false): Promise<T> {
 	if (fileResponse && response.headers.get("content-type")?.includes("application/octet-stream")) {
 		return { encoding: "binary", content: await response.blob() } as T;
 	}
-	return response.json() as Promise<T>;
+	const body = await response.json();
+	if (withTotal) {
+		const total = Number(response.headers.get("X-Total-Count"));
+		if (!Number.isSafeInteger(total) || total < 0) throw new Error("Registry did not return a valid result count");
+		return { items: body, total } as T;
+	}
+	return body as T;
 }
 
 async function request<T = unknown>(
@@ -263,6 +270,7 @@ async function request<T = unknown>(
 	path: string,
 	body?: unknown,
 	fileResponse = false,
+	options?: { signal?: AbortSignal; withTotal?: boolean },
 ): Promise<T> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
@@ -277,6 +285,7 @@ async function request<T = unknown>(
 			headers,
 			body: body !== undefined ? JSON.stringify(body) : undefined,
 			cache: "no-store",
+			signal: options?.signal,
 		});
 		if (res.status < 500) break;
 		// Brief pause before retry on 5xx
@@ -304,10 +313,11 @@ async function request<T = unknown>(
 					headers,
 					body: body !== undefined ? JSON.stringify(body) : undefined,
 					cache: "no-store",
+					signal: options?.signal,
 				});
 				if (retryRes.ok) {
 					if (retryRes.status === 204) return undefined as T;
-					return decodeResponse<T>(retryRes, fileResponse);
+					return decodeResponse<T>(retryRes, fileResponse, options?.withTotal);
 				}
 				const retryText = await retryRes.text().catch(() => "Request failed");
 				const retryErr = new Error(retryText);
@@ -372,7 +382,11 @@ async function request<T = unknown>(
 
 	if (response.status === 204) return undefined as T;
 
-	return decodeResponse<T>(response, fileResponse);
+	return decodeResponse<T>(response, fileResponse, options?.withTotal);
+}
+
+function getPage<T>(path: string, signal?: AbortSignal) {
+	return request<RegistryPage<T>>("GET", path, undefined, false, { signal, withTotal: true });
 }
 
 function get<T = unknown>(path: string) {
@@ -477,6 +491,8 @@ export const registry = {
 		const qs = params ? `?${new URLSearchParams(params)}` : "";
 		return get<RegistryItem[]>(`/${type}${qs}`);
 	},
+	listPage: (type: RegistryType, params: Record<string, string>, signal?: AbortSignal) =>
+		getPage<RegistryItem>(`/${type}?${new URLSearchParams(params)}`, signal),
 	get: (type: RegistryType, id: string) => get<RegistryItem>(`/${type}/${id}`),
 	forkDiff: (type: RegistryType, id: string, version: string) =>
 		get<ForkDiff>(`/${type}/${id}/fork-diff?${new URLSearchParams({ version })}`),
@@ -523,7 +539,11 @@ export const registry = {
 			body,
 		),
 	my: (type?: RegistryType) => get<RegistryItem[]>(`/${type ?? "agents"}/my`),
+	myPage: (type: RegistryType, params: Record<string, string>, signal?: AbortSignal) =>
+		getPage<RegistryItem>(`/${type}/my?${new URLSearchParams(params)}`, signal),
 	archived: () => get<RegistryItem[]>("/agents/archived"),
+	archivedPage: (params: Record<string, string>, signal?: AbortSignal) =>
+		getPage<RegistryItem>(`/agents/archived?${new URLSearchParams(params)}`, signal),
 	deletedAgents: () => get<RegistryItem[]>("/agents/deleted"),
 	archive: (id: string) => patch(`/agents/${id}/archive`),
 	unarchive: (id: string) => patch(`/agents/${id}/unarchive`),

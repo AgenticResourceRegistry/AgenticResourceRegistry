@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Chandhini Veerabuthiran <chandhini03@users.noreply.github.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -15,7 +16,7 @@
 import { cn } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { Search } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 /* ─── Stat Strip ─────────────────────────────────── */
 
@@ -246,15 +247,29 @@ export function TypeTabs({
   onTabChange,
   className,
   border = true,
+  changesPage = false,
 }: {
   tabs: TypeTab[];
   active: string;
   onTabChange: (v: string) => void;
   className?: string;
   border?: boolean;
+  changesPage?: boolean;
 }) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    const selected = strip?.querySelector<HTMLButtonElement>("[data-selected='true']");
+    if (!strip || !selected) return;
+    const left = selected.offsetLeft - strip.offsetLeft;
+    if (left < strip.scrollLeft) strip.scrollLeft = left;
+    else if (left + selected.offsetWidth > strip.scrollLeft + strip.clientWidth) {
+      strip.scrollLeft = left + selected.offsetWidth - strip.clientWidth;
+    }
+  }, [active]);
   return (
     <div
+      ref={stripRef}
       className={cn(
         "mb-[15px] flex gap-0 overflow-x-auto",
         border && "border-b border-border",
@@ -266,8 +281,11 @@ export function TypeTabs({
           key={tab.value}
           type="button"
           onClick={() => onTabChange(tab.value)}
+          data-selected={active === tab.value}
+          aria-current={changesPage && active === tab.value ? "page" : undefined}
+          aria-pressed={!changesPage ? active === tab.value : undefined}
           className={cn(
-            "whitespace-nowrap border-b-2 border-transparent px-3.5 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+            "whitespace-nowrap border-b-2 border-transparent px-3.5 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             active === tab.value && "border-foreground text-foreground",
           )}
         >
