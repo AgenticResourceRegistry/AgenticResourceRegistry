@@ -1530,3 +1530,73 @@ async def test_withdrawn_successor_of_an_approved_mcp_can_be_edited_and_reopened
         assert successor.status == ListingStatus.pending and successor.description == "Fixed successor"
         assert (await db.get(McpVersion, stable_id)).description == "Stable"
         assert (await db.get(McpListing, listing_id)).latest_version_id == stable_id
+
+
+@pytest.mark.asyncio
+async def test_review_detail_distinguishes_self_approval_from_change_requests(api, monkeypatch):
+    from services.review.policy import ApprovalPolicy
+
+    client, current, (author, reviewer, outsider, _), (_, number), _ = api
+    current[0] = author
+    base = f"/api/v1/reviews/{number}"
+    mine = (await client.get(base)).json()
+    assert mine["is_own_work"] and mine["can_comment"]
+    assert not mine["can_approve"] and not mine["can_request_changes"]
+    assert mine["can_withdraw"] and not mine["can_close"]
+    assert (await client.post(base + "/submissions", json={"verdict": "approve", "body": ""})).status_code == 403
+    current[0] = reviewer
+    other = (await client.get(base)).json()
+    assert other["can_approve"] and other["can_request_changes"] and other["can_comment"]
+    current[0] = outsider
+    assert (await client.get(base)).status_code == 404
+
+    async def counted(*_args, **_kwargs):
+        return ApprovalPolicy(self_approval="counted")
+
+    monkeypatch.setattr("api.routes.reviews.detail.policy_for", counted)
+    current[0] = author
+    # An owner without reviewer scope still cannot approve even with counted policy.
+    assert not (await client.get(base)).json()["can_approve"]
+
+
+@pytest.mark.asyncio
+async def test_comment_only_keeps_review_work_and_draft_visibility(api, monkeypatch):
+    from services.inbox.delivery import deliver as real_deliver
+    from services.review.notifications import deliver_event
+    from services.review.policy import ApprovalPolicy
+
+    monkeypatch.setattr("services.review.notifications.deliver", real_deliver)
+    client, current, (author, reviewer, _, _), (rid, number), factory = api
+    base = f"/api/v1/reviews/{number}"
+    current[0] = author
+    assert (await client.post(base + "/reviewers", json={"user_id": str(reviewer.id)})).status_code == 201
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        await deliver_event(db, review, "requested", author.id, reviewer_id=reviewer.id)
+        await db.commit()
+
+    async def zero(*_args, **_kwargs):
+        return ApprovalPolicy(
+            required_approvals={kind: 0 for kind in ("agent", "mcp", "skill", "hook", "prompt", "sandbox")}
+        )
+
+    monkeypatch.setattr("services.review.decisions.policy_for", zero)
+    current[0] = reviewer
+    draft = await client.post(base + "/threads", json={"body": "Pending feedback", "as_draft": True})
+    assert draft.status_code == 201, draft.text
+    thread = (await client.get(base + "/threads")).json()[0]
+    assert thread["comments"][0]["pending"] is True
+    current[0] = author
+    assert (await client.get(base + "/threads")).json() == []
+    current[0] = reviewer
+    assert (await client.post(base + "/submissions", json={"verdict": "comment", "body": ""})).status_code == 201
+    assert (await client.get(base + "/threads")).json()[0]["comments"][0]["pending"] is False
+    queue = await client.get("/api/v1/reviews?needs=my_review&state=all")
+    assert number in [row["number"] for row in queue.json()["items"]]
+    async with factory() as db:
+        inbox = (
+            await db.scalars(
+                select(InboxItem).where(InboxItem.user_id == reviewer.id, InboxItem.kind == InboxKind.review_requested)
+            )
+        ).all()
+        assert inbox and any(item.state == InboxState.open for item in inbox)

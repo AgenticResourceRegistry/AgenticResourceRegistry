@@ -217,6 +217,7 @@ async def list_reviews(
                     ReviewSubmission.id == latest_decision,
                     ReviewSubmission.revision_id == Review.head_revision_id,
                     ReviewSubmission.state == "submitted",
+                    ReviewSubmission.verdict.in_(("approve", "request_changes")),
                 )
             )
         )
