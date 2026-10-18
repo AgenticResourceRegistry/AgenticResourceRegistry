@@ -22,7 +22,7 @@ observal discover inspect urn:air:... --output json
 observal discover use urn:air:... --output json
 ```
 
-Skills and prompts load into the current session; other kinds return the install command below as `next_step`. The `observal` skill's Discovery reference covers the fields in detail.
+Skills and prompts load into the current session; MCP servers, hooks, and agents return the install command below as `next_step`. Sandboxes have no install command: their `next_step` is `observal agent add sandbox <uuid>`, which only edits a local `observal-agent.yaml`. The `observal` skill's Discovery reference covers the fields in detail.
 
 For kind-specific browsing and filters, use the registry list commands. Start broad with natural-language search, then narrow only when needed.
 

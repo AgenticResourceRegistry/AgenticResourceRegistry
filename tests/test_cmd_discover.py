@@ -616,3 +616,139 @@ def test_agent_init_rejects_bad_since(monkeypatch, tmp_path, _agent_boundaries):
     )
     assert result.exit_code == 7
     assert "Invalid --since" in result.output
+
+
+# ── every printed command must exist ─────────────────────────────────────
+
+SANDBOX_URN = f"urn:air:observal.example.com:sandbox:{ENTITY}"
+
+
+def _assert_command_exists(line: str) -> list[str]:
+    """Resolve a printed `observal ...` command in the real Typer app and parse its arguments with Click."""
+    import shlex
+
+    import click
+    import typer.main
+
+    from observal_cli.main import app
+
+    argv = shlex.split(line)
+    assert argv[0] == "observal", line
+    cmd = typer.main.get_command(app)
+    ctx = click.Context(cmd, info_name="observal")
+    rest = [a.replace("<harness>", "kiro") for a in argv[1:]]
+    while isinstance(cmd, click.Group):
+        assert rest and rest[0] in cmd.commands, f"no such command in {line!r}"
+        name, rest = rest[0], rest[1:]
+        cmd = cmd.commands[name]
+        ctx = click.Context(cmd, info_name=name, parent=ctx)
+    cmd.make_context(cmd.name, rest, parent=ctx.parent)  # raises on unknown flag or wrong argument count
+    return argv
+
+
+@pytest.mark.parametrize(
+    ("kind", "ref", "expected"),
+    [
+        ("agent", "acme/rev@2.0.0", "observal agent pull acme/rev --harness kiro --version 2.0.0"),
+        ("mcp", "acme/github@1.4.2", "observal registry mcp install acme/github --harness kiro --version 1.4.2"),
+        ("hook", "acme/fmt@1.0.0", "observal registry hook install acme/fmt --harness kiro --version 1.0.0"),
+        ("sandbox", "acme/box@3.1.0", f"observal agent add sandbox {ENTITY} --version 3.1.0"),
+    ],
+)
+def test_use_next_step_is_a_real_command_for_every_setup_kind(monkeypatch, kind, ref, expected):
+    urn = f"urn:air:observal.example.com:{kind}:{ENTITY}"
+    entry = _entry(identifier=urn, **{"obs:kind": kind, "obs:nativeRef": ref})
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=entry))
+
+    result = _invoke("use", urn, "--harness", "kiro", "--output", "json")
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["next_step"] == expected
+    assert data["activated"] is False
+    _assert_command_exists(data["next_step"])
+
+
+def test_use_sandbox_says_plainly_it_is_used_through_an_agent(monkeypatch):
+    entry = _entry(identifier=SANDBOX_URN, **{"obs:kind": "sandbox", "obs:nativeRef": "acme/box@3.1.0"})
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=entry))
+
+    data = json.loads(_invoke("use", SANDBOX_URN, "--output", "json").output)
+    assert "registry sandbox show" not in data["next_step"]
+    # Meaning, not wording: it must not promise an install command, and must say the Agent has to be pulled.
+    assert "no install command" in data["reason"].lower()
+    assert "agent pull" in data["reason"]
+    assert "confirms before writing" not in data["reason"]
+
+    text = _invoke("use", SANDBOX_URN).output
+    assert f"observal agent add sandbox {ENTITY}" in text and "restart" not in text
+
+
+def test_use_sandbox_without_version_does_not_pin(monkeypatch):
+    entry = _entry(identifier=SANDBOX_URN, version="", **{"obs:kind": "sandbox", "obs:nativeRef": "acme/box"})
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=entry))
+
+    data = json.loads(_invoke("use", SANDBOX_URN, "--output", "json").output)
+    assert data["next_step"] == f"observal agent add sandbox {ENTITY}"
+
+
+def test_next_step_for_sandbox_needs_an_entity_id_and_other_kinds_have_none():
+    assert discover._next_step({"obs:kind": "sandbox", "obs:nativeRef": "a/b@1.0.0"}, None) is None
+    assert discover._next_step({"obs:kind": "prompt", "obs:nativeRef": "a/b@1.0.0"}, None) is None
+    assert discover._next_step({"obs:kind": "mcp"}, None) is None
+
+
+def test_hostile_reference_stays_a_single_valid_argument_for_the_real_command():
+    step = discover._next_step({"obs:kind": "mcp", "obs:nativeRef": "a/b';rm -rf %_\\@1.0.0"}, "kiro")
+    argv = _assert_command_exists(step)
+    assert argv[4] == "a/b';rm -rf %_\\"
+
+
+def test_context_kinds_have_no_next_step_to_print(monkeypatch):
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=_entry()))
+    monkeypatch.setattr(discover.client, "get_text", Mock(return_value="# body"))
+    data = json.loads(_invoke("use", URN, "--harness", "kiro", "--output", "json").output)
+    assert data["activated"] is True and "next_step" not in data
+
+
+def test_use_hints_printed_by_search_and_inspect_are_real_commands():
+    a2a = "urn:air:agents.acme.com:a2a:incident-triage"
+    delegate_hint = discover._use_hint({"identifier": a2a, "obs:availability": "delegate"})
+    assert _assert_command_exists(delegate_hint)[:3] == ["observal", "delegate", "run"]
+    assert discover._use_hint({"identifier": a2a, "obs:protocol": "a2a"}) == delegate_hint
+    assert _assert_command_exists(discover._use_hint({"identifier": URN}))[:3] == ["observal", "discover", "use"]
+
+
+def test_sandbox_without_native_ref_still_gets_the_agent_add_step(monkeypatch):
+    entry = _entry(identifier=SANDBOX_URN, **{"obs:kind": "sandbox", "obs:nativeRef": None})
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=entry))
+
+    # The entry's own version still pins the release discovery showed.
+    data = json.loads(_invoke("use", SANDBOX_URN, "--output", "json").output)
+    assert data["next_step"] == f"observal agent add sandbox {ENTITY} --version 1.2.0"
+    assert discover._next_step({"obs:kind": "sandbox"}, None, ENTITY) == f"observal agent add sandbox {ENTITY}"
+    assert discover._next_step({"obs:kind": "sandbox", "version": "1.2.0"}, None, ENTITY) == data["next_step"]
+
+    # No step, no reference to one.
+    assert discover._next_step({"obs:kind": "sandbox"}, None) is None
+    monkeypatch.setattr(discover, "_next_step", lambda *a, **k: None)
+    data = json.loads(_invoke("use", SANDBOX_URN, "--output", "json").output)
+    assert data["next_step"] is None and "next_step" not in data["reason"]
+
+
+def test_printed_sandbox_step_really_adds_the_sandbox_to_the_agent_yaml(monkeypatch, tmp_path):
+    import shlex
+
+    entry = _entry(identifier=SANDBOX_URN, **{"obs:kind": "sandbox", "obs:nativeRef": "acme/box@3.1.0"})
+    monkeypatch.setattr(discover.client, "get", Mock(return_value=entry))
+    step = json.loads(_invoke("use", SANDBOX_URN, "--output", "json").output)["next_step"]
+    argv = shlex.split(step)
+    assert argv[:3] == ["observal", "agent", "add"]
+
+    (tmp_path / "observal-agent.yaml").write_text(yaml.safe_dump({"name": "a", "components": []}))
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(agent.agent_app, ["add", *argv[3:], "--output", "json"])
+
+    assert result.exit_code == 0, result.output
+    saved = yaml.safe_load((tmp_path / "observal-agent.yaml").read_text())
+    assert saved["components"] == [{"component_type": "sandbox", "component_id": ENTITY, "version": "3.1.0"}]
