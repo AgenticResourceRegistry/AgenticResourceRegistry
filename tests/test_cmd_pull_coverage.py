@@ -3679,6 +3679,137 @@ def test_pull_bracket_spanning_secret_is_masked_before_rich_parsing(pull_app, bo
     assert "SECRET" not in result.output
 
 
+def test_pull_rich_escaped_bracket_secret_and_literal_tag(pull_app, boundaries, tmp_path):
+    from observal_cli.render import esc
+
+    secret = "ab[cd]ef"  # Dummy credential; lowercase brackets are Rich markup candidates.
+    boundaries.post.return_value = {
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+        "warnings": [f"reflected {esc(secret)} and {esc('[foo]')}"],
+    }
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}")
+    assert result.exit_code == 0, result.output
+    assert secret.encode() not in result.output.encode()
+    assert b"ab\\[cd]ef" not in result.output.encode()
+    assert b"<secret>" in result.output.encode()
+    assert b"[foo]" in result.output.encode()  # No extra slash from escaping twice.
+    assert b"\\[foo]" not in result.output.encode()
+
+
+def test_pull_escaped_warning_keeps_rich_style_without_literal_slashes():
+    from rich.text import Text
+
+    token = cmd_pull._pull_secrets.set({"ab[cd]ef"})
+    try:
+        markup = cmd_pull._safe_markup(f"[yellow]{cmd_pull.esc('ab[cd]ef')} and {cmd_pull.esc('[foo]')}[/yellow]")
+        shown = Text.from_markup(markup)
+        assert shown.plain == "<secret> and [foo]"
+        assert any(span.style == "yellow" for span in shown.spans)
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_preescaped_literal_stays_literal_when_secret_overlaps_style(capsys):
+    token = cmd_pull._pull_secrets.set({"e"})
+    try:
+        literal = r"\[foo]"
+        cmd_pull.rprint(f"[green]{cmd_pull.esc(literal)}[/green]")
+        output = capsys.readouterr().out
+        assert "[foo]" in output
+        assert "\\" not in output
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_json_serialized_and_double_encoded_reflections_are_masked(capsys):
+    from urllib.parse import quote
+
+    from observal_cli.errors import CliError, ErrorCategory
+
+    secret = 'DUMMY"\\TOKEN'
+    serialized = json.dumps(secret)[1:-1]
+    twice_encoded = quote(quote(secret, safe=""), safe="")
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        cmd_pull.output_json({"warnings": [f"reflected {serialized} {twice_encoded}"]})
+        warning = json.loads(capsys.readouterr().out)["warnings"][0]
+        assert warning == "reflected <secret> <secret>"
+        error = CliError(
+            ErrorCategory.VALIDATION, f"rejected {serialized}", operation="Pull agent", detail=twice_encoded
+        )
+        safe = cmd_pull._safe_error(error)
+        assert safe.message == "rejected <secret>"
+        assert safe.detail == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_unicode_json_and_mixed_percent_reflections_are_masked():
+    from urllib.parse import quote
+
+    secret = "DUMMY_ñ[ok]"
+    serialized = json.dumps(secret, ensure_ascii=True)[1:-1]
+    twice_encoded = quote(quote(secret, safe=""), safe="")
+    mixed = "DUMMY%255f" + quote("ñ", safe="") + r"\[ok]"
+    assert cmd_pull._mask_values(f"{serialized} {twice_encoded} {mixed}", {secret}) == "<secret> <secret> <secret>"
+
+
+def test_pull_literal_marker_is_not_trusted_but_generated_marker_is_preserved():
+    marker = "<secret>"
+    secret = "DUMMY" + marker
+    assert cmd_pull._mask_values(f"server reflected {secret}", {secret}) == "server reflected <secret>"
+    assert cmd_pull._mask_values("server reflected <secret>", {marker}) == "server reflected <secret>"
+    # A short second credential inside the replacement must not corrupt it,
+    # while the same text supplied by the server must still be scanned.
+    first = cmd_pull._mask_values(f"{secret} untrusted {marker} end", {secret})
+    assert cmd_pull._mask_values(first, {"e"}) == "<secret> untrust<secret>d <s<secret>cr<secret>t> <secret>nd"
+
+
+def test_pull_unicode_json_hex_case_and_mixed_reflections():
+    secret = "DUMMYñTOKEN"
+    text = r"DUMMY\u00F1TOKEN DUMMY\u00f1TOKEN DUMMY%C3%B1TOKEN DUMMY%25c3%25B1TOKEN"
+    assert cmd_pull._mask_values(text, {secret}) == "<secret> <secret> <secret> <secret>"
+    # Raw matching is still case sensitive; only hex digits in encodings fold.
+    assert cmd_pull._mask_values("dummyñTOKEN", {secret}) == "dummyñTOKEN"
+
+
+def test_pull_short_overlapping_values_and_mixed_encodings():
+    assert cmd_pull._mask_values("DUMMYX DUMMY%58 DUMMY", {"DUMMY", "DUMMYX"}) == ("<secret> <secret> <secret>")
+    assert cmd_pull._mask_values(r"a\\b a%5Cb a%255cb", {r"a\b"}) == "<secret> <secret> <secret>"
+
+
+def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "secret = '\\\\' * 32 + 'Z'\n"
+        "text = '\\\\' * 100_000 + 'Q'\n"
+        "assert _mask_values(text, {secret}) == text\n"
+        "# An attainable lowercase-hex ending must not be rejected by the fast path.\n"
+        "assert _mask_values('\\\\' * 100_000 + '%5a', {secret}) == '\\\\' * 99_936 + '<secret>'\n"
+        "assert _mask_values('\\\\' * 80 + 'Q', {'\\\\' * 32 + 'Q'}) == '\\\\' * 16 + '<secret>'\n"
+        "if sys.platform == 'linux':\n"
+        "    import resource\n"
+        "    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss < 160 * 1024\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_model_override_trace_does_not_log_raw_values():
+    from io import StringIO
+
+    from loguru import logger
+
+    stream = StringIO()
+    sink = logger.add(stream, level="TRACE")
+    try:
+        assert cmd_pull._parse_model_overrides(["DUMMY_MODEL_OVERRIDE"]) == ("DUMMY_MODEL_OVERRIDE", {})
+    finally:
+        logger.remove(sink)
+    assert "DUMMY_MODEL_OVERRIDE" not in stream.getvalue()
+
+
 def test_pull_dummy_server_metadata_does_not_enter_debug_log(boundaries, tmp_path):
     from io import StringIO
 

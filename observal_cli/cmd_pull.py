@@ -40,7 +40,8 @@ from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
-from observal_cli.render import OutputMode, esc, output_json, spinner
+from observal_cli.render import OutputMode, spinner
+from observal_cli.render import esc as render_esc
 from observal_shared.harness_registry import HARNESS_REGISTRY, get_scope_aware_harnesses
 
 # Hook script names used as placeholders in server-generated agent configs.
@@ -51,31 +52,164 @@ _HOOK_SCRIPT_NAMES = ("observal-hook.sh", "observal-stop-hook.sh")
 _pull_secrets = client._pull_reporting_secrets
 
 
+class _MaskedText(str):
+    """Tracks only placeholders created by this reporting pass, not source text."""
+
+    def __new__(cls, value: str, protected: tuple[tuple[int, int], ...]):
+        instance = super().__new__(cls, value)
+        instance.protected = protected
+        return instance
+
+
 def _mask_values(value: str, secrets: set[str] | None) -> str:
     ordered = sorted((secret for secret in (secrets or ()) if secret), key=len, reverse=True)
     if not ordered:
         return value
 
-    # An HTTP error may reflect a URL-encoded credential (including encoding
-    # normally unreserved characters such as underscores). Match mixed literal
-    # and percent-encoded bytes, regardless of hex digit case.
-    def encoded_pattern(secret: str) -> str:
-        return "".join(
-            f"(?:{re.escape(char)}|(?i:%{ord(char):02x}))"
-            if ord(char) < 128
-            else f"(?:{re.escape(char)}|{''.join(f'(?i:%{byte:02x})' for byte in char.encode('utf-8'))})"
-            for char in secret
-        )
+    # Each source character can be literal, Rich/JSON escaped, or URL encoded
+    # (including double encoding). Memoize (character, input offset) states:
+    # overlapping backslash alternatives otherwise make a regex exponential.
+    def alternatives(secret: str) -> list[tuple[tuple[str, bool], ...]]:
+        result = []
+        for char in secret:
+            choices = {(char, False)}
+            json_choice = json.dumps(char, ensure_ascii=True)[1:-1]
+            if json_choice != char:
+                choices.add((json_choice, json_choice.startswith(r"\u")))
+            if char == "[":
+                choices.add((r"\[", False))
+            if ord(char) < 128:
+                choices.update({(f"%{ord(char):02x}", True), (f"%25{ord(char):02x}", True)})
+                choices.add((f"\\u{ord(char):04x}", True))
+            else:
+                encoded = "".join(f"%{byte:02x}" for byte in char.encode("utf-8"))
+                choices.update({(encoded, True), (encoded.replace("%", "%25"), True)})
+            result.append(tuple(sorted(choices, key=lambda choice: len(choice[0]), reverse=True)))
+        return result
 
-    pattern = re.compile("|".join(encoded_pattern(secret) for secret in ordered))
-    return "".join(
-        part if part == "<secret>" else pattern.sub(lambda _match: "<secret>", part)
-        for part in re.split(r"(<secret>)", value)
-    )
+    patterns = [alternatives(secret) for secret in ordered]
+    size = len(value)
+
+    def match(parts: list[tuple[tuple[str, bool], ...]], start: int, cache: dict[tuple[int, int], int]) -> int:
+        # Explicit postorder traversal avoids both backtracking and recursion
+        # limits for long credentials. -1 means no full match from this state.
+        root = (0, start)
+        stack = [(root, False)]
+        while stack:
+            state, ready = stack.pop()
+            if state in cache:
+                continue
+            index, offset = state
+            if index == len(parts):
+                cache[state] = offset
+                continue
+            following = []
+            for choice, fold_hex in parts[index]:
+                end = offset + len(choice)
+                if end <= size and (
+                    value[offset:end].casefold() == choice.casefold() if fold_hex else value.startswith(choice, offset)
+                ):
+                    following.append((index + 1, end))
+            if ready:
+                cache[state] = max((cache[child] for child in following), default=-1)
+            else:
+                stack.append((state, True))
+                stack.extend((child, False) for child in following if child not in cache)
+        return cache[root]
+
+    # A match must reach a representation of the final character. Track the
+    # earliest ending without materializing positions for the whole warning.
+    # Encoded hex digits fold (including lowercase); raw characters do not.
+    endings = [
+        (
+            parts,
+            sum(max(len(choice) for choice, _ in choices) for choices in parts),
+            tuple(
+                (re.compile(re.escape(choice), re.IGNORECASE | re.ASCII) if fold_hex else choice, len(choice))
+                for choice, fold_hex in parts[-1]
+            ),
+        )
+        for parts in patterns
+    ]
+    next_ends = [0] * len(endings)
+
+    def next_end(choices: tuple[tuple[str | re.Pattern[str], int], ...], start: int) -> int:
+        earliest = size + 1
+        for choice, length in choices:
+            if isinstance(choice, str):
+                position = value.find(choice, start)
+            else:
+                found = choice.search(value, start)
+                position = found.start() if found else -1
+            if position != -1:
+                earliest = min(earliest, position + length)
+        return earliest
+
+    for index, (_, _, choices) in enumerate(endings):
+        next_ends[index] = next_end(choices, 0)
+    possible = [(parts, width, choices, next_ends[index]) for index, (parts, width, choices) in enumerate(endings)]
+    output = []
+    protected = []
+    source_protected = iter(value.protected if isinstance(value, _MaskedText) else ())
+    next_protected = next(source_protected, None)
+    output_size = 0
+    cursor = 0
+    while cursor < size:
+        if next_protected is not None and cursor == next_protected[0]:
+            output.append(value[cursor : next_protected[1]])
+            protected.append((output_size, output_size + next_protected[1] - cursor))
+            output_size += next_protected[1] - cursor
+            cursor = next_protected[1]
+            next_protected = next(source_protected, None)
+            continue
+        end = -1
+        for index, (parts, width, choices, earliest_end) in enumerate(possible):
+            if earliest_end <= cursor:
+                earliest_end = next_end(choices, cursor)
+                possible[index] = (parts, width, choices, earliest_end)
+            if earliest_end > cursor + width:
+                continue
+            # Avoid building a DP graph where no first character can match.
+            if any(
+                value.startswith(choice[0][0], cursor) or (choice[1] and value[cursor] == choice[0][0])
+                for choice in parts[0]
+            ):
+                # States are shared only within this attempt; retaining them for
+                # every start position makes memory grow with warning length.
+                end = match(parts, cursor, {})
+                if end != -1:
+                    break
+        if end == -1:
+            output.append(value[cursor])
+            output_size += 1
+            cursor += 1
+        else:
+            # A match must not consume an internally generated placeholder.
+            if next_protected is not None and end > next_protected[0]:
+                output.append(value[cursor])
+                output_size += 1
+                cursor += 1
+                continue
+            output.append("<secret>")
+            protected.append((output_size, output_size + len("<secret>")))
+            output_size += len("<secret>")
+            cursor = end
+    return _MaskedText("".join(output), tuple(protected))
 
 
 def _safe_text(value: str) -> str:
     return _mask_values(value, _pull_secrets.get())
+
+
+def esc(value) -> str:
+    """Escape labels for Rich; rprint masks the assembled text before parsing it."""
+    return _escape_preescaped("" if value is None else str(value))
+
+
+def _escape_preescaped(value: str) -> str:
+    return "".join(
+        part if part.startswith(r"\[") else render_esc(part) for part in re.split(r"((?<!\\)\\\[[^\]]+\])", value)
+    )
 
 
 # Only CLI-owned schema paths are exempt from key masking. Unknown nested maps
@@ -180,9 +314,10 @@ def _safe_markup(text: str) -> str:
     secrets = _pull_secrets.get() or ()
     masked = _safe_text(text)
     if any(secret and any(secret in tag for tag in _RICH_TAGS) for secret in secrets):
-        return escape_markup(masked)
+        return _escape_preescaped(masked)
     return "".join(
-        part if part in _RICH_TAGS else escape_markup(part) for part in re.split(r"((?<!\\)\[[^\]]+\])", masked)
+        part if part in _RICH_TAGS or part.startswith(r"\[") else escape_markup(part)
+        for part in re.split(r"((?<!\\)\[[^\]]+\]|(?<!\\)\\\[[^\]]+\])", masked)
     )
 
 
@@ -1458,7 +1593,6 @@ def _parse_model_overrides(values: list[str]) -> tuple[str | None, dict[str, str
 
     Returns ``(default_value, per_harness_overrides)``.
     """
-    optic.trace("values={}", values)
     default: str | None = None
     overrides: dict[str, str] = {}
     for raw in values or []:
