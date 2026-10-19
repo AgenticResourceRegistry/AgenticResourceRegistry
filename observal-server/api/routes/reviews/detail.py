@@ -150,7 +150,7 @@ async def detail(
         "can_approve": active and eligible and (not own or self_approval_allowed),
         "can_request_changes": active and eligible and not own,
         "can_comment": active,
-        "can_publish": active and eligible and (not own or self_approval_allowed),
+        "can_publish": active and eligible and (not own or can_self_publish),
         "can_override_publish": active and eligible and user.role == UserRole.super_admin,
         "can_close": active and eligible and not own,
         "can_withdraw": active and can_withdraw,

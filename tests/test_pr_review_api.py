@@ -1560,6 +1560,30 @@ async def test_review_detail_distinguishes_self_approval_from_change_requests(ap
 
 
 @pytest.mark.asyncio
+async def test_counted_public_self_approval_does_not_grant_normal_publish(api, monkeypatch):
+    from services.review.policy import ApprovalPolicy
+
+    client, current, (author, _, _, _), (_, number), factory = api
+    async with factory() as db:
+        author.role = UserRole.super_admin
+        db.add(author)
+        await db.commit()
+
+    async def counted(*_args, **_kwargs):
+        return ApprovalPolicy(self_approval="counted")
+
+    monkeypatch.setattr("api.routes.reviews.detail.policy_for", counted)
+    monkeypatch.setattr("services.review.decisions.policy_for", counted)
+    current[0] = author
+    detail = await client.get(f"/api/v1/reviews/{number}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["can_approve"] is True
+    assert detail.json()["can_publish"] is False
+    assert detail.json()["can_override_publish"] is True
+    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_comment_only_keeps_review_work_and_draft_visibility(api, monkeypatch):
     from services.inbox.delivery import deliver as real_deliver
     from services.review.notifications import deliver_event
