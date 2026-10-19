@@ -30,7 +30,30 @@ _version_enforced: bool = False
 _EXEMPT_SUBCOMMANDS = frozenset({"self", "server"})
 _OPTIONAL_AUTH = ContextVar("observal_optional_auth", default=False)
 _PUBLIC_POST = ContextVar("observal_public_post", default=False)
+# Set only while agent pull handles supplied MCP credentials. Logging must not
+# include reflected names/versions in request paths during that invocation.
+_pull_reporting_secrets: ContextVar[set[str] | None] = ContextVar("pull_reporting_secrets", default=None)
 _QueryParams = dict | list[tuple[str, str]]
+
+
+class _PullHTTPXFilter(logging.Filter):
+    """HTTPX and httpcore can log reflected URLs and response headers during pull."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _pull_reporting_secrets.get()
+
+
+# Logger filters do not apply to child records propagated to a parent logger.
+# httpcore uses these explicit names for sync and async HTTP/1.1, HTTP/2 and proxies.
+for _http_logger_name in (
+    "httpx",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+):
+    logging.getLogger(_http_logger_name).addFilter(_PullHTTPXFilter())
 
 
 def _get_cli_version() -> str:
@@ -157,7 +180,7 @@ def _handle_error(
     resource: str | None = None,
 ) -> None:
     """Convert an HTTP status into the stable CLI error contract."""
-    optic.trace("error={}, path={}", error, path)
+    optic.trace("HTTP request returned an error")
     response = error.response
     code = response.status_code
     detail = _safe_detail(response)
@@ -284,7 +307,7 @@ def _handle_timeout(
     detail: str | None = None,
 ) -> None:
     """Convert a timeout into the stable CLI error contract."""
-    optic.trace("path={}", path)
+    optic.trace("HTTP request timed out")
     timeout = config.get_timeout()
     fail(
         ErrorCategory.UNAVAILABLE,
@@ -346,7 +369,7 @@ def _request_with_retry(
     retried after a transient response because their server state may be
     unknown.
     """
-    optic.trace("method={}, url={}", method, url)
+    optic.trace("HTTP method={}", method)
     timeout = config.get_timeout()
     func = getattr(httpx, method)
 
@@ -361,7 +384,17 @@ def _request_with_retry(
     elif json is not None:
         kwargs["json"] = json
 
-    safe_url = urlunparse(urlparse(url)._replace(netloc=urlparse(url).hostname or ""))
+    # Pull metadata may reflect a supplied credential in the URL path. Keep
+    # ordinary request diagnostics unchanged outside that reporting boundary.
+    redact_path = bool(_pull_reporting_secrets.get())
+    safe_url = urlunparse(
+        urlparse(url)._replace(
+            netloc=urlparse(url).hostname or "",
+            path="" if redact_path else urlparse(url).path,
+            query="" if redact_path else urlparse(url).query,
+            fragment="" if redact_path else urlparse(url).fragment,
+        )
+    )
     optic.debug("{} {}", method.upper(), safe_url)
     t0 = time.monotonic()
 
@@ -573,7 +606,7 @@ def get(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, params={}", path, params)
+    optic.trace("GET request")
     operation, resource = _error_context(
         operation,
         resource,
@@ -600,7 +633,7 @@ def get_text(
     resource: str | None = None,
 ) -> str:
     """GET a text response, optionally enforcing its media type."""
-    optic.trace("path={}, params={}, content_type={}", path, params, content_type)
+    optic.trace("request with content_type={}", content_type)
     operation, resource = _error_context(
         operation,
         resource,
@@ -667,7 +700,7 @@ def get_with_headers(
     resource: str | None = None,
 ) -> tuple[dict, dict[str, str]]:
     """Like ``get()``, but also returns response headers with lowercase keys."""
-    optic.trace("path={}, params={}", path, params)
+    optic.trace("GET request with response headers")
     operation, resource = _error_context(
         operation,
         resource,
@@ -693,7 +726,7 @@ def post(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, has_json_data={}", path, json_data is not None)
+    optic.trace("POST request has_json_data={}", json_data is not None)
     operation, resource = _error_context(
         operation,
         resource,
@@ -735,7 +768,7 @@ def put(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, has_json_data={}", path, json_data is not None)
+    optic.trace("PUT request has_json_data={}", json_data is not None)
     operation, resource = _error_context(
         operation,
         resource,
@@ -753,7 +786,7 @@ def patch(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, has_json_data={}", path, json_data is not None)
+    optic.trace("PATCH request has_json_data={}", json_data is not None)
     operation, resource = _error_context(
         operation,
         resource,
@@ -765,7 +798,7 @@ def patch(
 
 
 def delete(path: str, *, operation: str | None = None, resource: str | None = None) -> dict:
-    optic.trace("path={}", path)
+    optic.trace("DELETE request")
     operation, resource = _error_context(
         operation,
         resource,

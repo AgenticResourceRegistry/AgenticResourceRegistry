@@ -20,6 +20,8 @@ import subprocess
 import sys
 import tomllib
 from contextlib import nullcontext, redirect_stdout
+from dataclasses import replace
+from functools import wraps
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -29,7 +31,8 @@ import typer
 import yaml
 from loguru import logger as optic
 from packaging.version import InvalidVersion, Version
-from rich import print as rprint
+from rich import print as rich_print
+from rich.markup import escape as escape_markup
 
 from observal_cli import client, config
 from observal_cli.constants import VALID_HARNESSES
@@ -43,6 +46,188 @@ from observal_shared.harness_registry import HARNESS_REGISTRY, get_scope_aware_h
 # Hook script names used as placeholders in server-generated agent configs.
 # Resolved to absolute paths client-side before writing to disk.
 _HOOK_SCRIPT_NAMES = ("observal-hook.sh", "observal-stop-hook.sh")
+
+# Reporting only: never apply this to install inputs, generated files or subprocess argv.
+_pull_secrets = client._pull_reporting_secrets
+
+
+def _mask_values(value: str, secrets: set[str] | None) -> str:
+    ordered = sorted((secret for secret in (secrets or ()) if secret), key=len, reverse=True)
+    if not ordered:
+        return value
+
+    # An HTTP error may reflect a URL-encoded credential (including encoding
+    # normally unreserved characters such as underscores). Match mixed literal
+    # and percent-encoded bytes, regardless of hex digit case.
+    def encoded_pattern(secret: str) -> str:
+        return "".join(
+            f"(?:{re.escape(char)}|(?i:%{ord(char):02x}))"
+            if ord(char) < 128
+            else f"(?:{re.escape(char)}|{''.join(f'(?i:%{byte:02x})' for byte in char.encode('utf-8'))})"
+            for char in secret
+        )
+
+    pattern = re.compile("|".join(encoded_pattern(secret) for secret in ordered))
+    return "".join(
+        part if part == "<secret>" else pattern.sub(lambda _match: "<secret>", part)
+        for part in re.split(r"(<secret>)", value)
+    )
+
+
+def _safe_text(value: str) -> str:
+    return _mask_values(value, _pull_secrets.get())
+
+
+# Only CLI-owned schema paths are exempt from key masking. Unknown nested maps
+# can have server-provided keys and must be treated as data, even for short secrets.
+_REPORT_KEYS = {
+    "output": frozenset(
+        {
+            "agent",
+            "project_lock",
+            "lock",
+            "harness",
+            "scope",
+            "dry_run",
+            "target_directory",
+            "files",
+            "warnings",
+            "setup_commands",
+            "reports_sessions",
+        }
+    ),
+    "agent": frozenset({"id", "qualified_name", "version", "latest_version", "resolved_from", "local_name"}),
+    "lock": frozenset({"status", "digest", "components", "problems"}),
+    "components": frozenset({"type", "name", "id", "version", "version_id", "digest", "qualified_name", "source"}),
+    "files": frozenset({"path", "status"}),
+    "inputs": frozenset({"kind", "name", "component"}),
+    "setup_commands": frozenset({"command", "executable", "status", "return_code"}),
+    "result": frozenset(
+        {
+            "invalid_input_kind",
+            "component",
+            "needs_input",
+            "inputs",
+            "partial",
+            "stage",
+            "files",
+            "setup_commands",
+            "failed_path",
+            "failed_skills",
+            "folder_recovery_errors",
+            "installation_tracked",
+            "committed_folders",
+            "non_folder_writes_may_remain",
+            "reports_sessions",
+            "dry_run",
+            "active_agent_persisted",
+        }
+    ),
+}
+_REPORT_CHILDREN = {
+    "files": "files",
+    "inputs": "inputs",
+    "setup_commands": "setup_commands",
+    "agent": "agent",
+    "lock": "lock",
+    "components": "components",
+}
+
+
+def _safe_data(value, schema: str | None = None):
+    if isinstance(value, str):
+        return _safe_text(value)
+    if isinstance(value, dict):
+        return {
+            key
+            if key in _REPORT_KEYS.get(schema, ())
+            else _safe_text(key)
+            if isinstance(key, str)
+            else key: _safe_data(item, _REPORT_CHILDREN.get(key) if key in _REPORT_KEYS.get(schema, ()) else None)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_data(item, schema) for item in value]
+    return value
+
+
+_RICH_TAGS = frozenset(
+    f"[{tag}]"
+    for tag in (
+        "bold",
+        "cyan",
+        "dim",
+        "green",
+        "red",
+        "yellow",
+        "bold green",
+        "bold yellow",
+        "/bold",
+        "/cyan",
+        "/dim",
+        "/green",
+        "/red",
+        "/yellow",
+        "/bold green",
+        "/bold yellow",
+    )
+)
+
+
+def _safe_markup(text: str) -> str:
+    # Mask the entire string before looking for markup: secrets can span '[' or ']'.
+    # If a short secret also occurs in an authored tag, render escaped plain text.
+    secrets = _pull_secrets.get() or ()
+    masked = _safe_text(text)
+    if any(secret and any(secret in tag for tag in _RICH_TAGS) for secret in secrets):
+        return escape_markup(masked)
+    return "".join(
+        part if part in _RICH_TAGS else escape_markup(part) for part in re.split(r"((?<!\\)\[[^\]]+\])", masked)
+    )
+
+
+def rprint(*values, **kwargs):
+    rich_print(*(_safe_markup(value) if isinstance(value, str) else value for value in values), **kwargs)
+
+
+def output_json(value):
+    from observal_cli.render import output_json as render_json
+
+    render_json(_safe_data(value, "output"))
+
+
+def _safe_error(error: CliError) -> CliError:
+    return replace(
+        error,
+        message=_safe_text(error.message),
+        operation=_safe_text(error.operation),
+        resource=_safe_text(error.resource) if error.resource is not None else None,
+        remediation=_safe_text(error.remediation) if error.remediation is not None else None,
+        request_id=_safe_text(error.request_id) if error.request_id is not None else None,
+        detail=_safe_text(error.detail) if error.detail is not None else None,
+        result=_safe_data(error.result, "result"),
+    )
+
+
+def _reporting_boundary(callback):
+    @wraps(callback)
+    def wrapped(*args, **kwargs):
+        token = _pull_secrets.set(set())
+        try:
+            return callback(*args, **kwargs)
+        except CliError as error:
+            raise _safe_error(error) from None
+        finally:
+            _pull_secrets.reset(token)
+
+    return wrapped
+
+
+def _secret_password_input(label: str) -> str:
+    value = password_input(_safe_markup(label))
+    if value and (secrets := _pull_secrets.get()) is not None:
+        secrets.add(value)
+    return value
 
 
 def _component_conflicts(harness: str, agent_name: str, components: list[dict]) -> list[str]:
@@ -342,7 +527,7 @@ def _collect_mcp_env_vars(
                         rprint(f"  [green]\u2713[/green] {esc(ev['name'])} [dim](from --env)[/dim]")
                     else:
                         desc = f" [dim]({esc(ev['description'])})[/dim]" if ev.get("description") else ""
-                        val = password_input(f"  {esc(ev['name'])}{desc}")
+                        val = _secret_password_input(f"  {esc(ev['name'])}{desc}")
                         mcp_env[ev["name"]] = val
 
             if optional:
@@ -353,7 +538,7 @@ def _collect_mcp_env_vars(
                         rprint(f"  [green]\u2713[/green] {esc(ev['name'])} [dim](from --env)[/dim]")
                     else:
                         desc = f" [dim]({esc(ev['description'])})[/dim]" if ev.get("description") else ""
-                        val = password_input(f"  {esc(ev['name'])}{desc} (press Enter to skip)")
+                        val = _secret_password_input(f"  {esc(ev['name'])}{desc} (press Enter to skip)")
                         if val:
                             mcp_env[ev["name"]] = val
 
@@ -413,7 +598,7 @@ def _collect_mcp_headers(
                         rprint(f"  [green]\u2713[/green] {esc(h['name'])} [dim](from --header)[/dim]")
                     else:
                         desc = f" [dim]({esc(h['description'])})[/dim]" if h.get("description") else ""
-                        val = password_input(f"  {esc(h['name'])}{desc}")
+                        val = _secret_password_input(f"  {esc(h['name'])}{desc}")
                         mcp_hdrs[h["name"]] = val
 
             if optional:
@@ -424,7 +609,7 @@ def _collect_mcp_headers(
                         rprint(f"  [green]\u2713[/green] {esc(h['name'])} [dim](from --header)[/dim]")
                     else:
                         desc = f" [dim]({esc(h['description'])})[/dim]" if h.get("description") else ""
-                        val = password_input(f"  {esc(h['name'])}{desc} (press Enter to skip)")
+                        val = _secret_password_input(f"  {esc(h['name'])}{desc} (press Enter to skip)")
                         if val:
                             mcp_hdrs[h["name"]] = val
 
@@ -546,7 +731,7 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
 
     Returns a human-readable status string ("created", "updated", "merged").
     """
-    optic.trace("path={}, len={}", path, len(str(content)))
+    optic.trace("writing generated file (bytes={})", len(str(content)))
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
 
@@ -835,7 +1020,7 @@ def _resolve_path(raw_path: str, target_dir: Path, *, allow_home: bool = False) 
     Raises typer.Exit if the resolved path escapes *target_dir* (and home
     expansion is not permitted).
     """
-    optic.trace("raw_path={}, target_dir={}", raw_path, target_dir)
+    optic.trace("resolving generated file path")
     if raw_path.startswith("~/") or raw_path.startswith("~\\"):
         if allow_home:
             return Path(raw_path).expanduser().resolve()
@@ -1110,7 +1295,7 @@ def _fingerprint_written_skills(
 
 
 def _progress(output: OutputMode | str, message: str | None = None):
-    return nullcontext() if output == "json" else spinner(message)
+    return nullcontext() if output == "json" else spinner(_safe_text(message) if message is not None else message)
 
 
 def _pull_failure_result(
@@ -1145,6 +1330,7 @@ def _valid_setup_command(command: object) -> bool:
 
 # Setup-command flags whose value carries an MCP header or environment value.
 _MASKED_SETUP_FLAGS = {"-H": ": ", "--header": ": ", "-e": "=", "--env": "="}
+_SENSITIVE_SETUP_FLAGS = {"--token", "--password", "--api-key"}
 
 
 def _redact_url(argument: str) -> str:
@@ -1156,18 +1342,35 @@ def _redact_url(argument: str) -> str:
     return urlunsplit((parts.scheme, host, parts.path, "<redacted>" if parts.query else "", ""))
 
 
-def _display_setup_command(command: list[str]) -> list[str]:
-    """Return a setup command with header, environment and URL credentials masked for output."""
+def _display_setup_command(command: list[str], *, secret_values: set[str] | None = None) -> list[str]:
+    """Return a separate reporting argv; never alter the executable command."""
     shown: list[str] = []
     separator = None
+    mask_next = False
     for argument in command:
-        if argument == "--":
+        contains_supplied_value = any(value and value in argument for value in (secret_values or ()))
+        structural_value = False
+        if mask_next:
+            argument = "<secret>"
+            mask_next = False
+        elif argument == "--":
             separator = None
         elif separator is not None and separator in argument:
+            structural_value = True
             argument = f"{argument.split(separator, 1)[0]}{separator}<secret>"
         else:
             separator = _MASKED_SETUP_FLAGS.get(argument)
-            argument = _redact_url(argument)
+            mask_next = argument.lower() in _SENSITIVE_SETUP_FLAGS
+            if argument.lower().startswith(tuple(flag + "=" for flag in _SENSITIVE_SETUP_FLAGS)):
+                argument = argument.split("=", 1)[0] + "=<secret>"
+            elif argument.lower().startswith("bearer "):
+                argument = "Bearer <secret>"
+            else:
+                argument = _redact_url(argument)
+        if structural_value:
+            argument = _mask_values(argument, secret_values)
+        elif contains_supplied_value:
+            argument = "<secret>"
         shown.append(argument)
     return shown
 
@@ -2033,6 +2236,7 @@ def write_install_snippet(
     is_user_scope: bool,
     dry_run: bool = False,
     quiet: bool = False,
+    secret_values: set[str] | None = None,
     skill_bundles: list[dict] | None = None,
     lock: dict | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
@@ -2064,8 +2268,12 @@ def write_install_snippet(
 
     def tracked_skill_install(skill_name: str, installer, **kwargs):
         try:
-            with redirect_stdout(StringIO()) if quiet else nullcontext():
-                return installer(**kwargs)
+            captured = StringIO()
+            with redirect_stdout(captured):
+                installed = installer(**kwargs)
+            if not quiet:
+                print(_mask_values(captured.getvalue(), secret_values), end="")
+            return installed
         except CliError as error:
             if error.result is None:
                 error.result = _pull_failure_result(
@@ -2833,6 +3041,7 @@ def _install_skill_bundle(
 
 def register_pull(app: typer.Typer):
     @app.command("pull")
+    @_reporting_boundary
     def pull(
         agent_id: str = typer.Argument(..., help="Agent ID, name, row number, or @alias"),
         harness: str = typer.Option(
@@ -2968,6 +3177,9 @@ def register_pull(app: typer.Typer):
             )
         env_overrides = _parse_assignments(env, "environment variable")
         header_overrides = _parse_assignments(header, "header")
+        secrets = _pull_secrets.get()
+        assert secrets is not None
+        secrets.update(value for value in (*env_overrides.values(), *header_overrides.values()) if value)
         model_default, model_overrides = _parse_model_overrides(model or [])
         unused_model_harnesses = set(model_overrides) - {harness}
         if unused_model_harnesses:
@@ -3090,6 +3302,7 @@ def register_pull(app: typer.Typer):
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
         )
+        secrets.update(value for values in env_values.values() for value in values.values() if value)
         header_values = _collect_mcp_headers(
             plan,
             no_prompt=no_prompt,
@@ -3097,6 +3310,7 @@ def register_pull(app: typer.Typer):
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
         )
+        secrets.update(value for values in header_values.values() for value in values.values() if value)
         if missing_inputs:
             fail(
                 ErrorCategory.VALIDATION,
@@ -3457,6 +3671,7 @@ def register_pull(app: typer.Typer):
                 is_user_scope=is_user_scope,
                 dry_run=dry_run,
                 quiet=output == "json",
+                secret_values=secrets,
                 lock=lock,
             )
             if not dry_run:
@@ -3599,26 +3814,27 @@ def register_pull(app: typer.Typer):
                     setup_results.append({"command": [], "status": "failed", "return_code": None})
                     setup_failures.append("invalid setup command")
                     continue
-                shown = _display_setup_command(command)
+                shown = _display_setup_command(command, secret_values=secrets)
+                executable = shown[0] if shown[0] != "<secret>" else "setup executable"
                 try:
                     setup_command = adapter.prepare_mcp_setup_command(command, options.get("scope", "project"))
                     process = subprocess.run(setup_command, capture_output=True, text=True, timeout=60, cwd=setup_cwd)
                 except FileNotFoundError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} not found")
+                    setup_failures.append(f"{executable} not found")
                     continue
                 except subprocess.TimeoutExpired:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} timed out")
+                    setup_failures.append(f"{executable} timed out")
                     continue
                 except OSError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} could not start")
+                    setup_failures.append(f"{executable} could not start")
                     continue
                 status = "completed" if process.returncode == 0 else "failed"
                 setup_results.append({"command": shown, "status": status, "return_code": process.returncode})
                 if process.returncode != 0:
-                    setup_failures.append(f"{command[0]} exited with code {process.returncode}")
+                    setup_failures.append(f"{executable} exited with code {process.returncode}")
         elif setup_cmds:
             for command in setup_cmds:
                 if not _valid_setup_command(command):
@@ -3626,7 +3842,11 @@ def register_pull(app: typer.Typer):
                     setup_failures.append("invalid setup command")
                 else:
                     setup_results.append(
-                        {"command": _display_setup_command(command), "status": "would_run", "return_code": None}
+                        {
+                            "command": _display_setup_command(command, secret_values=secrets),
+                            "status": "would_run",
+                            "return_code": None,
+                        }
                     )
 
         if setup_failures:
