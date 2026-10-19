@@ -139,6 +139,8 @@ const EPOCH = "observal_auth_epoch";
 const INTENT = "observal_logout_intent";
 const PENDING = "observal_refresh_pending";
 const TAB_EPOCH = "observal_tab_epoch";
+// A guest decision belongs to this tab, not to another tab's shared login.
+const TAB_GUEST = "observal_tab_guest";
 const LOCK = "observal_auth_transition";
 const PROFILE = [STORAGE_KEY_USER_ROLE, STORAGE_KEY_USER_NAME, STORAGE_KEY_USER_EMAIL,
 	STORAGE_KEY_USER_USERNAME, STORAGE_KEY_USER_AVATAR];
@@ -163,10 +165,10 @@ function erase() {
 // Legacy signed-in browsers predate epochs. Only a serialized startup migration
 // may adopt their refresh token; a fenced or previously epoch-tagged tab cannot.
 export async function migrateLegacySession(): Promise<void> {
-	if (localStorage.getItem(INTENT) || localStorage.getItem(EPOCH) ||
+	if (sessionStorage.getItem(TAB_GUEST) || localStorage.getItem(INTENT) || localStorage.getItem(EPOCH) ||
 		sessionStorage.getItem(TAB_EPOCH) || !localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN)) return;
 	await requireLock().request(LOCK, () => {
-		if (localStorage.getItem(INTENT) || localStorage.getItem(EPOCH) ||
+		if (sessionStorage.getItem(TAB_GUEST) || localStorage.getItem(INTENT) || localStorage.getItem(EPOCH) ||
 			sessionStorage.getItem(TAB_EPOCH) || !localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN)) return;
 		localStorage.setItem(EPOCH, crypto.randomUUID());
 		// Do not trust a legacy access token or cached role without a server exchange.
@@ -174,17 +176,21 @@ export async function migrateLegacySession(): Promise<void> {
 		window.dispatchEvent(new Event("storage"));
 	});
 }
+export function abandonLegacySession(): void {
+	sessionStorage.setItem(TAB_GUEST, "1");
+	clearTabAccess();
+}
 export function hasLegacySession(): boolean {
-	return !!navigator.locks?.request && !localStorage.getItem(EPOCH) && !localStorage.getItem(INTENT) &&
+	return !!navigator.locks?.request && !sessionStorage.getItem(TAB_GUEST) && !localStorage.getItem(EPOCH) && !localStorage.getItem(INTENT) &&
 		!sessionStorage.getItem(TAB_EPOCH) && !!localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
 }
 export function canSilentRefresh(): boolean {
 	const tab = sessionStorage.getItem(TAB_EPOCH);
-	return !!authEpoch() && (!tab || tab === authEpoch());
+	return !sessionStorage.getItem(TAB_GUEST) && !!authEpoch() && (!tab || tab === authEpoch());
 }
 export function authEpoch(): string | null {
 	if (typeof window === "undefined") return null;
-	if (!navigator.locks?.request || localStorage.getItem(INTENT)) return null;
+	if (!navigator.locks?.request || sessionStorage.getItem(TAB_GUEST) || localStorage.getItem(INTENT)) return null;
 	return localStorage.getItem(EPOCH);
 }
 export function isCurrentAuth(epoch: string | null, actor?: string | null): boolean {
@@ -230,6 +236,11 @@ export async function commitLogin(data: { access_token: string; refresh_token: s
 		const current = localStorage.getItem(INTENT) || localStorage.getItem(EPOCH);
 		if (current !== (started || null)) return false;
 		const epoch = crypto.randomUUID();
+		// Drop the previous actor's socket and cached queries before publishing B.
+		// Event listeners run synchronously; dispatching after writePair would let
+		// a B subscription reuse A's still-connected GraphQL client.
+		window.dispatchEvent(new Event("observal:session-cleared"));
+		sessionStorage.removeItem(TAB_GUEST);
 		for (const key of PROFILE) localStorage.removeItem(key);
 		localStorage.setItem(EPOCH, epoch);
 		localStorage.removeItem(INTENT);
@@ -268,7 +279,33 @@ function fenceSession(epoch: string): () => void {
 		}).catch(() => { /* tombstone still fences credentials if cleanup fails */ });
 	};
 }
+// Legacy ownership requires matching JWT subjects, not just tab-local access:
+// another tab may have replaced the shared refresh with a different actor's.
+// Install the fence before any await: a rejected/unavailable lock must not leave
+// a refresh that a new tab can silently migrate. Migration checks INTENT under
+// the lock, and synchronous JS cannot interleave with its storage writes.
+function fenceLegacyOwner(): { access: string; refresh: string } | null {
+	const access = sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN);
+	const refresh = localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
+	const actor = localStorage.getItem(STORAGE_KEY_USER_EMAIL);
+	const subject = access && jwtSubject(access);
+	if (!access || !refresh || !subject || jwtSubject(refresh) !== subject || sessionStorage.getItem(TAB_GUEST) ||
+		localStorage.getItem(EPOCH) || sessionStorage.getItem(TAB_EPOCH) || localStorage.getItem(INTENT)) return null;
+	if (sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN) !== access ||
+		localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN) !== refresh ||
+		localStorage.getItem(STORAGE_KEY_USER_EMAIL) !== actor ||
+		localStorage.getItem(EPOCH) || localStorage.getItem(INTENT)) return null;
+	localStorage.setItem(INTENT, crypto.randomUUID());
+	erase();
+	return { access, refresh };
+}
 // Legacy caller compatibility is deliberately removed: token writes must be awaited.
+export async function leaveForGuest(): Promise<void> {
+	fenceLegacyOwner();
+	sessionStorage.setItem(TAB_GUEST, "1");
+	clearSession();
+}
+
 export function clearSession() {
 	const epoch = localStorage.getItem(EPOCH);
 	// An unbound (guest/new) or stale tab does not own the shared session.
@@ -282,6 +319,26 @@ export function clearSession() {
 let logoutPair: { epoch: string | null; refresh: string; access: string } | null = null;
 
 export async function signOut(): Promise<void> {
+	if (!localStorage.getItem(EPOCH) && !sessionStorage.getItem(TAB_EPOCH)) {
+		const legacy = fenceLegacyOwner();
+		if (legacy) {
+			const { access, refresh } = legacy;
+			if (isJwtUsable(access) && (!jwtSubject(refresh) || jwtSubject(access) === jwtSubject(refresh))) {
+				try {
+					const response = await fetchWithTimeout(`${API}/auth/logout`, {
+						method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${access}` },
+						body: JSON.stringify({ refresh_token: refresh }),
+					});
+					if (response.ok) return;
+				} catch { /* narrow fallback below */ }
+			}
+			try { await fetchWithTimeout(`${API}/auth/token/revoke`, {
+				method: "POST", headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ refresh_token: refresh }),
+			}); } catch { /* local logout remains final */ }
+			return;
+		}
+	}
 	if (localStorage.getItem(INTENT)) return;
 	if (!localStorage.getItem(EPOCH) ||
 		sessionStorage.getItem(TAB_EPOCH) !== localStorage.getItem(EPOCH)) {
@@ -368,13 +425,19 @@ async function revokeAfterRefresh(epoch: string, refresh: string, access: string
 		body: JSON.stringify({ refresh_token: refresh }),
 	}); } catch { /* local logout remains final */ }
 }
+function jwtPayload(token: string): { sub?: string; exp?: number } | null {
+	try {
+		const part = token.split(".")[1];
+		if (!part || !/^[A-Za-z0-9_-]+={0,2}$/.test(part)) return null;
+		return JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=")));
+	} catch { return null; }
+}
 function jwtSubject(token: string): string | null {
-	try { return JSON.parse(atob(token.split(".")[1])).sub || null; }
-	catch { return null; }
+	const sub = jwtPayload(token)?.sub;
+	return typeof sub === "string" && sub.trim() ? sub : null;
 }
 function isJwtUsable(token: string): boolean {
-	try { return JSON.parse(atob(token.split(".")[1])).exp * 1000 > Date.now() + 5000; }
-	catch { return false; }
+	return (jwtPayload(token)?.exp ?? 0) * 1000 > Date.now() + 5000;
 }
 async function fetchJsonWithTimeout<T>(url: string, init: RequestInit): Promise<{ response: Response; data?: T }> {
 	const controller = new AbortController();

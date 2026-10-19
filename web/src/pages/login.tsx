@@ -11,7 +11,7 @@ import { Suspense, useState, useEffect, useRef } from "react";
 import { Link, useRouter, useSearch } from "@tanstack/react-router";
 import { Eye, EyeOff, ArrowRight, Loader2, AlertCircle, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { auth, config as configApi, commitLogin, loginStart, getAccessToken, clearSession, getUserRole } from "@/lib/api";
+import { auth, config as configApi, commitLogin, loginStart, getAccessToken, leaveForGuest, getUserRole } from "@/lib/api";
 import { isPublicRegistryPath } from "@/lib/public-registry";
 import { isSafeNext, safeNext } from "@/lib/safe-next";
 import type { SsoHealthResult, E2eStatusResult, HealthCheck } from "@/lib/api";
@@ -270,12 +270,16 @@ function LoginContent() {
     window.location.href = ssoStartUrl("/api/v1/sso/saml/login");
   }
 
-  function handleGuestLogin() {
+  async function handleGuestLogin() {
     sessionStorage.removeItem("observal_sso_start");
-    clearSession();
-    const requestedPath = safeNext(searchParams.next);
-    const pathname = requestedPath.split(/[?#]/, 1)[0];
-    window.location.replace(isPublicRegistryPath(pathname) ? requestedPath : "/");
+    try {
+      await leaveForGuest();
+      const requestedPath = safeNext(searchParams.next);
+      const pathname = requestedPath.split(/[?#]/, 1)[0];
+      window.location.replace(isPublicRegistryPath(pathname) ? requestedPath : "/");
+    } catch {
+      setError("Could not leave the previous session. Please try again.");
+    }
   }
 
   useEffect(() => {

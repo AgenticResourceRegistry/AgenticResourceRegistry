@@ -7,7 +7,7 @@ import { Suspense, useState, useEffect, useCallback } from "react";
 import { useRouter, useSearch } from "@tanstack/react-router";
 import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import { auth, getAccessToken } from "@/lib/api";
+import { auth, getAccessToken, hasLegacySession, migrateLegacySession, refreshAccessToken } from "@/lib/api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ function DeviceContent() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const { brandingAppName, brandingLogo, brandingWordmark } = useDeploymentConfig();
 
   const formatCode = useCallback((raw: string): string => {
@@ -31,18 +32,24 @@ function DeviceContent() {
     return limited;
   }, []);
 
-  // Redirect to login if not authenticated
+  // Resolve a legacy or refresh-only session before deciding whether to redirect.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const hasToken = !!getAccessToken();
-    if (!hasToken) {
-      const code = codeParam;
+    let cancelled = false;
+    async function resolveAuth() {
+      try {
+        if (hasLegacySession()) await migrateLegacySession();
+        if (!getAccessToken()) await refreshAccessToken();
+      } catch { /* unsupported browser or failed refresh: ask for sign-in */ }
+      if (cancelled) return;
+      if (getAccessToken()) { setAuthReady(true); return; }
       const directSso = ssoParam === "1";
-      const returnPath = code
-        ? `/device?code=${encodeURIComponent(code)}${directSso ? "&sso=1" : ""}`
+      const returnPath = codeParam
+        ? `/device?code=${encodeURIComponent(codeParam)}${directSso ? "&sso=1" : ""}`
         : `/device${directSso ? "?sso=1" : ""}`;
       router.navigate({ to: "/login", search: { next: returnPath, ...(directSso ? { sso: "1" } : {}) }, replace: true });
     }
+    void resolveAuth();
+    return () => { cancelled = true; };
   }, [router, codeParam, ssoParam]);
 
   // Pre-fill code from query parameter
@@ -81,7 +88,7 @@ function DeviceContent() {
   }
 
   // Don't render form until we know user is authenticated
-  if (typeof window !== "undefined" && !getAccessToken()) {
+  if (!authReady || !getAccessToken()) {
     return null;
   }
 
