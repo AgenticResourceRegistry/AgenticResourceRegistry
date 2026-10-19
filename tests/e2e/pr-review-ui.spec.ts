@@ -145,11 +145,20 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
   }];
   const verdicts: unknown[] = [];
   const reviewerRequests: unknown[] = [];
+  const candidateId = "30000000-0000-4000-8000-000000000001";
   await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
   await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id: "other-reviewer", username: "reviewer", name: "Review Tester", role: "reviewer" } }));
   await page.route("**/api/v1/reviews/42**", route => {
     const url = new URL(route.request().url());
     const suffix = url.pathname.replace("/api/v1/reviews/42", "");
+    if (suffix === "/reviewers/eligible") {
+      const people = [{ id: candidateId, name: "Hari Srinivasan", username: "hari", role: "reviewer" },
+        { id: "30000000-0000-4000-8000-000000000002", name: "Aryan", username: "aryan", role: "admin" },
+        { id: "30000000-0000-4000-8000-000000000003", name: "Alex", username: "alex", role: "super_admin" },
+        { id: "30000000-0000-4000-8000-000000000004", name: "Taylor", username: "taylor", role: "user" }];
+      const query = url.searchParams.get("q")?.toLowerCase() ?? "";
+      return route.fulfill({ json: people.filter(person => person.name.toLowerCase().includes(query)) });
+    }
     if (suffix === "/reviewers" && route.request().method() === "POST") {
       reviewerRequests.push(route.request().postDataJSON());
       return route.fulfill({ status: 201, json: { requested: true } });
@@ -173,10 +182,46 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
   await expect(page.getByText("Please verify permissions.")).toBeVisible();
   await expect(page.getByText("The command needs a permission check.")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("pr-review-conversation-desktop.png"), fullPage: true });
-  await page.getByRole("textbox", { name: "Reviewer user ID" }).fill(id);
+  const picker = page.getByRole("combobox", { name: "Find a reviewer" });
+  await picker.click();
+  await expect(page.getByRole("option", { name: /Hari Srinivasan/ })).toBeVisible();
+  // The first pointer event used to dismiss the popover just after it opened.
+  await page.waitForTimeout(250);
+  await expect(picker).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("option", { name: /Aryan/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Alex/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Taylor/ })).toBeVisible();
+  await picker.press("Escape");
+  await expect(picker).toHaveAttribute("aria-expanded", "false");
+  await picker.click();
+  await expect(page.getByRole("option", { name: /Hari Srinivasan/ })).toBeVisible();
+  await picker.press("ArrowUp");
+  await expect(page.getByRole("option", { name: /Taylor/ })).toHaveAttribute("aria-selected", "true");
+  // The keyboard-highlighted option is visibly distinct from the others.
+  const background = (name: RegExp) => page.getByRole("option", { name }).evaluate(node => getComputedStyle(node).backgroundColor);
+  expect(await background(/Taylor/)).not.toBe(await background(/Aryan/));
+  await picker.fill("Nobody");
+  await expect(page.getByText("No eligible reviewers match. Try another name.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request reviewer" })).toBeDisabled();
+  await picker.fill("Taylor");
+  await page.getByRole("option", { name: /Taylor/ }).click();
+  await expect(picker).toHaveValue("Taylor");
+  await expect(page.getByRole("button", { name: "Request reviewer" })).toBeEnabled();
+  // Tab leaves the open list for the request action; options are not tab stops.
+  await picker.click();
+  await expect(page.getByRole("option").first()).toBeVisible();
+  await picker.press("Tab");
+  await expect(page.getByRole("button", { name: "Request reviewer" })).toBeFocused();
+  await picker.fill("Hari");
+  await expect(page.getByRole("button", { name: "Request reviewer" })).toBeDisabled();
+  await expect(page.getByRole("option", { name: /Hari Srinivasan/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Aryan/ })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("pr-review-picker-desktop.png"), fullPage: true });
+  await picker.press("ArrowDown");
+  await picker.press("Enter");
   await page.getByRole("button", { name: "Request reviewer" }).click();
   await expect.poll(() => reviewerRequests.length).toBe(1);
-  expect(reviewerRequests[0]).toEqual({ user_id: id });
+  expect(reviewerRequests[0]).toEqual({ user_id: candidateId });
   await page.getByRole("button", { name: "Files changed" }).click();
   await expect(page.getByRole("table", { name: "Diff for SKILL.md" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("pr-review-detail-desktop.png"), fullPage: true });

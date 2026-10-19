@@ -4,6 +4,13 @@
 export type ReviewState = "open" | "changes_requested" | "approved" | "published" | "closed";
 export type ReviewVerdict = "comment" | "approve" | "request_changes";
 
+export interface EligibleReviewer {
+  id: string;
+  name: string;
+  username: string;
+  role: "reviewer" | "admin" | "super_admin" | "user";
+}
+
 export interface ReviewGate {
   ready: boolean;
   approvals: number;
