@@ -206,7 +206,7 @@ async def list_reviews(
                 ReviewSubmission.state != "draft",
                 ReviewSubmission.verdict.in_(("approve", "request_changes")),
             )
-            .order_by(ReviewSubmission.submitted_at.desc(), ReviewSubmission.id.desc())
+            .order_by(ReviewSubmission.submitted_at.desc().nulls_last(), ReviewSubmission.id.desc())
             .limit(1)
             .correlate(Review)
             .scalar_subquery()
