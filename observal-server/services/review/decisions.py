@@ -106,6 +106,11 @@ def _own_work(subject, version, actor_id) -> bool:
     return actor_id in (version.released_by, owner_id) or str(actor_id) in (subject.co_authors or [])
 
 
+def _can_self_publish(subject, policy: ApprovalPolicy) -> bool:
+    """Only a private teamspace with counted self-approval permits owner publication."""
+    return subject.is_private and policy.source == "teamspace" and policy.self_approval == "counted"
+
+
 async def _reviewer_in_scope(db, subject, version, user):
     scope = await review_scope(db, user)
     return can_review(subject, scope) and (
@@ -691,11 +696,7 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
         if user is None:
             raise HTTPException(403, "Publisher required")
         await _require_reviewer(db, review, user)
-        if (
-            _own_work(subject, version, user.id)
-            and not (subject.is_private and policy.source == "teamspace" and policy.self_approval == "counted")
-            and not override
-        ):
+        if _own_work(subject, version, user.id) and not _can_self_publish(subject, policy) and not override:
             raise HTTPException(403, "Authors and co-authors cannot publish their own work")
     await ensure_request_threads(db, review, persist=False, update_state=False)
     if review.subject_type == "agent":
