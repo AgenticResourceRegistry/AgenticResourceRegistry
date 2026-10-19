@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -49,6 +50,8 @@ def _mock_db(membership=None):
     db.scalar = AsyncMock(return_value=membership)
     # Fork-count reads use a grouped execute; this fixture has no fork rows.
     db.execute.return_value.all = MagicMock(return_value=[])
+    db.execute.return_value.scalars = MagicMock()
+    db.execute.return_value.scalars.return_value.all = MagicMock(return_value=[])
     return db
 
 
@@ -68,6 +71,7 @@ def _listing_mock(status=ListingStatus.approved, submitted_by=None, is_private=F
     m = MagicMock()
     m.id = uuid.uuid4()
     m.latest_version_id = uuid.uuid4()
+    m.latest_version = SimpleNamespace(id=m.latest_version_id, status=status, version="1.0.0")
     m.name = "test-listing"
     m.namespace = "testowner"
     m.slug = "test-listing"

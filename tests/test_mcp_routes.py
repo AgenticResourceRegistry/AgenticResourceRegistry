@@ -54,7 +54,7 @@ def _db():
         delete=AsyncMock(),
         flush=AsyncMock(),
         refresh=AsyncMock(),
-        execute=AsyncMock(),
+        execute=AsyncMock(return_value=_result()),
         scalar=AsyncMock(return_value=None),
         commit=AsyncMock(),
         rollback=AsyncMock(),
@@ -1424,6 +1424,10 @@ class TestDraftCreationAndUpdates:
         _http_error(exc, expected_status, detail)
         db.flush.assert_not_awaited()
         db.refresh.assert_not_awaited()
+        if mode == "approved":
+            db.execute.assert_awaited_once()  # Check for an active reviewed successor.
+        else:
+            db.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_visibility_rejection_precedes_version_mutation(self, monkeypatch):
@@ -1522,7 +1526,10 @@ class TestEditingLocks:
             await mcp.start_edit_mcp(str(LISTING_ID), db, _user())
 
         _http_error(exc, status, detail)
-        db.execute.assert_not_awaited()
+        if mode == "approved":
+            db.execute.assert_awaited_once()  # Check for an active reviewed successor.
+        else:
+            db.execute.assert_not_awaited()
         commit.assert_not_awaited()
 
     @pytest.mark.asyncio

@@ -42,6 +42,7 @@ from schemas.hook import (
     HookSubmitRequest,
     HookUpdateRequest,
 )
+from services.component_edit_target import editable_version
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.registry_namespace import identity_exists
 from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
@@ -367,11 +368,11 @@ async def update_hook_draft(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    ver = listing.latest_version
+    ver = await editable_version(db, "hook", listing, HookVersion)
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version to update")
     await lock_review_for_edit(db, "hook", ver)
-    if listing.status not in (
+    if ver.status not in (
         ListingStatus.draft,
         ListingStatus.rejected,
         ListingStatus.pending,
@@ -438,7 +439,7 @@ async def start_edit_hook(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    ver = listing.latest_version
+    ver = await editable_version(db, "hook", listing, HookVersion)
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version")
     if ver.status not in (
@@ -467,7 +468,7 @@ async def cancel_edit_hook(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    ver = listing.latest_version
+    ver = await editable_version(db, "hook", listing, HookVersion)
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version")
     release_edit_lock(ver, current_user.id)
@@ -488,7 +489,8 @@ async def submit_hook_draft(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    if listing.status not in (
+    ver = await editable_version(db, "hook", listing, HookVersion)
+    if ver is None or ver.status not in (
         ListingStatus.draft,
         ListingStatus.rejected,
         ListingStatus.pending,
@@ -496,10 +498,10 @@ async def submit_hook_draft(
     ):
         raise HTTPException(status_code=400, detail="Listing is not a draft")
 
-    if not listing.description:
+    if not ver.description:
         raise HTTPException(status_code=400, detail="Description is required before submitting")
 
-    review = await submit_for_review(db, "hook", listing, listing.latest_version, current_user.id, message=message)
+    review = await submit_for_review(db, "hook", listing, ver, current_user.id, message=message)
     await commit_or_name_conflict(db, "hook")
     await db.refresh(listing)
     response = await component_response(listing, "hook", current_user, db)
