@@ -185,14 +185,52 @@ def load_config(home: Path | None = None) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+# Written next to config.json when the server rejects the stored refresh token
+# (revoked by a logout or password change, or expired). Holds a fingerprint of
+# that token, so hooks stop retrying it and a new login clears the state.
+AUTH_EXPIRED_FILE = "auth_expired"
+
+
+def _token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def login_expired(home: Path | None = None) -> bool:
+    """Whether hooks found the current login revoked or expired."""
+    config = load_config(home)
+    if not config or not config["refresh_token"]:
+        return False
+    marker = Path(config["_config_path"]).parent / AUTH_EXPIRED_FILE
+    try:
+        return marker.read_text().strip() == _token_fingerprint(config["refresh_token"])
+    except OSError:
+        return False
+
+
 def _refresh_access_token(server_url: str, refresh_token: str, config_path: str) -> str | None:
     """Use refresh_token to obtain a new access_token and persist it."""
     import httpx
+
+    marker = Path(config_path).parent / AUTH_EXPIRED_FILE
+    fingerprint = _token_fingerprint(refresh_token)
+    try:
+        if marker.read_text().strip() == fingerprint:
+            # Already rejected: retrying only burns the server's auth rate limit.
+            return None
+    except OSError:
+        pass
 
     url = f"{server_url.rstrip('/')}/api/v1/auth/token/refresh"
     try:
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(url, json={"refresh_token": refresh_token})
+            if resp.status_code == 401:
+                optic.warning("refresh token rejected; session delivery paused until `observal auth login`")
+                try:
+                    marker.write_text(fingerprint)
+                except OSError:
+                    pass
+                return None
             if resp.status_code >= 300:
                 return None
             data = resp.json()

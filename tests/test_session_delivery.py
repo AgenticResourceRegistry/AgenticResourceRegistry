@@ -610,6 +610,44 @@ def test_refresh_access_token_failures_are_soft(monkeypatch, failure: str):
     assert base._refresh_access_token("https://server.example", "refresh", "/missing") is None
 
 
+def test_rejected_refresh_token_is_not_retried_until_a_new_login(tmp_path: Path, monkeypatch):
+    import httpx
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(401, json={"detail": "Refresh token has been revoked or expired"})
+
+    _install_http_transport(monkeypatch, handler)
+    config_path = tmp_path / ".observal" / "config.json"
+    config_path.parent.mkdir()
+    config = {"server_url": "https://server.example", "access_token": "old", "refresh_token": "revoked"}
+    config_path.write_text(json.dumps(config))
+
+    assert not base.login_expired(tmp_path)
+    for _ in range(3):
+        assert base._refresh_access_token("https://server.example", "revoked", str(config_path)) is None
+    assert len(requests) == 1
+    assert base.login_expired(tmp_path)
+
+    # A new login stores a different refresh token, which is tried again.
+    config_path.write_text(json.dumps({**config, "refresh_token": "new-login"}))
+    assert not base.login_expired(tmp_path)
+    assert base._refresh_access_token("https://server.example", "new-login", str(config_path)) is None
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("expired", [True, False])
+def test_cli_warns_when_hooks_found_the_login_expired(monkeypatch, capsys, expired: bool):
+    from observal_cli import main
+
+    monkeypatch.setattr(base, "login_expired", lambda: expired)
+    main._warn_if_login_expired()
+
+    assert ("observal auth login" in capsys.readouterr().err) is expired
+
+
 def test_post_to_server_refreshes_once_and_returns_the_exact_acknowledgement(monkeypatch):
     import httpx
 

@@ -62,6 +62,8 @@ observal auth logout --output json
 
 Logout always removes local tokens when the local configuration is readable. Remote revocation is best effort and is reported separately in JSON. Use `observal doctor cleanup` to remove Observal-managed harness hooks.
 
+A logout from any device, including the web UI, also signs out the hooks on every other machine. When a hook's token refresh is rejected, the hooks stop retrying until the next `observal auth login`, and every other `observal` command prints a notice that sessions are not being sent.
+
 ## Current user
 
 ```bash
