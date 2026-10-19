@@ -51,6 +51,7 @@ import {
   useAgentForks,
 } from "@/hooks/use-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
+import { getAccessToken } from "@/lib/api";
 import { hasMinRole } from "@/hooks/use-role-guard";
 import type {
   AgentComponentLink,
@@ -733,7 +734,7 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
       setCoAuthors([]);
       return;
     }
-    const token = sessionStorage.getItem("observal_access_token");
+    const token = getAccessToken();
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
     fetch(`/api/v1/agents/${id}/co-authors`, { headers })

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useCallback } from "react";
@@ -7,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { UserSearchInput } from "@/components/shared/user-search-input";
+import { getAccessToken } from "@/lib/api";
 import {
 	Dialog,
 	DialogContent,
@@ -17,11 +19,6 @@ import {
 } from "@/components/ui/dialog";
 
 const API = "/api/v1";
-
-function getAccessToken(): string | null {
-	if (typeof window === "undefined") return null;
-	return sessionStorage.getItem("observal_access_token");
-}
 
 export interface CoAuthor {
 	id: string;

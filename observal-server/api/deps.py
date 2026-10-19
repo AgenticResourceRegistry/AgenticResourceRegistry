@@ -109,6 +109,7 @@ _PASSWORD_CHANGE_EXEMPT_PATHS = frozenset(
         "/api/v1/auth/whoami",
         "/api/v1/auth/token/refresh",
         "/api/v1/auth/token/revoke",
+        "/api/v1/auth/logout",
     }
 )
 

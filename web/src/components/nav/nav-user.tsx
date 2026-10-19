@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Harishankar <harishankar0301@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -17,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenuButton } from "@/components/ui/sidebar";
-import { clearSession, getUserAvatar } from "@/lib/api";
+import { signOut, getUserAvatar } from "@/lib/api";
 import { useSyncExternalStore } from "react";
 
 function initials(name: string) {
@@ -91,27 +92,10 @@ export function NavUser({ user }: NavUserProps) {
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          onClick={async () => {
-            try {
-              const token = sessionStorage.getItem("observal_access_token");
-              const refreshToken = localStorage.getItem("observal_refresh_token");
-              if (token) {
-                await fetch("/api/v1/auth/logout", {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    refresh_token: refreshToken || undefined,
-                  }),
-                });
-              }
-            } catch {
-              // Best-effort — proceed with client-side cleanup regardless
-            }
-            clearSession();
+          onClick={() => {
+            const done = signOut(); // fence is installed before the first await
             router.navigate({ to: "/login" });
+            void done;
           }}
         >
           <LogOut className="mr-2 h-4 w-4" />

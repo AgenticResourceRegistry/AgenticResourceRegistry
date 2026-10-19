@@ -1,5 +1,6 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Web Frontend
@@ -24,7 +25,7 @@ The web UI is one of three ways to interact with Agentic Resource Registry, alon
 | Data fetching | TanStack Query via `use-api.ts` | Caching, deduplication, mutations |
 | Tables | TanStack Table | Sort, filter, pagination built-in |
 | Charts | Recharts 3 | Simple, works with OKLCH tokens |
-| Auth storage | Current code uses sessionStorage for access token, localStorage for refresh token and profile cache | Documents existing behavior. Do not add new auth localStorage use unless intentionally changing the auth model. |
+| Auth storage | sessionStorage for access token and tab epoch; localStorage for refresh token, profile cache, opaque session epoch, logout intent and refresh pending marker | A synchronous tombstone blocks stale tab refresh while Web Locks serialize token writers. Without Web Locks, authenticated startup and login fail closed; logout still clears locally. |
 | API proxy | Vite dev proxy and nginx in Docker | Single origin for `/api/v1/*`, no CORS in prod |
 | Fonts | Local files only | No Google Fonts CDN calls |
 | Design tokens | OKLCH in `app.css` | Perceptually uniform themes |
@@ -127,7 +128,7 @@ src/lib/           # API wrapper, types, query client, theme, GraphQL WS
 
 **Harness list:** Fetched from `/api/v1/config/harnesses` via `useHarnesses()`. Never hardcode harness names or capabilities in the frontend. The server is the single source of truth.
 
-**Auth state:** Current implementation stores `observal_access_token` in sessionStorage. It stores `observal_refresh_token` and cached user role/profile fields in localStorage so refresh and nav state survive reloads and new tabs. Treat this as existing behavior, not a pattern to expand. If changing auth storage, migrate deliberately and update this file in the same PR.
+**Auth state:** Access token and tab epoch live in sessionStorage. Refresh token, cached profile, opaque session epoch, logout-intent tombstone, and indeterminate rotation marker live in localStorage. Writers use the same-origin Web Lock; logout marks intent and clears local credentials synchronously without waiting for a stalled lock. The tab holding a successful refresh during logout attempts authenticated account-wide logout with its new private bearer. If that tab disappears or the bearer cannot be used, only best-effort single-JTI revocation of the old refresh token is possible; an already rotated token or other sessions may survive remotely. Auth getters refuse fenced tokens. Legacy browsers without an epoch are migrated under the lock before silent refresh; a pending rotation still requires explicit sign-in. A new explicit login may replace the tombstone, but a delayed server-wide logout may revoke its tokens; reauthenticate if that happens. If remote logout fails, `/auth/token/revoke` only attempts single-refresh-token revocation, not account-wide logout. Never use localStorage read/write as a cross-tab mutex. Do not expand auth storage without updating this model.
 
 **Theming:** Use semantic tokens such as `var(--primary)` and `var(--destructive)`. Never use raw color values in components. Theme tokens live in `app.css`.
 
