@@ -23,6 +23,7 @@ from starlette.requests import Request
 
 import services.dynamic_settings as ds
 from database import async_session
+from models.mcp import ListingStatus
 from models.user import User, UserRole
 from services.jwt_service import decode_access_token
 from services.redis import get_redis
@@ -594,3 +595,14 @@ async def resolve_visible_listing(
     if listing is None or not await check_listing_visibility_async(listing, current_user, db):
         return None
     return listing
+
+
+def hidden_unapproved_listing(listing, current_user) -> bool:
+    """True when a component listing is not approved and the caller may not view it.
+
+    Sibling routes (versions, feedback) must answer with the same 404 as
+    ``GET /{type}/{id}``, otherwise they confirm that someone else's draft exists.
+    """
+    if listing.status == ListingStatus.approved:
+        return False
+    return not may_view_unapproved(get_effective_component_permission(listing, current_user), current_user)
