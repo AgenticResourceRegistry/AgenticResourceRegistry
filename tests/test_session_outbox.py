@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ def test_outbox_survives_reopen_and_acknowledges_only_contiguous_batches(tmp_pat
             session_id="session",
             acknowledged_line=1,
             db_path=db,
+            expected_item=restarted[0],
         )
         == 1
     )
@@ -101,6 +103,7 @@ def test_source_batches_drain_before_metadata_waiting_on_their_checkpoint(tmp_pa
         session_id="session",
         acknowledged_line=1,
         db_path=db,
+        expected_item=items[0],
     )
     remaining = outbox.pending(destination="http://server", user_id="user", db_path=db)
     assert [(item.start_line, item.end_line) for item in remaining] == [(2, 1)]
@@ -181,6 +184,7 @@ def test_database_is_owner_only_and_stats_track_sync(tmp_path: Path):
         session_id="session",
         acknowledged_line=0,
         db_path=db,
+        expected_item=outbox.pending(destination="http://server", user_id="user", db_path=db)[0],
     )
     stats = outbox.stats(db_path=db)
     assert stats["pending"] == 0

@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Codex CLI harness adapter."""
@@ -115,27 +116,37 @@ class CodexAdapter(BaseAdapter):
             return None
         return role
 
+    def _source(self, path: Path) -> SessionSource:
+        """Use only metadata recorded by this rollout, never the hook process cwd."""
+        meta = self._session_meta(path)
+        return SessionSource(
+            self.harness_name,
+            self._session_id(path),
+            path,
+            cwd=meta.get("cwd") if isinstance(meta.get("cwd"), str) else "",
+            parent_session_id=self._parent_thread_id(path),
+        )
+
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
         root = self._sessions_root(home)
         if not root.is_dir():
             return None
         session_id = str(event.get("session_id") or event.get("thread_id") or "")
+        transcript = event.get("transcript_path") or event.get("transcriptPath")
+        if not session_id and not transcript:
+            return None
         candidates = list(root.rglob("*.jsonl"))
         if session_id:
             candidates = [path for path in candidates if self._session_id(path) == session_id]
+        if transcript:
+            candidates = [path for path in candidates if str(path.resolve()) == str(Path(transcript).resolve())]
         if not candidates:
             return None
         try:
             path = max(candidates, key=lambda item: item.stat().st_mtime)
         except OSError:
             return None
-        return SessionSource(
-            self.harness_name,
-            self._session_id(path),
-            path,
-            cwd=str(event.get("cwd") or ""),
-            parent_session_id=self._parent_thread_id(path),
-        )
+        return self._source(path)
 
     def discover_session_sources(
         self,
@@ -151,17 +162,104 @@ class CodexAdapter(BaseAdapter):
             try:
                 modified_at = path.stat().st_mtime
                 if modified_at >= cutoff:
-                    sources.append(
-                        SessionSource(
-                            self.harness_name,
-                            self._session_id(path),
-                            path,
-                            parent_session_id=self._parent_thread_id(path),
-                        )
-                    )
+                    sources.append(self._source(path))
             except OSError:
                 continue
         return sorted(sources, key=lambda source: source.path.stat().st_mtime if source.path else 0, reverse=True)
+
+    def outbox_provenance(self, source: SessionSource, payload: dict) -> dict | None:
+        """Record only verified delegated identity or explicit lack of identity."""
+        from observal_cli.delegation.tasks import delegated_agent
+
+        delegated = delegated_agent("", (source.session_id,))
+        identity = "unattributed"
+        if payload.get("agent_id"):
+            if delegated != (payload.get("agent_id"), payload.get("agent_version")):
+                return None
+            identity = "delegation"
+        return {
+            "session_id": source.session_id,
+            "path": str(source.path.resolve()) if source.path else "",
+            "source_kind": "codex-rollout",
+            "identity": identity,
+            "agent_id": payload.get("agent_id"),
+            "agent_version": payload.get("agent_version"),
+        }
+
+    def allows_ambient_agent_identity(self) -> bool:
+        return False
+
+    def validate_outbox_provenance(self, item) -> bool:
+        """Only a session-bound delegated identity can authorize attributed replay."""
+        proof = item.provenance
+        if proof is None:
+            return not item.payload.get("agent_id") and not item.payload.get("agent_version")
+        if not isinstance(proof, dict) or proof.get("session_id") != item.session_id:
+            return False
+        path = proof.get("path")
+        if proof.get("source_kind") != "codex-rollout" or not isinstance(path, str) or not path.endswith(".jsonl"):
+            return False
+        source_path = Path(path).resolve()
+        if (
+            self._session_id(source_path) != item.session_id
+            or not any(parent.name == "sessions" and parent.parent.name == ".codex" for parent in source_path.parents)
+            or str(source_path) != path
+            or item.payload.get("session_id") != item.session_id
+            or item.payload.get("harness") != item.harness
+        ):
+            return False
+        try:
+            from observal_cli.sessions.base import hash_session_source, read_new_records
+
+            source = self._source(source_path)
+            lines, offsets, _ = read_new_records(source_path, 0)
+            start = item.start_line
+            posted = item.payload.get("lines") or []
+            posted_offsets = item.payload.get("end_byte_offsets") or []
+            if (
+                start < 0
+                or start > len(lines)
+                or not isinstance(posted, list)
+                or lines[start : start + len(posted)] != posted
+                or len(posted_offsets) != len(posted)
+                or any(offset != offsets[start + index] for index, offset in enumerate(posted_offsets[:-1]))
+                or (posted and posted_offsets[-1] != item.end_offset)
+                or (posted and item.end_offset < offsets[start + len(posted) - 1])
+                or (posted and start + len(posted) < len(offsets) and item.end_offset >= offsets[start + len(posted)])
+                or item.end_offset > source_path.stat().st_size
+            ):
+                return False
+            if item.payload.get("session_hash") is not None:
+                digest, count = hash_session_source(source_path)
+                if (item.payload["session_hash"], item.payload.get("hashed_line_count")) != (digest, count):
+                    return False
+            # A rollout's own metadata must not contradict the path identity.
+            with source_path.open(encoding="utf-8") as transcript:
+                first = json.loads(transcript.readline())
+            meta = first.get("payload") if first.get("type") == "session_meta" else None
+            if isinstance(meta, dict) and meta.get("id") and meta["id"] != item.session_id:
+                return False
+        except (OSError, ValueError, IndexError, TypeError, AttributeError):
+            return False
+        identity = proof.get("identity")
+        if identity == "unattributed":
+            return (
+                not item.payload.get("agent_id")
+                and not item.payload.get("agent_version")
+                and not proof.get("agent_id")
+                and not proof.get("agent_version")
+            )
+        if identity != "delegation" or not item.payload.get("agent_id"):
+            return False
+        from observal_cli.delegation.tasks import delegated_agent
+
+        delegated = delegated_agent("", (item.session_id,))
+        return (
+            delegated == (item.payload.get("agent_id"), item.payload.get("agent_version"))
+            and proof.get("agent_id") == item.payload.get("agent_id")
+            and proof.get("agent_version") == item.payload.get("agent_version")
+            and source.session_id == item.session_id
+        )
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         home = home or Path.home()
