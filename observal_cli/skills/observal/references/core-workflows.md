@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Core workflows
@@ -23,6 +24,7 @@ Do not run an authentication probe before every command. Execute the requested r
 ```bash
 observal auth whoami --output json
 observal auth login
+observal auth login --server dev.observal.io
 observal auth login --sso --output json
 observal auth login --sso --provider google --output json
 observal auth logout --output json
@@ -35,11 +37,11 @@ observal auth set-username new-handle --output json
 For noninteractive password authentication, keep passwords out of arguments:
 
 ```bash
-OBSERVAL_PASSWORD_FILE=/path/to/password observal auth login --server https://observal.example.com --email me@example.com --name 'Example User' --output json
+OBSERVAL_PASSWORD_FILE=/path/to/password observal auth login --server dev.observal.io --email me@example.com --name 'Example User' --output json
 OBSERVAL_CURRENT_PASSWORD_FILE=/path/to/current OBSERVAL_NEW_PASSWORD_FILE=/path/to/new observal auth change-password --output json
 ```
 
-Fresh-server JSON bootstrap can require `--name`. SSO JSON emits an authorization event followed by an authenticated event. A username becomes the Registry namespace and can become immutable after ownership is established.
+Bare login hosts use HTTPS by default; specify `http://` explicitly for an intentional development/self-hosted HTTP server. A blank human prompt chooses `http://localhost`; bare `localhost` uses HTTPS. Login saves the successfully reached server URL and credentials. A conflicting `OBSERVAL_SERVER_URL` override blocks login (including after localhost port fallback); unset it or set it to the chosen full URL before retrying. Fresh-server JSON bootstrap can require `--name`. SSO JSON emits an authorization event followed by an authenticated event. A username becomes the Registry namespace and can become immutable after ownership is established.
 
 At every CLI startup, bundled Observal skill trees are hash-checked against the packaged copies. Drift causes complete replacement of only the six Observal-managed skill directories, including stale extra files.
 

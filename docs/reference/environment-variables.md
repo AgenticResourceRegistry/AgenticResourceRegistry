@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Environment variables"
 ---
@@ -137,6 +138,8 @@ Read from the environment at invocation time. Override values in `~/.observal/co
 | `OBSERVAL_CURRENT_PASSWORD` | unset                      | Current password for non-interactive password changes |
 | `OBSERVAL_NEW_PASSWORD` | unset                          | New password for non-interactive or mandatory password changes |
 | `OBSERVAL_TIMEOUT`      | `30`                           | HTTP timeout in seconds |
+
+`OBSERVAL_SERVER_URL` continues to override the saved URL on every CLI invocation. During `auth login`, it must be a full HTTP(S) URL matching the selected destination (including any localhost fallback), or login stops before authentication so saved credentials cannot be used against a different server. Bare hosts are accepted for login's `--server` option or interactive prompt, not as an environment override. Unset or correct the override before retrying.
 
 The token and password variables support corresponding `_FILE` forms. Configuring both a direct variable and its file form is an error. When multiple token aliases are present, the legacy precedence remains `OBSERVAL_TOKEN`, then `OBSERVAL_API_KEY`, then `OBSERVAL_ACCESS_TOKEN`.
 
