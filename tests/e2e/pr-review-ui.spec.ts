@@ -430,7 +430,10 @@ for (const subject_type of ["agent", "mcp"] as const) {
       id: threadKey, path: null, side: null, start_line: null, end_line: null, outdated: false,
       resolved_at: status === "blocking" ? null : now, revision_id: null,
       change_request: { submission_id: submissionId, reviewer_id: reviewerKey, status, can_withdraw, dismissed_by: status === "blocking" ? null : reviewerKey, dismissed_reason: status === "blocking" ? null : "Question answered" },
-      comments: [{ id: submissionId, thread_id: threadKey, author_id: reviewerKey, body: "Is this change required?", created_at: now }],
+      comments: [
+        { id: submissionId, thread_id: threadKey, author_id: reviewerKey, body: "Is this change required?", created_at: now },
+        ...(threadKey === threadId ? [{ id: "99999999-9999-4999-8999-999999999999", thread_id: threadKey, author_id: id, body: "I replied to this request", created_at: now }] : []),
+      ],
     });
     await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
     await page.route("**/api/v1/config/public", route => route.fulfill({ json: { experimental_review_checks: false } }));
@@ -457,6 +460,8 @@ for (const subject_type of ["agent", "mcp"] as const) {
     await page.goto("/review/42");
     const request = page.locator(`#thread-${threadId}`);
     await expect(request.getByText("Changes requested · blocks publication")).toBeVisible();
+    await expect(request.getByText("I replied to this request")).toBeVisible();
+    await expect(request.getByText("harish", { exact: true })).toBeVisible();
     await expect(request).toHaveCount(1);
     await expect(page.getByText("Commented", { exact: true })).toBeVisible();
     const general = page.locator(`#thread-${generalId}`);
