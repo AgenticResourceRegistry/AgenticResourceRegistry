@@ -18,6 +18,7 @@ Covers Codex CLI, GitHub Copilot (VS Code), and OpenCode across:
 from __future__ import annotations
 
 import json
+import tomllib
 import uuid
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -547,7 +548,7 @@ class TestDictToToml:
     def test_empty_servers(self):
         d = {"mcp_servers": {}}
         toml = _dict_to_toml(d)
-        assert toml.strip() == ""
+        assert tomllib.loads(toml) == d
 
     def test_boolean_values(self):
         d = {"mcp_servers": {"my-srv": {"command": "npx", "autoApprove": True}}}

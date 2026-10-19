@@ -14,17 +14,19 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 import subprocess
 import sys
 import tomllib
-from contextlib import nullcontext, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlsplit, urlunsplit
 
+import tomlkit
 import typer
 import yaml
 from loguru import logger as optic
@@ -434,64 +436,184 @@ def _collect_mcp_headers(
     return header_values
 
 
+class _TomlConflict(ValueError):  # noqa: N818 - internal conflict category
+    """Unsafe TOML input or concurrent modification (never include source values)."""
+
+
+_MISSING = object()
+
+
+def _read_toml_bytes(path: Path) -> bytes | object:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return _MISSING
+
+
+def _same_toml_value(left: object, right: object) -> bool:
+    if isinstance(left, float) and isinstance(right, float) and math.isnan(left) and math.isnan(right):
+        return True
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(_same_toml_value(left[k], right[k]) for k in left)
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(_same_toml_value(a, b) for a, b in zip(left, right, strict=True))
+    return type(left) is type(right) and left == right
+
+
+def _check_toml_value(value: object) -> None:
+    """Reject values that have no unambiguous TOML representation."""
+    from datetime import date, datetime, time
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise _TomlConflict("Invalid TOML configuration")
+            _check_toml_value(child)
+    elif isinstance(value, list):
+        for child in value:
+            _check_toml_value(child)
+    elif type(value) not in (str, bool, int, float, date, datetime, time):
+        raise _TomlConflict("Invalid TOML configuration")
+
+
+def _inline_toml_table(values: dict) -> tomlkit.items.InlineTable:
+    """Build nested inline values for an existing inline MCP root."""
+    table = tomlkit.inline_table()
+    for key, value in values.items():
+        table[key] = _inline_toml_table(value) if isinstance(value, dict) else tomlkit.item(value)
+    return table
+
+
+def _trailing_toml_trivia(table: tomlkit.items.Table) -> list:
+    """Find trivia before the next sibling header, even after a nested table."""
+    trailing = []
+    for key, item in reversed(table.value.body):
+        if key is None:
+            trailing.append(item)
+        else:
+            if not trailing and isinstance(item, tomlkit.items.Table):
+                return _trailing_toml_trivia(item)
+            break
+    return list(reversed(trailing))
+
+
+def _toml_document(content: dict, existing_text: str | None = None) -> str:
+    """Replace named server subtrees, preserving everything else in the document."""
+    if not isinstance(content, dict) or len(content) != 1:
+        raise _TomlConflict("Invalid TOML configuration")
+    root_key, incoming = next(iter(content.items()))
+    if not isinstance(root_key, str) or not isinstance(incoming, dict):
+        raise _TomlConflict("Invalid TOML configuration")
+    for name, server in incoming.items():
+        if not isinstance(name, str) or not isinstance(server, dict):
+            raise _TomlConflict("Invalid TOML configuration")
+        _check_toml_value(server)
+
+    before = tomllib.loads(existing_text) if existing_text is not None else {}
+    section = before.get(root_key, {})
+    if not isinstance(section, dict) or any(not isinstance(server, dict) for server in section.values()):
+        raise _TomlConflict("Invalid TOML configuration")
+    if existing_text is not None and not incoming:
+        return existing_text
+
+    doc = tomlkit.parse(existing_text) if existing_text is not None else tomlkit.document()
+    if root_key not in doc:
+        doc[root_key] = tomlkit.table()
+    root = doc[root_key]
+    # Dotted assignments are still in the document's top-level key/value area.
+    # An explicit server header here would capture following top-level keys.
+    dotted_root = any(key is not None and key.key == root_key and key.is_dotted() for key, _ in doc._body)
+    for name, server in incoming.items():
+        if isinstance(root, tomlkit.items.InlineTable) or dotted_root:
+            root[name] = _inline_toml_table(server)
+            continue
+        table = tomlkit.table()
+        for key, value in server.items():
+            if isinstance(value, dict):
+                child = tomlkit.table()
+                for child_key, child_value in value.items():
+                    child[child_key] = tomlkit.item(child_value)
+                table[key] = child
+            else:
+                table[key] = tomlkit.item(value)
+        # TOMLKit attaches comments before the next table header to the end
+        # of the previous table. Carry that boundary trivia across replacement.
+        if name in root and isinstance(root[name], tomlkit.items.Table):
+            for item in _trailing_toml_trivia(root[name]):
+                table.add(item)
+        root[name] = table
+
+    rendered = tomlkit.dumps(doc)
+    after = tomllib.loads(rendered)
+    expected = {**before, root_key: {**section, **incoming}}
+    if not _same_toml_value(after, expected):
+        raise _TomlConflict("Invalid TOML configuration")
+    return rendered
+
+
 def _dict_to_toml(d: dict) -> str:
-    """Very basic TOML serializer for MCP configs."""
-    lines = []
-    for section, servers in d.items():
-        for name, srv in servers.items():
-            lines.append(f"[{section}.{name}]")
-            for k, v in srv.items():
-                if isinstance(v, list):
-                    arr = ", ".join(json.dumps(s) for s in v)
-                    lines.append(f"{k} = [{arr}]")
-                elif isinstance(v, dict):
-                    for subk, subv in v.items():
-                        lines.append(f"{k}.{subk} = {json.dumps(subv)}")
-                elif isinstance(v, bool):
-                    lines.append(f"{k} = {'true' if v else 'false'}")
-                elif isinstance(v, str):
-                    lines.append(f"{k} = {json.dumps(v)}")
-                else:
-                    lines.append(f"{k} = {v}")
-            lines.append("")
-    return "\n".join(lines)
+    return _toml_document(d)
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+@contextmanager
+def _toml_write_lock(path: Path):
+    """Serialize cooperating pull writers; the byte check catches other editors."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(f".{path.name}.observal.lock").open("a+b") as lock:
+        if sys.platform == "win32":
+            import msvcrt
+
+            # Windows byte-range locking needs a byte to lock, even on a new file.
+            lock.seek(0, 2)
+            if lock.tell() == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _atomic_write_text(path: Path, content: str, *, expected_bytes: bytes | object = None) -> None:
     temporary: Path | None = None
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as file:
             temporary = Path(file.name)
             file.write(content)
+        if expected_bytes is not None and _read_toml_bytes(path) != expected_bytes:
+            raise _TomlConflict("Configuration changed during pull")
         temporary.replace(path)
-    except (OSError, UnicodeError):
+    finally:
         if temporary:
             temporary.unlink(missing_ok=True)
-        raise
 
 
-def _merge_toml_text(existing_text: str, content: dict, root_key: str) -> str:
-    parsed = tomllib.loads(existing_text)
-    incoming = content.get(root_key, {})
-    existing_section = parsed.get(root_key, {})
-    if not isinstance(incoming, dict) or not isinstance(existing_section, dict):
-        raise ValueError(f"TOML section {root_key} must be a mapping")
-
-    lines = existing_text.splitlines(keepends=True)
-    for name in set(incoming).intersection(existing_section):
-        header = f"[{root_key}.{name}]"
-        start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
-        if start is None:
-            raise ValueError(f"cannot safely update existing TOML table {header}")
-        end = start + 1
-        while end < len(lines) and not lines[end].lstrip().startswith("["):
-            end += 1
-        del lines[start:end]
-
-    existing = "".join(lines).rstrip()
-    rendered = _dict_to_toml(content).rstrip()
-    return f"{existing}\n\n{rendered}\n" if existing else f"{rendered}\n"
+def _write_toml_config(path: Path, content: dict, *, merge: bool) -> str:
+    with _toml_write_lock(path):
+        prior = _read_toml_bytes(path)
+        try:
+            existing = prior.decode("utf-8") if prior is not _MISSING and merge else None
+            rendered = _toml_document(content, existing)
+        except (OSError, _TomlConflict):
+            raise
+        except Exception as error:
+            raise _TomlConflict("Invalid TOML configuration") from error
+        if prior is not _MISSING and merge and rendered == existing:
+            return "merged"
+        _atomic_write_text(path, rendered, expected_bytes=prior)
+        return "created" if prior is _MISSING else "merged" if merge else "updated"
 
 
 def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: bool, merge: bool) -> str:
@@ -542,7 +664,7 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
 
     Returns a human-readable status string ("created", "updated", "merged").
     """
-    optic.trace("path={}, len={}", path, len(str(content)))
+    optic.trace("path={}", path)
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
 
@@ -555,12 +677,7 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
             next(iter(content), "mcpServers"),
         )
         if path.suffix == ".toml":
-            toml_str = _dict_to_toml(content)
-            if existed and merge_mcp:
-                existing_text = path.read_text(encoding="utf-8")
-                _atomic_write_text(path, _merge_toml_text(existing_text, content, root_key))
-                return "merged"
-            _atomic_write_text(path, toml_str)
+            return _write_toml_config(path, content, merge=merge_mcp)
         elif path.suffix in (".yaml", ".yml"):
             return _merge_yaml_config(path, content, root_key, existed=existed, merge=merge_mcp)
         else:
@@ -597,14 +714,14 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
 def _write_file_checked(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
     try:
         return _write_file(path, content, merge_mcp=merge_mcp)
-    except ValueError as error:
+    except (ValueError, TypeError, UnicodeError) as error:
         fail(
             ErrorCategory.CONFLICT,
             f"Could not safely merge existing configuration: {path}.",
             operation="Pull agent",
             resource=str(path),
             remediation="Fix or back up the existing configuration, then retry.",
-            detail=repr(error),
+            detail=None if path.suffix == ".toml" else repr(error),
         )
     except OSError as error:
         fail(
@@ -613,7 +730,17 @@ def _write_file_checked(path: Path, content: str | dict, *, merge_mcp: bool = Fa
             operation="Pull agent",
             resource=str(path),
             remediation="Check file permissions and available disk space.",
-            detail=repr(error),
+            detail=None if path.suffix == ".toml" else repr(error),
+        )
+    except Exception:
+        if path.suffix != ".toml":
+            raise
+        fail(
+            ErrorCategory.CONFLICT,
+            f"Could not safely merge existing configuration: {path}.",
+            operation="Pull agent",
+            resource=str(path),
+            remediation="Fix or back up the existing configuration, then retry.",
         )
 
 
