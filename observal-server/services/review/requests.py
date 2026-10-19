@@ -81,6 +81,35 @@ async def reconcile_request_threads(db, review, *, actor_id=None):
     return rows, statuses
 
 
+def _has_stale_threads(review, statuses, existing):
+    """Check whether linked conversations disagree with their request lifecycle."""
+    terminal = review.state.value in ("published", "closed")
+    return any(
+        (thread.resolved_at is None and (statuses.get(thread.change_request_id) != "blocking" or terminal))
+        or (thread.resolved_at is not None and statuses.get(thread.change_request_id) == "blocking" and not terminal)
+        for thread in existing
+    )
+
+
+def _needs_repair(review, rows, statuses, existing):
+    """Detect missing request links or conversations with the wrong resolved state."""
+    linked = {thread.change_request_id for thread in existing}
+    return any(row.verdict == "request_changes" and row.id not in linked for row in rows) or _has_stale_threads(
+        review, statuses, existing
+    )
+
+
+async def request_threads_need_repair(db, review):
+    """Check old-worker drift without locking review, listing, or version rows."""
+    rows, _, statuses = await review_decisions(db, review)
+    existing = (
+        await db.scalars(
+            select(ReviewThread).where(ReviewThread.review_id == review.id, ReviewThread.change_request_id.is_not(None))
+        )
+    ).all()
+    return _needs_repair(review, rows, statuses, existing)
+
+
 async def ensure_request_threads(db, review, *, persist=True, update_state=True):
     """Reconcile requests written by old API workers after migration backfill."""
     from models.inbox import InboxKind
@@ -93,12 +122,7 @@ async def ensure_request_threads(db, review, *, persist=True, update_state=True)
         )
     ).all()
     linked = {thread.change_request_id for thread in existing}
-    terminal = review.state.value in ("published", "closed")
-    stale = any(
-        (thread.resolved_at is None and (statuses.get(thread.change_request_id) != "blocking" or terminal))
-        or (thread.resolved_at is not None and statuses.get(thread.change_request_id) == "blocking" and not terminal)
-        for thread in existing
-    )
+    stale = _has_stale_threads(review, statuses, existing)
     created = False
     for request in rows:
         if request.verdict != "request_changes" or request.id in linked:

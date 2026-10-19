@@ -67,7 +67,7 @@ export interface ReviewDetail extends ReviewSummary {
   revisions: Array<{ id: string; number: number; message: string | null; created_by: string | null; created_at: string; pruned: boolean }>;
   requested_reviewers: string[];
   reviewer_names?: Record<string, string>;
-  reviewer_decisions?: Record<string, { verdict: ReviewVerdict; status: string }>;
+  reviewer_decisions?: Record<string, { verdict: ReviewVerdict; status: string; revision_id: string }>;
   commented_reviewers?: string[];
   my_subscription: "watching" | "muted" | null;
   self_approval_allowed: boolean;

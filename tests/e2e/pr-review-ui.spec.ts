@@ -161,6 +161,7 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
     base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
     revisions: [{ id, number: 1, message: "Initial release", created_by: id, created_at: now, pruned: false }],
     requested_reviewers: [id], reviewer_names: { [id]: "harish" },
+    reviewer_decisions: { [id]: { verdict: "approve", status: "submitted", revision_id: "10000000-0000-4000-8000-000000000009" } },
   };
   const diff = [{ path: "SKILL.md", status: "added", lang: "markdown", pinned: false, generated: false,
     additions: 1, deletions: 0, too_large: false,
@@ -204,6 +205,7 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
   await expect(page.getByRole("heading", { name: "Publication gate" })).toBeVisible();
   await expect(page.getByText("Please verify permissions.")).toBeVisible();
   await expect(page.getByText("The command needs a permission check.")).toBeVisible();
+  await expect(page.getByText("Approval outdated", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("pr-review-conversation-desktop.png"), fullPage: true });
   const picker = page.getByRole("combobox", { name: "Find a reviewer" });
   await picker.click();

@@ -757,7 +757,11 @@ async def test_newer_withdrawn_request_does_not_resurrect_old_decisions(api):
     gate = (await client.get(base + "/gate")).json()
     assert gate["approvals"] == 0 and gate["outstanding_requests"] == 0
     detail = (await client.get(base)).json()
-    assert detail["reviewer_decisions"][str(reviewer.id)] == {"verdict": "request_changes", "status": "withdrawn"}
+    assert detail["reviewer_decisions"][str(reviewer.id)] == {
+        "verdict": "request_changes",
+        "revision_id": detail["head_revision_id"],
+        "status": "withdrawn",
+    }
     assert number in [
         row["number"] for row in (await client.get("/api/v1/reviews?needs=my_review&state=all")).json()["items"]
     ]
@@ -766,6 +770,42 @@ async def test_newer_withdrawn_request_does_not_resurrect_old_decisions(api):
         next(t for t in threads if t["change_request"]["submission_id"] == old.json()["id"])["change_request"]["status"]
         == "superseded"
     )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_decision_exposes_revision_after_author_resubmits(api):
+    client, current, (author, reviewer, _, _), (rid, number), factory = api
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
+    ).status_code == 201
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        old_head = str(review.head_revision_id)
+        listing = await db.get(SkillListing, review.subject_id)
+        version = await db.get(SkillVersion, review.version_id)
+        version.skill_md_content = "# Revised content\n"
+        await open_or_push(db, "skill", listing, version, author.id, message="Address feedback")
+        await db.commit()
+    detail = await client.get(f"/api/v1/reviews/{number}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["head_revision_id"] != old_head
+    assert detail.json()["reviewer_decisions"][str(reviewer.id)]["revision_id"] == old_head
+    assert detail.json()["gate"]["approvals"] == 0
+
+
+@pytest.mark.asyncio
+async def test_healthy_review_reads_do_not_lock_listing_version_or_review(api, monkeypatch):
+    client, current, (_, reviewer, _, _), (_, number), _ = api
+    current[0] = reviewer
+    no_lock = AsyncMock(side_effect=AssertionError("healthy read must not lock review"))
+    monkeypatch.setattr("api.routes.reviews.detail._lock_review", no_lock)
+    monkeypatch.setattr("api.routes.reviews.threads._lock_review", no_lock)
+    base = f"/api/v1/reviews/{number}"
+    for url in (base, base + "/gate", base + "/threads"):
+        response = await client.get(url)
+        assert response.status_code == 200, response.text
+    no_lock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -795,7 +835,12 @@ async def test_old_worker_approval_reconciles_existing_linked_request(api, monke
     broadcast = AsyncMock()
     monkeypatch.setattr(notifications, "deliver_gate_change", delivery)
     monkeypatch.setattr("api.routes.reviews.detail.notify_update", broadcast)
+    from api.routes.reviews.detail import _lock_review
+
+    lock = AsyncMock(wraps=_lock_review)
+    monkeypatch.setattr("api.routes.reviews.detail._lock_review", lock)
     ready = (await client.get(base + "/gate")).json()
+    lock.assert_awaited_once()
     delivery.assert_awaited_once()
     broadcast.assert_awaited_once()
     assert ready["outstanding_requests"] == 0

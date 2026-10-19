@@ -19,7 +19,12 @@ from schemas.review import CommentCreate, CommentEdit, ThreadCreate
 from services.audit import audit_detail
 from services.review import notifications
 from services.review.decisions import _event, _lock_review, gate, may_withdraw_request, sync_state
-from services.review.requests import ensure_request_threads, request_lifecycle_status, review_decisions
+from services.review.requests import (
+    ensure_request_threads,
+    request_lifecycle_status,
+    request_threads_need_repair,
+    review_decisions,
+)
 
 router = APIRouter()
 
@@ -87,9 +92,10 @@ async def threads(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    await _lock_review(db, review)
-    if await ensure_request_threads(db, review):
-        await notify_update(review, "gate")
+    if await request_threads_need_repair(db, review):
+        await _lock_review(db, review)
+        if await ensure_request_threads(db, review):
+            await notify_update(review, "gate")
     stmt = select(ReviewThread).where(ReviewThread.review_id == review.id)
     if resolved is not None:
         stmt = stmt.where(ReviewThread.resolved_at.is_not(None) if resolved else ReviewThread.resolved_at.is_(None))
