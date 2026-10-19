@@ -135,34 +135,268 @@ const STORAGE_KEY_USER_AVATAR = "observal_user_avatar";
 // TODO(SEC-025): migrate to HttpOnly cookies set by the API and proxied
 // through nginx to reduce token exfiltration risk. HttpOnly does not prevent
 // authenticated requests from XSS payloads, so retain XSS and CSRF defenses.
-function getAccessToken(): string | null {
-	if (typeof window === "undefined") return null;
-	return sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN);
-}
+const EPOCH = "observal_auth_epoch";
+const INTENT = "observal_logout_intent";
+const PENDING = "observal_refresh_pending";
+const TAB_EPOCH = "observal_tab_epoch";
+const LOCK = "observal_auth_transition";
+const PROFILE = [STORAGE_KEY_USER_ROLE, STORAGE_KEY_USER_NAME, STORAGE_KEY_USER_EMAIL,
+	STORAGE_KEY_USER_USERNAME, STORAGE_KEY_USER_AVATAR];
+const unsupported = "This browser does not support secure sign-in (Web Locks required).";
 
-function getRefreshToken(): string | null {
-	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
+function requireLock() {
+	if (!navigator.locks?.request) throw new Error(unsupported);
+	return navigator.locks;
 }
-
-export function setTokens(accessToken: string, refreshToken: string) {
-	sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, accessToken);
-	localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refreshToken);
-	window.dispatchEvent(new Event("storage"));
-}
-
-export function clearSession() {
-	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
-	localStorage.removeItem(STORAGE_KEY_REFRESH_TOKEN);
-	localStorage.removeItem("observal_api_key"); // clean up legacy
-	localStorage.removeItem(STORAGE_KEY_USER_ROLE);
-	localStorage.removeItem(STORAGE_KEY_USER_NAME);
-	localStorage.removeItem(STORAGE_KEY_USER_EMAIL);
-	localStorage.removeItem(STORAGE_KEY_USER_USERNAME);
-	localStorage.removeItem(STORAGE_KEY_USER_AVATAR);
+function announce() {
 	window.dispatchEvent(new Event("observal:session-cleared"));
 	window.dispatchEvent(new Event("storage"));
 }
+function erase() {
+	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+	// Retain the old tab identity so it cannot silently adopt a new actor.
+	localStorage.removeItem(STORAGE_KEY_REFRESH_TOKEN);
+	localStorage.removeItem("observal_api_key");
+	for (const key of PROFILE) localStorage.removeItem(key);
+	announce();
+}
+// Legacy signed-in browsers predate epochs. Only a serialized startup migration
+// may adopt their refresh token; a fenced or previously epoch-tagged tab cannot.
+export async function migrateLegacySession(): Promise<void> {
+	if (localStorage.getItem(INTENT) || localStorage.getItem(EPOCH) ||
+		sessionStorage.getItem(TAB_EPOCH) || !localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN)) return;
+	await requireLock().request(LOCK, () => {
+		if (localStorage.getItem(INTENT) || localStorage.getItem(EPOCH) ||
+			sessionStorage.getItem(TAB_EPOCH) || !localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN)) return;
+		localStorage.setItem(EPOCH, crypto.randomUUID());
+		// Do not trust a legacy access token or cached role without a server exchange.
+		sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+		window.dispatchEvent(new Event("storage"));
+	});
+}
+export function hasLegacySession(): boolean {
+	return !!navigator.locks?.request && !localStorage.getItem(EPOCH) && !localStorage.getItem(INTENT) &&
+		!sessionStorage.getItem(TAB_EPOCH) && !!localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
+}
+export function canSilentRefresh(): boolean {
+	const tab = sessionStorage.getItem(TAB_EPOCH);
+	return !!authEpoch() && (!tab || tab === authEpoch());
+}
+export function authEpoch(): string | null {
+	if (typeof window === "undefined") return null;
+	if (!navigator.locks?.request || localStorage.getItem(INTENT)) return null;
+	return localStorage.getItem(EPOCH);
+}
+export function isCurrentAuth(epoch: string | null, actor?: string | null): boolean {
+	return !!epoch && authEpoch() === epoch && sessionStorage.getItem(TAB_EPOCH) === epoch &&
+		(!actor || getUserEmail() === actor);
+}
+export async function updateProfile(epoch: string | null, actor: string | null, write: () => void): Promise<boolean> {
+	return requireLock().request(LOCK, () => {
+		if (!isCurrentAuth(epoch, actor)) return false;
+		write();
+		if (!isCurrentAuth(epoch, actor)) {
+			for (const key of PROFILE) localStorage.removeItem(key);
+			announce();
+			return false;
+		}
+		window.dispatchEvent(new Event("storage"));
+		return true;
+	});
+}
+export function getAccessToken(): string | null {
+	if (typeof window === "undefined" || !authEpoch() ||
+		sessionStorage.getItem(TAB_EPOCH) !== authEpoch()) return null;
+	return sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN);
+}
+function getRefreshToken(): string | null {
+	if (typeof window === "undefined" || !canSilentRefresh()) return null;
+	return localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
+}
+function writePair(access: string, refresh: string, epoch: string) {
+	sessionStorage.setItem(TAB_EPOCH, epoch);
+	sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, access);
+	localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refresh);
+	window.dispatchEvent(new Event("storage"));
+}
+export function loginStart(): string | null {
+	requireLock();
+	return localStorage.getItem(INTENT) || localStorage.getItem(EPOCH);
+}
+export async function commitLogin(data: { access_token: string; refresh_token: string;
+	user?: { role: string; name: string; email: string; username?: string | null; avatar_url?: string | null } },
+	started: string | null): Promise<boolean> {
+	return requireLock().request(LOCK, async () => {
+		const current = localStorage.getItem(INTENT) || localStorage.getItem(EPOCH);
+		if (current !== (started || null)) return false;
+		const epoch = crypto.randomUUID();
+		for (const key of PROFILE) localStorage.removeItem(key);
+		localStorage.setItem(EPOCH, epoch);
+		localStorage.removeItem(INTENT);
+		localStorage.removeItem(PENDING);
+		writePair(data.access_token, data.refresh_token, epoch);
+		if (data.user) {
+			setUserRole(data.user.role); setUserName(data.user.name);
+			setUserEmail(data.user.email); setUserUsername(data.user.username || "");
+			setUserAvatar(data.user.avatar_url || null);
+		}
+		// A logout click can occur in another tab between our first check and commit.
+		if (localStorage.getItem(INTENT)) { erase(); return false; }
+		return true;
+	});
+}
+function clearTabAccess() {
+	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+	announce();
+}
+// Fence synchronously, then serialize shared cleanup with login/refresh writers.
+// Do not await the lock: a stalled refresh must not delay logout or navigation.
+function fenceSession(epoch: string): () => void {
+	const intent = crypto.randomUUID();
+	localStorage.setItem(INTENT, intent);
+	clearTabAccess();
+	return () => {
+		if (!navigator.locks?.request) {
+			// Unsupported owner: no safe token writers in this tab. Do not erase a
+			// newer login (or another tab's session) if the fence has changed.
+			if (localStorage.getItem(EPOCH) === epoch && localStorage.getItem(INTENT) === intent &&
+				sessionStorage.getItem(TAB_EPOCH) === epoch) erase();
+			return;
+		}
+		void navigator.locks.request(LOCK, () => {
+			if (localStorage.getItem(EPOCH) === epoch && localStorage.getItem(INTENT) === intent) erase();
+		}).catch(() => { /* tombstone still fences credentials if cleanup fails */ });
+	};
+}
+// Legacy caller compatibility is deliberately removed: token writes must be awaited.
+export function clearSession() {
+	const epoch = localStorage.getItem(EPOCH);
+	// An unbound (guest/new) or stale tab does not own the shared session.
+	if (!epoch || sessionStorage.getItem(TAB_EPOCH) !== epoch || localStorage.getItem(INTENT)) {
+		clearTabAccess();
+		return;
+	}
+	fenceSession(epoch)();
+}
+
+let logoutPair: { epoch: string | null; refresh: string; access: string } | null = null;
+
+export async function signOut(): Promise<void> {
+	if (localStorage.getItem(INTENT)) return;
+	if (!localStorage.getItem(EPOCH) ||
+		sessionStorage.getItem(TAB_EPOCH) !== localStorage.getItem(EPOCH)) {
+		clearTabAccess();
+		return;
+	}
+	const epoch = localStorage.getItem(EPOCH)!;
+	const hasLock = !!navigator.locks?.request;
+	// Auth getters deliberately fail closed without Web Locks. Logout can still
+	// use the owned tab's captured credentials for best-effort remote revocation.
+	const refresh = hasLock ? getRefreshToken() : localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
+	const access = hasLock ? getAccessToken() : sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN);
+	const actor = hasLock ? getUserEmail() : localStorage.getItem(STORAGE_KEY_USER_EMAIL);
+	const subject = access ? jwtSubject(access) : null;
+	// Fence now, but queue cleanup after remote attempts so a private logout-only
+	// refresh can acquire an available lock before shared credentials are erased.
+	const cleanup = fenceSession(epoch);
+	if (!hasLock) cleanup(); // shared credentials must not survive unsupported logout
+	try {
+	// The remote logout is best effort. If another tab holds the refresh lock,
+	// that holder will attempt authenticated account-wide logout on receipt of
+	// the rotated bearer. If it disappears or the bearer is unusable, the only
+	// available fallback is single-JTI revoke of the captured old refresh token;
+	// it cannot revoke an already rotated token or the user's other sessions.
+	let bearer = access;
+	if ((!bearer || !isJwtUsable(bearer)) && refresh && navigator.locks?.request) {
+		if (logoutPair?.epoch === epoch && logoutPair.refresh === refresh) {
+			bearer = logoutPair.access;
+		} else if (!localStorage.getItem(PENDING)) {
+			// Never queue behind another tab's refresh: it may stall forever.
+			// Logout-only refresh is private: never publish this pair to UI storage.
+			await navigator.locks.request(LOCK, { ifAvailable: true }, async (lock) => {
+				if (!lock || localStorage.getItem(PENDING)) return;
+				localStorage.setItem(PENDING, epoch ?? "unknown");
+				try {
+					const { response, data: pair } = await fetchJsonWithTimeout<{ access_token: string }>(`${API}/auth/token/refresh`, {
+						method: "POST", headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ refresh_token: refresh }),
+					});
+					if (response.ok && pair) {
+						bearer = pair.access_token;
+						localStorage.removeItem(PENDING);
+					}
+				} catch { /* outcome unknown: leave pending marker */ }
+			});
+		}
+	}
+	if (bearer && actor && (!subject || jwtSubject(bearer) === subject) && isJwtUsable(bearer)) {
+		try {
+			const response = await fetchWithTimeout(`${API}/auth/logout`, {
+				method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}` },
+				body: JSON.stringify({ refresh_token: refresh || undefined }),
+			});
+			if (response.ok) return;
+		} catch { /* fallback below */ }
+	}
+	if (refresh) {
+		try { await fetchWithTimeout(`${API}/auth/token/revoke`, {
+			method: "POST", headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ refresh_token: refresh }),
+		}); } catch { /* local logout remains final */ }
+	}
+	} finally {
+		cleanup(); // never await a stalled lock holder
+	}
+}
+// The refresh holder can receive the only valid post-rotation bearer after the
+// initiating tab has already cleared local storage. It must revoke on behalf of
+// that logout, without ever publishing the pair across tabs.
+async function revokeAfterRefresh(epoch: string, refresh: string, access: string): Promise<void> {
+	if (localStorage.getItem(EPOCH) !== epoch || !localStorage.getItem(INTENT)) return;
+	logoutPair = { epoch, refresh, access };
+	if (isJwtUsable(access) && (!jwtSubject(refresh) || jwtSubject(access) === jwtSubject(refresh))) {
+		try {
+			const response = await fetchWithTimeout(`${API}/auth/logout`, {
+				method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${access}` },
+				body: JSON.stringify({ refresh_token: refresh }),
+			});
+			if (response.ok) return;
+		} catch { /* narrow fallback below */ }
+	}
+	try { await fetchWithTimeout(`${API}/auth/token/revoke`, {
+		method: "POST", headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ refresh_token: refresh }),
+	}); } catch { /* local logout remains final */ }
+}
+function jwtSubject(token: string): string | null {
+	try { return JSON.parse(atob(token.split(".")[1])).sub || null; }
+	catch { return null; }
+}
+function isJwtUsable(token: string): boolean {
+	try { return JSON.parse(atob(token.split(".")[1])).exp * 1000 > Date.now() + 5000; }
+	catch { return false; }
+}
+async function fetchJsonWithTimeout<T>(url: string, init: RequestInit): Promise<{ response: Response; data?: T }> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 8000);
+	try {
+		const response = await fetch(url, { ...init, signal: controller.signal });
+		return { response, data: response.ok ? await response.json() as T : undefined };
+	} finally { clearTimeout(timer); }
+}
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 8000);
+	try { return await fetch(url, { ...init, signal: controller.signal }); }
+	finally { clearTimeout(timer); }
+}
+if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
+	if ((event.key === INTENT && event.newValue) ||
+		(event.key === EPOCH && event.newValue !== sessionStorage.getItem(TAB_EPOCH))) {
+		sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+		announce();
+	}
+});
 
 export function setUserRole(role: string) {
 	localStorage.setItem(STORAGE_KEY_USER_ROLE, role);
@@ -170,7 +404,7 @@ export function setUserRole(role: string) {
 
 export function getUserRole(): string | null {
 	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_USER_ROLE);
+	return canSilentRefresh() ? localStorage.getItem(STORAGE_KEY_USER_ROLE) : null;
 }
 
 export function setUserName(name: string) {
@@ -179,7 +413,7 @@ export function setUserName(name: string) {
 
 export function getUserName(): string | null {
 	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_USER_NAME);
+	return canSilentRefresh() ? localStorage.getItem(STORAGE_KEY_USER_NAME) : null;
 }
 
 export function setUserEmail(email: string) {
@@ -188,7 +422,7 @@ export function setUserEmail(email: string) {
 
 export function getUserEmail(): string | null {
 	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_USER_EMAIL);
+	return canSilentRefresh() ? localStorage.getItem(STORAGE_KEY_USER_EMAIL) : null;
 }
 
 export function setUserUsername(username: string) {
@@ -197,7 +431,7 @@ export function setUserUsername(username: string) {
 
 export function getUserUsername(): string | null {
 	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_USER_USERNAME);
+	return canSilentRefresh() ? localStorage.getItem(STORAGE_KEY_USER_USERNAME) : null;
 }
 
 export function setUserAvatar(avatar: string | null) {
@@ -211,32 +445,75 @@ export function setUserAvatar(avatar: string | null) {
 
 export function getUserAvatar(): string | null {
 	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_USER_AVATAR);
+	return canSilentRefresh() ? localStorage.getItem(STORAGE_KEY_USER_AVATAR) : null;
 }
 
 let _refreshPromise: Promise<RefreshResult> | null = null;
 
-type RefreshResult = "ok" | "rejected" | "network_error";
+export type RefreshResult = "ok" | "rejected" | "network_error" | "superseded" | "reauth_required";
 
-async function _tryRefreshToken(): Promise<RefreshResult> {
-	const refreshToken = getRefreshToken();
-	if (!refreshToken) return "rejected";
-
-	try {
-		const res = await fetch(`${API}/auth/token/refresh`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ refresh_token: refreshToken }),
-		});
-
-		if (!res.ok) return "rejected";
-
-		const data = await res.json();
-		setTokens(data.access_token, data.refresh_token);
+function _tryRefreshToken(): Promise<RefreshResult> {
+	if (_refreshPromise) return _refreshPromise;
+	const epoch = authEpoch();
+	if (!epoch) return Promise.resolve("reauth_required");
+	const tabEpoch = sessionStorage.getItem(TAB_EPOCH);
+	const initial = getRefreshToken();
+	if (tabEpoch && tabEpoch !== epoch) return Promise.resolve("superseded");
+	if (!initial) return Promise.resolve("rejected");
+	const promise = requireLock().request(LOCK, async (): Promise<RefreshResult> => {
+		if (authEpoch() !== epoch) return "superseded";
+		const refresh = getRefreshToken();
+		if (!refresh) return "superseded";
+		// A previous tab may have rotated while this one waited for the lock.
+		// Use its new JTI, never the already consumed one.
+		if (localStorage.getItem(PENDING)) return "reauth_required";
+		localStorage.setItem(PENDING, epoch);
+		let res: Response;
+		let data: { access_token: string; refresh_token: string } | undefined;
+		try {
+			({ response: res, data } = await fetchJsonWithTimeout<{ access_token: string; refresh_token: string }>(`${API}/auth/token/refresh`, {
+				method: "POST", headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ refresh_token: refresh }),
+			}));
+		} catch {
+			// Unknown server outcome: never automatically reuse this JTI.
+			return authEpoch() === epoch ? "reauth_required" : "superseded";
+		}
+		if (res.ok && localStorage.getItem(INTENT) && localStorage.getItem(EPOCH) === epoch) {
+			if (data) await revokeAfterRefresh(epoch, refresh, data.access_token);
+			return "superseded";
+		}
+		const current = authEpoch() === epoch && getRefreshToken() === refresh &&
+			sessionStorage.getItem(TAB_EPOCH) === tabEpoch;
+		if (!current) return "superseded";
+		if (!res.ok) {
+			if (res.status === 429) {
+				localStorage.removeItem(PENDING); // rate limit did not consume the JTI
+				return "network_error";
+			}
+			if (res.status >= 500) return "reauth_required"; // unknown rotation outcome
+			localStorage.removeItem(PENDING);
+			return "rejected";
+		}
+		if (!data) return "reauth_required";
+		if (authEpoch() !== epoch || getRefreshToken() !== refresh) {
+			if (localStorage.getItem(INTENT) && localStorage.getItem(EPOCH) === epoch)
+				await revokeAfterRefresh(epoch, refresh, data.access_token);
+			return "superseded";
+		}
+		writePair(data.access_token, data.refresh_token, epoch);
+		localStorage.removeItem(PENDING);
+		// The logout intent can be set by another tab during our synchronous commit.
+		if (localStorage.getItem(INTENT)) {
+			erase();
+			await revokeAfterRefresh(epoch, refresh, data.access_token);
+			return "superseded";
+		}
 		return "ok";
-	} catch {
-		return "network_error";
-	}
+	});
+	_refreshPromise = promise;
+	void promise.finally(() => { if (_refreshPromise === promise) _refreshPromise = null; });
+	return promise;
 }
 
 /**
@@ -268,11 +545,13 @@ async function request<T = unknown>(
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
+	const epoch = authEpoch();
 	const token = getAccessToken();
 	if (token) headers["Authorization"] = `Bearer ${token}`;
 
 	let res: Response | undefined;
 	for (let attempt = 0; attempt < 2; attempt++) {
+		if (epoch && authEpoch() !== epoch) throw new Error("Session changed");
 		res = await fetch(`${API}${path}`, {
 			method,
 			headers,
@@ -288,24 +567,21 @@ async function request<T = unknown>(
 	if (!response.ok) {
 		// Auto-refresh on 401 (except for auth endpoints where 401 means bad credentials)
 		if (response.status === 401 && !path.startsWith("/auth/")) {
-			// Deduplicate concurrent refresh attempts
-			if (!_refreshPromise) {
-				_refreshPromise = _tryRefreshToken().finally(() => {
-					_refreshPromise = null;
-				});
-			}
-			const refreshResult = await _refreshPromise;
-
+			if (epoch !== authEpoch()) throw new Error("Session changed");
+			const refreshResult = await _tryRefreshToken();
+			if (epoch !== authEpoch()) throw new Error("Session changed");
 			if (refreshResult === "ok") {
 				// Retry the original request with new token
 				const newToken = getAccessToken();
-				if (newToken) headers["Authorization"] = `Bearer ${newToken}`;
+				if (!newToken) throw new Error("Session changed");
+				headers["Authorization"] = `Bearer ${newToken}`;
 				const retryRes = await fetch(`${API}${path}`, {
 					method,
 					headers,
 					body: body !== undefined ? JSON.stringify(body) : undefined,
 					cache: "no-store",
 				});
+				if (epoch !== authEpoch()) throw new Error("Session changed");
 				if (retryRes.ok) {
 					if (retryRes.status === 204) return undefined as T;
 					return decodeResponse<T>(retryRes, fileResponse);
@@ -316,11 +592,19 @@ async function request<T = unknown>(
 				throw retryErr;
 			}
 
-			if (refreshResult === "network_error") {
-				throw new Error("Network unavailable");
+			if (refreshResult === "reauth_required") {
+				if (epoch !== authEpoch()) throw new Error("Session changed");
+				clearSession();
+				if (typeof window !== "undefined") {
+					window.location.href = sessionExpiredLoginUrl();
+					return new Promise<T>(() => {});
+				}
+				throw new Error("Please sign in again to secure your session");
 			}
+			if (refreshResult !== "rejected") throw new Error("Session changed");
 
-			// Real rejection: session is truly expired
+			// A rejected old request must not clear a newly authenticated session.
+			if (epoch !== authEpoch()) throw new Error("Session changed");
 			clearSession();
 			if (typeof window !== "undefined") {
 				window.location.href = sessionExpiredLoginUrl();
@@ -374,6 +658,7 @@ async function request<T = unknown>(
 
 	if (response.status === 204) return undefined as T;
 
+	if (epoch && epoch !== authEpoch()) throw new Error("Session changed");
 	return decodeResponse<T>(response, fileResponse);
 }
 
@@ -1318,21 +1603,26 @@ export const insights = {
 			selection ?? {},
 		),
 	exportHtml: async (agentId: string, reportId: string): Promise<void> => {
+		const epoch = authEpoch();
 		let token = getAccessToken();
 		let res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
 		});
+		if (epoch !== authEpoch()) throw new Error("Session changed");
 		if (res.status === 401) {
 			const refreshed = await _tryRefreshToken();
-			if (refreshed) {
+			if (epoch !== authEpoch()) throw new Error("Session changed");
+			if (refreshed === "ok") {
 				token = getAccessToken();
 				res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {
 					headers: token ? { Authorization: `Bearer ${token}` } : {},
 				});
 			}
 		}
+		if (epoch !== authEpoch()) throw new Error("Session changed");
 		if (!res.ok) throw new Error("Export failed");
 		const blob = await res.blob();
+		if (epoch !== authEpoch()) throw new Error("Session changed");
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
 		a.href = url;

@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -17,7 +18,11 @@ import {
 	getUserUsername,
 	getUserAvatar,
 	setUserUsername,
-	setTokens,
+	commitLogin,
+	loginStart,
+	authEpoch,
+	updateProfile,
+	getAccessToken,
 	auth,
 } from "@/lib/api";
 import { ROLE_LABELS, type Role } from "@/hooks/use-role-guard";
@@ -136,12 +141,14 @@ function ChangeUsernameSection() {
 		}
 
 		setSaving(true);
+		const epoch = authEpoch();
+		const actor = getUserEmail();
 		try {
 			const res = await fetch("/api/v1/auth/profile/username", {
 				method: "PUT",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${sessionStorage.getItem("observal_access_token")}`,
+					Authorization: `Bearer ${getAccessToken()}`,
 				},
 				body: JSON.stringify({ username: newUsername }),
 			});
@@ -150,7 +157,7 @@ function ChangeUsernameSection() {
 				throw new Error(err.detail || "Failed to update username");
 			}
 			const data = await res.json();
-			setUserUsername(data.username);
+			if (!await updateProfile(epoch, actor, () => setUserUsername(data.username))) return;
 			toast.success("Username updated successfully");
 			setNewUsername("");
 		} catch (e) {
@@ -270,13 +277,14 @@ function ChangePasswordSection() {
 		}
 		setSaving(true);
 		try {
+			const started = loginStart();
 			// Changing the password signs out every session; keep this one on the fresh pair it hands back.
 			const { exchange_code } = await auth.changePassword({
 				current_password: currentPassword,
 				new_password: newPassword,
 			});
 			const session = await auth.exchangeCode({ code: exchange_code });
-			setTokens(session.access_token, session.refresh_token);
+			if (!await commitLogin(session, started)) throw new Error("Session changed");
 			toast.success("Password changed successfully");
 			setCurrentPassword("");
 			setNewPassword("");

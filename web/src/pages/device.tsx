@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -6,7 +7,7 @@ import { Suspense, useState, useEffect, useCallback } from "react";
 import { useRouter, useSearch } from "@tanstack/react-router";
 import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import { auth } from "@/lib/api";
+import { auth, getAccessToken } from "@/lib/api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,7 +34,7 @@ function DeviceContent() {
   // Redirect to login if not authenticated
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const hasToken = !!sessionStorage.getItem("observal_access_token");
+    const hasToken = !!getAccessToken();
     if (!hasToken) {
       const code = codeParam;
       const directSso = ssoParam === "1";
@@ -80,7 +81,7 @@ function DeviceContent() {
   }
 
   // Don't render form until we know user is authenticated
-  if (typeof window !== "undefined" && !sessionStorage.getItem("observal_access_token")) {
+  if (typeof window !== "undefined" && !getAccessToken()) {
     return null;
   }
 

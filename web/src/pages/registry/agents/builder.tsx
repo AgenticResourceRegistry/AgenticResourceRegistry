@@ -49,7 +49,7 @@ import { BuilderStepNav } from "@/components/registry/registry-primitives";
 import { EntityGlyph } from "@/components/registry/entity-glyph";
 import { useRegistryItem, useAgentValidation, useTeams, useWhoami, useSaveDraft, useUpdateDraft, useStartEdit } from "@/hooks/use-api";
 import { useAuthGuard } from "@/hooks/use-auth";
-import { registry, type RegistryType } from "@/lib/api";
+import { registry, getAccessToken, type RegistryType } from "@/lib/api";
 import { isValidAgentName, normalizeAgentName, slugifyRegistryText } from "@/lib/registry-name";
 import { cn } from "@/lib/utils";
 import type { RegistryItem, SuccessCriteria } from "@/lib/types";
@@ -254,7 +254,7 @@ function AgentBuilderInner() {
     });
 
     const releaseLock = () => {
-      const token = sessionStorage.getItem("observal_access_token");
+      const token = getAccessToken();
       fetch(`/api/v1/agents/${agentIdParam}/cancel-edit`, {
         method: "POST",
         headers: {

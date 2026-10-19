@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { createRootRoute, Outlet } from "@tanstack/react-router";
@@ -6,6 +7,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "@/lib/theme";
 import { makeQueryClient } from "@/lib/query-client";
+import { getAccessToken, authEpoch } from "@/lib/api";
 import { DynamicTitle } from "@/components/dynamic-title";
 import { ErrorBoundary } from "@/components/shared/error-boundary";
 import { VersionMismatchBanner } from "@/components/shared/version-mismatch-banner";
@@ -19,7 +21,7 @@ function subscribeToAuthChanges(callback: () => void) {
 function getAuthTokenSnapshot() {
   return typeof window === "undefined"
     ? ""
-    : sessionStorage.getItem("observal_access_token") ?? "";
+    : `${authEpoch() ?? ""}:${getAccessToken() ?? ""}`;
 }
 
 function RootComponent() {
@@ -37,6 +39,8 @@ function RootComponent() {
   useEffect(() => {
     const clearAccountData = () => queryClient.clear();
     window.addEventListener("observal:session-cleared", clearAccountData);
+    // A new query client has no prior account data; clearing it during
+    // startup can cancel the public-config request before the auth guard mounts.
     return () => window.removeEventListener("observal:session-cleared", clearAccountData);
   }, [queryClient]);
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createClient, type Client } from "graphql-ws";
-import { clearSession } from "@/lib/api";
+import { clearSession, getAccessToken, authEpoch } from "@/lib/api";
 import { sessionExpiredLoginUrl } from "@/lib/safe-next";
 
 function getWsUrl(): string {
@@ -15,12 +15,18 @@ function getWsUrl(): string {
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return sessionStorage.getItem("observal_access_token");
+  return getAccessToken();
 }
 
 let client: Client | null = null;
+if (typeof window !== "undefined") window.addEventListener("observal:session-cleared", () => {
+  const old = client;
+  client = null;
+  void Promise.resolve(old?.dispose()).catch(() => {});
+});
 
-function handleSubscriptionAuthError(err: unknown) {
+function handleSubscriptionAuthError(err: unknown, epoch: string | null) {
+  if (!epoch || authEpoch() !== epoch) return;
   const msg = String(err ?? "").toLowerCase();
   if (
     msg.includes("not authenticated") ||
@@ -53,6 +59,7 @@ function getClient(): Client {
 export function subscribeToSessionUpdates(
   onEvent: (sessionId: string, eventName: string) => void,
 ): () => void {
+  const epoch = authEpoch();
   return getClient().subscribe(
     {
       query: `subscription SessionUpdated($sessionId: String) {
@@ -66,11 +73,11 @@ export function subscribeToSessionUpdates(
       next: (value) => {
         const data = (value.data as { sessionUpdated?: { sessionId: string; eventName: string } })
           ?.sessionUpdated;
-        if (data) {
+        if (epoch === authEpoch() && data) {
           onEvent(data.sessionId, data.eventName);
         }
       },
-      error: (err) => handleSubscriptionAuthError(err),
+      error: (err) => handleSubscriptionAuthError(err, epoch),
       complete: () => {},
     },
   );
@@ -80,6 +87,7 @@ export function subscribeToReviewId(
   reviewId: string,
   onEvent: (event: { number: number | null; state: string | null; action: string }) => void,
 ): () => void {
+  const epoch = authEpoch();
   return getClient().subscribe(
     {
       query: `subscription ReviewUpdated($reviewId: String) {
@@ -90,9 +98,9 @@ export function subscribeToReviewId(
     {
       next: (value) => {
         const data = (value.data as { reviewUpdated?: { number: number | null; state: string | null; action: string } })?.reviewUpdated;
-        if (data) onEvent(data);
+        if (epoch === authEpoch() && data) onEvent(data);
       },
-      error: (err) => handleSubscriptionAuthError(err),
+      error: (err) => handleSubscriptionAuthError(err, epoch),
       complete: () => {},
     },
   );
@@ -101,6 +109,7 @@ export function subscribeToReviewId(
 export function subscribeToReviewUpdates(
   onEvent: (listingId: string, action: string) => void,
 ): () => void {
+  const epoch = authEpoch();
   return getClient().subscribe(
     {
       query: `subscription ReviewUpdated($listingId: String) {
@@ -114,11 +123,11 @@ export function subscribeToReviewUpdates(
       next: (value) => {
         const data = (value.data as { reviewUpdated?: { listingId: string; action: string } })
           ?.reviewUpdated;
-        if (data) {
+        if (epoch === authEpoch() && data) {
           onEvent(data.listingId, data.action);
         }
       },
-      error: (err) => handleSubscriptionAuthError(err),
+      error: (err) => handleSubscriptionAuthError(err, epoch),
       complete: () => {},
     },
   );

@@ -29,7 +29,7 @@ import {
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { requiresFolderDelivery } from "@/lib/skill-folder-delivery";
-import { registry, type RegistryType } from "@/lib/api";
+import { registry, getAccessToken, type RegistryType } from "@/lib/api";
 import type { RegistryItem, ComponentVersionSummary } from "@/lib/types";
 import {
   HOOK_EVENTS,
@@ -249,7 +249,7 @@ export default function ComponentsView({ type: activeType }: { type: RegistryTyp
     const handleBeforeUnload = () => {
       const item = editItemRef.current;
       if (item?.status === "pending") {
-        const token = sessionStorage.getItem("observal_access_token");
+        const token = getAccessToken();
         fetch(`/api/v1/${activeType}/${item.id}/cancel-edit`, {
           method: "POST",
           headers: {

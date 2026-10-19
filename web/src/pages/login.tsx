@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -10,7 +11,7 @@ import { Suspense, useState, useEffect, useRef } from "react";
 import { Link, useRouter, useSearch } from "@tanstack/react-router";
 import { Eye, EyeOff, ArrowRight, Loader2, AlertCircle, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { auth, config as configApi, setTokens, clearSession, setUserRole, getUserRole, setUserName, setUserEmail, setUserUsername, setUserAvatar } from "@/lib/api";
+import { auth, config as configApi, commitLogin, loginStart, getAccessToken, clearSession, getUserRole } from "@/lib/api";
 import { isPublicRegistryPath } from "@/lib/public-registry";
 import { isSafeNext, safeNext } from "@/lib/safe-next";
 import type { SsoHealthResult, E2eStatusResult, HealthCheck } from "@/lib/api";
@@ -50,6 +51,9 @@ function LoginContent() {
   const [ssoHealth, setSsoHealth] = useState<SsoHealthResult | null>(null);
   const [ssoHealthLoading, setSsoHealthLoading] = useState(false);
   const directSsoStarted = useRef(false);
+  // StrictMode replays effects with the same component state; callback codes
+  // are single-use, so claim before removing the start marker or exchanging.
+  const claimedSsoCallback = useRef<string | null>(null);
   const [ssoErrorDiag, setSsoErrorDiag] = useState<E2eStatusResult | null>(null);
   const [ssoErrorDiagExpanded, setSsoErrorDiagExpanded] = useState(true);
 
@@ -91,11 +95,17 @@ function LoginContent() {
   }, [ssoEnabled, samlEnabled]);
 
   useEffect(() => {
+    if (!navigator.locks?.request) {
+      setError("This browser does not support secure sign-in (Web Locks required).");
+    }
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     // Don't redirect to "/" if a SAML token exchange is pending
     const params = new URLSearchParams(window.location.search);
     if (params.get("saml_token") || params.get("code") || params.get("saml_code")) return;
-    const hasToken = !!sessionStorage.getItem("observal_access_token");
+    const hasToken = !!getAccessToken();
     if (hasToken && getUserRole()) {
       // Already signed in: honor a shared-link `next` instead of always going home.
       window.location.replace(safeNext(searchParams.next));
@@ -104,10 +114,23 @@ function LoginContent() {
 
   useEffect(() => {
     const samlTokenId = searchParams.saml_token;
-    if (samlTokenId) {
+    const ssoCode = searchParams.code || searchParams.saml_code;
+    const callback = samlTokenId ? `saml_token:${samlTokenId}` :
+      searchParams.code ? `code:${searchParams.code}` : ssoCode ? `saml_code:${ssoCode}` : null;
+    if (callback && claimedSsoCallback.current === callback) return;
+    let started: string | null = null;
+    if (callback) {
+      claimedSsoCallback.current = callback;
+      started = sessionStorage.getItem("observal_sso_start");
+      if (started === null) {
+        setError("Sign-in was cancelled. Please try again.");
+        return;
+      }
+      sessionStorage.removeItem("observal_sso_start");
       setLoading(true);
       window.history.replaceState({}, "", "/login");
-
+    }
+    if (samlTokenId) {
       (async () => {
         try {
           const res = await fetch(`/api/v1/sso/saml/exchange?token_id=${samlTokenId}`, {
@@ -115,13 +138,7 @@ function LoginContent() {
           });
           if (!res.ok) throw new Error("Exchange failed");
           const data = await res.json();
-          clearSession();
-          setTokens(data.access_token, data.refresh_token);
-          setUserRole(data.user.role);
-          setUserName(data.user.name);
-          setUserEmail(data.user.email);
-          if (data.user.username) setUserUsername(data.user.username);
-          window.dispatchEvent(new Event("storage"));
+          if (started === null || !await commitLogin(data, started)) throw new Error("Sign-in was cancelled");
           window.location.replace(safeNext(searchParams.next));
         } catch {
           setError("SAML sign-in failed. Please try again.");
@@ -132,21 +149,10 @@ function LoginContent() {
       return;
     }
 
-    const ssoCode = searchParams.code || searchParams.saml_code;
-
     if (ssoCode) {
-      setLoading(true);
-      window.history.replaceState({}, "", "/login");
-
       auth.exchangeCode({ code: ssoCode })
-        .then((data) => {
-          setTokens(data.access_token, data.refresh_token);
-          setUserRole(data.user.role);
-          setUserName(data.user.name);
-          setUserEmail(data.user.email);
-          if (data.user.username) setUserUsername(data.user.username);
-          if (data.user.avatar_url) setUserAvatar(data.user.avatar_url);
-          window.dispatchEvent(new Event("storage"));
+        .then(async (data) => {
+          if (started === null || !await commitLogin(data, started)) throw new Error("Sign-in was cancelled");
           window.location.href = safeNext(searchParams.next);
         })
         .catch((err) => {
@@ -177,21 +183,16 @@ function LoginContent() {
     setError("");
     setLoading(true);
     try {
+      const started = loginStart();
       const res = await auth.login({ email, password });
+      if (!await commitLogin(res, started)) throw new Error("Sign-in was cancelled");
 
       if (res.must_change_password) {
-        setTokens(res.access_token, res.refresh_token);
         setMustChangePassword(true);
         setLoading(false);
         return;
       }
 
-      setTokens(res.access_token, res.refresh_token);
-      setUserRole(res.user.role);
-      setUserName(res.user.name);
-      setUserEmail(res.user.email);
-      if (res.user.username) setUserUsername(res.user.username);
-      if (res.user.avatar_url) setUserAvatar(res.user.avatar_url);
       toast.success("Signed in successfully");
       window.location.replace(safeNext(searchParams.next));
     } catch (e) {
@@ -221,16 +222,11 @@ function LoginContent() {
     setLoading(true);
     try {
       // Changing the password signs out every session; keep this one on the fresh pair it hands back.
+      const started = loginStart();
       const { exchange_code } = await auth.changePassword({ current_password: password, new_password: newPassword });
       const session = await auth.exchangeCode({ code: exchange_code });
-      setTokens(session.access_token, session.refresh_token);
+      if (!await commitLogin(session, started)) throw new Error("Session changed");
       toast.success("Password changed successfully");
-      const res = await auth.whoami();
-      setUserRole(res.role);
-      setUserName(res.name);
-      setUserEmail(res.email);
-      if (res.username) setUserUsername(res.username);
-      if (res.avatar_url) setUserAvatar(res.avatar_url);
       window.location.replace(safeNext(searchParams.next));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to change password";
@@ -247,26 +243,35 @@ function LoginContent() {
   }
 
   function handleSsoLogin() {
+    if (!navigator.locks?.request) { setError("This browser does not support secure sign-in (Web Locks required)."); return; }
     setSsoLoading(true);
+    sessionStorage.setItem("observal_sso_start", loginStart() ?? "");
     window.location.href = ssoStartUrl("/api/v1/auth/oauth/login");
   }
 
   function handleGoogleLogin() {
+    if (!navigator.locks?.request) { setError("This browser does not support secure sign-in (Web Locks required)."); return; }
     setSsoLoading(true);
+    sessionStorage.setItem("observal_sso_start", loginStart() ?? "");
     window.location.href = ssoStartUrl("/api/v1/auth/oauth/google/login");
   }
 
   function handleGithubLogin() {
+    if (!navigator.locks?.request) { setError("This browser does not support secure sign-in (Web Locks required)."); return; }
     setSsoLoading(true);
+    sessionStorage.setItem("observal_sso_start", loginStart() ?? "");
     window.location.href = ssoStartUrl("/api/v1/auth/oauth/github/login");
   }
 
   function handleSamlLogin() {
+    if (!navigator.locks?.request) { setError("This browser does not support secure sign-in (Web Locks required)."); return; }
     setSsoLoading(true);
+    sessionStorage.setItem("observal_sso_start", loginStart() ?? "");
     window.location.href = ssoStartUrl("/api/v1/sso/saml/login");
   }
 
   function handleGuestLogin() {
+    sessionStorage.removeItem("observal_sso_start");
     clearSession();
     const requestedPath = safeNext(searchParams.next);
     const pathname = requestedPath.split(/[?#]/, 1)[0];

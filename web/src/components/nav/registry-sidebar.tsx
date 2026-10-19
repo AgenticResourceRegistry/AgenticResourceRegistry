@@ -49,6 +49,7 @@ import {
 	getUserName,
 	getUserEmail,
 	getUserUsername,
+	getAccessToken,
 } from "@/lib/api";
 import { hasMinRole, type Role } from "@/hooks/use-role-guard";
 import {
@@ -141,7 +142,7 @@ const storeSub = (cb: () => void) => {
 	return () => window.removeEventListener("storage", cb);
 };
 const getAuthSnap = () =>
-	`${sessionStorage.getItem("observal_access_token") ?? ""}|${getUserRole() ?? ""}|${getUserName() ?? ""}|${getUserEmail() ?? ""}|${getUserUsername() ?? ""}`;
+	`${getAccessToken() ?? ""}|${getUserRole() ?? ""}|${getUserName() ?? ""}|${getUserEmail() ?? ""}|${getUserUsername() ?? ""}`;
 const getServerSnap = () => "||||";
 
 function ServerVersionBadge() {

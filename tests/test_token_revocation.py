@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """User-wide token revocation must stick: a later login, refresh, or password change never revives old tokens."""
@@ -11,6 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 import api.deps as deps
 import api.routes.admin.users as admin_users
@@ -144,6 +147,25 @@ async def test_refresh_racing_a_logout_hands_out_no_tokens(env):
     env.db.execute = AsyncMock(side_effect=lookup_then_logout)
     assert not await _refreshes(env, refresh)
     assert not [key for key in env.redis.values if key.startswith("refresh_jti:")]
+
+
+@pytest.mark.asyncio
+async def test_forced_password_change_can_logout_over_http(env):
+    app = FastAPI()
+    app.include_router(auth.router)
+    app.dependency_overrides[deps.get_db] = lambda: env.db
+    env.redis.values[f"must_change_password:{env.user.id}"] = "1"
+    old_access, old_refresh, _ = await auth._issue_tokens(env.user)
+    other_access, _, _ = await auth._issue_tokens(env.user)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {old_access}"},
+            json={"refresh_token": old_refresh},
+        )
+    assert response.status_code == 200, response.text
+    assert not await _works(env, other_access)
 
 
 @pytest.mark.asyncio

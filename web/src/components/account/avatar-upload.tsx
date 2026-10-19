@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useRef, useState } from "react";
 import { Camera, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { auth, setUserAvatar } from "@/lib/api";
+import { auth, setUserAvatar, authEpoch, getUserEmail, updateProfile } from "@/lib/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -165,6 +166,8 @@ export function AvatarEditable({ name, avatarUrl }: AvatarEditableProps) {
 		if (!img || !imageUrl) return;
 
 		setUploading(true);
+		const epoch = authEpoch();
+		const actor = getUserEmail();
 		try {
 			const scaleX = img.naturalWidth / img.clientWidth;
 			const scaleY = img.naturalHeight / img.clientHeight;
@@ -183,7 +186,7 @@ export function AvatarEditable({ name, avatarUrl }: AvatarEditableProps) {
 			const dataUrl = canvas.toDataURL("image/png");
 
 			await auth.uploadAvatar({ avatar_url: dataUrl });
-			setUserAvatar(dataUrl);
+			if (!await updateProfile(epoch, actor, () => setUserAvatar(dataUrl))) return;
 
 			reset();
 			setOpen(false);
@@ -197,9 +200,11 @@ export function AvatarEditable({ name, avatarUrl }: AvatarEditableProps) {
 
 	const handleRemoveAvatar = async () => {
 		setUploading(true);
+		const epoch = authEpoch();
+		const actor = getUserEmail();
 		try {
 			await auth.deleteAvatar();
-			setUserAvatar(null);
+			if (!await updateProfile(epoch, actor, () => setUserAvatar(null))) return;
 			toast.success("Profile picture removed");
 			setOpen(false);
 		} catch (err) {
