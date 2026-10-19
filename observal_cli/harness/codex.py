@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -179,7 +180,7 @@ class CodexAdapter(BaseAdapter):
             identity = "delegation"
         return {
             "session_id": source.session_id,
-            "path": str(source.path.resolve()) if source.path else "",
+            "path": os.path.abspath(source.path) if source.path else "",
             "source_kind": "codex-rollout",
             "identity": identity,
             "agent_id": payload.get("agent_id"),
@@ -199,20 +200,38 @@ class CodexAdapter(BaseAdapter):
         path = proof.get("path")
         if proof.get("source_kind") != "codex-rollout" or not isinstance(path, str) or not path.endswith(".jsonl"):
             return False
-        source_path = Path(path).resolve()
+        # Check the lexical Codex location before resolving links: ~/.codex
+        # itself may be a symlink to another volume.
+        source_path = Path(path)
         if (
             self._session_id(source_path) != item.session_id
             or not any(parent.name == "sessions" and parent.parent.name == ".codex" for parent in source_path.parents)
-            or str(source_path) != path
+            or not source_path.is_absolute()
+            or os.path.abspath(path) != path
             or item.payload.get("session_id") != item.session_id
             or item.payload.get("harness") != item.harness
         ):
             return False
         try:
-            from observal_cli.sessions.base import hash_session_source, read_new_records
-
+            if item.end_offset < 0 or item.end_offset > source_path.stat().st_size:
+                return False
             source = self._source(source_path)
-            lines, offsets, _ = read_new_records(source_path, 0)
+            # Read only the queued byte prefix. Later appends cannot invalidate
+            # a final batch, and the proof need not scan a growing rollout.
+            with source_path.open("rb") as transcript:
+                prefix = transcript.read(item.end_offset)
+            if len(prefix) != item.end_offset:
+                return False
+            consumed = prefix
+            lines = []
+            offsets = []
+            position = 0
+            for encoded in consumed.splitlines(keepends=True):
+                position += len(encoded)
+                line = encoded.rstrip(b"\r\n").decode("utf-8", errors="replace")
+                if line.strip():
+                    lines.append(line)
+                    offsets.append(position)
             start = item.start_line
             posted = item.payload.get("lines") or []
             posted_offsets = item.payload.get("end_byte_offsets") or []
@@ -226,16 +245,21 @@ class CodexAdapter(BaseAdapter):
                 or (posted and posted_offsets[-1] != item.end_offset)
                 or (posted and item.end_offset < offsets[start + len(posted) - 1])
                 or (posted and start + len(posted) < len(offsets) and item.end_offset >= offsets[start + len(posted)])
-                or item.end_offset > source_path.stat().st_size
+                or (posted and not consumed.endswith(b"\n"))
             ):
                 return False
             if item.payload.get("session_hash") is not None:
-                digest, count = hash_session_source(source_path)
-                if (item.payload["session_hash"], item.payload.get("hashed_line_count")) != (digest, count):
+                count = item.payload.get("hashed_line_count")
+                if not isinstance(count, int) or count != len(lines):
+                    return False
+                hasher = hashlib.sha256()
+                for line in lines[:count]:
+                    hasher.update(hashlib.sha256(line.encode("utf-8", errors="replace")).hexdigest().encode())
+                    hasher.update(b"\n")
+                if item.payload["session_hash"] != hasher.hexdigest():
                     return False
             # A rollout's own metadata must not contradict the path identity.
-            with source_path.open(encoding="utf-8") as transcript:
-                first = json.loads(transcript.readline())
+            first = json.loads(lines[0]) if lines else {}
             meta = first.get("payload") if first.get("type") == "session_meta" else None
             if isinstance(meta, dict) and meta.get("id") and meta["id"] != item.session_id:
                 return False
