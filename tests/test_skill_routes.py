@@ -1314,7 +1314,7 @@ class TestEditingLocks:
 
         response = await skill.start_edit_skill("alice/review-skill", db, _user())
 
-        assert response == {"status": "locked"}
+        assert response == {"status": "locked", "revision": skill.verified_skill_revision(listing, locked)}
         assert "skill_listings" in _sql(db.execute.await_args_list[0].args[0])
         assert _sql(db.execute.await_args_list[0].args[0]).endswith("FOR UPDATE")
         stmt = db.execute.await_args.args[0]
