@@ -14,12 +14,20 @@ trace viewer. Codex uses a distinct format:
 from __future__ import annotations
 
 import json
+import re
 
 from .base import (
     basic_event,
     dict_field,
     list_field,
     load_line,
+    meta_assistant,
+    meta_session,
+    meta_time,
+    meta_tool_call,
+    meta_tool_result,
+    meta_usage,
+    meta_user,
     pick_timestamp,
     str_field,
     token_count,
@@ -321,3 +329,150 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
                 "service_name": harness,
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# Insight meta records
+# ---------------------------------------------------------------------------
+
+# Codex tools that run shell commands; their command text is measured like Pi's bash.
+_SHELL_TOOLS = frozenset({"shell", "local_shell", "exec", "exec_command", "unified_exec", "container.exec"})
+_SUBAGENT_TOOLS = frozenset({"spawn_agent"})
+_PATCH_FILE = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+)$")
+_EXIT_CODE = re.compile(r'(?:"exit_code"\s*:\s*|Exit code:?\s*|exited with code\s*)(-?\d+)')
+
+
+def _tool_text(payload: dict) -> str:
+    """The tool call's input: Codex sends ``arguments`` as JSON text, or ``input`` as free text."""
+    value = payload.get("arguments") or payload.get("input") or ""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _shell_command(text: str) -> str:
+    try:
+        args = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(args, dict):
+        return text
+    command = args.get("cmd") or args.get("command") or ""
+    return " ".join(str(part) for part in command) if isinstance(command, list) else str(command)
+
+
+def _patch_edits(text: str) -> list[dict]:
+    """One edit per file in an ``apply_patch`` envelope, holding its removed and added lines."""
+    if "*** Begin Patch" not in text:
+        return []
+    if "*** Begin Patch\\n" in text:
+        text = text.replace("\\n", "\n")  # the patch is a quoted string inside an exec script
+    edits: list[dict] = []
+    current: dict | None = None
+    for line in text.splitlines():
+        match = _PATCH_FILE.match(line.strip())
+        if match:
+            current = {"path": match.group(2).strip(), "old": [], "new": []}
+            edits.append(current)
+        elif current is not None and not line.startswith(("***", "@@")):
+            if line.startswith("+"):
+                current["new"].append(line[1:])
+            elif line.startswith("-"):
+                current["old"].append(line[1:])
+    return [{"path": e["path"], "oldText": "\n".join(e["old"]), "newText": "\n".join(e["new"])} for e in edits]
+
+
+def _meta_tool_call(payload: dict) -> dict:
+    name = str_field(payload, "name")
+    text = _tool_text(payload)
+    edits = _patch_edits(text)
+    if edits:
+        return meta_tool_call(name, str_field(payload, "call_id"), {"path": edits[0]["path"], "edits": edits}, "edit")
+    if name in _SHELL_TOOLS:
+        return meta_tool_call(name, str_field(payload, "call_id"), {"command": _shell_command(text)}, "bash")
+    if name in _SUBAGENT_TOOLS:
+        return meta_tool_call(name, str_field(payload, "call_id"), {}, "subagent")
+    try:
+        args = json.loads(text) if text else {}
+    except ValueError:
+        args = {}
+    return meta_tool_call(name, str_field(payload, "call_id"), args if isinstance(args, dict) else {})
+
+
+def _output_text(payload: dict) -> str:
+    output = payload.get("output", "")
+    if isinstance(output, list):
+        return "\n".join(str(block.get("text", "")) for block in output if isinstance(block, dict))
+    return str(output)
+
+
+def meta_records(entries: list[dict]) -> list[dict]:
+    """Convert Codex rollout lines into insight meta records.
+
+    A model response is the run of output items (reasoning, messages, tool calls)
+    between two inputs (a user turn or a tool output); it counts as one assistant
+    message. Token usage comes from ``token_count`` events as the change in the
+    running total, so repeated events are not counted twice.
+    """
+    records: list[dict] = []
+    tool_names: dict[str, str] = {}
+    model = ""
+    response: dict | None = None  # the open model response, closed by the next input
+    last_response: dict | None = None
+    last_total: dict = {}
+
+    for entry in entries:
+        ts = str_field(entry, "timestamp")
+        payload = dict_field(entry, "payload")
+        line_type = str_field(entry, "type")
+        payload_type = str_field(payload, "type")
+
+        if line_type == "session_meta":
+            records.append(meta_session(str_field(payload, "cwd"), ts))
+            continue
+        if line_type == "turn_context":
+            model = str_field(payload, "model") or model
+        elif line_type == "event_msg" and payload_type == "thread_settings_applied":
+            model = str_field(dict_field(payload, "thread_settings"), "model") or model
+        elif line_type == "event_msg" and payload_type == "token_count":
+            total = dict_field(dict_field(payload, "info"), "total_token_usage")
+            if total and last_response is not None:
+                delta = {key: token_count(total, key) - token_count(last_total, key) for key in total}
+                cached = max(delta.get("cached_input_tokens", 0), 0)
+                written = max(delta.get("cache_write_input_tokens", 0), 0)
+                previous = last_response["message"].get("usage") or meta_usage(0, 0)
+                last_response["message"]["usage"] = meta_usage(
+                    previous["input"] + uncached_input_tokens(max(delta.get("input_tokens", 0), 0), cached, written),
+                    previous["output"] + max(delta.get("output_tokens", 0), 0),
+                    previous["cacheRead"] + cached,
+                    previous["cacheWrite"] + written,
+                )
+            if total:
+                last_total = total
+        elif line_type == "response_item":
+            if payload_type in ("function_call", "custom_tool_call"):
+                if response is None:
+                    response = last_response = meta_assistant(ts, model)
+                    records.append(response)
+                tool_names[str_field(payload, "call_id")] = str_field(payload, "name")
+                response["message"]["content"].append(_meta_tool_call(payload))
+                continue
+            if payload_type in ("function_call_output", "custom_tool_call_output"):
+                text = _output_text(payload)
+                codes = [int(code) for code in _EXIT_CODE.findall(text)]
+                name = tool_names.get(str_field(payload, "call_id"), "")
+                records.append(meta_tool_result(ts, name, any(code != 0 for code in codes), text))
+                response = None
+                continue
+            prompt = user_prompt_text(payload)
+            if prompt is not None:
+                records.append(meta_user(ts, prompt))
+                response = None
+                continue
+            if payload_type in ("message", "reasoning") and payload.get("role") != "user":
+                if payload.get("role") in ("assistant", None) and response is None:
+                    response = last_response = meta_assistant(ts, model)
+                    records.append(response)
+                if response is not None:
+                    continue
+        if ts:
+            records.append(meta_time(ts))
+    return records

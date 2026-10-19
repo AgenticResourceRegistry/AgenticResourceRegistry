@@ -22,6 +22,7 @@ from datetime import datetime
 import structlog
 
 from services.insight_version_filters import agent_version_filter
+from services.session_parsers import meta_records
 
 from ._deps import get_query
 
@@ -76,8 +77,11 @@ def _extract_text_from_content(content) -> str:
     return str(content) if content else ""
 
 
-def extract_session_meta(session_id: str, raw_lines: list[str]) -> dict:
+def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "") -> dict:
     """Extract deterministic metadata from raw JSONL lines for one session.
+
+    Lines are first converted to Pi-style records by the *harness*'s
+    ``session_parsers`` converter, so every harness is measured the same way.
 
     Returns a dict with all computable stats (no LLM needed).
     """
@@ -114,6 +118,7 @@ def extract_session_meta(session_id: str, raw_lines: list[str]) -> dict:
     project_path = ""
     seen_tool_ids: set[str] = set()
 
+    entries: list[dict] = []
     for raw in raw_lines:
         if not raw.strip():
             continue
@@ -121,7 +126,12 @@ def extract_session_meta(session_id: str, raw_lines: list[str]) -> dict:
             entry = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    if harness:
+        entries = meta_records(harness, entries)
 
+    for entry in entries:
         entry_type = entry.get("type", "")
         ts_str = entry.get("timestamp", "")
 
@@ -279,8 +289,10 @@ def extract_session_meta(session_id: str, raw_lines: list[str]) -> dict:
                         seen_tool_ids.add(tool_id)
 
                     tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+                    # What the call does, when the harness names its tools differently from Pi.
+                    kind = block.get("kind") or tool_name
 
-                    if tool_name == "subagent":
+                    if kind == "subagent":
                         uses_subagent = True
                     if tool_name.startswith("mcp__") or tool_name == "mcp":
                         uses_mcp = True
@@ -300,26 +312,29 @@ def extract_session_meta(session_id: str, raw_lines: list[str]) -> dict:
                         if lang:
                             languages[lang] = languages.get(lang, 0) + 1
 
-                    if tool_name == "write" and file_path:
+                    if kind == "write" and file_path:
                         files_modified.add(file_path)
                         content_str = args.get("content", "")
-                        if isinstance(content_str, str):
+                        if isinstance(content_str, str) and content_str:
                             lines_added += _count_newlines(content_str) + 1
 
-                    if tool_name == "edit" and file_path:
+                    if kind == "edit" and file_path:
                         files_modified.add(file_path)
                         edits = args.get("edits", [])
                         if isinstance(edits, list):
                             for e in edits:
                                 if isinstance(e, dict):
+                                    # A patch edit names its own file.
+                                    if isinstance(e.get("path"), str) and e["path"]:
+                                        files_modified.add(e["path"])
                                     old = e.get("oldText", "") or e.get("old_string", "")
                                     new = e.get("newText", "") or e.get("new_string", "")
-                                    if isinstance(old, str):
+                                    if isinstance(old, str) and old:
                                         lines_removed += _count_newlines(old) + 1
-                                    if isinstance(new, str):
+                                    if isinstance(new, str) and new:
                                         lines_added += _count_newlines(new) + 1
 
-                    if tool_name == "bash":
+                    if kind == "bash":
                         cmd = args.get("command", "")
                         if isinstance(cmd, str):
                             if "git commit" in cmd:
@@ -506,13 +521,13 @@ async def fetch_all_session_transcripts(
     agent_name: str = "",
     agent_version: str | None = None,
     batch_size: int = 50,
-) -> dict[str, list[str]]:
+) -> dict[str, tuple[str, list[str]]]:
     """Fetch raw JSONL lines for all sessions of an agent from ClickHouse.
 
     Batches by session_id to avoid loading 200MB+ into memory at once.
     For 20 users x 100 sessions, fetches ~50 sessions at a time.
 
-    Returns {session_id: [raw_line, ...]} for all sessions in the period.
+    Returns {session_id: (harness, [raw_line, ...])} for all sessions in the period.
     """
     query = get_query()
 
@@ -566,13 +581,13 @@ async def fetch_all_session_transcripts(
     logger.info("fetching_transcripts", total_sessions=len(session_ids), batch_size=batch_size)
 
     # Fetch raw lines in batches
-    all_sessions: dict[str, list[str]] = {}
+    all_sessions: dict[str, tuple[str, list[str]]] = {}
 
     for i in range(0, len(session_ids), batch_size):
         batch_ids = session_ids[i : i + batch_size]
 
         batch_sql = """
-            SELECT session_id, raw_line
+            SELECT session_id, harness, raw_line
             FROM session_events FINAL
             WHERE session_id IN ({ids:Array(String)})
               AND raw_line != ''
@@ -587,7 +602,7 @@ async def fetch_all_session_transcripts(
             rows = r.json().get("data", [])
             for row in rows:
                 sid = row["session_id"]
-                all_sessions.setdefault(sid, []).append(row["raw_line"])
+                all_sessions.setdefault(sid, (row.get("harness") or "", []))[1].append(row["raw_line"])
         except Exception as e:
             logger.warning("fetch_batch_failed", batch_start=i, error=str(e))
             continue
@@ -596,7 +611,7 @@ async def fetch_all_session_transcripts(
         "fetched_session_transcripts",
         agent_id=agent_id,
         sessions=len(all_sessions),
-        total_lines=sum(len(v) for v in all_sessions.values()),
+        total_lines=sum(len(lines) for _, lines in all_sessions.values()),
     )
     return all_sessions
 
@@ -632,12 +647,13 @@ async def extract_all_session_metas(
     )
 
     metas = []
-    for session_id, lines in transcripts.items():
-        meta = extract_session_meta(session_id, lines)
+    for session_id, (harness, lines) in transcripts.items():
         # Enrich with credits, harness, layer hash, and report version scope from session_stats_agg
         stats = session_stats.get(session_id, {})
+        harness = harness or stats.get("harness", "")
+        meta = extract_session_meta(session_id, lines, harness)
         meta["credits"] = stats.get("credits", 0.0)
-        meta["harness"] = stats.get("harness", "")
+        meta["harness"] = harness
         meta["layer_hash"] = stats.get("layer_hash", "")
         meta["agent_version"] = agent_version or ""
         metas.append(meta)
