@@ -10,7 +10,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, inspect
 
-from models import Base, Review, ReviewRevision, ReviewThread
+from models import Base, Review, ReviewRevision, ReviewSubmission, ReviewThread
 
 
 def test_review_schema_upgrades_twice_from_legacy_sqlite():
@@ -75,3 +75,4 @@ def test_number_sequence_and_unique_revision():
     assert any(c.name == "uq_review_revision_number" for c in ReviewRevision.__table__.constraints)
     assert any(c.name == "uq_review_threads_change_request" for c in ReviewThread.__table__.constraints)
     assert any(c.name == "fk_review_threads_change_request" for c in ReviewThread.__table__.foreign_key_constraints)
+    assert any(i.name == "ix_review_submission_latest_decision" for i in ReviewSubmission.__table__.indexes)

@@ -172,6 +172,7 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
         async with engine.begin() as conn:
             await conn.execute(text("ALTER TABLE review_threads DROP COLUMN change_request_id CASCADE"))
             await conn.execute(text("DROP INDEX ix_review_comments_submission_id"))
+            await conn.execute(text("DROP INDEX ix_review_submission_latest_decision"))
             await conn.run_sync(migrate, "upgrade")
 
             def constraints(sync):
@@ -186,11 +187,16 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
                 )
                 assert any(row["column_names"] == ["change_request_id"] for row in unique)
                 assert any(row["column_names"] == ["submission_id"] for row in inspector.get_indexes("review_comments"))
+                assert any(
+                    row["column_names"] == ["review_id", "reviewer_id", "submitted_at", "id"]
+                    for row in inspector.get_indexes("review_submissions")
+                )
 
             await conn.run_sync(constraints)
         historical_thread_id = await verify_conversations()
         async with engine.begin() as conn:
             await conn.run_sync(migrate, "downgrade")
+            assert not await conn.scalar(text("SELECT to_regclass('ix_review_submission_latest_decision')"))
             retained = await conn.scalar(
                 text("SELECT count(*) FROM review_comments WHERE review_id = :review_id"), {"review_id": review.id}
             )
