@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Gate/state transitions on real SQLite rows; no external services."""
 
@@ -79,10 +80,10 @@ async def test_version_rounds_gate_publish_and_author_denial(db):
     assert ver.status == ListingStatus.changes_requested
     ver.skill_md_content = "# Fixed\n"
     await open_or_push(db, "skill", listing, ver, author.id, message="fixed")
-    # Resubmitting a newer revision answers the request and returns the review to reviewers.
-    assert review.state == ReviewState.open
-    assert ver.status == ListingStatus.pending
-    assert (await gate(db, review, policy=policy)).outstanding_requests == 0
+    # A revision does not silently clear a request: its reviewer must act explicitly.
+    assert review.state == ReviewState.changes_requested
+    assert ver.status == ListingStatus.changes_requested
+    assert (await gate(db, review, policy=policy)).outstanding_requests == 1
     await submit_verdict(db, review, reviewer, "approve", policy=policy)
     assert review.state == ReviewState.approved and ver.status == ListingStatus.pending
     assert (await gate(db, review, policy=policy)).ready
@@ -97,7 +98,7 @@ async def test_version_rounds_gate_publish_and_author_denial(db):
 
 
 @pytest.mark.asyncio
-async def test_unresolved_change_request_stays_visible_but_only_approvals_block(db):
+async def test_change_request_survives_revisions_and_blocks_until_reviewer_approves(db):
     from services.review.decisions import DRAFT_EDIT_MESSAGE
 
     author, reviewer, _, listing, version, review = await fixture_review(db)
@@ -118,14 +119,15 @@ async def test_unresolved_change_request_stays_visible_but_only_approvals_block(
     assert review.state == ReviewState.changes_requested
     version.skill_md_content = "# New revision\n"
     await open_or_push(db, "skill", listing, version, author.id, message="Addressed feedback")
-    assert review.state == ReviewState.open  # The resubmission answered the request.
+    assert review.state == ReviewState.changes_requested  # Resubmission cannot clear a request.
     await submit_verdict(db, review, reviewer, "request_changes", policy=ApprovalPolicy())
-    assert review.state == ReviewState.changes_requested  # A new request on the new head counts again.
+    assert review.state == ReviewState.changes_requested  # A new request supersedes the previous one.
     await submit_verdict(db, review, second, "approve", policy=ApprovalPolicy())
-    # The approval count is met, so a person may publish; the open request stays visible as advisory.
     result = await gate(db, review, policy=ApprovalPolicy())
-    assert result.ready and not result.clear and "changes_requested" in result.requirements
-    assert review.state == ReviewState.approved
+    assert not result.ready and "changes_requested" in result.blockers
+    with pytest.raises(HTTPException) as blocked:
+        await publish(db, review, second, policy=ApprovalPolicy())
+    assert blocked.value.status_code == 409
     await submit_verdict(db, review, reviewer, "approve", policy=ApprovalPolicy())
     assert (await gate(db, review, policy=ApprovalPolicy())).clear
 

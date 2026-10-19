@@ -256,7 +256,7 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
   await expect(page.getByRole("heading", { name: "Publication gate" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("pr-review-conversation-mobile.png"), fullPage: true });
   await page.getByRole("button", { name: "Review changes" }).click();
-  await page.getByRole("radio", { name: "Approve" }).check();
+  await page.getByRole("radio", { name: "Approve", exact: true }).check();
   await page.getByRole("button", { name: "Submit review" }).click();
   await expect.poll(() => verdicts.length).toBe(1);
   expect(verdicts[0]).toEqual({ verdict: "approve", body: "" });
