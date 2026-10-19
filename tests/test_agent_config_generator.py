@@ -3,12 +3,15 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for canonical harness config generation."""
 
 from __future__ import annotations
 
+import importlib.util
+import shlex
 import uuid
 from unittest.mock import MagicMock
 
@@ -416,6 +419,30 @@ class TestGenerateCodex:
         agent = _make_agent()
         cfg = generate_agent_config(agent, "codex")
         assert cfg["mcp_config"]["content"]["mcp_servers"] == {}
+
+    @pytest.mark.parametrize("scope, path", [("project", ".codex/hooks.json"), ("user", "~/.codex/hooks.json")])
+    def test_generated_hooks_use_importable_sender(self, scope, path):
+        cfg = generate_agent_config(_make_agent(), "codex", options={"scope": scope})
+        hooks_cfg = cfg["hooks_config"]
+        assert hooks_cfg["path"] == path
+        hooks = hooks_cfg["content"]["hooks"]
+        assert set(hooks) == {"UserPromptSubmit", "Stop"}
+        assert importlib.util.find_spec("observal_cli.hooks.session_push") is not None
+        for event in hooks:
+            assert len(hooks[event]) == 1
+            entry = hooks[event][0]
+            assert entry["matcher"] == ""
+            assert len(entry["hooks"]) == 1
+            assert entry["hooks"][0]["type"] == "command"
+            command = shlex.split(entry["hooks"][0]["command"])
+            assert command == [
+                "OBSERVAL_AGENT_NAME=test-agent",
+                "python3",
+                "-m",
+                "observal_cli.hooks.session_push",
+                "--harness",
+                "codex",
+            ]
 
     def test_content_not_empty(self):
         agent = _make_agent()

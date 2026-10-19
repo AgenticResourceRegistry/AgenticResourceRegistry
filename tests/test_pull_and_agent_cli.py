@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the `observal pull` command."""
@@ -10,13 +11,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+import uuid
 from contextlib import contextmanager
-from pathlib import PurePath
-from typing import TYPE_CHECKING
+from pathlib import Path, PurePath
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,9 +27,6 @@ from typer.testing import CliRunner
 
 from observal_cli.errors import CliError, ErrorCategory
 from observal_cli.main import app as cli_app
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 runner = CliRunner()
 
@@ -584,6 +583,89 @@ class TestPullKiro:
 
 
 class TestPullCodex:
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Codex's existing POSIX environment prefix requires a Unix shell"
+    )
+    def test_generated_hook_runs_after_pull_with_pinned_python(self, tmp_path: Path, monkeypatch):
+        from services.harness import generate_agent_config
+
+        agent = MagicMock()
+        agent.id = uuid.uuid4()
+        agent.name = "my-agent"
+        agent.description = "Test agent"
+        agent.prompt = "Do the thing"
+        agent.model_name = None
+        agent.components = []
+        agent.external_mcps = []
+        snippet = generate_agent_config(agent, "codex", options={"scope": "project"})
+
+        # Exercise the actual pull writer with a shell-quoted interpreter path containing spaces.
+        python_home = tmp_path / "venv with spaces"
+        python_home.symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+        pinned_python = str(python_home / "bin" / Path(sys.executable).name)
+        with (
+            monkeypatch.context() as patcher,
+            _patch_config(),
+            _patch_get_agent(),
+            _patch_post({"config_snippet": snippet}),
+        ):
+            patcher.setattr("observal_cli.cmd_pull.sys.executable", pinned_python)
+            result = runner.invoke(
+                cli_app,
+                [
+                    "agent",
+                    "pull",
+                    "abc123",
+                    "--harness",
+                    "codex",
+                    "--scope",
+                    "project",
+                    "--dir",
+                    str(tmp_path),
+                    "--no-prompt",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+
+        hooks = json.loads((tmp_path / ".codex/hooks.json").read_text())["hooks"]
+        assert set(hooks) == {"UserPromptSubmit", "Stop"}
+        commands = [hooks[event][0]["hooks"][0]["command"] for event in ("UserPromptSubmit", "Stop")]
+        assert commands[0] == commands[1]
+        assert shlex.split(commands[0]) == [
+            "OBSERVAL_AGENT_NAME=my-agent",
+            pinned_python,
+            "-m",
+            "observal_cli.hooks.session_push",
+            "--harness",
+            "codex",
+        ]
+
+        home = tmp_path / "empty-home"
+        home.mkdir()
+        env = {key: value for key, value in os.environ.items() if not key.startswith("OBSERVAL_")}
+        env.update(HOME=str(home), XDG_CONFIG_HOME=str(home), CODEX_HOME=str(home / ".codex"))
+        # The server's test venv can import the CLI only via pytest's source path;
+        # make that path explicit for the isolated subprocess (the installed CLI
+        # interpreter has its own package, but this test also runs from server/.venv).
+        root = Path(__file__).resolve().parents[1]
+        env["PYTHONPATH"] = os.pathsep.join(
+            (str(root), str(root / "packages/observal-shared"), str(root / "observal-server"))
+        )
+        # _patch_config mocks setup subprocesses only during pull; run the on-disk command for real.
+        executed = subprocess.run(
+            commands[0],
+            shell=True,
+            executable="/bin/sh",
+            input="{}",
+            text=True,
+            capture_output=True,
+            cwd=tmp_path,
+            env=env,
+            timeout=15,
+        )
+        assert executed.returncode == 0, executed.stderr
+        assert not (home / ".observal").exists()
+
     def test_writes_custom_agent(self, tmp_path: Path):
         with _patch_config(), _patch_get_agent(), _patch_post(_codex_snippet()):
             result = runner.invoke(
