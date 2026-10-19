@@ -1294,19 +1294,29 @@ async def test_failing_secret_scan_blocks_normal_publish_but_super_admin_can_ove
 
 
 @pytest.mark.asyncio
-async def test_advisory_items_do_not_block_an_approved_publish(api):
-    """OBS-1443: change requests and unresolved conversations stay visible but never block."""
-    client, current, (author, reviewer, _, second), (rid, number), factory = api
+async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
+    """A counted approval cannot silently bypass an explicit request for changes."""
+    client, current, (_, reviewer, _, second), (_, number), _ = api
     current[0] = second
-    assert (
-        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "request_changes", "body": "nit"})
-    ).status_code == 201
+    request = await client.post(
+        f"/api/v1/reviews/{number}/submissions", json={"verdict": "request_changes", "body": "nit"}
+    )
+    assert request.status_code == 201
     current[0] = reviewer
     assert (
         await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
     ).status_code == 201
     gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
-    assert "changes_requested" in gate["requirements"] and gate["blockers"] == [] and gate["ready"]
+    assert "changes_requested" in gate["blockers"] and not gate["ready"]
+    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 409
+    current[0] = second
+    withdrawn = await client.post(
+        f"/api/v1/reviews/{number}/submissions/{request.json()['id']}/withdraw-request",
+        json={"reason": "Resolved"},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    current[0] = reviewer
+    assert (await client.get(f"/api/v1/reviews/{number}/gate")).json()["ready"]
     assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
 
 
