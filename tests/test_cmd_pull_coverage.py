@@ -1907,6 +1907,30 @@ def test_earlier_mcp_write_failure_still_reports_existing_session_hooks(
     assert "Telemetry:" in human.output
 
 
+def test_failed_pull_reports_sessions_from_adapter_telemetry_outside_pull(
+    pull_app_boundary: typer.Typer,
+    boundaries: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extension that reports sessions stays active even when the pull fails before writing."""
+    target = tmp_path / "project"
+    target.mkdir()
+    boundaries.adapter.reports_sessions_outside_pull.return_value = True
+    boundaries.post.return_value = {
+        "config_snippet": {"mcp_config": {"path": "mcp.json", "content": {"mcpServers": {}}}}
+    }
+
+    def fail_write(path: Path, content: str) -> None:
+        raise OSError("synthetic write failure")
+
+    monkeypatch.setattr(cmd_pull, "_atomic_write_text", fail_write)
+
+    result = _invoke(pull_app_boundary, target, "--output", "json")
+    assert result.exit_code == 9
+    assert json.loads(result.stderr)["error"]["result"]["reports_sessions"] is True
+
+
 @pytest.mark.parametrize("existing_hook", [True, False])
 @pytest.mark.parametrize("preceding_file", [True, False])
 def test_failed_hook_write_reports_only_existing_session_hooks(
