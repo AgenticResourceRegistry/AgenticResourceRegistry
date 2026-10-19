@@ -180,10 +180,12 @@ def materialize(task: dict, ws: workspace.Workspace, *, harness: str, adapter) -
         raise LocalRunError(
             "Required agent skills did not install; refusing to launch a partially configured delegate."
         )
+    servers = mcp_servers_from_snippet(snippet, adapter)
+    adapter.prepare_delegated_mcp_config(ws.path, servers)
     m["agentName"] = detail.get("name") or name
     # The version the install resolved, so the child's sessions carry what actually ran.
     m["version"] = result.get("version") or m.get("version") or detail.get("version")
-    return name, mcp_servers_from_snippet(snippet, adapter), str(detail.get("prompt") or "")
+    return name, servers, str(detail.get("prompt") or "")
 
 
 def run(

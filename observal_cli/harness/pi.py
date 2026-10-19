@@ -34,7 +34,7 @@ class PiAdapter(BaseAdapter):
     """Adapter for Pi.
 
     Pi is harness-centric: the entirety of pi IS one agent.
-    MCP servers are managed via pi-mcp-adapter (reads ~/.pi/agent/mcp.json).
+    Pi's built-in MCP support reads ~/.pi/agent/mcp.json and .pi/mcp.json.
     Hooks are delivered as the observal-pi package.
     """
 
@@ -169,6 +169,19 @@ class PiAdapter(BaseAdapter):
         if (config_dir / "extensions" / "observal.ts").is_file() or is_npm_configured(config_dir):
             return "installed"
         return "missing"
+
+    def prepare_delegated_mcp_config(self, workdir: Path, servers: dict) -> None:
+        """Expose only this agent's project MCPs at the path Pi actually loads.
+
+        The normal pull keeps per-agent profiles under .pi/agents/<name>/.
+        Delegation additionally writes .pi/mcp.json in its throwaway copy,
+        replacing copied project servers even when this agent has none.
+        """
+        from observal_cli.cmd_pull import _resolve_path, _write_file_checked
+
+        project_mcp = _resolve_path(".pi/mcp.json", workdir)
+        if servers or project_mcp.exists():
+            _write_file_checked(project_mcp, {"mcpServers": servers})
 
     def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         # Verified against pi 0.87: -p/--print with no message argument reads the

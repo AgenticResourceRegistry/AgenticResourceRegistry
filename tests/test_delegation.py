@@ -14,6 +14,7 @@ import sys
 import textwrap
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -317,6 +318,102 @@ def test_mcp_servers_come_from_either_snippet_shape():
     kiro = get_adapter("kiro")
     snippet = {"mcp_config": {"path": ".kiro/settings/mcp.json", "content": {"mcpServers": {"gh": {"command": "x"}}}}}
     assert local.mcp_servers_from_snippet(snippet, kiro) == {"gh": {"command": "x"}}
+
+
+def _pi_materialize(tmp_path, monkeypatch, servers: dict):
+    """Use the real server formatter and delegated installer, with only the API mocked."""
+    from services.harness.pi import PiAdapter as ServerPiAdapter
+
+    ensure_loaded()
+    adapter = get_adapter("pi")
+    snippet = ServerPiAdapter().format_config(
+        SimpleNamespace(
+            safe_name="fixture-agent",
+            options={"scope": "project"},
+            rules_content="Fixture instructions",
+            mcp_configs=servers,
+            skill_configs=[],
+        )
+    )
+    monkeypatch.setattr(local.client, "get", lambda *args, **kwargs: {"slug": "fixture-agent", "prompt": ""})
+    monkeypatch.setattr(local.client, "post_public", lambda *args, **kwargs: {"config_snippet": snippet})
+    task = tasks.new_task(message="fixture task", observal={"agentId": AGENT_ID})
+    ws = workspace.Workspace(path=tmp_path, scratch=tmp_path / "scratch", repo=None)
+    return local.materialize(task, ws, harness="pi", adapter=adapter), adapter
+
+
+def test_pi_delegation_makes_installed_agent_mcps_discoverable(tmp_path, monkeypatch):
+    servers = {"fixture-server": {"command": "python", "args": ["-m", "fixture_server"]}}
+    (name, delegated_servers, _instructions), adapter = _pi_materialize(tmp_path, monkeypatch, servers)
+
+    assert name == "fixture-agent" and delegated_servers == servers
+    assert adapter.scan_project(tmp_path).mcps[0].name == "fixture-server"
+    assert json.loads((tmp_path / ".pi" / "mcp.json").read_text()) == {"mcpServers": servers}
+    # Normal pull's per-agent profile is left intact by this delegation-only copy.
+    assert json.loads((tmp_path / ".pi" / "agents" / "fixture-agent" / "mcp.json").read_text()) == {
+        "mcpServers": servers
+    }
+
+
+def test_pi_delegation_replaces_copied_project_mcps_with_agent_mcps(tmp_path, monkeypatch):
+    config = tmp_path / ".pi" / "mcp.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"mcpServers": {"unrelated": {"command": "not-approved"}}}))
+    servers = {"approved": {"command": "fixture-server"}}
+    _pi_materialize(tmp_path, monkeypatch, servers)
+    assert json.loads(config.read_text()) == {"mcpServers": servers}
+
+
+def test_pi_delegation_without_mcps_does_not_inherit_project_mcps(tmp_path, monkeypatch):
+    config = tmp_path / ".pi" / "mcp.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"mcpServers": {"unrelated": {"command": "not-approved"}}}))
+    (name, servers, _instructions), adapter = _pi_materialize(tmp_path, monkeypatch, {})
+    assert name == "fixture-agent" and servers == {}
+    assert json.loads(config.read_text()) == {"mcpServers": {}}
+    assert adapter.scan_project(tmp_path).mcps == []
+
+
+def test_pi_delegation_without_mcps_leaves_empty_project_alone(tmp_path, monkeypatch):
+    _pi_materialize(tmp_path, monkeypatch, {})
+    assert not (tmp_path / ".pi" / "mcp.json").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="test requires symlink support")
+def test_pi_delegation_refuses_a_project_mcp_symlink_outside_its_workspace(tmp_path, monkeypatch):
+    from observal_cli.errors import CliError
+
+    workdir = tmp_path / "workdir"
+    (workdir / ".pi").mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text("untouched")
+    (workdir / ".pi" / "mcp.json").symlink_to(outside)
+
+    with pytest.raises(CliError) as error:
+        _pi_materialize(workdir, monkeypatch, {"fixture-server": {"command": "python"}})
+    assert "escapes the target directory" in error.value.message
+    assert outside.read_text() == "untouched"
+
+
+@pytest.mark.skipif(not HAS_GIT, reason="git not installed")
+def test_pi_delegation_project_mcp_setup_does_not_leak_into_the_patch(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    (repo / ".pi").mkdir()
+    (repo / ".pi" / "mcp.json").write_text(json.dumps({"mcpServers": {"old": {"command": "old"}}}))
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "project MCP")
+
+    ws = workspace.create(repo)
+    try:
+        _pi_materialize(ws.path, monkeypatch, {"fixture-server": {"command": "python"}})
+        workspace.mark_baseline(ws)
+        (ws.path / "app.py").write_text("print('fixed')\n")
+        patch = workspace.changes(ws)
+    finally:
+        workspace.destroy(ws)
+
+    assert "app.py" in patch and ".pi/mcp.json" not in patch
+    assert json.loads((repo / ".pi" / "mcp.json").read_text()) == {"mcpServers": {"old": {"command": "old"}}}
 
 
 # ── Service guards ───────────────────────────────────────────────────────

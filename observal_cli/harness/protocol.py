@@ -398,6 +398,10 @@ class HarnessAdapter(Protocol):
         """Extract MCP server entries from a harness configuration."""
         ...
 
+    def prepare_delegated_mcp_config(self, workdir: Path, servers: dict) -> None:
+        """Expose a delegated agent's MCP servers in its throwaway workspace."""
+        ...
+
     def patch_hooks(self, dry_run: bool) -> bool:
         """Install this harness's telemetry hooks."""
         ...

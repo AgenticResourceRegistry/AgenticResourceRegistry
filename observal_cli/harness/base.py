@@ -292,6 +292,14 @@ class BaseAdapter:
             if isinstance(entry, dict) and any(field in entry for field in ("command", "url", "type"))
         }
 
+    def prepare_delegated_mcp_config(self, workdir: Path, servers: dict) -> None:
+        """Make the installed agent's MCP servers available in a headless workspace.
+
+        Called after installation and before the workspace baseline. Most harnesses
+        already read the installed config; adapters override this only if needed.
+        """
+        return None
+
     def patch_hooks(self, dry_run: bool) -> bool:
         return False
 
