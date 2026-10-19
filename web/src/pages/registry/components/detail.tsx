@@ -33,7 +33,7 @@ import {
   useComponentUpdateDraft,
   useComponentSubmitDraft,
 } from "@/hooks/use-api";
-import { getUserRole, registry } from "@/lib/api";
+import { authenticatedReadContext, getUserRole, registry } from "@/lib/api";
 import { useComponentInsightReports, useGenerateComponentInsight } from "@/hooks/use-insights-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
@@ -282,15 +282,21 @@ export default function ComponentDetailPage({
       return;
     }
     const controller = new AbortController();
-    const token = sessionStorage.getItem("observal_access_token");
-    const headers: Record<string, string> = {};
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    fetch(`/api/v1/${type}/${id}/co-authors`, { headers, signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => {
-        if (!controller.signal.aborted) setCoAuthors(data);
+    setCoAuthors([]);
+    try {
+      const { token, check } = authenticatedReadContext();
+      fetch(`/api/v1/${type}/${id}/co-authors`, {
+        headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
       })
-      .catch(() => {});
+        .then(async (r) => {
+          check();
+          const data = r.ok ? await r.json() : [];
+          check();
+          return data;
+        })
+        .then((data) => { if (!controller.signal.aborted) { check(); setCoAuthors(data); } })
+        .catch(() => {});
+    } catch { /* Account switched before the request; keep private data empty. */ }
     return () => controller.abort();
   }, [type, id, isAuthenticated]);
 
