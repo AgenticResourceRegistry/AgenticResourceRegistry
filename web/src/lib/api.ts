@@ -174,18 +174,30 @@ export function quarantineTab() {
 
 // Capture the identity and bearer for direct calls which bypass request().
 // Check before sending and after every await before using the response.
-export function authenticatedRequestContext(): { token: string; check: () => void } {
+function captureAuthenticatedContext(allowRotation: boolean): { token: string; check: () => void } {
 	const actor = getTabActor();
 	const token = getAccessToken();
 	const check = () => {
+		const current = getAccessToken();
 		if (!actor || !token || tokenSubject(token) !== actor || isAccountChanged() ||
-			getTabActor() !== actor || getAccessToken() !== token) {
+			getTabActor() !== actor || !current || tokenSubject(current) !== actor ||
+			(!allowRotation && current !== token)) {
 			if (isAccountChanged()) quarantineTab();
 			throw new AuthContextChanged();
 		}
 	};
 	check();
 	return { token: token!, check };
+}
+
+// Writes retain exact-bearer continuity; a rotation must not change their guard.
+export function authenticatedRequestContext(): { token: string; check: () => void } {
+	return captureAuthenticatedContext(false);
+}
+
+// A completed private GET remains valid after a same-principal access rotation.
+export function authenticatedReadContext(): { token: string; check: () => void } {
+	return captureAuthenticatedContext(true);
 }
 
 export function authenticatedContextGuard(): () => void {
@@ -384,18 +396,26 @@ async function request<T = unknown>(
 	// sign in, but must never attach its previous bearer or replay credentials.
 	const explicitAuth = method === "POST" &&
 		["/auth/login", "/auth/exchange", "/auth/register", "/auth/init"].includes(path);
-	const whoami = path === "/auth/whoami";
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
 	const token = explicitAuth ? null : getAccessToken();
 	const originalActor = explicitAuth ? null : getTabActor();
+	// A completed response belongs to the actor, not to one access-token string.
+	// Same-actor refreshes may rotate the bearer while a successful POST is in flight.
 	const contextChanged = () => !explicitAuth && (
 		isAccountChanged() || getTabActor() !== originalActor ||
-		(whoami
-			? (token !== null && (!getAccessToken() || tokenSubject(getAccessToken()) !== originalActor))
-			: getAccessToken() !== token)
+		(token !== null && (!getAccessToken() || tokenSubject(getAccessToken()) !== originalActor))
 	);
+	const currentActorToken = () => {
+		if (contextChanged()) {
+			if (isAccountChanged()) quarantineTab();
+			throw new AuthContextChanged();
+		}
+		const current = getAccessToken();
+		if (!originalActor || !current || tokenSubject(current) !== originalActor) throw new AuthContextChanged();
+		return current;
+	};
 	if (contextChanged() || (token && (!originalActor || tokenSubject(token) !== originalActor))) {
 		quarantineTab();
 		throw new AuthContextChanged();
@@ -425,68 +445,68 @@ async function request<T = unknown>(
 	}
 
 	if (!response.ok) {
-		// Auto-refresh on 401 (except for auth endpoints where 401 means bad credentials)
+		// Retry only a confirmed 401, never a completed write. A competing
+		// same-actor rotation can supply a new bearer without another refresh.
 		if (response.status === 401 && !path.startsWith("/auth/")) {
-			// Deduplicate concurrent refresh attempts
-			if (!_refreshPromise) {
-				_refreshPromise = _tryRefreshToken().finally(() => {
-					_refreshPromise = null;
-				});
-			}
-			const refreshResult = await _refreshPromise;
-
-			if (refreshResult.result === "ok") {
-				const newToken = refreshResult.token;
-				if (!originalActor || !newToken || tokenSubject(newToken) !== originalActor ||
-					getTabActor() !== originalActor || getAccessToken() !== newToken || isAccountChanged()) {
+			let retryToken = getAccessToken() !== token ? currentActorToken() : null;
+			if (!retryToken) {
+				if (!_refreshPromise) {
+					_refreshPromise = _tryRefreshToken().finally(() => {
+						_refreshPromise = null;
+					});
+				}
+				const refreshResult = await _refreshPromise;
+				if (refreshResult.result === "ok" || refreshResult.result === "superseded") {
+					const current = currentActorToken();
+					if (current !== token || refreshResult.result === "ok") retryToken = current;
+					else throw new AuthContextChanged(); // no safe new bearer to replay with
+				} else if (refreshResult.result === "account_changed" || contextChanged()) {
 					if (isAccountChanged()) quarantineTab();
 					throw new AuthContextChanged();
+				} else if (refreshResult.result === "network_error") {
+					throw new Error("Network unavailable");
 				}
-				headers["Authorization"] = `Bearer ${newToken}`;
-				const retryRes = await fetch(`${API}${path}`, {
-					method,
-					headers,
-					body: body !== undefined ? JSON.stringify(body) : undefined,
-					cache: "no-store",
-				});
-				if (getTabActor() !== originalActor || isAccountChanged() || getAccessToken() !== newToken) {
-					if (isAccountChanged()) quarantineTab();
-					throw new AuthContextChanged();
-				}
-				if (retryRes.ok) {
-					const data = retryRes.status === 204 ? undefined as T : await decodeResponse<T>(retryRes, fileResponse);
-					if (getTabActor() !== originalActor || isAccountChanged() || getAccessToken() !== newToken) {
-						if (isAccountChanged()) quarantineTab();
+				if (!retryToken && refreshResult.result === "rejected") {
+					// Only a confirmed rejection of the still-selected token can expire this tab.
+					if (getRefreshToken() && tokenSubject(getRefreshToken()) !== originalActor) {
+						quarantineTab();
 						throw new AuthContextChanged();
 					}
-					return data;
+					clearTabSession();
+					if (typeof window !== "undefined") {
+						window.location.href = sessionExpiredLoginUrl();
+						return new Promise<T>(() => {});
+					}
+					throw new Error("Session expired");
 				}
-				const retryText = await retryRes.text().catch(() => "Request failed");
-				const retryErr = new Error(retryText);
-				(retryErr as Error & { status: number }).status = retryRes.status;
-				throw retryErr;
 			}
-
-			if (refreshResult.result === "account_changed" || refreshResult.result === "superseded" ||
-				getTabActor() !== originalActor || isAccountChanged()) {
+			headers["Authorization"] = `Bearer ${currentActorToken()}`;
+			const retryRes = await fetch(`${API}${path}`, {
+				method,
+				headers,
+				body: body !== undefined ? JSON.stringify(body) : undefined,
+				cache: "no-store",
+			});
+			if (contextChanged()) {
 				if (isAccountChanged()) quarantineTab();
 				throw new AuthContextChanged();
 			}
-			if (refreshResult.result === "network_error") {
-				throw new Error("Network unavailable");
+			if (retryRes.ok) {
+				const data = retryRes.status === 204 ? undefined as T : await decodeResponse<T>(retryRes, fileResponse);
+				if (contextChanged()) {
+					if (isAccountChanged()) quarantineTab();
+					throw new AuthContextChanged();
+				}
+				return data;
 			}
-
-			// Only a confirmed rejection of the still-selected token can expire this tab.
-			if (getRefreshToken() && tokenSubject(getRefreshToken()) !== originalActor) {
-				quarantineTab();
+			const retryText = await retryRes.text().catch(() => "Request failed");
+			if (contextChanged()) {
+				if (isAccountChanged()) quarantineTab();
 				throw new AuthContextChanged();
 			}
-			clearTabSession();
-			if (typeof window !== "undefined") {
-				window.location.href = sessionExpiredLoginUrl();
-				return new Promise<T>(() => {});
-			}
-			throw new Error("Session expired");
+			const retryErr = new Error(retryText);
+			(retryErr as Error & { status: number }).status = retryRes.status;
+			throw retryErr;
 		}
 
 		const text = await response.text().catch(() => response.statusText);

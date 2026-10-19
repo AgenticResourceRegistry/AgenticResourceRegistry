@@ -744,6 +744,140 @@ test("direct co-author and transfer mutations never use a switched actor or comm
   }
 });
 
+test("completed POST survives same-actor rotation without replay, but not A to B", async ({ page }) => {
+  for (const nextActor of ["actor-a", "actor-b"]) {
+    await seed(page, A, AR);
+    const pending = barrier();
+    let writes = 0;
+    await page.route("**/api/v1/feedback", async (route) => {
+      writes++;
+      pending.entered();
+      await pending.gate;
+      await route.fulfill({ json: { id: "written" } });
+    });
+    const result = submit(page);
+    await pending.started;
+    await page.evaluate(({ access, refresh }) => {
+      sessionStorage.setItem("observal_access_token", access);
+      localStorage.setItem("observal_refresh_token", refresh);
+    }, { access: jwt(nextActor, "new-access"), refresh: jwt(nextActor, "new-refresh") });
+    pending.release();
+    expect(await result).toBe(nextActor === "actor-a" ? "ok" : "AuthContextChanged");
+    expect(writes).toBe(1);
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("same-actor 401 supersession retries once with current bearer", async ({ page }) => {
+  for (const phase of ["response", "refresh"]) {
+    await seed(page, A, AR);
+    const pending = barrier();
+    let writes = 0;
+    let refreshes = 0;
+    const rotated = jwt("actor-a", `rotated-${phase}`);
+    await page.route("**/api/v1/feedback", async (route) => {
+      writes++;
+      if (writes === 1) {
+        if (phase === "response") { pending.entered(); await pending.gate; }
+        await route.fulfill({ status: 401 });
+      } else {
+        expect(route.request().headers().authorization).toBe(`Bearer ${rotated}`);
+        await route.fulfill({ json: { id: "written" } });
+      }
+    });
+    await page.route("**/api/v1/auth/token/refresh", async (route) => {
+      refreshes++;
+      pending.entered(); await pending.gate;
+      await route.fulfill({ status: 401 }); // stale refresh must not expire the rotated session
+    });
+    const result = submit(page);
+    await pending.started;
+    await page.evaluate(({ rotated, refresh }) => {
+      sessionStorage.setItem("observal_access_token", rotated);
+      localStorage.setItem("observal_refresh_token", refresh);
+    }, { rotated, refresh: jwt("actor-a", `refresh-${phase}`) });
+    pending.release();
+    expect(await result).toBe("ok");
+    expect(writes).toBe(2);
+    expect(refreshes).toBe(phase === "response" ? 0 : 1);
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("read-only context accepts same-actor rotation but missing access and writes do not", async ({ page }) => {
+  await seed(page, A, AR);
+  expect(await page.evaluate((rotated) => {
+    const result = (check: () => void) => {
+      try { check(); return "ok"; } catch (error) { return (error as Error).name; }
+    };
+    return import("/src/lib/api.ts").then(({ authenticatedReadContext, authenticatedRequestContext }) => {
+      const read = authenticatedReadContext();
+      const write = authenticatedRequestContext();
+      sessionStorage.setItem("observal_access_token", rotated);
+      const sameActor = [result(read.check), result(write.check)];
+      sessionStorage.removeItem("observal_access_token");
+      return [...sameActor, result(read.check)];
+    });
+  }, jwt("actor-a", "rotated-access"))).toEqual(["ok", "AuthContextChanged", "AuthContextChanged"]);
+});
+
+for (const kind of ["agents", "mcps"]) {
+  test(`late ${kind} coauthor GET survives same-actor access rotation`, async ({ page }) => {
+    await seed(page, A, AR);
+    await expect(page.getByText(/Sign in (to your account|or browse the public registry)/)).toBeVisible();
+    await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
+    await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: true } }));
+    await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "user" } }));
+    const endpoint = kind === "mcps" ? "mcp" : kind;
+    await page.route(`**/api/v1/${endpoint}/test`, (route) => route.fulfill({ json: {
+      id: "test", name: "Test", slug: "test", status: "approved", version: "1.0.0", user_permission: "owner",
+    } }));
+    const pending = barrier();
+    await page.route(`**/api/v1/${endpoint}/test/co-authors`, async (route) => {
+      expect(route.request().headers().authorization).toBe(`Bearer ${A}`);
+      pending.entered(); await pending.gate;
+      await route.fulfill({ json: [{ id: "private", email: "private-a@example.com" }] });
+    });
+    await page.goto(kind === "agents" ? "/agents/test" : "/components/test?type=mcp", { waitUntil: "commit" });
+    await pending.started;
+    await page.evaluate(({ access, refresh }) => {
+      sessionStorage.setItem("observal_access_token", access);
+      localStorage.setItem("observal_refresh_token", refresh);
+    }, { access: jwt("actor-a", "rotated-access"), refresh: jwt("actor-a", "rotated-refresh") });
+    pending.release();
+    await expect(page.getByText("private-a@example.com")).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem("observal_tab_actor"))).toBe("actor-a");
+  });
+
+  test(`late ${kind} coauthor GET cannot restore emails after A to B quarantine`, async ({ page }) => {
+    await seed(page, A, AR);
+    await expect(page.getByText(/Sign in (to your account|or browse the public registry)/)).toBeVisible();
+    await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
+    await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: true } }));
+    await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "user" } }));
+    const endpoint = kind === "mcps" ? "mcp" : kind;
+    await page.route(`**/api/v1/${endpoint}/test`, (route) => route.fulfill({ json: {
+      id: "test", name: "Test", slug: "test", status: "approved", version: "1.0.0", user_permission: "owner",
+    } }));
+    const pending = barrier();
+    const completed = barrier();
+    await page.route(`**/api/v1/${endpoint}/test/co-authors`, async (route) => {
+      expect(route.request().headers().authorization).toBe(`Bearer ${A}`);
+      pending.entered(); await pending.gate;
+      await route.fulfill({ json: [{ id: "private", email: "private-a@example.com" }] });
+      completed.entered();
+    });
+    await page.goto(kind === "agents" ? "/agents/test" : "/components/test?type=mcp", { waitUntil: "commit" });
+    await pending.started;
+    await page.evaluate((br) => localStorage.setItem("observal_refresh_token", br), BR);
+    pending.release();
+    await completed.started;
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBeNull();
+    await expect(page.getByText("private-a@example.com")).toHaveCount(0);
+    await page.unrouteAll({ behavior: "wait" });
+  });
+}
+
 test("HTML export mismatch never retries or downloads", async ({ page }) => {
   await seed(page, A, BR);
   let calls = 0;
