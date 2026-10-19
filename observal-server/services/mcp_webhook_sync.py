@@ -46,6 +46,7 @@ from services.agent_lock import CONTENT_FIELDS
 from services.inbox import sources as inbox
 from services.mcp_validator import (
     CLONE_TIMEOUT,
+    _authenticated_clone_url,
     _build_clone_url,
     _redact_clone_error,
     _validate_git_url,
@@ -278,6 +279,12 @@ def has_approved_version(listing: McpListing) -> bool:
 
 def _git(args: list[str], *, cwd: str | None = None) -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    if any(_authenticated_clone_url(arg) for arg in args):
+        env.update(
+            GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0="http.followRedirects",
+            GIT_CONFIG_VALUE_0="false",
+        )
     result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=CLONE_TIMEOUT, env=env)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"git {args[0]} failed")

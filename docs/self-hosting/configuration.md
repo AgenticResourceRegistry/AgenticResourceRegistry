@@ -133,13 +133,14 @@ More: [Authentication and SSO](/self-hosting/authentication).
 ## Git operations (submission analysis)
 
 ```dotenv
-ALLOW_INTERNAL_URLS=false          # allow internal/private Git URLs (GitLab/GHE)
+ALLOW_INTERNAL_GIT_URLS=false      # allow internal/private Git URLs (GitLab/GHE)
 GIT_CLONE_TOKEN_FILE=/run/secrets/git_clone_token
+GIT_CLONE_TOKEN_HOSTS=github.com   # exact HTTPS hosts permitted to receive the token
 GIT_CLONE_TOKEN_USER=x-access-token
 GIT_CLONE_TIMEOUT=120              # seconds
 ```
 
-`GIT_CLONE_TOKEN_USER` varies by provider: `x-access-token` for GitHub, `oauth2` or `private-token` for GitLab.
+`GIT_CLONE_TOKEN_HOSTS` is required for authenticated clones: without it the token is never sent. List exact hostnames separated by commas (for example `github.com,gitlab.example.com`, or `git.example.com:8443` for a nonstandard port); subdomains and lookalikes are not trusted automatically. Authorities match exactly: `github.com:443` requires its own entry and does not match `github.com`. Only HTTPS clones receive credentials, even if HTTP clones are enabled. `GIT_CLONE_TOKEN_USER` varies by provider: `x-access-token` for GitHub, `oauth2` or `private-token` for GitLab.
 
 ## Observal CLI (client-side) env vars
 
