@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent draft workflow routes: save, update, start/cancel edit, submit."""
@@ -19,7 +20,6 @@ from schemas.agent import AgentCreateRequest, AgentResponse, AgentUpdateRequest
 from services.config_generator import validate_mcp_command
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
-from services.inbox import sources as inbox
 from services.registry_fork import provenance_for
 from services.registry_telemetry import emit_registry_event
 from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
@@ -277,10 +277,8 @@ async def update_draft(
     # approved yet and the call cannot currently fire. It stays as an invariant guard:
     # every site that writes is_private must route a private-to-public transition back
     # through review, so loosening the status gate above can never open that bypass.
-    if await review_publication_to_public(agent, current_user, db, was_private=was_private):
-        await inbox.on_review_requested(
-            db, agent, subject_type="agent", actor_id=current_user.id, version=agent.version
-        )
+    # The re-review notifies its own requested reviewers; nobody else is fanned out to.
+    await review_publication_to_public(agent, current_user, db, was_private=was_private)
 
     if req.version_bump_type and req.version is None:
         from services.versioning import bump_version

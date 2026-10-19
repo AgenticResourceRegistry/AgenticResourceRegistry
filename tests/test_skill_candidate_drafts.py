@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """A saved candidate owns new bytes without moving the approved pointer."""
@@ -325,9 +326,9 @@ async def test_rejected_git_version_is_editable_and_resubmittable_behind_approve
             assert listing.latest_version_id == approved_id
             version = await db.get(SkillVersion, rejected_id)
             assert version.status == ListingStatus.pending
+            # Submitting opens a review but requests nobody, so no reviewer is notified.
             notices = (await db.execute(select(InboxItem).where(InboxItem.subject_id == listing_id))).scalars().all()
-            assert len(notices) == 1
-            assert notices[0].dedupe_key.startswith("review_requested:skill:") and ":v1.3.0" in notices[0].dedupe_key
+            assert notices == []
             with pytest.raises(HTTPException) as pending:
                 await skill_files.update_skill_version_draft(
                     str(listing_id),

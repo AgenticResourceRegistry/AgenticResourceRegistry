@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """The per-user inbox API.
@@ -194,12 +195,12 @@ async def inbox_count(
 ):
     """Badge counts, and optionally the per-facet breakdown behind them.
 
-    Unread counts every unread item regardless of state, because an item that
-    was resolved without ever being opened is still something the user has not
-    seen. Reading it is what clears it. ``unread_done`` and ``unread_dismissed``
-    say how much of that sits outside the default Open bucket, so the Inbox can
-    point at it instead of claiming the user is caught up. Action-required counts
-    only OPEN items: work already done is not outstanding.
+    Unread counts unread items in the Open bucket only, so the badge matches the
+    unread rows the Inbox lists by default. An item resolved by someone else's
+    action (a peer approved, the review was published or closed) moves to Done
+    and stops counting; the event that resolved it arrives as its own message.
+    Action-required likewise counts only OPEN items: work already done is not
+    outstanding.
 
     Every count carries the visibility filter. A badge that ticks up for an item
     the caller cannot open would disclose the item just as surely as listing it.
@@ -212,17 +213,15 @@ async def inbox_count(
     """
     mine = (InboxItem.user_id == current_user.id, visibility.visible_filter(current_user))
 
-    # One grouped scan: the badge total, and how much of it sits in Done or Dismissed.
-    unread_by_state = dict(
-        (
-            await db.execute(
-                select(InboxItem.state, func.count(InboxItem.id))
-                .where(*mine, InboxItem.read_at.is_(None))
-                .group_by(InboxItem.state)
+    unread = (
+        await db.execute(
+            select(func.count(InboxItem.id)).where(
+                *mine,
+                InboxItem.read_at.is_(None),
+                InboxItem.state == InboxState.open,
             )
-        ).all()
-    )
-    unread = sum(unread_by_state.values())
+        )
+    ).scalar() or 0
     action = (
         await db.execute(
             select(func.count(InboxItem.id)).where(
@@ -246,8 +245,6 @@ async def inbox_count(
         open=by_state.get(InboxState.open, 0),
         done=by_state.get(InboxState.done, 0),
         dismissed=by_state.get(InboxState.dismissed, 0),
-        unread_done=unread_by_state.get(InboxState.done, 0),
-        unread_dismissed=unread_by_state.get(InboxState.dismissed, 0),
     )
     if not facets:
         return response

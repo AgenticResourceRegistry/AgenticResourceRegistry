@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Webhook auto-sync for MCP listings hosted on GitHub or GitLab.
@@ -43,7 +44,6 @@ from models.team import TeamMembership
 from models.user import User
 from schemas.mcp_webhook_sync import valid_ref_name
 from services.agent_lock import CONTENT_FIELDS
-from services.inbox import sources as inbox
 from services.mcp_validator import (
     CLONE_TIMEOUT,
     _authenticated_clone_url,
@@ -590,7 +590,6 @@ async def _sync_listing(db: AsyncSession, sync: McpWebhookSync, request: SyncReq
     current = listing.latest_version
     if current is None or (_semver_key(version) or (0, 0, 0)) >= (_semver_key(current.version) or (0, 0, 0)):
         listing.latest_version_id = ver.id
-    await inbox.on_publish(db, listing, subject_type="mcp", actor_id=actor.id, auto_approved=True, version=version)
     return SyncOutcome(status="success", detail=f"Published version {version}", version=version, sha=sha)
 
 

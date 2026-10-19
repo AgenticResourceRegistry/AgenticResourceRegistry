@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Visibility and a concurrent status change serialize over the listing lock."""
@@ -31,7 +32,6 @@ async def test_publication_serializes_with_skill_review_status(monkeypatch, publ
     schema = f"skill_visibility_{uuid.uuid4().hex}"
     admin = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": f"{schema},public"}})
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=1))
     monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", AsyncMock(return_value=1))
     try:
         async with admin.begin() as conn:

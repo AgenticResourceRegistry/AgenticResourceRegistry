@@ -143,6 +143,12 @@ def _upgrade_command(subject: Subject, ctx: dict[str, Any]) -> str | None:
     return f"{prefix} {target} --harness {harness}{prompt_flag}"
 
 
+# ``payload["audience"]`` on a reviewer's copy of a decision kind. Those kinds
+# skip the read-time membership re-check because they are addressed to the
+# submitter; a reviewer's copy is not, so visibility re-checks it anyway.
+REVIEWER_AUDIENCE = "reviewer"
+
+
 @dataclass(frozen=True, slots=True)
 class KindSpec:
     """How one kind renders and deduplicates."""
