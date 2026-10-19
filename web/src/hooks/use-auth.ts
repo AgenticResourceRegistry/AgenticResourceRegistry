@@ -7,7 +7,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter, useLocation } from "@tanstack/react-router";
-import { auth, setUserRole, getUserRole, clearSession, refreshAccessTokenWithReason, authEpoch, canSilentRefresh, isCurrentAuth, updateProfile, getAccessToken, hasLegacySession, migrateLegacySession } from "@/lib/api";
+import { auth, setUserRole, getUserRole, clearSession, refreshAccessTokenWithReason, authEpoch, canSilentRefresh, isCurrentAuth, updateProfile, getAccessToken, hasLegacySession, migrateLegacySession, abandonLegacySession } from "@/lib/api";
 import { currentPathAsNext } from "@/lib/safe-next";
 
 function isNetworkError(err: unknown): boolean {
@@ -126,7 +126,7 @@ export function useAuthGuard() {
     if (isSSR) return;
 
     if (isMigrating) {
-      void migrateLegacySession().then(() => window.dispatchEvent(new Event("storage")));
+      void migrateLegacySession().then(() => window.dispatchEvent(new Event("storage")), abandonLegacySession);
       return;
     }
     // New tab: no access token but refresh token exists. Try silent refresh.
@@ -174,7 +174,7 @@ export function useOptionalAuth() {
 
   useEffect(() => {
     if (isMigrating) {
-      void migrateLegacySession().then(() => window.dispatchEvent(new Event("storage")));
+      void migrateLegacySession().then(() => window.dispatchEvent(new Event("storage")), abandonLegacySession);
       return;
     }
     if (isRefreshing) {

@@ -25,9 +25,15 @@ if (typeof window !== "undefined") window.addEventListener("observal:session-cle
   void Promise.resolve(old?.dispose()).catch(() => {});
 });
 
-function handleSubscriptionAuthError(err: unknown, epoch: string | null) {
-  if (!epoch || authEpoch() !== epoch) return;
-  const msg = String(err ?? "").toLowerCase();
+function handleSubscriptionAuthError(err: unknown, epoch: string | null, token: string | null, refresh: string | null) {
+  // A rotated bearer can fail after another tab refreshed within the same epoch.
+  if (!epoch || authEpoch() !== epoch || !token || getAccessToken() !== token ||
+      localStorage.getItem("observal_refresh_token") !== refresh) return;
+  const msg = (Array.isArray(err)
+    ? err.map((item: { message?: string }) => item.message ?? String(item)).join(" ")
+    : err && typeof err === "object" && "reason" in err
+      ? String(err.reason)
+      : err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
   if (
     msg.includes("not authenticated") ||
     msg.includes("unauthorized") ||
@@ -60,6 +66,8 @@ export function subscribeToSessionUpdates(
   onEvent: (sessionId: string, eventName: string) => void,
 ): () => void {
   const epoch = authEpoch();
+  const token = getToken();
+  const refresh = localStorage.getItem("observal_refresh_token");
   return getClient().subscribe(
     {
       query: `subscription SessionUpdated($sessionId: String) {
@@ -77,7 +85,7 @@ export function subscribeToSessionUpdates(
           onEvent(data.sessionId, data.eventName);
         }
       },
-      error: (err) => handleSubscriptionAuthError(err, epoch),
+      error: (err) => handleSubscriptionAuthError(err, epoch, token, refresh),
       complete: () => {},
     },
   );
@@ -88,6 +96,8 @@ export function subscribeToReviewId(
   onEvent: (event: { number: number | null; state: string | null; action: string }) => void,
 ): () => void {
   const epoch = authEpoch();
+  const token = getToken();
+  const refresh = localStorage.getItem("observal_refresh_token");
   return getClient().subscribe(
     {
       query: `subscription ReviewUpdated($reviewId: String) {
@@ -100,7 +110,7 @@ export function subscribeToReviewId(
         const data = (value.data as { reviewUpdated?: { number: number | null; state: string | null; action: string } })?.reviewUpdated;
         if (epoch === authEpoch() && data) onEvent(data);
       },
-      error: (err) => handleSubscriptionAuthError(err, epoch),
+      error: (err) => handleSubscriptionAuthError(err, epoch, token, refresh),
       complete: () => {},
     },
   );
@@ -110,6 +120,8 @@ export function subscribeToReviewUpdates(
   onEvent: (listingId: string, action: string) => void,
 ): () => void {
   const epoch = authEpoch();
+  const token = getToken();
+  const refresh = localStorage.getItem("observal_refresh_token");
   return getClient().subscribe(
     {
       query: `subscription ReviewUpdated($listingId: String) {
@@ -127,7 +139,7 @@ export function subscribeToReviewUpdates(
           onEvent(data.listingId, data.action);
         }
       },
-      error: (err) => handleSubscriptionAuthError(err, epoch),
+      error: (err) => handleSubscriptionAuthError(err, epoch, token, refresh),
       complete: () => {},
     },
   );
