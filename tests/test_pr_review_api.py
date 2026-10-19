@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.deps import get_current_user, get_db, get_registry_user
@@ -664,7 +664,7 @@ async def test_inbox_delivery_is_transactional_and_uses_review_link(api, monkeyp
         assert items[0].kind == InboxKind.review_approval
         assert items[0].action_url == f"/review/{review.number}"
         assert items[0].action_command is None
-        await deliver_event(db, review, "opened", author.id)
+        await deliver_event(db, review, "requested", author.id, reviewer_id=reviewer.id)
         await db.commit()
         request = await db.scalar(
             select(InboxItem).where(InboxItem.user_id == reviewer.id, InboxItem.kind == InboxKind.review_requested)
@@ -700,16 +700,12 @@ async def test_retracted_reviewer_request_no_longer_requires_action(api, monkeyp
 @pytest.mark.asyncio
 async def test_review_action_items_resolve_on_verdict_and_publish(api, monkeypatch):
     from services.inbox.delivery import deliver as real_deliver
-    from services.review.notifications import deliver_event
 
-    client, current, (author, reviewer, _, second), (rid, number), factory = api
+    client, current, (author, reviewer, _, second), (_, number), factory = api
     monkeypatch.setattr("services.review.notifications.deliver", real_deliver)
     base = f"/api/v1/reviews/{number}"
-    async with factory() as db:
-        review = await db.get(Review, rid)
-        await deliver_event(db, review, "opened", author.id)
-        await db.commit()
     current[0] = author
+    assert (await client.post(base + "/reviewers", json={"user_id": str(reviewer.id)})).status_code == 201
     assert (await client.post(base + "/reviewers", json={"user_id": str(second.id)})).status_code == 201
     current[0] = reviewer
     assert (
@@ -748,6 +744,77 @@ async def test_review_action_items_resolve_on_verdict_and_publish(api, monkeypat
     async with factory() as db:
         items = (await db.scalars(select(InboxItem).where(InboxItem.user_id == second.id))).all()
         assert all(i.state == InboxState.done for i in items if i.action_required)
+
+
+@pytest.mark.asyncio
+async def test_reviewers_hear_only_about_reviews_requested_from_them(api, monkeypatch):
+    """OBS-1440: submitting must not fan a review request out to every reviewer.
+
+    Only explicitly requested reviewers get a request. When one approves, the
+    other hears it was reviewed; publication reaches both reviewers and the
+    author, and the badge counts exactly the unread rows in Open.
+    """
+    from api.routes.inbox import inbox_count
+    from services.inbox.delivery import deliver as real_deliver
+    from services.review.notifications import deliver_event
+
+    client, current, (author, reviewer, outsider, second), (rid, number), factory = api
+    monkeypatch.setattr("services.review.notifications.deliver", real_deliver)
+    base = f"/api/v1/reviews/{number}"
+
+    async def items_for(user):
+        async with factory() as db:
+            return (await db.scalars(select(InboxItem).where(InboxItem.user_id == user.id))).all()
+
+    async def badge(user):
+        async with factory() as db:
+            return (await inbox_count(facets=False, facet_state=InboxState.open, db=db, current_user=user)).unread
+
+    # Opening the review notifies nobody: no reviewer has been requested yet.
+    async with factory() as db:
+        await deliver_event(db, await db.get(Review, rid), "opened", author.id)
+        await db.commit()
+    assert await items_for(reviewer) == [] and await items_for(second) == []
+
+    # Requesting both reviewers gives each one request; the author gets nothing for it.
+    current[0] = author
+    for user in (reviewer, second):
+        assert (await client.post(base + "/reviewers", json={"user_id": str(user.id)})).status_code == 201
+    for user in (reviewer, second):
+        [request] = await items_for(user)
+        assert request.kind == InboxKind.review_requested and request.read_at is None
+    assert await items_for(author) == []
+    assert await items_for(outsider) == []
+    assert await badge(second) == 1
+
+    # One reviewer approves: the other hears it has been reviewed, the author hears the approval.
+    current[0] = reviewer
+    assert (await client.post(base + "/submissions", json={"verdict": "approve"})).status_code == 201
+    second_items = {i.kind: i for i in await items_for(second)}
+    approval = second_items[InboxKind.review_approval]
+    assert approval.state == InboxState.open and approval.read_at is None
+    # A reviewer's copy is re-checked against team membership; the author's is not.
+    assert approval.payload.get("audience") == "reviewer"
+    [author_approval] = [i for i in await items_for(author) if i.kind == InboxKind.review_approval]
+    assert "audience" not in author_approval.payload
+    # Whatever the approval resolved no longer counts; only unread Open rows do.
+    async with factory() as db:
+        open_unread = await db.scalar(
+            select(func.count(InboxItem.id)).where(
+                InboxItem.user_id == second.id,
+                InboxItem.state == InboxState.open,
+                InboxItem.read_at.is_(None),
+            )
+        )
+    assert await badge(second) == open_unread
+
+    # Publication reaches both requested reviewers except the publisher, and the author.
+    assert (await client.post(base + "/publish", json={})).status_code == 200
+    for user in (second, author):
+        published = [i for i in await items_for(user) if i.kind == InboxKind.review_approved]
+        assert published and published[0].title.startswith("Published:")
+    assert not [i for i in await items_for(reviewer) if i.kind == InboxKind.review_approved]
+    assert all(i.state == InboxState.done for i in await items_for(second) if i.action_required)
 
 
 @pytest.mark.asyncio
@@ -804,10 +871,15 @@ async def test_notifications_skip_actor_and_mute_except_final(api, monkeypatch):
 
         db.add(ReviewSubscription(review_id=rid, user_id=author.id, mode="muted"))
         await db.flush()
+
+        def recipients_of(calls):
+            return {uid for call in calls for uid in call["recipients"]}
+
         await deliver_event(db, review, "approve", reviewer.id, submission_id=uuid.uuid4())
-        assert author.id not in captured[-1]["recipients"]
+        assert author.id not in recipients_of(captured)
+        captured.clear()
         await deliver_event(db, review, "published", reviewer.id)
-        assert author.id in captured[-1]["recipients"]
+        assert author.id in recipients_of(captured)
 
 
 @pytest.mark.asyncio

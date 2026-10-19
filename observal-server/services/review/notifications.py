@@ -8,9 +8,8 @@ from sqlalchemy import select
 
 from models.inbox import InboxItem, InboxKind, InboxState
 from models.review import ReviewComment, ReviewReviewerRequest, ReviewSubmission, ReviewSubscription
-from services.inbox import recipients
 from services.inbox.delivery import deliver, resolve
-from services.inbox.registry import Subject
+from services.inbox.registry import REVIEWER_AUDIENCE, Subject
 from services.review.decisions import _target
 
 
@@ -80,7 +79,14 @@ async def deliver_event(
     reviewer_id=None,
     revision=None,
 ):
-    """Author and listing owner get every event except their own; mute exempts final outcomes."""
+    """Deliver one review event to the people it concerns; mute exempts final outcomes.
+
+    Reviewers hear about a review only once someone requests them. Opening a
+    review notifies nobody beyond reviewers already requested on it, so a busy
+    queue does not fan out to every admin. Requested reviewers then follow the
+    review: a peer's approval and the publication both reach them, and the author
+    hears about approvals, change requests, and publication.
+    """
     if event in ("published", "closed", "withdrawn", "superseded"):
         await resolve_review_work(db, review, actor_id)
     subject, version = await _target(db, review)
@@ -133,16 +139,24 @@ async def deliver_event(
         "superseded": InboxKind.review_rejected,
     }[event]
     if event == "opened":
-        ids = set(await recipients.reviewers_for(db, subject))
+        # Only reviewers someone explicitly asked; re-scoping a review re-notifies
+        # those still in scope rather than everyone who could review it.
+        ids = set(requested)
     elif event == "revision":
         ids = submitted | requested
     elif event == "requested":
-        ids = author_ids | {reviewer_id}
+        # The request is the reviewer's to act on, not the author's.
+        ids = {reviewer_id}
+    elif event == "approve":
+        # The other requested reviewers learn a peer has reviewed it.
+        ids = author_ids | requested | submitted
+    elif event == "published":
+        ids = author_ids | requested | submitted
     elif event in ("comment", "resolved", "unresolved"):
         ids = author_ids | (thread_users if thread_id else submitted)
     elif event == "ready":
         ids = author_ids | submitted | requested
-    elif event in ("lost", "withdrawn", "published", "superseded", "policy_changed"):
+    elif event in ("lost", "withdrawn", "superseded", "policy_changed"):
         ids = author_ids | submitted
     elif event == "dismissed":
         ids = author_ids | {reviewer_id}
@@ -157,7 +171,7 @@ async def deliver_event(
             )
         ).all()
     )
-    if event != "opened":
+    if event not in ("opened", "requested"):
         ids |= watched
     muted = set()
     if event not in ("published", "closed", "superseded"):
@@ -211,25 +225,30 @@ async def deliver_event(
         team_id=review.team_id,
         is_private=review.is_private,
     )
-    if event == "ready":
-        # The author hears the gate is green but cannot publish their own work.
-        # A single delivery call would mark their item action-required as well.
-        result = await deliver(
-            db,
-            kind=kind,
-            recipients=[uid for uid in allowed if uid in author_ids],
-            subject=subject_info,
-            actor_id=actor_id,
-            context=ctx,
-            action_required=False,
-        )
+    authors = [uid for uid in allowed if uid in author_ids]
+    reviewers = [uid for uid in allowed if uid not in author_ids]
+    result = []
+    if authors:
         result += await deliver(
             db,
             kind=kind,
-            recipients=[uid for uid in allowed if uid not in author_ids],
+            recipients=authors,
             subject=subject_info,
             actor_id=actor_id,
             context=ctx,
+            # The author hears the gate is green but cannot publish their own work.
+            action_required=False if event == "ready" else None,
         )
-        return result
-    return await deliver(db, kind=kind, recipients=allowed, subject=subject_info, actor_id=actor_id, context=ctx)
+    if reviewers:
+        # Decision kinds skip the read-time membership re-check because they are
+        # addressed to the submitter. A reviewer's copy is not, so it is marked and
+        # re-checked: a reviewer removed from a private team stops seeing it.
+        result += await deliver(
+            db,
+            kind=kind,
+            recipients=reviewers,
+            subject=subject_info,
+            actor_id=actor_id,
+            context={**ctx, "audience": REVIEWER_AUDIENCE},
+        )
+    return result

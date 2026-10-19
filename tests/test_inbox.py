@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Inbox delivery, lifecycle, idempotency, and read-time visibility.
@@ -437,11 +438,16 @@ async def test_decision_clears_every_reviewers_request_item(sessions):
             latest_version = None
 
         entity = _Entity()
-        delivered = await sources.on_review_requested(
-            db, entity, subject_type="mcp", actor_id=submitter.id, version="1.0.0"
+        # Three reviewers were requested on this version.
+        delivered = await delivery.deliver(
+            db,
+            kind=InboxKind.review_requested,
+            recipients=[deciding.id, other.id, admin.id],
+            subject=sources.subject_from_entity(entity, "mcp", version="1.0.0"),
+            actor_id=submitter.id,
         )
         await db.commit()
-        assert delivered == 3
+        assert len(delivered) == 3
 
         await sources.on_review_decided(
             db,
@@ -492,7 +498,13 @@ async def test_withdrawal_closes_all_reviewers_without_faking_an_outcome(session
             is_private = False
 
         entity = _Entity()
-        await sources.on_review_requested(db, entity, subject_type="skill", actor_id=author.id, version="1.2.0")
+        await delivery.deliver(
+            db,
+            kind=InboxKind.review_requested,
+            recipients=[r.id for r in reviewers],
+            subject=sources.subject_from_entity(entity, "skill", version="1.2.0"),
+            actor_id=author.id,
+        )
         await db.commit()
         assert (
             await sources.on_review_withdrawn(db, entity, subject_type="skill", actor_id=author.id, version="1.2.0")
@@ -656,50 +668,6 @@ async def test_resolving_stamps_and_clears_resolved_at(sessions):
 
 
 @pytest.mark.asyncio
-async def test_review_notifications_follow_item_and_team_visibility(sessions):
-    async with sessions() as db:
-        admin = await _user(db, UserRole.admin)
-        global_reviewer = await _user(db, UserRole.reviewer)
-        team_owner = await _user(db)
-        team_reviewer = await _user(db)
-        team_member = await _user(db)
-        other_owner = await _user(db)
-
-        team = Team(id=uuid.uuid4(), name="Team", handle="team", created_by=team_owner.id)
-        other = Team(id=uuid.uuid4(), name="Other", handle="other", created_by=other_owner.id)
-        db.add_all([team, other])
-        await db.flush()
-        db.add_all(
-            [
-                TeamMembership(team_id=team.id, user_id=team_owner.id, role=TeamRole.owner),
-                TeamMembership(team_id=team.id, user_id=team_reviewer.id, role=TeamRole.reviewer),
-                TeamMembership(team_id=team.id, user_id=team_member.id, role=TeamRole.member),
-                TeamMembership(team_id=other.id, user_id=other_owner.id, role=TeamRole.owner),
-            ]
-        )
-        await db.commit()
-
-        class _Entity:
-            def __init__(self, is_private, team_id):
-                self.is_private = is_private
-                self.team_id = team_id
-
-        cases = [
-            ("public", _Entity(False, None), {admin.id, global_reviewer.id}),
-            (
-                "public-team",
-                _Entity(False, team.id),
-                {admin.id, global_reviewer.id, team_owner.id, team_reviewer.id},
-            ),
-            ("team-private", _Entity(True, team.id), {team_owner.id, team_reviewer.id}),
-            ("personal-private", _Entity(True, None), {admin.id}),
-        ]
-        for label, entity, expected in cases:
-            actual = set(await recipients.reviewers_for(db, entity))
-            assert actual == expected, label
-
-
-@pytest.mark.asyncio
 async def test_team_owners_receive_team_scoped_items(sessions):
     async with sessions() as db:
         owner = await _user(db)
@@ -713,24 +681,6 @@ async def test_team_owners_receive_team_scoped_items(sessions):
 
         got = await recipients.team_owners(db, team.id)
         assert got == [owner.id]
-
-
-@pytest.mark.asyncio
-async def test_an_admin_who_is_also_a_team_reviewer_is_listed_once(sessions):
-    async with sessions() as db:
-        admin = await _user(db, UserRole.admin)
-        team = Team(id=uuid.uuid4(), name="T", handle="t", created_by=admin.id)
-        db.add(team)
-        await db.flush()
-        db.add(TeamMembership(team_id=team.id, user_id=admin.id, role=TeamRole.reviewer))
-        await db.commit()
-
-        class _Entity:
-            is_private = True
-            team_id = team.id
-
-        got = await recipients.reviewers_for(db, _Entity())
-        assert got.count(admin.id) == 1
 
 
 @pytest.mark.asyncio
@@ -779,6 +729,51 @@ async def test_removed_member_stops_seeing_a_private_subject(sessions):
         await db.commit()
 
         assert await visibility.visible_to(db, item, member) is False
+
+
+@pytest.mark.asyncio
+async def test_reviewer_copy_of_a_decision_is_rechecked_after_losing_membership(sessions):
+    """OBS-1440: requested reviewers now hear approvals and publications.
+
+    Those kinds skip the membership re-check for the submitter, but a reviewer's
+    copy is not theirs in that sense: once removed from the private team, the
+    reviewer stops seeing it, in the row check and in the SQL count alike.
+    """
+    from api.routes.inbox import inbox_count
+    from services.inbox.registry import REVIEWER_AUDIENCE
+
+    async with sessions() as db:
+        owner = await _user(db)
+        reviewer = await _user(db)
+        team = Team(id=uuid.uuid4(), name="T", handle="t", created_by=owner.id)
+        db.add(team)
+        await db.flush()
+        membership = TeamMembership(team_id=team.id, user_id=reviewer.id, role=TeamRole.reviewer)
+        db.add(membership)
+        await db.commit()
+
+        subject = await _listed_subject(db, owner, team_id=team.id, is_private=True)
+        author_copy = await delivery.deliver_one(
+            db, kind=InboxKind.review_approved, user_id=owner.id, subject=subject, context={"review_number": 1}
+        )
+        reviewer_copy = await delivery.deliver_one(
+            db,
+            kind=InboxKind.review_approved,
+            user_id=reviewer.id,
+            subject=subject,
+            context={"review_number": 1, "audience": REVIEWER_AUDIENCE},
+        )
+        await db.commit()
+        assert await visibility.visible_to(db, reviewer_copy, reviewer) is True
+        assert (await inbox_count(facets=False, facet_state=InboxState.open, db=db, current_user=reviewer)).unread == 1
+
+        await db.delete(membership)
+        await db.commit()
+
+        assert await visibility.visible_to(db, reviewer_copy, reviewer) is False
+        assert (await inbox_count(facets=False, facet_state=InboxState.open, db=db, current_user=reviewer)).unread == 0
+        # The submitter's own decision notice still reads regardless.
+        assert await visibility.visible_to(db, author_copy, owner) is True
 
 
 @pytest.mark.asyncio
@@ -1229,16 +1224,16 @@ async def test_counts_omit_facets_unless_asked(sessions):
 
 
 @pytest.mark.asyncio
-async def test_resolved_unread_items_count_until_read_and_are_reported(sessions):
-    """OBS-1406: the badge said 4 while the Open bucket was empty.
+async def test_badge_counts_only_unread_open_items(sessions):
+    """OBS-1440: the badge said 19 while the Open bucket listed 4.
 
-    An item resolved before the user opened it still counts as unread, so the
-    badge keeps it. The count reports how much of that sits in Done/Dismissed so
-    the Inbox can point at it, and reading the item is what clears it.
+    Items resolved by someone else's action sit in Done or Dismissed; the event
+    that resolved them arrives as its own message. The badge counts only the
+    unread rows the default Open list shows.
     """
     async with sessions() as db:
         user = await _user(db)
-        await _deliver_named(db, user, namespace="super", slug="still-open")
+        still_open = await _deliver_named(db, user, namespace="super", slug="still-open")
         withdrawn = await _deliver_named(db, user, namespace="super", slug="withdrawn")
         dropped = await _deliver_named(db, user, namespace="super", slug="dropped")
         delivery.resolve(db, withdrawn, state=InboxState.done)
@@ -1246,15 +1241,17 @@ async def test_resolved_unread_items_count_until_read_and_are_reported(sessions)
         await db.commit()
 
         counts = await _counts(db, user)
-        assert counts.unread == 3
-        assert (counts.unread_done, counts.unread_dismissed) == (1, 1)
-        # Not listed in the default Open bucket, which is why the page must point at them.
-        assert (await _list(db, user, state=InboxState.open)).total == 1
+        assert counts.unread == 1
+        assert counts.unread == (await _list(db, user, state=InboxState.open, unread=True)).total
 
-        delivery.mark_read(db, withdrawn)
+        delivery.mark_read(db, still_open)
         await db.commit()
-        cleared = await _counts(db, user)
-        assert (cleared.unread, cleared.unread_done, cleared.unread_dismissed) == (2, 0, 1)
+        assert (await _counts(db, user)).unread == 0
+
+        # Reopening a resolved item brings it back into the badge.
+        delivery.resolve(db, withdrawn, state=InboxState.open)
+        await db.commit()
+        assert (await _counts(db, user)).unread == 1
 
 
 @pytest.mark.asyncio

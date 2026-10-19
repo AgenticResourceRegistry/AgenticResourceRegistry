@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -947,34 +948,6 @@ export default function InboxPage() {
 
 	const groups = useMemo(() => groupItems(items, group), [items, group]);
 	const filtersActive = Boolean(kind || subjectType || actionOnly || query || unreadOnly);
-	// The nav badge counts unread items in every state, but the Open view lists only
-	// open ones. Say so, and offer a way into each resolved bucket that still has
-	// unread items, instead of "all caught up". Inside a resolved bucket the note
-	// follows the Unread filter that "Show unread" sets, so reading one bucket never
-	// hides the way to the other. Open keeps it under the Unread filter too, where
-	// "no matching" would otherwise hide items the badge still counts.
-	const resolvedTargets = (["done", "dismissed"] as const)
-		.map((b) => ({
-			bucket: b,
-			label: b === "done" ? "Done" : "Dismissed",
-			count: (b === "done" ? counts?.unread_done : counts?.unread_dismissed) ?? 0,
-		}))
-		.filter((t) => t.count > 0 && t.bucket !== bucket);
-	const resolvedUnread = resolvedTargets.reduce((sum, t) => sum + t.count, 0);
-	const resolvedUnreadNote =
-		resolvedUnread > 0 &&
-		!(kind || subjectType || actionOnly || query) &&
-		(bucket === "open" || unreadOnly);
-	const showResolvedUnread = (target: InboxState) => {
-		setBucket(target);
-		setUnreadOnly(true);
-		resetPage();
-	};
-	const resolvedActions = resolvedTargets.map((t) => (
-		<Button key={t.bucket} variant="ghost" onClick={() => showResolvedUnread(t.bucket)}>
-			{`Show unread in ${t.label}`}
-		</Button>
-	));
 	const selectedItem = items.find((item) => item.id === selectedId);
 
 	const railProps = {
@@ -1059,18 +1032,6 @@ export default function InboxPage() {
 										Try again
 									</Button>
 								</PaneState>
-							) : items.length === 0 && resolvedUnreadNote ? (
-								<PaneState
-									icon={InboxIcon}
-									title={
-										bucket === "open" && !unreadOnly
-											? `Nothing open, but ${resolvedUnread} unread`
-											: `Nothing unread here, but ${resolvedUnread} more unread`
-									}
-									copy="These were resolved before you opened them. Opening one marks it read."
-								>
-									{resolvedActions}
-								</PaneState>
 							) : items.length === 0 ? (
 								<PaneState
 									icon={InboxIcon}
@@ -1083,14 +1044,6 @@ export default function InboxPage() {
 								/>
 							) : (
 								<>
-									{resolvedUnreadNote && (
-										<div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-surface-raised px-3 py-2 text-2xs text-muted-foreground">
-											<span>
-												{`${resolvedUnread} resolved ${resolvedUnread === 1 ? "item" : "items"} you haven't opened`}
-											</span>
-											<span className="flex flex-wrap">{resolvedActions}</span>
-										</div>
-									)}
 									{groups.map((section) => (
 										<div key={section.label || "all"} className="mt-3 first:mt-0">
 											{section.label && <GroupHeading>{section.label}</GroupHeading>}
@@ -1231,18 +1184,12 @@ export default function InboxPage() {
 							<PaneState
 								icon={InboxIcon}
 								title={
-									filtersActive
-										? "No matching notifications"
-										: resolvedUnreadNote
-											? "Nothing open"
-											: "You are all caught up"
+									filtersActive ? "No matching notifications" : "You are all caught up"
 								}
 								copy={
 									filtersActive
 										? "Try clearing a filter or searching for something else."
-										: resolvedUnreadNote
-											? "Show the unread items on the left to read them."
-											: "Pick a notification on the left to see what it is asking for."
+										: "Pick a notification on the left to see what it is asking for."
 								}
 							/>
 						)}

@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal inbox"
 ---
@@ -46,6 +47,8 @@ Supported kinds are:
 * `insight_ready`
 * `system_notice`
 
+Submitting a component or Agent for review does not notify every reviewer. A `review_requested` item reaches only a reviewer someone requested on the review. Requested reviewers are then told when another reviewer approves and when the review is published. The author is told about approvals, change requests, and publication.
+
 JSON returns the direct paginated server object:
 
 ```json
@@ -66,7 +69,7 @@ observal inbox count --output json
 observal inbox count --facets --facet-state open --output json
 ```
 
-The basic result includes `unread`, `action_required`, `open`, `done`, and `dismissed`. `--facets` also returns `by_kind` and `by_subject_type`; `--facet-state` restricts those breakdowns and requires `--facets`.
+The basic result includes `unread`, `action_required`, `open`, `done`, and `dismissed`. `unread` and `action_required` count only open items, so `unread` matches the unread items the default Open list shows. `--facets` also returns `by_kind` and `by_subject_type`; `--facet-state` restricts those breakdowns and requires `--facets`.
 
 ## Show an item
 

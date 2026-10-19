@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Listing and version revisions are atomically rebound under PostgreSQL contention."""
@@ -35,7 +36,6 @@ async def test_tracked_visibility_and_manifest_lock_order(monkeypatch, writer_fi
     admin = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": f"{schema},public"}})
     monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=0))
     monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", AsyncMock(return_value=0))
     try:
         async with admin.begin() as conn:
