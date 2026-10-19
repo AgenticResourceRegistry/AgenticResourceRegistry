@@ -226,19 +226,22 @@ for (const override of [false, true]) test(`publish confirmation ${override ? "e
       : suffix === "/threads" || suffix === "/files" ? [] : detail });
   });
   await page.goto("/review/42");
+  // A super admin facing a blocked gate sees only the override action; the reason is asked in the dialog.
   if (override) {
-    await page.getByRole("textbox", { name: "Override reason" }).fill("Urgent release");
-    await page.getByRole("button", { name: "Publish with override" }).click();
-  } else {
-    await page.getByRole("button", { name: "Publish v1.0.0" }).click();
+    await expect(page.getByRole("button", { name: "Publish v1.0.0" })).toHaveCount(0);
+    await expect(page.getByRole("textbox", { name: "Override reason" })).toHaveCount(0);
   }
+  await expect(page.getByRole("textbox", { name: "Agent File category" })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Close reason" })).toHaveCount(0);
+  await page.getByRole("button", { name: override ? "Publish with override" : "Publish v1.0.0" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "Publish v1.0.0?" })).toBeVisible();
   await expect(dialog.getByText("Conversations are unresolved")).toBeVisible();
   if (override) {
-    await expect(dialog.getByText("Urgent release")).toBeVisible();
-    await expect(dialog.getByText("0 of 1 required approvals on revision 1")).toBeVisible();
+    await expect(dialog.getByText("0 of 1 required approvals (1 more needed)")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Confirm override" })).toBeDisabled();
+    await dialog.getByRole("textbox", { name: "Reason (required)" }).fill("Urgent release");
     await expect(dialog.getByText(/Confidentiality restrictions still apply/)).toBeVisible();
   }
   await page.screenshot({ path: testInfo.outputPath(`publish-confirm-${override ? "override" : "standard"}-desktop.png`) });
@@ -249,14 +252,52 @@ for (const override of [false, true]) test(`publish confirmation ${override ? "e
   else await page.getByRole("button", { name: "Publish v1.0.0" }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(dialog).toBeVisible();
+  if (override) await dialog.getByRole("textbox", { name: "Reason (required)" }).fill("Urgent release");
   await expect.poll(async () => {
     const box = await dialog.boundingBox();
     return !!box && box.x >= 0 && box.x + box.width <= 390;
   }).toBe(true);
   await page.screenshot({ path: testInfo.outputPath(`publish-confirm-${override ? "override" : "standard"}-mobile.png`) });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await dialog.getByRole("button", { name: override ? "Publish with override" : "Publish v1.0.0" }).click();
+  await dialog.getByRole("button", { name: override ? "Confirm override" : "Publish v1.0.0" }).click();
   await expect.poll(() => published.length).toBe(1);
   expect(published[0]).toEqual(override ? { override_reason: "Urgent release" } : {});
+  await expect(dialog).toHaveCount(0);
+});
+
+test("close review asks for a reason in a dialog", async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("observal_access_token", "review-ui-test");
+    localStorage.setItem("observal_user_role", "reviewer");
+  });
+  const gate = { ready: false, approvals: 0, required: 1, policy_source: "organization", requirements: ["required_approvals"] };
+  const detail = {
+    ...summary(42, "Skill: verify source", "skill"), gate,
+    body: "", opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
+    base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    revisions: [{ id, number: 1, message: "First release", created_by: id, created_at: now, pruned: false }],
+    requested_reviewers: [], reviewer_names: {},
+    checks: { pass: 0, fail: 0, warn: 0, skipped: 0, queued: 0, running: 0, error: 0 },
+  };
+  const closed: unknown[] = [];
+  await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
+  await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id: "reviewer", username: "reviewer", role: "reviewer" } }));
+  await page.route("**/api/v1/reviews/42**", route => {
+    const suffix = new URL(route.request().url()).pathname.replace("/api/v1/reviews/42", "");
+    if (suffix === "/close") { closed.push(route.request().postDataJSON()); return route.fulfill({ json: { state: "closed" } }); }
+    return route.fulfill({ json: suffix === "/gate" ? gate : suffix === "/timeline" ? { items: [], next_cursor: null }
+      : suffix === "/threads" || suffix === "/files" ? [] : detail });
+  });
+  await page.goto("/review/42");
+  await expect(page.getByRole("textbox", { name: "Close reason" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close review" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByRole("heading", { name: "Close review #42?" })).toBeVisible();
+  const confirm = dialog.getByRole("button", { name: "Close review" });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByRole("textbox", { name: "Reason (required)" }).fill("Duplicate of #41");
+  await confirm.click();
+  await expect.poll(() => closed.length).toBe(1);
+  expect(closed[0]).toEqual({ reason: "Duplicate of #41" });
   await expect(dialog).toHaveCount(0);
 });
