@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Page } from "@playwright/test";
@@ -6,11 +7,17 @@ import { Page } from "@playwright/test";
 /** Base URL for the Observal API */
 export const API_BASE = process.env.API_BASE ?? "http://localhost";
 
-let _cachedToken: string | null = null;
+type TestLogin = {
+  access_token: string;
+  refresh_token: string;
+  user: { role: string; name: string; email: string; username?: string | null; avatar_url?: string | null };
+};
 
-/** Get an access token by logging in with demo admin credentials (cached per worker) */
-export async function getAccessToken(): Promise<string> {
-  if (_cachedToken) return _cachedToken;
+let _cachedLogin: TestLogin | null = null;
+
+/** Cache the complete server-issued pair so browser fixtures use real auth state. */
+async function getLogin(): Promise<TestLogin> {
+  if (_cachedLogin) return _cachedLogin;
   const email = process.env.DEMO_ADMIN_EMAIL ?? "admin@demo.example";
   const password = process.env.DEMO_ADMIN_PASSWORD ?? "admin-changeme";
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -25,26 +32,32 @@ export async function getAccessToken(): Promise<string> {
     }
     if (!res.ok) throw new Error(`Login failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
     const data = await res.json();
-    if (data.access_token) {
-      _cachedToken = data.access_token;
-      return data.access_token as string;
+    if (data.access_token && data.refresh_token && data.user) {
+      _cachedLogin = data as TestLogin;
+      return _cachedLogin;
     }
-    throw new Error(`Login response missing access token (${res.status})`);
+    throw new Error(`Login response missing credentials or user (${res.status})`);
   }
   throw new Error("Login failed after retries");
+}
+
+/** Get the server-issued access token for API-only fixtures. */
+export async function getAccessToken(): Promise<string> {
+  return (await getLogin()).access_token;
 }
 
 /** @deprecated Use getAccessToken */
 export const getApiKey = getAccessToken;
 
-/** Login to the web UI by setting localStorage */
+/** Initialize browser auth using the same atomic login path as the product. */
 export async function loginToWebUI(page: Page) {
-  const token = await getAccessToken();
+  const login = await getLogin();
   await page.goto("/");
-  await page.evaluate((t) => {
-    sessionStorage.setItem("observal_access_token", t);
-    localStorage.setItem("observal_user_role", "admin");
-  }, token);
+  const committed = await page.evaluate(async (data) => {
+    const { commitLogin, loginStart } = await import("/src/lib/api.ts");
+    return commitLogin(data, loginStart());
+  }, login);
+  if (!committed) throw new Error("Browser rejected server-issued login pair");
   await page.reload();
 }
 
