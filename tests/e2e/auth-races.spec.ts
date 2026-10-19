@@ -10,6 +10,17 @@ const B = jwt("actor-b", "access");
 const AR = jwt("actor-a", "refresh");
 const BR = jwt("actor-b", "refresh");
 
+test("token subjects decode UTF-8 and reject malformed payloads", async ({ page }) => {
+  await page.goto("/login");
+  expect(await page.evaluate(async () => {
+    const { tokenSubject } = await import("/src/lib/api.ts");
+    const subject = "用户-ø";
+    const bytes = new TextEncoder().encode(JSON.stringify({ sub: subject }));
+    const encoded = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return [tokenSubject(`x.${encoded}.y`), tokenSubject("x.////.y")];
+  })).toEqual(["用户-ø", null]);
+});
+
 async function seed(page: Page, access: string | null, refresh: string) {
   await page.goto("/login");
   await page.evaluate(({ access, refresh }) => {

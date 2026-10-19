@@ -131,7 +131,10 @@ export function tokenSubject(token: string | null): string | null {
 	const parts = token.split(".");
 	if (parts.length !== 3) return null;
 	try {
-		const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+		const bytes = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
+		const payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+			Uint8Array.from(bytes, (char) => char.charCodeAt(0)),
+		));
 		return typeof payload?.sub === "string" && payload.sub.trim() && payload.sub === payload.sub.trim()
 			? payload.sub : null;
 	} catch {
