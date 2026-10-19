@@ -2322,6 +2322,8 @@ def write_install_snippet(
         allowed_toml_dir: Path | None = None,
     ) -> str:
         try:
+            if requested_toml_path is None and allowed_toml_dir is None:
+                return _write_file_checked(path, content, merge_mcp=merge_mcp)
             return _write_file_checked(
                 path,
                 content,
