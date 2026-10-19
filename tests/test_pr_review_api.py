@@ -743,6 +743,30 @@ async def test_disputed_request_can_be_withdrawn_without_a_revision(api):
 
 
 @pytest.mark.asyncio
+async def test_legacy_null_timestamp_does_not_outrank_recent_reviewer_approval(api):
+    client, current, (_, reviewer, _, _), (rid, number), factory = api
+    current[0] = reviewer
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        db.add(
+            ReviewSubmission(
+                review_id=rid,
+                revision_id=review.head_revision_id,
+                reviewer_id=reviewer.id,
+                verdict="request_changes",
+                state="dismissed",
+                submitted_at=None,
+            )
+        )
+        await db.commit()
+    assert (await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve"})).status_code == 201
+    queue = await client.get("/api/v1/reviews?needs=my_review&state=all")
+    assert queue.status_code == 200, queue.text
+    assert number not in [row["number"] for row in queue.json()["items"]]
+    assert (await client.get(f"/api/v1/reviews/{number}/gate")).json()["approvals"] == 1
+
+
+@pytest.mark.asyncio
 async def test_newer_withdrawn_request_does_not_resurrect_old_decisions(api):
     client, current, (_, reviewer, _, _), (_, number), _ = api
     base = f"/api/v1/reviews/{number}"
