@@ -2643,7 +2643,9 @@ def register_pull(app: typer.Typer):
                         is_user_scope=is_user_scope,
                     )
                 )
-                error.result["reports_sessions"] = _reports_written_sessions(paths)
+                error.result["reports_sessions"] = (
+                    _reports_written_sessions(paths) or adapter.reports_sessions_outside_pull()
+                )
                 if error.result["reports_sessions"]:
                     disclose_telemetry()
             raise
