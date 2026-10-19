@@ -119,6 +119,24 @@ def main(
     # One-time local state migrations
     _try_lockfile_migration()
 
+    if ctx.invoked_subcommand != "auth":
+        _warn_if_login_expired()
+
+
+def _warn_if_login_expired() -> None:
+    """Say so when hooks found the login revoked; their session pushes are failing."""
+    from observal_cli.errors import machine_output_requested
+    from observal_cli.sessions.base import login_expired
+
+    if machine_output_requested() or not login_expired():
+        return
+    from rich.console import Console
+
+    Console(stderr=True).print(
+        "[yellow]Your Observal login was revoked or has expired (a web logout signs out every device), "
+        "so sessions are not being sent. Run `observal auth login` to resume.[/yellow]"
+    )
+
 
 def _migrate_legacy_mcp_configs() -> None:
     """Rewrite legacy wrapped MCP entries before running a command."""
