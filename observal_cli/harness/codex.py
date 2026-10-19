@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -65,9 +66,25 @@ class CodexAdapter(BaseAdapter):
         match = re.search(r"([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$", path.stem)
         return match.group(1) if match else path.stem
 
+    def session_worker_environment(self) -> dict[str, str]:
+        """Keep Codex's relative home anchored to the hook's working directory."""
+        codex_home = os.environ.get("CODEX_HOME")
+        if codex_home and not Path(codex_home).expanduser().is_absolute():
+            return {"CODEX_HOME": str(Path(codex_home).expanduser().resolve())}
+        return {}
+
+    @staticmethod
+    def _sessions_root(home: Path | None) -> Path:
+        # Explicit home is used by isolated consumers/tests. Production hooks pass None.
+        codex_home = (
+            (home / ".codex")
+            if home is not None
+            else Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+        )
+        return (codex_home / "sessions").resolve()
+
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
-        home = home or Path.home()
-        root = home / ".codex" / "sessions"
+        root = self._sessions_root(home)
         if not root.is_dir():
             return None
         session_id = str(event.get("session_id") or event.get("thread_id") or "")
@@ -92,8 +109,7 @@ class CodexAdapter(BaseAdapter):
         home: Path | None = None,
         since_hours: int = 168,
     ) -> list[SessionSource]:
-        home = home or Path.home()
-        root = home / ".codex" / "sessions"
+        root = self._sessions_root(home)
         if not root.is_dir():
             return []
         cutoff = time.time() - since_hours * 3600
