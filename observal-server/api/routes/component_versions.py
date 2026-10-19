@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Factory that generates versioning sub-routers for all 5 component types.
@@ -27,6 +28,7 @@ from api.deps import (
     get_db,
     get_effective_component_permission,
     get_registry_user,
+    hidden_unapproved_listing,
     may_view_unapproved,
     require_role,
     resolve_visible_listing,
@@ -115,7 +117,7 @@ async def _list_versions(
     listing = await resolve_visible_listing(
         listing_model, listing_id, db, current_user, **({"load_options": summary_options} if summary_options else {})
     )
-    if not listing:
+    if not listing or hidden_unapproved_listing(listing, current_user):
         raise HTTPException(status_code=404, detail="Listing not found")
 
     # A version carries the real payload: prompt templates, MCP commands and args,
@@ -175,6 +177,7 @@ async def _get_version(
 ) -> dict:
     optic.trace("listing_id={}, version={}", listing_id, version)
     if component_type == "skill":
+        # _authorized_version applies the skill review rules, which include team reviewers.
         listing = await resolve_visible_listing(
             SkillListing, listing_id, db, current_user, load_options=_BODY_FREE_LISTING
         )
@@ -196,7 +199,7 @@ async def _get_version(
         return result
 
     listing = await resolve_visible_listing(listing_model, listing_id, db, current_user)
-    if not listing:
+    if not listing or hidden_unapproved_listing(listing, current_user):
         raise HTTPException(status_code=404, detail="Listing not found")
 
     version_filters = [version_model.listing_id == listing.id, version_model.version == version]
@@ -387,7 +390,7 @@ async def _version_suggestions(
 ) -> dict:
     optic.trace("listing_id={}, listing_model={}", listing_id, listing_model)
     listing = await resolve_visible_listing(listing_model, listing_id, db, current_user)
-    if not listing:
+    if not listing or hidden_unapproved_listing(listing, current_user):
         raise HTTPException(status_code=404, detail="Listing not found")
 
     from services.versioning import suggest_versions
