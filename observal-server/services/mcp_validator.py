@@ -142,7 +142,7 @@ async def _refresh_review_snapshot(listing: McpListing, db: AsyncSession) -> Non
     if version is None:
         return
     try:
-        if await resubmit_if_changed(db, "mcp", listing, version, MCP_VALIDATION_MESSAGE):
+        if await resubmit_if_changed(db, "mcp", listing, version, MCP_VALIDATION_MESSAGE, system_generated=True):
             await db.commit()
     except Exception:
         await db.rollback()

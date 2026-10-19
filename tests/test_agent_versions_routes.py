@@ -297,7 +297,7 @@ def boundaries(monkeypatch):
 
 def test_summary_and_detail_serialize_version_owned_fields():
     components = [
-        _component(name="GitHub"),
+        _component(name="GitHub", config_override={"env": {"MODE": "safe"}}),
         _component("skill", SKILL_ID, name="", resolved_version=None, order=1),
     ]
     version = _version(components=components)
@@ -329,6 +329,7 @@ def test_summary_and_detail_serialize_version_owned_fields():
             "component_id": str(MCP_ID),
             "name": "GitHub",
             "resolved_version": "1.2.3",
+            "config_override": {"env": {"MODE": "safe"}},
         },
         {
             "component_type": "skill",

@@ -707,6 +707,16 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
   const { data: versionDetail, isLoading: isVersionDetailLoading } = useAgentVersionDetail(id, selectedVersion);
   const effectiveVersionForDetail = selectedVersion ?? latestApprovedVersion ?? (agent as unknown as AgentDetail | undefined)?.version ?? null;
   const { data: effectiveVersionDetail } = useAgentVersionDetail(id, effectiveVersionForDetail);
+  // The Edit tab always amends the listing's current version, even if the overview
+  // is displaying a different (for example, last approved) release.
+  const editVersion = (agent as unknown as AgentDetail | undefined)?.version ?? null;
+  const {
+    data: editVersionDetail,
+    isLoading: editVersionLoading,
+    isError: editVersionFailed,
+    error: editVersionError,
+    refetch: refetchEditVersion,
+  } = useAgentVersionDetail(id, editVersion);
   // Freshness badges describe the rows on screen: the selected version's components,
   // or by default `component_links`, which come from the agent's current version.
   const pinnedRowsVersion = selectedVersion ?? (agent as unknown as AgentDetail | undefined)?.version ?? null;
@@ -1165,14 +1175,21 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
                 </TabsContent>
                 {canEdit && (
                   <TabsContent value="edit" className="mt-6">
-                    {isVersionContentLoading ? (
+                    {editVersionLoading && !editVersionDetail ? (
                       <VersionContentLoading />
+                    ) : !editVersionDetail ? (
+                      // Never open the form without the version: its defaults (such as empty
+                      // success criteria) would overwrite stored fields on save.
+                      <ErrorState
+                        message={editVersionFailed ? (editVersionError?.message ?? "Could not load this version for editing.") : "Could not load this version for editing."}
+                        onRetry={() => void refetchEditVersion()}
+                      />
                     ) : (
                       <AgentEditForm
                         agentId={id}
                         agent={a as unknown as AgentEditFormProps["agent"]}
-                        versionDetail={vd}
-                        currentVersion={effectiveVersion ?? "1.0.0"}
+                        versionDetail={editVersionDetail}
+                        currentVersion={editVersion ?? "1.0.0"}
                       />
                     )}
                   </TabsContent>

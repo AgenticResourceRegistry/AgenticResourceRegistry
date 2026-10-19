@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -18,6 +19,7 @@ from models.review import Review, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
 from services.review.cutover import submit_for_review
+from services.review.decisions import MCP_VALIDATION_MESSAGE, SYSTEM_REVISION_MESSAGES
 
 
 @pytest.mark.asyncio
@@ -60,6 +62,46 @@ async def test_submit_creates_review_in_same_transaction_and_notifies_reviewer(m
         assert notice.kind == InboxKind.review_requested
         assert notice.payload["review_number"] == review.number
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", sorted(SYSTEM_REVISION_MESSAGES))
+async def test_authored_submission_cannot_use_system_revision_messages(monkeypatch, message):
+    import services.review.cutover as cutover
+
+    lookup = AsyncMock()
+    push = AsyncMock()
+    monkeypatch.setattr(cutover, "_draft_already_under_review", lookup)
+    monkeypatch.setattr(cutover, "open_or_push", push)
+
+    with pytest.raises(HTTPException) as exc:
+        await submit_for_review(None, "mcp", None, None, uuid.uuid4(), message=message)
+
+    assert exc.value.status_code == 422
+    lookup.assert_not_awaited()
+    push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mcp_validator_can_submit_its_reserved_revision_message(monkeypatch):
+    import services.review.cutover as cutover
+
+    review = SimpleNamespace(number=42, state=ReviewState.open)
+    push = AsyncMock(return_value=review)
+    monkeypatch.setattr(cutover, "_draft_already_under_review", AsyncMock(return_value=None))
+    monkeypatch.setattr(cutover, "open_or_push", push)
+    monkeypatch.setattr(cutover, "_head", AsyncMock(return_value=SimpleNamespace(number=2)))
+    monkeypatch.setattr(cutover, "deliver_event", AsyncMock())
+    version = SimpleNamespace(status=ListingStatus.pending)
+    actor_id = uuid.uuid4()
+
+    assert (
+        await submit_for_review(
+            None, "mcp", None, version, actor_id, message=MCP_VALIDATION_MESSAGE, system_generated=True
+        )
+        is review
+    )
+    assert push.await_args.kwargs["message"] == MCP_VALIDATION_MESSAGE
 
 
 @pytest.mark.asyncio

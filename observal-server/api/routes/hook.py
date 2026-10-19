@@ -42,7 +42,7 @@ from schemas.hook import (
     HookSubmitRequest,
     HookUpdateRequest,
 )
-from services.component_edit_target import editable_version
+from services.component_edit_target import editable_version, reject_listing_edits_on_successor
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.registry_namespace import identity_exists
 from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
@@ -382,6 +382,7 @@ async def update_hook_draft(
             status_code=400, detail="Only draft, rejected, pending, or changes-requested listings can be edited"
         )
     _reject_visibility_edits(listing, req)
+    reject_listing_edits_on_successor(listing, ver, req, ("name", "owner"))
 
     for field in (
         "version",
