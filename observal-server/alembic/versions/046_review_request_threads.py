@@ -147,7 +147,12 @@ def upgrade() -> None:
     op.create_index(
         "ix_review_submission_latest_decision",
         "review_submissions",
-        ["review_id", "reviewer_id", "submitted_at", "id"],
+        [
+            "review_id",
+            "reviewer_id",
+            sa.literal_column("submitted_at").desc().nulls_last(),
+            sa.literal_column("id").desc(),
+        ],
     )
     backfill()
 

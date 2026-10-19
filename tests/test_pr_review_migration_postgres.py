@@ -187,10 +187,10 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
                 )
                 assert any(row["column_names"] == ["change_request_id"] for row in unique)
                 assert any(row["column_names"] == ["submission_id"] for row in inspector.get_indexes("review_comments"))
-                assert any(
-                    row["column_names"] == ["review_id", "reviewer_id", "submitted_at", "id"]
-                    for row in inspector.get_indexes("review_submissions")
+                index_def = sync.execute(
+                    text("SELECT pg_get_indexdef('ix_review_submission_latest_decision'::regclass)")
                 )
+                assert "(review_id, reviewer_id, submitted_at DESC NULLS LAST, id DESC)" in index_def.scalar_one()
 
             await conn.run_sync(constraints)
         historical_thread_id = await verify_conversations()
