@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { auth, prReviews } from "@/lib/api";
 import type { ReviewDetail, ReviewFile, ReviewGate, ReviewGateCheck, ReviewThread, ReviewTimelineEntry, ReviewVerdict } from "@/lib/types";
 import { useAuthGuard } from "@/hooks/use-auth";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -182,6 +183,7 @@ export default function ReviewDetailPage() {
   const [showSubmit, setShowSubmit] = useState(false);
   const [category, setCategory] = useState("");
   const [override, setOverride] = useState("");
+  const [publishConfirmation, setPublishConfirmation] = useState<{ overrideReason?: string; category?: string } | null>(null);
   const [reason, setReason] = useState("");
   const [requestedId, setRequestedId] = useState("");
   const { data: me } = useQuery({ queryKey: ["auth", "whoami"], queryFn: auth.whoami });
@@ -237,14 +239,47 @@ export default function ReviewDetailPage() {
   const openItems = openItemMessages(gate);
   const totalAdditions = (fileMetadata ?? []).reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const totalDeletions = (fileMetadata ?? []).reduce((sum, file) => sum + (file.deletions ?? 0), 0);
-  const publish = (overrideReason?: string) => {
-    const pending = openItems.length ? `\n\nOpen items (advisory):\n${openItems.map(item => `• ${item}`).join("\n")}` : "";
-    const question = overrideReason ? `Publish v${review.version} with a super admin override? This skips every requirement and is audited.` : `Publish v${review.version}?`;
-    if (window.confirm(question + pending)) action.mutate(() => prReviews.publish(number, category || undefined, overrideReason));
+  const publish = (overrideReason?: string) => setPublishConfirmation({ category: category || undefined, overrideReason });
+  const confirmPublish = () => {
+    if (!publishConfirmation || action.isPending) return;
+    action.mutate(
+      () => prReviews.publish(number, publishConfirmation.category, publishConfirmation.overrideReason),
+      { onSuccess: () => setPublishConfirmation(null) },
+    );
   };
   const reply = (id: string, body: string) => action.mutateAsync(() => prReviews.reply(number, id, body));
   const resolve = (id: string, value: boolean) => action.mutate(() => prReviews.resolve(number, id, value));
   return <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6">
+    <AlertDialog open={publishConfirmation !== null} onOpenChange={open => { if (!open && !action.isPending) setPublishConfirmation(null); }}>
+      <AlertDialogContent className="w-[calc(100vw-2rem)] max-w-md rounded-xl">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Publish v{review.version}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This makes revision {review.head_revision} of {review.title} available in the registry.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {publishConfirmation?.overrideReason && <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">
+          <p className="font-medium">Super admin override</p>
+          <p className="mt-1 text-muted-foreground">This bypasses review-gate criteria and is recorded in the audit trail. Confidentiality restrictions still apply.</p>
+          <p className="mt-2">{gate.approvals} of {gate.required} required approvals on revision {review.head_revision}</p>
+          <p className="mt-1 break-words"><span className="font-medium">Reason:</span> {publishConfirmation.overrideReason}</p>
+        </div>}
+        {openItems.length > 0 && <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <p className="font-medium">Open items · advisory</p>
+          <ul className="mt-2 max-h-36 list-disc space-y-1 overflow-y-auto pl-5 text-muted-foreground">
+            {openItems.map(item => <li key={item}>{item}</li>)}
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">These do not block manual publishing.</p>
+        </div>}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={action.isPending}>Cancel</AlertDialogCancel>
+          <Button type="button" disabled={action.isPending} onClick={confirmPublish}>
+            {action.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+            {action.isPending ? "Publishing…" : publishConfirmation?.overrideReason ? "Publish with override" : `Publish v${review.version}`}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     <header className="space-y-3">
       <Link to="/review" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" /> Review queue</Link>
       <div className="flex flex-wrap items-baseline gap-2"><h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight">{review.title}</h1><span className="font-mono text-xl text-muted-foreground">#{review.number}</span></div>

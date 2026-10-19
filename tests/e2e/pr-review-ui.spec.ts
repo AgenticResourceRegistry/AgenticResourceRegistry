@@ -193,3 +193,70 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
   await expect.poll(() => verdicts.length).toBe(1);
   expect(verdicts[0]).toEqual({ verdict: "approve", body: "" });
 });
+
+for (const override of [false, true]) test(`publish confirmation ${override ? "explains an override" : "shows advisory items"} without a browser prompt`, async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("observal_access_token", "review-ui-test");
+    localStorage.setItem("observal_user_role", "super_admin");
+  });
+  const gate = {
+    ready: !override, approvals: override ? 0 : 1, required: 1, policy_source: "organization",
+    requirements: override ? ["required_approvals", "unresolved_threads"] : ["unresolved_threads"],
+  };
+  const detail = {
+    ...summary(42, "Skill: verify source", "skill"), state: "approved", gate,
+    body: "", opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
+    base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    revisions: [{ id, number: 1, message: "First release", created_by: id, created_at: now, pruned: false }],
+    requested_reviewers: [], reviewer_names: {},
+    threads: { total: 1, unresolved: 1 },
+    checks: { pass: 0, fail: 0, warn: 0, skipped: 0, queued: 0, running: 0, error: 0 },
+  };
+  const published: unknown[] = [];
+  page.on("dialog", () => { throw new Error("Publish must not open a native browser dialog"); });
+  await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
+  await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id: "admin", username: "admin", role: "super_admin" } }));
+  await page.route("**/api/v1/reviews/42**", route => {
+    const suffix = new URL(route.request().url()).pathname.replace("/api/v1/reviews/42", "");
+    if (suffix === "/publish") {
+      published.push(route.request().postDataJSON());
+      return route.fulfill({ json: { state: "published" } });
+    }
+    return route.fulfill({ json: suffix === "/gate" ? gate : suffix === "/timeline" ? { items: [], next_cursor: null }
+      : suffix === "/threads" || suffix === "/files" ? [] : detail });
+  });
+  await page.goto("/review/42");
+  if (override) {
+    await page.getByRole("textbox", { name: "Override reason" }).fill("Urgent release");
+    await page.getByRole("button", { name: "Publish with override" }).click();
+  } else {
+    await page.getByRole("button", { name: "Publish v1.0.0" }).click();
+  }
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Publish v1.0.0?" })).toBeVisible();
+  await expect(dialog.getByText("Conversations are unresolved")).toBeVisible();
+  if (override) {
+    await expect(dialog.getByText("Urgent release")).toBeVisible();
+    await expect(dialog.getByText("0 of 1 required approvals on revision 1")).toBeVisible();
+    await expect(dialog.getByText(/Confidentiality restrictions still apply/)).toBeVisible();
+  }
+  await page.screenshot({ path: testInfo.outputPath(`publish-confirm-${override ? "override" : "standard"}-desktop.png`) });
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(published).toHaveLength(0);
+  if (override) await page.getByRole("button", { name: "Publish with override" }).click();
+  else await page.getByRole("button", { name: "Publish v1.0.0" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog).toBeVisible();
+  await expect.poll(async () => {
+    const box = await dialog.boundingBox();
+    return !!box && box.x >= 0 && box.x + box.width <= 390;
+  }).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath(`publish-confirm-${override ? "override" : "standard"}-mobile.png`) });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await dialog.getByRole("button", { name: override ? "Publish with override" : "Publish v1.0.0" }).click();
+  await expect.poll(() => published.length).toBe(1);
+  expect(published[0]).toEqual(override ? { override_reason: "Urgent release" } : {});
+  await expect(dialog).toHaveCount(0);
+});

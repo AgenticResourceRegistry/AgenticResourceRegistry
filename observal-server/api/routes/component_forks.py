@@ -25,6 +25,8 @@ from schemas.prompt import PromptListingResponse, PromptListingSummary
 from schemas.sandbox import SandboxListingResponse, SandboxListingSummary
 from schemas.skill import SkillListingResponse, SkillListingSummary
 from services import dynamic_settings
+from services.component_edit_target import editable_version
+from services.component_version_extras import ALLOWED_FIELDS
 from services.fork_diff import fork_version_diff
 from services.registry_fork import (
     ForkRequestSpec,
@@ -59,9 +61,26 @@ async def component_response(
     listing, kind: str, current_user, db, *, count: int = 0, summary: bool = False, provenance=_UNRESOLVED
 ):
     model = SUMMARY_MODELS[kind] if summary else RESPONSE_MODELS[kind]
-    return await attach_fork_info(
-        model.model_validate(listing), listing, kind, current_user, db, count=count, provenance=provenance
-    )
+    response = model.model_validate(listing)
+    if kind != "skill" and get_effective_component_permission(listing, current_user) == "owner":
+        from services.registry_fork import COMPONENT_MODELS
+
+        _, version_model = COMPONENT_MODELS[kind]
+        editable = await editable_version(db, kind, listing, version_model)
+        if editable is not None and editable.id != listing.latest_version_id:
+            # The approved pointer stays on the installable release. Show authors the
+            # reviewed successor they can actually edit, without mutating the ORM pointer.
+            fields = {"version", "description", "status", "rejection_reason", "changelog", "supported_harnesses"}
+            fields.update(ALLOWED_FIELDS[kind])
+            updates = {
+                field: getattr(editable, field)
+                for field in fields & model.model_fields.keys()
+                if hasattr(editable, field)
+            }
+            if "git_url" in model.model_fields and hasattr(editable, "source_url"):
+                updates["git_url"] = editable.source_url
+            response = model.model_validate({**response.model_dump(), **updates})
+    return await attach_fork_info(response, listing, kind, current_user, db, count=count, provenance=provenance)
 
 
 async def attach_fork_info(

@@ -11,8 +11,9 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api.deps import get_current_user, get_db
+from api.deps import get_current_user, get_db, get_registry_user
 from api.routes.agent import router as agent_router
+from api.routes.mcp import router as mcp_router
 from api.routes.reviews import policy_router
 from api.routes.reviews import router as review_router
 from api.routes.reviews.queue import router as queue_router
@@ -20,7 +21,7 @@ from api.routes.skill import router as skill_router
 from models import Base
 from models.agent import AgentStatus, AgentVersion
 from models.inbox import InboxItem, InboxKind, InboxState
-from models.mcp import ListingStatus
+from models.mcp import ListingStatus, McpListing, McpVersion
 from models.review import Review, ReviewComment, ReviewSubmission
 from models.skill import SkillListing, SkillVersion
 from models.team import Team, TeamMembership, TeamRole
@@ -61,6 +62,7 @@ async def api(monkeypatch):
     app.include_router(review_router)
     app.include_router(policy_router)
     app.include_router(skill_router)
+    app.include_router(mcp_router)
     app.include_router(agent_router)
     user_ref = [author]
 
@@ -70,6 +72,7 @@ async def api(monkeypatch):
 
     app.dependency_overrides[get_db] = db_dep
     app.dependency_overrides[get_current_user] = lambda: user_ref[0]
+    app.dependency_overrides[get_registry_user] = lambda: user_ref[0]
 
     async def silent(*args, **kwargs):
         return []
@@ -754,3 +757,105 @@ async def test_author_reopens_a_withdrawn_review_from_the_review(api):
     async with factory() as db:
         version = await db.get(SkillVersion, (await db.get(Review, rid)).version_id)
         assert version.status == ListingStatus.pending
+
+
+@pytest.mark.asyncio
+async def test_edit_approved_mcp_successor_targets_pending_review_not_installable_release(api):
+    client, current, (author, reviewer, outsider, _), _, factory = api
+    async with factory() as db:
+        listing = McpListing(
+            name="Multi-version",
+            namespace="tests",
+            slug="multi-version",
+            category="general",
+            owner="author",
+            submitted_by=author.id,
+        )
+        db.add(listing)
+        await db.flush()
+        stable = McpVersion(
+            listing_id=listing.id,
+            version="1.0.0",
+            description="Stable",
+            command="old-command",
+            status=ListingStatus.approved,
+            released_by=author.id,
+            released_at=datetime.now(UTC),
+        )
+        db.add(stable)
+        await db.flush()
+        listing.latest_version_id = stable.id
+        listing_id, stable_id = listing.id, stable.id
+        await db.commit()
+    current[0] = author
+    created = await client.post(
+        f"/api/v1/mcps/{listing_id}/versions",
+        json={"version": "1.1.0", "description": "Before edit", "extra": {"command": "new-command"}},
+    )
+    assert created.status_code == 200, created.text
+    number, pending_id = created.json()["review_number"], uuid.UUID(created.json()["id"])
+    async with factory() as db:
+        assert (await db.get(McpListing, listing_id)).latest_version_id == stable_id
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
+    ).status_code == 201
+    current[0] = outsider
+    public_detail = await client.get(f"/api/v1/mcps/{listing_id}")
+    assert public_detail.status_code == 200, public_detail.text
+    assert public_detail.json()["version"] == "1.0.0" and public_detail.json()["status"] == "approved"
+    current[0] = author
+    detail = await client.get(f"/api/v1/mcps/{listing_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["version"] == "1.1.0" and detail.json()["status"] == "pending"
+    assert (await client.post(f"/api/v1/mcps/{listing_id}/start-edit")).status_code == 200
+    edited = await client.put(f"/api/v1/mcps/{listing_id}/draft", json={"description": "Corrected"})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["version"] == "1.1.0" and edited.json()["review_revision"] == 2
+    async with factory() as db:
+        assert (await db.get(McpVersion, pending_id)).description == "Corrected"
+        assert (await db.get(McpVersion, stable_id)).description == "Stable"
+        assert (await db.get(McpListing, listing_id)).latest_version_id == stable_id
+    # The corrected revision, not an accidental sibling, is the publish target.
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "corrected"})
+    ).status_code == 201
+    published = await client.post(f"/api/v1/reviews/{number}/publish", json={})
+    assert published.status_code == 200, published.text
+    async with factory() as db:
+        assert (await db.get(McpListing, listing_id)).latest_version_id == pending_id
+        assert (await db.get(McpVersion, pending_id)).description == "Corrected"
+
+
+@pytest.mark.asyncio
+async def test_publish_clears_abandoned_component_edit_lock(api):
+    client, current, (author, reviewer, _, _), _, factory = api
+    current[0] = author
+    created = await client.post(
+        "/api/v1/mcps/submit",
+        json={
+            "name": "Lock release",
+            "owner": "author",
+            "version": "1.0.0",
+            "description": "First",
+            "category": "general",
+            "command": "run",
+        },
+    )
+    assert created.status_code == 200, created.text
+    listing_id, number = created.json()["id"], created.json()["review_number"]
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
+    ).status_code == 201
+    current[0] = author
+    assert (await client.post(f"/api/v1/mcps/{listing_id}/start-edit")).status_code == 200
+    current[0] = reviewer
+    published = await client.post(f"/api/v1/reviews/{number}/publish", json={})
+    assert published.status_code == 200, published.text
+    async with factory() as db:
+        version = await db.scalar(select(McpVersion).where(McpVersion.listing_id == uuid.UUID(listing_id)))
+        assert version.status == ListingStatus.approved
+        assert version.is_editing is False
+        assert version.editing_by is None and version.editing_since is None

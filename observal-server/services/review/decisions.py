@@ -36,7 +36,7 @@ from services.agent_lock import (
     latest_release,
     lock_agent_version,
 )
-from services.editing_lock import is_actively_editing
+from services.editing_lock import is_actively_editing, release_edit_lock
 from services.review import check_config, ci
 from services.review.anchors import reanchor
 from services.review.checks import pinned_component_blockers, snapshot_checks
@@ -630,6 +630,8 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
         else ListingStatus.approved
     )
     version.rejection_reason = None
+    # Publication supersedes any abandoned author edit lock on this version.
+    release_edit_lock(version, version.editing_by, force=True)
     version.reviewed_at = _now()
     # A counted approver is the reviewer of record; an override can have none.
     approvals = (

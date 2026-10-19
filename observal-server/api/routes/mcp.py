@@ -45,6 +45,7 @@ from schemas.mcp import (
     McpSubmitRequest,
     McpUpdateRequest,
 )
+from services.component_edit_target import editable_version
 from services.config_generator import generate_config
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.mcp_validator import analyze_repo, run_validation
@@ -484,11 +485,11 @@ async def update_mcp_draft(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    ver = listing.latest_version
+    ver = await editable_version(db, "mcp", listing, McpVersion)
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version to update")
     await lock_review_for_edit(db, "mcp", ver)
-    if listing.status not in (
+    if ver.status not in (
         ListingStatus.draft,
         ListingStatus.rejected,
         ListingStatus.pending,
@@ -558,7 +559,7 @@ async def start_edit_mcp(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    ver = listing.latest_version
+    ver = await editable_version(db, "mcp", listing, McpVersion)
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version")
     if ver.status not in (
@@ -587,7 +588,7 @@ async def cancel_edit_mcp(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    ver = listing.latest_version
+    ver = await editable_version(db, "mcp", listing, McpVersion)
     if not ver:
         raise HTTPException(status_code=400, detail="Listing has no version")
     release_edit_lock(ver, current_user.id)
@@ -608,7 +609,8 @@ async def submit_mcp_draft(
         raise HTTPException(status_code=404, detail="Listing not found")
     if get_effective_component_permission(listing, current_user) != "owner":
         raise HTTPException(status_code=403, detail="Not the listing owner")
-    if listing.status not in (
+    ver = await editable_version(db, "mcp", listing, McpVersion)
+    if ver is None or ver.status not in (
         ListingStatus.draft,
         ListingStatus.rejected,
         ListingStatus.pending,
@@ -616,12 +618,12 @@ async def submit_mcp_draft(
     ):
         raise HTTPException(status_code=400, detail="Listing is not a draft")
 
-    if not listing.description:
+    if not ver.description:
         raise HTTPException(status_code=400, detail="Description is required before submitting")
-    if not listing.git_url and not listing.command and not listing.url:
+    if not ver.source_url and not ver.command and not ver.url:
         raise HTTPException(status_code=400, detail="At least one of git_url, command, or url is required")
 
-    review = await submit_for_review(db, "mcp", listing, listing.latest_version, current_user.id, message=message)
+    review = await submit_for_review(db, "mcp", listing, ver, current_user.id, message=message)
     await commit_or_name_conflict(db, "listing")
     await db.refresh(listing)
     response = await component_response(listing, "mcp", current_user, db)
