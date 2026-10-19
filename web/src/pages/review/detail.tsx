@@ -152,7 +152,7 @@ function openItemMessages(gate: ReviewGate): string[] {
 const blockingNote = <span className="ml-1.5 rounded-full bg-destructive/10 px-1.5 py-0.5 text-2xs font-normal text-destructive">Blocks publishing</span>;
 const advisoryNote = <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-2xs font-normal text-muted-foreground">Advisory</span>;
 
-function PublicationGate({ experimentalReviewChecks, review, gate, isAuthor, busy, onPublish, onWithdraw, onClose, category, setCategory, override, setOverride, reason, setReason, isSuperAdmin }: { experimentalReviewChecks: boolean; review: ReviewDetail; gate: ReviewGate; isAuthor: boolean; busy: boolean; onPublish: (overrideReason?: string) => void; onWithdraw: () => void; onClose: () => void; category: string; setCategory: (value: string) => void; override: string; setOverride: (value: string) => void; reason: string; setReason: (value: string) => void; isSuperAdmin: boolean }) {
+function PublicationGate({ experimentalReviewChecks, review, gate, isAuthor, busy, onPublish, onWithdraw, onClose, isSuperAdmin }: { experimentalReviewChecks: boolean; review: ReviewDetail; gate: ReviewGate; isAuthor: boolean; busy: boolean; onPublish: (override: boolean) => void; onWithdraw: () => void; onClose: () => void; isSuperAdmin: boolean }) {
   const openItems = new Set(gate.requirements);
   const { blocking, hard } = gateBlockers(gate);
   const note = (key: string) => blocking.includes(key) ? blockingNote : advisoryNote;
@@ -165,10 +165,10 @@ function PublicationGate({ experimentalReviewChecks, review, gate, isAuthor, bus
   const canPublishNormally = !(isAuthor && !review.self_approval_allowed);
   // A super admin can publish past approvals, checks and their own work, never past integrity rules.
   const showOverride = isSuperAdmin && hard.length === 0 && (!gate.ready || !canPublishNormally);
-  const publishButton = <Button size="sm" disabled={!gate.ready || busy} aria-describedby={blockers.length ? "publish-blockers" : undefined} onClick={() => onPublish()}>Publish v{review.version}</Button>;
+  const publishButton = <Button size="sm" disabled={!gate.ready || busy} aria-describedby={blockers.length ? "publish-blockers" : undefined} onClick={() => onPublish(false)}>Publish v{review.version}</Button>;
   return <section className={`overflow-hidden rounded-xl border bg-card shadow-sm ${gate.ready ? "border-success/50" : "border-border"}`} aria-label="Publication gate">
     <h2 className="sr-only">Publication gate</h2>
-    <div className="flex items-start gap-3 border-b border-border px-4 py-3"><span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full ${gate.ready ? "bg-success text-success-foreground" : "bg-warning/20 text-foreground"}`}>{gate.ready ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}</span><div><p className="text-sm font-semibold">{gate.ready ? "Ready to publish" : "Publication gate"}</p><p className="text-xs text-muted-foreground">{gate.ready ? (advisory.length ? `Required approvals are met. ${advisory.length} open ${advisory.length === 1 ? "item is" : "items are"} worth a look before publishing.` : "Required approvals are met.") : "Publishing unlocks when the approvals and required checks pass. Change requests, conversations and edit locks are advisory."}</p></div></div>
+    <div className="flex items-start gap-3 border-b border-border px-4 py-3"><span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full ${gate.ready ? "bg-success text-success-foreground" : "bg-warning/20 text-foreground"}`}>{gate.ready ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}</span><div><p className="text-sm font-semibold">Publication gate</p>{(!gate.ready || advisory.length > 0) && <p className="text-xs text-muted-foreground">{gate.ready ? `${advisory.length} open ${advisory.length === 1 ? "item is" : "items are"} worth a look before publishing.` : "Publishing unlocks when the approvals and required checks pass. Change requests, conversations and edit locks are advisory."}</p>}</div></div>
     <div className="divide-y divide-border text-sm">
       <div className="flex items-start gap-3 px-4 py-2.5"><span className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded-full text-2xs ${gate.approvals >= gate.required ? "bg-success text-success-foreground" : "bg-warning/20 text-foreground"}`}>{gate.approvals >= gate.required ? <Check className="size-3" /> : "·"}</span><div><p className="font-medium">{gate.approvals} of {gate.required} approvals on revision {review.head_revision}</p><p className="text-xs text-muted-foreground">{gate.policy_source} policy · required to publish</p></div></div>
       {showChecks && <div className="flex items-start gap-3 px-4 py-2.5">{checksFailing ? <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" /> : <Check className="mt-0.5 size-4 shrink-0 text-success" />}<div><p className="font-medium">{checksFailing ? <>Required checks not passing{openItems.has("required_checks") ? note("required_checks") : note("mcp_validation")}</> : "Required checks passed"}</p>{checksFailing && <ul className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">{(gate.blocking_checks ?? []).map(check => <li key={check.id}>{describeCheck(check)}</li>)}{openItems.has("mcp_validation") && <li>{requirementLabels.mcp_validation}</li>}</ul>}{checksFailing && isAuthor && <p className="mt-0.5 text-xs text-muted-foreground">Fix these in the version, then submit a new revision.</p>}{!checksFailing && <p className="text-xs text-muted-foreground">{review.checks.queued + review.checks.running > 0 ? `${review.checks.queued + review.checks.running} automated check(s) still running` : "Automated checks configured for this scope; see the Checks tab for what each covered"}</p>}</div></div>}
@@ -177,11 +177,9 @@ function PublicationGate({ experimentalReviewChecks, review, gate, isAuthor, bus
       <div className="flex items-start gap-3 px-4 py-2.5"><MessageSquare className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><div><p className="font-medium">{review.threads.unresolved} unresolved {review.threads.unresolved === 1 ? "conversation" : "conversations"}{openItems.has("unresolved_threads") && advisoryNote}</p><p className="text-xs text-muted-foreground">Advisory · does not block publishing</p></div></div>
     </div>
     {active && <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
-      {!canPublishNormally ? <span className="text-xs text-muted-foreground">A reviewer will publish once the required approvals are met.</span> : blockers.length ? <TooltipProvider delayDuration={100}><Tooltip><TooltipTrigger asChild><span tabIndex={0} className="inline-flex cursor-not-allowed rounded-[var(--radius-control-compact)] focus-visible:outline-2 focus-visible:outline-ring">{publishButton}</span></TooltipTrigger><TooltipContent side="top" align="start" className="max-w-xs"><p className="font-semibold">Publishing is blocked</p><ul className="mt-1 list-disc space-y-0.5 pl-4">{blockers.map(message => <li key={message}>{message}</li>)}</ul>{advisory.length > 0 && <><p className="mt-2 font-semibold">Open items (advisory)</p><ul className="mt-1 list-disc space-y-0.5 pl-4">{advisory.map(message => <li key={message}>{message}</li>)}</ul></>}</TooltipContent></Tooltip></TooltipProvider> : publishButton}
-      {review.subject_type === "agent" && !isAuthor && <Input className="h-8 w-36" value={category} onChange={event => setCategory(event.target.value)} placeholder="Agent File category" aria-label="Agent File category" />}
-      {showOverride && <div className="flex flex-wrap items-center gap-2"><Input className="h-8 w-44" value={override} onChange={event => setOverride(event.target.value)} placeholder="Override reason" aria-label="Override reason" /><Button variant="outline" size="sm" disabled={!override.trim() || busy} onClick={() => onPublish(override)}>Publish with override</Button></div>}
+      {showOverride ? <Button size="sm" disabled={busy} onClick={() => onPublish(true)}>Publish with override</Button> : !canPublishNormally ? <span className="text-xs text-muted-foreground">A reviewer will publish once the required approvals are met.</span> : blockers.length ? <TooltipProvider delayDuration={100}><Tooltip><TooltipTrigger asChild><span tabIndex={0} className="inline-flex cursor-not-allowed rounded-[var(--radius-control-compact)] focus-visible:outline-2 focus-visible:outline-ring">{publishButton}</span></TooltipTrigger><TooltipContent side="top" align="start" className="max-w-xs"><p className="font-semibold">Publishing is blocked</p><ul className="mt-1 list-disc space-y-0.5 pl-4">{blockers.map(message => <li key={message}>{message}</li>)}</ul>{advisory.length > 0 && <><p className="mt-2 font-semibold">Open items (advisory)</p><ul className="mt-1 list-disc space-y-0.5 pl-4">{advisory.map(message => <li key={message}>{message}</li>)}</ul></>}</TooltipContent></Tooltip></TooltipProvider> : publishButton}
       <span className="flex-1" />
-      {isAuthor ? <Button size="sm" variant="outline" disabled={busy} onClick={onWithdraw}>Withdraw</Button> : <div className="flex flex-wrap items-center gap-2"><Input className="h-8 w-36" value={reason} onChange={event => setReason(event.target.value)} placeholder="Close reason" aria-label="Close reason" /><Button size="sm" variant="ghost" className="text-destructive" disabled={!reason.trim() || busy} onClick={onClose}>Close review</Button></div>}
+      {isAuthor ? <Button size="sm" variant="outline" disabled={busy} onClick={onWithdraw}>Withdraw</Button> : <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onClick={onClose}>Close review</Button>}
       {blockers.length > 0 && <p id="publish-blockers" className="basis-full text-xs text-muted-foreground"><span className="font-medium text-foreground">Blocked:</span> {blockers.join(" · ")}</p>}
       {hard.length > 0 && <p className="basis-full text-xs text-muted-foreground">Resolve these before publishing: no override skips them.</p>}
     </div>}
@@ -200,10 +198,10 @@ export default function ReviewDetailPage() {
   const [summary, setSummary] = useState("");
   const [verdict, setVerdict] = useState<ReviewVerdict>("comment");
   const [showSubmit, setShowSubmit] = useState(false);
-  const [category, setCategory] = useState("");
-  const [override, setOverride] = useState("");
-  const [publishConfirmation, setPublishConfirmation] = useState<{ overrideReason?: string; category?: string } | null>(null);
-  const [reason, setReason] = useState("");
+  const [publishConfirmation, setPublishConfirmation] = useState<{ override: boolean } | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [closing, setClosing] = useState(false);
+  const [closeReason, setCloseReason] = useState("");
   const [requestedId, setRequestedId] = useState("");
   const { data: me } = useQuery({ queryKey: ["auth", "whoami"], queryFn: auth.whoami });
   const { data: review, isPending, isError, refetch } = useQuery({ queryKey: ["pr-review", number], queryFn: () => prReviews.detail(number), refetchInterval: query => (query.state.data?.checks.queued ?? 0) + (query.state.data?.checks.running ?? 0) > 0 ? 5000 : false });
@@ -258,14 +256,20 @@ export default function ReviewDetailPage() {
   const openItems = openItemMessages(gate);
   const totalAdditions = (fileMetadata ?? []).reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const totalDeletions = (fileMetadata ?? []).reduce((sum, file) => sum + (file.deletions ?? 0), 0);
-  const publish = (overrideReason?: string) => setPublishConfirmation({ category: category || undefined, overrideReason });
+  const publish = (override: boolean) => { setOverrideReason(""); setPublishConfirmation({ override }); };
+  const overriding = !!publishConfirmation?.override;
   const confirmPublish = () => {
-    if (!publishConfirmation || action.isPending) return;
+    if (!publishConfirmation || action.isPending || (overriding && !overrideReason.trim())) return;
     action.mutate(
-      () => prReviews.publish(number, publishConfirmation.category, publishConfirmation.overrideReason),
+      () => prReviews.publish(number, undefined, overriding ? overrideReason.trim() : undefined),
       { onSuccess: () => setPublishConfirmation(null) },
     );
   };
+  const confirmClose = () => {
+    if (!closeReason.trim() || action.isPending) return;
+    action.mutate(() => prReviews.close(number, closeReason.trim()), { onSuccess: () => { setClosing(false); setCloseReason(""); } });
+  };
+  const overriddenItems = publishBlockers(gate);
   const reply = (id: string, body: string) => action.mutateAsync(() => prReviews.reply(number, id, body));
   const resolve = (id: string, value: boolean) => action.mutate(() => prReviews.resolve(number, id, value));
   return <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6">
@@ -277,11 +281,16 @@ export default function ReviewDetailPage() {
             This makes revision {review.head_revision} of {review.title} available in the registry.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {publishConfirmation?.overrideReason && <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">
-          <p className="font-medium">Super admin override</p>
-          <p className="mt-1 text-muted-foreground">This bypasses review-gate criteria and is recorded in the audit trail. Confidentiality restrictions still apply.</p>
-          <p className="mt-2">{gate.approvals} of {gate.required} required approvals on revision {review.head_revision}</p>
-          <p className="mt-1 break-words"><span className="font-medium">Reason:</span> {publishConfirmation.overrideReason}</p>
+        {overriding && <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">
+          <div>
+            <p className="font-medium">Super admin override</p>
+            <p className="mt-1 text-muted-foreground">This bypasses review-gate criteria and is recorded in the audit trail. Confidentiality restrictions still apply.</p>
+          </div>
+          {overriddenItems.length > 0 && <ul className="list-disc space-y-0.5 pl-5">{overriddenItems.map(item => <li key={item}>{item}</li>)}</ul>}
+          <div className="space-y-1.5">
+            <label htmlFor="override-reason" className="text-xs font-medium">Reason (required)</label>
+            <Textarea id="override-reason" value={overrideReason} onChange={event => setOverrideReason(event.target.value)} rows={3} placeholder="Why this release must publish now" className="bg-background" />
+          </div>
         </div>}
         {openItems.length > 0 && <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
           <p className="font-medium">Open items · advisory</p>
@@ -292,9 +301,28 @@ export default function ReviewDetailPage() {
         </div>}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={action.isPending}>Cancel</AlertDialogCancel>
-          <Button type="button" disabled={action.isPending} onClick={confirmPublish}>
+          <Button type="button" disabled={action.isPending || (overriding && !overrideReason.trim())} onClick={confirmPublish}>
             {action.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-            {action.isPending ? "Publishing…" : publishConfirmation?.overrideReason ? "Publish with override" : `Publish v${review.version}`}
+            {action.isPending ? "Publishing…" : overriding ? "Confirm override" : `Publish v${review.version}`}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    <AlertDialog open={closing} onOpenChange={open => { if (!open && !action.isPending) { setClosing(false); setCloseReason(""); } }}>
+      <AlertDialogContent className="w-[calc(100vw-2rem)] max-w-md rounded-xl">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Close review #{review.number}?</AlertDialogTitle>
+          <AlertDialogDescription>Closing rejects v{review.version}. The author sees your reason and can submit a new version.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="space-y-1.5">
+          <label htmlFor="close-reason" className="text-xs font-medium">Reason (required)</label>
+          <Textarea id="close-reason" value={closeReason} onChange={event => setCloseReason(event.target.value)} rows={3} placeholder="Why this version will not be published" />
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={action.isPending}>Cancel</AlertDialogCancel>
+          <Button type="button" variant="destructive" disabled={action.isPending || !closeReason.trim()} onClick={confirmClose}>
+            {action.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+            {action.isPending ? "Closing…" : "Close review"}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -304,9 +332,8 @@ export default function ReviewDetailPage() {
       <div className="flex flex-wrap items-baseline gap-2"><h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight">{review.title}</h1><span className="font-mono text-xl text-muted-foreground">#{review.number}</span></div>
       <div className="flex flex-wrap items-center gap-2.5 text-sm text-muted-foreground"><ReviewStatePill state={review.state} large /><span><span className="font-medium text-foreground">{reviewPerson(review.author_name, review.author_id)}</span> wants to publish <span className="font-mono text-foreground">v{review.version}</span>{review.base_version ? <> from <span className="font-mono">v{review.base_version}</span></> : " · first release"}</span><span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs capitalize">{review.subject_type}</span><span className="ml-auto">{editLink}</span></div>
     </header>
-    {review.state === "published" && <div className="rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-foreground">Published v{review.version}. This release is available in the registry.</div>}
-    {review.state === "closed" && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-foreground"><span className="min-w-0 flex-1">This review was closed{review.closed_reason ? ` (${review.closed_reason})` : ""}.{reopenable && " Edit the resource if needed, then reopen the review to send it back to reviewers."}</span>{reopenable && <>{editButton}<Button size="sm" disabled={action.isPending} onClick={() => action.mutate(() => prReviews.reopen(number))}>Reopen review</Button></>}</div>}
-    {isAuthor && review.state === "changes_requested" && <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">Changes were requested. Use Edit resource to make the changes, then submit them. Submitting a new revision answers the request and returns the review to reviewers.</div>}
+    {review.state === "closed" && (review.closed_reason || reopenable) && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-foreground"><span className="min-w-0 flex-1">{review.closed_reason && <span className="capitalize">{review.closed_reason}.</span>}{reopenable && " Edit the resource if needed, then reopen the review to send it back to reviewers."}</span>{reopenable && <>{editButton}<Button size="sm" disabled={action.isPending} onClick={() => action.mutate(() => prReviews.reopen(number))}>Reopen review</Button></>}</div>}
+    {isAuthor && review.state === "changes_requested" && <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">Use Edit resource to make the changes, then submit them. Submitting a new revision answers the request and returns the review to reviewers.</div>}
     <div className="flex flex-wrap items-center gap-x-2 border-b border-border">
       <nav aria-label="Review sections" className="flex min-w-0 flex-wrap gap-1">{([
         ["conversation", "Conversation", (timeline?.items.length ?? 0) + review.threads.total],
@@ -326,7 +353,7 @@ export default function ReviewDetailPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><p>Automated checks read and parse content; none runs submitted code. A check that could not run says so instead of passing.</p>{review.state !== "closed" && review.state !== "published" && <Button type="button" variant="outline" size="sm" disabled={action.isPending} onClick={() => action.mutate(() => prReviews.rerunChecks(number))}>Rerun checks</Button>}</div>
         <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">{checksPending ? <div className="p-4"><Skeleton className="h-16" /></div> : checks?.length ? checks.map(check => <div key={check.id} className="flex items-start gap-3 border-b border-border px-4 py-3 text-sm last:border-0">{check.status === "pass" ? <Check className="mt-0.5 size-4 shrink-0 text-success" /> : check.status === "fail" || check.status === "error" ? <X className="mt-0.5 size-4 shrink-0 text-destructive" /> : check.status === "queued" || check.status === "running" ? <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" />}<span className="min-w-0 flex-1"><span className="font-medium">{check.name}</span>{check.network && <span className="ml-2 text-2xs text-muted-foreground">contacts external hosts</span>}{(Array.isArray(check.details) ? check.details : check.details ? [check.details] : []).map((line, index) => <span key={index} className="block break-words text-xs text-muted-foreground">{line}</span>)}</span><span className="shrink-0 text-xs text-muted-foreground">{check.required ? "Blocks publishing" : "Advisory"} · {check.status}</span></div>) : <p className="p-5 text-sm text-muted-foreground">No checks recorded.</p>}</div>
       </div>}
-      <PublicationGate experimentalReviewChecks={experimentalReviewChecks} review={review} gate={gate} isAuthor={isAuthor} busy={action.isPending} isSuperAdmin={me?.role === "super_admin"} onPublish={publish} onWithdraw={() => { if (window.confirm("Withdraw this review?")) action.mutate(() => prReviews.withdraw(number)); }} onClose={() => action.mutate(() => prReviews.close(number, reason))} category={category} setCategory={setCategory} override={override} setOverride={setOverride} reason={reason} setReason={setReason} />
+      <PublicationGate experimentalReviewChecks={experimentalReviewChecks} review={review} gate={gate} isAuthor={isAuthor} busy={action.isPending} isSuperAdmin={me?.role === "super_admin"} onPublish={publish} onWithdraw={() => { if (window.confirm("Withdraw this review?")) action.mutate(() => prReviews.withdraw(number)); }} onClose={() => { setCloseReason(""); setClosing(true); }} />
     </main><aside className="min-w-0 space-y-4 text-sm lg:sticky lg:top-6">
       <section className="border-b border-border pb-4"><h2 className="mb-3 text-xs font-semibold">Reviewers</h2>{reviewers.length ? reviewers.map(person => <div key={person.id} className="mb-2 flex min-w-0 items-center gap-2"><ReviewAvatar name={person.name} /><span className="min-w-0 flex-1 truncate text-xs" title={person.name}>{person.name}</span><span className="shrink-0 text-xs text-muted-foreground">{person.verdict === "approve" ? (person.approvedRevision ? `Approved revision ${person.approvedRevision} (outdated)` : "Approved") : person.answered ? "Re-review requested" : person.verdict === "request_changes" ? "Changes requested" : person.verdict === "comment" ? "Commented" : "Requested"}</span></div>) : <p className="text-xs text-muted-foreground">No reviewers requested individually.</p>}{isOpen && <div className="mt-3 flex flex-wrap gap-2"><Input aria-label="Reviewer user ID" placeholder="Reviewer user ID" value={requestedId} onChange={event => setRequestedId(event.target.value)} className="h-8 min-w-32 flex-1" /><Button size="sm" variant="outline" disabled={!requestedId.trim() || action.isPending} onClick={() => action.mutate(() => prReviews.requestReviewer(number, requestedId.trim()), { onSuccess: () => setRequestedId("") })}>Request reviewer</Button></div>}</section>
       <section className="border-b border-border pb-4"><h2 className="mb-2 text-xs font-semibold">Approval policy</h2><p className="text-xs"><strong>{gate.approvals} of {gate.required}</strong> approvals · {gate.policy_source}</p><p className="mt-1 text-xs text-muted-foreground">Approvals are counted on the reviewed revision.</p></section>

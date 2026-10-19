@@ -56,8 +56,6 @@ function ReviewRow({ item, nested = false }: { item: ReviewSummary; nested?: boo
         <span>updated {reviewDate(item.updated_at)}</span>
       </p>
       {item.depends_on.length > 0 && <p className="text-xs text-muted-foreground">Waits on {item.depends_on.map(n => `#${n}`).join(", ")}</p>}
-      {item.state === "approved" && <p className="text-xs font-medium text-success">Gate is green · awaiting publication</p>}
-      {item.state === "changes_requested" && <p className="text-xs font-medium text-foreground">Changes requested · waiting for the author</p>}
       <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground sm:hidden"><span>{approvals}/{required} approvals</span><span aria-hidden="true">·</span><span className="inline-flex items-center gap-1" aria-label={`${item.threads.unresolved} unresolved conversations`}><MessageSquare className="size-3.5" aria-hidden="true" />{item.threads.unresolved}</span>{checksLabel && <><span aria-hidden="true">·</span><span>{checksLabel}</span></>}</p>
     </div>
     <div className="hidden min-w-36 flex-col items-end gap-1.5 text-xs text-muted-foreground sm:flex">
