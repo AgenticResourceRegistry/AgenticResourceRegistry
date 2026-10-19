@@ -14,6 +14,7 @@ from api.routes.reviews.common import get_review, head, notify_update, participa
 from api.routes.reviews.queue import summary
 from models.review import (
     Review,
+    ReviewComment,
     ReviewEvent,
     ReviewReviewerRequest,
     ReviewRevision,
@@ -65,9 +66,29 @@ async def detail(
         await db.scalars(select(ReviewReviewerRequest.user_id).where(ReviewReviewerRequest.review_id == review.id))
     ).all()
     submitted_by = (
-        await db.scalars(select(ReviewSubmission.reviewer_id).where(ReviewSubmission.review_id == review.id))
+        await db.scalars(
+            select(ReviewSubmission.reviewer_id).where(
+                ReviewSubmission.review_id == review.id,
+                (ReviewSubmission.state != "draft") | (ReviewSubmission.reviewer_id == user.id),
+            )
+        )
     ).all()
-    reviewer_ids = set(requested) | set(submitted_by)
+    # Names for visible conversation authors, not just people who submitted a verdict.
+    # Draft comments stay private until their owner submits them.
+    comment_authors = (
+        await db.scalars(
+            select(ReviewComment.author_id)
+            .distinct()
+            .outerjoin(ReviewSubmission, ReviewComment.submission_id == ReviewSubmission.id)
+            .where(
+                ReviewComment.review_id == review.id,
+                ReviewComment.submission_id.is_(None)
+                | (ReviewSubmission.state != "draft")
+                | (ReviewComment.author_id == user.id),
+            )
+        )
+    ).all()
+    reviewer_ids = set(requested) | set(submitted_by) | set(comment_authors)
     reviewer_names = {
         str(uid): username
         for uid, username in (

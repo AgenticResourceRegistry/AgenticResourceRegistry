@@ -895,9 +895,13 @@ async def start_edit_skill(
     await _recheck_skill_owner(db, listing, current_user)
     if ver.status == ListingStatus.pending:
         raise HTTPException(status_code=409, detail="Withdraw this pending version before editing its files")
+    try:
+        revision = verified_skill_revision(listing, ver)
+    except SkillValidationError as exc:
+        raise HTTPException(status_code=409, detail="Saved skill version is not a valid folder") from exc
     acquire_edit_lock(ver, current_user.id)
     await commit_or_name_conflict(db, "skill")
-    return {"status": "locked"}
+    return {"status": "locked", "revision": revision}
 
 
 @router.post("/{listing_id}/cancel-edit")

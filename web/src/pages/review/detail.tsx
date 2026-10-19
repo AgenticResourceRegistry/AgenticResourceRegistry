@@ -242,7 +242,10 @@ export default function ReviewDetailPage() {
   const isOpen = !!review && activeStates.has(review.state);
   // Authors cannot review their own resource unless the policy counts self-approval.
   const canReview = !isAuthor || !!review?.self_approval_allowed;
-  const names = review?.reviewer_names ?? {};
+  const names = useMemo(() => ({
+    ...(review?.reviewer_names ?? {}),
+    ...(review?.author_id && review.author_name ? { [review.author_id]: review.author_name } : {}),
+  }), [review]);
   const gate = liveGate ?? review?.gate;
   const unresolved = useMemo(() => (threads ?? []).filter(thread => !thread.resolved_at), [threads]);
   const reviewers = useMemo(() => {

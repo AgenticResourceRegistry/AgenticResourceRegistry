@@ -1195,7 +1195,7 @@ def test_symlink_failure_is_not_suppressed(tmp_path, monkeypatch):
 
 def test_edit_flags_acquire_lock_and_send_updates(monkeypatch):
     monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
-    post = Mock(return_value={})
+    post = Mock(return_value={"status": "locked", "revision": "current-revision"})
     put = Mock(return_value={"name": "new-name", "status": "draft"})
     monkeypatch.setattr(skill.client, "post", post)
     monkeypatch.setattr(skill.client, "put", put)
@@ -1234,6 +1234,7 @@ def test_edit_flags_acquire_lock_and_send_updates(monkeypatch):
             "task_type": "testing",
             "git_url": "https://github.com/acme/new",
             "git_ref": "v2",
+            "observed_revision": "current-revision",
         },
     )
 
@@ -1602,6 +1603,24 @@ def test_skill_install_does_not_record_failed_write(monkeypatch):
 
     assert result.exit_code == 9
     upsert.assert_not_called()
+
+
+def test_skill_edit_preserves_explicit_revision_from_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(skill.client, "post", Mock(return_value={"revision": "newer-revision"}))
+    monkeypatch.setattr(skill, "submit_edit_under_review", lambda kind, plural, resolved, result: result)
+    put = Mock(return_value={"id": "skill-1", "name": "review", "status": "pending"})
+    monkeypatch.setattr(skill.client, "put", put)
+    updates = tmp_path / "updates.json"
+    updates.write_text(json.dumps({"description": "Fix", "observed_revision": "older-revision"}))
+
+    result = runner.invoke(
+        app, ["registry", "skill", "edit", "skill-1", "--from-file", str(updates), "--output", "json"]
+    )
+    assert result.exit_code == 0, result.stderr
+    put.assert_called_once_with(
+        "/api/v1/skills/resolved/draft", {"description": "Fix", "observed_revision": "older-revision"}
+    )
 
 
 def test_skill_edit_json_returns_server_result(monkeypatch):

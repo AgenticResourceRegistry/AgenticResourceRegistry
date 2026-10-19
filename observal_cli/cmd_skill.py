@@ -1774,7 +1774,11 @@ def skill_edit(
     _validate_skill_fields(updates, "Edit skill")
 
     resolved = client.resolve_registry_reference("skill", skill_id)
-    client.post(f"/api/v1/skills/{resolved}/start-edit")
+    lock = client.post(f"/api/v1/skills/{resolved}/start-edit")
+    # The server locks the exact version and returns its revision. Preserve an
+    # explicit caller precondition so a stale --from-file update still fails.
+    if "observed_revision" not in updates and lock.get("revision"):
+        updates["observed_revision"] = lock["revision"]
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/skills/{resolved}/draft", updates)
