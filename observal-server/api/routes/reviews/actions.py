@@ -4,21 +4,74 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db
 from api.routes.reviews.common import get_review, notify_update, require_open
 from models.inbox import InboxKind
 from models.review import Review, ReviewReviewerRequest, ReviewSubscription
-from models.user import User
+from models.team import Team, TeamMembership, TeamRole
+from models.user import User, UserRole
 from schemas.review import PublishRequest, Reason, ReopenRequest, ReviewerRequest, SubscriptionUpdate
 from services.audit import audit_detail
 from services.review import check_config, ci, notifications
 from services.review.decisions import _event, _lock_review, _target, close, publish, withdraw
-from services.teamspace import can_review, review_scope
+from services.teamspace import TEAM_REVIEW_UNLOCKED, can_review, review_scope
 
 router = APIRouter()
+
+
+@router.get("/{ref}/reviewers/eligible")
+async def eligible_reviewers(
+    q: str = Query(default="", max_length=100),
+    review: Review = Depends(get_review),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search only people who can review this subject; never expose an org-wide directory for private items."""
+    require_open(review)
+    subject, _ = await _target(db, review)
+    team_id = getattr(subject, "team_id", None)
+    audience = User.role.in_((UserRole.admin, UserRole.super_admin))
+    if not subject.is_private:
+        audience = or_(audience, User.role == UserRole.reviewer)
+    if team_id is not None:
+        team_conditions = [
+            TeamMembership.team_id == team_id,
+            TeamMembership.user_id == User.id,
+            TeamMembership.role.in_((TeamRole.owner, TeamRole.reviewer)),
+            TEAM_REVIEW_UNLOCKED,
+        ]
+        if not subject.is_private:
+            team_conditions.append(Team.is_private.is_(False))
+        team_reviewer = exists(
+            select(TeamMembership.id).join(Team, Team.id == TeamMembership.team_id).where(*team_conditions)
+        )
+        audience = or_(audience, team_reviewer)
+    stmt = (
+        select(User)
+        .where(
+            audience,
+            User.id != review.opened_by,
+            ~exists(
+                select(ReviewReviewerRequest.user_id).where(
+                    ReviewReviewerRequest.review_id == review.id, ReviewReviewerRequest.user_id == User.id
+                )
+            ),
+        )
+        .order_by(User.name, User.username, User.id)
+        .limit(20)
+    )
+    if q.strip():
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        stmt = stmt.where(or_(User.name.ilike(pattern, escape="\\"), User.username.ilike(pattern, escape="\\")))
+    people = (await db.scalars(stmt)).all()
+    return [
+        {"id": person.id, "name": person.name, "username": person.username, "role": person.role.value}
+        for person in people
+    ]
 
 
 @router.post("/{ref}/reviewers", status_code=201)
@@ -29,6 +82,8 @@ async def request_reviewer(
     user: User = Depends(get_current_user),
 ):
     require_open(review)
+    if data.user_id == review.opened_by:
+        raise HTTPException(422, "Choose someone other than the review author")
     target = await db.get(User, data.user_id)
     subject, _ = await _target(db, review)
     if target is None or not can_review(subject, await review_scope(db, target)):

@@ -500,6 +500,78 @@ async def test_reviewer_request_and_subscription_authorization(api):
 
 
 @pytest.mark.asyncio
+async def test_eligible_reviewers_search_and_scope(api):
+    client, current, (author, reviewer, outsider, second), (rid, number), factory = api
+    base = f"/api/v1/reviews/{number}/reviewers/eligible"
+    current[0] = author
+    initial = (await client.get(base)).json()
+    assert {person["id"] for person in initial} == {str(reviewer.id), str(second.id)}
+    assert all(set(person) == {"id", "name", "username", "role"} for person in initial)
+    assert [person["id"] for person in (await client.get(base, params={"q": "Rev"})).json()] == [str(reviewer.id)]
+    assert (await client.get(base, params={"q": "no match"})).json() == []
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/reviewers", json={"user_id": str(reviewer.id)})
+    ).status_code == 201
+    assert [person["id"] for person in (await client.get(base)).json()] == [str(second.id)]
+    response = await client.post(f"/api/v1/reviews/{number}/reviewers", json={"user_id": str(author.id)})
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Choose someone other than the review author"
+
+    async with factory() as db:
+        listing = await db.get(SkillListing, (await db.get(Review, rid)).subject_id)
+        listing.is_private = True
+        team = Team(name="Private", handle="private", is_private=True, created_by=author.id)
+        db.add(team)
+        await db.flush()
+        listing.team_id = team.id
+        db.add(TeamMembership(team_id=team.id, user_id=outsider.id, role=TeamRole.reviewer))
+        await db.commit()
+    private = (await client.get(base)).json()
+    assert [person["id"] for person in private] == [str(outsider.id)]
+    assert (await client.get(base, params={"q": "out"})).json()[0]["username"] == "outsider"
+    async with factory() as db:
+        db.add_all(
+            [
+                User(id=uuid.uuid4(), username="admin", email="admin@x.test", name="Admin", role=UserRole.admin),
+                User(id=uuid.uuid4(), username="super", email="super@x.test", name="Super", role=UserRole.super_admin),
+            ]
+        )
+        team = await db.scalar(select(Team).where(Team.handle == "private"))
+        await db.flush()
+        owner = User(id=uuid.uuid4(), username="owner", email="owner@x.test", name="Team Owner", role=UserRole.user)
+        db.add_all([owner, TeamMembership(team_id=team.id, user_id=owner.id, role=TeamRole.owner)])
+        await db.commit()
+    assert {person["username"] for person in (await client.get(base)).json()} == {"admin", "super", "outsider", "owner"}
+    assert [person["username"] for person in (await client.get(base, params={"q": "team own"})).json()] == ["owner"]
+    assert [person["username"] for person in (await client.get(base, params={"q": "SUP"})).json()] == ["super"]
+    async with factory() as db:
+        team = await db.scalar(select(Team).where(Team.handle == "private"))
+        team.visibility_request_status = "pending"
+        team.visibility_requested_at = datetime.now(UTC)
+        await db.commit()
+    assert {person["username"] for person in (await client.get(base)).json()} == {"admin", "super"}
+    async with factory() as db:
+        team = await db.scalar(select(Team).where(Team.handle == "private"))
+        team.visibility_request_status = None
+        team.is_private = False
+        listing = await db.get(SkillListing, (await db.get(Review, rid)).subject_id)
+        listing.is_private = False
+        await db.commit()
+    assert {person["username"] for person in (await client.get(base)).json()} == {
+        "admin",
+        "super",
+        "second",
+        "outsider",
+        "owner",
+    }
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/reviewers", json={"user_id": str(owner.id)})
+    ).status_code == 201
+    current[0] = second
+    assert (await client.get(base)).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_draft_thread_never_blocks_resolved_thread_gate(api):
     from services.review.decisions import gate, submit_verdict
     from services.review.policy import ApprovalPolicy
