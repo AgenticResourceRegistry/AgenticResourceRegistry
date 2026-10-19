@@ -135,6 +135,10 @@ class BaseAdapter:
         """
         return None
 
+    def session_worker_environment(self) -> dict[str, str]:
+        """Environment overrides needed by detached session delivery workers."""
+        return {}
+
     def scan_home(self, home: Path | None = None) -> ScanResult:
         _check_feature(self.harness_name, "scan_home")
         return ScanResult()

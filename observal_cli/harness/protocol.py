@@ -322,6 +322,10 @@ class HarnessAdapter(Protocol):
         """Resolve a harness hook payload to its local session source."""
         ...
 
+    def session_worker_environment(self) -> dict[str, str]:
+        """Return environment overrides for detached session workers."""
+        ...
+
     def discover_session_sources(
         self,
         home: Path | None = None,
