@@ -429,7 +429,10 @@ function jwtPayload(token: string): { sub?: string; exp?: number } | null {
 	try {
 		const part = token.split(".")[1];
 		if (!part || !/^[A-Za-z0-9_-]+={0,2}$/.test(part)) return null;
-		return JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=")));
+		const bytes = atob(part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "="));
+		return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+			Uint8Array.from(bytes, (char) => char.charCodeAt(0)),
+		));
 	} catch { return null; }
 }
 function jwtSubject(token: string): string | null {
