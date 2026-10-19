@@ -1089,10 +1089,16 @@ export default function (pi: ExtensionAPI) {
         fs.readFileSync(SYNC_STATE_PATH, "utf-8"),
       );
 
-      const sessionsDir = (ctx.sessionManager as any).getSessionDir?.()
-        ?? path.join(os.homedir(), ".pi", "agent", "sessions");
-      const projectKey = ctx.cwd.replace(/\//g, "-");
-      const fullDir = path.join(sessionsDir, `-${projectKey}-`);
+      // getSessionDir() is already this project's directory. Without it, rebuild the
+      // name the way Pi does: "/home/me/repo" -> "--home-me-repo--".
+      const fullDir = (ctx.sessionManager as any).getSessionDir?.()
+        ?? path.join(
+          os.homedir(),
+          ".pi",
+          "agent",
+          "sessions",
+          `--${ctx.cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`,
+        );
       let recovered = 0;
       const now = Date.now();
 
