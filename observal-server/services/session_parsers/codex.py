@@ -26,6 +26,34 @@ from .base import (
     uncached_input_tokens,
 )
 
+# Codex records injected context (environment, AGENTS.md, shell output) as user
+# messages too; these prefixes mark it. Everything else in a user message is typed.
+_CONTEXT_PREFIXES = (
+    "<environment_context>",
+    "<user_instructions>",
+    "<user_shell_command>",
+    "<turn_aborted>",
+    "# AGENTS.md instructions for ",
+)
+
+
+def user_prompt_text(payload: dict) -> str | None:
+    """The text the user typed in a Codex ``response_item`` message, or None.
+
+    Codex writes every user turn as a ``response_item`` message with role
+    ``user``; some versions also echo it as an ``event_msg`` ``user_message``,
+    which is therefore not counted, so each prompt is counted once.
+    """
+    if payload.get("role") != "user":
+        return None
+    texts = [
+        str(block.get("text") or "")
+        for block in list_field(payload, "content")
+        if isinstance(block, dict) and block.get("type") == "input_text"
+    ]
+    typed = [text for text in texts if text.strip() and not text.lstrip().startswith(_CONTEXT_PREFIXES)]
+    return "\n".join(typed) if typed else None
+
 
 def parse_rows(rows: list[dict]) -> list[dict]:
     """Parse raw_line Codex JSONL rows into normalized frontend events."""
@@ -84,13 +112,13 @@ def _handle_event_msg(parsed: dict, ts: str, harness: str, events: list[dict]) -
     payload_type = payload.get("type", "")
 
     if payload_type == "user_message":
-        message = payload.get("message", "")
+        # Echo of a response_item user message, which carries the prompt.
         events.append(
             {
                 "timestamp": ts,
-                "event_name": "hook_userpromptsubmit",
-                "body": str(message)[:200],
-                "attributes": {"tool_input": str(message)},
+                "event_name": "system",
+                "body": "user_message",
+                "attributes": {},
                 "service_name": harness,
             }
         )
@@ -194,8 +222,19 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
         )
         return
 
-    if role == "user":
-        # Injected context (AGENTS.md, permissions) - system, not real user input
+    prompt = user_prompt_text(payload)
+    if prompt is not None:
+        events.append(
+            {
+                "timestamp": ts,
+                "event_name": "hook_userpromptsubmit",
+                "body": prompt[:200],
+                "attributes": {"tool_input": prompt},
+                "service_name": harness,
+            }
+        )
+    elif role == "user":
+        # Injected context (AGENTS.md, environment) - system, not real user input
         events.append(
             {
                 "timestamp": ts,
