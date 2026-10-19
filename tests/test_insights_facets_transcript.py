@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -40,6 +41,42 @@ def _meta(session_id: str, duration: int, tool_count: int) -> dict:
         "harness": "pi",
         "user_message_count": 2,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw", "prompt"),
+    [
+        ({"type": "event_msg", "payload": {"type": "user_message", "message": "fix the tests"}}, "fix the tests"),
+        (
+            {
+                "kind": "Prompt",
+                "data": {"content": [{"kind": "text", "data": "inspect"}, {"kind": "text", "data": "tests"}]},
+            },
+            "inspect tests",
+        ),
+        ({"payload": {"type": "user", "content": "review this patch"}}, "review this patch"),
+        ({"message": {"content": [{"type": "text", "text": "ordinary prompt"}]}}, "ordinary prompt"),
+    ],
+)
+def test_transcript_preserves_classified_codex_and_kiro_prompts(raw, prompt):
+    from services.insights.transcript import _format_rows
+
+    rows = [{"event_type": "user_prompt", "tool_name": "", "raw_line": json.dumps(raw), "content_preview": ""}]
+    assert _format_rows(rows) == f"[User]: {prompt}"
+
+
+def test_transcript_falls_back_to_normalized_preview_only_for_prompts():
+    from services.insights.transcript import _format_rows
+
+    rows = [
+        {
+            "event_type": "user_prompt",
+            "raw_line": json.dumps({"type": "event_msg"}),
+            "content_preview": "ingested text",
+        },
+        {"event_type": "system", "raw_line": "{}", "content_preview": "not a prompt"},
+    ]
+    assert _format_rows(rows) == "[User]: ingested text"
 
 
 @pytest.mark.asyncio
@@ -83,6 +120,34 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
     assert "cached-low" in load_cached.await_args.args[0]
     assert report["facets_summary"]["sessions_with_facets"] == 1
     assert report["facets_summary"]["goal_categories"] == [("fix_bug", 1)]
+
+
+@pytest.mark.asyncio
+async def test_build_session_transcript_reads_codex_and_kiro_rows(monkeypatch):
+    from services.insights import transcript
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "data": [
+                    {"event_type": "user_prompt", "raw_line": json.dumps(raw), "content_preview": ""}
+                    for raw in (
+                        {"type": "event_msg", "payload": {"type": "user_message", "message": "Codex task"}},
+                        {"kind": "Prompt", "data": {"content": [{"kind": "text", "data": "Kiro task"}]}},
+                    )
+                ]
+            }
+
+    async def query(sql, params):
+        assert "content_preview" in sql
+        assert params == {"param_sid": "local-session"}
+        return Response()
+
+    monkeypatch.setattr(transcript, "get_query", lambda: query)
+    assert await transcript.build_session_transcript("local-session") == "[User]: Codex task\n[User]: Kiro task"
 
 
 @pytest.mark.asyncio
