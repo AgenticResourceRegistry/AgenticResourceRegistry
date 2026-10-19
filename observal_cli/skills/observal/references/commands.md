@@ -258,10 +258,10 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal review dismiss`: Dismiss a verdict (admin or team owner, reason required).
 - `observal review draft`: View or discard your pending review comments.
 - `observal review files`: List changed virtual files.
-- `observal review gate`: Show approvals (the only publish blocker) and advisory open items.
+- `observal review gate`: Show what blocks publishing and which open items are advisory.
 - `observal review list`: List reviews visible to you; row numbers work with other review commands.
 - `observal review mute`: Mute review activity except final outcomes.
-- `observal review publish`: Publish once required approvals are met; super admins can override anything with a reason.
+- `observal review publish`: Publish once the gate allows it; super admins can override approvals and checks with a reason.
 - `observal review reopen`: Reopen a review you withdrew by resubmitting its version.
 - `observal review reply`: Reply to a conversation.
 - `observal review request-changes`: Request changes on a review.

@@ -99,28 +99,48 @@ def list_reviews(
         rprint("[dim]More reviews available; narrow your filters to find them.[/dim]")
 
 
-def _print_gate(gate: dict) -> None:
-    """Only approvals block publishing; every other open item is advisory."""
-    approvals = f"{gate['approvals']}/{gate['required']} approvals"
-    if gate["ready"]:
-        rprint(f"Publish: [green]allowed[/green] · {approvals}")
+# Mirrors services.review.decisions.ADVISORY_REQUIREMENTS: open items that never block publishing.
+_ADVISORY = frozenset({"changes_requested", "unresolved_threads", "edit_lock"})
+
+
+def _gate_blockers(gate: dict) -> tuple[list[str], list[str]]:
+    """(items blocking a normal publish, items not even a super admin override skips)."""
+    blockers = gate.get("blockers")
+    if blockers is None:  # Older servers do not report blockers; derive them.
+        blockers = [item for item in gate["requirements"] if item not in _ADVISORY]
+    return list(blockers), list(gate.get("hard_blockers") or [])
+
+
+def _print_requirement(requirement: str, failing: dict, colour: str) -> None:
+    if requirement == "required_checks" and failing:
+        for check in failing.values():
+            details = check.get("details") or []
+            details = ", ".join(map(str, details)) if isinstance(details, list) else str(details)
+            suffix = f": {details}" if details else ""
+            rprint(
+                f"  [{colour}]• {esc(str(check.get('name')))} {esc(str(check.get('status')))}{esc(suffix)}[/{colour}]"
+            )
     else:
-        rprint(f"Publish: [red]needs approvals[/red] · {approvals}")
+        rprint(f"  [{colour}]• {esc(str(requirement).replace('_', ' '))}[/{colour}]")
+
+
+def _print_gate(gate: dict) -> None:
+    """Blockers stop a normal publish; change requests, threads and edit locks are advisory."""
+    approvals = f"{gate['approvals']}/{gate['required']} approvals"
+    blockers, hard = _gate_blockers(gate)
+    rprint(f"Publish: {'[green]allowed[/green]' if gate['ready'] else '[red]blocked[/red]'} · {approvals}")
     failing = {check.get("id"): check for check in gate.get("blocking_checks") or []}
-    advisory = [item for item in gate["requirements"] if item != "required_approvals"]
+    if blockers:
+        rprint("Blocking publish:")
+        for requirement in blockers:
+            _print_requirement(requirement, failing, "red")
+        if hard:
+            rprint(f"[dim]Not overridable: {esc(', '.join(hard).replace('_', ' '))}[/dim]")
+    advisory = [item for item in gate["requirements"] if item not in blockers]
     if advisory:
-        rprint("Open items [dim](do not block publishing)[/dim]:")
-    for requirement in advisory:
-        if requirement == "required_checks" and failing:
-            for check in failing.values():
-                details = check.get("details") or []
-                details = ", ".join(map(str, details)) if isinstance(details, list) else str(details)
-                suffix = f": {details}" if details else ""
-                rprint(
-                    f"  [yellow]• {esc(str(check.get('name')))} {esc(str(check.get('status')))}{esc(suffix)}[/yellow]"
-                )
-        else:
-            rprint(f"  [yellow]• {esc(str(requirement).replace('_', ' '))}[/yellow]")
+        rprint("Open items [dim](advisory, do not block publishing)[/dim]:")
+        for requirement in advisory:
+            _print_requirement(requirement, failing, "yellow")
 
 
 @review_app.command("show")
@@ -208,7 +228,7 @@ def checks(ref: str, output: OutputMode = typer.Option("table", "--output", "-o"
 
 @review_app.command("gate")
 def gate(ref: str, output: OutputMode = typer.Option("table", "--output", "-o")):
-    """Show approvals (the only publish blocker) and advisory open items."""
+    """Show what blocks publishing and which open items are advisory."""
     result = client.get(_url(ref, "/gate"))
     if output == "json":
         output_json(result)
@@ -380,23 +400,29 @@ def publish(
     override_reason: str | None = typer.Option(None, "--override-reason"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
 ):
-    """Publish once required approvals are met; super admins can override anything with a reason."""
+    """Publish once the gate allows it; super admins can override approvals and checks with a reason."""
     override = (override_reason or "").strip() or None
     gate_state = client.get(_url(ref, "/gate"))
-    if not override and not gate_state["ready"]:
+    blockers, hard = _gate_blockers(gate_state)
+    if hard or (not override and not gate_state["ready"]):
         missing = gate_state["required"] - gate_state["approvals"]
+        items = [
+            f"needs {missing} more approval{'s' if missing != 1 else ''}" if item == "required_approvals" else item
+            for item in (hard or blockers)
+        ]
         fail(
             ErrorCategory.CONFLICT,
-            f"Publishing needs {missing} more approval{'s' if missing != 1 else ''} "
-            f"({gate_state['approvals']} of {gate_state['required']} on the latest revision).",
+            f"Publishing is blocked: {', '.join(items).replace('_', ' ')}.",
             operation="Publish review",
             resource=ref,
             remediation=(
-                f"Ask a reviewer to run observal review approve {ref}, "
+                "Fix these in the version and submit a new revision; no override skips them."
+                if hard
+                else f"Ask a reviewer to run observal review approve {ref} or fix the failing checks, "
                 "or have a super admin publish with --override-reason."
             ),
         )
-    advisory = [item for item in gate_state["requirements"] if item != "required_approvals"]
+    advisory = [item for item in gate_state["requirements"] if item not in blockers]
     if advisory and output != "json":
         rprint(f"[yellow]Publishing with open items (advisory): {esc(', '.join(advisory).replace('_', ' '))}[/yellow]")
     _result(

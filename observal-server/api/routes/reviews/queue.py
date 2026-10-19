@@ -141,6 +141,8 @@ async def summary(db, review, user):
             "requirements": result.requirements,
             "policy_source": result.policy_source,
             "blocking_checks": result.blocking_checks,
+            "blockers": result.blockers,
+            "hard_blockers": result.hard,
         },
         "requested_from_me": requested is not None,
         "my_last_submission": ({"verdict": mine.verdict, "revision_id": mine.revision_id} if mine else None),

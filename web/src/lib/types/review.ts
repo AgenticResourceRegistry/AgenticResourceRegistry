@@ -12,6 +12,10 @@ export interface ReviewGate {
   requirements: string[];
   outstanding_requests?: number;
   blocking_checks?: ReviewGateCheck[];
+  /** Open items that stop a normal publish (approvals, required checks, integrity rules). */
+  blockers?: string[];
+  /** Blockers not even a super admin override skips. */
+  hard_blockers?: string[];
 }
 
 export interface ReviewGateCheck {

@@ -51,7 +51,7 @@ observal review diff 123 --file SKILL.md --output json
 observal review checks 123 --output json
 ```
 
-Inspect the complete payload, pinned Agent dependencies, and checks before submitting a verdict. Approval does not publish by default. Only the required approvals block publishing; failing checks, change requests, unresolved conversations and unsubmitted draft changes are advisory open items to review and discuss, not blockers. A super admin may publish past anything with `--override-reason` (audited):
+Inspect the complete payload, pinned Agent dependencies, and checks before submitting a verdict. Approval does not publish by default. Publishing needs the required approvals and passing required checks (including the secret scan and required fields). Change requests, unresolved conversations and edit locks are advisory open items to discuss, not blockers. A super admin may publish past missing approvals and failing checks with `--override-reason` (audited), but nothing skips content changed without a new revision, an invalid or rollout-gated skill folder, a moved approved base, or unpublished pinned components:
 
 ```bash
 observal review approve 123 --output json

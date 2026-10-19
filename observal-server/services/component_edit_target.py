@@ -3,7 +3,7 @@
 """Choose the version an author is editing without changing the approved install pointer."""
 
 from packaging.version import InvalidVersion, Version
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from models.mcp import ListingStatus
 from models.review import Review, ReviewState
@@ -17,7 +17,8 @@ async def editable_version(db, kind, listing, version_model):
 
     Creating a version does not move latest_version_id until publication: moving it here
     would also change what unversioned installs receive. Read the review-bound version
-    instead. A closed/superseded review must never become an edit target.
+    instead. A review closed as rejected or superseded never becomes an edit target; a
+    withdrawn one does, because withdrawing returns the version to the author as a draft.
     """
     return (await editable_versions(db, kind, [listing], version_model)).get(listing.id, listing.latest_version)
 
@@ -40,7 +41,15 @@ async def editable_versions(db, kind, listings, version_model) -> dict:
                 .where(
                     Review.subject_type == kind,
                     Review.subject_id.in_(list(approved)),
-                    Review.state.in_(_ACTIVE),
+                    or_(
+                        Review.state.in_(_ACTIVE),
+                        # A withdrawn successor is back in draft: the author edits and reopens it.
+                        and_(
+                            Review.state == ReviewState.closed,
+                            Review.closed_reason == "withdrawn",
+                            version_model.status == ListingStatus.draft,
+                        ),
+                    ),
                     version_model.listing_id.in_(list(approved)),
                     version_model.status.in_(_EDITABLE),
                 )
