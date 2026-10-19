@@ -49,15 +49,20 @@ export async function getAccessToken(): Promise<string> {
 /** @deprecated Use getAccessToken */
 export const getApiKey = getAccessToken;
 
-/** Initialize browser auth using the same atomic login path as the product. */
+/** Seed a production-built browser with the complete server-issued login pair. */
 export async function loginToWebUI(page: Page) {
   const login = await getLogin();
   await page.goto("/");
-  const committed = await page.evaluate(async (data) => {
-    const { commitLogin, loginStart } = await import("/src/lib/api.ts");
-    return commitLogin(data, loginStart());
+  await page.evaluate((data) => {
+    const epoch = crypto.randomUUID();
+    localStorage.setItem("observal_auth_epoch", epoch);
+    sessionStorage.setItem("observal_tab_epoch", epoch);
+    sessionStorage.setItem("observal_access_token", data.access_token);
+    localStorage.setItem("observal_refresh_token", data.refresh_token);
+    localStorage.setItem("observal_user_role", data.user.role);
+    localStorage.setItem("observal_user_name", data.user.name);
+    localStorage.setItem("observal_user_email", data.user.email);
   }, login);
-  if (!committed) throw new Error("Browser rejected server-issued login pair");
   await page.reload();
 }
 
