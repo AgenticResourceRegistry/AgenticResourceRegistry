@@ -187,31 +187,35 @@ async def test_requested_changes_can_be_edited_and_resubmitted_as_revision(api):
 
 
 @pytest.mark.asyncio
-async def test_unsubmitted_draft_edit_is_advisory_and_approvals_unlock_publish(api):
+async def test_content_changed_after_approval_never_publishes_without_a_new_revision(api):
     client, current, (author, reviewer, _, _), (rid, number), factory = api
     current[0] = author
     async with factory() as db:
         review = await db.get(Review, rid)
         listing = await db.get(SkillListing, review.subject_id)
         listing.latest_version_id = review.version_id
+        admin = User(id=uuid.uuid4(), username="root", email="root@x.test", name="Root", role=UserRole.super_admin)
+        db.add(admin)
         await db.commit()
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
+    ).status_code == 201
     # The route refuses edits of a pending skill version, so model a racing writer directly.
     async with factory() as db:
         version = await db.get(SkillVersion, review.version_id)
         version.skill_md_content = "---\nname: test-skill\ndescription: Unreviewed\n---\n# Unreviewed behavior\n"
         await db.commit()
 
-    current[0] = reviewer
     gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
-    assert "unsubmitted_changes" in gate["requirements"] and not gate["ready"]
-    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 409  # Needs approvals.
-    assert (
-        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
-    ).status_code == 201
-    gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
-    # Still listed so reviewers can see and discuss it, but it no longer blocks publishing.
-    assert "unsubmitted_changes" in gate["requirements"] and gate["ready"]
-    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
+    assert gate["hard_blockers"] == ["unsubmitted_changes"] and not gate["ready"]
+    blocked = await client.post(f"/api/v1/reviews/{number}/publish", json={})
+    assert blocked.status_code == 409 and "unsubmitted_changes" in blocked.json()["detail"]
+    current[0] = admin
+    overridden = await client.post(f"/api/v1/reviews/{number}/publish", json={"override_reason": "urgent"})
+    assert overridden.status_code == 409 and "no override" in overridden.json()["detail"]
+    async with factory() as db:
+        assert (await db.get(SkillVersion, review.version_id)).status != ListingStatus.approved
 
 
 async def test_super_admin_override_publishes_without_approvals(api):
@@ -871,3 +875,89 @@ async def test_publish_clears_abandoned_component_edit_lock(api):
         assert version.status == ListingStatus.approved
         assert version.is_editing is False
         assert version.editing_by is None and version.editing_since is None
+
+
+@pytest.mark.asyncio
+async def test_failing_secret_scan_blocks_normal_publish_but_super_admin_can_override(api):
+    from models.review import ReviewRevision
+
+    client, current, (author, reviewer, _, _), (rid, number), factory = api
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        head = await db.get(ReviewRevision, review.head_revision_id)
+        head.checks = [
+            {"id": "secrets", "name": "Secret scan", "status": "fail", "required": True, "details": ["AWS key"]},
+            {"id": "schema", "name": "Required fields", "status": "pass", "required": True, "details": []},
+        ]
+        admin = User(id=uuid.uuid4(), username="root", email="root@x.test", name="Root", role=UserRole.super_admin)
+        db.add(admin)
+        await db.commit()
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
+    ).status_code == 201
+    gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
+    assert gate["blockers"] == ["required_checks"] and gate["hard_blockers"] == [] and not gate["ready"]
+    blocked = await client.post(f"/api/v1/reviews/{number}/publish", json={})
+    assert blocked.status_code == 409 and "required_checks" in blocked.json()["detail"]
+    current[0] = admin
+    overridden = await client.post(f"/api/v1/reviews/{number}/publish", json={"override_reason": "False positive"})
+    assert overridden.status_code == 200, overridden.text
+
+
+@pytest.mark.asyncio
+async def test_advisory_items_do_not_block_an_approved_publish(api):
+    """OBS-1443: change requests and unresolved conversations stay visible but never block."""
+    client, current, (author, reviewer, _, second), (rid, number), factory = api
+    current[0] = second
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "request_changes", "body": "nit"})
+    ).status_code == 201
+    current[0] = reviewer
+    assert (
+        await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
+    ).status_code == 201
+    gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
+    assert "changes_requested" in gate["requirements"] and gate["blockers"] == [] and gate["ready"]
+    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_successor_of_an_approved_mcp_can_be_edited_and_reopened(api):
+    client, current, (author, reviewer, _, _), _, factory = api
+    async with factory() as db:
+        listing = McpListing(
+            name="Reopen", namespace="tests", slug="reopen", category="general", owner="author", submitted_by=author.id
+        )
+        db.add(listing)
+        await db.flush()
+        stable = McpVersion(
+            listing_id=listing.id, version="1.0.0", description="Stable", command="old",
+            status=ListingStatus.approved, released_by=author.id, released_at=datetime.now(UTC),
+        )  # fmt: skip
+        db.add(stable)
+        await db.flush()
+        listing.latest_version_id = stable.id
+        listing_id, stable_id = listing.id, stable.id
+        await db.commit()
+    current[0] = author
+    created = await client.post(
+        f"/api/v1/mcps/{listing_id}/versions",
+        json={"version": "1.1.0", "description": "Successor", "extra": {"command": "new"}},
+    )
+    assert created.status_code == 200, created.text
+    number, successor_id = created.json()["review_number"], uuid.UUID(created.json()["id"])
+    assert (await client.post(f"/api/v1/reviews/{number}/withdraw")).status_code == 200
+    # Edit resource targets the withdrawn successor (now a draft), not the approved release.
+    detail = (await client.get(f"/api/v1/mcps/{listing_id}")).json()
+    assert (detail["version"], detail["status"]) == ("1.1.0", "draft")
+    edited = await client.put(f"/api/v1/mcps/{listing_id}/draft", json={"description": "Fixed successor"})
+    assert edited.status_code == 200, edited.text
+    reopened = await client.post(f"/api/v1/reviews/{number}/reopen", json={"message": "Fixed"})
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["state"] == "open"
+    async with factory() as db:
+        successor = await db.get(McpVersion, successor_id)
+        assert successor.status == ListingStatus.pending and successor.description == "Fixed successor"
+        assert (await db.get(McpVersion, stable_id)).description == "Stable"
+        assert (await db.get(McpListing, listing_id)).latest_version_id == stable_id

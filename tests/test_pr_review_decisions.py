@@ -180,7 +180,7 @@ async def test_private_team_can_count_own_approval(db):
 
 
 @pytest.mark.asyncio
-async def test_unpublished_pinned_component_is_advisory_for_agent_publish(db):
+async def test_unpublished_pinned_component_blocks_agent_publish_even_with_override(db):
     author, reviewer, admin, listing, component, component_review = await fixture_review(db)
     agent = Agent(name="Agent", namespace="tests", slug="test-agent", owner="author", created_by=author.id)
     db.add(agent)
@@ -210,11 +210,19 @@ async def test_unpublished_pinned_component_is_advisory_for_agent_publish(db):
     review = await open_or_push(db, "agent", agent, ver, author.id)
     await submit_verdict(db, review, reviewer, "approve", policy=ApprovalPolicy())
     result = await gate(db, review, policy=ApprovalPolicy())
-    assert "pinned_components" in result.requirements and result.ready and not result.clear
+    # The pinned skill is still unpublished: the agent is approved but cannot be published.
+    assert result.hard == ("pinned_components",) and not result.ready
+    with pytest.raises(HTTPException) as normal:
+        await publish(db, review, reviewer, policy=ApprovalPolicy())
+    assert normal.value.status_code == 409 and "pinned_components" in normal.value.detail
+    with pytest.raises(HTTPException) as overridden:
+        await publish(db, review, admin, override_reason="urgent", policy=ApprovalPolicy())
+    assert overridden.value.status_code == 409 and "no override" in overridden.value.detail
+    assert review.state != ReviewState.published
+    # Publishing the component first unblocks the agent.
     await submit_verdict(db, component_review, reviewer, "approve", policy=ApprovalPolicy())
     await publish(db, component_review, reviewer, policy=ApprovalPolicy())
     assert "pinned_components" not in (await gate(db, review, policy=ApprovalPolicy())).requirements
-    # Only approvals block a person: the agent publishes once approved.
     await publish(db, review, reviewer, policy=ApprovalPolicy())
     assert review.state == ReviewState.published
 

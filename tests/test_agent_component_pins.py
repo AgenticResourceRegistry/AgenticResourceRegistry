@@ -10,6 +10,7 @@ import json
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from api.routes import agent_versions, bulk
@@ -248,7 +249,7 @@ async def test_draft_cannot_pin_and_render_another_users_unreviewed_release(regi
     assert any("UNREVIEWED TEMPLATE" in (snapshot or "") for snapshot in snapshots)
 
 
-async def test_unapproved_pin_is_advisory_and_publish_freezes_the_lock(registry):
+async def test_unapproved_pin_blocks_and_publish_freezes_the_lock(registry):
 
     from models.user import UserRole
     from services.review.decisions import open_or_push, publish, submit_verdict
@@ -295,10 +296,13 @@ async def test_unapproved_pin_is_advisory_and_publish_freezes_the_lock(registry)
     reviewer = await ds.user(db, role=UserRole.admin)
     review = await open_or_push(db, "agent", agent, candidate, owner.id)
     await submit_verdict(db, review, reviewer, "approve")
-    # Only approvals block publishing; an unapproved pin is listed for reviewers but does not block.
+    # An unpublished pin blocks the agent's publish until the component is published.
     from services.review.decisions import gate
 
-    assert "pinned_components" in (await gate(db, review)).requirements
+    assert (await gate(db, review)).hard == ("pinned_components",)
+    with pytest.raises(HTTPException) as blocked:
+        await publish(db, review, reviewer)
+    assert blocked.value.status_code == 409
     pending.status = ListingStatus.approved
     await db.commit()
     await publish(db, review, reviewer)

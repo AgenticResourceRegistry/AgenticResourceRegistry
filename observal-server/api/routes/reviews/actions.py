@@ -191,7 +191,17 @@ async def reopen_review(
             user,
         )
     else:
-        if subject.latest_version_id != version.id:
+        if review.subject_type == "agent":
+            current_id = subject.latest_version_id
+        else:
+            # A successor of an approved release is not the listing's latest_version (that stays on
+            # the installable release until publication); the edit target is what submit acts on.
+            from services.component_edit_target import editable_version
+            from services.registry_fork import COMPONENT_MODELS
+
+            target = await editable_version(db, review.subject_type, subject, COMPONENT_MODELS[review.subject_type][1])
+            current_id = target.id if target is not None else None
+        if current_id != version.id:
             raise HTTPException(409, "A newer version of this resource exists; submit that version instead")
         submit = _listing_submit_route(review.subject_type)
         await submit(str(subject.id), message=message, db=db, current_user=user)

@@ -57,6 +57,16 @@ MCP_VALIDATION_MESSAGE = "Updated by MCP validation"
 # Revisions the system pushed; none of them is the author's resubmission.
 SYSTEM_REVISION_MESSAGES = frozenset({DRAFT_EDIT_MESSAGE, MCP_VALIDATION_MESSAGE})
 
+# Open items reviewers discuss that never block a person's publish (OBS-1443): an unanswered
+# change request, unresolved threads and an abandoned edit lock.
+ADVISORY_REQUIREMENTS = frozenset({"changes_requested", "unresolved_threads", "edit_lock"})
+# Integrity rules no publish path skips, including a super admin override: content changed
+# without a new revision, an uninstallable or rollout-gated skill folder, a moved approved
+# base, and an agent pinning components that are not published.
+HARD_REQUIREMENTS = frozenset(
+    {"unsubmitted_changes", "skill_folder_rollout", "skill_folder", "approved_base_changed", "pinned_components"}
+)
+
 
 def _now():
     return datetime.now(UTC)
@@ -298,10 +308,11 @@ async def open_or_push(
 class Gate:
     """Publication state of a review.
 
-    ``ready`` means a person may publish: only the required approvals block that.
-    ``requirements`` lists every open item (failing checks, change requests, unsubmitted
-    draft changes, ...). They are shown to reviewers and discussed, but do not block a
-    manual publish. ``clear`` is True when nothing is open; unattended auto-publish needs it.
+    ``requirements`` lists every open item. ``ready`` means a person may publish: every open
+    item is advisory (``ADVISORY_REQUIREMENTS``). ``hard`` lists the items not even a super
+    admin override skips (``HARD_REQUIREMENTS``); other blockers (approvals, required checks,
+    MCP validation) can be overridden by a super admin with a reason. ``clear`` is True when
+    nothing is open; unattended auto-publish needs it.
     """
 
     ready: bool
@@ -313,6 +324,12 @@ class Gate:
     # Required checks that are failing, so clients can say which check failed and why.
     blocking_checks: tuple[dict, ...] = ()
     clear: bool = False
+    hard: tuple[str, ...] = ()
+
+    @property
+    def blockers(self) -> tuple[str, ...]:
+        """Open items that stop a person publishing without an override."""
+        return tuple(r for r in self.requirements if r not in ADVISORY_REQUIREMENTS)
 
 
 async def _skill_blockers(db, review, version) -> list[str]:
@@ -405,8 +422,8 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
     if blocking_checks:
         blockers.append("required_checks")
     _, version = await _target(db, review)
-    # Draft saves push a new revision (cutover.push_draft_edit), so this only shows when
-    # content changed by another path. It is advisory: reviewers see it, it does not block.
+    # Draft saves push a new revision (cutover.push_draft_edit), so this only shows when content
+    # changed by another path. Publishing it would ship bytes no reviewer saw: never bypassed.
     if _hash(await render_files(review.subject_type, version, db)) != head.content_hash:
         blockers.append("unsubmitted_changes")
     if is_actively_editing(version):
@@ -419,6 +436,9 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
         blockers.append("pinned_components")
     if review.subject_type == "skill":
         blockers.extend(await _skill_blockers(db, review, version))
+        # An uninstallable folder is an integrity failure, not a check an admin may waive.
+        if any(c.get("id") == "skill_folder" and c.get("status") != "pass" for c in head.checks or []):
+            blockers.append("skill_folder")
     if policy.require_resolved_threads:
         threads = (
             (
@@ -441,7 +461,7 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
         if threads:
             blockers.append("unresolved_threads")
     return Gate(
-        "required_approvals" not in blockers,
+        all(b in ADVISORY_REQUIREMENTS for b in blockers),
         approvals,
         policy.required_approvals[review.subject_type],
         policy.source,
@@ -449,7 +469,34 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
         len(requests),
         blocking_checks,
         not blockers,
+        tuple(b for b in blockers if b in HARD_REQUIREMENTS),
     )
+
+
+_BLOCK_LABELS = {
+    "required_checks": "required checks are failing",
+    "mcp_validation": "MCP validation has not passed",
+    "unsubmitted_changes": "the content changed after the latest revision; submit it as a new revision",
+    "skill_folder_rollout": "skill folders with extra files cannot be installed yet",
+    "skill_folder": "the skill folder is not valid",
+    "approved_base_changed": "the approved base version changed; refresh before publishing",
+    "pinned_components": "pinned components must be published first",
+}
+
+
+def publish_block_message(blockers, result=None) -> str:
+    """One readable phrase per blocker, with the approval count when approvals are missing."""
+    parts = []
+    for key in blockers:
+        if key == "required_approvals" and result is not None:
+            missing = result.required - result.approvals
+            parts.append(
+                f"needs {missing} more approval{'s' if missing != 1 else ''} "
+                f"({result.approvals} of {result.required} on the latest revision)"
+            )
+        else:
+            parts.append(_BLOCK_LABELS.get(key, key.replace("_", " ")))
+    return "; ".join(parts)
 
 
 def _auto_publish_allowed(policy, version) -> bool:
@@ -584,7 +631,7 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
         override_reason = None
     if override_reason and (auto or user is None or user.role != UserRole.super_admin):
         raise HTTPException(403, "Only a super admin may publish with an override reason")
-    # A super admin override publishes regardless of approvals or any open item.
+    # A super admin override publishes past approvals and admin-required checks, never past HARD_REQUIREMENTS.
     override = bool(override_reason)
     if not auto:
         if user is None:
@@ -608,18 +655,21 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
                 "Make the agent team-visible or pin public skills, then submit a new revision.",
             )
     result = await gate(db, review, policy=policy)
+    if result.hard:
+        raise HTTPException(
+            409,
+            f"Review gate blocked (no override): {', '.join(result.hard)}. {publish_block_message(result.hard)}.",
+        )
     if auto:
         # Unattended publishing never skips an open item.
         if not result.clear:
             raise HTTPException(409, f"Auto-publish waits for every open item: {', '.join(result.requirements)}")
     elif not override and not result.ready:
-        # Only approvals block a person; other open items are advisory.
-        missing = result.required - result.approvals
         raise HTTPException(
             409,
-            f"Publishing needs {missing} more approval{'s' if missing != 1 else ''} "
-            f"({result.approvals} of {result.required} on the latest revision). "
-            "Other open items are advisory. A super admin can publish now with an override reason.",
+            f"Review gate blocked: {', '.join(result.blockers)}. {publish_block_message(result.blockers, result)}. "
+            "Change requests, unresolved conversations and edit locks are advisory. "
+            "A super admin can publish past approvals and checks with an override reason.",
         )
     re_review = review.subject_type == "skill" and version.pre_public_status is not None
     version.status = (

@@ -135,7 +135,7 @@ async def test_prerelease_publishes_without_replacing_stable_latest(db):
 
 
 @pytest.mark.asyncio
-async def test_moved_approved_base_is_advisory(db):
+async def test_moved_approved_base_blocks_even_override(db):
     users = await people(db)
     listing, base = await skill(db, users, version="1.0.0", status=ListingStatus.approved)
     _, moved = await skill(db, users, version="1.1.0", status=ListingStatus.approved, listing=listing)
@@ -144,9 +144,12 @@ async def test_moved_approved_base_is_advisory(db):
     review = await open_or_push(db, "skill", listing, candidate, users["author"].id)
     await approve(db, review, users)
     result = await gate(db, review)
-    assert "approved_base_changed" in result.requirements and result.ready and not result.clear
-    await publish(db, review, users["admin"], override_reason="urgent")
-    assert review.state == ReviewState.published
+    assert result.hard == ("approved_base_changed",) and not result.ready
+    for publisher, reason in ((users["reviewer"], None), (users["admin"], "urgent")):
+        with pytest.raises(HTTPException) as blocked:
+            await publish(db, review, publisher, override_reason=reason)
+        assert blocked.value.status_code == 409 and "approved_base_changed" in blocked.value.detail
+    assert review.state != ReviewState.published
 
 
 @pytest.mark.asyncio

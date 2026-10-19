@@ -462,8 +462,8 @@ async def test_submission_refuses_folder_whose_name_cannot_install(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_uninstallable_folder_is_flagged_and_override_still_publishes(monkeypatch):
-    """A folder that cannot install shows as a failing check; a super admin override publishes anyway."""
+async def test_uninstallable_folder_blocks_publish_even_with_override(monkeypatch):
+    """A folder that cannot install is an integrity failure: no publish path, override included, skips it."""
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     try:
@@ -488,9 +488,11 @@ async def test_uninstallable_folder_is_flagged_and_override_still_publishes(monk
             result = await gate(db, review)
             assert "required_checks" in result.requirements
             assert any(check["id"] == "skill_folder" for check in result.blocking_checks)
-            # Only approvals block publishing; the override path publishes past everything.
+            assert "skill_folder" in result.hard and not result.ready
             admin.role = UserRole.super_admin
-            await publish(db, review, admin, override_reason="Emergency")
-            assert review.state.value == "published"
+            with pytest.raises(HTTPException) as blocked:
+                await publish(db, review, admin, override_reason="Emergency")
+            assert blocked.value.status_code == 409 and "skill_folder" in blocked.value.detail
+            assert review.state.value != "published"
     finally:
         await engine.dispose()
