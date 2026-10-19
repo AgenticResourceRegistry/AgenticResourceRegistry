@@ -1365,7 +1365,7 @@ async def test_failing_secret_scan_blocks_normal_publish_but_super_admin_can_ove
 @pytest.mark.asyncio
 async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
     """A counted approval cannot silently bypass an explicit request for changes."""
-    client, current, (_, reviewer, _, second), (_, number), _ = api
+    client, current, (author, reviewer, _, second), (_, number), factory = api
     current[0] = second
     request = await client.post(
         f"/api/v1/reviews/{number}/submissions", json={"verdict": "request_changes", "body": "nit"}
@@ -1376,8 +1376,18 @@ async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
         await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
     ).status_code == 201
     gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
-    assert "changes_requested" in gate["blockers"] and not gate["ready"]
+    assert "changes_requested" in gate["blockers"] and gate["hard_blockers"] == ["changes_requested"]
+    assert not gate["ready"]
     assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 409
+    # Even the author acting as super admin cannot override an explicit reviewer request.
+    current[0] = author
+    async with factory() as db:
+        db_author = await db.get(User, author.id)
+        db_author.role = UserRole.super_admin
+        await db.commit()
+    author.role = UserRole.super_admin
+    bypass = await client.post(f"/api/v1/reviews/{number}/publish", json={"override_reason": "Emergency"})
+    assert bypass.status_code == 409 and "changes_requested" in bypass.json()["detail"]
     current[0] = second
     withdrawn = await client.post(
         f"/api/v1/reviews/{number}/submissions/{request.json()['id']}/withdraw-request",
@@ -1387,6 +1397,30 @@ async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
     current[0] = reviewer
     assert (await client.get(f"/api/v1/reviews/{number}/gate")).json()["ready"]
     assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_publication_records_only_an_effective_approver(api):
+    client, current, (_, reviewer, _, second), (rid, number), factory = api
+    base = f"/api/v1/reviews/{number}"
+    current[0] = reviewer
+    assert (await client.post(base + "/submissions", json={"verdict": "approve"})).status_code == 201
+    current[0] = second
+    assert (await client.post(base + "/submissions", json={"verdict": "approve"})).status_code == 201
+    request = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Fix this"})
+    assert request.status_code == 201
+    assert (await client.get(base + "/gate")).json()["approvals"] == 1
+    withdrawn = await client.post(
+        base + f"/submissions/{request.json()['id']}/withdraw-request", json={"reason": "No longer needed"}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    current[0] = reviewer
+    published = await client.post(base + "/publish", json={})
+    assert published.status_code == 200, published.text
+    async with factory() as db:
+        review = await db.get(Review, rid)
+        version = await db.get(SkillVersion, review.version_id)
+        assert version.reviewed_by == reviewer.id
 
 
 @pytest.mark.asyncio
