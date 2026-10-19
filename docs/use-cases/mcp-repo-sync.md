@@ -114,7 +114,7 @@ github.com and gitlab.com deliver webhooks over the public internet, so an Obser
 
 ## Private repositories
 
-Observal fetches the repository with the server's `GIT_CLONE_TOKEN`, the same token used to analyze git submissions. The token needs read access to the repository. For GitLab, set `GIT_CLONE_TOKEN_USER=oauth2`. A git server on a private network also needs `ALLOW_INTERNAL_GIT_URLS=true`.
+Observal fetches the repository with the server's `GIT_CLONE_TOKEN`, the same token used to analyze git submissions. The token needs read access to the repository. Set `GIT_CLONE_TOKEN_HOSTS` to the exact HTTPS hostname of your Git provider (`github.com` or your GitLab host); without it, the token is never sent. For GitLab, set `GIT_CLONE_TOKEN_USER=oauth2`. A git server on a private network also needs `ALLOW_INTERNAL_GIT_URLS=true`.
 
 ## Security
 

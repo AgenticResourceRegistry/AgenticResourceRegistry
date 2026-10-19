@@ -12,7 +12,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from git import Repo
 from loguru import logger as optic
@@ -80,27 +80,59 @@ def _git_url_warning(url: str) -> str:
 
 
 def _build_clone_url(git_url: str) -> str:
-    """Inject auth token into git URL if configured. Supports GitHub and GitLab token formats."""
+    """Authenticate only exact, operator-trusted HTTPS Git hosts (including their port)."""
     git_token = settings.GIT_CLONE_TOKEN or ""
     if not git_token:
         return git_url
-    parsed = urlparse(git_url)
+    try:
+        parsed = urlparse(git_url)
+        # An HTTP opt-in is not an opt-in to disclose credentials in cleartext.
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return git_url
+        authority = parsed.netloc.lower()
+        allowed = {host.strip().lower() for host in settings.GIT_CLONE_TOKEN_HOSTS.split(",") if host.strip()}
+        if authority not in allowed:
+            return git_url
+    except ValueError:  # malformed authority, e.g. invalid IPv6 brackets
+        return git_url
     token_user = os.environ.get("GIT_CLONE_TOKEN_USER", "x-access-token")
-    return f"{parsed.scheme}://{token_user}:{git_token}@{parsed.hostname}{parsed.path}"
+    credentials = f"{quote(token_user, safe='')}:{quote(git_token, safe='')}"
+    return urlunparse(parsed._replace(netloc=f"{credentials}@{parsed.netloc}"))
 
 
 def _redact_clone_error(error: Exception) -> str:
     message = str(error)
     git_token = settings.GIT_CLONE_TOKEN or ""
     if git_token:
-        message = message.replace(git_token, REDACTED)
+        message = message.replace(quote(git_token, safe=""), REDACTED).replace(git_token, REDACTED)
     return redact_secrets(message)
+
+
+def _authenticated_clone_url(url: str) -> bool:
+    """Check whether this URL embeds our shared token (not caller-supplied credentials)."""
+    try:
+        return bool(settings.GIT_CLONE_TOKEN and unquote(urlparse(url).password or "") == settings.GIT_CLONE_TOKEN)
+    except ValueError:
+        return False
 
 
 async def _async_clone(clone_url: str, dest: str, depth: int = 1) -> None:
     """Clone a repo in a thread with a timeout so we don't block the event loop."""
+    options: dict[str, object] = {"depth": depth}
+    if _authenticated_clone_url(clone_url):
+        # A trusted Git host may redirect to an untrusted host. Never follow with a token.
+        options["env"] = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.followRedirects",
+            "GIT_CONFIG_VALUE_0": "false",
+        }
     await asyncio.wait_for(
-        asyncio.to_thread(Repo.clone_from, clone_url, dest, depth=depth),
+        asyncio.to_thread(Repo.clone_from, clone_url, dest, **options),
         timeout=CLONE_TIMEOUT,
     )
 
