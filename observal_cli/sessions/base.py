@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared IO primitives for all harness session push scripts.
@@ -508,6 +509,9 @@ def drain_outbox(
         )
     )
 
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
     while items := telemetry_buffer.pending(
         destination=destination,
         user_id=user_id,
@@ -515,6 +519,12 @@ def drain_outbox(
         db_path=db_path,
     ):
         item = items[0]
+        validator = getattr(get_adapter(item.harness), "validate_outbox_provenance", None)
+        if validator is not None and not validator(item):
+            telemetry_buffer.hold_if_current(item, "unverified session attribution", db_path=db_path)
+            continue
+        if not telemetry_buffer.revision_is_current(item, db_path=db_path):
+            continue
         try:
             acknowledgement = post_batch(item.payload, config)
         except PermanentIngestRejectionError as exc:
@@ -526,6 +536,10 @@ def drain_outbox(
                 home=home,
             )
             continue
+        if acknowledgement is not None and not telemetry_buffer.revision_is_current(item, db_path=db_path):
+            # The server may have received the previous revision; never erase
+            # a concurrently corrected payload or advance its local checkpoint.
+            return False
         if acknowledgement is None:
             telemetry_buffer.record_attempt(item.id, db_path=db_path)
             return False
@@ -533,6 +547,8 @@ def drain_outbox(
         acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
         repair_from_line = acknowledgement.get("repair_from_line")
         if isinstance(repair_from_line, int):
+            if not telemetry_buffer.accept_item(item.id, db_path=db_path, revision=item.revision):
+                return False
             write_cursor(
                 item.checkpoint_key,
                 acknowledged_offset,
@@ -540,7 +556,6 @@ def drain_outbox(
                 home=home,
                 preserve_finalized=False,
             )
-            telemetry_buffer.accept_item(item.id, db_path=db_path)
             if repairs is not None:
                 repairs.append((item.harness, item.session_id))
             return False
@@ -566,14 +581,7 @@ def drain_outbox(
             return False
         if acknowledged_offset <= 0:
             acknowledged_offset = item.end_offset
-        write_cursor(
-            item.checkpoint_key,
-            acknowledged_offset,
-            acknowledged_line + 1,
-            finalized=item.final,
-            home=home,
-        )
-        telemetry_buffer.acknowledge(
+        deleted = telemetry_buffer.acknowledge(
             destination=destination,
             user_id=user_id,
             harness=item.harness,
@@ -581,8 +589,22 @@ def drain_outbox(
             acknowledged_line=acknowledged_line,
             include_metadata=item.end_line < item.start_line,
             db_path=db_path,
+            expected_item=item,
         )
-    return True
+        if not deleted:
+            return False
+        # An ahead-of-us server checkpoint does not establish that other local
+        # rows were reviewed or posted. Advance only across this sent range,
+        # without rewinding a cursor already ahead of an older posted batch.
+        current_offset, current_lines = read_cursor(item.checkpoint_key, home=home)
+        write_cursor(
+            item.checkpoint_key,
+            max(current_offset, min(acknowledged_offset, item.end_offset)),
+            max(current_lines, item.end_line + 1 if item.end_line >= item.start_line else item.start_line),
+            finalized=item.final,
+            home=home,
+        )
+    return not telemetry_buffer.has_holds(destination, user_id, db_path=db_path)
 
 
 def _checkpoint_gap_is_permanent(
@@ -628,6 +650,7 @@ def drain_session_source(
     checkpoint_fetch: Callable[[SessionSource, dict], dict | None] | None = None,
     rejections: list[tuple[str, str, int]] | None = None,
     _repair_attempts: int = 0,
+    identity_scope: str = "live",
 ) -> bool:
     """Spool all complete source records, then deliver them through the outbox."""
     from observal_cli import telemetry_buffer
@@ -636,6 +659,15 @@ def drain_session_source(
     user_id = str(config.get("user_id") or "")
     if source.path is None or not destination or not user_id:
         return False
+    if telemetry_buffer.is_held(destination, user_id, source.harness, source.session_id, db_path=db_path):
+        return False
+
+    def provenance(payload: dict) -> dict | None:
+        from observal_cli.harness import ensure_loaded, get_adapter
+
+        ensure_loaded()
+        builder = getattr(get_adapter(source.harness), "outbox_provenance", None)
+        return builder(source, payload) if builder is not None else None
 
     def source_was_rejected() -> bool:
         return bool(
@@ -692,6 +724,7 @@ def drain_session_source(
                 parent_session_id=source.parent_session_id,
                 session_jsonl=source.path,
                 harness=source.harness,
+                identity_scope=identity_scope,
             )
             payload["harness"] = source.harness
             if extra_fields:
@@ -712,6 +745,7 @@ def drain_session_source(
                 user_id=user_id,
                 checkpoint_key=source.checkpoint_key,
                 db_path=db_path,
+                provenance=provenance(payload),
             )
         if spool_only:
             return True
@@ -739,6 +773,7 @@ def drain_session_source(
                 checkpoint_fetch=checkpoint_fetch,
                 rejections=rejections,
                 _repair_attempts=_repair_attempts + 1,
+                identity_scope=identity_scope,
             )
         if bytes_read or (final and delivered and not source_was_rejected()):
             write_cursor(
@@ -768,6 +803,7 @@ def drain_session_source(
             parent_session_id=source.parent_session_id,
             session_jsonl=source.path,
             harness=source.harness,
+            identity_scope=identity_scope,
         )
         payload["harness"] = source.harness
         payload["end_byte_offsets"] = chunk_end_offsets
@@ -793,6 +829,7 @@ def drain_session_source(
             user_id=user_id,
             checkpoint_key=source.checkpoint_key,
             db_path=db_path,
+            provenance=provenance(payload),
         )
 
     if spool_only:
@@ -821,6 +858,7 @@ def drain_session_source(
             checkpoint_fetch=checkpoint_fetch,
             rejections=rejections,
             _repair_attempts=_repair_attempts + 1,
+            identity_scope=identity_scope,
         )
     return delivered and not source_was_rejected()
 
@@ -871,6 +909,7 @@ def build_payload(
     parent_session_id: str | None = None,
     session_jsonl: Path | None = None,
     harness: str = "claude-code",
+    identity_scope: str = "live",
 ) -> dict:
     """Construct the JSON body for the ingest endpoint.
 
@@ -884,7 +923,12 @@ def build_payload(
         # transcript records, or send no hash (unknown coverage) rather than a wrong one.
         cwd = _recorded_cwd(lines, session_jsonl)
     agent_id, agent_version = _resolve_agent(
-        cwd, lines, session_jsonl, harness=harness, session_ids=(session_id, parent_session_id)
+        cwd,
+        lines,
+        session_jsonl,
+        harness=harness,
+        session_ids=(session_id, parent_session_id),
+        identity_scope=identity_scope,
     )
     layer_hash = None if recovered_without_cwd and not cwd else _get_cached_layer_hash(session_id, cwd, harness)
     payload: dict = {
@@ -1126,6 +1170,7 @@ def _resolve_agent(
     session_jsonl: Path | None,
     harness: str = "claude-code",
     session_ids: tuple[str | None, ...] = (),
+    identity_scope: str = "live",
 ) -> tuple[str | None, str | None]:
     """Resolve agent identity: delegated child first, then harness adapter, environment, and lockfile."""
     import os
@@ -1133,7 +1178,9 @@ def _resolve_agent(
     from observal_cli.delegation.tasks import delegated_agent
     from observal_cli.harness import ensure_loaded, get_adapter
 
-    delegated = delegated_agent(cwd, session_ids)
+    # A Codex rollout may share a workspace with other sessions. Only an
+    # indexed child session, never the workspace, identifies its agent.
+    delegated = delegated_agent("" if harness == "codex" else cwd, session_ids)
     if delegated:
         return delegated
 
@@ -1145,7 +1192,21 @@ def _resolve_agent(
         if adapter_identity is not None:
             return adapter_identity
 
+    # Codex's generated hook marker is static installation state, not rollout identity.
+    # Recovery and public reconcile must likewise never inherit the caller's identity.
+    allows_ambient = getattr(adapter, "allows_ambient_agent_identity", None)
+    if callable(allows_ambient) and not allows_ambient():
+        return None, None
+    if identity_scope != "live":
+        return None, None
+
     env_agent_id = os.environ.get("OBSERVAL_AGENT_ID", "")
+    env_agent_name = os.environ.get("OBSERVAL_AGENT_NAME", "")
+    if env_agent_id and env_agent_name:
+        id_entry = _lookup_lockfile_agent_by_id(env_agent_id)
+        name_entry = _lookup_lockfile_agent(cwd, agent_name=env_agent_name)
+        if not id_entry or not name_entry or id_entry.get("id") != name_entry.get("id"):
+            return None, None
     if env_agent_id:
         # Prefer a harness-scoped match, but fall back to an unscoped UUID
         # lookup. A UUID is globally unique, and the harness recorded at pull

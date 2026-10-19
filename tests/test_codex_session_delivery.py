@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def test_codex_adapter_resolves_exact_and_latest_rollout(tmp_path: Path):
 
     assert exact is not None and exact.path == path
     assert exact.session_id == SESSION_ID
-    assert latest is not None and latest.session_id == SESSION_ID
+    assert latest is None  # cwd alone cannot select a concurrent rollout
 
 
 def test_codex_adapter_discovers_only_recent_rollouts(tmp_path: Path):
@@ -168,7 +169,7 @@ def test_codex_stop_uses_shared_engine_and_finalizer(tmp_path: Path, monkeypatch
     )
 
     assert drained == [(SESSION_ID, False)]
-    assert spawned == [(("--finalize-session", SESSION_ID, "--cwd", "/work"), "codex")]
+    assert spawned == [(("--finalize-session", SESSION_ID, "--cwd", ""), "codex")]
 
 
 def test_codex_hook_spec_uses_shared_engine():

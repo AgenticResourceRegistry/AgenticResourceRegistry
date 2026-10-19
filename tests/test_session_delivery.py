@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -402,6 +403,50 @@ def test_restart_drains_acknowledged_records_and_finalizes_cursor(tmp_path: Path
     assert base.read_cursor("session", home=tmp_path) == (source_path.stat().st_size, 1)
     state = json.loads((tmp_path / ".observal" / "sync_state.json").read_text())
     assert state["session"]["finalized"] is True
+
+
+def test_older_batch_ack_keeps_local_cursor_and_later_rows_pending(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    base.write_cursor("session", 100, 10, home=tmp_path)
+    for start, end in ((0, 4), (5, 9), (10, 10)):
+        telemetry_buffer.enqueue(
+            {
+                "session_id": "session",
+                "harness": "claude-code",
+                "start_offset": start,
+                "lines": [f"line {line}" for line in range(start, end + 1)],
+                "end_byte_offsets": [(line + 1) * 10 for line in range(start, end + 1)],
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+
+    attempted: list[int] = []
+
+    def first_post(payload, _config):
+        attempted.append(payload["start_offset"])
+        if payload["start_offset"] == 0:
+            return {"acknowledged_line": 9, "acknowledged_offset": 100}
+        return None
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=first_post)
+    assert attempted == [0, 5]
+    assert base.read_cursor("session", home=tmp_path) == (100, 10)
+    assert [
+        item.start_line for item in telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    ] == [5, 10]
+
+    def later_post(payload, _config):
+        attempted.append(payload["start_offset"])
+        assert base.read_cursor("session", home=tmp_path) == (100, 10)
+        end_line = payload["start_offset"] + len(payload["lines"]) - 1
+        return {"acknowledged_line": end_line, "acknowledged_offset": (end_line + 1) * 10}
+
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=later_post)
+    assert attempted == [0, 5, 5, 10]
+    assert base.read_cursor("session", home=tmp_path) == (110, 11)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
 
 
 def test_metadata_only_final_batch_is_spooled_and_acknowledged(tmp_path: Path, monkeypatch):

@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Recovery workflows
@@ -26,7 +27,7 @@ observal reconcile --harness claude-code --since 24 --output json
 observal reconcile --output json
 ```
 
-Dry run does not drain the outbox, contact ingestion, or change cursors. Report discovered, queued, skipped, failed, and cursor state. Reconciliation does not install hooks.
+Dry run does not drain the outbox, contact ingestion, or change cursors. Report discovered, queued, skipped, failed, held sessions, and cursor state. Reconciliation does not install hooks. A Codex session with unverified attribution is held rather than replayed. Inspect holds with `observal reconcile --list-held --output json` (optionally `--harness codex`). After independently checking the transcript and deciding that identity should be cleared, explicitly run `observal reconcile --harness codex --review-unattributed SESSION_ID`. The CLI verifies every pending source range and leaves the hold intact if a source is missing or mismatched. Never fabricate a transcript or proof to release a hold; review does not assign an agent identity. Run reconcile again to deliver released records.
 
 ## Manage CLI versions
 

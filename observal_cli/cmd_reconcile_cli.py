@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Manual recovery for local harness sessions missed by automatic delivery."""
@@ -13,6 +14,7 @@ import typer
 from rich import print as rprint
 from typer.models import OptionInfo
 
+from observal_cli import telemetry_buffer
 from observal_cli.errors import ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter, get_all_adapters
 from observal_cli.render import OutputMode, esc, output_json
@@ -38,6 +40,10 @@ def reconcile(
     since_hours: int = typer.Option(168, "--since", min=1, max=8760, help="Recent-session window in hours"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Preview without network or cursor changes"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
+    list_held: bool = typer.Option(False, "--list-held", help="List sessions blocked for attribution review"),
+    review_unattributed: str = typer.Option(
+        "", "--review-unattributed", help="Verify and release one held Codex session without agent identity"
+    ),
 ):
     """Backfill local session records missed by automatic hook delivery.
 
@@ -45,11 +51,19 @@ def reconcile(
       observal reconcile --output json
       observal reconcile --harness kiro --since 24 --output json
       observal reconcile --since 24 --dry-run --output json
+      observal reconcile --list-held --output json
+      observal reconcile --harness codex --review-unattributed SESSION_ID
     """
     harness = _value(harness).strip().lower()
     since_hours = _value(since_hours)
     dry_run = _value(dry_run)
     output = _value(output)
+    list_held = _value(list_held)
+    review_unattributed = _value(review_unattributed)
+    if list_held and review_unattributed:
+        fail(
+            ErrorCategory.VALIDATION, "Choose either --list-held or --review-unattributed.", operation="Review sessions"
+        )
     if not 1 <= since_hours <= 8760:
         fail(
             ErrorCategory.VALIDATION,
@@ -80,6 +94,44 @@ def reconcile(
             remediation=f"Choose from: {', '.join(sorted(adapters))}.",
         )
     targets = [harness] if harness else [name for name, adapter in adapters.items() if adapter.is_installed()]
+    destination, user_id = str(cfg.get("server_url") or "").rstrip("/"), str(cfg["user_id"])
+    if list_held:
+        holds = [
+            {"destination": dest, "user_id": uid, "harness": name, "session_id": sid, "reason": reason}
+            for dest, uid, name, sid, reason in telemetry_buffer.held_sessions()
+            if dest == destination and uid == user_id and (not harness or name == harness)
+        ]
+        if output == "json":
+            output_json({"held_sessions": holds})
+        else:
+            for hold in holds:
+                rprint(f"[yellow]{esc(hold['harness'])}/{esc(hold['session_id'])}[/yellow]: {esc(hold['reason'])}")
+            if not holds:
+                rprint("[dim]No held sessions.[/dim]")
+        return
+    if review_unattributed:
+        if harness != "codex" or dry_run:
+            fail(
+                ErrorCategory.VALIDATION,
+                "Review requires --harness codex and cannot use --dry-run.",
+                operation="Review sessions",
+            )
+        source = get_adapter("codex").resolve_session_source({"session_id": review_unattributed})
+        if source is None:
+            fail(
+                ErrorCategory.VALIDATION,
+                "Exact Codex rollout not found; hold remains in place.",
+                operation="Review sessions",
+            )
+        try:
+            telemetry_buffer.review_unattributed(destination, user_id, "codex", review_unattributed, source)
+        except telemetry_buffer.OutboxConflictError as exc:
+            fail(ErrorCategory.VALIDATION, f"Review refused: {exc}", operation="Review sessions")
+        if output == "json":
+            output_json({"reviewed_session": review_unattributed, "identity": "unattributed"})
+        else:
+            rprint(f"[green]Verified and released {esc(review_unattributed)} without agent attribution.[/green]")
+        return
 
     rejections: list[tuple[str, str, int]] = []
     outbox_drained: bool | None = None
@@ -147,6 +199,13 @@ def reconcile(
         "summary": summary,
         "rejections": rejection_rows,
     }
+    result["held_sessions"] = [
+        {"harness": name, "session_id": sid, "reason": reason}
+        for dest, uid, name, sid, reason in telemetry_buffer.held_sessions()
+        if dest == destination and uid == user_id and (not harness or name == harness)
+    ]
+    if result["held_sessions"] and output != "json":
+        rprint("[yellow]Held sessions need review: run `observal reconcile --list-held`.[/yellow]")
     if output == "json":
         output_json(result)
 
@@ -263,6 +322,7 @@ def _reconcile_harness(
                 cfg,
                 hook_event="Reconcile",
                 final=True,
+                identity_scope="recovery",
                 extra_records=adapter.session_extra_records(source, {"event": "Reconcile"}, True),
                 rejections=rejections,
             )

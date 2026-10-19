@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Durable SQLite outbox for acknowledged session delivery.
@@ -48,6 +49,8 @@ class OutboxItem:
     final: bool
     payload: dict
     attempts: int
+    provenance: dict | None = None
+    revision: int = 0
 
 
 def _path(db_path: Path | None) -> Path:
@@ -83,6 +86,19 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
                 UNIQUE(destination, user_id, harness, session_id, start_line, end_line)
             )
             """
+        )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(session_outbox)")}
+        if "provenance" not in columns:
+            conn.execute("ALTER TABLE session_outbox ADD COLUMN provenance TEXT")
+        if "revision" not in columns:
+            conn.execute("ALTER TABLE session_outbox ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS session_outbox_holds (
+                destination TEXT NOT NULL, user_id TEXT NOT NULL, harness TEXT NOT NULL,
+                session_id TEXT NOT NULL, reason TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (destination, user_id, harness, session_id)
+            )"""
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_outbox_pending ON session_outbox(destination, user_id, id)"
@@ -127,6 +143,7 @@ def enqueue(
     checkpoint_key: str | None = None,
     db_path: Path | None = None,
     max_bytes: int = MAX_OUTBOX_BYTES,
+    provenance: dict | None = None,
 ) -> int:
     """Persist one source batch and return its durable row ID.
 
@@ -153,6 +170,30 @@ def enqueue(
 
     conn = _connect(db_path, max_bytes=max_bytes)
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if _held(conn, *key[:4]):
+            raise OutboxConflictError(f"session {harness}/{session_id} is held for review")
+        # Every replacement must be independently validated; a previous proof
+        # cannot be carried forward to a new payload with different identity.
+        if provenance is not None:
+            from observal_cli.harness import ensure_loaded, get_adapter
+
+            ensure_loaded()
+            validator = getattr(get_adapter(harness), "validate_outbox_provenance", None)
+            candidate = OutboxItem(
+                0,
+                *key[:4],
+                checkpoint_key or session_id,
+                start_line,
+                end_line,
+                end_offset,
+                final,
+                payload,
+                0,
+                provenance,
+            )
+            if validator is not None and not validator(candidate):
+                raise OutboxConflictError("invalid session provenance")
         existing = conn.execute(
             "SELECT id, records_hash FROM session_outbox "
             "WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ? "
@@ -171,8 +212,8 @@ def enqueue(
                 """
                 INSERT INTO session_outbox (
                     destination, user_id, harness, session_id, checkpoint_key,
-                    start_line, end_line, end_offset, final, payload, records_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_line, end_line, end_offset, final, payload, records_hash, provenance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(destination, user_id, harness, session_id, start_line, end_line)
                 DO UPDATE SET
                     checkpoint_key = excluded.checkpoint_key,
@@ -181,7 +222,12 @@ def enqueue(
                     payload = CASE
                         WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
                         ELSE session_outbox.payload
-                    END
+                    END,
+                    provenance = CASE
+                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.provenance
+                        ELSE session_outbox.provenance
+                    END,
+                    revision = session_outbox.revision + 1
                 """,
                 (
                     *key[:4],
@@ -192,6 +238,7 @@ def enqueue(
                     int(final),
                     serialized,
                     records_hash,
+                    json.dumps(provenance) if provenance is not None else None,
                 ),
             )
             conn.commit()
@@ -228,16 +275,19 @@ def pending(
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            # Group once for each session's first row; a correlated MIN() per row rescans the whole
-            # destination for every row, which takes seconds on a few thousand queued batches.
+            # Group once per session while excluding held sessions; retain source-line order
+            # even if an earlier range was requeued after a later one.
             "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id FROM session_outbox "
             "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
             "SELECT item.id, item.destination, item.user_id, item.harness, item.session_id, "
             "item.checkpoint_key, item.start_line, item.end_line, item.end_offset, item.final, "
-            "item.payload, item.attempts "
+            "item.payload, item.attempts, item.provenance, item.revision "
             "FROM session_outbox AS item JOIN firsts "
             "ON firsts.harness = item.harness AND firsts.session_id = item.session_id "
             "WHERE item.destination = ? AND item.user_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM session_outbox_holds AS h WHERE "
+            "h.destination = item.destination AND h.user_id = item.user_id AND h.harness = item.harness "
+            "AND h.session_id = item.session_id) "
             "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
             (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
         ).fetchall()
@@ -255,11 +305,194 @@ def pending(
                 final=bool(row[9]),
                 payload=json.loads(row[10]),
                 attempts=int(row[11]),
+                provenance=json.loads(row[12]) if row[12] else None,
+                revision=int(row[13]),
             )
             for row in rows
         ]
     finally:
         conn.close()
+
+
+def _held(conn: sqlite3.Connection, destination: str, user_id: str, harness: str, session_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM session_outbox_holds WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            (destination, user_id, harness, session_id),
+        ).fetchone()
+        is not None
+    )
+
+
+def is_held(destination: str, user_id: str, harness: str, session_id: str, *, db_path: Path | None = None) -> bool:
+    conn = _connect(db_path)
+    try:
+        return _held(conn, destination.rstrip("/"), user_id, harness, session_id)
+    finally:
+        conn.close()
+
+
+def hold_if_current(item: OutboxItem, reason: str, *, db_path: Path | None = None) -> bool:
+    """Hold the entire session only if the inspected payload and proof still match."""
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT revision FROM session_outbox WHERE id = ?", (item.id,)).fetchone()
+        if not current or current[0] != item.revision:
+            conn.rollback()
+            return False
+        conn.execute(
+            "INSERT OR IGNORE INTO session_outbox_holds (destination, user_id, harness, session_id, reason) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (item.destination, item.user_id, item.harness, item.session_id, reason),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def revision_is_current(item: OutboxItem, *, db_path: Path | None = None) -> bool:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT revision FROM session_outbox WHERE id = ?", (item.id,)).fetchone()
+        return bool(
+            row
+            and row[0] == item.revision
+            and not _held(conn, item.destination, item.user_id, item.harness, item.session_id)
+        )
+    finally:
+        conn.close()
+
+
+def has_holds(destination: str, user_id: str, *, db_path: Path | None = None) -> bool:
+    conn = _connect(db_path)
+    try:
+        return (
+            conn.execute(
+                "SELECT 1 FROM session_outbox_holds WHERE destination = ? AND user_id = ? LIMIT 1",
+                (destination.rstrip("/"), user_id),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
+def held_sessions(*, db_path: Path | None = None) -> list[tuple[str, str, str, str, str]]:
+    """Expose durable holds for explicit operator review."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT destination, user_id, harness, session_id, reason FROM session_outbox_holds ORDER BY created_at"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def review_hold(
+    destination: str,
+    user_id: str,
+    harness: str,
+    session_id: str,
+    corrections: dict[int, tuple[dict, dict]],
+    *,
+    db_path: Path | None = None,
+) -> None:
+    """Atomically correct every held range before releasing it for replay.
+
+    An operator must supply independently verified payload and provenance for
+    *all* rows. This API does not infer historical identity from a directory.
+    """
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    destination = destination.rstrip("/")
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not _held(conn, destination, user_id, harness, session_id):
+            raise OutboxConflictError("session is not held")
+        rows = conn.execute(
+            "SELECT id, checkpoint_key, start_line, end_line, end_offset, final, payload, attempts, revision "
+            "FROM session_outbox WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            (destination, user_id, harness, session_id),
+        ).fetchall()
+        if not rows or {row[0] for row in rows} != set(corrections):
+            raise OutboxConflictError("review must cover every pending range")
+        validator = getattr(get_adapter(harness), "validate_outbox_provenance", None)
+        for row in rows:
+            payload, proof = corrections[row[0]]
+            original = json.loads(row[6])
+            if {key: value for key, value in payload.items() if key not in ("agent_id", "agent_version")} != {
+                key: value for key, value in original.items() if key not in ("agent_id", "agent_version")
+            }:
+                raise OutboxConflictError("review may change only agent identity")
+            item = OutboxItem(
+                row[0],
+                destination,
+                user_id,
+                harness,
+                session_id,
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                bool(row[5]),
+                payload,
+                row[7],
+                proof,
+                row[8],
+            )
+            if validator is not None and not validator(item):
+                raise OutboxConflictError("unverified review provenance")
+            conn.execute(
+                "UPDATE session_outbox SET payload = ?, provenance = ?, revision = revision + 1 WHERE id = ?",
+                (json.dumps(payload, separators=(",", ":"), ensure_ascii=False), json.dumps(proof), row[0]),
+            )
+        conn.execute(
+            "DELETE FROM session_outbox_holds WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            (destination, user_id, harness, session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def review_unattributed(
+    destination: str,
+    user_id: str,
+    harness: str,
+    session_id: str,
+    source,
+    *,
+    db_path: Path | None = None,
+) -> None:
+    """Explicitly release a held session as unattributed after verifying each source range."""
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    adapter = get_adapter(harness)
+    if harness != "codex" or source.session_id != session_id or source.path is None:
+        raise OutboxConflictError("review requires an exact Codex rollout")
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, payload FROM session_outbox WHERE destination = ? AND user_id = ? "
+            "AND harness = ? AND session_id = ?",
+            (destination.rstrip("/"), user_id, harness, session_id),
+        ).fetchall()
+    finally:
+        conn.close()
+    corrections = {}
+    for row_id, raw in rows:
+        payload = json.loads(raw)
+        payload["agent_id"] = payload["agent_version"] = None
+        proof = adapter.outbox_provenance(source, payload)
+        if proof is None:
+            raise OutboxConflictError("cannot verify source attribution")
+        corrections[row_id] = payload, proof
+    review_hold(destination, user_id, harness, session_id, corrections, db_path=db_path)
 
 
 def spooled_checkpoint(
@@ -354,16 +587,20 @@ def quarantine(item: OutboxItem, reason: str, *, db_path: Path | None = None) ->
         file.write((json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n").encode())
         file.flush()
         os.fsync(file.fileno())
-    accept_item(item.id, db_path=db_path)
+    accept_item(item.id, db_path=db_path, revision=item.revision)
     return path
 
 
-def accept_item(item_id: int, *, db_path: Path | None = None) -> None:
-    """Remove one posted batch when an audit rewinds the contiguous checkpoint."""
+def accept_item(item_id: int, *, db_path: Path | None = None, revision: int | None = None) -> bool:
+    """Remove a posted snapshot, never a replacement written after it was read."""
     conn = _connect(db_path)
     try:
-        conn.execute("DELETE FROM session_outbox WHERE id = ?", (item_id,))
+        if revision is None:
+            cursor = conn.execute("DELETE FROM session_outbox WHERE id = ?", (item_id,))
+        else:
+            cursor = conn.execute("DELETE FROM session_outbox WHERE id = ? AND revision = ?", (item_id, revision))
         conn.commit()
+        return bool(cursor.rowcount)
     finally:
         conn.close()
 
@@ -377,15 +614,27 @@ def acknowledge(
     acknowledged_line: int,
     include_metadata: bool = False,
     db_path: Path | None = None,
+    expected_item: OutboxItem,
 ) -> int:
-    """Delete acknowledged source batches and only metadata that was itself posted."""
+    """Delete only the posted, validated revision; a high server checkpoint proves nothing about other rows."""
     conn = _connect(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if (
+            expected_item.destination != destination.rstrip("/")
+            or expected_item.user_id != user_id
+            or expected_item.harness != harness
+            or expected_item.session_id != session_id
+            or expected_item.end_line > acknowledged_line
+            or (expected_item.end_line < expected_item.start_line and not include_metadata)
+            or _held(conn, destination.rstrip("/"), user_id, harness, session_id)
+        ):
+            conn.rollback()
+            return 0
         cursor = conn.execute(
-            "DELETE FROM session_outbox WHERE destination = ? AND user_id = ? AND harness = ? "
-            "AND session_id = ? AND end_line <= ? "
-            "AND (end_line >= start_line OR ? = 1)",
-            (destination.rstrip("/"), user_id, harness, session_id, acknowledged_line, int(include_metadata)),
+            "DELETE FROM session_outbox WHERE id = ? AND destination = ? AND user_id = ? AND harness = ? "
+            "AND session_id = ? AND revision = ?",
+            (expected_item.id, destination.rstrip("/"), user_id, harness, session_id, expected_item.revision),
         )
         if cursor.rowcount:
             conn.execute(
