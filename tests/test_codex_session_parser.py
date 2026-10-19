@@ -10,7 +10,7 @@ import json
 import pytest
 
 from services.session_parsers import parse_raw_events
-from services.session_parsers.ingest_classify import _classify_codex
+from services.session_parsers.ingest_classify import _classify_codex, _preview_codex
 
 
 def _token_count_row(info: object) -> dict:
@@ -122,3 +122,10 @@ def test_trace_view_shows_each_typed_prompt_once():
     prompts = [event for event in parse_raw_events(rows) if event["event_name"] == "hook_userpromptsubmit"]
 
     assert [event["attributes"]["tool_input"] for event in prompts] == ["run the tests before saying it's done"]
+
+
+def test_prompt_preview_skips_injected_context_blocks():
+    line = _user_message("<environment_context>...</environment_context>", "fix the parser")
+
+    assert _preview_codex(line, "user_prompt") == "fix the parser"
+    assert _preview_codex(ENVIRONMENT, "system").startswith("<environment_context>")

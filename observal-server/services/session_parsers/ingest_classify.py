@@ -649,6 +649,10 @@ def _preview_codex(parsed: dict, event_type: str) -> str:
 
         if line_type == "response_item":
             payload = parsed.get("payload", {})
+            # A typed prompt's preview is what was typed, not the context blocks sent with it.
+            typed = _codex_user_prompt_text(payload)
+            if typed is not None:
+                return typed[:_PREVIEW_MAX]
             content = payload.get("content", [])
             if isinstance(content, list):
                 parts: list[str] = []
