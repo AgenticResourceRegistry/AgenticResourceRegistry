@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """The single submit-to-review path. The caller commits all rows together."""
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from models.agent import AgentStatus
 from models.mcp import ListingStatus
 from models.review import Review, ReviewState
-from services.review.decisions import DRAFT_EDIT_MESSAGE, _head, open_or_push, sync_state
+from services.review.decisions import DRAFT_EDIT_MESSAGE, SYSTEM_REVISION_MESSAGES, _head, open_or_push, sync_state
 from services.review.notifications import deliver_event
 
 
@@ -26,7 +27,9 @@ async def lock_review_for_edit(db, subject_type, version):
         await db.refresh(version, attribute_names=["status"])
 
 
-async def submit_for_review(db, subject_type, subject, version, actor_id, *, message=None):
+async def submit_for_review(db, subject_type, subject, version, actor_id, *, message=None, system_generated=False):
+    if message in SYSTEM_REVISION_MESSAGES and not system_generated:
+        raise HTTPException(422, "This review message is reserved for system-generated revisions")
     already_current = await _draft_already_under_review(db, subject_type, version)
     if already_current is not None:
         # A draft save already pushed this content as the head revision; submitting it
@@ -72,7 +75,7 @@ async def _draft_already_under_review(db, subject_type, version):
     return review
 
 
-async def resubmit_if_changed(db, subject_type, subject, version, message, *, actor_id=None):
+async def resubmit_if_changed(db, subject_type, subject, version, message, *, actor_id=None, system_generated=False):
     """Push a new revision when the version changed after submission.
 
     Used for system-derived fields (MCP validation) and for author draft saves.
@@ -89,7 +92,15 @@ async def resubmit_if_changed(db, subject_type, subject, version, message, *, ac
     head = await _head(db, review)
     if _hash(await render_files(subject_type, version, db)) == head.content_hash:
         return None
-    return await submit_for_review(db, subject_type, subject, version, actor_id or version.released_by, message=message)
+    return await submit_for_review(
+        db,
+        subject_type,
+        subject,
+        version,
+        actor_id or version.released_by,
+        message=message,
+        system_generated=system_generated,
+    )
 
 
 async def push_draft_edit(db, subject_type, subject, version, actor_id) -> dict | None:

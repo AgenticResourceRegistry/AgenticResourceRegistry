@@ -45,7 +45,7 @@ from schemas.mcp import (
     McpSubmitRequest,
     McpUpdateRequest,
 )
-from services.component_edit_target import editable_version
+from services.component_edit_target import editable_version, reject_listing_edits_on_successor
 from services.config_generator import generate_config
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
 from services.mcp_validator import analyze_repo, run_validation
@@ -499,6 +499,7 @@ async def update_mcp_draft(
             status_code=400, detail="Only draft, rejected, pending, or changes-requested listings can be edited"
         )
     _reject_visibility_edits(listing, req)
+    reject_listing_edits_on_successor(listing, ver, req, ("name", "category", "owner"))
 
     for field in (
         "version",

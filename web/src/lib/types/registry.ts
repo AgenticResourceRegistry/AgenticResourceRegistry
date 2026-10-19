@@ -148,6 +148,7 @@ export interface AgentComponentReference {
 	component_name?: string;
 	mcp_name?: string;
 	resolved_version?: string;
+	config_override?: Record<string, unknown> | null;
 	status?: string;
 }
 

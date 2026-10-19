@@ -106,6 +106,7 @@ def _version_to_detail(ver: AgentVersion) -> dict:
             "component_id": str(c.component_id),
             "name": c.component_name or "",
             "resolved_version": c.resolved_version or "",
+            **({"config_override": c.config_override} if c.config_override is not None else {}),
         }
         for c in (ver.components or [])
     ]

@@ -92,6 +92,7 @@ interface ComponentLink {
   component_type?: string;
   component_id?: string;
   mcp_id?: string;
+  config_override?: Record<string, unknown> | null;
 }
 
 
@@ -198,6 +199,7 @@ export function AgentEditForm({
           component_name: component.component_name,
           mcp_name: component.mcp_name,
           name: component.name,
+          config_override: component.config_override,
         }))
       : (agent.component_links ?? agent.mcp_links ?? []);
     const grouped: Record<string, RegistryItem[]> = {
@@ -209,7 +211,7 @@ export function AgentEditForm({
       const compId = comp.component_id ?? comp.mcp_id;
       const compName = comp.component_name ?? comp.mcp_name ?? comp.name ?? compId ?? "";
       if (grouped[pluralType] && compId) {
-        grouped[pluralType].push({ id: compId, name: compName });
+        grouped[pluralType].push({ id: compId, name: compName, ...(comp.config_override !== undefined ? { config_override: comp.config_override } : {}) });
       }
     }
     setSelectedComponents(grouped);
@@ -339,11 +341,11 @@ export function AgentEditForm({
   // Only a confirmed release may refresh pins. Drafts always keep them, whatever
   // was left ticked in a cancelled release dialog.
   function buildVersionBody(version: string, refresh = false) {
-    const components: { component_type: string; component_id: string }[] = [];
+    const components: { component_type: string; component_id: string; config_override?: Record<string, unknown> | null }[] = [];
     for (const [type, items] of Object.entries(selectedComponents)) {
       const singularType = TYPE_MAP[type] ?? type;
       for (const item of items) {
-        components.push({ component_type: singularType, component_id: item.id });
+        components.push({ component_type: singularType, component_id: item.id, ...(item.config_override !== undefined ? { config_override: item.config_override as Record<string, unknown> | null } : {}) });
       }
     }
 

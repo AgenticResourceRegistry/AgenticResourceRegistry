@@ -809,7 +809,19 @@ async def test_edit_approved_mcp_successor_targets_pending_review_not_installabl
     assert detail.status_code == 200, detail.text
     assert detail.json()["version"] == "1.1.0" and detail.json()["status"] == "pending"
     assert (await client.post(f"/api/v1/mcps/{listing_id}/start-edit")).status_code == 200
-    edited = await client.put(f"/api/v1/mcps/{listing_id}/draft", json={"description": "Corrected"})
+    # Listing fields would change the live approved listing without review.
+    renamed = await client.put(f"/api/v1/mcps/{listing_id}/draft", json={"name": "Renamed", "description": "x"})
+    assert renamed.status_code == 409, renamed.text
+    async with factory() as db:
+        assert (await db.get(McpListing, listing_id)).name == "Multi-version"
+        assert (await db.get(McpVersion, pending_id)).description == "Before edit"
+    # Author lists (summaries) show the editable successor too.
+    mine = await client.get("/api/v1/mcps/my")
+    assert mine.status_code == 200, mine.text
+    assert [(row["version"], row["status"]) for row in mine.json()] == [("1.1.0", "pending")]
+    edited = await client.put(
+        f"/api/v1/mcps/{listing_id}/draft", json={"name": "Multi-version", "description": "Corrected"}
+    )
     assert edited.status_code == 200, edited.text
     assert edited.json()["version"] == "1.1.0" and edited.json()["review_revision"] == 2
     async with factory() as db:
