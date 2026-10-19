@@ -3783,6 +3783,9 @@ def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
         "import sys\n"
         f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
         "from observal_cli.cmd_pull import _mask_values\n"
+        "if sys.platform == 'linux':\n"
+        "    import resource\n"
+        "    baseline_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
         "secret = '\\\\' * 32 + 'Z'\n"
         "text = '\\\\' * 100_000 + 'Q'\n"
         "assert _mask_values(text, {secret}) == text\n"
@@ -3790,8 +3793,7 @@ def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
         "assert _mask_values('\\\\' * 100_000 + '%5a', {secret}) == '\\\\' * 99_936 + '<secret>'\n"
         "assert _mask_values('\\\\' * 80 + 'Q', {'\\\\' * 32 + 'Q'}) == '\\\\' * 16 + '<secret>'\n"
         "if sys.platform == 'linux':\n"
-        "    import resource\n"
-        "    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss < 160 * 1024\n"
+        "    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - baseline_rss < 96 * 1024\n"
     )
     subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
 
