@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import secrets
 import shlex
+import stat
 import subprocess
 import sys
 import tomllib
@@ -443,9 +446,13 @@ class _TomlConflict(ValueError):  # noqa: N818 - internal conflict category
 _MISSING = object()
 
 
-def _read_toml_bytes(path: Path) -> bytes | object:
+def _read_toml_bytes(path: Path, *, dir_fd: int | None = None) -> bytes | object:
     try:
-        return path.read_bytes()
+        if dir_fd is None:
+            return path.read_bytes()
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        with os.fdopen(fd, "rb") as file:
+            return file.read()
     except FileNotFoundError:
         return _MISSING
 
@@ -557,13 +564,14 @@ def _dict_to_toml(d: dict) -> str:
 
 @contextmanager
 def _toml_write_lock(path: Path):
-    """Serialize cooperating pull writers; the byte check catches other editors."""
+    """Lock the effective TOML target, pinning its directory on POSIX."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_name(f".{path.name}.observal.lock").open("a+b") as lock:
-        if sys.platform == "win32":
+    if sys.platform == "win32":
+        # Windows has no dir_fd replacement; keep the existing best-effort behavior.
+        target = path.resolve() if path.is_symlink() else path
+        with target.with_name(f".{target.name}.observal.lock").open("a+b") as lock:
             import msvcrt
 
-            # Windows byte-range locking needs a byte to lock, even on a new file.
             lock.seek(0, 2)
             if lock.tell() == 0:
                 lock.write(b"\0")
@@ -571,38 +579,132 @@ def _toml_write_lock(path: Path):
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
             try:
-                yield
+                yield target, None
             finally:
                 lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
+        return
 
+    import fcntl
+
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    target = path
+    try:
+        # Follow only the final component, so Codex configs intentionally
+        # symlinked to another file keep working without replacing the link.
+        for _ in range(40):
+            try:
+                mode = os.stat(target.name, dir_fd=directory, follow_symlinks=False).st_mode
+            except FileNotFoundError:
+                break
+            if not stat.S_ISLNK(mode):
+                break
+            link = Path(os.readlink(target.name, dir_fd=directory))
+            next_directory = os.open(link.parent, os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
+            target = link
+            os.close(directory)
+            directory = next_directory
+        else:
+            raise _TomlConflict("Too many configuration symlinks")
+
+        fd = os.open(f".{target.name}.observal.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        with os.fdopen(fd, "r+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
-                yield
+                yield target, directory
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
+    finally:
+        os.close(directory)
 
 
-def _atomic_write_text(path: Path, content: str, *, expected_bytes: bytes | object = None) -> None:
+def _check_toml_target(requested: Path, target: Path, dir_fd: int) -> None:
+    """Refuse a requested path that no longer leads to the pinned target directory and name."""
+    try:
+        resolved = requested.resolve()
+        current = resolved.parent.stat()
+        pinned = os.fstat(dir_fd)
+        if resolved.name != target.name or (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
+            raise _TomlConflict("Configuration path changed during pull")
+    except (OSError, RuntimeError) as error:
+        raise _TomlConflict("Configuration path changed during pull") from error
+
+
+def _check_install_toml_path(requested: Path | None, original: Path, allowed_dir: Path | None) -> None:
+    """Keep the validated target fixed even if a parent is retargeted before opening it."""
+    if requested is None:
+        return
+    try:
+        if requested.resolve() != original or (allowed_dir is not None and not original.is_relative_to(allowed_dir)):
+            raise _TomlConflict("Configuration path changed during pull")
+    except (OSError, RuntimeError) as error:
+        raise _TomlConflict("Configuration path changed during pull") from error
+
+
+def _atomic_write_text(
+    path: Path,
+    content: str,
+    *,
+    expected_bytes: bytes | object = None,
+    dir_fd: int | None = None,
+    requested_path: Path | None = None,
+    install_path: Path | None = None,
+    original_target: Path | None = None,
+    allowed_dir: Path | None = None,
+) -> None:
+    data = content.encode("utf-8")
+    if dir_fd is not None:
+        name = f".{path.name}.{secrets.token_hex(16)}"
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "wb") as file:
+                file.write(data)
+            if expected_bytes is not None and _read_toml_bytes(path, dir_fd=dir_fd) != expected_bytes:
+                raise _TomlConflict("Configuration changed during pull")
+            if requested_path is not None:
+                _check_toml_target(requested_path, path, dir_fd)
+            if install_path is not None:
+                _check_toml_target(install_path, path, dir_fd)
+                _check_install_toml_path(install_path, original_target, allowed_dir)
+            os.replace(name, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        finally:
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+        return
+
     temporary: Path | None = None
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as file:
+        with NamedTemporaryFile("wb", dir=path.parent, prefix=f".{path.name}.", delete=False) as file:
             temporary = Path(file.name)
-            file.write(content)
+            file.write(data)
         if expected_bytes is not None and _read_toml_bytes(path) != expected_bytes:
             raise _TomlConflict("Configuration changed during pull")
+        _check_install_toml_path(install_path, original_target, allowed_dir)
         temporary.replace(path)
     finally:
         if temporary:
             temporary.unlink(missing_ok=True)
 
 
-def _write_toml_config(path: Path, content: dict, *, merge: bool) -> str:
-    with _toml_write_lock(path):
-        prior = _read_toml_bytes(path)
+def _write_toml_config(
+    path: Path, content: dict, *, merge: bool, requested_path: Path | None = None, allowed_dir: Path | None = None
+) -> str:
+    def check_requested(target: Path, directory: int | None) -> None:
+        _check_install_toml_path(requested_path, path, allowed_dir)
+        if requested_path is not None and directory is not None:
+            _check_toml_target(requested_path, target, directory)
+
+    check_requested(path, None)
+    with _toml_write_lock(path) as (target, directory):
+        # The lexical install path and the validated canonical path must both
+        # still lead to the pinned destination, even for a no-op merge.
+        if directory is not None:
+            _check_toml_target(path, target, directory)
+        check_requested(target, directory)
+        prior = _read_toml_bytes(target, dir_fd=directory)
         try:
             existing = prior.decode("utf-8") if prior is not _MISSING and merge else None
             rendered = _toml_document(content, existing)
@@ -610,9 +712,24 @@ def _write_toml_config(path: Path, content: dict, *, merge: bool) -> str:
             raise
         except Exception as error:
             raise _TomlConflict("Invalid TOML configuration") from error
+        if directory is not None:
+            _check_toml_target(path, target, directory)
+        check_requested(target, directory)
         if prior is not _MISSING and merge and rendered == existing:
             return "merged"
-        _atomic_write_text(path, rendered, expected_bytes=prior)
+        _atomic_write_text(
+            target,
+            rendered,
+            expected_bytes=prior,
+            dir_fd=directory,
+            requested_path=path,
+            install_path=requested_path,
+            original_target=path,
+            allowed_dir=allowed_dir,
+        )
+        if directory is not None:
+            _check_toml_target(path, target, directory)
+        check_requested(target, directory)
         return "created" if prior is _MISSING else "merged" if merge else "updated"
 
 
@@ -656,7 +773,14 @@ def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: boo
     return "merged" if existed else "created"
 
 
-def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
+def _write_file(
+    path: Path,
+    content: str | dict,
+    *,
+    merge_mcp: bool = False,
+    requested_toml_path: Path | None = None,
+    allowed_toml_dir: Path | None = None,
+) -> str:
     """Write content to a file path, creating parent dirs as needed.
 
     If *merge_mcp* is True and the file already exists, merge the incoming
@@ -665,6 +789,7 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
     Returns a human-readable status string ("created", "updated", "merged").
     """
     optic.trace("path={}", path)
+    _check_install_toml_path(requested_toml_path, path, allowed_toml_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
 
@@ -677,7 +802,9 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
             next(iter(content), "mcpServers"),
         )
         if path.suffix == ".toml":
-            return _write_toml_config(path, content, merge=merge_mcp)
+            return _write_toml_config(
+                path, content, merge=merge_mcp, requested_path=requested_toml_path, allowed_dir=allowed_toml_dir
+            )
         elif path.suffix in (".yaml", ".yml"):
             return _merge_yaml_config(path, content, root_key, existed=existed, merge=merge_mcp)
         else:
@@ -711,9 +838,22 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
     return "updated" if existed else "created"
 
 
-def _write_file_checked(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
+def _write_file_checked(
+    path: Path,
+    content: str | dict,
+    *,
+    merge_mcp: bool = False,
+    requested_toml_path: Path | None = None,
+    allowed_toml_dir: Path | None = None,
+) -> str:
     try:
-        return _write_file(path, content, merge_mcp=merge_mcp)
+        return _write_file(
+            path,
+            content,
+            merge_mcp=merge_mcp,
+            requested_toml_path=requested_toml_path,
+            allowed_toml_dir=allowed_toml_dir,
+        )
     except (ValueError, TypeError, UnicodeError) as error:
         fail(
             ErrorCategory.CONFLICT,
@@ -2173,9 +2313,22 @@ def write_install_snippet(
     _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
     written: list[tuple[str, str]] = []  # (path, status)
 
-    def tracked_write(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
+    def tracked_write(
+        path: Path,
+        content: str | dict,
+        *,
+        merge_mcp: bool = False,
+        requested_toml_path: Path | None = None,
+        allowed_toml_dir: Path | None = None,
+    ) -> str:
         try:
-            return _write_file_checked(path, content, merge_mcp=merge_mcp)
+            return _write_file_checked(
+                path,
+                content,
+                merge_mcp=merge_mcp,
+                requested_toml_path=requested_toml_path,
+                allowed_toml_dir=allowed_toml_dir,
+            )
         except CliError as error:
             if error.result is None:
                 error.result = _pull_failure_result(
@@ -2349,11 +2502,28 @@ def write_install_snippet(
     # ── mcp_config with path key (Cursor/VSCode/Gemini) ─
     mcp_cfg = snippet.get("mcp_config")
     if mcp_cfg and isinstance(mcp_cfg, dict) and "path" in mcp_cfg:
+        allowed_dir = target_dir.resolve()
         p = _resolve_path(mcp_cfg["path"], target_dir, allow_home=is_user_scope)
         if dry_run:
             written.append((str(p), "would write"))
         else:
-            status = tracked_write(p, mcp_cfg["content"], merge_mcp=True)
+            # Keep the lexical install path as a second identity: _resolve_path
+            # already followed any config symlink to its validated target.
+            requested = None
+            if p.suffix == ".toml" and isinstance(mcp_cfg["content"], dict):
+                raw = mcp_cfg["path"]
+                requested = (
+                    Path(raw).expanduser()
+                    if is_user_scope and raw.startswith(("~/", "~\\"))
+                    else target_dir / (raw[2:] if raw.startswith(("~/", "~\\")) else raw)
+                )
+            status = tracked_write(
+                p,
+                mcp_cfg["content"],
+                merge_mcp=True,
+                requested_toml_path=requested,
+                allowed_toml_dir=None if is_user_scope and mcp_cfg["path"].startswith(("~/", "~\\")) else allowed_dir,
+            )
             written.append((str(p), status))
 
     # ── hooks_config (Cursor/VSCode/Copilot/OpenCode/Gemini) ─

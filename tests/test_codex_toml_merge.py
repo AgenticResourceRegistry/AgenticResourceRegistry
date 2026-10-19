@@ -6,6 +6,7 @@
 
 import builtins
 import json
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -56,21 +57,22 @@ def test_literal_keys_fresh_and_merge_preserves_unrelated_data(tmp_path):
         }
     }
     assert cmd_pull._write_file(path, payload, merge_mcp=True) == "created"
-    assert tomllib.loads(path.read_text()) == payload
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == payload
     path.write_text(
         '# leading\nmodel = "gpt" # owned by user\n'
         '[mcp_servers.other] # untouched\ncommand = "mine"\n'
-        "[unrelated] # trailing\nvalue = nan\n" + path.read_text()
+        "[unrelated] # trailing\nvalue = nan\n" + path.read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
     updated = {"mcp_servers": {name: {"command": "changed", "headers": {"a.b": "new"}}}}
     assert cmd_pull._write_file(path, updated, merge_mcp=True) == "merged"
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     assert data["mcp_servers"][name] == updated["mcp_servers"][name]
-    assert "obsolete" not in path.read_text()
+    assert "obsolete" not in path.read_text(encoding="utf-8")
     assert data["mcp_servers"]["other"] == {"command": "mine"}
     assert data["model"] == "gpt"
     for comment in ("# leading", "# owned by user", "# untouched", "# trailing"):
-        assert comment in path.read_text()
+        assert comment in path.read_text(encoding="utf-8")
 
 
 def test_inline_root_repull_replaces_only_target(tmp_path):
@@ -197,6 +199,170 @@ def test_snippet_codex_path_and_failure_tracking(tmp_path):
     assert exc.value.result["partial"] is False
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_snippet_codex_parent_swap_after_validation_does_not_write_outside(tmp_path, monkeypatch):
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-codex"
+    outside.mkdir()
+    original = b'model = "outside"\n'
+    (outside / "config.toml").write_bytes(original)
+    snippet = {"mcp_config": {"path": ".codex/config.toml", "content": {"mcp_servers": {"demo": {"command": "ok"}}}}}
+    resolve = cmd_pull._resolve_path
+
+    def swap_after_validation(*args, **kwargs):
+        result = resolve(*args, **kwargs)
+        if args[0] == ".codex/config.toml":
+            parent.rename(tmp_path / "moved-codex")
+            parent.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(cmd_pull, "_resolve_path", swap_after_validation)
+    with pytest.raises(CliError) as exc:
+        cmd_pull.write_install_snippet(
+            snippet, harness="codex", adapter=MagicMock(), target_dir=tmp_path, agent_id="dummy", is_user_scope=False
+        )
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert exc.value.result["files"] == []
+    assert exc.value.result["failed_path"] == str(tmp_path / ".codex" / "config.toml")
+    assert (outside / "config.toml").read_bytes() == original
+    assert not (outside / ".config.toml.observal.lock").exists()
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_snippet_codex_user_home_path_is_allowed(tmp_path, monkeypatch, symlink):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    parent = home / ".codex"
+    parent.mkdir()
+    requested = parent / "config.toml"
+    actual = home / "actual.toml" if symlink else requested
+    if symlink:
+        requested.symlink_to(actual)
+    original = b'model = "mine"\n'
+    actual.write_bytes(original)
+    snippet = {"mcp_config": {"path": "~/.codex/config.toml", "content": {"mcp_servers": {"demo": {"command": "ok"}}}}}
+    written, failed = cmd_pull.write_install_snippet(
+        snippet,
+        harness="codex",
+        adapter=MagicMock(),
+        target_dir=tmp_path / "project",
+        agent_id="dummy",
+        is_user_scope=True,
+    )
+    assert written == [(str(actual), "merged")]
+    assert failed == []
+    assert tomllib.loads(actual.read_text(encoding="utf-8")) == {
+        "model": "mine",
+        "mcp_servers": {"demo": {"command": "ok"}},
+    }
+    if symlink:
+        assert requested.is_symlink()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+@pytest.mark.parametrize("swap_parent", [False, True])
+def test_snippet_codex_symlink_retarget_during_render_is_conflict(tmp_path, monkeypatch, swap_parent):
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    link = parent / "config.toml"
+    original = b'model = "mine"\n'
+    old = tmp_path / "old.toml"
+    new = tmp_path.parent / f"{tmp_path.name}-outside.toml"
+    old.write_bytes(original)
+    new.write_bytes(original)
+    link.symlink_to(old)
+    snippet = {"mcp_config": {"path": ".codex/config.toml", "content": {"mcp_servers": {"demo": {"command": "ok"}}}}}
+    render = cmd_pull._toml_document
+
+    def retarget(*args, **kwargs):
+        result = render(*args, **kwargs)
+        if swap_parent:
+            parent.rename(tmp_path / "moved")
+            parent.symlink_to(outside, target_is_directory=True)
+        else:
+            link.unlink()
+            link.symlink_to(new)
+        return result
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    monkeypatch.setattr(cmd_pull, "_toml_document", retarget)
+    with pytest.raises(CliError) as exc:
+        cmd_pull.write_install_snippet(
+            snippet, harness="codex", adapter=MagicMock(), target_dir=tmp_path, agent_id="dummy", is_user_scope=False
+        )
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert exc.value.result["failed_path"] == str(old)
+    assert old.read_bytes() == new.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_snippet_codex_retarget_cannot_report_success(tmp_path, monkeypatch, after_replace):
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    link = parent / "config.toml"
+    old = tmp_path / "old.toml"
+    new = tmp_path / "new.toml"
+    original = b'[mcp_servers.demo]\ncommand = "ok"\n'
+    old.write_bytes(original if not after_replace else b'model = "mine"\n')
+    new.write_bytes(original)
+    link.symlink_to(old)
+    snippet = {"mcp_config": {"path": ".codex/config.toml", "content": {"mcp_servers": {"demo": {"command": "ok"}}}}}
+
+    def retarget():
+        link.unlink()
+        link.symlink_to(new)
+
+    if after_replace:
+        replace = os.replace
+
+        def swap_after_replace(*args, **kwargs):
+            replace(*args, **kwargs)
+            retarget()
+
+        monkeypatch.setattr(os, "replace", swap_after_replace)
+    else:
+        render = cmd_pull._toml_document
+
+        def swap_during_noop(*args, **kwargs):
+            result = render(*args, **kwargs)
+            retarget()
+            return result
+
+        monkeypatch.setattr(cmd_pull, "_toml_document", swap_during_noop)
+    with pytest.raises(CliError) as exc:
+        cmd_pull.write_install_snippet(
+            snippet, harness="codex", adapter=MagicMock(), target_dir=tmp_path, agent_id="dummy", is_user_scope=False
+        )
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert exc.value.result["files"] == []
+    assert new.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_snippet_codex_symlink_install_keeps_link_and_target(tmp_path):
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    link = parent / "config.toml"
+    actual = tmp_path / "actual.toml"
+    actual.write_text('model = "mine"\n', encoding="utf-8")
+    link.symlink_to("../actual.toml")
+    snippet = {"mcp_config": {"path": ".codex/config.toml", "content": {"mcp_servers": {"demo": {"command": "ok"}}}}}
+    written, failed = cmd_pull.write_install_snippet(
+        snippet, harness="codex", adapter=MagicMock(), target_dir=tmp_path, agent_id="dummy", is_user_scope=False
+    )
+    assert written == [(str(actual), "merged")]
+    assert failed == []
+    assert link.is_symlink()
+    assert tomllib.loads(actual.read_text(encoding="utf-8")) == {
+        "model": "mine",
+        "mcp_servers": {"demo": {"command": "ok"}},
+    }
+
+
 @pytest.mark.parametrize(
     "source", ['[mcp_servers.demo]\nenv = "dummy-sentinel"\n[bad\n', 'mcp_servers = "dummy-sentinel"\n']
 )
@@ -246,6 +412,198 @@ def test_concurrent_edit_or_creation_is_detected(tmp_path, monkeypatch, initial)
     assert not [p for p in tmp_path.glob(".config.toml.*") if p.name != ".config.toml.observal.lock"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_swapped_parent_during_render_does_not_write_outside_original_directory(tmp_path, monkeypatch):
+    parent = tmp_path / "codex"
+    parent.mkdir()
+    path = parent / "config.toml"
+    original = b'[mcp_servers.demo]\ncommand = "old"\n'
+    path.write_bytes(original)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "config.toml").write_bytes(original)
+    render = cmd_pull._toml_document
+
+    def swap(*args, **kwargs):
+        result = render(*args, **kwargs)
+        parent.rename(tmp_path / "moved")
+        parent.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(cmd_pull, "_toml_document", swap)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert (outside / "config.toml").read_bytes() == original
+    assert (tmp_path / "moved" / "config.toml").read_bytes() == original
+    assert not [p for p in (tmp_path / "moved").glob(".config.toml.*") if p.name != ".config.toml.observal.lock"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_config_symlink_retarget_during_render_fails_without_writing_either_target(tmp_path, monkeypatch):
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    path = parent / "config.toml"
+    original = b'model = "mine"\n'
+    old_target = tmp_path / "old.toml"
+    new_target = tmp_path / "new.toml"
+    old_target.write_bytes(original)
+    new_target.write_bytes(original)
+    path.symlink_to(old_target)
+    render = cmd_pull._toml_document
+
+    def swap(*args, **kwargs):
+        result = render(*args, **kwargs)
+        path.unlink()
+        path.symlink_to(new_target)
+        return result
+
+    monkeypatch.setattr(cmd_pull, "_toml_document", swap)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert path.resolve() == new_target
+    assert old_target.read_bytes() == new_target.read_bytes() == original
+    assert not [p for p in tmp_path.glob(".old.toml.*") if p.name != ".old.toml.observal.lock"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_noop_merge_retarget_during_render_does_not_report_success(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    original = b'[mcp_servers.demo]\ncommand = "new"\n'
+    old_target = tmp_path / "old.toml"
+    new_target = tmp_path / "new.toml"
+    old_target.write_bytes(original)
+    new_target.write_bytes(original)
+    path.symlink_to(old_target)
+    render = cmd_pull._toml_document
+
+    def swap(*args, **kwargs):
+        result = render(*args, **kwargs)
+        path.unlink()
+        path.symlink_to(new_target)
+        return result
+
+    monkeypatch.setattr(cmd_pull, "_toml_document", swap)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert old_target.read_bytes() == new_target.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_config_symlink_retarget_before_replace_cleans_temp(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    original = b'model = "mine"\n'
+    old_target = tmp_path / "old.toml"
+    new_target = tmp_path / "new.toml"
+    old_target.write_bytes(original)
+    new_target.write_bytes(original)
+    path.symlink_to(old_target)
+    read = cmd_pull._read_toml_bytes
+    calls = 0
+
+    def swap_after_cas(*args, **kwargs):
+        nonlocal calls
+        result = read(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            path.unlink()
+            path.symlink_to(new_target)
+        return result
+
+    monkeypatch.setattr(cmd_pull, "_read_toml_bytes", swap_after_cas)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert old_target.read_bytes() == new_target.read_bytes() == original
+    assert not [p for p in tmp_path.glob(".old.toml.*") if p.name != ".old.toml.observal.lock"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_symlinked_codex_config_preserves_link_and_target(tmp_path):
+    actual = tmp_path / "actual.toml"
+    actual.write_bytes(b'model = "mine"\n')
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    link = parent / "config.toml"
+    link.symlink_to("../actual.toml")
+    assert cmd_pull._write_file(link, {"mcp_servers": {"demo": {"command": "echo"}}}, merge_mcp=True) == "merged"
+    assert link.is_symlink()
+    assert tomllib.loads(actual.read_text(encoding="utf-8")) == {
+        "model": "mine",
+        "mcp_servers": {"demo": {"command": "echo"}},
+    }
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_swapped_symlinked_parent_does_not_write_new_target(tmp_path, monkeypatch):
+    parent = tmp_path / ".codex"
+    parent.mkdir()
+    original = b'model = "mine"\n'
+    real = tmp_path / "real.toml"
+    real.write_bytes(original)
+    (parent / "config.toml").symlink_to(real)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "config.toml").write_bytes(original)
+    render = cmd_pull._toml_document
+
+    def swap(*args, **kwargs):
+        result = render(*args, **kwargs)
+        parent.rename(tmp_path / "moved")
+        parent.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(cmd_pull, "_toml_document", swap)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(
+            parent / "config.toml", {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True
+        )
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert (outside / "config.toml").read_bytes() == original
+    assert (tmp_path / "moved" / "config.toml").is_symlink()
+    assert real.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_parent_swap_before_replace_keeps_destination_anchored(tmp_path, monkeypatch):
+    parent = tmp_path / "codex"
+    parent.mkdir()
+    path = parent / "config.toml"
+    original = b'model = "mine"\n'
+    path.write_bytes(original)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "config.toml").write_bytes(original)
+    replace = os.replace
+
+    def swap(src, dst, **kwargs):
+        parent.rename(tmp_path / "moved")
+        parent.symlink_to(outside, target_is_directory=True)
+        return replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "replace", swap)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert (outside / "config.toml").read_bytes() == original
+    assert tomllib.loads((tmp_path / "moved" / "config.toml").read_text(encoding="utf-8"))["mcp_servers"] == {
+        "demo": {"command": "new"}
+    }
+
+
+def test_atomic_writer_keeps_validated_crlf_bytes(tmp_path):
+    path = tmp_path / "config.toml"
+    source = b'model = "snowman \xe2\x98\x83"\r\n'
+    path.write_bytes(source)
+    assert cmd_pull._write_file(path, {"mcp_servers": {"demo": {"command": "ok"}}}, merge_mcp=True) == "merged"
+    result = path.read_bytes()
+    assert b"\r\r\n" not in result
+    assert b"\r\n" in result
+    assert tomllib.loads(result.decode("utf-8"))["model"] == "snowman ☃"
+
+
 def test_cooperating_writers_wait_on_same_lock(tmp_path):
     path = tmp_path / "config.toml"
     started, finished = Event(), Event()
@@ -269,14 +627,24 @@ def test_replace_failure_keeps_original_and_removes_temp(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
     original = b'[mcp_servers.demo]\ncommand = "old"\n'
     path.write_bytes(original)
-    replace = Path.replace
+    if os.name == "posix":
+        replace = os.replace
 
-    def unavailable(self, target):
-        if target == path:
-            raise OSError("dummy-sentinel")
-        return replace(self, target)
+        def unavailable(src, dst, **kwargs):
+            if dst == path.name:
+                raise OSError("dummy-sentinel")
+            return replace(src, dst, **kwargs)
 
-    monkeypatch.setattr(Path, "replace", unavailable)
+        monkeypatch.setattr(os, "replace", unavailable)
+    else:
+        replace = Path.replace
+
+        def unavailable(self, target):
+            if target == path:
+                raise OSError("dummy-sentinel")
+            return replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", unavailable)
     with pytest.raises(CliError) as exc:
         cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
     assert exc.value.category == ErrorCategory.UNAVAILABLE
