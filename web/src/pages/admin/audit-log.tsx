@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -15,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/search-field";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuditLog } from "@/hooks/use-api";
-import { admin } from "@/lib/api";
+import { admin, authenticatedContextGuard, AuthContextChanged } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/types";
 import { AdminMetric, AdminMetricStrip, AdminPanel, AdminTableFooter } from "./components/admin-surface";
 
@@ -191,15 +192,21 @@ export default function AuditLogPage() {
 
   const handleExport = useCallback(async () => {
     try {
+      const checkContext = authenticatedContextGuard();
       const csv = await admin.auditLogExport(parseSearchQuery(searchQuery));
+      checkContext();
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `observal_audit-log_${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z.csv`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error("Failed to export audit log. Please try again.");
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `observal_audit-log_${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z.csv`;
+        checkContext();
+        anchor.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      if (!(err instanceof AuthContextChanged)) toast.error("Failed to export audit log. Please try again.");
     }
   }, [searchQuery]);
 

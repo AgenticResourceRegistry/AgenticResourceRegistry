@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Harishankar <harishankar0301@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -17,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenuButton } from "@/components/ui/sidebar";
-import { clearSession, getUserAvatar } from "@/lib/api";
+import { clearSession, clearTabSession, getTabActor, getUserAvatar, tokenSubject } from "@/lib/api";
 import { useSyncExternalStore } from "react";
 
 function initials(name: string) {
@@ -92,13 +93,17 @@ export function NavUser({ user }: NavUserProps) {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => {
-            // Clear the local session first so an in-flight refresh cannot restore it, then
-            // revoke on the server with the credentials captured beforehand (best effort).
+            const actor = getTabActor();
             const token = sessionStorage.getItem("observal_access_token");
             const refreshToken = localStorage.getItem("observal_refresh_token");
-            clearSession();
+            // Only the owning tab may revoke and clear shared credentials. In all cases,
+            // fence local refresh before the best-effort network request.
+            const ownsRefresh = !!actor && tokenSubject(token) === actor &&
+              tokenSubject(refreshToken) === actor;
+            if (ownsRefresh) clearSession();
+            else clearTabSession();
             router.navigate({ to: "/login" });
-            if (token) {
+            if (ownsRefresh && token) {
               void fetch("/api/v1/auth/logout", {
                 method: "POST",
                 headers: {
