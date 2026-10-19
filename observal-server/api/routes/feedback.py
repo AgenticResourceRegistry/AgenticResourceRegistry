@@ -50,7 +50,7 @@ async def _visible_listing(db: AsyncSession, listing_type: str, listing_id: uuid
     if not listing or not await check_listing_visibility_async(listing, current_user, db):
         raise HTTPException(status_code=404, detail="Listing not found")
     # Agents gate non-approved listings in their own routes; components match GET /{type}/{id}.
-    if model is not Agent and hidden_unapproved_listing(listing, current_user):
+    if model is not Agent and await hidden_unapproved_listing(listing, current_user, db):
         raise HTTPException(status_code=404, detail="Listing not found")
     return listing
 
@@ -99,7 +99,9 @@ async def create_feedback(
 
     # Validate listing exists and is visible to the caller.
     listing = await _visible_listing(db, req.listing_type, req.listing_id, current_user)
-    if current_user.id in (getattr(listing, "submitted_by", None), getattr(listing, "created_by", None)):
+    authors = {getattr(listing, "submitted_by", None), getattr(listing, "created_by", None)}
+    authors |= {str(a) for a in getattr(listing, "co_authors", None) or []}
+    if current_user.id in authors or str(current_user.id) in authors:
         raise HTTPException(status_code=403, detail="You cannot review your own listing")
 
     # Enforce one review per user per listing

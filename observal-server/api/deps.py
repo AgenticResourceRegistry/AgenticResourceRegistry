@@ -597,12 +597,20 @@ async def resolve_visible_listing(
     return listing
 
 
-def hidden_unapproved_listing(listing, current_user) -> bool:
+async def hidden_unapproved_listing(listing, current_user, db: AsyncSession) -> bool:
     """True when a component listing is not approved and the caller may not view it.
 
     Sibling routes (versions, feedback) must answer with the same 404 as
     ``GET /{type}/{id}``, otherwise they confirm that someone else's draft exists.
+    Team reviewers who can review the listing keep access, as in the review queue.
     """
     if listing.status == ListingStatus.approved:
         return False
-    return not may_view_unapproved(get_effective_component_permission(listing, current_user), current_user)
+    if may_view_unapproved(get_effective_component_permission(listing, current_user), current_user):
+        return False
+    if current_user is None:
+        return True
+
+    from services.teamspace import can_review, review_scope
+
+    return not can_review(listing, await review_scope(db, current_user))
