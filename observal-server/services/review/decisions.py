@@ -62,11 +62,17 @@ SYSTEM_REVISION_MESSAGES = frozenset({DRAFT_EDIT_MESSAGE, MCP_VALIDATION_MESSAGE
 # Unresolved conversations and abandoned edit locks are advisory; an explicit
 # change request remains a publication blocker until withdrawn or approved.
 ADVISORY_REQUIREMENTS = frozenset({"unresolved_threads", "edit_lock"})
-# Integrity rules no publish path skips, including a super admin override: content changed
-# without a new revision, an uninstallable or rollout-gated skill folder, a moved approved
-# base, and an agent pinning components that are not published.
+# Integrity and explicit reviewer decisions no publish path skips, including a super admin
+# override. A change request requires that reviewer to approve or explicitly withdraw it.
 HARD_REQUIREMENTS = frozenset(
-    {"unsubmitted_changes", "skill_folder_rollout", "skill_folder", "approved_base_changed", "pinned_components"}
+    {
+        "changes_requested",
+        "unsubmitted_changes",
+        "skill_folder_rollout",
+        "skill_folder",
+        "approved_base_changed",
+        "pinned_components",
+    }
 )
 
 
@@ -364,19 +370,25 @@ async def _skill_blockers(db, review, version) -> list[str]:
     return blockers
 
 
+def _counted_approvals(decisions, head_id, policy):
+    """Use the same effective reviewer decisions for the gate and publication record."""
+    return [
+        s
+        for s in decisions
+        if s.state == "submitted"
+        and s.verdict == "approve"
+        and (s.revision_id == head_id or not policy.dismiss_stale_approvals)
+        and (not s.self_review or policy.self_approval == "counted")
+    ]
+
+
 async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
     policy = policy or await policy_for(review, db=db)
     head = await _head(db, review)
     _, latest, _ = await review_decisions(db, review)
     # Dismissed decisions are terminal; neither an earlier approval nor an
     # earlier change request may silently reappear after withdrawal.
-    approvals = sum(
-        s.state == "submitted"
-        and s.verdict == "approve"
-        and (s.revision_id == head.id or not policy.dismiss_stale_approvals)
-        and (not s.self_review or policy.self_approval == "counted")
-        for s in latest.values()
-    )
+    approvals = len(_counted_approvals(latest.values(), head.id, policy))
     # A change request remains blocking until its reviewer approves or withdraws it;
     # an author resubmitting new content does not silently clear the request.
     requests = {uid: s for uid, s in latest.items() if s.state == "submitted" and s.verdict == "request_changes"}
@@ -726,26 +738,15 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
     # Publication supersedes any abandoned author edit lock on this version.
     release_edit_lock(version, version.editing_by, force=True)
     version.reviewed_at = _now()
-    # A counted approver is the reviewer of record; an override can have none.
-    approvals = (
-        (
-            await db.execute(
-                select(ReviewSubmission)
-                .where(
-                    ReviewSubmission.review_id == review.id,
-                    ReviewSubmission.revision_id == review.head_revision_id,
-                    ReviewSubmission.verdict == "approve",
-                    ReviewSubmission.state == "submitted",
-                )
-                .order_by(ReviewSubmission.submitted_at.desc())
-            )
-        )
-        .scalars()
-        .all()
+    # Record an approval that actually counts for this gate, not a withdrawn
+    # reviewer's earlier approval or one invalidated by a newer revision.
+    _, latest, _ = await review_decisions(db, review)
+    approver = max(
+        _counted_approvals(latest.values(), review.head_revision_id, policy),
+        key=lambda s: (s.submitted_at.replace(tzinfo=None) if s.submitted_at else datetime.min, s.id),
+        default=None,
     )
-    version.reviewed_by = next(
-        (s.reviewer_id for s in approvals if not s.self_review or policy.self_approval == "counted"), None
-    )
+    version.reviewed_by = approver.reviewer_id if approver else None
     await db.flush()
     if review.subject_type == "agent":
         await lock_agent_version(db, subject, version)

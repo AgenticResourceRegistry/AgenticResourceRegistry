@@ -171,7 +171,7 @@ function PublicationGate({ experimentalReviewChecks, review, gate, isAuthor, bus
   const blockers = publishBlockers(gate);
   const advisory = openItemMessages(gate);
   const canPublishNormally = !(isAuthor && !review.self_approval_allowed);
-  // A super admin can publish past approvals, checks and their own work, never past integrity rules.
+  // A super admin may bypass approvals and checks, never change requests or integrity rules.
   const showOverride = isSuperAdmin && hard.length === 0 && (!gate.ready || !canPublishNormally);
   const publishButton = <Button size="sm" disabled={!gate.ready || busy} aria-describedby={blockers.length ? "publish-blockers" : undefined} onClick={() => onPublish(false)}>Publish v{review.version}</Button>;
   return <section className={`overflow-hidden rounded-xl border bg-card shadow-sm ${gate.ready ? "border-success/50" : "border-border"}`} aria-label="Publication gate">

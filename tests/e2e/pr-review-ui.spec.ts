@@ -335,6 +335,36 @@ for (const override of [false, true]) test(`publish confirmation ${override ? "e
   await expect(dialog).toHaveCount(0);
 });
 
+test("super admin cannot override a reviewer's change request", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("observal_access_token", "review-ui-test");
+    localStorage.setItem("observal_user_role", "super_admin");
+  });
+  const gate = {
+    ready: false, approvals: 1, required: 1, policy_source: "organization",
+    requirements: ["changes_requested"], blockers: ["changes_requested"], hard_blockers: ["changes_requested"],
+  };
+  const detail = {
+    ...summary(42, "Skill: verify source", "skill"), state: "changes_requested", gate,
+    opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
+    base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    revisions: [{ id, number: 1, message: "First release", created_by: id, created_at: now, pruned: false }],
+    requested_reviewers: [], reviewer_names: {},
+  };
+  await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
+  await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id: "admin", username: "admin", role: "super_admin" } }));
+  await page.route("**/api/v1/reviews/42**", route => {
+    const suffix = new URL(route.request().url()).pathname.replace("/api/v1/reviews/42", "");
+    return route.fulfill({ json: suffix === "/gate" ? gate : suffix === "/timeline" ? { items: [], next_cursor: null }
+      : suffix === "/threads" || suffix === "/files" ? [] : detail });
+  });
+  await page.goto("/review/42");
+  await expect(page.getByRole("button", { name: "Publish with override" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Publish v1.0.0" })).toBeDisabled();
+  await expect(page.getByText("Resolve these before publishing: no override skips them.")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("change-request-no-override.png"), fullPage: true });
+});
+
 test("close review asks for a reason in a dialog", async ({ page }) => {
   await page.addInitScript(() => {
     sessionStorage.setItem("observal_access_token", "review-ui-test");
