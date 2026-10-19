@@ -7,6 +7,7 @@
 These tests create real git repos in tmpdir and exercise the full clone/discover/validate pipeline.
 """
 
+import functools
 import json
 import subprocess
 import threading
@@ -450,12 +451,35 @@ class TestMirrorLock:
         assert len(mcp.components) == 2
         assert [c.name for c in skill.components] == ["debugging"]
 
-    def test_different_urls_sync_in_parallel(self, simple_mcp_repo, manifest_repo, tmp_base, overlap_tracker):
+    def test_different_urls_sync_in_parallel(
+        self, simple_mcp_repo, manifest_repo, tmp_base, overlap_tracker, monkeypatch
+    ):
         """The lock is per mirror, so unrelated sources do not wait on each other."""
+        # Both threads must reach clone together, so the overlap does not depend on thread start timing.
+        rendezvous = threading.Barrier(2, timeout=10)
+        tracked_clone = gms.clone_or_update
+
+        def clone_together(*args, **kwargs):
+            rendezvous.wait()
+            return tracked_clone(*args, **kwargs)
+
+        monkeypatch.setattr(gms, "clone_or_update", clone_together)
         results = _sync_in_parallel((str(simple_mcp_repo), "mcp"), (str(manifest_repo), "mcp"), base=tmp_base)
 
         assert overlap_tracker["peak"] == 2
         assert all(r.success for r in results)
+
+    def test_lock_wait_times_out_with_a_clear_error(self, simple_mcp_repo, tmp_base, monkeypatch):
+        """A sync stuck behind a held lock fails loudly instead of waiting forever."""
+        mirror = _mirror_path(str(simple_mcp_repo), tmp_base)
+        real_lock = gms._mirror_lock
+        monkeypatch.setattr(gms, "_mirror_lock", functools.partial(real_lock, timeout=0.3))
+        with real_lock(mirror):
+            result = sync_source(str(simple_mcp_repo), component_type="mcp", base=tmp_base)
+
+        assert result.success is False
+        assert "timed out" in result.error
+        assert mirror.name in result.error
 
     def test_lock_file_sits_beside_the_mirror(self, simple_mcp_repo, tmp_base):
         """A fresh clone replaces the mirror directory, so the lock file cannot live inside it."""
