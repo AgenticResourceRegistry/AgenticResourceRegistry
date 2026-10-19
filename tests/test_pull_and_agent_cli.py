@@ -773,6 +773,90 @@ class TestPullMcpMerge:
 # ═══════════════════════════════════════════════════════════════
 
 
+class TestProjectMcpDestinations:
+    def test_goose_project_pull_with_mcp_fails_without_writes(self, tmp_path: Path, monkeypatch):
+        home, project = tmp_path / "home", tmp_path / "project"
+        home.mkdir()
+        project.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        snippet = {
+            "config_snippet": {
+                "agent_profile": {"path": ".agents/agents/my-agent.md", "content": "# My Agent"},
+                "mcp_config": {
+                    "path": "~/.config/goose/config.yaml",
+                    "content": {"extensions": {"example": {"cmd": "echo"}}},
+                },
+            }
+        }
+        for flag in ([], ["--dry-run"]):
+            with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+                result = runner.invoke(
+                    cli_app,
+                    [
+                        "agent",
+                        "pull",
+                        "abc123",
+                        "--harness",
+                        "goose",
+                        "--scope",
+                        "project",
+                        "--dir",
+                        str(project),
+                        "--no-prompt",
+                        *flag,
+                    ],
+                )
+            assert result.exit_code != 0
+            assert "Goose MCP extensions require a user-level config" in _plain(result.output).replace("\n", " ")
+            assert not list(project.iterdir())
+            assert not list(home.iterdir())
+
+    def test_copilot_cli_project_pull_writes_native_mcp_file(self, tmp_path: Path, monkeypatch):
+        home, project = tmp_path / "home", tmp_path / "project"
+        home.mkdir()
+        project.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        snippet = {
+            "config_snippet": {
+                "agent_profile": {"path": ".github/agents/my-agent.agent.md", "content": "# My Agent"},
+                "mcp_config": {
+                    "path": ".mcp.json",
+                    "content": {
+                        "mcpServers": {
+                            "example": {
+                                "type": "stdio",
+                                "command": "echo",
+                                "args": ["hello"],
+                                "tools": ["*"],
+                            }
+                        }
+                    },
+                },
+            }
+        }
+        for flag in (["--dry-run"], []):
+            with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+                result = runner.invoke(
+                    cli_app,
+                    [
+                        "agent",
+                        "pull",
+                        "abc123",
+                        "--harness",
+                        "copilot-cli",
+                        "--dir",
+                        str(project),
+                        "--no-prompt",
+                        *flag,
+                    ],
+                )
+            assert result.exit_code == 0, result.output
+            if flag:
+                assert not (project / ".mcp.json").exists()
+        assert json.loads((project / ".mcp.json").read_text())["mcpServers"]["example"]["command"] == "echo"
+        assert not list(home.iterdir())
+
+
 class TestPullDryRun:
     def test_dry_run_does_not_write_files(self, tmp_path: Path):
         with _patch_config(), _patch_get_agent(), _patch_post(_cursor_snippet()):

@@ -38,7 +38,7 @@ from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
 from observal_cli.render import OutputMode, esc, output_json, spinner
-from observal_shared.harness_registry import get_scope_aware_harnesses
+from observal_shared.harness_registry import HARNESS_REGISTRY, get_scope_aware_harnesses
 
 # Hook script names used as placeholders in server-generated agent configs.
 # Resolved to absolute paths client-side before writing to disk.
@@ -1630,6 +1630,23 @@ def _rollback_managed_agent_state(
     return errors
 
 
+def _preflight_project_mcp_config(snippet: dict, *, harness: str, is_user_scope: bool) -> None:
+    """Do not silently relocate a user-only MCP config into an unread project path."""
+    spec = HARNESS_REGISTRY[harness]
+    if is_user_scope or spec["mcp_install_mode"] != "user_only":
+        return
+    config = snippet.get("mcp_config")
+    if isinstance(config, dict) and config.get("path") and config.get("content"):
+        name = spec["display_name"]
+        fail(
+            ErrorCategory.VALIDATION,
+            f"{name} MCP extensions require a user-level config; project scope cannot install them.",
+            operation="Pull agent",
+            resource=f"{name} MCP configuration",
+            remediation="Pull with --scope user, or use an Agent without MCP extensions for project scope.",
+        )
+
+
 def write_install_snippet(
     snippet: dict,
     *,
@@ -1654,6 +1671,7 @@ def write_install_snippet(
     the folder bundle installer. Legacy components without a matching bundle
     fall back to git or single-file registry_direct installs.
     """
+    _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
     written: list[tuple[str, str]] = []  # (path, status)
 
     def tracked_write(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
@@ -2433,6 +2451,7 @@ def register_pull(app: typer.Typer):
             )
 
         snippet = rewrite_observal_interpreter(snippet)
+        _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
         from observal_cli import managed_skill
 
         try:
