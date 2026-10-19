@@ -85,6 +85,7 @@ def boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespa
     adapter.rewrite_hooks.side_effect = lambda content, agent_id: content
     adapter.rewrite_agent_profile.side_effect = lambda content, agent_id: content
     adapter.allow_home_agent_profile.return_value = False
+    adapter.reports_sessions_outside_pull.return_value = False
 
     def apply_install_options(options: dict, tools: str | None) -> None:
         if tools:
@@ -341,6 +342,7 @@ def test_write_profile_pins_block_hook_and_preserves_body(monkeypatch: pytest.Mo
     )
     adapter = MagicMock()
     adapter.allow_home_agent_profile.return_value = False
+    adapter.reports_sessions_outside_pull.return_value = False
 
     written, failed = cmd_pull.write_install_snippet(
         {"agent_profile": {"path": "agent.md", "content": profile}},
@@ -408,6 +410,7 @@ def test_write_codex_profile_preserves_quoted_instructions(monkeypatch: pytest.M
     content = "developer_instructions = " + json.dumps(instruction) + "\n"
     adapter = MagicMock()
     adapter.allow_home_agent_profile.return_value = False
+    adapter.reports_sessions_outside_pull.return_value = False
     cmd_pull.write_install_snippet(
         {"agent_profile": {"path": "agent.toml", "content": content}},
         harness="codex",

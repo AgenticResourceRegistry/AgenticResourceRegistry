@@ -643,6 +643,38 @@ class TestPullPi:
         assert skill.exists()
         assert "Pi Skill" in skill.read_text()
 
+    @pytest.mark.parametrize("extension_installed", [True, False])
+    def test_reports_sessions_follows_observal_extension(self, tmp_path: Path, monkeypatch, extension_installed: bool):
+        pi_dir = tmp_path / "pi-agent"
+        if extension_installed:
+            (pi_dir / "extensions").mkdir(parents=True)
+            (pi_dir / "extensions" / "observal.ts").write_text("// observal")
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(pi_dir))
+        project = tmp_path / "project"
+        project.mkdir()
+
+        with _patch_config(), _patch_get_agent(), _patch_post(_pi_snippet()):
+            result = runner.invoke(
+                cli_app,
+                [
+                    "agent",
+                    "pull",
+                    "abc123",
+                    "--harness",
+                    "pi",
+                    "--dir",
+                    str(project),
+                    "--no-prompt",
+                    "--scope",
+                    "project",
+                    "--output",
+                    "json",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["reports_sessions"] is extension_installed
+
 
 class TestPullOpenCode:
     def test_writes_rules_mcp_and_hooks(self, tmp_path: Path):

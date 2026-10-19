@@ -170,6 +170,16 @@ class PiAdapter(BaseAdapter):
             return "installed"
         return "missing"
 
+    def reports_sessions_outside_pull(self) -> bool:
+        """The Observal Pi extension reports every session, not the pulled files."""
+        import os
+
+        from observal_cli.pi_extension import pi_agent_dir
+
+        env_dir = os.environ.get("PI_CODING_AGENT_DIR")
+        agent_dir = Path(env_dir).expanduser() if env_dir else pi_agent_dir()
+        return self.detect_hooks(agent_dir) == "installed"
+
     def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         # Verified against pi 0.87: -p/--print with no message argument reads the
         # prompt from stdin and exits; --session-id uses that exact session id,
