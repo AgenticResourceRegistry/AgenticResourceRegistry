@@ -117,7 +117,7 @@ async def _list_versions(
     listing = await resolve_visible_listing(
         listing_model, listing_id, db, current_user, **({"load_options": summary_options} if summary_options else {})
     )
-    if not listing or hidden_unapproved_listing(listing, current_user):
+    if not listing or await hidden_unapproved_listing(listing, current_user, db):
         raise HTTPException(status_code=404, detail="Listing not found")
 
     # A version carries the real payload: prompt templates, MCP commands and args,
@@ -199,7 +199,7 @@ async def _get_version(
         return result
 
     listing = await resolve_visible_listing(listing_model, listing_id, db, current_user)
-    if not listing or hidden_unapproved_listing(listing, current_user):
+    if not listing or await hidden_unapproved_listing(listing, current_user, db):
         raise HTTPException(status_code=404, detail="Listing not found")
 
     version_filters = [version_model.listing_id == listing.id, version_model.version == version]
@@ -390,7 +390,7 @@ async def _version_suggestions(
 ) -> dict:
     optic.trace("listing_id={}, listing_model={}", listing_id, listing_model)
     listing = await resolve_visible_listing(listing_model, listing_id, db, current_user)
-    if not listing or hidden_unapproved_listing(listing, current_user):
+    if not listing or await hidden_unapproved_listing(listing, current_user, db):
         raise HTTPException(status_code=404, detail="Listing not found")
 
     from services.versioning import suggest_versions
