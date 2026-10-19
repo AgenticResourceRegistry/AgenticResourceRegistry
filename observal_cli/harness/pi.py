@@ -23,6 +23,7 @@ from observal_cli.harness import (
     DiscoveredSkill,
     HookSpec,
     ScanResult,
+    SessionSource,
     register_adapter,
 )
 from observal_cli.harness.base import BaseAdapter, inline_agent_prompt
@@ -172,13 +173,35 @@ class PiAdapter(BaseAdapter):
 
     def reports_sessions_outside_pull(self) -> bool:
         """The Observal Pi extension reports every session, not the pulled files."""
-        import os
+        return self.detect_hooks(_pi_agent_dir()) == "installed"
 
-        from observal_cli.pi_extension import pi_agent_dir
+    def discover_session_sources(
+        self,
+        home: Path | None = None,
+        since_hours: int = 168,
+    ) -> list[SessionSource]:
+        """Recent Pi sessions: <agent dir>/sessions/--<cwd>--/<timestamp>_<id>.jsonl."""
+        import time
 
-        env_dir = os.environ.get("PI_CODING_AGENT_DIR")
-        agent_dir = Path(env_dir).expanduser() if env_dir else pi_agent_dir()
-        return self.detect_hooks(agent_dir) == "installed"
+        root = _pi_agent_dir(home) / "sessions"
+        if not root.is_dir():
+            return []
+        cutoff = time.time() - since_hours * 3600
+        found: list[tuple[float, SessionSource]] = []
+        for path in root.glob("*/*.jsonl"):
+            try:
+                modified_at = path.stat().st_mtime
+                if modified_at < cutoff:
+                    continue
+                with path.open(encoding="utf-8") as file:
+                    header = json.loads(file.readline())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(header, dict) or header.get("type") != "session" or not header.get("id"):
+                continue
+            source = SessionSource(self.harness_name, str(header["id"]), path, cwd=str(header.get("cwd") or ""))
+            found.append((modified_at, source))
+        return [source for _modified_at, source in sorted(found, key=lambda item: item[0], reverse=True)]
 
     def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         # Verified against pi 0.87: -p/--print with no message argument reads the
@@ -268,18 +291,23 @@ class PiAdapter(BaseAdapter):
 register_adapter(PiAdapter())
 
 
+def _pi_agent_dir(home: Path | None = None) -> Path:
+    """Pi's agent directory: PI_CODING_AGENT_DIR, else <home>/.pi/agent."""
+    import os
+
+    from observal_cli.pi_extension import pi_agent_dir
+
+    env_dir = os.environ.get("PI_CODING_AGENT_DIR") if home is None else None
+    return Path(env_dir).expanduser() if env_dir else pi_agent_dir(home)
+
+
 def _pi_trusts(path: Path) -> bool:
     """Whether Pi already trusts ``path``, resolved as Pi does it.
 
     The nearest saved decision in trust.json on the path or a parent wins; only
     without one does ``defaultProjectTrust: "always"`` apply.
     """
-    import os
-
-    from observal_cli.pi_extension import pi_agent_dir
-
-    env_dir = os.environ.get("PI_CODING_AGENT_DIR")
-    agent_dir = Path(env_dir).expanduser() if env_dir else pi_agent_dir()
+    agent_dir = _pi_agent_dir()
     try:
         trust = json.loads((agent_dir / "trust.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
