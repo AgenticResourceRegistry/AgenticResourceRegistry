@@ -218,14 +218,24 @@ def pending(
     limit: int = BATCH_SIZE,
     db_path: Path | None = None,
 ) -> list[OutboxItem]:
-    """Return durable batches oldest-first; attempts never make a row terminal."""
+    """Return durable batches oldest session first, each session in line order.
+
+    A session's lines can be spooled again after later lines (for example after a
+    server checkpoint rewind), so ordering by row id alone would send a batch the
+    checkpoint cannot reach before the batch that fills the gap, forever.
+    Attempts never make a row terminal.
+    """
     conn = _connect(db_path)
     try:
         rows = conn.execute(
             "SELECT id, destination, user_id, harness, session_id, checkpoint_key, "
             "start_line, end_line, end_offset, final, payload, attempts "
-            "FROM session_outbox WHERE destination = ? AND user_id = ? "
-            "ORDER BY (end_line < start_line), id LIMIT ?",
+            "FROM session_outbox AS item WHERE destination = ? AND user_id = ? "
+            "ORDER BY (end_line < start_line), "
+            "(SELECT MIN(first.id) FROM session_outbox AS first WHERE first.destination = item.destination "
+            "AND first.user_id = item.user_id AND first.harness = item.harness "
+            "AND first.session_id = item.session_id), "
+            "start_line, id LIMIT ?",
             (destination.rstrip("/"), user_id, limit),
         ).fetchall()
         return [
@@ -284,6 +294,28 @@ def spooled_checkpoint(
         expected = end_line + 1
         offset = max(offset, int(end_offset))
     return offset, expected
+
+
+def holds_line(
+    *,
+    destination: str,
+    user_id: str,
+    harness: str,
+    session_id: str,
+    line: int,
+    db_path: Path | None = None,
+) -> bool:
+    """Whether a pending source batch for the session still contains ``line``."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM session_outbox WHERE destination = ? AND user_id = ? AND harness = ? "
+            "AND session_id = ? AND start_line <= ? AND end_line >= ? LIMIT 1",
+            (destination.rstrip("/"), user_id, harness, session_id, line, line),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
 
 
 def record_attempt(item_id: int, *, db_path: Path | None = None) -> None:
