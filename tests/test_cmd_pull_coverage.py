@@ -770,14 +770,17 @@ def test_dict_to_toml_serializes_every_supported_value_shape() -> None:
         }
     )
 
-    assert rendered == (
-        "[mcp_servers.server]\n"
-        'args = ["one", "two"]\n'
-        'env.TOKEN = "secret"\n'
-        "enabled = true\n"
-        'label = "quoted \\"value\\""\n'
-        "retries = 3\n"
-    )
+    assert tomllib.loads(rendered) == {
+        "mcp_servers": {
+            "server": {
+                "args": ["one", "two"],
+                "env": {"TOKEN": "secret"},
+                "enabled": True,
+                "label": 'quoted "value"',
+                "retries": 3,
+            }
+        }
+    }
 
 
 def test_write_file_handles_toml_json_strings_and_empty_content(tmp_path: Path) -> None:
@@ -2262,6 +2265,62 @@ def test_parse_assignments_rejects_missing_names_and_values():
         with pytest.raises(typer.Exit) as error:
             cmd_pull._parse_assignments([invalid], "environment variable")
         assert error.value.exit_code == 7
+
+
+def test_codex_toml_conflict_is_safe_in_debug_json(
+    pull_app_boundary: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path
+) -> None:
+    target = tmp_path / "project"
+    path = target / ".codex" / "config.toml"
+    path.parent.mkdir(parents=True)
+    source = '[mcp_servers.demo.env]\nTOKEN = "dummy-sentinel"\n[broken\n'
+    path.write_text(source)
+    boundaries.post.return_value = {
+        "config_snippet": {
+            "mcp_config": {"path": ".codex/config.toml", "content": {"mcp_servers": {"demo": {"command": "echo"}}}}
+        }
+    }
+    from observal_cli.main import app as cli_app
+
+    result = RUNNER.invoke(
+        cli_app,
+        [
+            "--debug",
+            "agent",
+            "pull",
+            "acme/reviewer",
+            "--harness",
+            "codex",
+            "--dir",
+            str(target),
+            "--no-prompt",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 6
+    assert "dummy-sentinel" not in result.output
+    error = json.loads(result.stderr.splitlines()[-1])["error"]
+    assert error["category"] == "conflict"
+    assert error["result"]["files"] == []
+    assert error["result"]["partial"] is False
+    assert path.read_text() == source
+
+
+def test_codex_pull_without_mcps_writes_valid_empty_table(
+    pull_app: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path
+) -> None:
+    target = tmp_path / "project"
+    boundaries.post.return_value = {
+        "config_snippet": {"mcp_config": {"path": ".codex/config.toml", "content": {"mcp_servers": {}}}}
+    }
+    result = _invoke(pull_app, target, "--output", "json", harness="codex")
+    assert result.exit_code == 0, result.output
+    path = target / ".codex" / "config.toml"
+    assert tomllib.loads(path.read_text()) == {"mcp_servers": {}}
+    first = path.read_bytes()
+    assert _invoke(pull_app, target, "--output", "json", harness="codex").exit_code == 0
+    assert path.read_bytes() == first
 
 
 def test_toml_merge_is_idempotent_for_existing_server(tmp_path: Path):

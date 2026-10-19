@@ -4,6 +4,7 @@
 # SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 .PHONY: lint format check test test-ch test-adversarial test-eval-completeness test-fuzz test-all hooks clean migrate migrate-clickhouse check-migrations new-migration reset rebuild rebuild-fast rebuild-prometheus rebuild-observability rebuild-local reset-prometheus reset-observability up-prometheus up-observability down-prometheus down-observability logs-prometheus logs-observability release release-preview sync-skill ensure-host-dirs
@@ -23,7 +24,7 @@ check:  ## Full pre-commit check on all files
 # ── Testing ──────────────────────────────────────────────
 
 test:  ## Run Python tests (parallel across cores)
-	cd observal-server && uv run --with pytest --with pytest-asyncio --with pytest-xdist --with pyyaml --with typer --with rich --with hypothesis --with pyarrow pytest ../tests/ -q -n auto --ignore=../tests/integration_clickhouse
+	cd observal-server && uv run --with pytest --with pytest-asyncio --with pytest-xdist --with pyyaml --with typer --with rich --with hypothesis --with pyarrow --with tomlkit pytest ../tests/ -q -n auto --ignore=../tests/integration_clickhouse
 
 test-ch:  ## Phase 0 publication proofs on the existing local sample ClickHouse DB; no migrations or drops
 	cd observal-server && OBSERVAL_CH_TEST_URL="$${OBSERVAL_CH_TEST_URL:-http://127.0.0.1:8123/observal}" uv run --with pytest --with pytest-asyncio --with pyyaml --with typer --with rich pytest ../tests/integration_clickhouse/ -q
