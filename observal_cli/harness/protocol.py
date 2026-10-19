@@ -366,6 +366,14 @@ class HarnessAdapter(Protocol):
         """Return whether aged session recovery should finalize the source."""
         ...
 
+    def reports_sessions_outside_pull(self) -> bool:
+        """Return whether sessions are reported by telemetry a pull does not write.
+
+        Harnesses whose telemetry is an installed extension rather than
+        written hook files report sessions for any pulled agent.
+        """
+        ...
+
     def is_session_final(self, event: dict[str, Any]) -> bool:
         """Return whether a hook payload marks its session final."""
         ...

@@ -2652,7 +2652,7 @@ def register_pull(app: typer.Typer):
             _reports_sessions(snippet, target_dir=target_dir, is_user_scope=is_user_scope, dry_run=True)
             if dry_run
             else _reports_written_sessions([path for path, _status in written])
-        )
+        ) or adapter.reports_sessions_outside_pull()
         if reports_sessions:
             disclose_telemetry()
 

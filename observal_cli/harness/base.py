@@ -245,6 +245,10 @@ class BaseAdapter:
         """Finalize aged session sources by default."""
         return True
 
+    def reports_sessions_outside_pull(self) -> bool:
+        """Session telemetry comes from the hook files a pull writes."""
+        return False
+
     def is_session_final(self, event: dict[str, Any]) -> bool:
         """Recognize common final lifecycle event names."""
         event_name = str(
