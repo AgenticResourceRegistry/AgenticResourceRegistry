@@ -52,7 +52,7 @@
       "harness": "pi",
       "version": "1.0.0",
       "config_snippet": {
-        "agent_profile": {"path": "AGENTS.md", "content": "## Skills\n\n- **Example**"},
+        "agent_profile": {"path": ".pi/agents/example-agent/AGENTS.md", "content": "## Skills\n\n- **Example**"},
         "skill_components": [{"name": "example", "description": "Example skill", "slash_command": null, "task_type": "general", "delivery_mode": "registry_direct", "git_url": null, "git_ref": null, "skill_path": "/", "path": ".pi/agents/example-agent/skills/example/SKILL.md", "bundle_version_id": "44444444-4444-4444-8444-444444444444"}]
       },
       "warnings": [],
