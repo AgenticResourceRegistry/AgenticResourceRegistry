@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from observal_cli.harness import SessionSource
+    from observal_cli.telemetry_buffer import OutboxItem
 
 # ---------------------------------------------------------------------------
 # Offset / cursor state
@@ -544,6 +545,24 @@ def drain_outbox(
                 repairs.append((item.harness, item.session_id))
             return False
         if acknowledged_line < item.end_line:
+            if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
+                # The lines between the server checkpoint and this batch were quarantined
+                # or lost, so the checkpoint can never reach it. The server stored the
+                # batch; accept it instead of resending it forever ahead of every session.
+                write_cursor(
+                    item.checkpoint_key,
+                    item.end_offset,
+                    item.end_line + 1,
+                    finalized=item.final,
+                    home=home,
+                )
+                telemetry_buffer.accept_item(item.id, db_path=db_path)
+                log_error(
+                    f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
+                    f"past a checkpoint gap after line {acknowledged_line}",
+                    home=home,
+                )
+                continue
             return False
         if acknowledged_offset <= 0:
             acknowledged_offset = item.end_offset
@@ -564,6 +583,31 @@ def drain_outbox(
             db_path=db_path,
         )
     return True
+
+
+def _checkpoint_gap_is_permanent(
+    item: OutboxItem,
+    acknowledged_line: int,
+    acknowledgement: dict,
+    *,
+    db_path: Path | None = None,
+) -> bool:
+    """Whether the server stored a batch that its checkpoint can never reach."""
+    from observal_cli import telemetry_buffer
+
+    if item.end_line < item.start_line or acknowledged_line + 1 >= item.start_line:
+        return False
+    stored_whole_batch = acknowledgement.get("ingested") == len(item.payload.get("lines") or [])
+    if int(acknowledgement.get("errors") or 0) or not stored_whole_batch:
+        return False
+    return not telemetry_buffer.holds_line(
+        destination=item.destination,
+        user_id=item.user_id,
+        harness=item.harness,
+        session_id=item.session_id,
+        line=acknowledged_line + 1,
+        db_path=db_path,
+    )
 
 
 def drain_session_source(

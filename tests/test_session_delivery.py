@@ -183,6 +183,77 @@ def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_
     assert rejected["reason"].endswith("status 422")
 
 
+def _enqueue_lines(db: Path, session_id: str, start_line: int, count: int) -> None:
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": session_id,
+            "lines": [f"line-{start_line + i}" for i in range(count)],
+            "start_offset": start_line,
+            "end_byte_offsets": [10 * (start_line + i + 1) for i in range(count)],
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+
+
+def _ack_behind_gap(payload: dict, _config: dict) -> dict:
+    # Lines 3-4 of "gappy" were quarantined, so its checkpoint stays at line 2.
+    acknowledged = 2 if payload["session_id"] == "gappy" else payload["start_offset"] + len(payload["lines"]) - 1
+    return {"acknowledged_line": acknowledged, "ingested": len(payload["lines"]), "errors": 0}
+
+
+def test_batch_past_a_quarantined_gap_is_accepted_without_blocking_later_sessions(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    _enqueue_lines(db, "gappy", 5, 2)
+    _enqueue_lines(db, "next", 0, 1)
+    posted = []
+
+    def post(payload, cfg):
+        posted.append(payload["session_id"])
+        return _ack_behind_gap(payload, cfg)
+
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert posted == ["gappy", "next"]
+    assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
+    assert base.read_cursor("gappy", home=tmp_path)[1] == 7
+
+
+def test_respooled_earlier_lines_are_sent_before_later_batches(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    _enqueue_lines(db, "gappy", 5, 2)
+    _enqueue_lines(db, "other", 0, 1)
+    _enqueue_lines(db, "gappy", 3, 2)  # spooled again after its later lines
+    checkpoints = {"gappy": 2}
+    posted = []
+
+    def contiguous_server(payload, _cfg):
+        session_id, start = payload["session_id"], payload["start_offset"]
+        ack = checkpoints.get(session_id, start - 1)
+        if start <= ack + 1:
+            ack = max(ack, start + len(payload["lines"]) - 1)
+        checkpoints[session_id] = ack
+        posted.append((session_id, start))
+        return {"acknowledged_line": ack, "ingested": len(payload["lines"]), "errors": 0}
+
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=contiguous_server)
+    assert posted == [("gappy", 3), ("gappy", 5), ("other", 0)]
+    assert checkpoints["gappy"] == 6
+
+
+def test_batch_past_a_gap_waits_when_the_server_reports_errors(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    _enqueue_lines(db, "gappy", 5, 2)
+
+    def post(payload, cfg):
+        return {**_ack_behind_gap(payload, cfg), "errors": 1}
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert [(item.start_line, item.end_line) for item in pending] == [(5, 6)]
+
+
 def test_reconcile_delivery_reports_rejection_without_advancing_cursor(tmp_path: Path, monkeypatch):
     disable_payload_metadata(monkeypatch)
     source_path = tmp_path / "session.jsonl"
