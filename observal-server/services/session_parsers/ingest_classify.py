@@ -29,6 +29,7 @@ import re
 from collections.abc import Callable
 
 from .base import dict_field, list_field, str_field, strip_cursor_xml_tags
+from .codex import user_prompt_text as _codex_user_prompt_text
 
 _PREVIEW_MAX = 500
 
@@ -554,8 +555,6 @@ def _classify_codex(parsed: dict) -> str | None:
 
     if line_type == "event_msg":
         payload_type = str_field(dict_field(parsed, "payload"), "type")
-        if payload_type == "user_message":
-            return "user_prompt"
         if payload_type == "agent_message":
             return "assistant_text"
         if payload_type == "token_count":
@@ -576,7 +575,7 @@ def _classify_codex(parsed: dict) -> str | None:
             return "tool_result"
 
         if role == "user":
-            return "system"
+            return "user_prompt" if _codex_user_prompt_text(payload) is not None else "system"
         if role == "assistant":
             if isinstance(content, list):
                 for block in content:
