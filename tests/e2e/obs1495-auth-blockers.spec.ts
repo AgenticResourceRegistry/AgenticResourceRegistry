@@ -1,10 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 const profile = { role: "user", name: "A", email: "a@example.test" };
 const jwt = (sub: string) => `x.${btoa(JSON.stringify({ sub }))}.y`;
+
+async function mockPublicAgentPage(context: BrowserContext) {
+  // Keep route rendering independent of a running API; tests still assert the
+  // actual registry heading and the guest/authenticated session behavior.
+  for (const [path, body] of [
+    ["config/harnesses", { harnesses: [], default_harness: null }],
+    ["config/version", { server_version: "dev" }],
+    ["teams", []],
+    ["inbox/count", { unread: 0 }],
+    ["agents/my", []],
+    ["agents/deleted", []],
+  ] as const) {
+    await context.route(`**/api/v1/${path}`, (route) => route.fulfill({ json: body }));
+  }
+  await context.route(/\/api\/v1\/agents(?:\?.*)?$/, (route) => route.fulfill({ json: [] }));
+}
 
 // All exchanges are local and deterministic; no SSO provider or credentials required.
 test.beforeEach(async ({ context }) => {
@@ -69,19 +85,7 @@ for (const callback of ["code", "saml_code", "saml_token"] as const) {
         body: JSON.stringify({ access_token: "accepted", refresh_token: "accepted-refresh", user: profile }),
       });
     });
-    // The public config is mocked in beforeEach. Keep the returned page and
-    // its authenticated sidebar independent of the Vite proxy/API process.
-    for (const [path, body] of [
-      ["config/harnesses", { harnesses: [], default_harness: null }],
-      ["config/version", { server_version: "dev" }],
-      ["teams", []],
-      ["inbox/count", { unread: 0 }],
-      ["agents/my", []],
-      ["agents/deleted", []],
-    ] as const) {
-      await context.route(`**/api/v1/${path}`, (route) => route.fulfill({ json: body }));
-    }
-    await context.route(/\/api\/v1\/agents(?:\?.*)?$/, (route) => route.fulfill({ json: [] }));
+    await mockPublicAgentPage(context);
     await page.goto("/__auth_test__");
     await page.evaluate(() => sessionStorage.setItem("observal_sso_start", ""));
     await page.goto(`/login?${callback}=once&next=%2Fresources%2Fagents`);
@@ -320,6 +324,7 @@ test("legacy owner guest removes shared refresh while a refresh-only guest canno
 });
 
 test("refresh-only legacy guest stays anonymous across reload without clearing another tab", async ({ page, context }) => {
+  await mockPublicAgentPage(context);
   let refreshes = 0;
   await context.route("**/api/v1/auth/token/refresh", (route) => {
     refreshes++;
@@ -344,6 +349,7 @@ test("refresh-only legacy guest stays anonymous across reload without clearing a
 });
 
 test("refresh-only legacy guest without another tab cannot reauthenticate", async ({ page, context }) => {
+  await mockPublicAgentPage(context);
   let refreshes = 0;
   await context.route("**/api/v1/auth/token/refresh", (route) => {
     refreshes++;
