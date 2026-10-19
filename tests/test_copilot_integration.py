@@ -974,7 +974,7 @@ class TestServerAdapterFormatConfig:
         result = adapter.format_config(ctx)
 
         mcp_config = result["mcp_config"]
-        assert mcp_config["path"] == "~/.copilot/mcp-config.json"
+        assert mcp_config["path"] == ".mcp.json"
         assert "mcpServers" in mcp_config["content"]
 
     def test_no_prompt_files_without_prompt_components(self):
@@ -1212,7 +1212,7 @@ class TestPropertyConfigGenerationFormat:
         assert result["agent_profile"]["path"].endswith(".agent.md")
 
         assert "mcp_config" in result
-        assert result["mcp_config"]["path"] == "~/.copilot/mcp-config.json"
+        assert result["mcp_config"]["path"] == ".mcp.json"
         assert "mcpServers" in result["mcp_config"]["content"]
 
         assert "hooks_config" in result
