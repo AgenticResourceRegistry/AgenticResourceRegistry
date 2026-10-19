@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -49,17 +50,33 @@ def _mirror_path(git_url: str, base: Path = DEFAULT_MIRROR_BASE) -> Path:
     return base / url_hash
 
 
+# Longer than two back-to-back git commands (120 s each), so a healthy queue never trips it.
+MIRROR_LOCK_TIMEOUT = 300.0
+_MIRROR_LOCK_POLL = 0.1
+
+
 @contextmanager
-def _mirror_lock(mirror_dir: Path) -> Iterator[None]:
-    """Hold an exclusive lock on one mirror checkout.
+def _mirror_lock(mirror_dir: Path, timeout: float = MIRROR_LOCK_TIMEOUT) -> Iterator[None]:
+    """Hold an exclusive lock on one mirror checkout, waiting at most ``timeout`` seconds.
 
     flock locks belong to the open file, so this serializes syncs across worker
     threads and across uvicorn processes that share the mirror base. The lock
     file sits beside the mirror because a fresh clone deletes the mirror directory.
+    The wait is bounded so queued syncs cannot hold every executor thread forever.
     """
     mirror_dir.parent.mkdir(parents=True, exist_ok=True)
     with open(mirror_dir.with_name(f"{mirror_dir.name}.lock"), "a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"timed out after {timeout:g}s waiting for mirror lock on {mirror_dir.name}"
+                    ) from None
+                time.sleep(_MIRROR_LOCK_POLL)
         try:
             yield
         finally:
