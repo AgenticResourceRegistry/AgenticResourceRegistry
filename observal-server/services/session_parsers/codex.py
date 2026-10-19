@@ -188,8 +188,9 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
     content = list_field(payload, "content")
     payload_type = payload.get("type", "")
 
-    # Direct function_call / function_call_output at payload level
-    if payload_type == "function_call":
+    # Direct function_call / function_call_output at payload level. custom_tool_call
+    # is Codex's freeform-input tool (apply_patch, exec scripts): "input", not "arguments".
+    if payload_type in ("function_call", "custom_tool_call"):
         events.append(
             {
                 "timestamp": ts,
@@ -197,7 +198,7 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
                 "body": payload.get("name", ""),
                 "attributes": {
                     "tool_name": payload.get("name", ""),
-                    "tool_input": payload.get("arguments", ""),
+                    "tool_input": payload.get("arguments") or payload.get("input") or "",
                     "tool_use_id": payload.get("call_id", ""),
                 },
                 "service_name": harness,
@@ -205,7 +206,10 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
         )
         return
 
-    if payload_type == "function_call_output":
+    if payload_type in ("function_call_output", "custom_tool_call_output"):
+        output = payload.get("output", "")
+        if isinstance(output, list):
+            output = "\n".join(str(block.get("text", "")) for block in output if isinstance(block, dict))
         events.append(
             {
                 "timestamp": ts,
@@ -213,7 +217,7 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
                 "body": payload.get("name", "tool_result"),
                 "attributes": {
                     "tool_name": payload.get("name", ""),
-                    "tool_response": str(payload.get("output", ""))[:500],
+                    "tool_response": str(output)[:500],
                     "tool_use_id": payload.get("call_id", ""),
                     "success": "true",
                 },
