@@ -27,7 +27,12 @@ from services.review import check_config, ci
 from services.review.decisions import _lock_review, _own_work, _target, gate
 from services.review.diff import diff_files
 from services.review.policy import policy_for
-from services.review.requests import ensure_request_threads, request_lifecycle_status, review_decisions
+from services.review.requests import (
+    ensure_request_threads,
+    request_lifecycle_status,
+    request_threads_need_repair,
+    review_decisions,
+)
 from services.teamspace import can_review, review_scope
 
 router = APIRouter()
@@ -46,9 +51,10 @@ async def detail(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    await _lock_review(db, review)
-    if await ensure_request_threads(db, review):
-        await notify_update(review, "gate")
+    if await request_threads_need_repair(db, review):
+        await _lock_review(db, review)
+        if await ensure_request_threads(db, review):
+            await notify_update(review, "gate")
     revisions = (
         await db.scalars(
             select(ReviewRevision).where(ReviewRevision.review_id == review.id).order_by(ReviewRevision.number)
@@ -105,6 +111,7 @@ async def detail(
         "reviewer_decisions": {
             str(uid): {
                 "verdict": row.verdict,
+                "revision_id": str(row.revision_id),
                 "status": request_lifecycle_status(review, row, request_statuses)
                 if row.verdict == "request_changes"
                 else row.state,
@@ -209,9 +216,10 @@ async def checks(review: Review = Depends(get_review), db: AsyncSession = Depend
 
 @router.get("/{ref}/gate")
 async def gate_detail(review: Review = Depends(get_review), db: AsyncSession = Depends(get_db)):
-    await _lock_review(db, review)
-    if await ensure_request_threads(db, review):
-        await notify_update(review, "gate")
+    if await request_threads_need_repair(db, review):
+        await _lock_review(db, review)
+        if await ensure_request_threads(db, review):
+            await notify_update(review, "gate")
     result = await gate(db, review)
     return {
         "ready": result.ready,
