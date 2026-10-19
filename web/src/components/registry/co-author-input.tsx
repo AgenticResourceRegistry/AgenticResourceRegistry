@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useCallback } from "react";
@@ -7,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { UserSearchInput } from "@/components/shared/user-search-input";
+import { authenticatedRequestContext, AuthContextChanged } from "@/lib/api";
 import {
 	Dialog,
 	DialogContent,
@@ -17,11 +19,6 @@ import {
 } from "@/components/ui/dialog";
 
 const API = "/api/v1";
-
-function getAccessToken(): string | null {
-	if (typeof window === "undefined") return null;
-	return sessionStorage.getItem("observal_access_token");
-}
 
 export interface CoAuthor {
 	id: string;
@@ -66,13 +63,6 @@ export function CoAuthorInput({
 	const [transferOpen, setTransferOpen] = useState(false);
 	const [confirmRemove, setConfirmRemove] = useState<CoAuthor | null>(null);
 
-	const headers = useCallback(() => {
-		const h: Record<string, string> = { "Content-Type": "application/json" };
-		const token = getAccessToken();
-		if (token) h.Authorization = `Bearer ${token}`;
-		return h;
-	}, []);
-
 	const resetAdd = () => {
 		setAddOpen(false);
 		setInput("");
@@ -94,6 +84,7 @@ export function CoAuthorInput({
 		setError(null);
 
 		try {
+			const { token, check } = authenticatedRequestContext();
 			const isEmail = value.includes("@") && !value.startsWith("@") && value.indexOf("@") < value.length - 1;
 			const body = selectedAddUserId
 				? { user_id: selectedAddUserId }
@@ -101,27 +92,31 @@ export function CoAuthorInput({
 					? { email: value.toLowerCase() }
 					: { username: value.replace(/^@/, "") };
 
+			check();
 			const res = await fetch(`${API}/${entityType}/${entityId}/co-authors`, {
 				method: "POST",
-				headers: headers(),
+				headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
 				body: JSON.stringify(body),
 			});
 
+			check();
 			if (!res.ok) {
 				const data = await res.json().catch(() => ({}));
+				check();
 				setError(data.detail || `Failed to add co-author (${res.status})`);
 				return;
 			}
 
 			const added: CoAuthor = await res.json();
+			check();
 			onChange([...coAuthors, added]);
 			resetAdd();
-		} catch {
-			setError("Network error");
+		} catch (e) {
+			if (!(e instanceof AuthContextChanged)) setError("Network error");
 		} finally {
 			setLoading(false);
 		}
-	}, [entityType, entityId, coAuthors, onChange, headers, input, selectedAddUserId]);
+	}, [entityType, entityId, coAuthors, onChange, input, selectedAddUserId]);
 
 	const executeRemove = useCallback(
 		async (userId: string) => {
@@ -129,28 +124,30 @@ export function CoAuthorInput({
 			setError(null);
 
 			try {
-				const h = headers();
-				delete h["Content-Type"];
+				const { token, check } = authenticatedRequestContext();
+				check();
 				const res = await fetch(`${API}/${entityType}/${entityId}/co-authors/${userId}`, {
 					method: "DELETE",
-					headers: h,
+					headers: { Authorization: `Bearer ${token}` },
 				});
 
+				check();
 				if (!res.ok) {
 					const data = await res.json().catch(() => ({}));
+					check();
 					setError(data.detail || `Failed to remove co-author (${res.status})`);
 					return;
 				}
 
 				onChange(coAuthors.filter((c) => c.id !== userId));
 				setConfirmRemove(null);
-			} catch {
-				setError("Network error");
+			} catch (e) {
+				if (!(e instanceof AuthContextChanged)) setError("Network error");
 			} finally {
 				setLoading(false);
 			}
 		},
-		[entityType, entityId, coAuthors, onChange, headers],
+		[entityType, entityId, coAuthors, onChange],
 	);
 
 	const executeTransfer = useCallback(async () => {
@@ -160,32 +157,36 @@ export function CoAuthorInput({
 		setError(null);
 
 		try {
+			const { token, check } = authenticatedRequestContext();
 			const isEmail = target.includes("@") && target.indexOf("@") < target.length - 1;
 			const body = selectedTransferUserId
 				? { user_id: selectedTransferUserId }
 				: isEmail
 					? { email: target.toLowerCase() }
 					: { username: target };
+			check();
 			const res = await fetch(`${API}/${entityType}/${entityId}/transfer-ownership`, {
 				method: "POST",
-				headers: headers(),
+				headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
 				body: JSON.stringify(body),
 			});
 
+			check();
 			if (!res.ok) {
 				const data = await res.json().catch(() => ({}));
+				check();
 				setError(data.detail || `Failed to transfer ownership (${res.status})`);
 				return;
 			}
 
 			resetTransfer();
 			onTransferOwnership?.();
-		} catch {
-			setError("Network error");
+		} catch (e) {
+			if (!(e instanceof AuthContextChanged)) setError("Network error");
 		} finally {
 			setLoading(false);
 		}
-	}, [entityType, entityId, headers, onTransferOwnership, selectedTransferUserId, transferTarget]);
+	}, [entityType, entityId, onTransferOwnership, selectedTransferUserId, transferTarget]);
 
 	return (
 		<div className="space-y-3">
