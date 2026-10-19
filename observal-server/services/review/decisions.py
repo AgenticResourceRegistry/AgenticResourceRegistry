@@ -59,8 +59,8 @@ MCP_VALIDATION_MESSAGE = "Updated by MCP validation"
 # Revisions the system pushed; none of them is the author's resubmission.
 SYSTEM_REVISION_MESSAGES = frozenset({DRAFT_EDIT_MESSAGE, MCP_VALIDATION_MESSAGE})
 
-# Open items reviewers discuss that never block a person's publish (OBS-1443): an unanswered
-# change request, unresolved threads and an abandoned edit lock.
+# Unresolved conversations and abandoned edit locks are advisory; an explicit
+# change request remains a publication blocker until withdrawn or approved.
 ADVISORY_REQUIREMENTS = frozenset({"unresolved_threads", "edit_lock"})
 # Integrity rules no publish path skips, including a super admin override: content changed
 # without a new revision, an uninstallable or rollout-gated skill folder, a moved approved

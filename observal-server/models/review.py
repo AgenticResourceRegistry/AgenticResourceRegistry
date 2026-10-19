@@ -133,6 +133,13 @@ class ReviewSubmission(Base):
             postgresql_where=text("state = 'draft'"),
             sqlite_where=text("state = 'draft'"),
         ),
+        Index(
+            "ix_review_submission_latest_decision",
+            "review_id",
+            "reviewer_id",
+            "submitted_at",
+            "id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

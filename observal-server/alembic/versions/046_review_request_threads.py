@@ -144,11 +144,17 @@ def upgrade() -> None:
     )
     op.create_unique_constraint("uq_review_threads_change_request", "review_threads", ["change_request_id"])
     op.create_index("ix_review_comments_submission_id", "review_comments", ["submission_id"])
+    op.create_index(
+        "ix_review_submission_latest_decision",
+        "review_submissions",
+        ["review_id", "reviewer_id", "submitted_at", "id"],
+    )
     backfill()
 
 
 def downgrade() -> None:
     # Preserve comments/replies as ordinary conversations on rollback.
+    op.drop_index("ix_review_submission_latest_decision", table_name="review_submissions")
     op.drop_index("ix_review_comments_submission_id", table_name="review_comments")
     op.drop_constraint("uq_review_threads_change_request", "review_threads", type_="unique")
     op.drop_constraint("fk_review_threads_change_request", "review_threads", type_="foreignkey")
