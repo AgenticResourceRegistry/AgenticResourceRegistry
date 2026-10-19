@@ -569,9 +569,10 @@ def _classify_codex(parsed: dict) -> str | None:
         content = payload.get("content", [])
         payload_type = payload.get("type", "")
 
-        if payload_type == "function_call":
+        # custom_tool_call is Codex's freeform-input tool (apply_patch, exec scripts).
+        if payload_type in ("function_call", "custom_tool_call"):
             return "tool_call"
-        if payload_type == "function_call_output":
+        if payload_type in ("function_call_output", "custom_tool_call_output"):
             return "tool_result"
 
         if role == "user":
@@ -775,7 +776,7 @@ def _tool_info_codex(parsed: dict) -> tuple[str | None, str | None]:
     if parsed.get("type") != "response_item":
         return None, None
     payload = dict_field(parsed, "payload")
-    if payload.get("type") == "function_call":
+    if payload.get("type") in ("function_call", "custom_tool_call"):
         return payload.get("name"), payload.get("call_id")
     content = payload.get("content", [])
     if isinstance(content, list):

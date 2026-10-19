@@ -116,6 +116,27 @@ def test_classify_codex_user_messages(line: dict, expected: str):
     assert _classify_codex(line) == expected
 
 
+CUSTOM_CALL = {
+    "type": "response_item",
+    "payload": {"type": "custom_tool_call", "name": "apply_patch", "input": "*** Begin Patch", "call_id": "c1"},
+}
+CUSTOM_OUTPUT = {
+    "type": "response_item",
+    "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "ok"}]},
+}
+
+
+def test_custom_tool_calls_are_tool_events():
+    assert (_classify_codex(CUSTOM_CALL), _classify_codex(CUSTOM_OUTPUT)) == ("tool_call", "tool_result")
+    rows = [{"raw_line": json.dumps(line), "harness": "codex"} for line in (CUSTOM_CALL, CUSTOM_OUTPUT)]
+
+    call, result = parse_raw_events(rows)
+
+    assert (call["event_name"], call["attributes"]["tool_name"]) == ("hook_pretooluse", "apply_patch")
+    assert call["attributes"]["tool_input"] == "*** Begin Patch"
+    assert (result["event_name"], result["attributes"]["tool_response"]) == ("hook_posttooluse", "ok")
+
+
 def test_trace_view_shows_each_typed_prompt_once():
     rows = [{"raw_line": json.dumps(line), "harness": "codex"} for line in (ENVIRONMENT, AGENTS_MD, PROMPT, ECHO)]
 
