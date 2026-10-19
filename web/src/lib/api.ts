@@ -39,6 +39,7 @@ import type {
 	SkillBinaryContents,
 	ReviewSummary,
 	ReviewDetail,
+	EligibleReviewer,
 	ReviewGate,
 	ReviewFile,
 	ReviewThread,
@@ -664,6 +665,9 @@ export const prReviews = {
   reopen: (ref: string, message?: string) => post(`/reviews/${encodeURIComponent(ref)}/reopen`, { message }),
   subscribe: (ref: string, mode: "watching" | "muted") => put(
     `/reviews/${encodeURIComponent(ref)}/subscription`, { mode },
+  ),
+  eligibleReviewers: (ref: string, query: string) => get<EligibleReviewer[]>(
+    `/reviews/${encodeURIComponent(ref)}/reviewers/eligible?q=${encodeURIComponent(query)}`,
   ),
   requestReviewer: (ref: string, userId: string) => post(
     `/reviews/${encodeURIComponent(ref)}/reviewers`, { user_id: userId },

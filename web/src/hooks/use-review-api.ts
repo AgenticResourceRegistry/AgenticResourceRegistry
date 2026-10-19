@@ -5,6 +5,14 @@ import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { prReviews } from "@/lib/api";
 
+export function useEligibleReviewers(ref: string, query: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["pr-review", ref, "eligible-reviewers", query],
+    queryFn: () => prReviews.eligibleReviewers(ref, query),
+    enabled,
+  });
+}
+
 /** The teamspace Review tab links to participant-scoped review pages. */
 export function useTeamReviewQueue(teamId: string | undefined, enabled: boolean) {
   return useQuery({
