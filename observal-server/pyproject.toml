@@ -84,6 +84,7 @@ dev = [
     "pyyaml",
     "typer",
     "rich",
+    "tomlkit>=0.13.3",  # CLI install snippets are exercised by the shared test suite
 ]
 
 [tool.coverage.run]
