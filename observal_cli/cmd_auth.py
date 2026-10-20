@@ -737,6 +737,9 @@ def status(
             "available": True,
             "total": buf.get("total", 0),
             "pending": buf.get("pending", 0),
+            "terminal_sessions": buf.get("terminal_sessions", 0),
+            "archived_rows": buf.get("archived_rows", 0),
+            "archive_path": buf.get("archive_path"),
             "bytes": buf.get("bytes", 0),
             "oldest_pending": buf.get("oldest_pending"),
         }

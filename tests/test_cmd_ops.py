@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral tests for the operations, admin, trace, and self CLI commands."""
@@ -107,7 +108,11 @@ def test_telemetry_status_reports_server_and_outbox_state(cli, monkeypatch):
             "bytes": 1536,
             "oldest_pending": "2026-01-01",
             "last_sync": "2026-01-02",
-            "total": 0,
+            "total": 3,
+            "terminal_sessions": 1,
+            "archived_rows": 3,
+            "inflight_sessions": 0,
+            "archive_path": "/tmp/observal-review-test.jsonl",
         },
     )
 
@@ -117,10 +122,12 @@ def test_telemetry_status_reports_server_and_outbox_state(cli, monkeypatch):
     assert "Status:       [green]ok" in output
     assert "Tool calls:   8" in output
     assert "Pending:      2 batches" in output
+    assert "Terminal:     1 quarantined sessions (3 rows)" in output
+    assert "In-flight:    0 sessions" in output
+    assert "Private archive: /tmp/observal-review-test.jsonl" in output
     assert "Disk:         1.5 KiB" in output
     assert "Oldest:       2026-01-01 UTC" in output
     assert "Last sync:    2026-01-02 UTC" in output
-    assert "Outbox is empty" in output
 
 
 def test_telemetry_status_tolerates_unavailable_local_stats(cli, monkeypatch):
