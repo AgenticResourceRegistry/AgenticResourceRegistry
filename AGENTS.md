@@ -25,7 +25,7 @@ Ten harnesses are registered in `packages/observal-shared/observal_shared/harnes
 | Harness | Hook spec | Session parser | Capabilities | Harness-specific e2e |
 |---|---|---|---|---|
 | Claude Code | yes | `claude-code` | hooks, mcp_servers, skills | no |
-| Kiro | yes | `kiro` | hooks, mcp_servers | yes (9 specs) |
+| Kiro | yes | `kiro` | hooks, mcp_servers, skills | yes (9 specs) |
 | Cursor | no | `cursor` | hooks, mcp_servers | no |
 | Pi | no | `pi` | hooks, mcp_servers, skills | no |
 | Codex CLI | yes | `codex` | hooks, mcp_servers, skills | no |

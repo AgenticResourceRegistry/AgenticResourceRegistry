@@ -2972,3 +2972,24 @@ def test_repull_restores_deleted_project_skill_folder(pull_app_boundary, registr
         == original_receipt
     )
     assert json.loads((target / "observal.lock").read_text())["agents"]["acme/reviewer"]["version"] == "1.1.0"
+
+
+def test_kiro_agent_pull_installs_skill_folder(pull_app_boundary, registry, tmp_path, monkeypatch):
+    from observal_cli import lockfile
+
+    config = tmp_path / "config"
+    monkeypatch.setattr(lockfile, "CONFIG_DIR", config)
+    monkeypatch.setattr(lockfile, "LOCKFILE_PATH", config / "lockfile.json")
+    monkeypatch.setattr(lockfile, "_LOCKFILE_LOCK", config / "lockfile.lock")
+
+    def install(_path, _body):
+        result = _folder_install_result()
+        result["config_snippet"]["skill_components"][0]["path"] = ".kiro/skills/demo/SKILL.md"
+        result["skill_bundles"][0]["skill_file_path"] = ".kiro/skills/demo/SKILL.md"
+        return result
+
+    registry.post.side_effect = install
+    target = tmp_path / "project"
+    pulled = _invoke(pull_app_boundary, target, "--output", "json", harness="kiro")
+    assert pulled.exit_code == 0, pulled.output
+    assert (target / ".kiro/skills/demo/SKILL.md").read_text() == "---\nname: demo\n---\n"

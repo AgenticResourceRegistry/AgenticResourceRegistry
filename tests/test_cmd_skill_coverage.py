@@ -1533,3 +1533,34 @@ def test_skill_validation_uses_stable_exit_code(arguments, monkeypatch):
 
     assert result.exit_code == 7
     get.assert_not_called()
+
+
+def test_kiro_skill_install_writes_user_skill_and_script(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="skill-id"))
+    monkeypatch.setattr(skill.client, "get", Mock(return_value=_skill_item()))
+    post = Mock(
+        return_value={
+            "config_snippet": {
+                "skill": {
+                    "id": "skill-id",
+                    "name": "Review Skill",
+                    "version": "1.2.3",
+                    "delivery_mode": "registry_direct",
+                    "skill_md_content": "---\nname: review-skill\ndescription: Review\n---\n# Review\n",
+                    "script_content": "print('review')\n",
+                    "script_filename": "run.py",
+                }
+            }
+        }
+    )
+    monkeypatch.setattr(skill.client, "post", post)
+    monkeypatch.setattr(lockfile, "upsert_standalone", Mock())
+
+    result = runner.invoke(app, ["registry", "skill", "install", "alice/review-skill", "--harness", "kiro"])
+
+    assert result.exit_code == 0, result.output
+    assert (home / ".kiro/skills/review-skill/SKILL.md").read_text().endswith("# Review\n")
+    assert (home / ".kiro/skills/review-skill/scripts/run.py").read_text() == "print('review')\n"
+    assert post.call_args.args[1]["harness"] == "kiro"

@@ -94,7 +94,7 @@ HARNESS_REGISTRY: dict[str, dict] = {
     },
     "kiro": {
         "display_name": "Kiro",
-        "capabilities": {"hooks", "mcp_servers"},
+        "capabilities": {"hooks", "mcp_servers", "skills"},
         "session_parser": "kiro",
         "scopes": ["project", "user"],
         "default_scope": "user",

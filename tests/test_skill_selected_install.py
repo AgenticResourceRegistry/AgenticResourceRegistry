@@ -49,7 +49,7 @@ async def test_opted_in_standalone_bundle_declares_all_files_and_denies_old_clie
             with pytest.raises(HTTPException) as unsupported:
                 await skill.install_skill(
                     str(listing_id),
-                    SkillInstallRequest(harness="kiro", supported_features=["skill_extra_files_v1"]),
+                    SkillInstallRequest(harness="cursor", supported_features=["skill_extra_files_v1"]),
                     MagicMock(),
                     db,
                     owner,
