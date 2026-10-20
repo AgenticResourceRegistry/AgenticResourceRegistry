@@ -525,88 +525,99 @@ def drain_outbox(
             continue
         if not telemetry_buffer.revision_is_current(item, db_path=db_path):
             continue
-        try:
-            acknowledgement = post_batch(item.payload, config)
-        except PermanentIngestRejectionError as exc:
-            quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
-            if quarantine_path is None:
-                return False
-            if rejections is not None:
-                rejections.append((item.harness, item.session_id, exc.status_code))
-            log_error(
-                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
-                home=home,
-            )
+        claim = telemetry_buffer.claim_for_delivery(item, db_path=db_path)
+        if claim is None:
+            # Selection raced another sender or a review. Re-select, excluding
+            # claimed/held sessions, so other sessions can still make progress.
             continue
-        if acknowledgement is not None and not telemetry_buffer.revision_is_current(item, db_path=db_path):
-            # The server may have received the previous revision; never erase
-            # a concurrently corrected payload or advance its local checkpoint.
-            return False
-        if acknowledgement is None:
-            telemetry_buffer.record_attempt(item.id, db_path=db_path)
-            return False
-        acknowledged_line = int(acknowledgement["acknowledged_line"])
-        acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
-        repair_from_line = acknowledgement.get("repair_from_line")
-        if isinstance(repair_from_line, int):
-            if not telemetry_buffer.accept_item(item.id, db_path=db_path, revision=item.revision):
-                return False
-            write_cursor(
-                item.checkpoint_key,
-                acknowledged_offset,
-                repair_from_line,
-                home=home,
-                preserve_finalized=False,
-            )
-            if repairs is not None:
-                repairs.append((item.harness, item.session_id))
-            return False
-        if acknowledged_line < item.end_line:
-            if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
-                # The lines between the server checkpoint and this batch were quarantined
-                # or lost, so the checkpoint can never reach it. The server stored the
-                # batch; accept it instead of resending it forever ahead of every session.
-                write_cursor(
-                    item.checkpoint_key,
-                    item.end_offset,
-                    item.end_line + 1,
-                    finalized=item.final,
-                    home=home,
-                )
-                telemetry_buffer.accept_item(item.id, db_path=db_path)
+        try:
+            try:
+                acknowledgement = post_batch(item.payload, config)
+            except PermanentIngestRejectionError as exc:
+                quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+                if quarantine_path is None:
+                    return False
+                if rejections is not None:
+                    rejections.append((item.harness, item.session_id, exc.status_code))
                 log_error(
-                    f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
-                    f"past a checkpoint gap after line {acknowledged_line}",
+                    f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
                     home=home,
                 )
                 continue
-            return False
-        if acknowledged_offset <= 0:
-            acknowledged_offset = item.end_offset
-        deleted = telemetry_buffer.acknowledge(
-            destination=destination,
-            user_id=user_id,
-            harness=item.harness,
-            session_id=item.session_id,
-            acknowledged_line=acknowledged_line,
-            include_metadata=item.end_line < item.start_line,
-            db_path=db_path,
-            expected_item=item,
-        )
-        if not deleted:
-            return False
-        # An ahead-of-us server checkpoint does not establish that other local
-        # rows were reviewed or posted. Advance only across this sent range,
-        # without rewinding a cursor already ahead of an older posted batch.
-        current_offset, current_lines = read_cursor(item.checkpoint_key, home=home)
-        write_cursor(
-            item.checkpoint_key,
-            max(current_offset, min(acknowledged_offset, item.end_offset)),
-            max(current_lines, item.end_line + 1 if item.end_line >= item.start_line else item.start_line),
-            finalized=item.final,
-            home=home,
-        )
-    return not telemetry_buffer.has_holds(destination, user_id, db_path=db_path)
+            if acknowledgement is not None and not telemetry_buffer.revision_is_current(item, db_path=db_path):
+                # The server may have received the previous revision; never erase
+                # a concurrently corrected payload or advance its local checkpoint.
+                return False
+            if acknowledgement is None:
+                telemetry_buffer.record_attempt(item.id, db_path=db_path)
+                return False
+            acknowledged_line = int(acknowledgement["acknowledged_line"])
+            acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
+            repair_from_line = acknowledgement.get("repair_from_line")
+            if isinstance(repair_from_line, int):
+                if not telemetry_buffer.accept_item(item.id, db_path=db_path, revision=item.revision):
+                    return False
+                write_cursor(
+                    item.checkpoint_key,
+                    acknowledged_offset,
+                    repair_from_line,
+                    home=home,
+                    preserve_finalized=False,
+                )
+                if repairs is not None:
+                    repairs.append((item.harness, item.session_id))
+                return False
+            if acknowledged_line < item.end_line:
+                if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
+                    # The server stored this batch, but a permanently missing range
+                    # prevents its checkpoint from reaching it.
+                    if not telemetry_buffer.accept_item(item.id, db_path=db_path, revision=item.revision):
+                        return False
+                    write_cursor(
+                        item.checkpoint_key,
+                        item.end_offset,
+                        item.end_line + 1,
+                        finalized=item.final,
+                        home=home,
+                    )
+                    log_error(
+                        f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
+                        f"past a checkpoint gap after line {acknowledged_line}",
+                        home=home,
+                    )
+                    continue
+                return False
+            if acknowledged_offset <= 0:
+                acknowledged_offset = item.end_offset
+            deleted = telemetry_buffer.acknowledge(
+                destination=destination,
+                user_id=user_id,
+                harness=item.harness,
+                session_id=item.session_id,
+                acknowledged_line=acknowledged_line,
+                include_metadata=item.end_line < item.start_line,
+                db_path=db_path,
+                expected_item=item,
+            )
+            if not deleted:
+                return False
+            # An ahead-of-us server checkpoint does not establish that other local
+            # rows were reviewed or posted. Advance only across this sent range,
+            # without rewinding a cursor already ahead of an older posted batch.
+            current_offset, current_lines = read_cursor(item.checkpoint_key, home=home)
+            write_cursor(
+                item.checkpoint_key,
+                max(current_offset, min(acknowledged_offset, item.end_offset)),
+                max(current_lines, item.end_line + 1 if item.end_line >= item.start_line else item.start_line),
+                finalized=item.final,
+                home=home,
+            )
+        finally:
+            telemetry_buffer.release_delivery_claim(item, claim, db_path=db_path)
+    return not (
+        telemetry_buffer.has_holds(destination, user_id, db_path=db_path)
+        or telemetry_buffer.has_inflight(destination, user_id, db_path=db_path)
+    )
 
 
 def _checkpoint_gap_is_permanent(
@@ -661,6 +672,8 @@ def drain_session_source(
     user_id = str(config.get("user_id") or "")
     if source.path is None or not destination or not user_id:
         return False
+    if telemetry_buffer.is_terminal(destination, user_id, source.harness, source.session_id, db_path=db_path):
+        return False
     if telemetry_buffer.is_held(destination, user_id, source.harness, source.session_id, db_path=db_path):
         return False
 
@@ -687,6 +700,10 @@ def drain_session_source(
         if source_was_rejected():
             return False
 
+    # The pre-drain may have quarantined this very source. Never recover its
+    # cursor from a server checkpoint or re-read its rollout afterward.
+    if telemetry_buffer.is_terminal(destination, user_id, source.harness, source.session_id, db_path=db_path):
+        return False
     if recover_from_server:
         recovered = recover_cursor_from_server(source, config, home=home, fetch=checkpoint_fetch)
         if recovered is None:

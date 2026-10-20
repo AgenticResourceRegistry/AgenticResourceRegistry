@@ -44,6 +44,10 @@ def reconcile(
     review_unattributed: str = typer.Option(
         "", "--review-unattributed", help="Verify and release one held Codex session without agent identity"
     ),
+    quarantine_held: str | None = typer.Option(
+        None, "--quarantine-held", help="Archive a held Codex session without replaying it"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Confirm terminal quarantine without prompting"),
 ):
     """Backfill local session records missed by automatic hook delivery.
 
@@ -53,6 +57,7 @@ def reconcile(
       observal reconcile --since 24 --dry-run --output json
       observal reconcile --list-held --output json
       observal reconcile --harness codex --review-unattributed SESSION_ID
+      observal reconcile --harness codex --quarantine-held SESSION_ID
     """
     harness = _value(harness).strip().lower()
     since_hours = _value(since_hours)
@@ -60,10 +65,23 @@ def reconcile(
     output = _value(output)
     list_held = _value(list_held)
     review_unattributed = _value(review_unattributed)
-    if list_held and review_unattributed:
+    quarantine_held = _value(quarantine_held)
+    quarantine_requested = quarantine_held is not None
+    yes = _value(yes)
+    if sum(bool(mode) for mode in (list_held, review_unattributed, quarantine_requested)) > 1:
         fail(
-            ErrorCategory.VALIDATION, "Choose either --list-held or --review-unattributed.", operation="Review sessions"
+            ErrorCategory.VALIDATION,
+            "Choose only one of --list-held, --review-unattributed, or --quarantine-held.",
+            operation="Review sessions",
         )
+    if quarantine_requested and (harness != "codex" or dry_run or not quarantine_held.strip()):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Quarantine requires --harness codex, a session ID, and no --dry-run.",
+            operation="Quarantine held session",
+        )
+    if yes and not quarantine_requested:
+        fail(ErrorCategory.VALIDATION, "--yes requires --quarantine-held.", operation="Review sessions")
     if not 1 <= since_hours <= 8760:
         fail(
             ErrorCategory.VALIDATION,
@@ -95,6 +113,31 @@ def reconcile(
         )
     targets = [harness] if harness else [name for name, adapter in adapters.items() if adapter.is_installed()]
     destination, user_id = str(cfg.get("server_url") or "").rstrip("/"), str(cfg["user_id"])
+    if quarantine_requested:
+        if not yes:
+            if output == "json":
+                fail(
+                    ErrorCategory.VALIDATION,
+                    "JSON quarantine requires --yes to confirm without prompting.",
+                    operation="Quarantine held session",
+                )
+            if not typer.confirm(
+                f"Archive held Codex session {quarantine_held} locally without replay? "
+                "Its original records will remain in a private local archive."
+            ):
+                rprint("[dim]Quarantine cancelled; hold unchanged.[/dim]")
+                return
+        try:
+            count = telemetry_buffer.quarantine_held_session(destination, user_id, "codex", quarantine_held)
+        except telemetry_buffer.OutboxConflictError as exc:
+            fail(ErrorCategory.VALIDATION, f"Quarantine refused: {exc}", operation="Quarantine held session")
+        except telemetry_buffer.OutboxError as exc:
+            fail(ErrorCategory.UNAVAILABLE, str(exc), operation="Quarantine held session")
+        if output == "json":
+            output_json({"session_id": quarantine_held, "status": "quarantined", "rows": count})
+        else:
+            rprint(f"[green]Quarantined {count} held Codex row(s) for {esc(quarantine_held)}; no replay.[/green]")
+        return
     if list_held:
         holds = [
             {"destination": dest, "user_id": uid, "harness": name, "session_id": sid, "reason": reason}
@@ -199,11 +242,15 @@ def reconcile(
         "summary": summary,
         "rejections": rejection_rows,
     }
-    result["held_sessions"] = [
-        {"harness": name, "session_id": sid, "reason": reason}
-        for dest, uid, name, sid, reason in telemetry_buffer.held_sessions()
-        if dest == destination and uid == user_id and (not harness or name == harness)
-    ]
+    result["held_sessions"] = (
+        []
+        if dry_run
+        else [
+            {"harness": name, "session_id": sid, "reason": reason}
+            for dest, uid, name, sid, reason in telemetry_buffer.held_sessions()
+            if dest == destination and uid == user_id and (not harness or name == harness)
+        ]
+    )
     if result["held_sessions"] and output != "json":
         rprint("[yellow]Held sessions need review: run `observal reconcile --list-held`.[/yellow]")
     if output == "json":
@@ -272,6 +319,18 @@ def _reconcile_harness(
             rprint(f"  [red]✗[/red] {esc(source.session_id)} could not be read")
             continue
 
+        if (
+            not dry_run
+            and cfg.get("server_url")
+            and cfg.get("user_id")
+            and telemetry_buffer.is_terminal(
+                str(cfg["server_url"]), str(cfg["user_id"]), source.harness, source.session_id
+            )
+        ):
+            result["skipped"] += 1
+            session.update(status="quarantined", reason="terminal quarantine; not delivered")
+            result["sessions"].append(session)
+            continue
         local_offset, _line_count, finalized = read_cursor_state(source.checkpoint_key)
         bytes_new = max(size - local_offset, 0)
         session["bytes_new"] = bytes_new

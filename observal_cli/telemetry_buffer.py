@@ -13,7 +13,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
+import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,14 +59,123 @@ def _path(db_path: Path | None) -> Path:
     return db_path or DB_PATH
 
 
+def _assert_archive_identity(path: Path, identity: tuple[int, int]) -> None:
+    """Refuse to discard originals if the archive name no longer resolves to our file."""
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise OutboxError("quarantine archive path disappeared") from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (info.st_dev, info.st_ino) != identity:
+        raise OutboxError("quarantine archive path changed")
+
+
+def _validate_archive(fd: int) -> None:
+    """Reject any damaged existing JSONL before appending (under SQLite's writer lock)."""
+    with os.fdopen(os.dup(fd), "rb") as archive:
+        archive.seek(0)
+        for line_number, line in enumerate(archive, 1):
+            if not line.endswith(b"\n"):
+                raise OutboxError(
+                    f"quarantine archive has an incomplete line {line_number}; manual repair required: "
+                    "back up the archive and database, then inspect and repair the archive before retrying"
+                )
+            try:
+                record = json.loads(line.decode("utf-8"))
+                if not isinstance(record, dict):
+                    raise ValueError("archive record must be a JSON object")
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                raise OutboxError(
+                    f"quarantine archive has malformed JSON on line {line_number}; manual repair required: "
+                    "back up the archive and database, then inspect and repair the archive before retrying"
+                ) from exc
+
+
+def _archive_os_name() -> str:
+    return os.name
+
+
+def _secure_archive_flags() -> tuple[int, int]:
+    """Refuse archives where no-follow, private mode, or directory durability is unverified."""
+    # Windows os.open cannot enforce no-follow or private ACLs, and fsync on a
+    # directory descriptor is not a verified durability primitive there. Do not
+    # delete the SQLite originals on an unverified best-effort archive.
+    if _archive_os_name() == "nt":
+        raise OutboxError(
+            "terminal quarantine archive is unsupported on Windows: cannot verify no-follow, "
+            "private ACLs and directory durability; keep the outbox database and quarantine "
+            "on a supported POSIX host, or preserve the database for manual recovery"
+        )
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if not isinstance(nofollow, int) or not isinstance(directory, int) or not callable(getattr(os, "fchmod", None)):
+        raise OutboxError(
+            "terminal quarantine archive requires O_NOFOLLOW, O_DIRECTORY and fchmod; "
+            "keep the outbox database and use a supported POSIX host for quarantine"
+        )
+    return os.O_RDWR | os.O_APPEND | os.O_CREAT | nofollow, os.O_RDONLY | directory
+
+
+def _archive_rows(path: Path, rows: list[dict]) -> tuple[tuple[int, int], int]:
+    """Append originals and keep the inode open until the SQLite change finishes."""
+    flags, directory_flags = _secure_archive_flags()
+    try:
+        fd = os.open(path, flags, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OutboxError("unsafe quarantine archive path")
+            identity = (info.st_dev, info.st_ino)
+            # The caller already holds BEGIN IMMEDIATE. A previous process may
+            # have died mid-write without entering our OSError rollback path.
+            _validate_archive(fd)
+            offset = info.st_size
+            try:
+                os.fchmod(fd, 0o600)
+                for row in rows:
+                    data = (json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+                    while data:
+                        written = os.write(fd, data)
+                        if written == 0:
+                            raise OSError("zero-byte quarantine archive write")
+                        data = data[written:]
+                os.fsync(fd)
+                # A newly created archive must survive a crash before SQLite commits.
+                directory = os.open(path.parent, directory_flags)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+                # Fsync on an open descriptor also succeeds after its name is
+                # unlinked. Confirm the destination still names that regular file.
+                _assert_archive_identity(path, identity)
+            except OSError as exc:
+                # The caller holds SQLite's writer lock. Remove an incomplete JSONL
+                # suffix before allowing any later archive attempt to append.
+                try:
+                    os.ftruncate(fd, offset)
+                    os.fsync(fd)
+                except OSError as rollback_exc:
+                    raise OutboxError("cannot restore quarantine archive after failed append") from rollback_exc
+                raise OutboxError("cannot durably append quarantine archive") from exc
+            # Keep a descriptor alive so unlink/relink cannot recycle this inode
+            # between the append and the pre-commit path checks.
+            return identity, os.dup(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise OutboxError("cannot durably append quarantine archive") from exc
+
+
 def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> sqlite3.Connection:
     path = _path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    archive_fd: int | None = None
     try:
         conn = sqlite3.connect(str(path), timeout=5)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA busy_timeout=3000")
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS session_outbox (
@@ -101,6 +212,55 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             )"""
         )
         conn.execute(
+            """CREATE TABLE IF NOT EXISTS session_outbox_inflight (
+                destination TEXT NOT NULL, user_id TEXT NOT NULL, harness TEXT NOT NULL,
+                session_id TEXT NOT NULL, claim_token TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (destination, user_id, harness, session_id)
+            )"""
+        )
+        # Upgrade early terminal archives without discarding originals. Concurrent
+        # connections serialize this migration through SQLite's write lock.
+        terminal_columns = {r[1] for r in conn.execute("PRAGMA table_info(session_outbox_terminal)")}
+        legacy: list[dict] = []
+        if "payload" in terminal_columns:
+            names = [r[1] for r in conn.execute("PRAGMA table_info(session_outbox_terminal)")]
+            legacy = [
+                dict(zip(names, row, strict=True)) for row in conn.execute("SELECT * FROM session_outbox_terminal")
+            ]
+            if legacy:
+                archive_path = path.with_suffix(".quarantined.jsonl")
+                archive_identity, archive_fd = _archive_rows(archive_path, legacy)
+                _assert_archive_identity(archive_path, archive_identity)
+            conn.execute("DROP TABLE session_outbox_terminal")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS session_outbox_terminal (
+                destination TEXT NOT NULL, user_id TEXT NOT NULL, harness TEXT NOT NULL,
+                session_id TEXT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL,
+                archived_rows INTEGER NOT NULL,
+                quarantined_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (destination, user_id, harness, session_id)
+            )"""
+        )
+        if legacy:
+            for row in legacy:
+                conn.execute(
+                    "INSERT INTO session_outbox_terminal "
+                    "(destination, user_id, harness, session_id, status, reason, archived_rows, quarantined_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?) "
+                    "ON CONFLICT(destination, user_id, harness, session_id) "
+                    "DO UPDATE SET archived_rows = archived_rows + 1",
+                    (
+                        row["destination"],
+                        row["user_id"],
+                        row["harness"],
+                        row["session_id"],
+                        row["status"],
+                        row["reason"],
+                        row["quarantined_at"],
+                    ),
+                )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_outbox_pending ON session_outbox(destination, user_id, id)"
         )
         conn.execute(
@@ -111,6 +271,8 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             )
             """
         )
+        if legacy:
+            _assert_archive_identity(archive_path, archive_identity)
         conn.commit()
         page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
         conn.execute(f"PRAGMA max_page_count = {max(1, max_bytes // page_size)}")
@@ -119,8 +281,16 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
         except OSError:
             pass
         return conn
-    except sqlite3.Error as exc:
-        raise OutboxError(f"cannot open durable telemetry outbox: {exc}") from exc
+    except (sqlite3.Error, OutboxError) as exc:
+        if "conn" in locals():
+            conn.rollback()
+            conn.close()
+        if isinstance(exc, OutboxError):
+            raise
+        raise OutboxError("cannot open durable telemetry outbox") from exc
+    finally:
+        if archive_fd is not None:
+            os.close(archive_fd)
 
 
 def _used_bytes(conn: sqlite3.Connection) -> int:
@@ -192,6 +362,8 @@ def enqueue(
     conn = _connect(db_path, max_bytes=max_bytes)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if _terminal(conn, *key[:4]):
+            raise OutboxConflictError(f"session {harness}/{session_id} is terminally quarantined")
         if _held(conn, *key[:4]):
             raise OutboxConflictError(f"session {harness}/{session_id} is held for review")
         existing = conn.execute(
@@ -267,11 +439,9 @@ def pending(
     limit: int = BATCH_SIZE,
     db_path: Path | None = None,
 ) -> list[OutboxItem]:
-    """Return durable batches oldest session first, each session in line order.
+    """Return unheld, unclaimed batches oldest session first, each session in line order.
 
-    A session's lines can be spooled again after later lines (for example after a
-    server checkpoint rewind), so ordering by row id alone would send a batch the
-    checkpoint cannot reach before the batch that fills the gap, forever.
+    Requeued earlier lines must precede later lines even when their row ids are newer.
     Attempts never make a row terminal.
     """
     conn = _connect(db_path)
@@ -290,6 +460,9 @@ def pending(
             "AND NOT EXISTS (SELECT 1 FROM session_outbox_holds AS h WHERE "
             "h.destination = item.destination AND h.user_id = item.user_id AND h.harness = item.harness "
             "AND h.session_id = item.session_id) "
+            "AND NOT EXISTS (SELECT 1 FROM session_outbox_inflight AS i WHERE "
+            "i.destination = item.destination AND i.user_id = item.user_id AND i.harness = item.harness "
+            "AND i.session_id = item.session_id) "
             "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
             (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
         ).fetchall()
@@ -326,6 +499,34 @@ def _held(conn: sqlite3.Connection, destination: str, user_id: str, harness: str
     )
 
 
+def _inflight(conn: sqlite3.Connection, destination: str, user_id: str, harness: str, session_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM session_outbox_inflight WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            (destination, user_id, harness, session_id),
+        ).fetchone()
+        is not None
+    )
+
+
+def _terminal(conn: sqlite3.Connection, destination: str, user_id: str, harness: str, session_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM session_outbox_terminal WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            (destination, user_id, harness, session_id),
+        ).fetchone()
+        is not None
+    )
+
+
+def is_terminal(destination: str, user_id: str, harness: str, session_id: str, *, db_path: Path | None = None) -> bool:
+    conn = _connect(db_path)
+    try:
+        return _terminal(conn, destination.rstrip("/"), user_id, harness, session_id)
+    finally:
+        conn.close()
+
+
 def is_held(destination: str, user_id: str, harness: str, session_id: str, *, db_path: Path | None = None) -> bool:
     conn = _connect(db_path)
     try:
@@ -350,6 +551,47 @@ def hold_if_current(item: OutboxItem, reason: str, *, db_path: Path | None = Non
         )
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+def claim_for_delivery(item: OutboxItem, *, db_path: Path | None = None) -> str | None:
+    """Claim a session across processes before posting; stale claims require manual investigation.
+
+    No automatic expiry: a crashed sender may have sent the request before dying.
+    """
+    conn = _connect(db_path)
+    key = (item.destination, item.user_id, item.harness, item.session_id)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT revision FROM session_outbox WHERE id = ?", (item.id,)).fetchone()
+        if not row or row[0] != item.revision or _held(conn, *key) or _terminal(conn, *key):
+            return None
+        token = secrets.token_hex(16)
+        inserted = conn.execute(
+            "INSERT OR IGNORE INTO session_outbox_inflight "
+            "(destination, user_id, harness, session_id, claim_token) VALUES (?, ?, ?, ?, ?)",
+            (*key, token),
+        )
+        if inserted.rowcount != 1:
+            return None
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def release_delivery_claim(item: OutboxItem, token: str, *, db_path: Path | None = None) -> None:
+    """Only the sender owning the claim can clear it, after posting/ack handling."""
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "DELETE FROM session_outbox_inflight WHERE destination = ? AND user_id = ? "
+            "AND harness = ? AND session_id = ? AND claim_token = ?",
+            (item.destination, item.user_id, item.harness, item.session_id, token),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -381,6 +623,21 @@ def has_holds(destination: str, user_id: str, *, db_path: Path | None = None) ->
         conn.close()
 
 
+def has_inflight(destination: str, user_id: str, *, db_path: Path | None = None) -> bool:
+    """A claimed session is not yet known to be delivered, even if no row is selectable."""
+    conn = _connect(db_path)
+    try:
+        return (
+            conn.execute(
+                "SELECT 1 FROM session_outbox_inflight WHERE destination = ? AND user_id = ? LIMIT 1",
+                (destination.rstrip("/"), user_id),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
 def session_delivered(
     destination: str, user_id: str, harness: str, session_id: str, *, db_path: Path | None = None
 ) -> bool:
@@ -390,6 +647,7 @@ def session_delivered(
         key = (destination.rstrip("/"), user_id, harness, session_id)
         return (
             not _held(conn, *key)
+            and not _terminal(conn, *key)
             and conn.execute(
                 "SELECT 1 FROM session_outbox WHERE destination = ? AND user_id = ? "
                 "AND harness = ? AND session_id = ? LIMIT 1",
@@ -410,6 +668,81 @@ def held_sessions(*, db_path: Path | None = None) -> list[tuple[str, str, str, s
         ).fetchall()
     finally:
         conn.close()
+
+
+def quarantine_held_session(
+    destination: str, user_id: str, harness: str, session_id: str, *, db_path: Path | None = None
+) -> int:
+    """Atomically preserve all held rows, then remove their hold and queued copies.
+
+    Only an explicit operator action calls this; archived rows are never replayed.
+    """
+    if harness != "codex" or not session_id or not destination or not user_id:
+        raise OutboxConflictError("quarantine requires a Codex session and authenticated destination/user")
+    destination = destination.rstrip("/")
+    key = (destination, user_id, harness, session_id)
+    conn = _connect(db_path)
+    archive_fd: int | None = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        hold = conn.execute(
+            "SELECT reason FROM session_outbox_holds WHERE destination = ? AND user_id = ? "
+            "AND harness = ? AND session_id = ?",
+            key,
+        ).fetchone()
+        if not hold:
+            raise OutboxConflictError("session is not held")
+        if conn.execute(
+            "SELECT 1 FROM session_outbox_inflight WHERE destination = ? AND user_id = ? "
+            "AND harness = ? AND session_id = ?",
+            key,
+        ).fetchone():
+            raise OutboxConflictError(
+                "session has an in-flight delivery claim; wait for the sender to finish, or if it crashed, "
+                "investigate server delivery and preserve the database for manual recovery"
+            )
+        names = [r[1] for r in conn.execute("PRAGMA table_info(session_outbox)")]
+        rows = [
+            dict(zip(names, row, strict=True))
+            for row in conn.execute(
+                "SELECT * FROM session_outbox WHERE destination = ? AND user_id = ? "
+                "AND harness = ? AND session_id = ? ORDER BY id",
+                key,
+            )
+        ]
+        count = len(rows)
+        if not count:
+            raise OutboxConflictError("held session has no queued rows")
+        archive_path = _path(db_path).with_suffix(".quarantined.jsonl")
+        archive_identity, archive_fd = _archive_rows(
+            archive_path,
+            [{**row, "status": "quarantined", "reason": hold[0]} for row in rows],
+        )
+        conn.execute(
+            "INSERT INTO session_outbox_terminal (destination, user_id, harness, session_id, status, reason, archived_rows) "
+            "VALUES (?, ?, ?, ?, 'quarantined', ?, ?)",
+            (*key, hold[0], count),
+        )
+        _assert_archive_identity(archive_path, archive_identity)
+        deleted = conn.execute(
+            "DELETE FROM session_outbox WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            key,
+        )
+        if deleted.rowcount != count:
+            raise OutboxConflictError("session changed during quarantine")
+        conn.execute(
+            "DELETE FROM session_outbox_holds WHERE destination = ? AND user_id = ? AND harness = ? AND session_id = ?",
+            key,
+        )
+        _assert_archive_identity(archive_path, archive_identity)
+        conn.commit()
+        return count
+    except sqlite3.Error as exc:
+        raise OutboxError("cannot durably quarantine held session") from exc
+    finally:
+        conn.close()
+        if archive_fd is not None:
+            os.close(archive_fd)
 
 
 def review_hold(
@@ -474,7 +807,10 @@ def review_hold(
                 raise OutboxConflictError("unverified review provenance")
             updates.append((json.dumps(payload, separators=(",", ":"), ensure_ascii=False), json.dumps(proof), row[0]))
         conn.execute("BEGIN IMMEDIATE")
-        if not _held(conn, destination, user_id, harness, session_id) or snapshot(conn) != rows:
+        key = (destination, user_id, harness, session_id)
+        if _inflight(conn, *key):
+            raise OutboxConflictError("session has an in-flight delivery claim; wait for the sender to finish")
+        if not _held(conn, *key) or snapshot(conn) != rows:
             raise OutboxConflictError("held session changed during review")
         for update in updates:
             conn.execute(
@@ -703,6 +1039,10 @@ def stats(*, db_path: Path | None = None) -> dict:
     conn = _connect(db_path)
     try:
         pending_count = int(conn.execute("SELECT COUNT(*) FROM session_outbox").fetchone()[0])
+        terminal_count, archived_rows = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(archived_rows), 0) FROM session_outbox_terminal"
+        ).fetchone()
+        inflight_count = int(conn.execute("SELECT COUNT(*) FROM session_outbox_inflight").fetchone()[0])
         oldest = conn.execute("SELECT created_at FROM session_outbox ORDER BY id LIMIT 1").fetchone()
         last_sync = conn.execute("SELECT last_sync FROM session_outbox_state WHERE id = 1").fetchone()
         quarantine_path = _path(db_path).with_suffix(".rejected.jsonl")
@@ -715,7 +1055,11 @@ def stats(*, db_path: Path | None = None) -> dict:
             "pending": pending_count,
             "failed": failed_count,
             "sent": 0,
-            "total": pending_count + failed_count,
+            "total": pending_count + failed_count + terminal_count,
+            "terminal_sessions": terminal_count,
+            "inflight_sessions": inflight_count,
+            "archived_rows": archived_rows,
+            "archive_path": str(_path(db_path).with_suffix(".quarantined.jsonl")) if terminal_count else None,
             "oldest_pending": oldest[0] if oldest else None,
             "last_sync": last_sync[0] if last_sync else None,
             "bytes": _used_bytes(conn),
