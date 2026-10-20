@@ -104,8 +104,47 @@ def write_cursor(
 # ---------------------------------------------------------------------------
 
 
+# The server rejects a session line longer than this (ingest MAX_TEXT_LENGTH).
+MAX_LINE_CHARS = 1_048_576
+
+
+def _omit_long_strings(value, limit: int):
+    if isinstance(value, str):
+        return value if len(value) <= limit else f"[observal: {len(value)} characters omitted]"
+    if isinstance(value, list):
+        return [_omit_long_strings(item, limit) for item in value]
+    if isinstance(value, dict):
+        return {key: _omit_long_strings(item, limit) for key, item in value.items()}
+    return value
+
+
+def fit_line(line: str) -> str:
+    """Return *line* short enough for the server to accept.
+
+    A pasted image or a long thinking signature can push one transcript line past
+    the server's limit, which rejects the whole batch for good. Long string values
+    are replaced with a marker, longest first, so the line stays valid JSON with
+    its structure intact. Records are always read through this, so the session
+    hash covers exactly the lines that are sent.
+    """
+    if len(line) <= MAX_LINE_CHARS:
+        return line
+    try:
+        record = json.loads(line)
+    except ValueError:
+        record = None
+    if isinstance(record, (dict, list)):
+        limit = 65_536
+        while limit >= 64:
+            fitted = json.dumps(_omit_long_strings(record, limit), ensure_ascii=False, separators=(",", ":"))
+            if len(fitted) <= MAX_LINE_CHARS:
+                return fitted
+            limit //= 4
+    return json.dumps({"observal_omitted_characters": len(line)})
+
+
 def read_new_records(jsonl_path: Path, offset: int) -> tuple[list[str], list[int], int]:
-    """Read complete non-empty records and their absolute end-byte offsets."""
+    """Read complete non-empty records, fitted to the server's line limit, and their absolute end-byte offsets."""
     with open(jsonl_path, "rb") as file:
         file.seek(offset)
         raw = file.read()
@@ -123,7 +162,7 @@ def read_new_records(jsonl_path: Path, offset: int) -> tuple[list[str], list[int
         absolute_offset += len(encoded_line)
         line = encoded_line.rstrip(b"\r\n").decode("utf-8", errors="replace")
         if line.strip():
-            lines.append(line)
+            lines.append(fit_line(line))
             end_offsets.append(absolute_offset)
     return lines, end_offsets, complete_bytes
 
@@ -418,6 +457,24 @@ def recover_cursor_from_server(
 
 
 MAX_CHUNK_SIZE = 500
+# Batch bytes stay under the server's default 10 MB request limit (MAX_REQUEST_SIZE_MB).
+MAX_BATCH_BYTES = 8 * 1024 * 1024
+
+
+def batch_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    """Split *lines* into ``(start, end)`` batches under both the line and the byte limit."""
+    ranges: list[tuple[int, int]] = []
+    start = size = 0
+    for index, line in enumerate(lines):
+        # Each line travels JSON-encoded inside the request body.
+        line_bytes = len(json.dumps(line, ensure_ascii=False).encode("utf-8"))
+        if index > start and (index - start >= MAX_CHUNK_SIZE or size + line_bytes > MAX_BATCH_BYTES):
+            ranges.append((start, index))
+            start, size = index, 0
+        size += line_bytes
+    if lines:
+        ranges.append((start, len(lines)))
+    return ranges
 
 
 # ---------------------------------------------------------------------------
@@ -642,10 +699,10 @@ def drain_session_source(
     # Attribute trailing blank-line bytes to the last real record checkpoint.
     end_byte_offsets[-1] = byte_offset + bytes_read
 
-    for chunk_start in range(0, len(lines), MAX_CHUNK_SIZE):
-        chunk = lines[chunk_start : chunk_start + MAX_CHUNK_SIZE]
-        chunk_end_offsets = end_byte_offsets[chunk_start : chunk_start + MAX_CHUNK_SIZE]
-        is_last = chunk_start + MAX_CHUNK_SIZE >= len(lines)
+    for chunk_start, chunk_end in batch_ranges(lines):
+        chunk = lines[chunk_start:chunk_end]
+        chunk_end_offsets = end_byte_offsets[chunk_start:chunk_end]
+        is_last = chunk_end == len(lines)
         payload = build_payload(
             session_id=source.session_id,
             lines=chunk,
