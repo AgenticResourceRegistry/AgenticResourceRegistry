@@ -3751,19 +3751,21 @@ def test_pull_form_encoded_space_reflections_in_json_markup_and_errors(capsys):
 
     from observal_cli.errors import CliError, ErrorCategory
 
-    secret = "DUMMY alpha+beta gamma"
-    form = quote_plus(secret, safe="")
+    sample_value = "DUMMY alpha+beta gamma"
+    form = quote_plus(sample_value, safe="")
     double = quote_plus(form, safe="")
     mixed = "DUMMY+alpha%252Bbeta%20gamma"
-    serialized = json.dumps(secret)[1:-1]
-    assert cmd_pull._mask_values(f"{form} {double} {mixed} {serialized}", {secret}) == "<secret> " * 3 + "<secret>"
+    serialized = json.dumps(sample_value)[1:-1]
+    assert (
+        cmd_pull._mask_values(f"{form} {double} {mixed} {serialized}", {sample_value}) == "<secret> " * 3 + "<secret>"
+    )
     # Literal pluses at space positions are ambiguous with quote_plus: fail closed.
-    assert cmd_pull._mask_values("DUMMY+alpha+beta+gamma", {secret}) == "<secret>"
+    assert cmd_pull._mask_values("DUMMY+alpha+beta+gamma", {sample_value}) == "<secret>"
     # A plus in untrusted text is never globally decoded or rewritten.
-    assert cmd_pull._mask_values("unrelated+value DUMMY%2Balpha+beta", {secret}) == (
+    assert cmd_pull._mask_values("unrelated+value DUMMY%2Balpha+beta", {sample_value}) == (
         "unrelated+value DUMMY%2Balpha+beta"
     )
-    token = cmd_pull._pull_secrets.set({secret})
+    token = cmd_pull._pull_secrets.set({sample_value})
     try:
         cmd_pull.output_json({"warnings": [f"{form} {double} {mixed} unrelated+value"]})
         assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret> <secret> <secret> unrelated+value"]
