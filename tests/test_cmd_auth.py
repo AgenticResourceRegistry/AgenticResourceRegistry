@@ -432,6 +432,22 @@ def test_login_accepts_canonical_equivalent_override(monkeypatch: pytest.MonkeyP
     assert get.call_args_list[0] == call(f"{SERVER_URL}/health", timeout=10)
 
 
+def test_login_accepts_internationalized_host_and_equivalent_punycode_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://xn--mnchen-3ya.example")
+    get, _, _ = _prepare_login(monkeypatch)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+
+    auth.login("münchen.example", "ada", VALID_PASSWORD, None, False, False)
+
+    assert get.call_args_list[0] == call("https://münchen.example/health", timeout=10)
+    password_login.assert_called_once_with(
+        "https://münchen.example", "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
 def test_human_prompt_bare_host_uses_https(monkeypatch: pytest.MonkeyPatch) -> None:
     get, _, _ = _prepare_login(monkeypatch)
     monkeypatch.setattr(auth, "text_input", MagicMock(return_value="  dev.observal.io/  "))

@@ -134,16 +134,21 @@ def _login_server_url(value: str, *, source: str, require_scheme: bool = False) 
             invalid()
         if ":" in host:
             IPv6Address(host)
-        elif not re.fullmatch(r"[A-Za-z0-9_.-]+", host):
-            invalid()
-    except ValueError:
+        else:
+            # HTTPX accepts IDNA names; do not regress valid internationalized
+            # server URLs while rejecting malformed authorities before login.
+            ascii_host = host.encode("idna").decode("ascii")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", ascii_host):
+                invalid()
+    except (ValueError, UnicodeError):
         invalid()
     return raw
 
 
 def _login_destination(url: str) -> tuple[str, str, int, str]:
     parsed = urlsplit(url)
-    return parsed.scheme, parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path
+    host = parsed.hostname.encode("idna").decode("ascii").lower()
+    return parsed.scheme, host, parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path
 
 
 def _guard_login_override(server_url: str, override: str | None) -> None:
