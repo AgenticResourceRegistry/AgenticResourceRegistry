@@ -3744,6 +3744,39 @@ def test_pull_json_serialized_and_double_encoded_reflections_are_masked(capsys):
         cmd_pull._pull_secrets.reset(token)
 
 
+def test_pull_form_encoded_space_reflections_in_json_markup_and_errors(capsys):
+    from urllib.parse import quote_plus
+
+    from rich.text import Text
+
+    from observal_cli.errors import CliError, ErrorCategory
+
+    secret = "DUMMY alpha+beta gamma"
+    form = quote_plus(secret, safe="")
+    double = quote_plus(form, safe="")
+    mixed = "DUMMY+alpha%252Bbeta%20gamma"
+    serialized = json.dumps(secret)[1:-1]
+    assert cmd_pull._mask_values(f"{form} {double} {mixed} {serialized}", {secret}) == "<secret> " * 3 + "<secret>"
+    # Literal pluses at space positions are ambiguous with quote_plus: fail closed.
+    assert cmd_pull._mask_values("DUMMY+alpha+beta+gamma", {secret}) == "<secret>"
+    # A plus in untrusted text is never globally decoded or rewritten.
+    assert cmd_pull._mask_values("unrelated+value DUMMY%2Balpha+beta", {secret}) == (
+        "unrelated+value DUMMY%2Balpha+beta"
+    )
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        cmd_pull.output_json({"warnings": [f"{form} {double} {mixed} unrelated+value"]})
+        assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret> <secret> <secret> unrelated+value"]
+        markup = cmd_pull._safe_markup(f"[yellow]{form} {double} {mixed} unrelated+value[/yellow]")
+        assert Text.from_markup(markup).plain == "<secret> <secret> <secret> unrelated+value"
+        error = CliError(ErrorCategory.VALIDATION, f"rejected {mixed}", operation="Pull agent", detail=double)
+        safe = cmd_pull._safe_error(error)
+        assert safe.message == "rejected <secret>"
+        assert safe.detail == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
 def test_pull_unicode_json_and_mixed_percent_reflections_are_masked():
     from urllib.parse import quote
 
@@ -3752,6 +3785,20 @@ def test_pull_unicode_json_and_mixed_percent_reflections_are_masked():
     twice_encoded = quote(quote(secret, safe=""), safe="")
     mixed = "DUMMY%255f" + quote("ñ", safe="") + r"\[ok]"
     assert cmd_pull._mask_values(f"{serialized} {twice_encoded} {mixed}", {secret}) == "<secret> <secret> <secret>"
+
+
+def test_pull_reverse_bitset_accepts_mixed_url_json_and_raw_choices():
+    # A bit can advance across different-length alternatives at successive
+    # offsets; the encoded prefix index must never reject those transitions.
+    secret = "ñ[é]ñ"
+    forms = (
+        r"\u00F1%5B%C3%A9\u005Dñ",
+        r"%25c3%25B1[\u00e9%5d%c3%b1",
+        r"%c3%b1\[é%255d\u00f1",
+    )
+    assert cmd_pull._mask_values("!" + " | ".join(forms), {secret}) == "!" + " | ".join(["<secret>"] * 3)
+    near_miss = forms[0][:-1] + "Q"
+    assert cmd_pull._mask_values(near_miss, {secret}) == near_miss
 
 
 def test_pull_literal_marker_is_not_trusted_but_generated_marker_is_preserved():
@@ -3778,6 +3825,34 @@ def test_pull_short_overlapping_values_and_mixed_encodings():
     assert cmd_pull._mask_values(r"a\\b a%5Cb a%255cb", {r"a\b"}) == "<secret> <secret> <secret>"
 
 
+def test_pull_first_character_prefilter_keeps_encoded_starts():
+    # None of these warnings contains the secret's raw first character.
+    assert cmd_pull._mask_values(r"\[ok]", {"[ok]"}) == "<secret>"
+    assert cmd_pull._mask_values(r"\"TOKEN", {'"TOKEN'}) == "<secret>"
+    assert cmd_pull._mask_values(r"\u00F1TOKEN", {"ñTOKEN"}) == "<secret>"
+    assert cmd_pull._mask_values("%C3%B1TOKEN %25c3%25B1TOKEN", {"ñTOKEN"}) == "<secret> <secret>"
+    assert cmd_pull._mask_values("+TOKEN %2bTOKEN %252BTOKEN %20TOKEN", {" TOKEN"}) == (
+        "<secret> <secret> <secret> <secret>"
+    )
+    assert cmd_pull._mask_values("qtOKEN", {"QtOKEN"}) == "qtOKEN"  # raw remains case-sensitive
+
+
+def test_pull_many_impossible_secrets_skip_reverse_scans():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "text = 'Q' * 100_000\n"
+        "for count in (100, 300):\n"
+        "    secrets = {f'DUMMY_{i:03d}_secret' for i in range(count)}\n"
+        "    start = monotonic()\n"
+        "    assert _mask_values(text, secrets) == text\n"
+        "    assert monotonic() - start < 3.0, count\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
 def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
     script = (
         "import sys\n"
@@ -3796,6 +3871,38 @@ def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
         "    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - baseline_rss < 96 * 1024\n"
     )
     subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_pull_long_near_matches_have_bounded_runtime():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "secret = 'a' * 1600 + 'Z'\n"
+        "text = 'a' * 1600 + 'Q%5a'\n"
+        "start = monotonic()\n"
+        "assert _mask_values(text, {secret}) == text\n"
+        "assert monotonic() - start < 1.0\n"
+        "assert _mask_values('a' * 1600 + '%5a', {secret}) == '<secret>'\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_pull_distinct_unicode_masks_skip_unrelated_warning_positions():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "secret = ''.join(chr(0x400 + i) for i in range(6400))\n"
+        "for text in ('Q' * 6400, (secret[:80] + 'Q') * 80, '%GG' * 6400):\n"
+        "    start = monotonic()\n"
+        "    assert _mask_values(text, {secret}) == text\n"
+        "    assert monotonic() - start < 5.0\n"
+        "assert _mask_values('Q' + secret, {secret}) == 'Q<secret>'\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=15)
 
 
 def test_model_override_trace_does_not_log_raw_values():
