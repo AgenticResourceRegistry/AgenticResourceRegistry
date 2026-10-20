@@ -83,6 +83,38 @@ class CodexAdapter(BaseAdapter):
         )
         return (codex_home / "sessions").resolve()
 
+    @staticmethod
+    def _session_meta(path: Path) -> dict:
+        """Return the payload of the rollout's first line, the ``session_meta`` record."""
+        try:
+            with path.open(encoding="utf-8") as rollout:
+                record = json.loads(rollout.readline())
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(record, dict) or record.get("type") != "session_meta":
+            return {}
+        payload = record.get("payload")
+        return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def _parent_thread_id(cls, path: Path) -> str | None:
+        parent = cls._session_meta(path).get("parent_thread_id")
+        return parent if isinstance(parent, str) and parent else None
+
+    def attributes_by_directory(self) -> bool:
+        # Pulled agents run as subagents, which write their own rollouts; the
+        # parent session in that folder is the user's own Codex session.
+        return False
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        if session_jsonl is None:
+            return None
+        meta = self._session_meta(session_jsonl)
+        role = meta.get("agent_role")
+        if meta.get("thread_source") != "subagent" or not isinstance(role, str) or not role:
+            return None
+        return role
+
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
         root = self._sessions_root(home)
         if not root.is_dir():
@@ -102,6 +134,7 @@ class CodexAdapter(BaseAdapter):
             self._session_id(path),
             path,
             cwd=str(event.get("cwd") or ""),
+            parent_session_id=self._parent_thread_id(path),
         )
 
     def discover_session_sources(
@@ -123,6 +156,7 @@ class CodexAdapter(BaseAdapter):
                             self.harness_name,
                             self._session_id(path),
                             path,
+                            parent_session_id=self._parent_thread_id(path),
                         )
                     )
             except OSError:

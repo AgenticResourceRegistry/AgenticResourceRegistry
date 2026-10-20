@@ -19,6 +19,8 @@ There are two ways the hooks get installed:
 - `observal agent pull` embeds them in the generated agent profile's `hooks:` frontmatter.
 - `observal doctor patch` writes them into `~/.claude/settings.json` for all Claude Code sessions.
 
+A session is credited to an agent only when the agent ran. That means a session started with `claude --agent <name>` (or the `agent` setting), or a subagent transcript whose agent type is a pulled agent. A pulled agent in the folder doesn't claim the other sessions started there.
+
 ---
 
 ## Supported capabilities

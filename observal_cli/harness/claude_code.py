@@ -117,6 +117,22 @@ class ClaudeCodeAdapter(BaseAdapter):
             )
         return sorted(sources, key=lambda source: str(source.path))
 
+    def attributes_by_directory(self) -> bool:
+        # A session runs as an agent only through `--agent` or the `agent` setting,
+        # which the transcript records; a pulled agent in the folder proves nothing.
+        return False
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        # Claude Code writes agent-<id>.meta.json beside each subagent transcript.
+        if session_jsonl is None or session_jsonl.parent.name != "subagents":
+            return None
+        try:
+            meta = json.loads(session_jsonl.with_suffix(".meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        agent_type = meta.get("agentType") if isinstance(meta, dict) else None
+        return agent_type if isinstance(agent_type, str) and agent_type else None
+
     def related_session_sources(self, source: SessionSource, home: Path | None = None) -> list[SessionSource]:
         if source.path is None or source.parent_session_id is not None:
             return []

@@ -180,7 +180,7 @@ class TestResolveAgentVersionFromLockfile:
         assert agent_version == "2.0.1"
 
     def test_lockfile_fallback_when_no_env_or_jsonl(self, tmp_path):
-        """When neither env var nor JSONL match, lockfile provides both name and version."""
+        """A harness that cannot name its agent falls back to the agent pulled into the directory."""
         entry = _make_lockfile_entry(
             name="fallback-agent", agent_id="uuid-789", version="3.0.0", directory=str(tmp_path)
         )
@@ -192,7 +192,7 @@ class TestResolveAgentVersionFromLockfile:
             import os
 
             os.environ.pop("OBSERVAL_AGENT_NAME", None)
-            agent_id, agent_version = _resolve_agent(str(tmp_path), [], None)
+            agent_id, agent_version = _resolve_agent(str(tmp_path), [], None, harness="cursor")
 
         assert agent_id == "uuid-789"
         assert agent_version == "3.0.0"
