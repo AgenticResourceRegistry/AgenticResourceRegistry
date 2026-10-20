@@ -78,6 +78,13 @@ def _mask_values(value: str, secrets: set[str] | None) -> str:
                 choices.add((json_choice, json_choice.startswith(r"\u")))
             if char == "[":
                 choices.add((r"\[", False))
+            if char == " ":
+                # quote_plus encodes a space as +; another encoding pass
+                # turns that + into %2B. A literal + in the same position is
+                # indistinguishable from a form-encoded space: fail closed and
+                # mask the whole matching credential rather than leak it.
+                # Never decode the whole source: unrelated pluses stay intact.
+                choices.update({("+", False), ("%2b", True), ("%252b", True)})
             if ord(char) < 128:
                 choices.update({(f"%{ord(char):02x}", True), (f"%25{ord(char):02x}", True)})
                 choices.add((f"\\u{ord(char):04x}", True))
@@ -117,37 +124,65 @@ def _mask_values(value: str, secrets: set[str] | None) -> str:
                 stack.extend((child, False) for child in following if child not in cache)
         return cache[root]
 
-    # A match must reach a representation of the final character. Track the
-    # earliest ending without materializing positions for the whole warning.
-    # Encoded hex digits fold (including lowercase); raw characters do not.
-    endings = [
-        (
-            parts,
-            sum(max(len(choice) for choice, _ in choices) for choices in parts),
-            tuple(
-                (re.compile(re.escape(choice), re.IGNORECASE | re.ASCII) if fold_hex else choice, len(choice))
-                for choice, fold_hex in parts[-1]
-            ),
-        )
-        for parts in patterns
-    ]
-    next_ends = [0] * len(endings)
-
-    def next_end(choices: tuple[tuple[str | re.Pattern[str], int], ...], start: int) -> int:
-        earliest = size + 1
-        for choice, length in choices:
-            if isinstance(choice, str):
-                position = value.find(choice, start)
+    # Reverse bit-parallel DP: bit i means i secret characters can be matched
+    # from this offset. A ring retains only the offsets needed by the longest
+    # single-character encoding. This proves which starts can match before the
+    # (more expensive) forward walk, even for long overlapping near-misses.
+    # Group identical alternatives into bit masks so repeated characters do
+    # not turn each input position into a walk over the whole credential.
+    # A match must begin with an alternative for the first secret character.
+    # Build the warning's character set once; most supplied credentials cannot
+    # even start in an unrelated warning, so they need no full reverse scan.
+    input_chars = set(value)
+    folded_input_starts = {char.casefold()[0] for char in input_chars}
+    possible = []
+    for parts in patterns:
+        if not any(
+            (choice.casefold()[0] in folded_input_starts if fold_hex else choice[0] in input_chars)
+            for choice, fold_hex in parts[0]
+        ):
+            continue
+        masks: dict[tuple[str, bool], int] = {}
+        max_width = 1
+        for index, choices in enumerate(reversed(parts)):
+            for choice, fold_hex in choices:
+                masks[choice, fold_hex] = masks.get((choice, fold_hex), 0) | (1 << index)
+                max_width = max(max_width, len(choice))
+        # Raw alternatives include literal characters and escaped brackets.
+        # Index encoded alternatives
+        # by their full folded spelling rather than their shared '%' / '\\'
+        # prefix. Even four-byte Unicode codepoints sharing the first two bytes
+        # then need only one hash lookup per encoding width at each offset.
+        literal: dict[str, list[tuple[str, int]]] = {}
+        folded: dict[int, dict[str, int]] = {}
+        for (choice, fold_hex), mask in masks.items():
+            if fold_hex:
+                by_width = folded.setdefault(len(choice), {})
+                key = choice.casefold()
+                by_width[key] = by_width.get(key, 0) | mask
             else:
-                found = choice.search(value, start)
-                position = found.start() if found else -1
-            if position != -1:
-                earliest = min(earliest, position + length)
-        return earliest
-
-    for index, (_, _, choices) in enumerate(endings):
-        next_ends[index] = next_end(choices, 0)
-    possible = [(parts, width, choices, next_ends[index]) for index, (parts, width, choices) in enumerate(endings)]
+                literal.setdefault(choice[0], []).append((choice, mask))
+        states = [0] * (max_width + 1)
+        states[size % len(states)] = 1  # Empty suffix at end of input.
+        starts = bytearray(size)
+        full = 1 << len(parts)
+        for offset in range(size - 1, -1, -1):
+            bits = 1  # The empty suffix can start at every offset.
+            char = value[offset]
+            for choice, mask in literal.get(char, ()):
+                end = offset + len(choice)
+                if end <= size and value.startswith(choice, offset):
+                    bits |= (states[end % len(states)] & mask) << 1
+            for width, by_spelling in folded.items():
+                end = offset + width
+                if end <= size:
+                    mask = by_spelling.get(value[offset:end].casefold(), 0)
+                    if mask:
+                        bits |= (states[end % len(states)] & mask) << 1
+            states[offset % len(states)] = bits
+            if bits & full:
+                starts[offset] = 1
+        possible.append((parts, starts))
     output = []
     protected = []
     source_protected = iter(value.protected if isinstance(value, _MaskedText) else ())
@@ -163,19 +198,10 @@ def _mask_values(value: str, secrets: set[str] | None) -> str:
             next_protected = next(source_protected, None)
             continue
         end = -1
-        for index, (parts, width, choices, earliest_end) in enumerate(possible):
-            if earliest_end <= cursor:
-                earliest_end = next_end(choices, cursor)
-                possible[index] = (parts, width, choices, earliest_end)
-            if earliest_end > cursor + width:
-                continue
-            # Avoid building a DP graph where no first character can match.
-            if any(
-                value.startswith(choice[0][0], cursor) or (choice[1] and value[cursor] == choice[0][0])
-                for choice in parts[0]
-            ):
-                # States are shared only within this attempt; retaining them for
-                # every start position makes memory grow with warning length.
+        for parts, starts in possible:
+            if starts[cursor]:
+                # Only attainable starts need the forward walk to select the
+                # longest encoding; no per-start graph is kept in memory.
                 end = match(parts, cursor, {})
                 if end != -1:
                     break
