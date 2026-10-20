@@ -9,6 +9,7 @@ import os
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -167,6 +168,12 @@ def test_concurrent_ack_cannot_steal_held_session_archive(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM session_outbox").fetchone()[0] == 0
 
 
+def _spawn_test_imports(monkeypatch):
+    # Spawn reimports this test module. CI runs pytest from observal-server,
+    # where the repository's tests package is not otherwise importable.
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1]), prepend=os.pathsep)
+
+
 def _child_claim(db, entered, resume):
     item = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
     token = outbox.claim_for_delivery(item, db_path=db)
@@ -176,9 +183,10 @@ def _child_claim(db, entered, resume):
     outbox.release_delivery_claim(item, token, db_path=db)
 
 
-def test_claim_serializes_across_processes(tmp_path):
+def test_claim_serializes_across_processes(tmp_path, monkeypatch):
     db = tmp_path / "queue.db"
     _queue(db)
+    _spawn_test_imports(monkeypatch)
     context = multiprocessing.get_context("spawn")
     entered, resume = context.Event(), context.Event()
     item = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
@@ -376,7 +384,7 @@ def _crash_during_archive(db, after_fsync):
     outbox.quarantine_held_session("http://server", "user", "codex", "second", db_path=db)
 
 
-def test_crash_during_archive_append_refuses_retry_and_preserves_hold(tmp_path):
+def test_crash_during_archive_append_refuses_retry_and_preserves_hold(tmp_path, monkeypatch):
     db = tmp_path / "queue.db"
     _queue(db, session="first")
     _hold(db, session="first")
@@ -385,6 +393,7 @@ def test_crash_during_archive_append_refuses_retry_and_preserves_hold(tmp_path):
     prefix = archive.read_bytes()
     _queue(db, session="second")
     _hold(db, session="second")
+    _spawn_test_imports(monkeypatch)
     child = multiprocessing.get_context("spawn").Process(target=_crash_during_archive, args=(db, False))
     child.start()
     child.join(10)
@@ -401,10 +410,11 @@ def test_crash_during_archive_append_refuses_retry_and_preserves_hold(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM session_outbox_terminal").fetchone()[0] == 1
 
 
-def test_crash_after_archive_fsync_can_retry_with_readable_duplicates(tmp_path):
+def test_crash_after_archive_fsync_can_retry_with_readable_duplicates(tmp_path, monkeypatch):
     db = tmp_path / "queue.db"
     _queue(db, session="second")
     _hold(db, session="second")
+    _spawn_test_imports(monkeypatch)
     child = multiprocessing.get_context("spawn").Process(target=_crash_during_archive, args=(db, True))
     child.start()
     child.join(10)
