@@ -443,6 +443,15 @@ class _TomlConflict(ValueError):  # noqa: N818 - internal conflict category
     """Unsafe TOML input or concurrent modification (never include source values)."""
 
 
+class _TomlPostWriteConflict(_TomlConflict):
+    """A path changed after replacement; the pinned destination was already written."""
+
+    def __init__(self, destination: str, status: str):
+        super().__init__("Configuration path changed during pull")
+        self.destination = destination
+        self.status = status
+
+
 _MISSING = object()
 
 
@@ -551,6 +560,11 @@ def _toml_document(content: dict, existing_text: str | None = None) -> str:
         root[name] = table
 
     rendered = tomlkit.dumps(doc)
+    # TOMLKit preserves existing trivia but emits newly created tables with LF.
+    # Only normalize when the source has a consistent CRLF convention; leave
+    # mixed-newline documents and newly generated documents alone.
+    if existing_text and "\r\n" in existing_text and "\n" not in existing_text.replace("\r\n", ""):
+        rendered = rendered.replace("\r\n", "\n").replace("\n", "\r\n")
     after = tomllib.loads(rendered)
     expected = {**before, root_key: {**section, **incoming}}
     if not _same_toml_value(after, expected):
@@ -569,7 +583,36 @@ def _toml_write_lock(path: Path):
     if sys.platform == "win32":
         # Windows has no dir_fd replacement; keep the existing best-effort behavior.
         target = path.resolve() if path.is_symlink() else path
-        with target.with_name(f".{target.name}.observal.lock").open("a+b") as lock:
+        lock_path = target.with_name(f".{target.name}.observal.lock")
+        try:
+            mode = lock_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if (
+                stat.S_ISLNK(mode.st_mode)
+                or getattr(mode, "st_file_attributes", 0) & 0x400
+                or (stat.S_ISREG(mode.st_mode) and mode.st_nlink > 1)
+            ):
+                raise _TomlConflict("Unsafe configuration lock path")
+        # O_NOFOLLOW also protects the open on platforms that provide it.
+        try:
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except OSError as error:
+            if lock_path.is_symlink():
+                raise _TomlConflict("Unsafe configuration lock path") from error
+            raise
+        with os.fdopen(fd, "r+b") as lock:
+            opened = os.fstat(fd)
+            current = lock_path.lstat()
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or getattr(current, "st_file_attributes", 0) & 0x400
+                or (stat.S_ISREG(current.st_mode) and current.st_nlink > 1)
+                or (stat.S_ISREG(opened.st_mode) and opened.st_nlink > 1)
+                or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise _TomlConflict("Unsafe configuration lock path")
             import msvcrt
 
             lock.seek(0, 2)
@@ -689,6 +732,17 @@ def _atomic_write_text(
             temporary.unlink(missing_ok=True)
 
 
+def _toml_written_destination(target: Path, directory: int | None) -> str:
+    """Describe the write by pinned directory identity, never a mutable pathname."""
+    if directory is None:
+        # Windows has no pinned dir_fd replacement; do not claim a path is authoritative.
+        return f"unpinned directory (identity unavailable), filename={target.name!r} (not a pathname)"
+    pinned = os.fstat(directory)
+    return (
+        f"pinned directory (device={pinned.st_dev}, inode={pinned.st_ino}), filename={target.name!r} (not a pathname)"
+    )
+
+
 def _write_toml_config(
     path: Path, content: dict, *, merge: bool, requested_path: Path | None = None, allowed_dir: Path | None = None
 ) -> str:
@@ -727,10 +781,16 @@ def _write_toml_config(
             original_target=path,
             allowed_dir=allowed_dir,
         )
-        if directory is not None:
-            _check_toml_target(path, target, directory)
-        check_requested(target, directory)
-        return "created" if prior is _MISSING else "merged" if merge else "updated"
+        status = "created" if prior is _MISSING else "merged" if merge else "updated"
+        try:
+            if directory is not None:
+                _check_toml_target(path, target, directory)
+            check_requested(target, directory)
+        except _TomlConflict as error:
+            # The replace completed against the pinned directory even if the
+            # lexical path has since moved or points elsewhere.
+            raise _TomlPostWriteConflict(_toml_written_destination(target, directory), status) from error
+        return status
 
 
 def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: bool, merge: bool) -> str:
@@ -862,6 +922,11 @@ def _write_file_checked(
             resource=str(path),
             remediation="Fix or back up the existing configuration, then retry.",
             detail=None if path.suffix == ".toml" else repr(error),
+            result=(
+                _pull_failure_result([(str(error.destination), error.status)], "write_files", failed_path=str(path))
+                if isinstance(error, _TomlPostWriteConflict)
+                else None
+            ),
         )
     except OSError as error:
         fail(
@@ -2333,11 +2398,13 @@ def write_install_snippet(
             )
         except CliError as error:
             if error.result is None:
-                error.result = _pull_failure_result(
-                    written,
-                    "write_files",
-                    failed_path=str(path),
-                )
+                error.result = _pull_failure_result(written, "write_files", failed_path=str(path))
+            elif written:
+                error.result["files"] = [
+                    *({"path": name, "status": status} for name, status in written),
+                    *error.result.get("files", []),
+                ]
+                error.result["partial"] = True
             raise
 
     def tracked_skill_install(skill_name: str, installer, **kwargs):
