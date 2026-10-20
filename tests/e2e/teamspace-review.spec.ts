@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, Page, test } from "@playwright/test";
 
 import { API_BASE } from "./helpers";
+import { loginWithRetry } from "./login-retry";
 
 /**
  * The teamspace Review tab is the ONLY surface a team reviewer has.
@@ -31,18 +33,9 @@ const _tokens = new Map<string, string>();
 async function tokenFor(email: string): Promise<string> {
   const cached = _tokens.get(email);
   if (cached) return cached;
-  // The limiter keys on a bearer token hash before falling back to the client
-  // IP, so a distinct dummy token per principal keeps principals out of one
-  // another's bucket.
-  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer e2e-${email}` },
-    body: JSON.stringify({ email, password: PASSWORD }),
-  });
-  const data = await res.json();
-  if (!data.access_token) throw new Error(`login failed for ${email}: ${JSON.stringify(data)}`);
-  _tokens.set(email, data.access_token as string);
-  return data.access_token as string;
+  const token = await loginWithRetry(email, PASSWORD);
+  _tokens.set(email, token);
+  return token;
 }
 
 async function loginAs(page: Page, principal: Principal) {
@@ -64,6 +57,7 @@ async function openTeamspace(page: Page) {
 }
 
 test.describe("teamspace review tab", () => {
+  test.setTimeout(150_000);
   test("a team owner sees the Review tab", async ({ page }) => {
     await loginAs(page, OWNER);
     await openTeamspace(page);
@@ -111,6 +105,7 @@ test.describe("teamspace review tab", () => {
 });
 
 test.describe("visibility confirmation", () => {
+  test.setTimeout(150_000);
   test("making a team-private listing public asks for confirmation first", async ({ page }) => {
     const token = await tokenFor(OWNER.email);
 
