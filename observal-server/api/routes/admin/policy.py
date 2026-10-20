@@ -71,14 +71,15 @@ async def get_security_events(
 
     limit = min(max(int(limit), 1), 1000)
     offset = max(int(offset), 0)
+    where = " AND ".join(conditions)
     sql = (
-        f"SELECT * FROM security_events WHERE {' AND '.join(conditions)} "
-        f"ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset} FORMAT JSON"
+        f"SELECT * FROM security_events WHERE {where} ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset} FORMAT JSON"
     )
     response = await _query(sql, params)
     response.raise_for_status()
-    data = response.json()
-    return {"events": data.get("data", []), "total": data.get("rows", 0)}
+    count_response = await _query(f"SELECT count() AS total FROM security_events WHERE {where} FORMAT JSON", params)
+    count_response.raise_for_status()
+    return {"events": response.json().get("data", []), "total": int(count_response.json()["data"][0]["total"])}
 
 
 @router.get("/trace-privacy")
