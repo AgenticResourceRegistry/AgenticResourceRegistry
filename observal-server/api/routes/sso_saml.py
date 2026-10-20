@@ -26,6 +26,7 @@ from onelogin.saml2.auth import OneLogin_Saml2_Auth
 from sqlalchemy import select
 
 from api.deps import get_db
+from api.routes.auth import _issue_tokens
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +36,6 @@ from models.saml_config import SamlConfig
 from models.user import User, UserRole
 from schemas.sso_health import all_pass, make_check
 from services import sso_diagnostics
-from services.jwt_service import create_access_token, create_refresh_token
 from services.redis import get_redis
 from services.saml import (
     build_saml_settings,
@@ -59,7 +59,6 @@ from services.security_events import (
     Severity,
     emit_security_event,
 )
-from services.token_revocation import upgrade_legacy_revocation
 from services.username_generator import generate_unique_username
 
 
@@ -230,17 +229,6 @@ def _build_auth(config, sp_private_key: str, request_data: dict) -> OneLogin_Sam
         sp_slo_url=sp_slo_url,
     )
     return OneLogin_Saml2_Auth(request_data, old_settings=saml_settings)
-
-
-async def _issue_tokens(user: User) -> tuple[str, str, int]:
-    redis = get_redis()
-    # Before minting: an upgraded legacy marker means "now", and the new pair must postdate it.
-    await upgrade_legacy_revocation(redis, user.id)
-    access_token, expires_in = create_access_token(user.id, user.role)
-    refresh_token, jti = create_refresh_token(user.id, user.role)
-    refresh_ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
-    await redis.setex(f"refresh_jti:{jti}", refresh_ttl, str(user.id))
-    return access_token, refresh_token, expires_in
 
 
 _SAML_HEALTH_TIMEOUT = 10.0
