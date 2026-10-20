@@ -177,14 +177,13 @@ export function quarantineTab() {
 
 // Capture the identity and bearer for direct calls which bypass request().
 // Check before sending and after every await before using the response.
-function captureAuthenticatedContext(allowRotation: boolean): { token: string; check: () => void } {
+function captureAuthenticatedContext(): { token: string; check: () => void } {
 	const actor = getTabActor();
 	const token = getAccessToken();
 	const check = () => {
 		const current = getAccessToken();
 		if (!actor || !token || tokenSubject(token) !== actor || isAccountChanged() ||
-			getTabActor() !== actor || !current || tokenSubject(current) !== actor ||
-			(!allowRotation && current !== token)) {
+			getTabActor() !== actor || !current || tokenSubject(current) !== actor) {
 			if (isAccountChanged()) quarantineTab();
 			throw new AuthContextChanged();
 		}
@@ -193,14 +192,13 @@ function captureAuthenticatedContext(allowRotation: boolean): { token: string; c
 	return { token: token!, check };
 }
 
-// Writes retain exact-bearer continuity; a rotation must not change their guard.
+// Completed direct requests belong to the pinned actor, not to one bearer string.
 export function authenticatedRequestContext(): { token: string; check: () => void } {
-	return captureAuthenticatedContext(false);
+	return captureAuthenticatedContext();
 }
 
-// A completed private GET remains valid after a same-principal access rotation.
 export function authenticatedReadContext(): { token: string; check: () => void } {
-	return captureAuthenticatedContext(true);
+	return captureAuthenticatedContext();
 }
 
 export function authenticatedContextGuard(): () => void {
@@ -453,34 +451,40 @@ async function request<T = unknown>(
 		if (response.status === 401 && !path.startsWith("/auth/")) {
 			let retryToken = getAccessToken() !== token ? currentActorToken() : null;
 			if (!retryToken) {
-				if (!_refreshPromise) {
-					_refreshPromise = _tryRefreshToken().finally(() => {
-						_refreshPromise = null;
-					});
-				}
-				const refreshResult = await _refreshPromise;
-				if (refreshResult.result === "ok" || refreshResult.result === "superseded") {
-					const current = currentActorToken();
-					if (current !== token || refreshResult.result === "ok") retryToken = current;
-					else throw new AuthContextChanged(); // no safe new bearer to replay with
-				} else if (refreshResult.result === "account_changed" || contextChanged()) {
-					if (isAccountChanged()) quarantineTab();
-					throw new AuthContextChanged();
-				} else if (refreshResult.result === "network_error") {
-					throw new Error("Network unavailable");
-				}
-				if (!retryToken && refreshResult.result === "rejected") {
-					// Only a confirmed rejection of the still-selected token can expire this tab.
-					if (getRefreshToken() && tokenSubject(getRefreshToken()) !== originalActor) {
-						quarantineTab();
+				// A second tab may rotate the shared refresh while our access bearer stays
+				// stale. Try that same actor's new refresh once, using the single-flight.
+				for (let refreshAttempt = 0; refreshAttempt < 2 && !retryToken; refreshAttempt++) {
+					currentActorToken();
+					if (!_refreshPromise) {
+						_refreshPromise = _tryRefreshToken().finally(() => {
+							_refreshPromise = null;
+						});
+					}
+					const refreshResult = await _refreshPromise;
+					if (refreshResult.result === "ok" || refreshResult.result === "superseded") {
+						const current = currentActorToken();
+						if (current !== token || refreshResult.result === "ok") retryToken = current;
+						else if (refreshAttempt === 1) throw new AuthContextChanged(); // no safe bearer to replay with
+						continue;
+					}
+					if (refreshResult.result === "account_changed" || contextChanged()) {
+						if (isAccountChanged()) quarantineTab();
 						throw new AuthContextChanged();
 					}
-					clearTabSession();
-					if (typeof window !== "undefined") {
-						window.location.href = sessionExpiredLoginUrl();
-						return new Promise<T>(() => {});
+					if (refreshResult.result === "network_error") throw new Error("Network unavailable");
+					if (refreshResult.result === "rejected") {
+						// Only a confirmed rejection of the still-selected token can expire this tab.
+						if (getRefreshToken() && tokenSubject(getRefreshToken()) !== originalActor) {
+							quarantineTab();
+							throw new AuthContextChanged();
+						}
+						clearTabSession();
+						if (typeof window !== "undefined") {
+							window.location.href = sessionExpiredLoginUrl();
+							return new Promise<T>(() => {});
+						}
+						throw new Error("Session expired");
 					}
-					throw new Error("Session expired");
 				}
 			}
 			headers["Authorization"] = `Bearer ${currentActorToken()}`;

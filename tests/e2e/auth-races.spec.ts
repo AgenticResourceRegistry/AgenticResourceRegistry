@@ -131,6 +131,77 @@ test("same-actor refresh replays POST; transient failures never clear refresh", 
   }
 });
 
+test("losing tab retries a superseded same-actor refresh with the winner's shared token", async ({ context, page }) => {
+  await seed(page, A, AR);
+  const winnerTab = await context.newPage();
+  await seed(winnerTab, A, AR);
+  const pending = barrier();
+  const winnerAccess = jwt("actor-a", "winner-access");
+  const winnerRefresh = jwt("actor-a", "winner-refresh");
+  const replayAccess = jwt("actor-a", "replay-access");
+  const replayRefresh = jwt("actor-a", "replay-refresh");
+  const bearers: Array<string | undefined> = [];
+  const refreshTokens: string[] = [];
+  await page.route("**/api/v1/feedback", async (route) => {
+    bearers.push(route.request().headers().authorization);
+    await route.fulfill(bearers.length === 1 ? { status: 401 } : { json: { id: "written" } });
+  });
+  await page.route("**/api/v1/auth/token/refresh", async (route) => {
+    const refresh = JSON.parse(route.request().postData()!).refresh_token;
+    refreshTokens.push(refresh);
+    if (refresh === AR) {
+      pending.entered();
+      await pending.gate;
+      await route.fulfill({ status: 401 });
+    } else {
+      expect(refresh).toBe(winnerRefresh);
+      await route.fulfill({ json: { access_token: replayAccess, refresh_token: replayRefresh } });
+    }
+  });
+  await winnerTab.route("**/api/v1/auth/token/refresh", (route) => {
+    expect(JSON.parse(route.request().postData()!).refresh_token).toBe(AR);
+    return route.fulfill({ json: { access_token: winnerAccess, refresh_token: winnerRefresh } });
+  });
+  const result = submit(page);
+  await pending.started;
+  expect(await winnerTab.evaluate(async () => (await import("/src/lib/api.ts")).refreshAccessTokenWithReason())).toBe("ok");
+  pending.release();
+  expect(await result).toBe("ok");
+  expect(bearers).toEqual([`Bearer ${A}`, `Bearer ${replayAccess}`]);
+  expect(refreshTokens).toEqual([AR, winnerRefresh]);
+  expect(await page.evaluate(() => sessionStorage.getItem("observal_tab_actor"))).toBe("actor-a");
+  expect(await page.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBe(replayRefresh);
+});
+
+test("a second superseded refresh cannot loop or replay without a new bearer", async ({ page }) => {
+  await seed(page, A, AR);
+  const rotated = jwt("actor-a", "shared-refresh");
+  const newer = jwt("actor-a", "newer-refresh");
+  const pending = [barrier(), barrier()];
+  let writes = 0;
+  let refreshes = 0;
+  await page.route("**/api/v1/feedback", (route) => {
+    writes++;
+    return route.fulfill({ status: 401 });
+  });
+  await page.route("**/api/v1/auth/token/refresh", async (route) => {
+    const index = refreshes++;
+    expect(JSON.parse(route.request().postData()!).refresh_token).toBe(index === 0 ? AR : rotated);
+    pending[index].entered();
+    await pending[index].gate;
+    await route.fulfill({ status: 401 });
+  });
+  const result = submit(page);
+  for (const [index, token] of [rotated, newer].entries()) {
+    await pending[index].started;
+    await page.evaluate((value) => localStorage.setItem("observal_refresh_token", value), token);
+    pending[index].release();
+  }
+  expect(await result).toBe("AuthContextChanged");
+  expect([writes, refreshes]).toEqual([1, 2]);
+  expect(await page.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBe(newer);
+});
+
 test("new tab bootstrap works but an unauthenticated original POST is never replayed", async ({ page }) => {
   await seed(page, null, BR);
   let calls = 0;
@@ -672,6 +743,29 @@ test("username PUT refuses a mismatched actor before sending", async ({ page }) 
   expect(await page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBeNull();
 });
 
+test("username success survives same-actor rotation and updates cached username", async ({ page }) => {
+  await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: false } }));
+  await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "user" } }));
+  await seed(page, A, AR);
+  await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
+  await page.goto("/account");
+  await page.getByPlaceholder("3-32 chars, lowercase alphanumeric + hyphens/dots").fill("new-name");
+  const pending = barrier();
+  let calls = 0;
+  await page.route("**/api/v1/auth/profile/username", async (route) => {
+    calls++;
+    expect(route.request().headers().authorization).toBe(`Bearer ${A}`);
+    pending.entered(); await pending.gate;
+    await route.fulfill({ json: { username: "new-name" } });
+  });
+  await page.getByRole("button", { name: "Update Username" }).click();
+  await pending.started;
+  await page.evaluate((access) => sessionStorage.setItem("observal_access_token", access), jwt("actor-a", "username-rotated"));
+  pending.release();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("observal_user_username"))).toBe("new-name");
+  expect(calls).toBe(1);
+});
+
 test("late username PUT cannot overwrite B's shared username", async ({ page }) => {
   await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: false } }));
   await seed(page, A, AR);
@@ -755,6 +849,52 @@ test("direct co-author and transfer mutations never use a switched actor or comm
   }
 });
 
+test("co-author writes commit successful responses after same-actor rotation", async ({ page }) => {
+  for (const action of ["add", "transfer"] as const) {
+    await seed(page, A, AR);
+    await page.evaluate(async () => {
+      const { default: React } = await import("/node_modules/.vite/deps/react.js");
+      const { default: ReactDOM } = await import("/node_modules/.vite/deps/react-dom_client.js");
+      const { CoAuthorInput } = await import("/src/components/registry/co-author-input.tsx");
+      const hookSource = await (await fetch("/src/hooks/use-user-search.ts")).text();
+      const queryModule = hookSource.match(/from "([^\"]*\/\@tanstack_react-query\.js\?v=[^\"]+)"/)?.[1];
+      if (!queryModule) throw new Error("Query module URL unavailable");
+      const { QueryClient, QueryClientProvider } = await import(/* @vite-ignore */ queryModule);
+      const node = document.createElement("div"); document.body.appendChild(node);
+      (window as any).changes = []; (window as any).transfers = 0;
+      ReactDOM.createRoot(node).render(React.createElement(QueryClientProvider, { client: new QueryClient() },
+        React.createElement(CoAuthorInput, {
+          entityType: "agents", entityId: "test", coAuthors: [],
+          onChange: (authors: unknown) => (window as any).changes.push(authors),
+          canTransferOwnership: true, onTransferOwnership: () => (window as any).transfers++,
+        })));
+    });
+    await page.getByRole("button", { name: action === "add" ? "Add" : "Transfer", exact: true }).click();
+    await page.getByPlaceholder("Search people").fill("@another");
+    const pending = barrier();
+    let calls = 0;
+    await page.route(`**/api/v1/agents/test/${action === "add" ? "co-authors" : "transfer-ownership"}`, async (route) => {
+      calls++;
+      expect(route.request().headers().authorization).toBe(`Bearer ${A}`);
+      pending.entered(); await pending.gate;
+      await route.fulfill({ json: { id: "new", email: "new@example.com" } });
+    });
+    await page.getByRole("button", { name: action === "add" ? "Add co-author" : "Transfer owner", exact: true })
+      .evaluate((el: HTMLElement) => el.click());
+    await pending.started;
+    await page.evaluate((access) => sessionStorage.setItem("observal_access_token", access), jwt("actor-a", `coauthor-${action}`));
+    pending.release();
+    if (action === "add") {
+      await expect.poll(() => page.evaluate(() => (window as any).changes)).toEqual([[{ id: "new", email: "new@example.com" }]]);
+    } else {
+      await expect.poll(() => page.evaluate(() => (window as any).transfers)).toBe(1);
+    }
+    expect(calls).toBe(1);
+    await page.unrouteAll({ behavior: "wait" });
+    await page.reload();
+  }
+});
+
 test("completed POST survives same-actor rotation without replay, but not A to B", async ({ page }) => {
   for (const nextActor of ["actor-a", "actor-b"]) {
     await seed(page, A, AR);
@@ -815,7 +955,7 @@ test("same-actor 401 supersession retries once with current bearer", async ({ pa
   }
 });
 
-test("read-only context accepts same-actor rotation but missing access and writes do not", async ({ page }) => {
+test("direct authenticated contexts accept same-actor rotation but not a missing access token", async ({ page }) => {
   await seed(page, A, AR);
   expect(await page.evaluate((rotated) => {
     const result = (check: () => void) => {
@@ -827,9 +967,11 @@ test("read-only context accepts same-actor rotation but missing access and write
       sessionStorage.setItem("observal_access_token", rotated);
       const sameActor = [result(read.check), result(write.check)];
       sessionStorage.removeItem("observal_access_token");
-      return [...sameActor, result(read.check)];
+      const missing = result(read.check);
+      sessionStorage.setItem("observal_access_token", "x." + btoa(JSON.stringify({ sub: "actor-b" })) + ".y");
+      return [...sameActor, missing, result(write.check)];
     });
-  }, jwt("actor-a", "rotated-access"))).toEqual(["ok", "AuthContextChanged", "AuthContextChanged"]);
+  }, jwt("actor-a", "rotated-access"))).toEqual(["ok", "ok", "AuthContextChanged", "AuthContextChanged"]);
 });
 
 for (const kind of ["agents", "mcps"]) {
