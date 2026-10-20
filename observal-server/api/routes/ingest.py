@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest endpoint."""
@@ -127,6 +128,7 @@ class SessionIngestResponse(BaseModel):
     ingested: int
     skipped: int
     errors: int
+    error_offsets: list[int] = Field(default_factory=list)
     acknowledged_line: int
     acknowledged_offset: int
     integrity_ok: bool | None = None  # Only set when final=True
@@ -194,6 +196,11 @@ async def ingest_session(
             detail={"message": "session source changed at an acknowledged line", "offsets": exc.offsets},
         )
 
+    from services.clickhouse import query_session_error_offsets
+
+    error_offsets = await query_session_error_offsets(
+        req.session_id, project_id, user_id, req.harness, req.start_offset, req.start_offset + len(req.lines) - 1
+    )
     acknowledged_line, acknowledged_offset = await advance_session_checkpoint(
         req.session_id,
         project_id,
@@ -287,7 +294,8 @@ async def ingest_session(
     return SessionIngestResponse(
         ingested=result.ingested,
         skipped=result.skipped,
-        errors=result.errors,
+        errors=len(error_offsets),
+        error_offsets=error_offsets,
         acknowledged_line=acknowledged_line,
         acknowledged_offset=acknowledged_offset,
         integrity_ok=integrity_ok,

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from pydantic import ValidationError
 
 from api.routes import ingest as ingest_route
 from api.routes.ingest import SessionIngestRequest
-from services import session_ingest
+from services import clickhouse, session_ingest
 from services.clickhouse import insert as clickhouse_insert
 
 
@@ -223,6 +224,7 @@ async def test_ingest_route_returns_contiguous_acknowledgement(monkeypatch):
         AsyncMock(return_value=session_ingest.IngestResult(ingested=0, skipped=2, errors=0)),
     )
     monkeypatch.setattr(session_ingest, "advance_session_checkpoint", AsyncMock(return_value=(4, 120)))
+    monkeypatch.setattr(clickhouse, "query_session_error_offsets", AsyncMock(return_value=[]))
 
     response = await ingest_route.ingest_session.__wrapped__(
         SessionIngestRequest(
