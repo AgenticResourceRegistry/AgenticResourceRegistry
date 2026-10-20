@@ -128,7 +128,7 @@ const COMPONENT_HELP_DOCS = {
 	hooks: { file: "registry-hook-helper.md", label: "Hook helper" },
 	sandboxes: { file: "registry-sandbox-helper.md", label: "Sandbox helper" },
 	prompts: { file: "cli/prompt.md", label: "Prompt helper" },
-	agents: { file: "core-concepts/README.md", label: "Agent File helper" },
+	agents: { file: "core-concepts/index.md", label: "Agent File helper" },
 } as const;
 
 const MAX_SKILL_UPLOAD_BYTES = 2 * 1024 * 1024;

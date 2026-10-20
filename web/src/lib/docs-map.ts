@@ -143,10 +143,10 @@ export const PAGE_DOCS: Record<string, DocRef> = {
 	"traces.detail": { file: "self-hosting/telemetry.md", label: "Telemetry Configuration" },
 
 	// Registry
-	"agents": { file: "core-concepts/README.md", label: "Core Concepts" },
-	"agents.builder": { file: "core-concepts/README.md", label: "Core Concepts" },
+	"agents": { file: "core-concepts/index.md", label: "Core Concepts" },
+	"agents.builder": { file: "core-concepts/index.md", label: "Core Concepts" },
 	"agents.install": { file: "getting-started/quickstart.md", label: "Quickstart" },
-	"components": { file: "core-concepts/README.md", label: "Core Concepts" },
+	"components": { file: "core-concepts/index.md", label: "Core Concepts" },
 
 	// Admin
 	"audit-log": { file: "reference/api-endpoints.md", label: "API Reference" },
