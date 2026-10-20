@@ -141,7 +141,8 @@ def test_new_server_in_dotted_key_config_keeps_top_level_model(tmp_path):
     assert path.read_text() == result
 
 
-def test_windows_lock_imports_msvcrt_without_fcntl(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_windows_lock_imports_msvcrt_without_fcntl(tmp_path, monkeypatch, preexisting):
     real_import = builtins.__import__
     windows = MagicMock(LK_LOCK=1, LK_UNLCK=2)
 
@@ -155,10 +156,104 @@ def test_windows_lock_imports_msvcrt_without_fcntl(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(builtins, "__import__", import_without_fcntl)
     path = tmp_path / "config.toml"
+    if preexisting:
+        (tmp_path / ".config.toml.observal.lock").write_bytes(b"")
     with cmd_pull._toml_write_lock(path):
         assert windows.locking.call_args.args[1:] == (windows.LK_LOCK, 1)
         assert (tmp_path / ".config.toml.observal.lock").read_bytes() == b"\0"
     assert [call.args[1:] for call in windows.locking.call_args_list] == [(windows.LK_LOCK, 1), (windows.LK_UNLCK, 1)]
+
+
+def test_windows_lock_symlink_is_rejected_before_writing(tmp_path, monkeypatch):
+    real_import = builtins.__import__
+    windows = MagicMock(LK_LOCK=1, LK_UNLCK=2)
+
+    def import_msvcrt(name, *args, **kwargs):
+        return windows if name == "msvcrt" else real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(builtins, "__import__", import_msvcrt)
+    config = tmp_path / "config.toml"
+    config.write_bytes(b"")
+    lock = tmp_path / ".config.toml.observal.lock"
+    lock.symlink_to(config)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(config, {"mcp_servers": {"demo": {"command": "ok"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert config.read_bytes() == b""
+    assert lock.is_symlink()
+    windows.locking.assert_not_called()
+
+
+def test_windows_lock_hardlink_is_rejected_before_writing(tmp_path, monkeypatch):
+    real_import = builtins.__import__
+    windows = MagicMock(LK_LOCK=1, LK_UNLCK=2)
+
+    def import_msvcrt(name, *args, **kwargs):
+        return windows if name == "msvcrt" else real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(builtins, "__import__", import_msvcrt)
+    config = tmp_path / "config.toml"
+    config.write_bytes(b"")
+    lock = tmp_path / ".config.toml.observal.lock"
+    os.link(config, lock)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(config, {"mcp_servers": {"demo": {"command": "ok"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert config.read_bytes() == lock.read_bytes() == b""
+    windows.locking.assert_not_called()
+
+
+def test_windows_lock_hardlink_swap_during_open_is_rejected(tmp_path, monkeypatch):
+    real_import = builtins.__import__
+    windows = MagicMock(LK_LOCK=1, LK_UNLCK=2)
+
+    def import_msvcrt(name, *args, **kwargs):
+        return windows if name == "msvcrt" else real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(builtins, "__import__", import_msvcrt)
+    config = tmp_path / "config.toml"
+    config.write_bytes(b"")
+    lock = tmp_path / ".config.toml.observal.lock"
+    lock.write_bytes(b"")
+    original_open = os.open
+
+    def swapped_open(path, *args, **kwargs):
+        if path == lock:
+            lock.unlink()
+            os.link(config, lock)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swapped_open)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(config, {"mcp_servers": {"demo": {"command": "ok"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert config.read_bytes() == lock.read_bytes() == b""
+    windows.locking.assert_not_called()
+
+
+def test_windows_lock_reparse_point_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    config = tmp_path / "config.toml"
+    config.write_bytes(b"")
+    lock = tmp_path / ".config.toml.observal.lock"
+    lock.write_bytes(b"sentinel")
+    lstat = Path.lstat
+
+    def reparse(self, *args, **kwargs):
+        result = lstat(self, *args, **kwargs)
+        if self == lock:
+            return MagicMock(st_mode=result.st_mode, st_file_attributes=0x400)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", reparse)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(config, {"mcp_servers": {"demo": {"command": "ok"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert lock.read_bytes() == b"sentinel"
+    assert config.read_bytes() == b""
 
 
 def test_empty_server_map_is_valid_and_noop(tmp_path):
@@ -338,7 +433,19 @@ def test_snippet_codex_retarget_cannot_report_success(tmp_path, monkeypatch, aft
             snippet, harness="codex", adapter=MagicMock(), target_dir=tmp_path, agent_id="dummy", is_user_scope=False
         )
     assert exc.value.category == ErrorCategory.CONFLICT
-    assert exc.value.result["files"] == []
+    if after_replace:
+        assert exc.value.result["partial"] is True
+        identity = old.parent.stat()
+        assert exc.value.result["files"] == [
+            {
+                "path": f"pinned directory (device={identity.st_dev}, inode={identity.st_ino}), filename='old.toml' (not a pathname)",
+                "status": "merged",
+            }
+        ]
+        assert tomllib.loads(old.read_text())["mcp_servers"]["demo"] == {"command": "ok"}
+    else:
+        assert exc.value.result["partial"] is False
+        assert exc.value.result["files"] == []
     assert new.read_bytes() == original
 
 
@@ -588,9 +695,104 @@ def test_parent_swap_before_replace_keeps_destination_anchored(tmp_path, monkeyp
         cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
     assert exc.value.category == ErrorCategory.CONFLICT
     assert (outside / "config.toml").read_bytes() == original
-    assert tomllib.loads((tmp_path / "moved" / "config.toml").read_text(encoding="utf-8"))["mcp_servers"] == {
-        "demo": {"command": "new"}
-    }
+    moved = tmp_path / "moved" / "config.toml"
+    assert tomllib.loads(moved.read_text(encoding="utf-8"))["mcp_servers"] == {"demo": {"command": "new"}}
+    assert exc.value.result["partial"] is True
+    identity = moved.parent.stat()
+    assert exc.value.result["files"] == [
+        {
+            "path": f"pinned directory (device={identity.st_dev}, inode={identity.st_ino}), filename='config.toml' (not a pathname)",
+            "status": "merged",
+        }
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+@pytest.mark.parametrize("existed", [False, True])
+def test_post_write_second_rename_and_path_reuse_does_not_misreport_destination(tmp_path, monkeypatch, existed):
+    parent = tmp_path / "codex"
+    parent.mkdir()
+    requested = parent / "config.toml"
+    if existed:
+        requested.write_text('model = "mine"\n')
+    unrelated = tmp_path / "outside"
+    unrelated.mkdir()
+    (unrelated / "config.toml").write_text('model = "outside"\n')
+    moved = tmp_path / "moved"
+    replace = os.replace
+
+    def swap_after_replace(*args, **kwargs):
+        replace(*args, **kwargs)
+        parent.rename(moved)
+        parent.symlink_to(unrelated, target_is_directory=True)
+
+    monkeypatch.setattr(os, "replace", swap_after_replace)
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(requested, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert exc.value.result["failed_path"] == str(requested)
+    assert exc.value.result["partial"] is True
+    # Reuse the path that /proc/self/fd or F_GETPATH could have observed.
+    written = tmp_path / "written"
+    moved.rename(written)
+    moved.mkdir()
+    (moved / "config.toml").write_text('model = "unrelated"\n')
+    identity = written.stat()
+    assert exc.value.result["files"] == [
+        {
+            "path": f"pinned directory (device={identity.st_dev}, inode={identity.st_ino}), filename='config.toml' (not a pathname)",
+            "status": "merged" if existed else "created",
+        }
+    ]
+    assert tomllib.loads((written / "config.toml").read_text())["mcp_servers"] == {"demo": {"command": "new"}}
+    assert (moved / "config.toml").read_text() == 'model = "unrelated"\n'
+    assert (unrelated / "config.toml").read_text() == 'model = "outside"\n'
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory descriptor semantics")
+def test_darwin_parent_swap_reports_pinned_destination_not_outside(tmp_path, monkeypatch):
+    import fcntl
+
+    parent = tmp_path / "codex"
+    parent.mkdir()
+    requested = parent / "config.toml"
+    requested.write_bytes(b'model = "mine"\n')
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    unrelated = outside / "config.toml"
+    original = b'model = "outside"\n'
+    unrelated.write_bytes(original)
+    moved = tmp_path / "moved" / "config.toml"
+    replace = os.replace
+
+    def swap(src, dst, **kwargs):
+        replace(src, dst, **kwargs)
+        parent.rename(moved.parent)
+        parent.symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(os, "replace", swap)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(fcntl, "F_GETPATH", 50, raising=False)
+
+    def no_path_lookup(*args, **kwargs):
+        raise AssertionError("F_GETPATH must not be used for reporting")
+
+    monkeypatch.setattr(fcntl, "fcntl", no_path_lookup)
+
+    with pytest.raises(CliError) as exc:
+        cmd_pull._write_file_checked(requested, {"mcp_servers": {"demo": {"command": "new"}}}, merge_mcp=True)
+    assert exc.value.category == ErrorCategory.CONFLICT
+    assert exc.value.result["failed_path"] == str(requested)
+    assert exc.value.result["partial"] is True
+    destination = exc.value.result["files"][0]
+    assert destination["status"] == "merged"
+    assert str(unrelated) not in destination["path"]
+    identity = moved.parent.stat()
+    assert destination["path"] == (
+        f"pinned directory (device={identity.st_dev}, inode={identity.st_ino}), filename='config.toml' (not a pathname)"
+    )
+    assert unrelated.read_bytes() == original
+    assert tomllib.loads(moved.read_text())["mcp_servers"] == {"demo": {"command": "new"}}
 
 
 def test_atomic_writer_keeps_validated_crlf_bytes(tmp_path):
@@ -602,6 +804,24 @@ def test_atomic_writer_keeps_validated_crlf_bytes(tmp_path):
     assert b"\r\r\n" not in result
     assert b"\r\n" in result
     assert tomllib.loads(result.decode("utf-8"))["model"] == "snowman ☃"
+
+
+def test_crlf_merge_preserves_newline_convention_and_utf8(tmp_path):
+    path = tmp_path / "config.toml"
+    source = b'# snowman \xe2\x98\x83\r\nmodel = "gpt"\r\n[mcp_servers.other]\r\ncommand = "old"\r\n'
+    path.write_bytes(source)
+    incoming = {"mcp_servers": {"demo": {"command": "ok", "env": {"TOKEN": "dummy"}}}}
+    assert cmd_pull._write_file(path, incoming, merge_mcp=True) == "merged"
+    result = path.read_bytes()
+    assert result.startswith(b'# snowman \xe2\x98\x83\r\nmodel = "gpt"\r\n')
+    assert b"\n" not in result.replace(b"\r\n", b"")
+    assert b"\r\r\n" not in result
+    assert tomllib.loads(result.decode("utf-8"))["mcp_servers"] == {
+        "other": {"command": "old"},
+        **incoming["mcp_servers"],
+    }
+    assert cmd_pull._write_file(path, incoming, merge_mcp=True) == "merged"
+    assert path.read_bytes() == result
 
 
 def test_cooperating_writers_wait_on_same_lock(tmp_path):
