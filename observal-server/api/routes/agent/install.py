@@ -68,11 +68,13 @@ async def install_agent(
     )
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.status != AgentStatus.approved and not (
+    # With draft installs allowed, the creator can install versions that are not approved yet.
+    owner_draft_install = (
         current_user is not None
         and _ds.get_sync_bool("security.allow_draft_install")
         and agent.created_by == current_user.id
-    ):
+    )
+    if agent.status != AgentStatus.approved and not owner_draft_install:
         raise HTTPException(status_code=404, detail="Agent not found or not approved for installation")
     if get_effective_agent_permission(agent, current_user) == "none":
         raise HTTPException(status_code=403, detail="Insufficient permissions to install this agent")
@@ -84,8 +86,9 @@ async def install_agent(
         version_stmt = select(AgentVersion).where(
             AgentVersion.agent_id == agent.id,
             AgentVersion.version == req.version,
-            AgentVersion.status == AgentStatus.approved,
         )
+        if not owner_draft_install:
+            version_stmt = version_stmt.where(AgentVersion.status == AgentStatus.approved)
         version_result = await db.execute(version_stmt)
         target_version = version_result.scalar_one_or_none()
         if not target_version:
