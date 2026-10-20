@@ -426,6 +426,13 @@ class TestGenerateCodex:
         cfg = generate_agent_config(agent, "codex")
         assert len(cfg["agent_profile"]["content"]) > 0
 
+    def test_writes_no_hooks_file(self):
+        # A hooks file would tag every Codex session in the folder with the agent,
+        # and at user scope it would replace the hooks `observal doctor patch` installed.
+        for scope in ("project", "user"):
+            cfg = generate_agent_config(_make_agent(), "codex", options={"scope": scope})
+            assert "hooks_config" not in cfg
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 8. generate_agent_config — Copilot

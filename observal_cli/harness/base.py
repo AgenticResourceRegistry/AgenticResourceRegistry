@@ -326,6 +326,12 @@ class BaseAdapter:
     def requires_explicit_agent_id(self) -> bool:
         return False
 
+    def attributes_by_directory(self) -> bool:
+        return True
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        return None
+
     def headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         _check_headless(self.harness_name)
         return self._headless_command(request)

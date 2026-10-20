@@ -1070,6 +1070,16 @@ def _resolve_agent(
     if not agent_name:
         agent_name = _parse_agent_from_lines(lines)
 
+    # 3. A subagent transcript names the agent definition it ran as. Only a pulled
+    # agent counts: built-in subagent types are not registry agents.
+    if not agent_name:
+        subagent_name = getattr(adapter, "session_subagent_name", lambda _path: None)(session_jsonl)
+        if subagent_name:
+            entry = _lookup_lockfile_agent(cwd, agent_name=subagent_name)
+            if entry is None:
+                return None, None
+            return entry.get("id") or entry.get("name"), entry.get("version")
+
     # Look up version from lockfile. Agent name is the reliable signal for per-agent hooks.
     lockfile_entry = _lookup_lockfile_agent(cwd, agent_name=agent_name) if cwd or agent_name else None
 
@@ -1085,8 +1095,9 @@ def _resolve_agent(
                 version = lockfile_entry.get("version")
         return agent_id, version
 
-    # 3. No name from env/JSONL; fall back to lockfile entirely
-    if lockfile_entry:
+    # 4. No name from env/JSONL: harnesses that cannot name the agent fall back
+    # to the agent pulled into the session's directory.
+    if lockfile_entry and getattr(adapter, "attributes_by_directory", lambda: True)():
         return lockfile_entry.get("id") or lockfile_entry.get("name"), lockfile_entry.get("version")
 
     return None, None

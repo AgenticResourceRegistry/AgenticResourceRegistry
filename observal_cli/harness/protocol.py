@@ -422,6 +422,14 @@ class HarnessAdapter(Protocol):
         """Return whether sessions must not fall back to name or cwd attribution."""
         ...
 
+    def attributes_by_directory(self) -> bool:
+        """Return whether a session that names no agent is credited to the agent pulled into its directory."""
+        ...
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        """Return the agent definition a subagent transcript ran as, or None for a main session."""
+        ...
+
     def headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         """Build the argv that runs a materialized agent on one task and exits.
 
