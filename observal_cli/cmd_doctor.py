@@ -18,8 +18,10 @@ push session JSONL incrementally to the server.
 
 import hashlib
 import json
+import re
 import shutil
 import sys
+import tomllib
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -449,14 +451,45 @@ def _check_codex(issues: list, warnings: list):
             "Codex session push hooks not installed. Run `observal doctor patch --harness codex` to inject them."
         )
 
-    # Check codex_hooks flag
     if config_path.exists():
         try:
             content = config_path.read_text()
-            if "codex_hooks = false" in content:
-                issues.append(f"{config_path}: `codex_hooks = false`. Observal hooks will not fire.")
         except OSError as error:
             issues.append(f"{config_path}: cannot read Codex configuration: {error}")
+        else:
+            if _codex_hooks_disabled(content):
+                issues.append(f"{config_path}: hooks are turned off under [features]. Observal hooks will not fire.")
+            if _without_stale_codex_hooks_key(content) != content:
+                warnings.append(
+                    f"{config_path}: the top-level `codex_hooks` key is not a Codex setting, so Codex warns on "
+                    "every run. Run `observal doctor patch --harness codex` to remove it."
+                )
+
+
+def _codex_hooks_disabled(config_text: str) -> bool:
+    """Return whether Codex config turns hooks off.
+
+    Hooks are on by default since they became stable. ``[features].hooks`` turns them
+    off, and Codex still reads the older name ``codex_hooks`` in that table.
+    """
+    try:
+        features = tomllib.loads(config_text).get("features")
+    except tomllib.TOMLDecodeError:
+        return False
+    if not isinstance(features, dict):
+        return False
+    return features.get("hooks") is False or features.get("codex_hooks") is False
+
+
+def _without_stale_codex_hooks_key(config_text: str) -> str:
+    """Drop the top-level ``codex_hooks`` key that earlier ``doctor patch`` runs wrote.
+
+    Codex never read it there: the flag only exists under ``[features]``.
+    """
+    first_table = re.search(r"^\s*\[", config_text, re.MULTILINE)
+    head_end = first_table.start() if first_table else len(config_text)
+    head = re.sub(r"^codex_hooks\s*=.*(?:\n|$)", "", config_text[:head_end], flags=re.MULTILINE)
+    return head + config_text[head_end:]
 
 
 def _check_copilot(issues: list, warnings: list):
@@ -1553,7 +1586,7 @@ def _patch_pi(dry_run: bool) -> bool:
 
 
 def _patch_codex(dry_run: bool) -> bool:
-    """Install session push hooks into ~/.codex/hooks.json and enable codex_hooks flag."""
+    """Install session push hooks into ~/.codex/hooks.json."""
     optic.debug("_patch_codex: dry_run={}", dry_run)
     from observal_cli.harness_specs.codex_hooks_spec import build_codex_hooks
 
@@ -1587,16 +1620,15 @@ def _patch_codex(dry_run: bool) -> bool:
             needs_update = True
             break
 
-    # Also check if codex_hooks flag needs enabling
-    needs_flag = False
-    if config_path.exists():
-        content = config_path.read_text()
-        if "codex_hooks" not in content or "codex_hooks = false" in content:
-            needs_flag = True
-    else:
-        needs_flag = True
+    config_text = config_path.read_text() if config_path.exists() else ""
+    cleaned_config = _without_stale_codex_hooks_key(config_text)
+    if _codex_hooks_disabled(config_text):
+        rprint(
+            f"  [yellow]Hooks are turned off under {esc('[features]')} in {esc(config_path)}; "
+            "Observal hooks will not fire.[/yellow]"
+        )
 
-    if not needs_update and not needs_flag:
+    if not needs_update and cleaned_config == config_text:
         rprint("  [dim]Already up to date[/dim]")
         return False
 
@@ -1623,22 +1655,11 @@ def _patch_codex(dry_run: bool) -> bool:
         verb = "Would install" if dry_run else "Installed"
         rprint(f"  {verb} hooks in {esc(hooks_path)}")
 
-    # Enable codex_hooks flag in config.toml
-    if needs_flag:
+    if cleaned_config != config_text:
         if not dry_run:
-            codex_dir.mkdir(parents=True, exist_ok=True)
-            if config_path.exists():
-                content = config_path.read_text()
-                if "codex_hooks = false" in content:
-                    content = content.replace("codex_hooks = false", "codex_hooks = true")
-                elif "codex_hooks" not in content:
-                    content = f"codex_hooks = true\n{content}"
-                atomic_write(config_path, content)
-            else:
-                atomic_write(config_path, "codex_hooks = true\n")
-
-        verb = "Would enable" if dry_run else "Enabled"
-        rprint(f"  {verb} codex_hooks flag in {esc(config_path)}")
+            atomic_write(config_path, cleaned_config)
+        verb = "Would remove" if dry_run else "Removed"
+        rprint(f"  {verb} the stale codex_hooks key from {esc(config_path)}")
 
     return True
 

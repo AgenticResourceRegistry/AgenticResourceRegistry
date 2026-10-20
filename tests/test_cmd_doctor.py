@@ -274,17 +274,30 @@ class TestChecks:
 
         assert any("Cursor session push hooks not installed" in warning for warning in warnings)
 
-    def test_codex_reports_disabled_hook_flag(self, tmp_path: Path):
+    @pytest.mark.parametrize("key", ["hooks", "codex_hooks"])
+    def test_codex_reports_hooks_turned_off_in_features(self, tmp_path: Path, key: str):
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text("codex_hooks = false\n", encoding="utf-8")
+        (codex_dir / "config.toml").write_text(f"[features]\n{key} = false\n", encoding="utf-8")
         issues: list[str] = []
         warnings: list[str] = []
 
         _check_codex(issues, warnings)
 
-        assert any("codex_hooks = false" in issue for issue in issues)
+        assert any("hooks are turned off under [features]" in issue for issue in issues)
         assert any("Codex session push hooks not installed" in warning for warning in warnings)
+
+    def test_codex_warns_about_the_stale_top_level_key(self, tmp_path: Path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text('codex_hooks = true\nmodel = "gpt-6"\n', encoding="utf-8")
+        issues: list[str] = []
+        warnings: list[str] = []
+
+        _check_codex(issues, warnings)
+
+        assert issues == []
+        assert any("top-level `codex_hooks` key is not a Codex setting" in warning for warning in warnings)
 
     def test_copilot_warns_when_vscode_exists_without_hooks(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
@@ -606,15 +619,20 @@ class TestPatchFunctions:
         assert manifest == {"managed": True, "version": CLI_VERSION}
         assert _patch_pi(dry_run=False) is False
 
-    def test_patch_codex_writes_hooks_and_enables_flag(self, tmp_path: Path):
+    def test_patch_codex_writes_hooks_and_drops_stale_flag(self, tmp_path: Path):
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text("codex_hooks = false\n", encoding="utf-8")
+        # Earlier patches wrote codex_hooks at the top level, where Codex never reads it.
+        (codex_dir / "config.toml").write_text(
+            'codex_hooks = true\nmodel = "gpt-6"\n\n[features]\ncodex_hooks = true\n', encoding="utf-8"
+        )
         write_json(codex_dir / "hooks.json", {"hooks": {"Stop": [{"hooks": [{"command": "foreign"}]}]}})
 
         assert _patch_codex(dry_run=False) is True
 
-        assert "codex_hooks = true" in (codex_dir / "config.toml").read_text(encoding="utf-8")
+        config_text = (codex_dir / "config.toml").read_text(encoding="utf-8")
+        assert config_text == 'model = "gpt-6"\n\n[features]\ncodex_hooks = true\n'
+        assert _patch_codex(dry_run=False) is False
         groups = read_json(codex_dir / "hooks.json")["hooks"]["Stop"]
         assert any(group.get("hooks", [{}])[0].get("command") == "foreign" for group in groups)
         assert any(
