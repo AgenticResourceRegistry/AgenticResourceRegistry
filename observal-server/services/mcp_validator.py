@@ -150,7 +150,7 @@ async def _refresh_review_snapshot(listing: McpListing, db: AsyncSession) -> Non
 
 
 async def _clone_and_inspect(listing: McpListing, db: AsyncSession, tmp_dir: str) -> Path | None:
-    url_err = _validate_git_url(listing.git_url)
+    url_err = await asyncio.to_thread(_validate_git_url, listing.git_url)
     if url_err:
         db.add(McpValidationResult(listing_id=listing.id, stage="clone_and_inspect", passed=False, details=url_err))
         await db.commit()
@@ -367,7 +367,7 @@ async def _manifest_validation(listing: McpListing, db: AsyncSession, entry_poin
 async def analyze_repo(git_url: str) -> dict:
     """Clone and analyze a repo without creating a listing. Returns extracted metadata."""
     _empty = {"name": "", "description": "", "version": "0.1.0", "tools": []}
-    url_err = _validate_git_url(git_url)
+    url_err = await asyncio.to_thread(_validate_git_url, git_url)
     if url_err:
         return {**_empty, "error": url_err}
 

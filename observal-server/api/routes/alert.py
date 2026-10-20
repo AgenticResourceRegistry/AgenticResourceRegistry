@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import secrets
 import uuid
 from urllib.parse import urlparse
@@ -31,14 +32,14 @@ from services.ssrf_guard import is_private_url
 router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
 
 
-def _validate_webhook_url(url: str) -> None:
+async def _validate_webhook_url(url: str) -> None:
     optic.trace("validating webhook URL: {}", url)
     if not url:
         return  # empty URL is OK (no webhook)
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(400, "webhook_url must use http or https")
-    if is_private_url(url):
+    if await asyncio.to_thread(is_private_url, url):
         raise HTTPException(400, "webhook_url must not point to private/internal networks")
 
 
@@ -63,7 +64,7 @@ async def create_alert(
     current_user: User = Depends(require_role(UserRole.user)),
 ):
     optic.debug("alert create")
-    _validate_webhook_url(body.webhook_url)
+    await _validate_webhook_url(body.webhook_url)
     target_id = await watchable_target_id(db, current_user, body.target_type, body.target_id)
     if target_id is None:
         # Same answer whether or not the agent exists, so this does not reveal hidden agents.
@@ -102,7 +103,7 @@ async def update_alert(
     if body.status is not None:
         rule.status = body.status
     if body.webhook_url is not None:
-        _validate_webhook_url(body.webhook_url)
+        await _validate_webhook_url(body.webhook_url)
         rule.webhook_url = body.webhook_url
     await db.commit()
     await db.refresh(rule)
