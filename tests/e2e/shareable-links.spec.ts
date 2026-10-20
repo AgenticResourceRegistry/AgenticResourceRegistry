@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, Page, test } from "@playwright/test";
 import { API_BASE } from "./helpers";
+import { loginWithRetry } from "./login-retry";
 
 const PASSWORD = "E2e-Team-Invite!42";
 const suffix = Date.now().toString(36);
@@ -31,19 +33,7 @@ async function demoLogin(role: "admin" | "super_admin"): Promise<string> {
   const password = superAdmin
     ? (process.env.DEMO_SUPER_ADMIN_PASSWORD ?? "super-changeme")
     : (process.env.DEMO_ADMIN_PASSWORD ?? "admin-changeme");
-  const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer e2e-shareable-${role}-${suffix}-${crypto.randomUUID()}`,
-    },
-    body: JSON.stringify({ email, password }),
-  });
-  const body = await response.json();
-  if (!response.ok || !body.access_token) {
-    throw new Error(`${role} login failed: status=${response.status} has_token=${Boolean(body?.access_token)}`);
-  }
-  return body.access_token;
+  return loginWithRetry(email, password);
 }
 
 async function api(path: string, token: string, method = "GET", body?: unknown) {
@@ -79,11 +69,8 @@ async function createUser(label: string, role = "user"): Promise<Principal> {
     role,
     password: PASSWORD,
   });
-  const login = await api("/api/v1/auth/login", `e2e-${label}-${suffix}`, "POST", {
-    email,
-    password: PASSWORD,
-  });
-  return { id: created.id, email, role, token: login.access_token };
+  const token = await loginWithRetry(email, PASSWORD);
+  return { id: created.id, email, role, token };
 }
 
 async function loginAs(page: Page, principal: Principal) {
@@ -109,6 +96,9 @@ test.describe("shareable teamspace links", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async () => {
+    // Six sequential logins can each retry for up to 120s against the shared IP bucket.
+    // Allow all six retry budgets plus 90s for user/team fixture API calls.
+    test.setTimeout(6 * 120_000 + 90_000);
     adminToken = await demoLogin("admin");
     superAdminToken = await demoLogin("super_admin");
     owner = await createUser("owner");
@@ -309,16 +299,20 @@ test.describe("shareable teamspace links", () => {
   });
 
   test("private invite preserves login destination and durable request state", async ({ page }) => {
-    await page.route("**/api/v1/auth/login", async (route) => {
-      await route.continue({
-        headers: { ...route.request().headers(), Authorization: `Bearer e2e-browser-${suffix}` },
-      });
-    });
+    // Eight 15s waits on 429 can use 120s; leave 60s for navigation and assertions.
+    test.setTimeout(120_000 + 60_000);
     await page.goto(`/team-invites/${inviteToken}`);
     await expect(page).toHaveURL(new RegExp(`/login\\?next=%2Fteam-invites%2F${inviteToken}`));
     await page.getByLabel("Email").fill(outsider.email);
     await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: /sign in/i }).click();
+    for (let attempt = 0; attempt < 9; attempt++) {
+      const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/v1/auth/login"));
+      await page.getByRole("button", { name: /sign in/i }).click();
+      const response = await responsePromise;
+      if (response.status() !== 429) break;
+      if (attempt === 8) throw new Error("Browser login remained rate limited after retries");
+      await page.waitForTimeout(15_000);
+    }
     await expect(page).toHaveURL(new RegExp(`/team-invites/${inviteToken}$`));
 
     await page.getByRole("button", { name: "Request to join", exact: true }).click();
