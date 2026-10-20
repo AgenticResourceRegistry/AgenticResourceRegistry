@@ -578,7 +578,11 @@ function _tryRefreshToken(): Promise<RefreshResult> {
 		return "ok";
 	});
 	_refreshPromise = promise;
-	void promise.finally(() => { if (_refreshPromise === promise) _refreshPromise = null; });
+	// Do not create a second, unobserved rejecting promise with .finally().
+	void promise.then(
+		() => { if (_refreshPromise === promise) _refreshPromise = null; },
+		() => { if (_refreshPromise === promise) _refreshPromise = null; },
+	);
 	return promise;
 }
 
@@ -650,7 +654,9 @@ async function request<T = unknown>(
 				if (epoch !== authEpoch()) throw new Error("Session changed");
 				if (retryRes.ok) {
 					if (retryRes.status === 204) return undefined as T;
-					return decodeResponse<T>(retryRes, fileResponse);
+					const data = await decodeResponse<T>(retryRes, fileResponse);
+					if (epoch !== authEpoch()) throw new Error("Session changed");
+					return data;
 				}
 				const retryText = await retryRes.text().catch(() => "Request failed");
 				const retryErr = new Error(retryText);
@@ -722,10 +728,12 @@ async function request<T = unknown>(
 		throw err;
 	}
 
+	if (epoch !== authEpoch()) throw new Error("Session changed");
 	if (response.status === 204) return undefined as T;
 
-	if (epoch && epoch !== authEpoch()) throw new Error("Session changed");
-	return decodeResponse<T>(response, fileResponse);
+	const data = await decodeResponse<T>(response, fileResponse);
+	if (epoch !== authEpoch()) throw new Error("Session changed");
+	return data;
 }
 
 function get<T = unknown>(path: string) {
