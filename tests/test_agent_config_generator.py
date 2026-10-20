@@ -61,6 +61,10 @@ class TestSanitizeName:
     def test_passthrough_for_safe_name(self):
         assert _sanitize_name("my-agent_v2") == "my-agent_v2"
 
+    def test_trailing_newline_is_replaced(self):
+        assert _sanitize_name("evil\n") == "evil-"
+        assert _sanitize_name("evil\r\n") == "evil--"
+
     def test_replaces_spaces_and_special_chars(self):
         assert _sanitize_name("my agent!@#v2") == "my-agent---v2"
 
