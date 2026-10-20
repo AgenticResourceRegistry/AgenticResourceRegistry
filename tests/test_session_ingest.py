@@ -1303,7 +1303,7 @@ async def test_integrity_reads_checkpoint_and_accepts_matching_line_and_offset(e
     external_calls.manifest.assert_not_awaited()
 
 
-async def test_integrity_hashes_only_requested_lines_and_accepts_zero_offsets(external_calls):
+async def test_integrity_hashes_only_requested_lines_and_accepts_omitted_offset(external_calls):
     hashes = ["source-zero", "source-one"]
     external_calls.manifest.return_value = [(0, 10, hashes[0]), (1, 20, hashes[1]), (2, 30, "not-hashed")]
 
@@ -1313,7 +1313,7 @@ async def test_integrity_hashes_only_requested_lines_and_accepts_zero_offsets(ex
         USER_ID,
         "claude-code",
         expected_line_count=3,
-        expected_offset=0,
+        expected_offset=None,
         acknowledged_line=2,
         acknowledged_offset=999,
         expected_hash=_hash_manifest(hashes),

@@ -28,6 +28,74 @@ def disable_payload_metadata(monkeypatch):
     monkeypatch.setattr(base, "_get_cached_layer_hash", lambda *_args, **_kwargs: None)
 
 
+def test_outbox_final_replacement_rebases_offset_without_retiring_stale_snapshot(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    payload = {
+        "harness": "claude-code",
+        "session_id": "session",
+        "lines": [],
+        "start_offset": 1,
+        "final": True,
+        "total_offset": 34,
+    }
+    telemetry_buffer.enqueue(payload, destination="http://server", user_id="user", db_path=db)
+    old = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
+    telemetry_buffer.enqueue({**payload, "total_offset": 18}, destination="http://server", user_id="user", db_path=db)
+    new = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
+    assert new.id == old.id and new.end_offset == new.payload["total_offset"] == 18
+    assert not telemetry_buffer.accept_item(old, db_path=db)
+    assert (
+        telemetry_buffer.acknowledge(
+            destination="http://server",
+            user_id="user",
+            harness="claude-code",
+            session_id="session",
+            acknowledged_line=0,
+            posted_item=old,
+            db_path=db,
+        )
+        == 0
+    )
+    assert telemetry_buffer.accept_item(new, db_path=db)
+
+
+def test_outbox_same_range_final_uses_new_total_offset(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    payload = {
+        "harness": "claude-code",
+        "session_id": "session",
+        "lines": ["same"],
+        "start_offset": 0,
+        "end_byte_offsets": [34],
+    }
+    telemetry_buffer.enqueue(payload, destination="http://server", user_id="user", db_path=db)
+    telemetry_buffer.enqueue(
+        {**payload, "final": True, "total_offset": 18, "end_byte_offsets": [34]},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
+    assert item.final and item.end_offset == item.payload["total_offset"] == 18
+
+
+def test_outbox_ordinary_source_range_keeps_monotonic_offset(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    payload = {
+        "harness": "claude-code",
+        "session_id": "session",
+        "lines": ["same"],
+        "start_offset": 0,
+        "end_byte_offsets": [34],
+    }
+    telemetry_buffer.enqueue(payload, destination="http://server", user_id="user", db_path=db)
+    telemetry_buffer.enqueue(
+        {**payload, "end_byte_offsets": [18]}, destination="http://server", user_id="user", db_path=db
+    )
+    item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
+    assert item.end_offset == 34 and item.payload["end_byte_offsets"] == [34]
+
+
 def test_read_new_records_excludes_partial_line_and_tracks_bytes(tmp_path: Path):
     source = tmp_path / "session.jsonl"
     source.write_bytes(b'{"a":1}\n\n{"b":2}')
@@ -696,12 +764,12 @@ def test_final_hash_mismatch_rewinds_and_repairs_source_range(tmp_path: Path, mo
         db_path=db,
         post=audit,
     )
-    assert starts == [0, 1]
+    assert starts == [0, 0]
     assert telemetry_buffer.stats(db_path=db)["pending"] == 0
     assert base.read_cursor("session", home=tmp_path) == (source_path.stat().st_size, 3)
 
 
-@pytest.mark.parametrize("interrupt", ["write", "accept"])
+@pytest.mark.parametrize("interrupt", ["write", "hold"])
 def test_repair_interruption_preserves_final_replay(tmp_path: Path, monkeypatch, interrupt: str):
     disable_payload_metadata(monkeypatch)
     path = tmp_path / "session.jsonl"
@@ -725,16 +793,17 @@ def test_repair_interruption_preserves_final_replay(tmp_path: Path, monkeypatch,
         db_path=db,
     )
     real_write = base._write_cursor_unlocked
-    real_accept = telemetry_buffer.accept_item
+    real_hold = telemetry_buffer.set_replay_hold
 
     def interrupted_write(*args, **kwargs):
         raise RuntimeError("interrupted before cursor replacement")
 
-    def interrupted_accept(*args, **kwargs):
-        raise RuntimeError("interrupted after cursor replacement")
+    def interrupted_hold(*args, **kwargs):
+        real_hold(*args, **kwargs)
+        raise RuntimeError("interrupted after replay hold")
 
     monkeypatch.setattr(base, "_write_cursor_unlocked", interrupted_write if interrupt == "write" else real_write)
-    monkeypatch.setattr(telemetry_buffer, "accept_item", interrupted_accept if interrupt == "accept" else real_accept)
+    monkeypatch.setattr(telemetry_buffer, "set_replay_hold", interrupted_hold if interrupt == "hold" else real_hold)
 
     def repair(*_args):
         return {"acknowledged_line": 0, "acknowledged_offset": 8, "repair_from_line": 1}
@@ -743,11 +812,9 @@ def test_repair_interruption_preserves_final_replay(tmp_path: Path, monkeypatch,
         base.drain_outbox(config(), home=tmp_path, db_path=db, post=repair)
     queued = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
     assert len(queued) == 1 and queued[0].final
-    assert base.read_cursor_state("session", home=tmp_path) == (
-        (path.stat().st_size, 2, True) if interrupt == "write" else (8, 1, False)
-    )
+    assert base.read_cursor_state("session", home=tmp_path) == (path.stat().st_size, 2, True)
     monkeypatch.setattr(base, "_write_cursor_unlocked", real_write)
-    monkeypatch.setattr(telemetry_buffer, "accept_item", real_accept)
+    monkeypatch.setattr(telemetry_buffer, "set_replay_hold", real_hold)
     posts = []
 
     def resume(payload, _config):
@@ -905,7 +972,9 @@ def test_earlier_final_repair_without_source_does_not_starve_other_sessions(tmp_
     assert len(pending) == 1 and pending[0].session_id == "missing" and pending[0].final
     assert pending[0].payload["session_hash"] == "final-audit"
     assert pending[0].payload["total_offset"] == 100
-    assert pending[0].attempts == 1 and pending[0].retry_after > 0
+    assert telemetry_buffer.replay_held(
+        destination="http://server", user_id="user", harness="claude-code", session_id="missing", db_path=db
+    )
 
     assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
     assert posted == ["missing", "healthy"]
@@ -923,11 +992,11 @@ def test_earlier_final_repair_without_source_does_not_starve_other_sessions(tmp_
     )
     monkeypatch.setattr(telemetry_buffer.time, "time", lambda: 10**12)
     assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
-    assert posted == ["missing", "healthy", "missing", "healthy-later"]
+    assert posted == ["missing", "healthy", "healthy-later"]
     assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
-    assert posted == ["missing", "healthy", "missing", "healthy-later"]
+    assert posted == ["missing", "healthy", "healthy-later"]
     pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
-    assert len(pending) == 1 and pending[0].final and pending[0].attempts == 2
+    assert len(pending) == 1 and pending[0].final
 
 
 @pytest.mark.parametrize("source_present", [False, True])

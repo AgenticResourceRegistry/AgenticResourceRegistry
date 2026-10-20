@@ -430,6 +430,7 @@ class IntegrityResult:
     server_hash: str | None = None
     repair_from_line: int | None = None
     repair_offset: int = 0
+    reconciled_offset: bool = False
 
 
 async def ingest_session_lines(
@@ -682,7 +683,7 @@ async def check_session_integrity(
     user_id: str,
     harness: str,
     expected_line_count: int,
-    expected_offset: int,
+    expected_offset: int | None,
     acknowledged_line: int | None = None,
     acknowledged_offset: int | None = None,
     expected_hash: str | None = None,
@@ -694,7 +695,8 @@ async def check_session_integrity(
             session_id, project_id, user_id, harness
         )
     expected_line = expected_line_count - 1
-    offset_ok = expected_offset == 0 or acknowledged_offset == 0 or acknowledged_offset == expected_offset
+    # None is the legacy offset-less audit; an explicit zero is a real EOF.
+    offset_ok = expected_offset is None or acknowledged_offset == 0 or acknowledged_offset == expected_offset
     server_hash = None
     repair_from_line = acknowledged_line + 1 if acknowledged_line < expected_line else None
     manifest: list[tuple[int, int, str]] = []
@@ -721,6 +723,35 @@ async def check_session_integrity(
         elif server_hash != expected_hash:
             repair_from_line = 0 if repair_from_line is None else min(repair_from_line, 0)
 
+    # The final hash covers file records only; harness-added suffix records
+    # still need to be present and accounted for at the last file byte offset.
+    # Blank-byte growth *or shrinkage* can change that offset without changing
+    # any file record hash. Never reconcile an unauthenticated or gapped prefix.
+    hash_count = expected_line_count if hashed_line_count is None else hashed_line_count
+    suffix = manifest[hash_count:] if 0 <= hash_count <= expected_line_count else []
+    complete_manifest = (
+        0 <= hash_count <= expected_line_count <= 4_294_967_295
+        and len(manifest) == expected_line_count
+        and all(
+            line_offset == index and 0 <= end_offset <= 18_446_744_073_709_551_615
+            for index, (line_offset, end_offset, _) in enumerate(manifest)
+        )
+        and (hash_count > 0 or (expected_line_count > 0 and expected_hash == hashlib.sha256(b"").hexdigest()))
+        # The suffix was written at the *former* file end. A replay may have
+        # updated only file rows, so it need not match the current prefix end.
+        and (not suffix or all(end_offset == suffix[0][1] for _, end_offset, _ in suffix))
+    )
+    reconciled_offset = (
+        not offset_ok
+        and repair_from_line is None
+        and expected_hash is not None
+        and server_hash == expected_hash
+        and acknowledged_line == expected_line
+        and complete_manifest
+        and 0 < acknowledged_offset == manifest[-1][1]
+        and expected_offset is not None
+        and 0 <= expected_offset <= 18_446_744_073_709_551_615
+    )
     repair_offset = 0
     if repair_from_line and manifest:
         repair_offset = next(
@@ -729,12 +760,13 @@ async def check_session_integrity(
         )
 
     return IntegrityResult(
-        ok=acknowledged_line == expected_line and offset_ok and repair_from_line is None,
+        ok=acknowledged_line == expected_line and (offset_ok or reconciled_offset) and repair_from_line is None,
         acknowledged_line=acknowledged_line,
         acknowledged_offset=acknowledged_offset,
         expected_line=expected_line,
-        expected_offset=expected_offset,
+        expected_offset=expected_offset if expected_offset is not None else 0,
         server_hash=server_hash,
         repair_from_line=repair_from_line,
         repair_offset=repair_offset,
+        reconciled_offset=reconciled_offset,
     )

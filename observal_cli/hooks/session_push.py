@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Generic Python harness hook entry point for durable session delivery."""
@@ -15,8 +16,10 @@ from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
+from observal_cli import telemetry_buffer
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.sessions.base import (
+    cursor_source_shrunk,
     drain_outbox,
     drain_session_source,
     load_config,
@@ -201,12 +204,23 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
             continue
         try:
             stat = source.path.stat()
-            if now - stat.st_mtime < _RECOVERY_MIN_AGE_SECONDS:
-                continue
         except OSError:
             continue
+        held = (
+            telemetry_buffer.replay_held(
+                destination=str(config["server_url"]),
+                user_id=str(config["user_id"]),
+                harness=source.harness,
+                session_id=source.session_id,
+            )
+            if config.get("server_url") and config.get("user_id")
+            else False
+        )
+        shrunk = cursor_source_shrunk(source.checkpoint_key, home=home)
         offset, _line_count, finalized = read_cursor_state(source.checkpoint_key, home=home)
-        if offset >= stat.st_size and (finalized or not recovery_final):
+        if not held and not shrunk and offset <= stat.st_size and now - stat.st_mtime < _RECOVERY_MIN_AGE_SECONDS:
+            continue
+        if offset == stat.st_size and (finalized or not recovery_final) and not held and not shrunk:
             continue
         event = {"session_id": source.session_id, "hook_event_name": "Stop"}
         # Scope is checked after the cheap cursor and age filters: deciding it
@@ -216,8 +230,8 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 source,
                 config,
                 hook_event="CrashRecovery",
-                final=recovery_final,
-                extra_fields=adapter.session_extra_fields(source, event, recovery_final, home=home),
+                final=recovery_final or held,
+                extra_fields=adapter.session_extra_fields(source, event, recovery_final or held, home=home),
                 recover_from_server=True,
                 home=home,
             )

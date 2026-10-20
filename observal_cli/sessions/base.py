@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 import tempfile
 import time
 from contextlib import contextmanager
@@ -59,6 +60,37 @@ def read_cursor_state(session_id: str, home: Path | None = None) -> tuple[int, i
     """Return byte offset, line count, and finality for one local source."""
     offset, line_count, finalized, _valid = read_cursor_status(session_id, home=home)
     return offset, line_count, finalized
+
+
+def cursor_source_shrunk(session_id: str, home: Path | None = None) -> bool:
+    """A witnessed shrink cannot be cleared by a later append or server ACK."""
+    entry = _cursor_entry(session_id, home)
+    return bool(entry and entry.get("source_shrunk"))
+
+
+def mark_cursor_source_shrunk(session_id: str, home: Path | None = None) -> None:
+    """Persist an unsafe source position until explicitly repaired locally."""
+    with _cursor_lock(home):
+        offset, line_count = read_cursor(session_id, home=home)
+        _write_cursor_unlocked(session_id, offset, line_count, home=home, source_shrunk=True)
+
+
+def _remember_source_path(session_id: str, path: Path, home: Path | None) -> bool:
+    """Bind a checkpoint to its first source path; mark a relocation unsafe."""
+    resolved = str(path.resolve())
+    with _cursor_lock(home):
+        entry = _cursor_entry(session_id, home)
+        if entry is not None and "source_path" in entry:
+            if entry["source_path"] != resolved:
+                offset, line_count = read_cursor(session_id, home=home)
+                _write_cursor_unlocked(session_id, offset, line_count, home=home, source_shrunk=True)
+                return False
+            return not bool(entry.get("source_shrunk"))
+        if entry is not None and entry.get("source_shrunk"):
+            return False
+        offset, line_count = read_cursor(session_id, home=home)
+        _write_cursor_unlocked(session_id, offset, line_count, home=home, source_path=resolved)
+        return True
 
 
 def read_cursor(session_id: str, home: Path | None = None) -> tuple[int, int]:
@@ -109,6 +141,8 @@ def _write_cursor_unlocked(
     finalized: bool = False,
     home: Path | None = None,
     preserve_finalized: bool = True,
+    source_shrunk: bool = False,
+    source_path: str | None = None,
 ) -> None:
     if home is None:
         home = Path.home()
@@ -137,6 +171,12 @@ def _write_cursor_unlocked(
     }
     if finalized or (preserve_finalized and isinstance(previous, dict) and previous.get("finalized")):
         entry["finalized"] = True
+    if source_shrunk or (isinstance(previous, dict) and previous.get("source_shrunk")):
+        entry["source_shrunk"] = True
+    if isinstance(previous, dict) and "source_path" in previous:
+        entry["source_path"] = previous["source_path"]
+    elif source_path is not None:
+        entry["source_path"] = source_path
     data[session_id] = entry
     with tempfile.NamedTemporaryFile("w", dir=sync_dir, delete=False) as temporary:
         temporary.write(json.dumps(data))
@@ -485,7 +525,14 @@ def recover_cursor_from_server(
     fetch: Callable[[SessionSource, dict], dict | None] | None = None,
 ) -> tuple[int, int] | None:
     """Replace missing, corrupt, or stale local state with the server checkpoint."""
-    if source.path is None:
+    if source.path is None or not _remember_source_path(source.checkpoint_key, source.path, home):
+        return None
+    local_offset, _ = read_cursor(source.checkpoint_key, home=home)
+    if local_offset > source.path.stat().st_size:
+        mark_cursor_source_shrunk(source.checkpoint_key, home=home)
+        log_error(
+            f"source shrank before checkpoint recovery for {source.harness} session {source.session_id}", home=home
+        )
         return None
     checkpoint = (fetch or get_server_checkpoint)(source, config)
     if checkpoint is None:
@@ -495,6 +542,8 @@ def recover_cursor_from_server(
     server_offset = int(checkpoint.get("acknowledged_offset") or 0)
     byte_offset = _checkpoint_byte_offset(source.path, line_count, server_offset)
     if byte_offset is None:
+        if server_offset > source.path.stat().st_size:
+            mark_cursor_source_shrunk(source.checkpoint_key, home=home)
         log_error(
             f"server checkpoint does not match local source for {source.harness} session {source.session_id}",
             home=home,
@@ -573,6 +622,7 @@ def drain_outbox(
             limit=1,
             exclude_sessions=blocked | visited,
             skip_backoff=True,
+            skip_replay_hold=True,
             db_path=db_path,
         )
         if not items:
@@ -581,8 +631,17 @@ def drain_outbox(
             visited.clear()
             continue
         item = items[0]
+        if cursor_source_shrunk(item.checkpoint_key, home=home):
+            # Preserve the pending audit without letting it block other sessions.
+            blocked.add((item.harness, item.session_id))
+            continue
         with _cursor_lock(home):
             cursor_before_post = _cursor_entry(item.checkpoint_key, home)
+            # The marker can be set after the unlocked fast check above.
+            shrunk_before_post = bool(cursor_before_post and cursor_before_post.get("source_shrunk"))
+        if shrunk_before_post:
+            blocked.add((item.harness, item.session_id))
+            continue
         visited.add((item.harness, item.session_id))
         if item.retry_after > time.time():
             blocked.add((item.harness, item.session_id))
@@ -591,7 +650,14 @@ def drain_outbox(
         try:
             acknowledgement = post_batch(item.payload, config)
         except PermanentIngestRejectionError as exc:
-            archived = telemetry_buffer.quarantine(item, str(exc.status_code), db_path=db_path)
+            with _cursor_lock(home):
+                if _cursor_entry(item.checkpoint_key, home) != cursor_before_post or cursor_source_shrunk(
+                    item.checkpoint_key, home=home
+                ):
+                    # A concurrent shrink/repair invalidates this rejection too.
+                    # Keep the pending final for explicit local recovery.
+                    return False
+                archived = telemetry_buffer.quarantine(item, str(exc.status_code), db_path=db_path)
             if archived is None:
                 # A newer version was spooled while this request was in flight.
                 continue
@@ -657,31 +723,35 @@ def drain_outbox(
                 ):
                     telemetry_buffer.record_attempt(item.id, db_path=db_path)
                     return False
+                if item.final:
+                    # A final audit may cover records both before and after the
+                    # repair boundary. Hold the whole session before rewinding:
+                    # a crash or missing source must not deliver its old audit.
+                    telemetry_buffer.set_replay_hold(item, db_path=db_path)
                 _write_cursor_unlocked(
                     item.checkpoint_key,
-                    expected_offset,
-                    0 if repair_from_line < item.start_line else repair_from_line,
+                    0 if item.final else expected_offset,
+                    0 if item.final or repair_from_line < item.start_line else repair_from_line,
                     home=home,
                     preserve_finalized=False,
                 )
-                # Cursor first: a failed write must leave the only durable copy
-                # (including final audit metadata) in the outbox. Earlier repairs
-                # retain this batch until the source has been durably re-spooled.
-                if (
-                    not (item.final and repair_from_line == 0)
-                    and not (item.final and repair_from_line < item.start_line)
-                    and not telemetry_buffer.accept_item(item, db_path=db_path)
-                ):
+                if not item.final and not telemetry_buffer.accept_item(item, db_path=db_path):
                     continue
             if repairs is not None:
                 repairs.append((item.harness, item.session_id))
-            if item.final and (repair_from_line == 0 or repair_from_line < item.start_line):
-                # Without a source to re-spool, this final batch must remain
-                # retryable, but must not starve other sessions on every drain.
-                telemetry_buffer.record_attempt(item.id, db_path=db_path, backoff=True)
+            if item.final:
                 blocked.add((item.harness, item.session_id))
                 continue
             return False
+        if item.final and acknowledgement.get("integrity_ok") is False:
+            log_error(
+                f"session integrity failed without a usable repair boundary for "
+                f"{item.harness} session {item.session_id}; final audit retained",
+                home=home,
+            )
+            telemetry_buffer.record_attempt(item.id, db_path=db_path, backoff=True)
+            blocked.add((item.harness, item.session_id))
+            continue
         if acknowledged_line < item.end_line:
             if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
                 # The server stored the batch, but a missing source line prevents
@@ -726,9 +796,35 @@ def drain_outbox(
         # Server may be ahead due to another delivery process. Never extrapolate
         # local state beyond the source positions this process actually posted.
         with _cursor_lock(home):
-            if _cursor_entry(item.checkpoint_key, home) != cursor_before_post:
-                # Do not delete the batch on a stale ACK: the intervening
-                # rewind may require the source records to be posted again.
+            current_entry = _cursor_entry(item.checkpoint_key, home)
+            if current_entry != cursor_before_post or (current_entry and current_entry.get("source_shrunk")):
+                # Do not delete the batch on a stale ACK, even when the
+                # shrink marker was already present at the snapshot.
+                return False
+            if item.final and current_entry is not None and "source_path" in current_entry:
+                source_path = current_entry["source_path"]
+                try:
+                    if not isinstance(source_path, str) or not source_path or not Path(source_path).is_absolute():
+                        raise ValueError("invalid local source path")
+                    source_stat = Path(source_path).stat()
+                    unsafe_source = not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size < item.end_offset
+                except (OSError, ValueError):
+                    unsafe_source = True
+                if unsafe_source:
+                    # Already holding the cursor lock; calling the public marker
+                    # helper here would deadlock. Preserve the final for repair.
+                    offset, line_count = read_cursor(item.checkpoint_key, home=home)
+                    _write_cursor_unlocked(item.checkpoint_key, offset, line_count, home=home, source_shrunk=True)
+                    blocked.add((item.harness, item.session_id))
+                    continue
+            if telemetry_buffer.replay_held(
+                destination=destination,
+                user_id=user_id,
+                harness=item.harness,
+                session_id=item.session_id,
+                db_path=db_path,
+            ):
+                # An in-flight ACK from before the hold cannot retire the audit.
                 return False
             if not telemetry_buffer.acknowledge(
                 destination=destination,
@@ -816,7 +912,16 @@ def drain_session_source(
     user_id = str(config.get("user_id") or "")
     if source.path is None or not destination or not user_id:
         return False
+    # Bind/check under the cursor lock before draining pending finals or
+    # spooling: an ACK for the old path cannot certify a relocated source.
+    if not _remember_source_path(source.checkpoint_key, source.path, home):
+        return False
     if not source.path.is_file():
+        return False
+    local_offset, _ = read_cursor(source.checkpoint_key, home=home)
+    if local_offset > source.path.stat().st_size:
+        mark_cursor_source_shrunk(source.checkpoint_key, home=home)
+        log_error(f"source shrank below cursor for {source.harness} session {source.session_id}", home=home)
         return False
 
     def source_was_rejected() -> bool:
@@ -836,10 +941,21 @@ def drain_session_source(
     # A transient pre-drain failure never prevents new local records from being spooled.
     if not spool_only:
         drain_outbox(config, home=home, db_path=db_path, post=post, rejections=rejections)
+        # Another scanner may have witnessed a relocation while that post was
+        # in flight. Do not spool from either path after the marker is set.
+        with _cursor_lock(home):
+            entry = _cursor_entry(source.checkpoint_key, home)
+            if entry is not None and entry.get("source_shrunk"):
+                return False
 
+    # A persisted hold must take precedence over the server checkpoint: the
+    # server may be ahead of the source (for example, Cursor usage records).
+    replay_held = telemetry_buffer.replay_held(
+        destination=destination, user_id=user_id, harness=source.harness, session_id=source.session_id, db_path=db_path
+    )
     # Rejected sessions still spool new records; only network delivery is paused.
     rejected = source_was_rejected()
-    if recover_from_server and not rejected:
+    if recover_from_server and not rejected and not replay_held:
         recovered = recover_cursor_from_server(source, config, home=home, fetch=checkpoint_fetch)
         if recovered is None:
             return False
@@ -849,6 +965,12 @@ def drain_session_source(
     # Snapshot old batches before replay. An earlier final audit may have
     # rewound the cursor to zero while retaining later batches as the only
     # durable copy until the source can be re-spooled.
+    if replay_held:
+        byte_offset, line_count = 0, 0
+    if byte_offset > source.path.stat().st_size:
+        mark_cursor_source_shrunk(source.checkpoint_key, home=home)
+        log_error(f"spooled offset exceeds source for {source.harness} session {source.session_id}", home=home)
+        return False
     old_batches = (
         [
             item
@@ -882,6 +1004,42 @@ def drain_session_source(
     # hash and the uploaded snapshot must both describe the project the transcript
     # records; with none, build_payload sends no hash and nothing is uploaded.
     cwd = source.cwd or (_recorded_cwd(lines, source.path) if hook_event in _DISK_EVENTS else "")
+    # A Stop worker and reconcile have no hook usage payload. Recover only
+    # synthetic records actually retained in the outbox; otherwise retry an
+    # audit of the server's already acknowledged suffix without making lines up.
+    retained_total = None
+    metadata_suffix = False
+    if replay_held and replaying_final and not extra_records:
+        old_final = next((item for item in old_batches if item.final), None)
+        if old_final is not None:
+            old_total = old_final.payload.get("total_line_count")
+            old_hashed = old_final.payload.get("hashed_line_count")
+            if (
+                type(old_total) is int
+                and type(old_hashed) is int
+                and old_hashed == hashed_line_count == len(lines)
+                and old_final.payload.get("session_hash") == session_hash
+                and old_total >= old_hashed
+            ):
+                suffix = {}
+                for item in old_batches:
+                    for index, record in enumerate(item.payload.get("lines") or []):
+                        position = item.start_line + index
+                        offsets = item.payload.get("end_byte_offsets") or []
+                        if old_hashed <= position < old_total and index < len(offsets):
+                            suffix[position] = (record, offsets[index])
+                if len(suffix) == old_total - old_hashed and all(
+                    type(suffix[index][1]) is int and suffix[index][1] == old_final.payload.get("total_offset")
+                    for index in range(old_hashed, old_total)
+                ):
+                    # Blank lines can move the file end without changing its
+                    # source hash. Re-spool retained usage at the new byte end.
+                    extra_records = tuple(suffix[index][0] for index in range(old_hashed, old_total))
+                elif not suffix and not old_final.payload.get("lines"):
+                    # Only an existing metadata-only final can certify the
+                    # suffix count when its records are no longer local.
+                    metadata_suffix = True
+                    retained_total = old_total
     if extra_records:
         lines.extend(extra_records)
         end_byte_offsets.extend([byte_offset + bytes_read] * len(extra_records))
@@ -894,10 +1052,39 @@ def drain_session_source(
         # replay chunk is durable, including the new final audit metadata.
         source_lines, _, _ = read_new_records(source.path, 0)
         source_lines.extend(extra_records)
+        if (
+            replay_held
+            and not metadata_suffix
+            and any(item.final and item.payload.get("total_line_count", 0) > len(source_lines) for item in old_batches)
+        ):
+            return False
         if not source_lines:
             if any(item.payload.get("lines") for item in old_batches):
                 return False
+            if metadata_suffix:
+                queued = telemetry_buffer.pending(
+                    destination=destination, user_id=user_id, limit=100000, db_path=db_path
+                )
+                if not any(
+                    item.harness == source.harness
+                    and item.session_id == source.session_id
+                    and item.final
+                    and item.start_line == retained_total
+                    and item.end_line == retained_total - 1
+                    and item.payload.get("total_line_count") == retained_total
+                    and item.payload.get("session_hash") == session_hash
+                    for item in queued
+                ):
+                    return False
             telemetry_buffer.clear_replay_backoff(old_batches, db_path=db_path)
+            if replay_held:
+                telemetry_buffer.clear_replay_hold(
+                    destination=destination,
+                    user_id=user_id,
+                    harness=source.harness,
+                    session_id=source.session_id,
+                    db_path=db_path,
+                )
             return True
         queued = telemetry_buffer.pending(destination=destination, user_id=user_id, limit=100000, db_path=db_path)
         replay = {
@@ -916,6 +1103,7 @@ def drain_session_source(
                 or chunk.payload.get("lines") != source_lines[start:end]
                 or (
                     end == len(source_lines)
+                    and not metadata_suffix
                     and (
                         not chunk.final
                         or chunk.payload.get("total_line_count") != len(source_lines)
@@ -926,7 +1114,19 @@ def drain_session_source(
                 return False
             if end == len(source_lines):
                 replacement = chunk
+        if metadata_suffix:
+            replacement = replay.get((retained_total, retained_total - 1))
+            if (
+                replacement is None
+                or not replacement.final
+                or replacement.payload.get("total_line_count") != retained_total
+                or replacement.payload.get("hashed_line_count") != hashed_line_count
+                or replacement.payload.get("session_hash") != session_hash
+            ):
+                return False
         for old in old_batches:
+            if metadata_suffix and old.final and not old.payload.get("lines"):
+                continue
             if (
                 old.end_line >= len(source_lines)
                 or old.payload.get("lines") != source_lines[old.start_line : old.end_line + 1]
@@ -947,6 +1147,14 @@ def drain_session_source(
             if not telemetry_buffer.accept_item(old, db_path=db_path):
                 return False
         telemetry_buffer.clear_replay_backoff(old_batches, db_path=db_path)
+        if replay_held:
+            telemetry_buffer.clear_replay_hold(
+                destination=destination,
+                user_id=user_id,
+                harness=source.harness,
+                session_id=source.session_id,
+                db_path=db_path,
+            )
         return True
 
     if not lines:
@@ -956,9 +1164,9 @@ def drain_session_source(
             payload = build_payload(
                 session_id=source.session_id,
                 lines=[],
-                start_offset=line_count,
+                start_offset=retained_total if metadata_suffix else line_count,
                 hook_event=hook_event,
-                line_count_before=line_count,
+                line_count_before=retained_total if metadata_suffix else line_count,
                 new_offset=byte_offset,
                 cwd=cwd,
                 parent_session_id=source.parent_session_id,
@@ -970,7 +1178,7 @@ def drain_session_source(
                 payload.update({key: value for key, value in extra_fields.items() if key != "layer_hash"})
             if final:
                 payload["final"] = True
-                payload["total_line_count"] = line_count
+                payload["total_line_count"] = retained_total if metadata_suffix else line_count
                 payload["total_offset"] = byte_offset
                 payload["session_hash"] = session_hash
                 payload["hashed_line_count"] = hashed_line_count
@@ -1051,7 +1259,7 @@ def drain_session_source(
         )
         payload["harness"] = source.harness
         payload["end_byte_offsets"] = chunk_end_offsets
-        if final and is_last:
+        if final and is_last and not metadata_suffix:
             payload["final"] = True
             payload["total_line_count"] = line_count + len(lines)
             payload["total_offset"] = byte_offset + bytes_read
@@ -1073,6 +1281,36 @@ def drain_session_source(
             user_id=user_id,
             checkpoint_key=source.checkpoint_key,
             db_path=db_path,
+        )
+
+    if metadata_suffix:
+        # File records are posted first; the final carries no invented suffix.
+        payload = build_payload(
+            session_id=source.session_id,
+            lines=[],
+            start_offset=retained_total,
+            hook_event=hook_event,
+            line_count_before=retained_total,
+            new_offset=byte_offset + bytes_read,
+            cwd=source.cwd,
+            parent_session_id=source.parent_session_id,
+            session_jsonl=source.path,
+            harness=source.harness,
+        )
+        payload.update(
+            {
+                "harness": source.harness,
+                "final": True,
+                "total_line_count": retained_total,
+                "total_offset": byte_offset + bytes_read,
+                "session_hash": session_hash,
+                "hashed_line_count": hashed_line_count,
+            }
+        )
+        if extra_fields:
+            payload.update(extra_fields)
+        telemetry_buffer.enqueue(
+            payload, destination=destination, user_id=user_id, checkpoint_key=source.checkpoint_key, db_path=db_path
         )
 
     if not retire_covered_batches():

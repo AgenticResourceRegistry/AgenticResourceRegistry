@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Manual recovery for local harness sessions missed by automatic delivery."""
@@ -13,10 +14,12 @@ import typer
 from rich import print as rprint
 from typer.models import OptionInfo
 
+from observal_cli import telemetry_buffer
 from observal_cli.errors import ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter, get_all_adapters
 from observal_cli.render import OutputMode, esc, output_json
 from observal_cli.sessions.base import (
+    cursor_source_shrunk,
     drain_outbox,
     drain_session_source,
     load_config,
@@ -214,10 +217,25 @@ def _reconcile_harness(
             continue
 
         local_offset, _line_count, finalized = read_cursor_state(source.checkpoint_key)
+        shrunk = cursor_source_shrunk(source.checkpoint_key)
         bytes_new = max(size - local_offset, 0)
+        held = (
+            telemetry_buffer.replay_held(
+                destination=str(cfg["server_url"]),
+                user_id=str(cfg["user_id"]),
+                harness=source.harness,
+                session_id=source.session_id,
+            )
+            if cfg.get("server_url") and cfg.get("user_id")
+            else False
+        )
         session["bytes_new"] = bytes_new
         if dry_run:
-            if bytes_new:
+            if held or shrunk or local_offset > size:
+                result["would_push"] += 1
+                session["status"] = "would_push"
+                rprint(f"  [dim]Would replay:[/dim] {esc(source.session_id)}")
+            elif bytes_new:
                 result["would_push"] += 1
                 session["status"] = "would_push"
                 rprint(f"  [dim]Would push:[/dim] {esc(source.session_id)} ({bytes_new} bytes new)")
@@ -231,14 +249,14 @@ def _reconcile_harness(
             result["sessions"].append(session)
             continue
 
-        if finalized and local_offset >= size:
+        if finalized and local_offset == size and not held and not shrunk:
             result["up_to_date"] += 1
             session["status"] = "up_to_date"
             result["sessions"].append(session)
             continue
 
         try:
-            recovered = recover_cursor_from_server(source, cfg)
+            recovered = (local_offset, _line_count) if held else recover_cursor_from_server(source, cfg)
         except (OSError, sqlite3.Error) as error:
             fail(
                 ErrorCategory.UNAVAILABLE,

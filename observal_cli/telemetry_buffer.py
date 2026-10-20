@@ -98,6 +98,11 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             "CREATE TABLE IF NOT EXISTS session_outbox_backoff (item_id INTEGER PRIMARY KEY, retry_after REAL NOT NULL)"
         )
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_outbox_replay_hold ("
+            "destination TEXT NOT NULL, user_id TEXT NOT NULL, harness TEXT NOT NULL, "
+            "session_id TEXT NOT NULL, PRIMARY KEY(destination, user_id, harness, session_id))"
+        )
+        conn.execute(
             """CREATE TABLE IF NOT EXISTS session_outbox_rejected (
                 item_id INTEGER PRIMARY KEY, destination TEXT NOT NULL, user_id TEXT NOT NULL,
                 harness TEXT NOT NULL, session_id TEXT NOT NULL, recovered INTEGER NOT NULL DEFAULT 0,
@@ -165,8 +170,13 @@ def enqueue(
     start_line = int(payload.get("start_offset", 0))
     end_line = start_line + len(lines) - 1
     end_offsets = payload.get("end_byte_offsets") or []
-    end_offset = int(end_offsets[-1]) if end_offsets else int(payload.get("total_offset") or 0)
     final = bool(payload.get("final"))
+    if final and payload.get("total_offset") is not None:
+        end_offset = int(payload["total_offset"])
+    elif end_offsets:
+        end_offset = int(end_offsets[-1])
+    else:
+        end_offset = int(payload.get("total_offset") or 0)
     serialized = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     records_hash = _records_hash(payload)
     key = (destination.rstrip("/"), user_id, harness, session_id, start_line, end_line)
@@ -196,7 +206,11 @@ def enqueue(
                 ON CONFLICT(destination, user_id, harness, session_id, start_line, end_line)
                 DO UPDATE SET
                     checkpoint_key = excluded.checkpoint_key,
-                    end_offset = max(session_outbox.end_offset, excluded.end_offset),
+                    end_offset = CASE
+                        WHEN excluded.final = 1 OR (excluded.end_line < excluded.start_line AND session_outbox.final = 0)
+                        THEN excluded.end_offset
+                        ELSE max(session_outbox.end_offset, excluded.end_offset)
+                    END,
                     final = max(session_outbox.final, excluded.final),
                     payload = CASE
                         WHEN excluded.final = 1 OR (excluded.end_line < excluded.start_line AND session_outbox.final = 0)
@@ -243,6 +257,7 @@ def pending(
     limit: int = BATCH_SIZE,
     exclude_sessions: set[tuple[str, str]] | None = None,
     skip_backoff: bool = False,
+    skip_replay_hold: bool = False,
     db_path: Path | None = None,
 ) -> list[OutboxItem]:
     """Return source-order batches by session, excluding rejected sessions and optional backoff."""
@@ -258,6 +273,13 @@ def pending(
             if skip_backoff
             else ""
         )
+        hold_predicate = (
+            "AND NOT EXISTS (SELECT 1 FROM session_outbox_replay_hold h WHERE "
+            "h.destination = session_outbox.destination AND h.user_id = session_outbox.user_id "
+            "AND h.harness = session_outbox.harness AND h.session_id = session_outbox.session_id) "
+            if skip_replay_hold
+            else ""
+        )
         rows = conn.execute(
             "SELECT id, destination, user_id, harness, session_id, checkpoint_key, "
             "start_line, end_line, end_offset, final, payload, attempts, "
@@ -267,6 +289,7 @@ def pending(
             "r.destination = session_outbox.destination AND r.user_id = session_outbox.user_id "
             "AND r.harness = session_outbox.harness AND r.session_id = session_outbox.session_id AND r.recovered = 0) "
             + backoff_predicate
+            + hold_predicate
             + predicate
             + " ORDER BY (SELECT min(s.id) FROM session_outbox s WHERE "
             "s.destination = session_outbox.destination AND s.user_id = session_outbox.user_id "
@@ -299,6 +322,49 @@ def pending(
             )
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+def set_replay_hold(item: OutboxItem, *, db_path: Path | None = None) -> None:
+    """Block delivery of this session until a replacement audit is durable."""
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO session_outbox_replay_hold VALUES (?, ?, ?, ?)",
+            (item.destination, item.user_id, item.harness, item.session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def replay_held(*, destination: str, user_id: str, harness: str, session_id: str, db_path: Path | None = None) -> bool:
+    conn = _connect(db_path)
+    try:
+        return (
+            conn.execute(
+                "SELECT 1 FROM session_outbox_replay_hold WHERE destination = ? AND user_id = ? "
+                "AND harness = ? AND session_id = ?",
+                (destination.rstrip("/"), user_id, harness, session_id),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
+def clear_replay_hold(
+    *, destination: str, user_id: str, harness: str, session_id: str, db_path: Path | None = None
+) -> None:
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "DELETE FROM session_outbox_replay_hold WHERE destination = ? AND user_id = ? "
+            "AND harness = ? AND session_id = ?",
+            (destination.rstrip("/"), user_id, harness, session_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 

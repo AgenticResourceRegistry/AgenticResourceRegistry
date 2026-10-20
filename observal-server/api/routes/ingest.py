@@ -227,18 +227,21 @@ async def ingest_session(
             user_id=user_id,
             harness=req.harness,
             expected_line_count=req.total_line_count,
-            expected_offset=req.total_offset or 0,
+            expected_offset=req.total_offset,
             acknowledged_line=acknowledged_line,
             acknowledged_offset=acknowledged_offset,
             expected_hash=req.session_hash,
             hashed_line_count=req.hashed_line_count,
         )
         integrity_ok = integrity.ok
-        if integrity.repair_from_line is not None:
+        if integrity.repair_from_line is not None or integrity.reconciled_offset:
             from services.clickhouse import insert_session_checkpoint
 
-            acknowledged_line = integrity.repair_from_line - 1
-            acknowledged_offset = integrity.repair_offset
+            if integrity.repair_from_line is not None:
+                acknowledged_line = integrity.repair_from_line - 1
+                acknowledged_offset = integrity.repair_offset
+            else:
+                acknowledged_offset = integrity.expected_offset
             await insert_session_checkpoint(
                 req.session_id,
                 project_id,
