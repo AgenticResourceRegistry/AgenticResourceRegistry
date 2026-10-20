@@ -655,6 +655,48 @@ def recover_quarantined(item_id: int, *, db_path: Path | None = None, payload: d
         conn.close()
 
 
+def clear_replay_backoff(items: list[OutboxItem], *, db_path: Path | None = None) -> None:
+    """A validated source replay can retry its retained batches immediately."""
+    conn = _connect(db_path)
+    try:
+        conn.executemany("DELETE FROM session_outbox_backoff WHERE item_id = ?", ((item.id,) for item in items))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def demote_replayed_final(item: OutboxItem, replacement: OutboxItem, *, db_path: Path | None = None) -> bool:
+    """CAS a stale intermediate final only while its replacement is durable."""
+    if not item.final or not replacement.final or replacement.end_line <= item.end_line:
+        return False
+    payload = dict(item.payload)
+    for key in ("final", "total_line_count", "total_offset", "session_hash", "hashed_line_count"):
+        payload.pop(key, None)
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        durable = conn.execute(
+            "SELECT 1 FROM session_outbox WHERE id = ? AND payload = ? AND final = 1",
+            (replacement.id, replacement.payload_snapshot),
+        ).fetchone()
+        changed = 0
+        if durable:
+            changed = conn.execute(
+                "UPDATE session_outbox SET final = 0, payload = ? "
+                "WHERE id = ? AND payload = ? AND end_offset = ? AND final = 1",
+                (
+                    json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
+                    item.id,
+                    item.payload_snapshot,
+                    item.end_offset,
+                ),
+            ).rowcount
+        conn.commit()
+        return bool(changed)
+    finally:
+        conn.close()
+
+
 def accept_item(item: OutboxItem, *, db_path: Path | None = None) -> bool:
     """Remove one posted batch when an audit rewinds the contiguous checkpoint."""
     conn = _connect(db_path)

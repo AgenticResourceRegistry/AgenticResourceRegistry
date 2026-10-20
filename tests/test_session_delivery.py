@@ -701,6 +701,391 @@ def test_final_hash_mismatch_rewinds_and_repairs_source_range(tmp_path: Path, mo
     assert base.read_cursor("session", home=tmp_path) == (source_path.stat().st_size, 3)
 
 
+@pytest.mark.parametrize("interrupt", ["write", "accept"])
+def test_repair_interruption_preserves_final_replay(tmp_path: Path, monkeypatch, interrupt: str):
+    disable_payload_metadata(monkeypatch)
+    path = tmp_path / "session.jsonl"
+    path.write_text('{"n":0}\n{"n":1}\n')
+    source = SessionSource("claude-code", "session", path)
+    db = tmp_path / "outbox.db"
+    base.write_cursor("session", path.stat().st_size, 2, finalized=True, home=tmp_path)
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 0,
+            "lines": ['{"n":0}', '{"n":1}'],
+            "end_byte_offsets": [8, path.stat().st_size],
+            "final": True,
+            "total_line_count": 2,
+            "total_offset": path.stat().st_size,
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    real_write = base._write_cursor_unlocked
+    real_accept = telemetry_buffer.accept_item
+
+    def interrupted_write(*args, **kwargs):
+        raise RuntimeError("interrupted before cursor replacement")
+
+    def interrupted_accept(*args, **kwargs):
+        raise RuntimeError("interrupted after cursor replacement")
+
+    monkeypatch.setattr(base, "_write_cursor_unlocked", interrupted_write if interrupt == "write" else real_write)
+    monkeypatch.setattr(telemetry_buffer, "accept_item", interrupted_accept if interrupt == "accept" else real_accept)
+
+    def repair(*_args):
+        return {"acknowledged_line": 0, "acknowledged_offset": 8, "repair_from_line": 1}
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        base.drain_outbox(config(), home=tmp_path, db_path=db, post=repair)
+    queued = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert len(queued) == 1 and queued[0].final
+    assert base.read_cursor_state("session", home=tmp_path) == (
+        (path.stat().st_size, 2, True) if interrupt == "write" else (8, 1, False)
+    )
+    monkeypatch.setattr(base, "_write_cursor_unlocked", real_write)
+    monkeypatch.setattr(telemetry_buffer, "accept_item", real_accept)
+    posts = []
+
+    def resume(payload, _config):
+        posts.append(payload["start_offset"])
+        return {
+            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
+            "acknowledged_offset": payload.get("end_byte_offsets", [payload.get("total_offset")])[-1],
+        }
+
+    assert base.drain_session_source(
+        source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=resume
+    )
+    assert posts[0] == 0
+    assert base.read_cursor_state("session", home=tmp_path) == (path.stat().st_size, 2, True)
+
+
+@pytest.mark.parametrize("count", [12, 512])
+def test_earlier_final_repair_respooled_before_queued_neighbors(tmp_path: Path, monkeypatch, count: int):
+    disable_payload_metadata(monkeypatch)
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(f'{{"n":{n}}}  \n' for n in range(count)))
+    source = SessionSource("claude-code", "session", path)
+    db = tmp_path / "outbox.db"
+    lines, offsets, _ = base.read_new_records(path, 0)
+    assert offsets[4] == 50
+    base.write_cursor("session", offsets[9], 10, finalized=True, home=tmp_path)
+    for start in (10, 11):
+        telemetry_buffer.enqueue(
+            {
+                "harness": "claude-code",
+                "session_id": "session",
+                "start_offset": start,
+                "lines": [lines[start]],
+                "end_byte_offsets": [offsets[start]],
+                "final": start == 10,
+                "total_line_count": count,
+                "total_offset": offsets[-1],
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    posted = []
+
+    def audit(payload, _config):
+        posted.append(payload["start_offset"])
+        if len(posted) == 1:
+            return {"acknowledged_line": 4, "acknowledged_offset": offsets[4], "repair_from_line": 5}
+        return {
+            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
+            "acknowledged_offset": payload["end_byte_offsets"][-1],
+        }
+
+    assert base.drain_session_source(
+        source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=audit
+    )
+    assert posted == ([10, 0] if count == 12 else [10, 0, 500])
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
+    assert base.read_cursor_state("session", home=tmp_path) == (offsets[-1], count, True)
+
+
+def test_earlier_repair_survives_interrupted_chunk_spool(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(f'{{"n":{n}}}\n' for n in range(512)))
+    source = SessionSource("claude-code", "session", path)
+    db = tmp_path / "outbox.db"
+    lines, offsets, _ = base.read_new_records(path, 0)
+    base.write_cursor("session", offsets[9], 10, finalized=True, home=tmp_path)
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 10,
+            "lines": [lines[10]],
+            "end_byte_offsets": [offsets[10]],
+            "final": True,
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    real_enqueue = telemetry_buffer.enqueue
+    interrupted = False
+
+    def crash_on_second_chunk(payload, **kwargs):
+        nonlocal interrupted
+        if payload["start_offset"] == 500 and not interrupted:
+            interrupted = True
+            raise RuntimeError("interrupted spool")
+        return real_enqueue(payload, **kwargs)
+
+    monkeypatch.setattr(telemetry_buffer, "enqueue", crash_on_second_chunk)
+    attempts = []
+
+    def audit(payload, _config):
+        attempts.append(payload["start_offset"])
+        if payload["start_offset"] == 10:
+            return {"acknowledged_line": 4, "acknowledged_offset": offsets[4], "repair_from_line": 5}
+        return {
+            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
+            "acknowledged_offset": payload["end_byte_offsets"][-1],
+        }
+
+    with pytest.raises(RuntimeError, match="interrupted spool"):
+        base.drain_session_source(
+            source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=audit
+        )
+    monkeypatch.setattr(telemetry_buffer, "enqueue", real_enqueue)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 2
+    assert base.drain_session_source(
+        source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=audit
+    )
+    assert attempts[-2:] == [0, 500]
+    assert base.read_cursor_state("session", home=tmp_path) == (offsets[-1], 512, True)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
+
+
+def test_earlier_final_repair_without_source_does_not_starve_other_sessions(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    for session_id, start in (("missing", 10), ("healthy", 0)):
+        telemetry_buffer.enqueue(
+            {
+                "harness": "claude-code",
+                "session_id": session_id,
+                "start_offset": start,
+                "lines": ["record"],
+                "end_byte_offsets": [100 if start else 6],
+                "final": session_id == "missing",
+                "total_line_count": 11 if start else 1,
+                "total_offset": 100 if start else 6,
+                "session_hash": "final-audit" if start else None,
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    base.write_cursor("missing", 90, 10, finalized=True, home=tmp_path)
+    posted = []
+
+    def post(payload, _config):
+        posted.append(payload["session_id"])
+        if payload["session_id"] == "missing":
+            # The remote offset is not a local source boundary and cannot be trusted.
+            return {"acknowledged_line": 4, "acknowledged_offset": 42, "repair_from_line": 5}
+        return {"acknowledged_line": 0, "acknowledged_offset": 6}
+
+    repairs = []
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post, repairs=repairs)
+    assert posted == ["missing", "healthy"]
+    assert repairs == [("claude-code", "missing")]
+    assert base.read_cursor_state("missing", home=tmp_path) == (0, 0, False)
+    assert base.read_cursor("healthy", home=tmp_path) == (6, 1)
+    pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert len(pending) == 1 and pending[0].session_id == "missing" and pending[0].final
+    assert pending[0].payload["session_hash"] == "final-audit"
+    assert pending[0].payload["total_offset"] == 100
+    assert pending[0].attempts == 1 and pending[0].retry_after > 0
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert posted == ["missing", "healthy"]
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "healthy-later",
+            "start_offset": 0,
+            "lines": ["record"],
+            "end_byte_offsets": [6],
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    monkeypatch.setattr(telemetry_buffer.time, "time", lambda: 10**12)
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert posted == ["missing", "healthy", "missing", "healthy-later"]
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert posted == ["missing", "healthy", "missing", "healthy-later"]
+    pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert len(pending) == 1 and pending[0].final and pending[0].attempts == 2
+
+
+@pytest.mark.parametrize("source_present", [False, True])
+def test_line_zero_final_repair_keeps_audit_until_replay(tmp_path: Path, monkeypatch, source_present: bool):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    path = tmp_path / "session.jsonl"
+    if source_present:
+        path.write_text('{"n":0}\n')
+    source = SessionSource("claude-code", "session", path)
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 0,
+            "lines": ['{"n":0}'],
+            "end_byte_offsets": [8],
+            "final": True,
+            "total_line_count": 1,
+            "total_offset": 8,
+            "session_hash": "old-audit",
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    base.write_cursor("session", 8, 1, finalized=True, home=tmp_path)
+    assert not base.drain_outbox(
+        config(),
+        home=tmp_path,
+        db_path=db,
+        post=lambda *_: {"acknowledged_line": -1, "acknowledged_offset": 0, "repair_from_line": 0},
+    )
+    queued = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert len(queued) == 1 and queued[0].final and queued[0].payload["session_hash"] == "old-audit"
+    assert base.read_cursor_state("session", home=tmp_path) == (0, 0, False)
+    if not source_present:
+        assert not base.drain_session_source(
+            source, config(), hook_event="Stop", final=True, spool_only=True, home=tmp_path, db_path=db
+        )
+        assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0].final
+    else:
+        assert base.drain_session_source(
+            source, config(), hook_event="Stop", final=True, spool_only=True, home=tmp_path, db_path=db
+        )
+        replayed = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+        assert len(replayed) == 1 and replayed[0].final
+        assert replayed[0].payload["session_hash"] == base.hash_session_source(path)[0]
+
+
+def test_line_zero_final_survives_crash_before_replay_spool(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    path = tmp_path / "session.jsonl"
+    path.write_text('{"n":0}\n')
+    source = SessionSource("claude-code", "session", path)
+    base.write_cursor("session", 8, 1, finalized=True, home=tmp_path)
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 0,
+            "lines": ['{"n":0}'],
+            "end_byte_offsets": [8],
+            "final": True,
+            "total_line_count": 1,
+            "session_hash": "audit",
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    base.drain_outbox(
+        config(),
+        home=tmp_path,
+        db_path=db,
+        post=lambda *_: {"acknowledged_line": -1, "acknowledged_offset": 0, "repair_from_line": 0},
+    )
+
+    def crash(*_args, **_kwargs):
+        raise RuntimeError("before spool")
+
+    monkeypatch.setattr(telemetry_buffer, "enqueue", crash)
+    with pytest.raises(RuntimeError, match="before spool"):
+        base.drain_session_source(
+            source, config(), hook_event="Stop", final=True, spool_only=True, home=tmp_path, db_path=db
+        )
+    queued = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert len(queued) == 1 and queued[0].final and queued[0].payload["session_hash"] == "audit"
+
+
+def test_replayed_intermediate_final_is_demoted_after_growth(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(f'{{"n":{n}}}\n' for n in range(1500)))
+    source = SessionSource("claude-code", "session", path)
+    lines, offsets, _ = base.read_new_records(path, 0)
+    base.write_cursor("session", offsets[999], 1000, finalized=True, home=tmp_path)
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 500,
+            "lines": lines[500:1000],
+            "end_byte_offsets": offsets[500:1000],
+            "final": True,
+            "total_line_count": 1000,
+            "total_offset": offsets[999],
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    posted = []
+
+    def audit(payload, _config):
+        posted.append((payload["start_offset"], payload.get("final", False), payload.get("total_line_count")))
+        if len(posted) == 1:
+            return {"acknowledged_line": -1, "acknowledged_offset": 0, "repair_from_line": 0}
+        return {
+            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
+            "acknowledged_offset": payload["end_byte_offsets"][-1],
+        }
+
+    assert base.drain_session_source(
+        source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=audit
+    )
+    assert posted == [(500, True, 1000), (0, False, None), (500, False, None), (1000, True, 1500)]
+    assert base.read_cursor_state("session", home=tmp_path) == (offsets[-1], 1500, True)
+
+
+def test_earlier_repair_rejects_far_ahead_offset(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "s",
+            "start_offset": 10,
+            "lines": ["record"],
+            "end_byte_offsets": [100],
+            "final": True,
+        },
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    base.write_cursor("s", 90, 10, finalized=True, home=tmp_path)
+    assert not base.drain_outbox(
+        config(),
+        home=tmp_path,
+        db_path=db,
+        post=lambda *_: {"acknowledged_line": 4, "acknowledged_offset": 999, "repair_from_line": 5},
+    )
+    assert base.read_cursor_state("s", home=tmp_path) == (90, 10, True)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 1
+
+
 def test_server_commit_before_local_delete_is_safe_to_retry(tmp_path: Path, monkeypatch):
     disable_payload_metadata(monkeypatch)
     source_path = tmp_path / "session.jsonl"

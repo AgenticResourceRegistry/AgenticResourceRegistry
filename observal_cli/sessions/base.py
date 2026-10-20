@@ -636,7 +636,11 @@ def drain_outbox(
                     # when the numeric cursor returned to the same position.
                     return False
                 cursor_offset, cursor_line = read_cursor(item.checkpoint_key, home=home)
-                if repair_from_line == 0:
+                if item.final and repair_from_line < item.start_line:
+                    # The posted batch cannot prove the earlier source boundary.
+                    # Ignore the remote byte position and replay from the beginning.
+                    expected_offset = 0
+                elif repair_from_line == 0:
                     expected_offset = 0
                 elif item.start_line < repair_from_line <= item.start_line + len(offsets):
                     expected_offset = offsets[repair_from_line - item.start_line - 1]
@@ -646,19 +650,37 @@ def drain_outbox(
                     expected_offset = None
                 if (
                     expected_offset is None
+                    or acknowledged_offset is None
                     or acknowledged_line != repair_from_line - 1
-                    or acknowledged_offset != expected_offset
+                    or (repair_from_line >= item.start_line and acknowledged_offset != expected_offset)
                     or acknowledged_offset > item.end_offset
                 ):
                     telemetry_buffer.record_attempt(item.id, db_path=db_path)
                     return False
-                if not telemetry_buffer.accept_item(item, db_path=db_path):
-                    continue
                 _write_cursor_unlocked(
-                    item.checkpoint_key, acknowledged_offset, repair_from_line, home=home, preserve_finalized=False
+                    item.checkpoint_key,
+                    expected_offset,
+                    0 if repair_from_line < item.start_line else repair_from_line,
+                    home=home,
+                    preserve_finalized=False,
                 )
+                # Cursor first: a failed write must leave the only durable copy
+                # (including final audit metadata) in the outbox. Earlier repairs
+                # retain this batch until the source has been durably re-spooled.
+                if (
+                    not (item.final and repair_from_line == 0)
+                    and not (item.final and repair_from_line < item.start_line)
+                    and not telemetry_buffer.accept_item(item, db_path=db_path)
+                ):
+                    continue
             if repairs is not None:
                 repairs.append((item.harness, item.session_id))
+            if item.final and (repair_from_line == 0 or repair_from_line < item.start_line):
+                # Without a source to re-spool, this final batch must remain
+                # retryable, but must not starve other sessions on every drain.
+                telemetry_buffer.record_attempt(item.id, db_path=db_path, backoff=True)
+                blocked.add((item.harness, item.session_id))
+                continue
             return False
         if acknowledged_line < item.end_line:
             if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
@@ -794,6 +816,8 @@ def drain_session_source(
     user_id = str(config.get("user_id") or "")
     if source.path is None or not destination or not user_id:
         return False
+    if not source.path.is_file():
+        return False
 
     def source_was_rejected() -> bool:
         return telemetry_buffer.is_rejected(
@@ -822,16 +846,36 @@ def drain_session_source(
         byte_offset, line_count = recovered
     else:
         byte_offset, line_count = read_cursor(source.checkpoint_key, home=home)
-    byte_offset, line_count = telemetry_buffer.spooled_checkpoint(
-        destination=destination,
-        user_id=user_id,
-        harness=source.harness,
-        session_id=source.session_id,
-        checkpoint_key=source.checkpoint_key,
-        line_count=line_count,
-        byte_offset=byte_offset,
-        db_path=db_path,
+    # Snapshot old batches before replay. An earlier final audit may have
+    # rewound the cursor to zero while retaining later batches as the only
+    # durable copy until the source can be re-spooled.
+    old_batches = (
+        [
+            item
+            for item in telemetry_buffer.pending(
+                destination=destination, user_id=user_id, limit=100000, db_path=db_path
+            )
+            if item.harness == source.harness
+            and item.session_id == source.session_id
+            and item.checkpoint_key == source.checkpoint_key
+            and item.start_line >= 0
+        ]
+        if final and byte_offset == 0 and line_count == 0
+        else []
     )
+    replaying_final = any(item.final for item in old_batches)
+    if not replaying_final:
+        old_batches = []
+        byte_offset, line_count = telemetry_buffer.spooled_checkpoint(
+            destination=destination,
+            user_id=user_id,
+            harness=source.harness,
+            session_id=source.session_id,
+            checkpoint_key=source.checkpoint_key,
+            line_count=line_count,
+            byte_offset=byte_offset,
+            db_path=db_path,
+        )
     session_hash, hashed_line_count = hash_session_source(source.path) if final else (None, None)
     lines, end_byte_offsets, bytes_read = read_new_records(source.path, byte_offset)
     # Sources rebuilt from disk (recovery, reconcile) have no cwd. The payload's layer
@@ -841,6 +885,70 @@ def drain_session_source(
     if extra_records:
         lines.extend(extra_records)
         end_byte_offsets.extend([byte_offset + bytes_read] * len(extra_records))
+
+    def retire_covered_batches() -> bool:
+        if not old_batches:
+            return True
+        # An interrupted spool may already contain some replay chunks. Never
+        # remove an older final (or deliver a later neighbor) until *every*
+        # replay chunk is durable, including the new final audit metadata.
+        source_lines, _, _ = read_new_records(source.path, 0)
+        source_lines.extend(extra_records)
+        if not source_lines:
+            if any(item.payload.get("lines") for item in old_batches):
+                return False
+            telemetry_buffer.clear_replay_backoff(old_batches, db_path=db_path)
+            return True
+        queued = telemetry_buffer.pending(destination=destination, user_id=user_id, limit=100000, db_path=db_path)
+        replay = {
+            (item.start_line, item.end_line): item
+            for item in queued
+            if item.harness == source.harness
+            and item.session_id == source.session_id
+            and item.checkpoint_key == source.checkpoint_key
+        }
+        replacement = None
+        for start in range(0, len(source_lines), MAX_CHUNK_SIZE):
+            end = min(start + MAX_CHUNK_SIZE, len(source_lines))
+            chunk = replay.get((start, end - 1))
+            if (
+                chunk is None
+                or chunk.payload.get("lines") != source_lines[start:end]
+                or (
+                    end == len(source_lines)
+                    and (
+                        not chunk.final
+                        or chunk.payload.get("total_line_count") != len(source_lines)
+                        or chunk.payload.get("session_hash") != session_hash
+                    )
+                )
+            ):
+                return False
+            if end == len(source_lines):
+                replacement = chunk
+        for old in old_batches:
+            if (
+                old.end_line >= len(source_lines)
+                or old.payload.get("lines") != source_lines[old.start_line : old.end_line + 1]
+            ):
+                return False
+            reused = (
+                old.start_line % MAX_CHUNK_SIZE == 0
+                and old.end_line == min(old.start_line + MAX_CHUNK_SIZE, len(source_lines)) - 1
+            )
+            if reused:
+                if (
+                    old.final
+                    and old.end_line < len(source_lines) - 1
+                    and not telemetry_buffer.demote_replayed_final(old, replacement, db_path=db_path)
+                ):
+                    return False
+                continue
+            if not telemetry_buffer.accept_item(old, db_path=db_path):
+                return False
+        telemetry_buffer.clear_replay_backoff(old_batches, db_path=db_path)
+        return True
+
     if not lines:
         if bytes_read:
             byte_offset += bytes_read
@@ -877,6 +985,8 @@ def drain_session_source(
                 checkpoint_key=source.checkpoint_key,
                 db_path=db_path,
             )
+        if not retire_covered_batches():
+            return False
         if spool_only:
             return True
         if rejected:
@@ -964,6 +1074,9 @@ def drain_session_source(
             checkpoint_key=source.checkpoint_key,
             db_path=db_path,
         )
+
+    if not retire_covered_batches():
+        return False
 
     if spool_only:
         return True
