@@ -304,6 +304,51 @@ async def test_offset_only_final_reconciles_both_directions(monkeypatch, harness
 
 
 @pytest.mark.asyncio
+async def test_repeated_final_offset_rebase_preserves_synthetic_manifest(monkeypatch):
+    digest = hashlib.sha256(b"covered file record").hexdigest()
+    final_hash = hashlib.sha256(f"{digest}\n".encode()).hexdigest()
+    # ClickHouse source rows retain the original suffix byte position across
+    # checkpoint rebases; only the checkpoint changes between final requests.
+    manifest = [(0, 106, digest), (1, 106, "synthetic")]
+    query_manifest = AsyncMock(return_value=manifest)
+    monkeypatch.setattr(session_ingest, "query_session_source_manifest", query_manifest)
+    monkeypatch.setattr(
+        session_ingest, "ingest_session_lines", AsyncMock(return_value=session_ingest.IngestResult(0, 0, 0))
+    )
+    checkpoint = [1, 106]
+
+    async def advance(*_args):
+        return tuple(checkpoint)
+
+    async def insert(*args):
+        assert args[:4] == ("session", ingest_route.DEFAULT_PROJECT_ID, "user", "cursor")
+        checkpoint[:] = args[4:]
+
+    monkeypatch.setattr(session_ingest, "advance_session_checkpoint", advance)
+    monkeypatch.setattr(clickhouse, "insert_session_checkpoint", AsyncMock(side_effect=insert))
+    monkeypatch.setattr(clickhouse, "query_session_error_offsets", AsyncMock(return_value=[]))
+    for target in (109, 104):
+        req = SessionIngestRequest(
+            session_id="session",
+            harness="cursor",
+            lines=[],
+            final=True,
+            total_line_count=2,
+            total_offset=target,
+            session_hash=final_hash,
+            hashed_line_count=1,
+        )
+        response = await ingest_route.ingest_session.__wrapped__(req, MagicMock(), MagicMock(id="user"))
+        assert response.integrity_ok is True
+        assert response.repair_from_line is None
+        assert (response.acknowledged_line, response.acknowledged_offset) == (1, target)
+        assert checkpoint == [1, target]
+        assert manifest == [(0, 106, digest), (1, 106, "synthetic")]
+    assert query_manifest.await_count == 2
+    assert clickhouse.insert_session_checkpoint.await_count == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("manifest", "hash_count", "expected_hash"),
     [
@@ -311,7 +356,7 @@ async def test_offset_only_final_reconciles_both_directions(monkeypatch, harness
         ([(0, 18, "file")], 1, "match"),  # missing synthetic suffix
         ([(0, 18, "file"), (2, 18, "synthetic")], 1, "match"),  # gap
         ([(0, 18, "file"), (1, 18, "synthetic"), (2, 18, "extra")], 1, "match"),
-        ([(0, 18, "file"), (1, 19, "synthetic")], 1, "match"),  # suffix has wrong byte accounting
+        ([(0, 18, "file"), (1, 19, "synthetic"), (2, 20, "synthetic")], 1, "match"),  # split suffix
         ([(0, 18, "changed"), (1, 18, "synthetic")], 1, "match"),
         ([(0, 18, "file"), (1, 18, "synthetic")], 1, None),  # no hash to authenticate source
         ([(0, 18, "file"), (1, 18, "synthetic")], 0, "match"),
@@ -329,7 +374,7 @@ async def test_offset_reconciliation_rejects_unverified_manifest(monkeypatch, ma
         2,
         21,
         acknowledged_line=1,
-        acknowledged_offset=18,
+        acknowledged_offset=109,  # previously rebased, no longer equal to the manifest suffix
         expected_hash=digest,
         hashed_line_count=hash_count,
     )
@@ -347,7 +392,9 @@ async def test_offset_reconciliation_rejects_unverified_manifest(monkeypatch, ma
         ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], 4, 18, 21, True),
         ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], -1, 18, 21, True),
         ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], 1, 2**64, 21, True),
+        ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], 1, -1, 21, True),
         ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], 1, 18, 2**64, True),
+        ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], 1, 18, -1, True),
         ([(0, 18, "file"), (1, 21, "a"), (2, 21, "b")], 1, 18, 21, False),
     ],
 )

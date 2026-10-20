@@ -748,7 +748,10 @@ async def check_session_integrity(
         and server_hash == expected_hash
         and acknowledged_line == expected_line
         and complete_manifest
-        and 0 < acknowledged_offset == manifest[-1][1]
+        # A prior final audit may already have rebased this checkpoint without
+        # changing source rows. Require a bounded checkpoint, not equality with
+        # the stale suffix position in the source manifest.
+        and 0 <= acknowledged_offset <= 18_446_744_073_709_551_615
         and expected_offset is not None
         and 0 <= expected_offset <= 18_446_744_073_709_551_615
     )
