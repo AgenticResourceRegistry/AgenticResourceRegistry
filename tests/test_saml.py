@@ -861,12 +861,9 @@ class TestSamlEndpoints:
                     new_callable=AsyncMock,
                 ),
                 patch(
-                    "api.routes.sso_saml.create_access_token",
-                    return_value=("access-tok", 3600),
-                ),
-                patch(
-                    "api.routes.sso_saml.create_refresh_token",
-                    return_value=("refresh-tok", "jti-1"),
+                    "api.routes.sso_saml._issue_tokens",
+                    new_callable=AsyncMock,
+                    return_value=("access-tok", "refresh-tok", 3600),
                 ),
             ):
                 async with AsyncClient(
@@ -1247,12 +1244,9 @@ class TestSamlRelayState:
                     new_callable=AsyncMock,
                 ),
                 patch(
-                    "api.routes.sso_saml.create_access_token",
-                    return_value=("access-tok", 3600),
-                ),
-                patch(
-                    "api.routes.sso_saml.create_refresh_token",
-                    return_value=("refresh-tok", "jti-1"),
+                    "api.routes.sso_saml._issue_tokens",
+                    new_callable=AsyncMock,
+                    return_value=("access-tok", "refresh-tok", 3600),
                 ),
             ):
                 async with AsyncClient(
@@ -1338,12 +1332,9 @@ class TestSamlRelayState:
                     new_callable=AsyncMock,
                 ),
                 patch(
-                    "api.routes.sso_saml.create_access_token",
-                    return_value=("access-tok", 3600),
-                ),
-                patch(
-                    "api.routes.sso_saml.create_refresh_token",
-                    return_value=("refresh-tok", "jti-1"),
+                    "api.routes.sso_saml._issue_tokens",
+                    new_callable=AsyncMock,
+                    return_value=("access-tok", "refresh-tok", 3600),
                 ),
             ):
                 async with AsyncClient(
