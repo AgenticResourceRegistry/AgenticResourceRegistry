@@ -3726,10 +3726,10 @@ def test_pull_json_serialized_and_double_encoded_reflections_are_masked(capsys):
 
     from observal_cli.errors import CliError, ErrorCategory
 
-    secret = 'DUMMY"\\TOKEN'
-    serialized = json.dumps(secret)[1:-1]
-    twice_encoded = quote(quote(secret, safe=""), safe="")
-    token = cmd_pull._pull_secrets.set({secret})
+    sample_value = 'DUMMY"\\TOKEN'
+    serialized = json.dumps(sample_value)[1:-1]
+    twice_encoded = quote(quote(sample_value, safe=""), safe="")
+    token = cmd_pull._pull_secrets.set({sample_value})
     try:
         cmd_pull.output_json({"warnings": [f"reflected {serialized} {twice_encoded}"]})
         warning = json.loads(capsys.readouterr().out)["warnings"][0]
