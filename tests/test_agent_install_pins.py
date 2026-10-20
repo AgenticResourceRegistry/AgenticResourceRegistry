@@ -212,7 +212,7 @@ async def test_opted_in_resource_less_direct_agent_still_declares_skill_md(sessi
 
 
 @pytest.mark.parametrize(
-    "harness", ["claude-code", "pi", "codex", "copilot", "copilot-cli", "opencode", "antigravity", "goose"]
+    "harness", ["claude-code", "kiro", "pi", "codex", "copilot", "copilot-cli", "opencode", "antigravity", "goose"]
 )
 @pytest.mark.parametrize("scope", ["project", "user"])
 async def test_agent_bundle_preserves_pinned_tree_for_every_skill_harness(session, harness, scope):
@@ -277,7 +277,7 @@ async def test_agent_bundle_preserves_pinned_tree_for_every_skill_harness(sessio
     assert all(file["path"] != folder.skill_file_path for file in response.config_snippet.get("skills", []))
 
 
-@pytest.mark.parametrize("harness", ["kiro", "cursor"])
+@pytest.mark.parametrize("harness", ["cursor"])
 async def test_bundle_refuses_harness_without_verified_skills_capability(session, harness):
     owner = await ds.user(session)
     listing, agent, _ = await _pinned_agent(session, owner, "skill")
