@@ -51,8 +51,15 @@ function retryUntilSettled(
   const attempt = async () => {
     if (cancelled || inFlight) return;
     inFlight = true;
-    const result = await attemptRequest();
-    inFlight = false;
+    let result: Awaited<ReturnType<typeof attemptRequest>>;
+    try {
+      result = await attemptRequest();
+    } catch {
+      // A failed Web Lock cannot leave a guarded route spinning forever.
+      result = "reauth_required";
+    } finally {
+      inFlight = false;
+    }
     if (cancelled || authEpoch() !== epoch) return;
 
     if (result === "ok") {

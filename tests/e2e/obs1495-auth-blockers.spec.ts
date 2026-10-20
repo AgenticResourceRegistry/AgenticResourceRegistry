@@ -185,6 +185,75 @@ test(`base64url JWT ${label} subject and expiry allow account-wide logout`, asyn
 });
 }
 
+for (const [status, retry] of [[204, false], [200, false], [204, true], [200, true]] as const) {
+  test(`request rejects superseded ${status} ${retry ? "401 retry" : "initial"} response`, async ({ page, context }) => {
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    await context.route("**/api/v1/auth/token/refresh", (route) => route.fulfill({ json: { access_token: "A-new", refresh_token: "A-rotated" } }));
+    let requests = 0;
+    await context.route("**/api/v1/overview/stats", async (route) => {
+      requests++;
+      if (retry && requests === 1) return route.fulfill({ status: 401 });
+      entered();
+      await barrier;
+      await route.fulfill(status === 204 ? { status: 204 } : { json: profile });
+    });
+    await page.goto("/__auth_test__");
+    await page.evaluate(async (user) => {
+      const auth = await import("/src/lib/api.ts");
+      await auth.commitLogin({ access_token: "A", refresh_token: "A-refresh", user }, auth.loginStart());
+      (window as unknown as { pending: Promise<unknown> }).pending = auth.dashboard.stats()
+        .then(() => "success", (err: Error) => err.message);
+    }, profile);
+    await waiting;
+    await page.evaluate(async () => {
+      const auth = await import("/src/lib/api.ts");
+      await auth.commitLogin({ access_token: "B", refresh_token: "B-refresh",
+        user: { role: "user", name: "B", email: "b@example.test" } }, auth.loginStart());
+    });
+    release();
+    expect(await page.evaluate(() => (window as unknown as { pending: Promise<string> }).pending)).toBe("Session changed");
+  });
+}
+
+for (const retry of [false, true]) {
+test(`request rejects same-actor login during ${retry ? "retried" : "initial"} JSON decode`, async ({ page, context }) => {
+  let requests = 0;
+  await context.route("**/api/v1/auth/token/refresh", (route) => route.fulfill({ json: { access_token: "A-rotated", refresh_token: "A-rotated-refresh" } }));
+  await context.route("**/api/v1/overview/stats", (route) => {
+    requests++;
+    return route.fulfill(retry && requests === 1 ? { status: 401 } : { json: profile });
+  });
+  await page.goto("/__auth_test__");
+  await page.evaluate(async (user) => {
+    const auth = await import("/src/lib/api.ts");
+    await auth.commitLogin({ access_token: "A", refresh_token: "A-refresh", user }, auth.loginStart());
+    const original = Response.prototype.json;
+    let entered!: () => void;
+    let release!: () => void;
+    (window as unknown as { entered: Promise<void>; release: () => void; pending: Promise<string> }).entered = new Promise<void>((resolve) => { entered = resolve; });
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    (window as unknown as { release: () => void }).release = release;
+    Response.prototype.json = async function () {
+      if (this.url.includes("/overview/stats")) { entered(); await barrier; }
+      return original.call(this);
+    };
+    (window as unknown as { pending: Promise<string> }).pending = auth.dashboard.stats()
+      .then(() => "success", (err: Error) => err.message);
+  }, profile);
+  await page.evaluate(() => (window as unknown as { entered: Promise<void> }).entered);
+  await page.evaluate(async () => {
+    const auth = await import("/src/lib/api.ts");
+    await auth.commitLogin({ access_token: "A-again", refresh_token: "A-new",
+      user: { role: "user", name: "A", email: "a@example.test" } }, auth.loginStart());
+    (window as unknown as { release: () => void }).release();
+  });
+  expect(await page.evaluate(() => (window as unknown as { pending: Promise<string> }).pending)).toBe("Session changed");
+});
+}
+
 test("current-bearer GraphQL auth error still clears its owner", async ({ page }) => {
   let fail!: () => void;
   let subscribed!: () => void;
@@ -211,18 +280,24 @@ test("current-bearer GraphQL auth error still clears its owner", async ({ page }
   expect(await page.evaluate(() => localStorage.getItem("observal_logout_intent"))).not.toBeNull();
 });
 
-test("old-bearer GraphQL error cannot clear another tab's rotated session", async ({ page, context }) => {
+test("old-bearer GraphQL error recovers subscription after another tab rotates", async ({ page, context }) => {
   let sendError!: () => void;
   let subscribed!: () => void;
   const ready = new Promise<void>((resolve) => { subscribed = resolve; });
-  await context.route("**/api/v1/auth/token/refresh", (route) => route.fulfill({
-    contentType: "application/json", body: JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh" }),
-  }));
+  let subscriptions = 0;
+  const refreshes: string[] = [];
+  await context.route("**/api/v1/auth/token/refresh", (route) => {
+    refreshes.push(route.request().postDataJSON().refresh_token);
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      access_token: `new-access-${refreshes.length}`, refresh_token: `new-refresh-${refreshes.length}`,
+    }) });
+  });
   await page.routeWebSocket("**/api/v1/graphql", (ws) => {
     ws.onMessage((raw) => {
       const message = JSON.parse(String(raw));
       if (message.type === "connection_init") ws.send(JSON.stringify({ type: "connection_ack" }));
       if (message.type === "subscribe") {
+        subscriptions++;
         sendError = () => ws.send(JSON.stringify({ type: "error", id: message.id, payload: [{ message: "invalid token" }] }));
         subscribed();
       }
@@ -243,13 +318,13 @@ test("old-bearer GraphQL error cannot clear another tab's rotated session", asyn
   });
   // Replace the backend refresh call deterministically; only the shared JTI
   // changes, while the original subscription's bearer remains in the old tab.
-  expect(await other.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBe("new-refresh");
+  expect(await other.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBe("new-refresh-1");
   sendError();
-  // Let the browser dispatch the queued WebSocket frame before checking state.
-  await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+  await expect.poll(() => subscriptions).toBe(2);
+  expect(refreshes).toEqual(["old-refresh", "new-refresh-1"]);
   expect(await other.evaluate(() => ({ refresh: localStorage.getItem("observal_refresh_token"), intent: localStorage.getItem("observal_logout_intent") })))
-    .toMatchObject({ refresh: expect.any(String), intent: null });
-  expect(await page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBe("old-access");
+    .toMatchObject({ refresh: "new-refresh-2", intent: null });
+  expect(await page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBe("new-access-2");
 });
 
 async function warmDevice(page: Page) {
@@ -614,6 +689,37 @@ test("unsupported legacy owner signs out locally and best-effort revokes", async
 });
 
 for (const path of ["/account", "/resources/agents"] as const) {
+  test(`rejected refresh lock settles ${path} without unhandled rejection`, async ({ page, context }) => {
+    let refreshes = 0;
+    const unhandled: string[] = [];
+    page.on("pageerror", (err) => unhandled.push(err.message));
+    await context.route("**/api/v1/auth/token/refresh", (route) => {
+      refreshes++;
+      return route.fulfill({ status: 401 });
+    });
+    await page.goto("/__auth_test__");
+    await page.evaluate(async (user) => {
+      const auth = await import("/src/lib/api.ts");
+      await auth.commitLogin({ access_token: "A", refresh_token: "A-refresh", user }, auth.loginStart());
+    }, profile);
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "locks", { configurable: true, value: {
+        request: () => Promise.reject(new Error("startup lock rejected")),
+      } });
+    });
+    const fresh = await context.newPage();
+    fresh.on("pageerror", (err) => unhandled.push(err.message));
+    await fresh.goto(path);
+    if (path === "/account") {
+      await expect(fresh).toHaveURL(/\/login\?next=/);
+    } else {
+      await expect(fresh.getByRole("heading", { name: "Agentic Resources" })).toBeVisible();
+    }
+    expect(await fresh.evaluate(() => sessionStorage.getItem("observal_tab_guest"))).toBeNull();
+    expect(refreshes).toBe(0);
+    expect(unhandled).toEqual([]);
+  });
+
   test(`rejected migration lock settles ${path} without silently refreshing`, async ({ page, context }) => {
     let refreshes = 0;
     await context.route("**/api/v1/auth/token/refresh", (route) => {
