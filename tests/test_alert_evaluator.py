@@ -5,6 +5,8 @@
 
 """Tests for alert evaluation engine, SSRF protection, and webhook delivery."""
 
+import asyncio
+import threading
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -379,33 +381,62 @@ class TestEvaluateAlerts:
 
 
 class TestAlertRouteSSRF:
-    def test_validate_webhook_url_rejects_private(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_rejects_private(self):
         from api.routes.alert import _validate_webhook_url
 
         with patch("api.routes.alert.is_private_url", return_value=True):
             with pytest.raises(Exception) as exc_info:
-                _validate_webhook_url("http://10.0.0.1/hook")
+                await _validate_webhook_url("http://10.0.0.1/hook")
             assert exc_info.value.status_code == 400
             assert "private" in exc_info.value.detail.lower()
 
-    def test_validate_webhook_url_rejects_non_http(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_rejects_non_http(self):
         from api.routes.alert import _validate_webhook_url
 
         with pytest.raises(Exception) as exc_info:
-            _validate_webhook_url("ftp://example.com/hook")
+            await _validate_webhook_url("ftp://example.com/hook")
         assert exc_info.value.status_code == 400
         assert "http" in exc_info.value.detail.lower()
 
-    def test_validate_webhook_url_allows_empty(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_allows_empty(self):
         from api.routes.alert import _validate_webhook_url
 
-        _validate_webhook_url("")
+        await _validate_webhook_url("")
 
-    def test_validate_webhook_url_allows_public_https(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_allows_public_https(self):
         from api.routes.alert import _validate_webhook_url
 
         with patch("api.routes.alert.is_private_url", return_value=False):
-            _validate_webhook_url("https://hooks.slack.com/services/T00/B00/xxx")
+            await _validate_webhook_url("https://hooks.slack.com/services/T00/B00/xxx")
+
+    @pytest.mark.asyncio
+    async def test_slow_dns_does_not_block_event_loop(self):
+        from api.routes.alert import _validate_webhook_url
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_dns(_url):
+            started.set()
+            release.wait(timeout=5)
+            return True
+
+        with patch("api.routes.alert.is_private_url", side_effect=slow_dns):
+            task = asyncio.create_task(_validate_webhook_url("https://example.com/hook"))
+            try:
+                # This timer cannot fire if the DNS lookup blocks the event loop.
+                assert await asyncio.wait_for(asyncio.to_thread(started.wait, 2), timeout=3)
+                await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+                assert not task.done()
+            finally:
+                release.set()
+            with pytest.raises(Exception) as exc_info:
+                await task
+            assert exc_info.value.status_code == 400
 
 
 class TestAlertHistorySchema:

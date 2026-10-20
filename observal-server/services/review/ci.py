@@ -121,7 +121,7 @@ class Ctx:
         url, ref, _ = self.source()
         if not url:
             raise CheckSkippedError("No Git source recorded")
-        _validate_git_url(url)
+        await asyncio.to_thread(_validate_git_url, url)
         self._tmp = tempfile.mkdtemp(prefix="observal_ci_")
         for args in (("init", "-q"), ("fetch", "-q", "--depth", "1", "--no-tags", url, ref or "HEAD")):
             code, _, err = await _git(*args, cwd=self._tmp)
@@ -463,7 +463,7 @@ async def check_git_source(ctx: Ctx) -> Outcome:
     url, ref, recorded = ctx.source()
     if not url:
         return Outcome("skipped", ["No Git source recorded"])
-    _validate_git_url(url)
+    await asyncio.to_thread(_validate_git_url, url)
     notes = []
     if ref and _SHA.match(ref):
         await ctx.repo()  # Fetching the commit proves it exists.

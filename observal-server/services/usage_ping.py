@@ -399,7 +399,7 @@ async def _deliver_payload(payload: UsagePingPayload) -> httpx.Response:
     local_development = (
         settings.USAGE_PING_DEPLOYMENT_TYPE == "development" and parsed.hostname in _LOCAL_COLLECTOR_HOSTS
     )
-    if not local_development and is_private_url(collector_url):
+    if not local_development and await asyncio.to_thread(is_private_url, collector_url):
         raise RuntimeError("Usage-ping collector resolves to a private or internal address")
 
     last_error: Exception | None = None
