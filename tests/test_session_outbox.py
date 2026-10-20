@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -106,6 +107,31 @@ def test_source_batches_drain_before_metadata_waiting_on_their_checkpoint(tmp_pa
     assert [(item.start_line, item.end_line) for item in remaining] == [(2, 1)]
 
 
+def test_posted_metadata_ack_preserves_unposted_final_metadata(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    outbox.enqueue(payload(1, []) | {"total_credits": 1.0}, destination="http://server", user_id="user", db_path=db)
+    outbox.enqueue(
+        payload(2, [], final=True) | {"total_credits": 2.0}, destination="http://server", user_id="user", db_path=db
+    )
+    posted = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
+    assert (
+        outbox.acknowledge(
+            destination="http://server",
+            user_id="user",
+            harness="claude-code",
+            session_id="session",
+            acknowledged_line=999,
+            posted_item=posted,
+            db_path=db,
+        )
+        == 1
+    )
+    remaining = outbox.pending(destination="http://server", user_id="user", db_path=db)
+    assert len(remaining) == 1
+    assert remaining[0].payload["total_credits"] == 2.0
+    assert remaining[0].final
+
+
 def test_requeue_rejects_different_content_for_same_source_range(tmp_path: Path):
     db = tmp_path / "outbox.db"
     outbox.enqueue(payload(0, ["original"]), destination="http://server", user_id="user", db_path=db)
@@ -166,6 +192,28 @@ def test_capacity_failure_never_evicts_existing_records(tmp_path: Path):
     items = outbox.pending(destination="http://server", user_id="user", db_path=db)
     assert len(items) == 1
     assert items[0].payload["lines"] == ["kept"]
+
+
+def test_quarantine_frees_active_capacity_without_acking_and_corrected_replay(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    original = payload(0, ["bad" * 20_000])
+    outbox.enqueue(original, destination="http://server", user_id="user", db_path=db, max_bytes=128 * 1024)
+    item = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
+    outbox.quarantine(item, "422", db_path=db)
+    assert outbox.stats(db_path=db)["pending"] == 0
+    assert outbox.is_rejected(
+        destination="http://server",
+        user_id="user",
+        harness="claude-code",
+        session_id="session",
+        db_path=db,
+    )
+    corrected = payload(0, ["fixed"])
+    outbox.recover_quarantined(item.id, db_path=db, payload=corrected)
+    assert outbox.pending(destination="http://server", user_id="user", db_path=db)[0].payload == corrected
+    entries = list(db.with_suffix(".rejected.d").glob("*.json"))
+    assert len(entries) == 1
+    assert json.loads(entries[0].read_text())["payload"] == original
 
 
 def test_database_is_owner_only_and_stats_track_sync(tmp_path: Path):

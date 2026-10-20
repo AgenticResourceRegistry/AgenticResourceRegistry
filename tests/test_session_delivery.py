@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -195,13 +196,14 @@ def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_
         return {"acknowledged_line": 0, "acknowledged_offset": len("valid")}
 
     rejections = []
-    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post, rejections=rejections)
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post, rejections=rejections)
     assert rejections == [("claude-code", "bad", 422)]
-    assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
+    pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert pending == []
     assert telemetry_buffer.stats(db_path=db)["failed"] == 1
-    rejected = json.loads(db.with_suffix(".rejected.jsonl").read_text())
-    assert rejected["session_id"] == "bad"
-    assert rejected["reason"].endswith("status 422")
+    entries = list(db.with_suffix(".rejected.d").glob("*.json"))
+    assert len(entries) == 1
+    assert json.loads(entries[0].read_text())["payload"]["lines"] == ["invalid"]
 
 
 def _enqueue_lines(db: Path, session_id: str, start_line: int, count: int) -> None:
@@ -311,6 +313,202 @@ def test_reconcile_delivery_reports_rejection_without_advancing_cursor(tmp_path:
     assert rejections == [("kiro", "bad", 422)]
     assert base.read_cursor(source.checkpoint_key, home=tmp_path) == (0, 0)
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
+    assert telemetry_buffer.stats(db_path=db)["failed"] == 1
+
+
+def test_server_failure_skips_session_but_retains_order_across_restart(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    for session, start in (("bad", 0), ("bad", 1), ("good", 0)):
+        telemetry_buffer.enqueue(
+            {
+                "harness": "claude-code",
+                "session_id": session,
+                "lines": [str(start)],
+                "start_offset": start,
+                "end_byte_offsets": [(start + 1) * 10],
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    posted = []
+
+    def post(payload, _config):
+        posted.append((payload["session_id"], payload["start_offset"]))
+        if payload["session_id"] == "bad":
+            raise base.SessionServerError("500")
+        return {"acknowledged_line": 0, "acknowledged_offset": 10}
+
+    base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert posted == [("bad", 0), ("good", 0)]
+    posted.clear()
+    base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert posted == []
+    assert [
+        (item.session_id, item.start_line)
+        for item in telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    ] == [("bad", 0), ("bad", 1)]
+
+    monkeypatch.setattr(telemetry_buffer.time, "time", lambda: 10**12)
+    posted.clear()
+    base.drain_outbox(
+        config(),
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, cfg: (
+            posted.append(payload["start_offset"])
+            or {"acknowledged_line": payload["start_offset"], "acknowledged_offset": payload["end_byte_offsets"][-1]}
+        ),
+    )
+    assert posted == [0, 1]
+
+
+def test_backoff_skips_eight_sessions_and_visits_ninth_on_next_drain(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    for number in range(9):
+        telemetry_buffer.enqueue(
+            {
+                "harness": "claude-code",
+                "session_id": f"s{number}",
+                "lines": ["x"],
+                "start_offset": 0,
+                "end_byte_offsets": [1],
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    visited = []
+
+    def post(payload, _config):
+        visited.append(payload["session_id"])
+        if payload["session_id"] != "s8":
+            raise base.SessionServerError("500")
+        return {"acknowledged_line": 0, "acknowledged_offset": 1}
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert visited == [f"s{n}" for n in range(8)]
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert visited[-1] == "s8"
+
+
+def test_many_healthy_sessions_finish_across_bounded_drains(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    for number in range(60):
+        telemetry_buffer.enqueue(
+            {
+                "harness": "claude-code",
+                "session_id": f"healthy-{number}",
+                "lines": ["x"],
+                "start_offset": 0,
+                "end_byte_offsets": [1],
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    posted = []
+
+    def post(payload, _config):
+        posted.append(payload["session_id"])
+        return {"acknowledged_line": 0, "acknowledged_offset": 1}
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert len(posted) == 50
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert len(set(posted)) == 60
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
+
+
+def test_rejected_gap_survives_restart_and_explicit_recovery(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    ids = [
+        telemetry_buffer.enqueue(
+            {
+                "harness": "claude-code",
+                "session_id": "bad",
+                "lines": [line],
+                "start_offset": index,
+                "end_byte_offsets": [index + 1],
+            },
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+        for index, line in enumerate(("invalid", "later"))
+    ]
+    posted = []
+
+    def reject(payload, _config):
+        posted.append(payload["start_offset"])
+        raise base.PermanentIngestRejectionError(422)
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=reject)
+    assert posted == [0]
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=reject)
+    assert posted == [0]
+    assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
+    entries = list(db.with_suffix(".rejected.d").glob("*.json"))
+    assert len(entries) == 1
+    assert entries[0].stat().st_mode & 0o777 == 0o600
+    with pytest.raises(telemetry_buffer.OutboxConflictError):
+        telemetry_buffer.recover_quarantined(
+            ids[0],
+            db_path=db,
+            payload={"harness": "claude-code", "session_id": "other", "lines": ["x"], "start_offset": 0},
+        )
+    assert telemetry_buffer.is_rejected(
+        destination="http://server",
+        user_id="user",
+        harness="claude-code",
+        session_id="bad",
+        db_path=db,
+    )
+    assert telemetry_buffer.recover_quarantined(ids[0], db_path=db) > 0
+    with pytest.raises(telemetry_buffer.OutboxError, match="already recovered"):
+        telemetry_buffer.recover_quarantined(ids[0], db_path=db)
+    assert [
+        item.start_line
+        for item in telemetry_buffer.pending(
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    ] == [0, 1]
+    # Recovery must post the missing source line before later same-session records.
+    posted.clear()
+    assert base.drain_outbox(
+        config(),
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, _cfg: (
+            posted.append(payload["start_offset"])
+            or {"acknowledged_line": payload["start_offset"], "acknowledged_offset": payload["end_byte_offsets"][-1]}
+        ),
+    )
+    assert posted == [0, 1]
+
+
+def test_ack_cannot_delete_unposted_final_metadata_or_future_source(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    for payload in (
+        {"lines": ["zero"], "start_offset": 0, "end_byte_offsets": [10]},
+        {"lines": ["one"], "start_offset": 1, "end_byte_offsets": [20]},
+        {"lines": [], "start_offset": 2, "final": True, "total_offset": 20},
+    ):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": "s", **payload},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+
+    def ack(payload, _config):
+        return {"acknowledged_line": 999, "acknowledged_offset": 999999}
+
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=ack)
+    assert base.read_cursor("s", home=tmp_path) == (20, 2)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
 
 
 def test_spool_only_never_blocks_hook_on_network(tmp_path: Path, monkeypatch):
@@ -797,7 +995,13 @@ def test_post_to_server_transient_and_malformed_responses_are_soft(monkeypatch, 
 
     _install_http_transport(monkeypatch, handler)
 
-    assert base.post_to_server_ack("https://server.example", "token", {"session_id": "session", "lines": []}) is None
+    if failure == "rejected":
+        with pytest.raises(base.SessionServerError):
+            base.post_to_server_ack("https://server.example", "token", {"session_id": "session", "lines": []})
+    else:
+        assert (
+            base.post_to_server_ack("https://server.example", "token", {"session_id": "session", "lines": []}) is None
+        )
 
 
 def test_get_server_checkpoint_refreshes_and_preserves_source_identity(tmp_path: Path, monkeypatch):
@@ -895,6 +1099,29 @@ def test_drain_outbox_rejects_incomplete_configuration_and_partial_acknowledgeme
     pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
     assert [(item.session_id, item.start_line, item.end_line) for item in pending] == [("session", 0, 0)]
     assert base.read_cursor("session", home=tmp_path) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "ack",
+    [
+        {"acknowledged_line": True},
+        {"acknowledged_line": -2},
+        {"acknowledged_line": 999, "acknowledged_offset": True},
+        {"acknowledged_line": 999, "repair_from_line": True},
+        {"acknowledged_line": 999, "repair_from_line": 1000},
+    ],
+)
+def test_invalid_200_ack_keeps_batch_and_cursor(tmp_path: Path, ack: dict):
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "s", "lines": ["record"], "start_offset": 0, "end_byte_offsets": [10]},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=lambda *_args: ack)
+    assert base.read_cursor("s", home=tmp_path) == (0, 0)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 1
 
 
 def test_drain_session_source_rejects_missing_inputs_and_failed_recovery(tmp_path: Path, monkeypatch):

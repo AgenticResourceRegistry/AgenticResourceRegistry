@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared IO primitives for all harness session push scripts.
@@ -14,10 +15,14 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger as optic
+
+from observal_cli.lockfile import _exclusive_lock
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -62,6 +67,24 @@ def read_cursor(session_id: str, home: Path | None = None) -> tuple[int, int]:
     return offset, line_count
 
 
+@contextmanager
+def _cursor_lock(home: Path | None):
+    root = home if home is not None else Path.home()
+    directory = root / ".observal"
+    directory.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(directory / "sync_state.lock"):
+        yield
+
+
+def _cursor_entry(session_id: str, home: Path | None) -> dict | None:
+    path = (home if home is not None else Path.home()) / ".observal" / "sync_state.json"
+    try:
+        entry = json.loads(path.read_text()).get(session_id)
+        return entry if isinstance(entry, dict) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def write_cursor(
     session_id: str,
     offset: int,
@@ -75,10 +98,21 @@ def write_cursor(
     ``finalized=True`` marks that the Stop hook completed (or crash recovery
     ran) so the scanner will skip this session.
     """
+    with _cursor_lock(home):
+        _write_cursor_unlocked(session_id, offset, line_count, finalized, home, preserve_finalized)
+
+
+def _write_cursor_unlocked(
+    session_id: str,
+    offset: int,
+    line_count: int,
+    finalized: bool = False,
+    home: Path | None = None,
+    preserve_finalized: bool = True,
+) -> None:
     if home is None:
         home = Path.home()
     sync_dir = home / ".observal"
-    sync_dir.mkdir(parents=True, exist_ok=True)
     state_file = sync_dir / "sync_state.json"
 
     data: dict = {}
@@ -90,8 +124,17 @@ def write_cursor(
         except Exception:
             pass
 
-    entry: dict = {"offset": offset, "line_count": line_count}
     previous = data.get(session_id)
+    entry: dict = {
+        "offset": offset,
+        "line_count": line_count,
+        "revision": (
+            previous.get("revision", 0)
+            if isinstance(previous, dict) and type(previous.get("revision", 0)) is int
+            else 0
+        )
+        + 1,
+    }
     if finalized or (preserve_finalized and isinstance(previous, dict) and previous.get("finalized")):
         entry["finalized"] = True
     data[session_id] = entry
@@ -299,6 +342,10 @@ class PermanentIngestRejectionError(RuntimeError):
         super().__init__(f"server permanently rejected the payload with status {status_code}")
 
 
+class SessionServerError(RuntimeError):
+    """A server-side failure scoped to this session, not the transport."""
+
+
 def post_to_server_ack(
     server_url: str,
     access_token: str,
@@ -336,15 +383,21 @@ def post_to_server_ack(
                 )
                 if response.status_code in {400, 409, 413, 415, 422}:
                     raise PermanentIngestRejectionError(response.status_code)
+                if 500 <= response.status_code < 600:
+                    raise SessionServerError("ingest server returned 5xx")
                 return None
             data = response.json()
-            if not isinstance(data.get("acknowledged_line"), int):
+            if (
+                not isinstance(data, dict)
+                or type(data.get("acknowledged_line")) is not int
+                or data["acknowledged_line"] < -1
+            ):
                 optic.warning("ingest response for session {} had no acknowledgement", session_id)
                 return None
             elapsed = (time.perf_counter() - started) * 1000
             optic.debug("uploaded {} lines for session {} ({:.0f}ms)", line_count, session_id, elapsed)
             return data
-    except PermanentIngestRejectionError:
+    except (PermanentIngestRejectionError, SessionServerError):
         raise
     except Exception as e:
         elapsed = (time.perf_counter() - started) * 1000
@@ -508,81 +561,186 @@ def drain_outbox(
         )
     )
 
-    while items := telemetry_buffer.pending(
-        destination=destination,
-        user_id=user_id,
-        limit=1,
-        db_path=db_path,
-    ):
+    blocked: set[tuple[str, str]] = set()
+    visited: set[tuple[str, str]] = set()
+    # Bound HTTP work, not backoff scans. SQL skips backed-off sessions, so a ninth
+    # eligible session is visited even when the first eight failed in a prior drain.
+    probes = 0
+    while len(blocked) < 8 and probes < 50:
+        items = telemetry_buffer.pending(
+            destination=destination,
+            user_id=user_id,
+            limit=1,
+            exclude_sessions=blocked | visited,
+            skip_backoff=True,
+            db_path=db_path,
+        )
+        if not items:
+            if not visited:
+                break
+            visited.clear()
+            continue
         item = items[0]
+        with _cursor_lock(home):
+            cursor_before_post = _cursor_entry(item.checkpoint_key, home)
+        visited.add((item.harness, item.session_id))
+        if item.retry_after > time.time():
+            blocked.add((item.harness, item.session_id))
+            continue
+        probes += 1
         try:
             acknowledgement = post_batch(item.payload, config)
         except PermanentIngestRejectionError as exc:
-            quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+            archived = telemetry_buffer.quarantine(item, str(exc.status_code), db_path=db_path)
+            if archived is None:
+                # A newer version was spooled while this request was in flight.
+                continue
+            blocked.add((item.harness, item.session_id))
             if rejections is not None:
                 rejections.append((item.harness, item.session_id, exc.status_code))
             log_error(
-                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
+                f"rejected {item.harness} session {item.session_id} batch (status {exc.status_code}); "
+                f"quarantined as item {item.id} for explicit recovery",
                 home=home,
             )
+            continue
+        except SessionServerError:
+            telemetry_buffer.record_attempt(item.id, db_path=db_path, backoff=True)
+            blocked.add((item.harness, item.session_id))
             continue
         if acknowledgement is None:
             telemetry_buffer.record_attempt(item.id, db_path=db_path)
             return False
-        acknowledged_line = int(acknowledgement["acknowledged_line"])
-        acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
+        acknowledged_line = acknowledgement.get("acknowledged_line") if isinstance(acknowledgement, dict) else None
+        acknowledged_offset = acknowledgement.get("acknowledged_offset") if isinstance(acknowledgement, dict) else None
+        if (
+            type(acknowledged_line) is not int
+            or acknowledged_line < -1
+            or (acknowledged_offset is not None and (type(acknowledged_offset) is not int or acknowledged_offset < 0))
+        ):
+            telemetry_buffer.record_attempt(item.id, db_path=db_path)
+            return False
         repair_from_line = acknowledgement.get("repair_from_line")
-        if isinstance(repair_from_line, int):
-            write_cursor(
-                item.checkpoint_key,
-                acknowledged_offset,
-                repair_from_line,
-                home=home,
-                preserve_finalized=False,
-            )
-            telemetry_buffer.accept_item(item.id, db_path=db_path)
+        if repair_from_line is not None and (
+            type(repair_from_line) is not int or not 0 <= repair_from_line <= item.end_line + 1
+        ):
+            telemetry_buffer.record_attempt(item.id, db_path=db_path)
+            return False
+        if repair_from_line is not None:
+            # Never trust a server-provided byte position beyond the local posted source.
+            # For a rewind inside this batch, require the exact recorded line boundary.
+            offsets = item.payload.get("end_byte_offsets") or []
+            with _cursor_lock(home):
+                if _cursor_entry(item.checkpoint_key, home) != cursor_before_post:
+                    # An intervening repair/ACK invalidates this response, even
+                    # when the numeric cursor returned to the same position.
+                    return False
+                cursor_offset, cursor_line = read_cursor(item.checkpoint_key, home=home)
+                if repair_from_line == 0:
+                    expected_offset = 0
+                elif item.start_line < repair_from_line <= item.start_line + len(offsets):
+                    expected_offset = offsets[repair_from_line - item.start_line - 1]
+                elif cursor_line == repair_from_line:
+                    expected_offset = cursor_offset
+                else:
+                    expected_offset = None
+                if (
+                    expected_offset is None
+                    or acknowledged_line != repair_from_line - 1
+                    or acknowledged_offset != expected_offset
+                    or acknowledged_offset > item.end_offset
+                ):
+                    telemetry_buffer.record_attempt(item.id, db_path=db_path)
+                    return False
+                if not telemetry_buffer.accept_item(item, db_path=db_path):
+                    continue
+                _write_cursor_unlocked(
+                    item.checkpoint_key, acknowledged_offset, repair_from_line, home=home, preserve_finalized=False
+                )
             if repairs is not None:
                 repairs.append((item.harness, item.session_id))
             return False
         if acknowledged_line < item.end_line:
             if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
-                # The lines between the server checkpoint and this batch were quarantined
-                # or lost, so the checkpoint can never reach it. The server stored the
-                # batch; accept it instead of resending it forever ahead of every session.
-                write_cursor(
-                    item.checkpoint_key,
-                    item.end_offset,
-                    item.end_line + 1,
-                    finalized=item.final,
-                    home=home,
-                )
-                telemetry_buffer.accept_item(item.id, db_path=db_path)
+                # The server stored the batch, but a missing source line prevents
+                # its checkpoint from advancing. Never accept a stale response.
+                with _cursor_lock(home):
+                    if _cursor_entry(item.checkpoint_key, home) != cursor_before_post:
+                        return False
+                    if not telemetry_buffer.accept_item(item, db_path=db_path):
+                        continue
+                    current_offset, current_line = read_cursor(item.checkpoint_key, home=home)
+                    if item.end_line + 1 >= current_line:
+                        _write_cursor_unlocked(
+                            item.checkpoint_key,
+                            max(current_offset, item.end_offset),
+                            item.end_line + 1,
+                            finalized=item.final,
+                            home=home,
+                        )
                 log_error(
                     f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
                     f"past a checkpoint gap after line {acknowledged_line}",
                     home=home,
                 )
                 continue
+            telemetry_buffer.record_attempt(item.id, db_path=db_path)
             return False
-        if acknowledged_offset <= 0:
-            acknowledged_offset = item.end_offset
-        write_cursor(
-            item.checkpoint_key,
-            acknowledged_offset,
-            acknowledged_line + 1,
-            finalized=item.final,
-            home=home,
-        )
-        telemetry_buffer.acknowledge(
+        error_offsets = acknowledgement.get("error_offsets", [])
+        if isinstance(error_offsets, list):
+            count = 0
+            first_offsets: list[int] = []
+            for offset in error_offsets:
+                if type(offset) is int and item.start_line <= offset <= item.end_line:
+                    count += 1
+                    if len(first_offsets) < 10:
+                        first_offsets.append(offset)
+            if count:
+                log_error(
+                    f"session ingest: {count} source normalization error(s) "
+                    f"in posted batch; first offsets {first_offsets}",
+                    home=home,
+                )
+        # Server may be ahead due to another delivery process. Never extrapolate
+        # local state beyond the source positions this process actually posted.
+        with _cursor_lock(home):
+            if _cursor_entry(item.checkpoint_key, home) != cursor_before_post:
+                # Do not delete the batch on a stale ACK: the intervening
+                # rewind may require the source records to be posted again.
+                return False
+            if not telemetry_buffer.acknowledge(
+                destination=destination,
+                user_id=user_id,
+                harness=item.harness,
+                session_id=item.session_id,
+                acknowledged_line=item.end_line,
+                posted_item=item,
+                db_path=db_path,
+            ):
+                continue
+            current_offset, current_line = read_cursor(item.checkpoint_key, home=home)
+            if item.end_line + 1 >= current_line:
+                _write_cursor_unlocked(
+                    item.checkpoint_key,
+                    max(current_offset, item.end_offset),
+                    item.end_line + 1,
+                    finalized=item.final,
+                    home=home,
+                )
+    return (
+        not blocked
+        and not telemetry_buffer.pending(
             destination=destination,
             user_id=user_id,
-            harness=item.harness,
-            session_id=item.session_id,
-            acknowledged_line=acknowledged_line,
-            include_metadata=item.end_line < item.start_line,
+            limit=1,
             db_path=db_path,
         )
-    return True
+        and not telemetry_buffer.has_rejections(
+            destination=destination,
+            user_id=user_id,
+            db_path=db_path,
+        )
+    )
 
 
 def _checkpoint_gap_is_permanent(
@@ -638,7 +796,13 @@ def drain_session_source(
         return False
 
     def source_was_rejected() -> bool:
-        return bool(
+        return telemetry_buffer.is_rejected(
+            destination=destination,
+            user_id=user_id,
+            harness=source.harness,
+            session_id=source.session_id,
+            db_path=db_path,
+        ) or bool(
             rejections
             and any(
                 harness == source.harness and session_id == source.session_id for harness, session_id, _ in rejections
@@ -648,10 +812,10 @@ def drain_session_source(
     # A transient pre-drain failure never prevents new local records from being spooled.
     if not spool_only:
         drain_outbox(config, home=home, db_path=db_path, post=post, rejections=rejections)
-        if source_was_rejected():
-            return False
 
-    if recover_from_server:
+    # Rejected sessions still spool new records; only network delivery is paused.
+    rejected = source_was_rejected()
+    if recover_from_server and not rejected:
         recovered = recover_cursor_from_server(source, config, home=home, fetch=checkpoint_fetch)
         if recovered is None:
             return False
@@ -715,7 +879,11 @@ def drain_session_source(
             )
         if spool_only:
             return True
+        if rejected:
+            return False
         repairs: list[tuple[str, str]] = []
+        with _cursor_lock(home):
+            cursor_before_drain = _cursor_entry(source.checkpoint_key, home)
         delivered = drain_outbox(
             config,
             home=home,
@@ -741,13 +909,15 @@ def drain_session_source(
                 _repair_attempts=_repair_attempts + 1,
             )
         if bytes_read or (final and delivered and not source_was_rejected()):
-            write_cursor(
-                source.checkpoint_key,
-                byte_offset,
-                line_count,
-                finalized=final and delivered,
-                home=home,
-            )
+            with _cursor_lock(home):
+                if _cursor_entry(source.checkpoint_key, home) == cursor_before_drain:
+                    _write_cursor_unlocked(
+                        source.checkpoint_key,
+                        byte_offset,
+                        line_count,
+                        finalized=final and delivered,
+                        home=home,
+                    )
         return delivered and not source_was_rejected()
 
     # Attribute trailing blank-line bytes to the last real record checkpoint.
@@ -797,6 +967,8 @@ def drain_session_source(
 
     if spool_only:
         return True
+    if rejected:
+        return False
     repairs = []
     delivered = drain_outbox(
         config,
