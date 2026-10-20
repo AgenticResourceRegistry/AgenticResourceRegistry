@@ -98,13 +98,15 @@ async def detect_layer_groups(
     """
     query = get_query()
 
+    # The version expression has its own alias: naming it agent_version would make
+    # ClickHouse resolve the column inside it to the alias, and GROUP BY would fail.
     sql = """
         SELECT
             if(
                 agent_version = '' AND {agent_version:String} = '__LEGACY_VERSION__',
                 '__LEGACY_VERSION__',
                 agent_version
-            ) AS agent_version,
+            ) AS version_key,
             layer_hash,
             count() AS sessions,
             uniq(user_id) AS users,
@@ -124,13 +126,7 @@ async def detect_layer_groups(
           AND last_event_time <= {t_end:String}
           AND layer_hash != ''
           AND __AGENT_VERSION_FILTER__
-        GROUP BY
-            if(
-                agent_version = '' AND {agent_version:String} = '__LEGACY_VERSION__',
-                '__LEGACY_VERSION__',
-                agent_version
-            ),
-            layer_hash
+        GROUP BY version_key, layer_hash
         HAVING sessions >= 3
         ORDER BY sessions DESC
         LIMIT 20
@@ -156,7 +152,7 @@ async def detect_layer_groups(
 
     return [
         {
-            "agent_version": row.get("agent_version", ""),
+            "agent_version": row.get("version_key", ""),
             "layer_hash": row["layer_hash"],
             "sessions": int(row.get("sessions", 0)),
             "users": int(row.get("users", 0)),
