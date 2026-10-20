@@ -361,6 +361,9 @@ def meta_records(entries: list[dict]) -> list[dict]:
                 record = meta_assistant(ts, "" if model.startswith("<") else model)
                 assistants[message_id] = record
                 records.append(record)
+            if entry.get("isApiErrorMessage"):
+                # Claude Code's own notice when the API refused the request ("Not logged in").
+                record["message"]["stopReason"] = "error"
             usage = dict_field(message, "usage")
             if usage:
                 record["message"]["usage"] = meta_usage(

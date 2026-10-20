@@ -108,6 +108,7 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
     lines_removed = 0
     user_message_count = 0
     assistant_message_count = 0
+    failed_response_count = 0
     first_prompt = ""
     total_messages = 0
     model_usage: dict[str, dict] = {}  # {model: {input_tokens, output_tokens, cost, messages}}
@@ -238,6 +239,12 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
 
         # ── Assistant message ──
         if role == "assistant":
+            if msg.get("stopReason") == "error" and not msg.get("content"):
+                # The provider refused the request (bad credentials, an outage), so
+                # nothing reached the user: Pi records it like this, and so does the
+                # Claude Code normaliser for its API error notices.
+                failed_response_count += 1
+                continue
             assistant_message_count += 1
             if msg_ts:
                 last_assistant_ts = msg_ts
@@ -411,6 +418,7 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
         "duration_seconds": duration_seconds,
         "user_message_count": user_message_count,
         "assistant_message_count": assistant_message_count,
+        "failed_response_count": failed_response_count,
         "total_messages": total_messages,
         "tool_counts": tool_counts,
         "languages": languages,
@@ -647,11 +655,18 @@ async def extract_all_session_metas(
     )
 
     metas = []
+    failed_runs = 0
     for session_id, (harness, lines) in transcripts.items():
         # Enrich with credits, harness, layer hash, and report version scope from session_stats_agg
         stats = session_stats.get(session_id, {})
         harness = harness or stats.get("harness", "")
         meta = extract_session_meta(session_id, lines, harness)
+        if meta["user_message_count"] and not meta["assistant_message_count"]:
+            # Prompts that never got a response: the run failed before reaching the
+            # model (missing credentials, a crash), so it says nothing about the agent.
+            # Formats the extractor cannot read count neither and are kept.
+            failed_runs += 1
+            continue
         meta["credits"] = stats.get("credits", 0.0)
         meta["harness"] = harness
         meta["layer_hash"] = stats.get("layer_hash", "")
@@ -662,6 +677,7 @@ async def extract_all_session_metas(
         "extracted_session_metas",
         total=len(transcripts),
         substantive=len(metas),
+        failed_runs=failed_runs,
     )
     return metas
 
