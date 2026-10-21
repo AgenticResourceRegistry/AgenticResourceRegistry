@@ -178,7 +178,7 @@ class AgentUpdateRequest(BaseModel):
         # Omitted keeps the current model; an explicit blank resets it to "auto".
         return v if v is None else normalize_model_name(v)
 
-    @field_validator("name", mode="before")
+    @field_validator("name")
     @classmethod
     def _validate_name(cls, v: str | None) -> str | None:
         if v is None:
@@ -192,7 +192,7 @@ class AgentUpdateRequest(BaseModel):
             )
         return v
 
-    @field_validator("version", mode="before")
+    @field_validator("version")
     @classmethod
     def _validate_version(cls, v: str | None) -> str | None:
         if v is not None and not validate_semver(v):
@@ -398,7 +398,7 @@ class AgentVersionCreateRequest(BaseModel):
 class AgentRestoreRequest(BaseModel):
     name: str | None = None
 
-    @field_validator("name", mode="before")
+    @field_validator("name")
     @classmethod
     def _validate_name(cls, v: str | None) -> str | None:
         if v is None:
