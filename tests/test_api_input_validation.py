@@ -334,3 +334,69 @@ async def test_insights_report_mutations_reject_non_uuid_ids():
         applied = await client.post("/api/v1/insights/reports/not-a-uuid/apply", json={})
     assert (deleted.status_code, applied.status_code) == (422, 422)
     db.execute.assert_not_called()
+
+
+# ── OBS-1463 item 3: the Bearer scheme is case-insensitive ───────────────────
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("Bearer abc", "abc"),
+        ("bearer abc", "abc"),
+        ("BEARER  abc ", "abc"),
+        ("Bearer ", ""),
+        ("Basic abc", None),
+        ("Bearerabc", None),
+        ("", None),
+        (None, None),
+        (123, None),
+    ],
+)
+def test_bearer_token_parses_scheme_case_insensitively(header, expected):
+    from services.auth_header import bearer_token
+
+    assert bearer_token(header) == expected
+
+
+@pytest.mark.asyncio
+async def test_lowercase_bearer_scheme_authenticates(monkeypatch):
+    import uuid
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from fastapi import Depends
+
+    import api.deps as deps
+
+    user = SimpleNamespace(id=uuid.uuid4(), auth_provider="local", must_change_password=False)
+    authenticate = AsyncMock(return_value=user)
+    monkeypatch.setattr(deps, "_authenticate_via_jwt", authenticate)
+    monkeypatch.setattr(deps, "_enforce_password_change", AsyncMock())
+
+    app = FastAPI()
+    app.dependency_overrides[deps.get_db] = lambda: None
+
+    @app.get("/me")
+    async def me(current=Depends(deps.get_current_user)):
+        return {"id": str(current.id)}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/me", headers={"Authorization": "bearer tok123"})
+    assert resp.status_code == 200
+    authenticate.assert_awaited_once_with("tok123", None)
+
+
+def test_cache_key_treats_lowercase_bearer_as_an_identity():
+    from types import SimpleNamespace
+
+    from services.cache import _request_key_builder
+
+    def request(auth):
+        return SimpleNamespace(url=SimpleNamespace(path="/x"), query_params=None, headers={"authorization": auth})
+
+    anon = _request_key_builder(lambda: None, request=request(""))
+    assert _request_key_builder(lambda: None, request=request("bearer a")) != anon
+    assert _request_key_builder(lambda: None, request=request("bearer a")) != _request_key_builder(
+        lambda: None, request=request("bearer b")
+    )

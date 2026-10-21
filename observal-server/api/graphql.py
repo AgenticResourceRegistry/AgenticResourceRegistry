@@ -15,6 +15,7 @@ from starlette.requests import HTTPConnection
 
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 from services import dynamic_settings as ds
+from services.auth_header import bearer_token
 from services.jwt_service import decode_access_token
 from services.redis import subscribe
 
@@ -75,9 +76,9 @@ class Subscription:
             params = info.context.get("connection_params") or {}
             authorization = params.get("authorization") if isinstance(params, dict) else None
             authorization = authorization or info.context["request"].headers.get("authorization")
-            if not isinstance(authorization, str) or not authorization.startswith("Bearer "):
+            token = bearer_token(authorization)
+            if token is None:
                 raise ValueError("Authentication required")
-            token = authorization.removeprefix("Bearer ").strip()
 
             async def is_allowed() -> bool:
                 async with async_session() as db:
@@ -125,9 +126,9 @@ async def _resolve_user_context_from_request(request) -> dict:
     auth: str | None = None
     if request is not None:
         auth = request.headers.get("authorization")
-    if not auth or not auth.startswith("Bearer "):
+    token = bearer_token(auth)
+    if token is None:
         return default
-    token = auth.removeprefix("Bearer ").strip()
     try:
         payload = decode_access_token(token)
     except jwt.InvalidTokenError:

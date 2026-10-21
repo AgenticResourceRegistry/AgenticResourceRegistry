@@ -230,7 +230,7 @@ class TestScimServiceContracts:
 
 class TestBearerAuthentication:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("authorization", [None, "", "Basic secret", "bearer secret"])
+    @pytest.mark.parametrize("authorization", [None, "", "Basic secret", "Bearersecret"])
     async def test_missing_or_wrong_scheme_is_rejected_without_database_or_security_event(
         self, authorization, monkeypatch
     ):

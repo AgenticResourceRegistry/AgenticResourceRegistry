@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 from api.deps import get_db
 from models.scim_token import ScimToken
 from models.user import User, UserRole, live_users
+from services.auth_header import bearer_token
 from services.events import UserCreated, UserDeleted, bus
 from services.scim_service import (
     SCIM_PATCH_SCHEMA,
@@ -65,10 +66,10 @@ async def _verify_scim_token(
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> ScimToken:
-    if not authorization or not authorization.startswith("Bearer "):
+    token = bearer_token(authorization)
+    if token is None:
         raise HTTPException(status_code=401, detail="Missing or invalid SCIM bearer token")
 
-    token = authorization.removeprefix("Bearer ").strip()
     token_hash = hash_scim_token(token)
 
     result = await db.execute(
