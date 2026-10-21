@@ -71,7 +71,9 @@ observal agent pull <agent-name> --harness claude-code --scope user
 
 User agents are written to `~/.claude/agents/{name}.md`.
 
-### 4. Install global session hooks (optional)
+### 4. Install global session hooks
+
+`observal auth login` installs these automatically when Claude Code is already present. To install or repair them by hand:
 
 ```bash
 observal doctor patch

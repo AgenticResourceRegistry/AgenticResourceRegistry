@@ -31,7 +31,7 @@ Login accepts `server`, `email`, `password`, `name`, `sso`, `saml`, `provider`, 
 
 Human login always asks for the server URL unless `--server` is supplied; leave the prompt blank to use `http://localhost`. On a fresh server, provide email, name, and a password to create the first administrator. JSON mode never prompts, uses the configured server or local default, and requires complete credential inputs.
 
-Successful human login synchronizes the bundled skills, creates the initial layer snapshot, and runs doctor. Select `no-setup` to skip the snapshot and doctor. JSON mode skips those post-login steps.
+Successful human login first installs the Claude Code session hooks when Claude Code is already present (a `~/.claude` directory or a `claude` binary on `PATH`), then synchronizes the bundled skills, creates the initial layer snapshot, and runs doctor. A Claude Code settings file that is not valid JSON is left untouched with a note to run `observal doctor patch --harness claude-code`. Select `no-setup` to skip the snapshot and doctor. JSON mode skips those post-login steps.
 
 `provider` picks the browser SSO provider: `oidc`, `saml`, `google` or `github`. It implies `sso`, and the CLI rejects a provider the server has not enabled, or `saml` combined with a different `provider`. A bare `sso` uses the only enabled provider, or asks which one when the server enables several. JSON mode and non-interactive input never ask, so a bare `sso` there falls back to the server default (OIDC, then SAML); pass `provider` to choose.
 
