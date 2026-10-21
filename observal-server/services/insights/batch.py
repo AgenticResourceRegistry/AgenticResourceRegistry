@@ -136,7 +136,18 @@ def _build_registry_scope(agent: Agent | None, agent_config: dict | None) -> Reg
 
 
 # Maximum time a report can stay in 'running' before being considered stale.
-_REPORT_TIMEOUT_MINUTES = 10
+REPORT_TIMEOUT_MINUTES = 10
+
+
+def insight_report_job_id(report_id) -> str:
+    """arq job id for generating one report.
+
+    Keyed on the report, not on its inputs: arq also refuses an id whose
+    result it still keeps, so an input-keyed id would silently drop a
+    legitimate re-run for an hour after the first one finished and leave its
+    report pending forever. Duplicate inputs are caught before the insert.
+    """
+    return f"insight-report:{report_id}"
 
 
 async def _reap_stale_reports() -> int:
@@ -145,7 +156,7 @@ async def _reap_stale_reports() -> int:
     Handles cases where the worker crashed, system shut off, or the job timed out.
     Returns the number of reports reaped.
     """
-    cutoff = datetime.now(UTC) - timedelta(minutes=_REPORT_TIMEOUT_MINUTES)
+    cutoff = datetime.now(UTC) - timedelta(minutes=REPORT_TIMEOUT_MINUTES)
     async with async_session() as db:
         stmt = select(InsightReport).where(
             InsightReport.status == InsightReportStatus.running,
@@ -155,7 +166,7 @@ async def _reap_stale_reports() -> int:
         stale = list(result.scalars().all())
         for report in stale:
             report.status = InsightReportStatus.failed
-            report.error_message = f"Timed out after {_REPORT_TIMEOUT_MINUTES} minutes (system may have restarted)"
+            report.error_message = f"Timed out after {REPORT_TIMEOUT_MINUTES} minutes (system may have restarted)"
             report.completed_at = datetime.now(UTC)
             logger.warning("insight_report_reaped", report_id=str(report.id), started_at=str(report.started_at))
         if stale:
@@ -452,7 +463,9 @@ async def discover_and_queue_reports() -> int:
 
                 # Enqueue the generation job
                 pool = await _get_arq_pool()
-                await pool.enqueue_job("generate_insight_report", str(report.id))
+                await pool.enqueue_job(
+                    "generate_insight_report", str(report.id), _job_id=insight_report_job_id(report.id)
+                )
 
                 await db.commit()
                 queued += 1
