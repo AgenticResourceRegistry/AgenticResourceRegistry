@@ -13,8 +13,49 @@ const B = jwt("actor-b", "access");
 const AR = jwt("actor-a", "refresh");
 const BR = jwt("actor-b", "refresh");
 
-test("token subjects decode UTF-8 and reject malformed payloads", async ({ page }) => {
+// Keep the real app out of module-only tests: an authenticated React login page
+// can redirect while page.evaluate imports a module, destroying its context.
+async function blankModulePage(page: Page) {
+  await page.route("**/login**", (route) => route.fulfill({
+    contentType: "text/html", body: `<!doctype html><html><body>
+      <script type="module">
+        import RefreshRuntime from "/@react-refresh";
+        RefreshRuntime.injectIntoGlobalHook(window);
+        window.$RefreshReg$ = () => {};
+        window.$RefreshSig$ = () => type => type;
+        window.__vite_plugin_react_preamble_installed__ = true;
+      </script></body></html>`,
+  }));
   await page.goto("/login");
+  await expect(page.locator("#root")).toHaveCount(0); // never mount the app's auth guard
+  await expect.poll(() => page.evaluate(() => (window as any).__vite_plugin_react_preamble_installed__ === true)).toBe(true);
+}
+
+// UI tests exercise the real guards, but never depend on the running stack's
+// whoami response to a synthetic test JWT. Per-test routes override these.
+test.beforeEach(async ({ page }) => {
+  // The optional third-party analytics script is irrelevant to these auth races.
+  await page.route("https://d2mvefebd70kbz.cloudfront.net/**", (route) => route.abort());
+  // Unrelated background queries must not hit either a real CI account or an
+  // absent local proxy. Explicit race endpoints below override this fallback.
+  await page.route("**/api/v1/**", (route) => route.fulfill({ status: 404, json: { detail: "Not found" } }));
+  await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: false } }));
+  await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "user", name: "A" } }));
+});
+
+const activeBarriers = new Set<ReturnType<typeof barrier>>();
+test.afterEach(async ({ page }) => {
+  for (const pending of activeBarriers) pending.release();
+  activeBarriers.clear();
+  // In-page decode gates also need releasing when an assertion fails early.
+  await page.evaluate(() => {
+    (window as any).releaseDecode?.();
+    (window as any).releaseBlob?.();
+  }).catch(() => {}); // navigation/closure may already have destroyed this context
+});
+
+test("token subjects decode UTF-8 and reject malformed payloads", async ({ page }) => {
+  await blankModulePage(page);
   expect(await page.evaluate(async () => {
     const { tokenSubject } = await import("/src/lib/api.ts");
     const subject = "用户-ø";
@@ -24,8 +65,9 @@ test("token subjects decode UTF-8 and reject malformed payloads", async ({ page 
   })).toEqual(["用户-ø", null]);
 });
 
-async function seed(page: Page, access: string | null, refresh: string) {
-  await page.goto("/login");
+async function seed(page: Page, access: string | null, refresh: string, ui = false) {
+  if (ui) await page.goto("/login");
+  else await blankModulePage(page);
   await page.evaluate(({ access, refresh }) => {
     if (access) sessionStorage.setItem("observal_access_token", access);
     localStorage.setItem("observal_refresh_token", refresh);
@@ -43,11 +85,13 @@ async function submit(page: Page) {
 function barrier() {
   let release!: () => void;
   let entered!: () => void;
-  return {
+  const pending = {
     gate: new Promise<void>((resolve) => { release = resolve; }),
     started: new Promise<void>((resolve) => { entered = resolve; }),
     release: () => release(), entered: () => entered(),
   };
+  activeBarriers.add(pending);
+  return pending;
 }
 
 test("an A mutation cannot be replayed with B's shared refresh token", async ({ context, page }) => {
@@ -274,7 +318,7 @@ test("same-account competing rotation does not clear the winner", async ({ page 
 
 test("storage event quarantines A before a protected view renders B's shared role", async ({ page }) => {
   await page.route("**/api/v1/config/public", async (route) => route.fulfill({ json: { public_registry_enabled: false } }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("/resources/agents");
   await expect(page.getByText("Sign out")).toHaveCount(0); // menu is closed
@@ -292,7 +336,7 @@ test("storage event quarantines A before a protected view renders B's shared rol
 
 test("returning after missing the storage event blocks A's protected content", async ({ context, page }) => {
   await page.route("**/api/v1/config/public", async (route) => route.fulfill({ json: { public_registry_enabled: false } }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("about:blank");
   const tabB = await context.newPage();
@@ -313,7 +357,7 @@ test("pending whoami cannot write A's role over B's shared profile", async ({ pa
     await pending.gate;
     await route.fulfill({ json: { role: "user", name: "A" } });
   });
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.goto("/resources/agents");
   await pending.started;
   await page.evaluate((br) => {
@@ -334,7 +378,7 @@ test("pending A whoami rejection cannot clear B's shared profile", async ({ page
     await pending.gate;
     await route.fulfill({ status: 401 });
   });
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.goto("/resources/agents");
   await pending.started;
   await page.evaluate((br) => {
@@ -349,7 +393,7 @@ test("pending A whoami rejection cannot clear B's shared profile", async ({ page
 
 test("mounted A sign out cannot send or delete B's refresh", async ({ page }) => {
   await page.route("**/api/v1/config/public", async (route) => route.fulfill({ json: { public_registry_enabled: false } }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("/resources/agents");
   const menu = page.getByRole("button", { name: /user/i }).last();
@@ -465,7 +509,7 @@ test("pending whoami accepts same-actor success and retries stale rejection", as
       await route.fulfill({ json: { role: "user", name: "A" } });
     }
   });
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.goto("/resources/agents");
   await pending.started;
   const rotated = jwt("actor-a", "whoami-rotated");
@@ -489,7 +533,7 @@ test("pending whoami success may write role after same-actor rotation", async ({
     await pending.gate;
     await route.fulfill({ json: { role: "user", name: "A" } });
   });
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.goto("/resources/agents");
   await pending.started;
   await page.evaluate(({ access, refresh }) => {
@@ -590,7 +634,7 @@ test("public registry stays anonymous-ready after account switch, including relo
   page.on("request", (request) => {
     if (request.headers().authorization === `Bearer ${B}`) bRequests.push(request.url());
   });
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("/resources/agents");
   await page.evaluate(({ br }) => {
@@ -673,14 +717,14 @@ test("audit CSV export rejects A data after B switches during response or text d
     expect(authorization).toBe(`Bearer ${A}`);
     expect(await page.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBe(BR);
     await page.unrouteAll({ behavior: "wait" });
-    await page.reload();
   }
 });
 
 test("audit CSV UI does not download A response after B account switch", async ({ page }) => {
+  await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "admin", name: "A" } }));
   await page.route("**/api/v1/config/public", async (route) => route.fulfill({ json: { public_registry_enabled: false } }));
   await page.route("**/api/v1/admin/audit-log", async (route) => route.fulfill({ json: [] }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "admin"));
   await page.goto("/audit-log");
   const exportButton = page.getByRole("button", { name: "Export CSV" });
@@ -702,11 +746,12 @@ test("audit CSV UI does not download A response after B account switch", async (
 });
 
 test("audit CSV UI rechecks identity immediately before download", async ({ page }) => {
+  await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "admin", name: "A" } }));
   await page.route("**/api/v1/config/public", async (route) => route.fulfill({ json: { public_registry_enabled: false } }));
   await page.route("**/api/v1/admin/audit-log**", async (route) => route.fulfill(
     route.request().url().includes("/export") ? { body: "private-A" } : { json: [] },
   ));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "admin"));
   await page.goto("/audit-log");
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
@@ -728,7 +773,7 @@ test("audit CSV UI rechecks identity immediately before download", async ({ page
 
 test("username PUT refuses a mismatched actor before sending", async ({ page }) => {
   await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: false } }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("/account");
   await page.getByPlaceholder("3-32 chars, lowercase alphanumeric + hyphens/dots").fill("new-name");
@@ -749,7 +794,7 @@ test("username PUT refuses a mismatched actor before sending", async ({ page }) 
 test("username success survives same-actor rotation and updates cached username", async ({ page }) => {
   await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: false } }));
   await page.route("**/api/v1/auth/whoami", (route) => route.fulfill({ json: { id: "actor-a", role: "user" } }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("/account");
   await page.getByPlaceholder("3-32 chars, lowercase alphanumeric + hyphens/dots").fill("new-name");
@@ -771,7 +816,7 @@ test("username success survives same-actor rotation and updates cached username"
 
 test("late username PUT cannot overwrite B's shared username", async ({ page }) => {
   await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: false } }));
-  await seed(page, A, AR);
+  await seed(page, A, AR, true);
   await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
   await page.goto("/account");
   await page.getByPlaceholder("3-32 chars, lowercase alphanumeric + hyphens/dots").fill("new-name");
@@ -894,7 +939,7 @@ test("co-author writes commit successful responses after same-actor rotation", a
     }
     expect(calls).toBe(1);
     await page.unrouteAll({ behavior: "wait" });
-    await page.reload();
+    // seed() navigates to a fresh isolated document for the next action.
   }
 });
 
@@ -979,7 +1024,7 @@ test("direct authenticated contexts accept same-actor rotation but not a missing
 
 for (const kind of ["agents", "mcps"]) {
   test(`late ${kind} coauthor GET survives same-actor access rotation`, async ({ page }) => {
-    await seed(page, A, AR);
+    await seed(page, A, AR, true);
     await expect(page.getByText(/Sign in (to your account|or browse the public registry)/)).toBeVisible();
     await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
     await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: true } }));
@@ -1006,7 +1051,7 @@ for (const kind of ["agents", "mcps"]) {
   });
 
   test(`late ${kind} coauthor GET cannot restore emails after A to B quarantine`, async ({ page }) => {
-    await seed(page, A, AR);
+    await seed(page, A, AR, true);
     await expect(page.getByText(/Sign in (to your account|or browse the public registry)/)).toBeVisible();
     await page.evaluate(() => localStorage.setItem("observal_user_role", "user"));
     await page.route("**/api/v1/config/public", (route) => route.fulfill({ json: { public_registry_enabled: true } }));
@@ -1077,7 +1122,6 @@ test("HTML export 200 downloads once after same-actor rotation during response o
     await expect.poll(() => downloads).toBe(1);
     expect(calls).toBe(1);
     await page.unrouteAll({ behavior: "wait" });
-    await page.reload();
   }
 });
 
@@ -1120,7 +1164,6 @@ test("HTML export 200 cannot download A after B switches during response or blob
     expect(downloads).toBe(0);
     expect(await page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBeNull();
     await page.unrouteAll({ behavior: "wait" });
-    await page.reload();
   }
 });
 
