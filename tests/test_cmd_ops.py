@@ -1079,6 +1079,82 @@ def test_upgrade_installs_releases_lock_and_returns_json(cli, monkeypatch):
     assert cli.lines == []
 
 
+@pytest.fixture
+def upgrade_env(cli, monkeypatch):
+    """Logged-in CLI on 1.15.0 whose installs are recorded instead of run."""
+    from observal_cli import install_detector, upgrade_lock, version_check
+
+    installs = []
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.15.0")
+    monkeypatch.setattr(install_detector, "detect", lambda: install_info())
+    monkeypatch.setattr(ops.config, "load", lambda: {"server_url": "https://obs.test/", "access_token": "tok"})
+    monkeypatch.setattr(upgrade_lock, "acquire_lock", lambda scope: "lock")
+    monkeypatch.setattr(upgrade_lock, "release_lock", lambda lock: None)
+    monkeypatch.setattr(ops, "_do_install", lambda info, target, direction, output: installs.append(target))
+    return SimpleNamespace(installs=installs, version_check=version_check)
+
+
+def test_upgrade_targets_dev_server_build_instead_of_latest_release(cli, upgrade_env, monkeypatch):
+    """OBS-1439: --pre used to offer a GitHub release that still mismatched a dev server."""
+    seen = []
+    monkeypatch.setattr(
+        upgrade_env.version_check,
+        "_fetch_from_server",
+        lambda url, token: seen.append((url, token)) or {"server_version": "1.16.0-dev.0"},
+    )
+    monkeypatch.setattr(upgrade_env.version_check, "_fetch_from_github", raises(AssertionError("asked GitHub")))
+
+    ops.upgrade(None, True, True)
+
+    assert seen == [("https://obs.test", "tok")]
+    assert upgrade_env.installs == ["1.16.0.dev0"]
+    assert "unreleased v1.16.0.dev0" in cli.text()
+    assert "git+https://github.com/Observal/Observal@main" in cli.text()
+
+
+def test_upgrade_uses_github_when_server_runs_a_release(cli, upgrade_env, monkeypatch):
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_server", lambda url, token: {"server_version": "1.15.1"}
+    )
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_github", lambda include_pre: {"latest_version": "1.15.1"}
+    )
+
+    ops.upgrade(None, True, True)
+
+    assert upgrade_env.installs == ["1.15.1"]
+    assert "unreleased" not in cli.text()
+
+
+def test_upgrade_falls_back_to_github_when_server_is_unreachable(cli, upgrade_env, monkeypatch):
+    monkeypatch.setattr(upgrade_env.version_check, "_fetch_from_server", lambda url, token: None)
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_github", lambda include_pre: {"latest_version": "1.15.1"}
+    )
+
+    ops.upgrade(None, True, True)
+
+    assert upgrade_env.installs == ["1.15.1"]
+    assert "Could not read the server version" in cli.text()
+
+
+@pytest.mark.parametrize(
+    ("version", "cfg"),
+    [("1.15.1", {"server_url": "https://obs.test", "access_token": "tok"}), (None, {"server_url": ""})],
+)
+def test_upgrade_skips_server_check_for_explicit_version_or_no_login(cli, upgrade_env, monkeypatch, version, cfg):
+    monkeypatch.setattr(ops.config, "load", lambda: cfg)
+    monkeypatch.setattr(upgrade_env.version_check, "_fetch_from_server", raises(AssertionError("asked server")))
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_github", lambda include_pre: {"latest_version": "1.15.1"}
+    )
+
+    ops.upgrade(version, False, True)
+
+    assert upgrade_env.installs == ["1.15.1"]
+    assert "server version" not in cli.text()
+
+
 def test_downgrade_reports_empty_release_lists(cli, monkeypatch):
     from observal_cli import version_check
 
