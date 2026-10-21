@@ -1540,39 +1540,44 @@ export const insights = {
 			selection ?? {},
 		),
 	exportHtml: async (agentId: string, reportId: string): Promise<void> => {
-		let token = getAccessToken();
-		const actor = getTabActor();
-		if (isAccountChanged()) { quarantineTab(); throw new AuthContextChanged(); }
-		let res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		const { token, check } = authenticatedReadContext();
+		const path = `${API}/agents/${agentId}/insights/reports/${reportId}/export/html`;
+		const fetchExport = (bearer: string) => fetch(path, {
+			headers: { Authorization: `Bearer ${bearer}` },
 		});
+		let res = await fetchExport(token);
+		check();
 		if (res.status === 401) {
-			const refreshed = await _tryRefreshToken();
-			if (refreshed.result === "account_changed" || refreshed.result === "superseded") throw new AuthContextChanged();
-			if (refreshed.result === "ok" && actor && tokenSubject(refreshed.token ?? null) === actor &&
-				getTabActor() === actor && getAccessToken() === refreshed.token && !isAccountChanged()) {
-				token = refreshed.token ?? null;
-				res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {
-					headers: token ? { Authorization: `Bearer ${token}` } : {},
-				});
+			let retryToken = getAccessToken();
+			if (retryToken === token) {
+				const refreshed = await _tryRefreshToken();
+				check();
+				if (refreshed.result !== "ok" && refreshed.result !== "superseded") {
+					if (refreshed.result === "account_changed") throw new AuthContextChanged();
+					throw new Error("Export failed");
+				}
+				retryToken = getAccessToken();
+				// A superseded refresh is only safe to retry if the winner supplied
+				// a new bearer. Never replay the rejected bearer (or another actor's).
+				if (refreshed.result === "superseded" && retryToken === token) throw new AuthContextChanged();
 			}
-		}
-		if (getTabActor() !== actor || isAccountChanged() || getAccessToken() !== token) {
-			if (isAccountChanged()) quarantineTab();
-			throw new AuthContextChanged();
+			check();
+			res = await fetchExport(retryToken!);
+			check();
 		}
 		if (!res.ok) throw new Error("Export failed");
 		const blob = await res.blob();
-		if (getTabActor() !== actor || isAccountChanged() || getAccessToken() !== token) {
-			if (isAccountChanged()) quarantineTab();
-			throw new AuthContextChanged();
-		}
+		check();
 		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = `insight-report-${reportId.slice(0, 8)}.html`;
-		a.click();
-		URL.revokeObjectURL(url);
+		try {
+			check();
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = `insight-report-${reportId.slice(0, 8)}.html`;
+			a.click();
+		} finally {
+			URL.revokeObjectURL(url);
+		}
 	},
 };
 

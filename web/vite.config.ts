@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { defineConfig } from "vite";
@@ -8,6 +9,8 @@ import { resolve } from "path";
 import { readFileSync } from "fs";
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf-8"));
+// Playwright's CI-only Vite server proxies through the disposable stack's load balancer.
+const proxyTarget = process.env.OBSERVAL_VITE_PROXY_TARGET || "http://localhost:8000";
 
 export default defineConfig({
   plugins: [TanStackRouterVite({ routesDirectory: "./src/routes" }), react()],
@@ -36,20 +39,20 @@ export default defineConfig({
     port: 3000,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: proxyTarget,
         changeOrigin: true,
         ws: true,
       },
       "/.well-known/ard.json": {
-        target: "http://localhost:8000",
+        target: proxyTarget,
         changeOrigin: true,
       },
       "/.well-known/ai-catalog.json": {
-        target: "http://localhost:8000",
+        target: proxyTarget,
         changeOrigin: true,
       },
       "/health": {
-        target: "http://localhost:8000",
+        target: proxyTarget,
         changeOrigin: true,
       },
     },

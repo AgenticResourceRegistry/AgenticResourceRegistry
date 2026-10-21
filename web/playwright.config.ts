@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { defineConfig } from "@playwright/test";
@@ -17,14 +18,14 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },
-  // Only start dev server locally; CI uses Docker stack
-  webServer: isCI
-    ? undefined
-    : {
-        command: "pnpm dev",
-        port: 3000,
-        reuseExistingServer: true,
-        timeout: 120_000,
-      },
+  // Module-level tests use a fresh Vite server in CI; other CI specs still use the Docker stack.
+  webServer: {
+    command: isCI
+      ? "OBSERVAL_VITE_PROXY_TARGET=http://localhost:80 pnpm exec vite --port 3104 --strictPort"
+      : "pnpm dev",
+    port: isCI ? 3104 : 3000,
+    reuseExistingServer: !isCI,
+    timeout: 120_000,
+  },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
 });
