@@ -97,7 +97,7 @@ Full setup in [Authentication and SSO](/self-hosting/authentication).
 
 ```
 RATE_LIMIT_AUTH=10/minute          # general auth endpoints
-RATE_LIMIT_AUTH_STRICT=5/minute    # login and password reset
+RATE_LIMIT_AUTH_STRICT=5/minute    # user registration
 ```
 
 Tighten for higher-traffic deployments.

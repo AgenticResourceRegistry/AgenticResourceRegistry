@@ -25,7 +25,7 @@ Every credential listed with file support accepts `NAME_FILE=/path/to/secret` in
 | `MAX_REQUEST_SIZE_MB`    | `10`                           | Maximum request body size for ordinary endpoints                                                                                                              |
 | `MAX_MIGRATION_REQUEST_SIZE_MB` | `6144`                | Maximum combined multipart request size for Admin migration import and validation uploads                                                                     |
 | `RATE_LIMIT_AUTH`        | `10/minute`                    | General auth-endpoint rate limit                                                                                                                              |
-| `RATE_LIMIT_AUTH_STRICT` | `5/minute`                     | Login and password-reset rate limit                                                                                                                           |
+| `RATE_LIMIT_AUTH_STRICT` | `5/minute`                     | User registration rate limit                                                                                                                                  |
 
 ### Databases
 
