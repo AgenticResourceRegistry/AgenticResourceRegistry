@@ -17,6 +17,7 @@ import pytest
 import xxhash
 
 from services import session_ingest
+from services.clickhouse.insert import _dumps
 from services.secrets_redactor import REDACTED
 from tests.test_antigravity_session_parser import USER_PROMPT as ANTIGRAVITY_USER_PROMPT
 from tests.test_claude_code_session_parser import (
@@ -394,6 +395,22 @@ async def test_batch_normalizes_relationships_timestamps_usage_tools_and_result_
         assert row["source_sha256"] == hashlib.sha256(encoded).hexdigest()
         assert row["content_length"] == len(encoded)
     external_calls.refresh.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, "claude-code")
+
+
+async def test_lone_surrogate_does_not_abort_other_session_lines(external_calls):
+    malformed = '{"type":"user","message":"\ud800"}'
+    valid = CLAUDE_USER_PROMPT
+
+    result = await _ingest([malformed, valid])
+
+    assert result == session_ingest.IngestResult(ingested=1, skipped=0, errors=1)
+    rows = external_calls.insert.await_args.args[0]
+    assert [row["event_type"] for row in rows] == ["_parse_error", "user_prompt"]
+    assert rows[0]["content_length"] == len(malformed.encode("utf-8", errors="replace"))
+    assert rows[0]["source_sha256"] == hashlib.sha256(malformed.encode("utf-8", errors="replace")).hexdigest()
+    assert rows[0]["raw_line"] == malformed.encode("utf-8", errors="replace").decode("utf-8")
+    assert '"event_type":"_parse_error"' in _dumps(rows[0])
+    external_calls.refresh.assert_awaited_once()
 
 
 async def test_identity_metadata_and_source_accounting_survive_redaction(external_calls):
