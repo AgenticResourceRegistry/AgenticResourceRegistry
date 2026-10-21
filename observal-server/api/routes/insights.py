@@ -28,7 +28,7 @@ from schemas.insights import (
 )
 from services.insight_version_filters import agent_version_filter
 from services.insights import INSIGHTS_AVAILABLE, render_report_html
-from services.insights.batch import REPORT_TIMEOUT_MINUTES, insight_report_job_id
+from services.insights.batch import REPORT_TIMEOUT_MINUTES, find_baseline_report, insight_report_job_id
 from services.redis import _get_arq_pool
 
 router = APIRouter(prefix="/api/v1/insights", tags=["insights"])
@@ -391,19 +391,13 @@ async def generate_insight(
     if in_flight:
         return InsightReportListItem.model_validate(in_flight)
 
-    # Find previous completed report for regression linking
-    prev_stmt = (
-        select(InsightReport)
-        .where(
-            InsightReport.agent_id == agent.id,
-            InsightReport.agent_version == agent_version.version,
-            InsightReport.status == InsightReportStatus.completed,
-        )
-        .order_by(InsightReport.created_at.desc())
-        .limit(1)
+    prev_report = await find_baseline_report(
+        db,
+        agent_id=agent.id,
+        agent_version=agent_version.version,
+        period_start=period_start,
+        period_end=now,
     )
-    prev_result = await db.execute(prev_stmt)
-    prev_report = prev_result.scalar_one_or_none()
 
     report = InsightReport(
         agent_id=agent.id,
