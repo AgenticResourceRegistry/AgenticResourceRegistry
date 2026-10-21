@@ -63,7 +63,7 @@ First build pulls images and compiles the Vite frontend. Expect 3 to 5 minutes. 
 | `observal-api`        | internal                | FastAPI backend                           |
 | `observal-worker`     | internal                | Background jobs (arq)                    |
 | `observal-init`       | internal                | Runs DB migrations on startup then exits |
-| `observal-db`         | `localhost:5432`        | PostgreSQL 16 (registry data)            |
+| `observal-db`         | `localhost:5432`        | PostgreSQL 18 (registry data)            |
 | `observal-clickhouse` | `localhost:8123`        | ClickHouse (session and audit events)    |
 | `observal-redis`      | `localhost:6379`        | Job queue + pub/sub                      |
 | `observal-prometheus` | `http://localhost:9090` | Metrics scraping                         |

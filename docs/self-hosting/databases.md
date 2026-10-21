@@ -8,8 +8,8 @@ Observal runs two DBs with very different jobs.
 
 | DB | Role | Access pattern | Schema source of truth |
 | --- | --- | --- | --- |
-| Postgres 16 | Registry, users, config | Relational, transactional | Alembic migrations in `observal-server/alembic/versions/` |
-| ClickHouse 26.5 | Telemetry and audit event storage | Columnar, time-series, high-write | Versioned SQL migrations in `observal-server/clickhouse/migrations/` |
+| Postgres 18 | Registry, users, config | Relational, transactional | Alembic migrations in `observal-server/alembic/versions/` |
+| ClickHouse 26.6 | Telemetry and audit event storage | Columnar, time-series, high-write | Versioned SQL migrations in `observal-server/clickhouse/migrations/` |
 
 ## Postgres
 
