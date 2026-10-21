@@ -46,7 +46,7 @@ observal agent pull alice/reviewer --harness cursor --no-prompt --strict
 | `--strict` / `--no-strict` | Refuse an install that does not match its lock; defaults to `OBSERVAL_STRICT` |
 | `--output`, `-o` | Table or JSON output |
 
-Unknown harnesses, unsupported scopes, malformed assignments, unused harness model overrides, unsupported model or tool options, invalid versions, and `--upgrade` combined with `--version` fail locally with validation exit code 7.
+Unknown harnesses, unsupported scopes, malformed assignments, unused harness model overrides, unsupported model or tool options, invalid versions, and `--upgrade` combined with `--version` fail locally with validation exit code 7. A project-scope pull of an Agent with MCP servers also fails this way for Goose, which only reads a user-level MCP config: pull with `--scope user` instead.
 
 ## Pinned versions
 

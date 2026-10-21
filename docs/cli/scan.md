@@ -39,7 +39,7 @@ If you run `observal scan` with no flags, it auto-detects every installed harnes
    * Copilot: `.vscode/mcp.json`
    * Antigravity: `.agents/mcp_config.json` or `~/.gemini/antigravity-cli/mcp_config.json`
    * Goose: `~/.config/goose/config.yaml` (the `extensions` key)
-   * Copilot CLI: `~/.copilot/mcp-config.json`
+   * Copilot CLI: `.mcp.json` (project) or `~/.copilot/mcp-config.json` (home)
 2. Lists every MCP server found and its direct command or URL.
 3. Reports installed session telemetry hooks.
 
