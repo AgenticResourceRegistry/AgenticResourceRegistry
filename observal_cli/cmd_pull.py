@@ -27,6 +27,8 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlsplit, urlunsplit
 
+import click
+import httpx
 import typer
 import yaml
 from loguru import logger as optic
@@ -76,8 +78,16 @@ def _mask_values(value: str, secrets: set[str] | None) -> str:
             json_choice = json.dumps(char, ensure_ascii=True)[1:-1]
             if json_choice != char:
                 choices.add((json_choice, json_choice.startswith(r"\u")))
+            if char in {"'", '"'}:
+                # Python repr escapes the quote used to delimit a message.
+                choices.add(("\\" + char, False))
+                # repr of a JSON-escaped quote has three backslashes.
+                choices.add(("\\" * 3 + char, False))
             if char == "[":
                 choices.add((r"\[", False))
+            if char == "/":
+                # JSON permits escaping slashes even though json.dumps does not.
+                choices.add((r"\/", False))
             if char == " ":
                 # quote_plus encodes a space as +; another encoding pass
                 # turns that + into %2B. A literal + in the same position is
@@ -91,6 +101,14 @@ def _mask_values(value: str, secrets: set[str] | None) -> str:
             else:
                 encoded = "".join(f"%{byte:02x}" for byte in char.encode("utf-8"))
                 choices.update({(encoded, True), (encoded.replace("%", "%25"), True)})
+            # repr(error) doubles backslashes already present in reflected JSON
+            # escapes. Include those spellings per character so mixed raw, URL,
+            # JSON, and repr-escaped fragments still share the bounded matcher.
+            choices.update(
+                (choice.replace("\\", "\\\\"), fold_hex)
+                for choice, fold_hex in tuple(choices)
+                if choice.startswith("\\") and len(choice) > 1
+            )
             result.append(tuple(sorted(choices, key=lambda choice: len(choice[0]), reverse=True)))
         return result
 
@@ -135,12 +153,36 @@ def _mask_values(value: str, secrets: set[str] | None) -> str:
     # even start in an unrelated warning, so they need no full reverse scan.
     input_chars = set(value)
     folded_input_starts = {char.casefold()[0] for char in input_chars}
+    folded_value: str | None = None
     possible = []
     for parts in patterns:
         if not any(
             (choice.casefold()[0] in folded_input_starts if fold_hex else choice[0] in input_chars)
             for choice, fold_hex in parts[0]
         ):
+            continue
+        # A full match must contain a spelling of its final two characters.
+        # Test this necessary condition before scanning every warning position
+        # for each credential with a common first character. Only a bounded
+        # pair of alternatives is materialized; never decode the warning.
+        tail = parts[-2:]
+        tail_choices = (
+            ((a + b, fold_a or fold_b) for a, fold_a in tail[0] for b, fold_b in tail[1])
+            if len(tail) == 2
+            else iter(tail[0])
+        )
+        attainable = False
+        for spelling, folded in tail_choices:
+            if folded:
+                if folded_value is None:
+                    folded_value = value.casefold()
+                if spelling.casefold() in folded_value:
+                    attainable = True
+                    break
+            elif spelling in value:
+                attainable = True
+                break
+        if not attainable:
             continue
         masks: dict[tuple[str, bool], int] = {}
         max_width = 1
@@ -378,6 +420,63 @@ def _reporting_boundary(callback):
             return callback(*args, **kwargs)
         except CliError as error:
             raise _safe_error(error) from None
+        except Exception as error:
+            # Exception messages may transform supplied values in ways the
+            # bounded reporting matcher cannot anticipate. Never render their
+            # text (including repr) in debug mode when secrets were supplied.
+            has_secrets = bool(_pull_secrets.get())
+            detail = type(error).__name__ if has_secrets else _safe_text(repr(error))
+            if isinstance(error, httpx.HTTPStatusError):
+                from observal_cli.errors import http_status_category
+
+                status = error.response.status_code
+                failure = CliError(
+                    http_status_category(status),
+                    f"The server rejected the operation with HTTP {status}.",
+                    operation="Pull agent",
+                    resource="Observal server",
+                    remediation="Check the request and server health, then retry.",
+                    request_id=_safe_text(error.response.headers["x-request-id"])
+                    if "x-request-id" in error.response.headers
+                    else None,
+                    http_status=status,
+                    detail=detail,
+                )
+            elif isinstance(error, httpx.RequestError):
+                failure = CliError(
+                    ErrorCategory.UNAVAILABLE,
+                    "The network operation failed.",
+                    operation="Pull agent",
+                    resource="Observal service",
+                    remediation="Check network connectivity and service health, then retry.",
+                    detail=detail,
+                )
+            elif isinstance(error, click.UsageError):
+                failure = CliError(
+                    ErrorCategory.USAGE,
+                    "Invalid pull arguments.",
+                    operation="Pull agent",
+                    remediation="Check the command arguments and retry.",
+                    detail=type(error).__name__,
+                )
+            else:
+                category = (
+                    ErrorCategory.PERMISSION
+                    if isinstance(error, PermissionError)
+                    else ErrorCategory.NOT_FOUND
+                    if isinstance(error, FileNotFoundError)
+                    else ErrorCategory.UNAVAILABLE
+                    if isinstance(error, TimeoutError)
+                    else ErrorCategory.UNEXPECTED
+                )
+                failure = CliError(
+                    category,
+                    "The agent pull could not complete.",
+                    operation="Pull agent",
+                    remediation="Retry with --debug for additional diagnostics.",
+                    detail=detail,
+                )
+            raise failure from None
         finally:
             _pull_secrets.reset(token)
 
