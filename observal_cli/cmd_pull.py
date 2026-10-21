@@ -4342,7 +4342,9 @@ def register_pull(app: typer.Typer):
                 warnings_list.append("Local layer snapshot could not be refreshed; run `observal doctor`.")
 
             try:
-                adapter.persist_active_agent(str(agent_uuid), agent_detail.get("name", resolved), agent_version)
+                adapter.persist_active_agent(
+                    str(agent_uuid), agent_detail.get("name", resolved), agent_version, is_user_scope=is_user_scope
+                )
             except (OSError, RuntimeError) as error:
                 fail(
                     ErrorCategory.UNAVAILABLE,

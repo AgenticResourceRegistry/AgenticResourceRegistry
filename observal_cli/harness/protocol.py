@@ -402,7 +402,7 @@ class HarnessAdapter(Protocol):
         """Return whether an agent profile may resolve under the home directory."""
         ...
 
-    def persist_active_agent(self, agent_id: str, name: str, version: str | None) -> None:
+    def persist_active_agent(self, agent_id: str, name: str, version: str | None, *, is_user_scope: bool) -> None:
         """Persist harness-specific global agent attribution after pull."""
         ...
 
