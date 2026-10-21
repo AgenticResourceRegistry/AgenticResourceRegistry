@@ -672,7 +672,7 @@ async def test_analyze_repo_classifies_clone_timeout_and_cleans_up(monkeypatch):
     [
         (
             "authentication failed",
-            "Repository is private or not accessible. Configure GIT_CLONE_TOKEN for private repos.",
+            "Repository is private or not accessible. Configure GIT_CLONE_TOKEN and GIT_CLONE_TOKEN_HOSTS for private repos.",
         ),
         ("repository not found", "Repository not found. Check the URL."),
         ("connection reset", "Failed to clone repository. Check the URL and try again."),

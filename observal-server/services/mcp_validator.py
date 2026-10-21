@@ -420,7 +420,7 @@ async def analyze_repo(git_url: str) -> dict:
             if any(h in err_msg for h in auth_hints):
                 return {
                     **_empty,
-                    "error": "Repository is private or not accessible. Configure GIT_CLONE_TOKEN for private repos.",
+                    "error": "Repository is private or not accessible. Configure GIT_CLONE_TOKEN and GIT_CLONE_TOKEN_HOSTS for private repos.",
                 }
             if "not found" in err_msg or "does not exist" in err_msg:
                 return {**_empty, "error": "Repository not found. Check the URL."}
