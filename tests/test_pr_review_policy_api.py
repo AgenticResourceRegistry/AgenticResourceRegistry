@@ -56,7 +56,17 @@ async def test_review_policy_admin_and_team_owner(monkeypatch):
     url = f"/api/v1/teams/{team_id}/review-policy"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.put("/api/v1/admin/review-policy", json={})).status_code == 403
-        assert (await client.put(url, json={})).status_code == 403
+        denied_write = await client.put(url, json={})
+        denied_read = await client.get(url)
+        assert (denied_write.status_code, denied_write.json()["detail"]) == (
+            403,
+            "Only team owners may edit review policy",
+        )
+        # A read must not be told it tried to edit.
+        assert (denied_read.status_code, denied_read.json()["detail"]) == (
+            403,
+            "Only team owners may view review policy",
+        )
         selected[0] = owner
         assert (await client.put(url, json={"required_approvals": {"skill": 6}})).status_code == 422
         result = await client.put(url, json={"required_approvals": {"skill": 2}})

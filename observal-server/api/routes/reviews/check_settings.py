@@ -98,7 +98,7 @@ async def put_org_checks(
 async def get_team_checks(
     team_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    await _team_owner(db, team_id, user)
+    await _team_owner(db, team_id, user, action="view review checks")
     return _view("teamspace", await check_config.load_stored(team_id, is_private=True))
 
 
@@ -110,7 +110,7 @@ async def put_team_checks(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    await _team_owner(db, team_id, user)
+    await _team_owner(db, team_id, user, action="edit review checks")
     stored = await _save(db, check_config.team_key(team_id), data)
     audit_detail(request, action="review.checks_changed", resource_type="team", resource_id=team_id)
     return _view("teamspace", stored)
