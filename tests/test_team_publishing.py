@@ -303,7 +303,7 @@ class TestSkillSubmitStatus:
                     "/api/v1/skills/submit",
                     json={
                         "name": "s",
-                        "version": "1.0",
+                        "version": "1.0.0",
                         "description": "d",
                         "owner": "o",
                         "task_type": "code-review",

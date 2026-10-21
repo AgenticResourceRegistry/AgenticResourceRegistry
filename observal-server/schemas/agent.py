@@ -9,7 +9,6 @@
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import re
 import uuid
 from datetime import datetime
 from typing import Literal
@@ -93,9 +92,6 @@ class SuccessCriteria(BaseModel):
 ComponentType = Literal["mcp", "skill", "hook", "prompt", "sandbox"]
 
 
-_COMPONENT_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$")
-
-
 class ComponentRef(BaseModel):
     """Reference to a registry component to include in an agent.
 
@@ -106,15 +102,8 @@ class ComponentRef(BaseModel):
 
     component_type: ComponentType
     component_id: uuid.UUID
-    version: str | None = None
+    version: ListingVersion | None = None
     config_override: dict | None = None
-
-    @field_validator("version")
-    @classmethod
-    def _validate_version(cls, v: str | None) -> str | None:
-        if v is not None and (len(v) > 50 or not _COMPONENT_VERSION_RE.match(v)):
-            raise ValueError(f"Invalid component version '{v}'. Use an exact version such as 1.2.0")
-        return v
 
 
 class AgentCreateRequest(BaseModel):

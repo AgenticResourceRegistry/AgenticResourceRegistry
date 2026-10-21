@@ -97,22 +97,22 @@ def _get_factory():
 
 
 def test_semver_pattern_matches_valid():
-    from api.routes.component_versions import SEMVER_RE
+    from schemas.constants import COMPONENT_VERSION_RE
 
-    assert SEMVER_RE.match(SEMVER_VALID)
-    assert SEMVER_RE.match(SEMVER_VALID_PRE)
-    assert SEMVER_RE.match("0.0.0")
-    assert SEMVER_RE.match("10.20.300")
+    assert COMPONENT_VERSION_RE.fullmatch(SEMVER_VALID)
+    assert COMPONENT_VERSION_RE.fullmatch(SEMVER_VALID_PRE)
+    assert COMPONENT_VERSION_RE.fullmatch("0.0.0")
+    assert COMPONENT_VERSION_RE.fullmatch("10.20.300")
 
 
 def test_semver_pattern_rejects_invalid():
-    from api.routes.component_versions import SEMVER_RE
+    from schemas.constants import COMPONENT_VERSION_RE
 
-    assert not SEMVER_RE.match(SEMVER_INVALID)
-    assert not SEMVER_RE.match("1.2")
-    assert not SEMVER_RE.match("1.2.3.4")
-    assert not SEMVER_RE.match("")
-    assert not SEMVER_RE.match("v1.2.3")
+    assert not COMPONENT_VERSION_RE.fullmatch(SEMVER_INVALID)
+    assert not COMPONENT_VERSION_RE.fullmatch("1.2")
+    assert not COMPONENT_VERSION_RE.fullmatch("1.2.3.4")
+    assert not COMPONENT_VERSION_RE.fullmatch("")
+    assert not COMPONENT_VERSION_RE.fullmatch("v1.2.3")
 
 
 # ---------------------------------------------------------------------------
@@ -288,35 +288,13 @@ async def test_get_version_not_found():
 
 @pytest.mark.asyncio
 async def test_publish_version_bad_semver():
-    """publish_version rejects invalid semver strings with 422."""
-    from fastapi import HTTPException
+    """The publish request rejects invalid semver, so FastAPI answers 422 before the handler runs."""
+    from pydantic import ValidationError
 
-    from api.routes.component_versions import _publish_version
-    from models.mcp import McpListing, McpVersion
     from schemas.component_version import VersionPublishRequest
 
-    owner_id = uuid.uuid4()
-    listing = _make_listing(owner_id)
-    user = _make_user()
-    user.id = owner_id
-
-    req = VersionPublishRequest(version=SEMVER_INVALID, description="test", changelog=None, extra=None)
-
-    with (
-        patch(RESOLVE_SEAM, new=AsyncMock(return_value=listing)),
-        pytest.raises(HTTPException) as exc,
-    ):
-        await _publish_version(
-            listing_id=str(listing.id),
-            req=req,
-            listing_model=McpListing,
-            version_model=McpVersion,
-            component_type="mcp",
-            db=AsyncMock(),
-            current_user=user,
-        )
-
-    assert exc.value.status_code == 422
+    with pytest.raises(ValidationError):
+        VersionPublishRequest(version=SEMVER_INVALID, description="test", changelog=None, extra=None)
 
 
 @pytest.mark.asyncio

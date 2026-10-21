@@ -192,14 +192,14 @@ class TestSchemas:
     def test_skill_submit_valid(self):
         from schemas.skill import SkillSubmitRequest
 
-        r = SkillSubmitRequest(name="s", version="1.0", description="desc", owner="o", task_type="code-review")
+        r = SkillSubmitRequest(name="s", version="1.0.0", description="desc", owner="o", task_type="code-review")
         assert r.skill_path == "/"
 
     def test_hook_submit_valid(self):
         from schemas.hook import HookSubmitRequest
 
         r = HookSubmitRequest(
-            name="h", version="1.0", description="desc", owner="o", event="PreToolUse", handler_type="command"
+            name="h", version="1.0.0", description="desc", owner="o", event="PreToolUse", handler_type="command"
         )
         assert r.execution_mode == "async"
         assert r.priority == 100
@@ -208,7 +208,7 @@ class TestSchemas:
         from schemas.prompt import PromptSubmitRequest
 
         r = PromptSubmitRequest(
-            name="p", version="1.0", description="desc", owner="o", category="general", template="Hello {{ name }}"
+            name="p", version="1.0.0", description="desc", owner="o", category="general", template="Hello {{ name }}"
         )
         assert r.variables == []
 
@@ -216,7 +216,7 @@ class TestSchemas:
         from schemas.sandbox import SandboxSubmitRequest
 
         r = SandboxSubmitRequest(
-            name="sb", version="1.0", description="desc", owner="o", runtime_type="docker", image="python:3.11"
+            name="sb", version="1.0.0", description="desc", owner="o", runtime_type="docker", image="python:3.11"
         )
         assert r.network_policy == "none"
 
@@ -226,13 +226,13 @@ class TestSchemas:
         from schemas.hook import HookSubmitRequest
 
         with pytest.raises(ValueError):
-            HookSubmitRequest(name="h", version="1.0", description="d", owner="o", handler_type="command")
+            HookSubmitRequest(name="h", version="1.0.0", description="d", owner="o", handler_type="command")
 
     def test_sandbox_submit_missing_image(self):
         from schemas.sandbox import SandboxSubmitRequest
 
         with pytest.raises(ValueError):
-            SandboxSubmitRequest(name="sb", version="1.0", description="d", owner="o", runtime_type="docker")
+            SandboxSubmitRequest(name="sb", version="1.0.0", description="d", owner="o", runtime_type="docker")
 
     # ── ListingResponse from_attributes ──
 
@@ -251,7 +251,7 @@ class TestSchemas:
             namespace="testuser",
             slug="p",
             qualified_name="testuser/p",
-            version="1.0",
+            version="1.0.0",
             description="d",
             owner="o",
             category="c",
@@ -315,7 +315,13 @@ class TestSkillRoutes:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 r = await ac.post(
                     "/api/v1/skills/submit",
-                    json={"name": "s", "version": "1.0", "description": "d", "owner": "o", "task_type": "code-review"},
+                    json={
+                        "name": "s",
+                        "version": "1.0.0",
+                        "description": "d",
+                        "owner": "o",
+                        "task_type": "code-review",
+                    },
                 )
         assert r.status_code == 200
         assert db.add.call_count == 2  # listing + version
@@ -348,7 +354,7 @@ class TestSkillRoutes:
                     "/api/v1/skills/submit",
                     json={
                         "name": "s",
-                        "version": "1.0",
+                        "version": "1.0.0",
                         "description": "d",
                         "owner": "o",
                         "task_type": "code-review",
@@ -449,7 +455,7 @@ class TestHookRoutes:
                 "/api/v1/hooks/submit",
                 json={
                     "name": "h",
-                    "version": "1.0",
+                    "version": "1.0.0",
                     "description": "d",
                     "owner": "o",
                     "event": "PreToolUse",
@@ -502,7 +508,7 @@ class TestPromptRoutes:
                 "/api/v1/prompts/submit",
                 json={
                     "name": "p",
-                    "version": "1.0",
+                    "version": "1.0.0",
                     "description": "d",
                     "owner": "o",
                     "category": "general",
@@ -581,7 +587,7 @@ class TestSandboxRoutes:
                 "/api/v1/sandboxes/submit",
                 json={
                     "name": "sb",
-                    "version": "1.0",
+                    "version": "1.0.0",
                     "description": "d",
                     "owner": "o",
                     "runtime_type": "docker",
