@@ -12,11 +12,14 @@ methods they support; the feature gate runs before the override.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger as optic
 
 from observal_cli.harness.protocol import (
     METHOD_FEATURE_MAP,
@@ -115,6 +118,8 @@ class BaseAdapter:
     # any work (no usable login), and what to tell the user then. Empty: nothing reliable to ask.
     headless_ready_argv: tuple[str, ...] = ()
     headless_not_ready_hint = ""
+    # Credentials that authenticate a headless run without a login: when any is set the check is skipped.
+    headless_ready_skip_env: tuple[str, ...] = ()
     managed_agent_profiles: tuple[str, ...] = ()
     managed_skills: tuple[str, ...] = ()
     managed_mcp_files: tuple[str, ...] = ()
@@ -328,6 +333,8 @@ class BaseAdapter:
         """Why this harness cannot run a delegated agent right now; None when it can, or cannot tell."""
         if not self.headless_ready_argv:
             return None
+        if any(os.environ.get(name) for name in self.headless_ready_skip_env):
+            return None
         binary = shutil.which(self.headless_ready_argv[0])
         if binary is None:
             return None
@@ -339,8 +346,12 @@ class BaseAdapter:
                 timeout=HEADLESS_READY_TIMEOUT_SECONDS,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired):
-            return None  # a check that does not answer never blocks a delegation
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # A check that does not answer never blocks a delegation, but the skipped check is logged.
+            optic.warning(
+                "headless readiness check skipped: harness={} reason={}", self.harness_name, type(exc).__name__
+            )
+            return None
         if proc.returncode == 0:
             return None
         return self.headless_not_ready_hint or f"`{' '.join(self.headless_ready_argv)}` failed."
