@@ -50,51 +50,44 @@ def backfill() -> None:
         .mappings()
         .all()
     )
+    has_links = sa.inspect(db).has_table("review_request_thread_links_046")
     for row in requests:
         cleared = (
             row["state"] == "dismissed" or row["later_id"] is not None or row["review_state"] in ("closed", "published")
         )
         created_at = row["submitted_at"] or datetime.now(UTC)
-        # A downgraded database retains the original conversation and its
-        # submission-linked first comment. Recover that link on re-upgrade
-        # instead of creating an unresolvable duplicate blocking conversation.
-        # Draft comments can share the submission ID but predate the verdict.
-        # Request-opening threads and comments are written after submission,
-        # whether or not their text was subsequently edited.
-        prior = db.execute(
-            sa.text("""
-                SELECT t.id FROM review_threads t
-                  JOIN review_comments c ON c.thread_id = t.id
-                 WHERE t.review_id = :review_id AND t.change_request_id IS NULL
-                   AND t.path IS NULL AND t.created_by = :reviewer_id
-                   AND c.submission_id = :request_id AND c.author_id = :reviewer_id
-                   AND t.created_at >= :submitted_at AND c.created_at >= t.created_at
-                 LIMIT 2
-            """),
-            {
-                "review_id": row["review_id"],
-                "request_id": row["id"],
-                "reviewer_id": row["reviewer_id"],
-                "submitted_at": row["submitted_at"],
-            },
-        ).all()
-        if len(prior) == 1:
-            db.execute(
-                sa.text("""
-                    UPDATE review_threads SET change_request_id = :request_id,
-                        resolved_at = CASE WHEN :cleared THEN COALESCE(resolved_at, :resolved_at) ELSE NULL END,
-                        resolved_by = CASE WHEN :cleared THEN COALESCE(resolved_by, :resolved_by) ELSE NULL END
-                     WHERE id = :thread_id
-                """),
-                {
-                    "request_id": row["id"],
-                    "thread_id": prior[0].id,
-                    "cleared": cleared,
-                    "resolved_at": row["dismissed_at"] or created_at,
-                    "resolved_by": row["dismissed_by"] or row["reviewer_id"],
-                },
-            )
-            continue
+        link = None
+        if has_links:
+            # A missing thread is a tombstone, not permission to recreate its
+            # deleted content. Never infer identity from comments or timestamps.
+            link = db.execute(
+                sa.text("SELECT thread_id FROM review_request_thread_links_046 WHERE request_id = :request_id"),
+                {"request_id": row["id"]},
+            ).scalar_one_or_none()
+            if link is not None:
+                restored = db.execute(
+                    sa.text("""
+                        UPDATE review_threads SET change_request_id = :request_id,
+                            resolved_at = CASE WHEN :cleared THEN COALESCE(resolved_at, :resolved_at) ELSE NULL END,
+                            resolved_by = CASE WHEN :cleared THEN COALESCE(resolved_by, :resolved_by) ELSE NULL END
+                         WHERE id = :thread_id AND review_id = :review_id
+                           AND created_by = :reviewer_id AND change_request_id IS NULL
+                         RETURNING id
+                    """),
+                    {
+                        "request_id": row["id"],
+                        "thread_id": link,
+                        "review_id": row["review_id"],
+                        "reviewer_id": row["reviewer_id"],
+                        "cleared": cleared,
+                        "resolved_at": row["dismissed_at"] or created_at,
+                        "resolved_by": row["dismissed_by"] or row["reviewer_id"],
+                    },
+                ).scalar_one_or_none()
+                if restored is not None:
+                    continue
+                # Deleted/mismatched mapping: insert a linked, empty tombstone
+                # below, never a replacement opening comment.
         thread_id = uuid.uuid4()
         db.execute(
             sa.text("""
@@ -114,6 +107,8 @@ def backfill() -> None:
                 "created_at": created_at,
             },
         )
+        if link is not None:
+            continue
         db.execute(
             sa.text("""
                 INSERT INTO review_comments
@@ -155,9 +150,25 @@ def upgrade() -> None:
         ],
     )
     backfill()
+    # Only a re-upgrade has links. Remove them atomically with restoring the
+    # association; a fresh installation has no migration-owned table.
+    if sa.inspect(op.get_bind()).has_table("review_request_thread_links_046"):
+        op.drop_table("review_request_thread_links_046")
 
 
 def downgrade() -> None:
+    # Preserve identity even when downgraded workers edit/delete the opening
+    # comment or remove a whole thread. Do not cascade thread deletion here:
+    # the mapping also serves as a tombstone to prevent resurrecting content.
+    op.create_table(
+        "review_request_thread_links_046",
+        sa.Column("request_id", U, primary_key=True),
+        sa.Column("thread_id", U, nullable=False),
+    )
+    op.execute("""
+        INSERT INTO review_request_thread_links_046 (request_id, thread_id)
+        SELECT change_request_id, id FROM review_threads WHERE change_request_id IS NOT NULL
+    """)
     # Preserve comments/replies as ordinary conversations on rollback.
     op.drop_index("ix_review_submission_latest_decision", table_name="review_submissions")
     op.drop_index("ix_review_comments_submission_id", table_name="review_comments")

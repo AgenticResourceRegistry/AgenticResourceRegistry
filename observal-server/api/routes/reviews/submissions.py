@@ -77,8 +77,9 @@ async def submit(
 ):
     if data.verdict == "request_changes" and not data.body.strip():
         raise HTTPException(422, "Explain what needs changing")
+    await _lock_review(db, review)
     was_ready = (await gate(db, review)).ready
-    row = await submit_verdict(db, review, user, data.verdict, data.body)
+    row = await submit_verdict(db, review, user, data.verdict, data.body, review_locked=True)
     await db.flush()
     if data.verdict != "comment":
         await notifications.resolve_review_work(
@@ -137,7 +138,7 @@ async def dismiss_submission(
         raise HTTPException(404, "Submission not found")
     await _lock_review(db, review)
     was_ready = (await gate(db, review)).ready
-    await dismiss(db, review, row, user, data.reason)
+    await dismiss(db, review, row, user, data.reason, review_locked=True)
     if row.verdict == "request_changes":
         await notifications.resolve_review_work(
             db, review, user.id, kinds=(InboxKind.change_requested,), request_ids={str(row.id)}
@@ -172,7 +173,7 @@ async def withdraw_request(
         raise HTTPException(404, "Submission not found")
     await _lock_review(db, review)
     was_ready = (await gate(db, review)).ready
-    await dismiss(db, review, row, user, data.reason, withdraw_request=True)
+    await dismiss(db, review, row, user, data.reason, withdraw_request=True, review_locked=True)
     await notifications.resolve_review_work(
         db, review, user.id, kinds=(InboxKind.change_requested,), request_ids={str(row.id)}
     )

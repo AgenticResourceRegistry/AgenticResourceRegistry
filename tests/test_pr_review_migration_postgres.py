@@ -19,11 +19,14 @@ from alembic.operations import Operations
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api.routes.reviews.detail import timeline
+from api.routes.reviews.threads import threads
 from models import Base
 from models.review import ReviewComment, ReviewSubmission, ReviewThread
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
-from services.review.decisions import open_or_push
+from services.review.decisions import gate, open_or_push
+from services.review.requests import ensure_request_threads
 
 
 @pytest.mark.asyncio
@@ -112,28 +115,26 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
                 body="Live question",
                 submitted_at=earlier + timedelta(minutes=1),
             )
-            db.add_all([historical, live])
-            await db.flush()
-            thread = ReviewThread(
+            undated = ReviewSubmission(
                 review_id=review.id,
-                change_request_id=live.id,
-                created_by=reviewer.id,
-                created_at=live.submitted_at + timedelta(milliseconds=5),
+                revision_id=review.head_revision_id,
+                reviewer_id=reviewer.id,
+                state="submitted",
+                verdict="request_changes",
+                body="Undated question",
+                submitted_at=None,
             )
+            db.add_all([historical, live, undated])
+            await db.flush()
             draft_at = live.submitted_at - timedelta(minutes=5)
-            draft_thread = ReviewThread(review_id=review.id, created_by=reviewer.id, created_at=draft_at)
-            db.add_all([thread, draft_thread])
+            draft_thread = ReviewThread(review_id=review.id, created_by=author.id, created_at=draft_at)
+            undated_draft = ReviewThread(
+                review_id=review.id, created_by=reviewer.id, created_at=earlier - timedelta(minutes=20)
+            )
+            db.add_all([draft_thread, undated_draft])
             await db.flush()
             db.add_all(
                 [
-                    ReviewComment(
-                        review_id=review.id,
-                        thread_id=thread.id,
-                        submission_id=live.id,
-                        author_id=reviewer.id,
-                        body=live.body,
-                        created_at=live.submitted_at + timedelta(milliseconds=10),
-                    ),
                     ReviewComment(
                         review_id=review.id,
                         thread_id=draft_thread.id,
@@ -142,32 +143,54 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
                         body="Separate draft note",
                         created_at=draft_at,
                     ),
+                    ReviewComment(
+                        review_id=review.id,
+                        thread_id=undated_draft.id,
+                        submission_id=undated.id,
+                        author_id=reviewer.id,
+                        body=undated.body,
+                        created_at=earlier - timedelta(minutes=20) + timedelta(milliseconds=5),
+                    ),
                 ]
             )
             await db.commit()
-            live_thread_id = thread.id
             draft_thread_id = draft_thread.id
+            undated_draft_id = undated_draft.id
 
-        async def verify_conversations(historical_thread_id=None):
+        async def verify_conversations(deleted_opening=False, deleted_thread=False, mismatched=False):
             async with sessions() as db:
                 rows = (await db.scalars(select(ReviewThread).where(ReviewThread.review_id == review.id))).all()
-                assert len(rows) == 3
-                by_request = {row.change_request_id: row for row in rows}
-                assert set(by_request) == {historical.id, live.id, None}
-                assert by_request[None].id == draft_thread_id
-                assert by_request[live.id].id == live_thread_id
+                assert len(rows) == 5 + int(mismatched)
+                by_request = {row.change_request_id: row for row in rows if row.change_request_id is not None}
+                assert set(by_request) == {historical.id, live.id, undated.id}
+                unlinked = {draft_thread_id, undated_draft_id}
+                if mismatched:
+                    unlinked.add(undated_thread_id)
+                    assert by_request[undated.id].id != undated_thread_id
+                else:
+                    assert by_request[undated.id].id == undated_thread_id
+                assert {row.id for row in rows if row.change_request_id is None} == unlinked
+                if deleted_thread:
+                    assert by_request[live.id].id != live_thread_id
+                else:
+                    assert by_request[live.id].id == live_thread_id
                 assert by_request[live.id].resolved_at is None
                 assert by_request[historical.id].resolved_at is not None
-                if historical_thread_id is not None:
-                    assert by_request[historical.id].id == historical_thread_id
+                assert by_request[historical.id].id == historical_thread_id
                 comments = (await db.scalars(select(ReviewComment).where(ReviewComment.review_id == review.id))).all()
-                assert len(comments) == 3
-                assert {(c.submission_id, c.thread_id, c.author_id, c.body) for c in comments} == {
+                assert len(comments) == 5 - int(deleted_opening) - int(deleted_thread)
+                expected = {
                     (live.id, live_thread_id, reviewer.id, live.body),
-                    (historical.id, by_request[historical.id].id, reviewer.id, historical.body),
+                    (historical.id, historical_thread_id, reviewer.id, historical.body),
                     (live.id, draft_thread_id, reviewer.id, "Separate draft note"),
+                    (undated.id, undated_thread_id, reviewer.id, undated.body),
+                    (undated.id, undated_draft_id, reviewer.id, undated.body),
                 }
-                return by_request[historical.id].id
+                if deleted_opening:
+                    expected.remove((undated.id, undated_thread_id, reviewer.id, undated.body))
+                if deleted_thread:
+                    expected.remove((live.id, live_thread_id, reviewer.id, live.body))
+                assert {(c.submission_id, c.thread_id, c.author_id, c.body) for c in comments} == expected
 
         async with engine.begin() as conn:
             await conn.execute(text("ALTER TABLE review_threads DROP COLUMN change_request_id CASCADE"))
@@ -193,23 +216,87 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
                 assert "(review_id, reviewer_id, submitted_at DESC NULLS LAST, id DESC)" in index_def.scalar_one()
 
             await conn.run_sync(constraints)
-        historical_thread_id = await verify_conversations()
+        async with sessions() as db:
+            rows = (await db.scalars(select(ReviewThread).where(ReviewThread.review_id == review.id))).all()
+            by_request = {row.change_request_id: row.id for row in rows if row.change_request_id is not None}
+            historical_thread_id = by_request[historical.id]
+            live_thread_id = by_request[live.id]
+            undated_thread_id = by_request[undated.id]
+        await verify_conversations()
         async with engine.begin() as conn:
             await conn.run_sync(migrate, "downgrade")
             assert not await conn.scalar(text("SELECT to_regclass('ix_review_submission_latest_decision')"))
             retained = await conn.scalar(
                 text("SELECT count(*) FROM review_comments WHERE review_id = :review_id"), {"review_id": review.id}
             )
-            assert retained == 3
+            assert retained == 5
+            assert await conn.scalar(text("SELECT to_regclass('review_request_thread_links_046')"))
+            assert dict(
+                (await conn.execute(text("SELECT request_id, thread_id FROM review_request_thread_links_046"))).all()
+            ) == {
+                historical.id: historical_thread_id,
+                live.id: live_thread_id,
+                undated.id: undated_thread_id,
+            }
             # The old API can edit verdict text while the conversation's
             # opening comment retains its original body.
             await conn.execute(
                 text("UPDATE review_submissions SET body = 'Edited live question' WHERE id = :id"), {"id": live.id}
             )
+            # The opening is physically deleted while the same-body draft
+            # remains. Neither the draft nor a synthesized copy may replace it.
+            await conn.execute(text("DELETE FROM review_comments WHERE thread_id = :id"), {"id": undated_thread_id})
             await conn.run_sync(migrate, "upgrade")
-        await verify_conversations(historical_thread_id)
+            assert not await conn.scalar(text("SELECT to_regclass('review_request_thread_links_046')"))
+        await verify_conversations(deleted_opening=True)
+        async with engine.begin() as conn:
+            await conn.run_sync(migrate, "downgrade")
+            # The second rollback removes the *blocking* conversation. Preserve
+            # the verdict but change its body so the removed text is unambiguous.
+            await conn.execute(text("DELETE FROM review_threads WHERE id = :id"), {"id": live_thread_id})
+            await conn.execute(
+                text("UPDATE review_submissions SET body = 'Retained verdict text' WHERE id = :id"), {"id": live.id}
+            )
+            # A mapping pointing at an unrelated draft must not claim it or
+            # synthesize the opening comment deleted on the first rollback.
+            await conn.execute(
+                text("UPDATE review_request_thread_links_046 SET thread_id = :thread WHERE request_id = :request"),
+                {"thread": draft_thread_id, "request": undated.id},
+            )
+            await conn.run_sync(migrate, "upgrade")
+            assert not await conn.scalar(text("SELECT to_regclass('review_request_thread_links_046')"))
+        await verify_conversations(deleted_opening=True, deleted_thread=True, mismatched=True)
         async with sessions() as db:
-            assert (await db.get(ReviewSubmission, live.id)).body == "Edited live question"
+            assert (await db.get(ReviewSubmission, live.id)).body == "Retained verdict text"
+            assert not await ensure_request_threads(db, review)
+            visible = await threads(review=review, db=db, user=author, resolved=None, path=None, outdated=None)
+            tombstone = next(
+                row for row in visible if row["change_request"] and row["change_request"]["submission_id"] == live.id
+            )
+            assert tombstone["comments"] == []
+            assert tombstone["change_request"]["status"] == "blocking"
+            assert tombstone["id"] != live_thread_id
+            assert (await gate(db, review)).outstanding_requests == 1
+            assert not (await gate(db, review)).ready
+            assert not await db.scalar(text("SELECT 1 FROM review_comments WHERE body = 'Live question'"))
+            # Timeline ordering requires dated verdicts; the NULL-submitted_at
+            # migration case above has already been exercised.
+            await db.execute(
+                text("UPDATE review_submissions SET submitted_at = :at WHERE id = :id"),
+                {"at": earlier - timedelta(minutes=1), "id": undated.id},
+            )
+            items = (await timeline(review=review, db=db, user=author, cursor=None, limit=50))["items"]
+            assert all(item.get("body") != "Live question" for item in items)
+            assert any(item.get("body") == "Retained verdict text" for item in items)
+            assert not await ensure_request_threads(db, review)
+            assert (
+                await db.scalar(text("SELECT count(*) FROM review_threads WHERE review_id = :id"), {"id": review.id})
+                == 6
+            )
+            assert (
+                await db.scalar(text("SELECT count(*) FROM review_comments WHERE review_id = :id"), {"id": review.id})
+                == 3
+            )
     finally:
         await engine.dispose()
         async with admin.begin() as conn:
