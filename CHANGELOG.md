@@ -41,6 +41,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
 - support multi-artifact migration validation and import uploads
 - restore teamspace discovery, membership controls, private join requests, and empty personal deletion
