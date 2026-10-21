@@ -83,7 +83,8 @@ class CodexAdapter(BaseAdapter):
             if home is not None
             else Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
         )
-        return (codex_home / "sessions").resolve()
+        # Preserve the lexical .codex segment even when CODEX_HOME is symlinked.
+        return Path(os.path.abspath(codex_home / "sessions"))
 
     @staticmethod
     def _session_meta(path: Path) -> dict:
@@ -116,6 +117,20 @@ class CodexAdapter(BaseAdapter):
         if meta.get("thread_source") != "subagent" or not isinstance(role, str) or not role:
             return None
         return role
+
+    def resolve_session_agent_identity(
+        self, session_jsonl: Path | None, cwd: str
+    ) -> tuple[str | None, str | None] | None:
+        """Credit only a rollout's actual pulled subagent role, not its folder."""
+        from observal_cli.sessions.base import _lookup_lockfile_agent
+
+        role = self.session_subagent_name(session_jsonl)
+        if not role:
+            return None
+        entry = _lookup_lockfile_agent(cwd, agent_name=role)
+        if not entry or (cwd and entry.get("scope") == "project" and entry.get("directory") != cwd):
+            return None, None
+        return entry.get("id") or entry.get("name"), entry.get("version")
 
     def _source(self, path: Path) -> SessionSource:
         """Use only metadata recorded by this rollout, never the hook process cwd."""
@@ -169,15 +184,21 @@ class CodexAdapter(BaseAdapter):
         return sorted(sources, key=lambda source: source.path.stat().st_mtime if source.path else 0, reverse=True)
 
     def outbox_provenance(self, source: SessionSource, payload: dict) -> dict | None:
-        """Record only verified delegated identity or explicit lack of identity."""
+        """Record only rollout-bound or delegated identity, never a hook marker."""
         from observal_cli.delegation.tasks import delegated_agent
 
         delegated = delegated_agent("", (source.session_id,))
         identity = "unattributed"
         if payload.get("agent_id"):
-            if delegated != (payload.get("agent_id"), payload.get("agent_version")):
-                return None
-            identity = "delegation"
+            if delegated == (payload.get("agent_id"), payload.get("agent_version")):
+                identity = "delegation"
+            else:
+                if self.resolve_session_agent_identity(source.path, source.cwd) != (
+                    payload.get("agent_id"),
+                    payload.get("agent_version"),
+                ):
+                    return None
+                identity = "rollout-subagent"
         return {
             "session_id": source.session_id,
             "path": os.path.abspath(source.path) if source.path else "",
@@ -273,17 +294,30 @@ class CodexAdapter(BaseAdapter):
                 and not proof.get("agent_id")
                 and not proof.get("agent_version")
             )
-        if identity != "delegation" or not item.payload.get("agent_id"):
+        if not item.payload.get("agent_id") or (proof.get("agent_id"), proof.get("agent_version")) != (
+            item.payload.get("agent_id"),
+            item.payload.get("agent_version"),
+        ):
             return False
-        from observal_cli.delegation.tasks import delegated_agent
+        if identity == "delegation":
+            from observal_cli.delegation.tasks import delegated_agent
 
-        delegated = delegated_agent("", (item.session_id,))
-        return (
-            delegated == (item.payload.get("agent_id"), item.payload.get("agent_version"))
-            and proof.get("agent_id") == item.payload.get("agent_id")
-            and proof.get("agent_version") == item.payload.get("agent_version")
-            and source.session_id == item.session_id
-        )
+            return delegated_agent("", (item.session_id,)) == (
+                item.payload.get("agent_id"),
+                item.payload.get("agent_version"),
+            )
+        if identity == "rollout-subagent":
+            # A queued role is not proof: re-read this exact rollout and match
+            # the pulled agent, including its pinned version, at delivery time.
+            return (
+                isinstance(meta, dict)
+                and meta.get("id") == item.session_id
+                and (
+                    self.resolve_session_agent_identity(source_path, source.cwd)
+                    == (item.payload.get("agent_id"), item.payload.get("agent_version"))
+                )
+            )
+        return False
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         home = home or Path.home()

@@ -58,6 +58,204 @@ def test_discovered_cwd_and_missing_or_wrong_hook_id(tmp_path):
     assert adapter.resolve_session_source({"session_id": "third"}, home=tmp_path).path == missing
 
 
+def test_live_subagent_and_recovery_keep_own_identity_and_user_boundary(tmp_path, monkeypatch):
+    """A hook's parent marker cannot claim the parent, another user, or a damaged rollout."""
+    cfg = config(tmp_path)
+    db = tmp_path / "queue.db"
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", db)
+    monkeypatch.setattr(base, "recover_cursor_from_server", lambda *a, **kw: (0, 0))
+    monkeypatch.setattr(base, "_get_cached_layer_hash", lambda *a: None)
+    monkeypatch.setattr(base, "_capabilities_for_session", lambda *a: None)
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **kw: None)
+    monkeypatch.setattr(session_push, "read_cursor_state", lambda *a, **kw: (0, 0, False))
+    monkeypatch.setenv("OBSERVAL_AGENT_ID", "other-agent")
+    monkeypatch.setenv("OBSERVAL_AGENT_NAME", "other-agent")
+    project = str(tmp_path / "project")
+    monkeypatch.setattr(
+        "observal_cli.lockfile.read_registry_lockfile",
+        lambda: (
+            {},
+            {
+                "harnesses": {
+                    "codex": {
+                        "agents": [
+                            {
+                                "name": "quick-fixer",
+                                "id": "agent-uuid",
+                                "version": "1.0.0",
+                                "scope": "project",
+                                "directory": project,
+                            }
+                        ]
+                    }
+                }
+            },
+        ),
+    )
+    root = tmp_path / ".codex" / "sessions"
+    root.mkdir(parents=True)
+
+    def record(session, **meta):
+        path = root / f"{session}.jsonl"
+        path.write_text(json.dumps({"type": "session_meta", "payload": {"id": session, "cwd": project, **meta}}) + "\n")
+        return path
+
+    record("parent", thread_source="user")
+    record("child", thread_source="subagent", agent_role="quick-fixer", parent_thread_id="parent")
+    record("queued", thread_source="subagent", agent_role="quick-fixer", parent_thread_id="parent")
+    damaged = record("damaged", thread_source="subagent", agent_role="quick-fixer")
+    observed = []
+
+    def post(payload, _cfg):
+        observed.append(payload)
+        return {
+            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
+            "acknowledged_offset": payload["end_byte_offsets"][-1],
+        }
+
+    monkeypatch.setattr(base, "post_to_server_ack", lambda _url, _token, body, config: post(body, config))
+    session_push._run_hook({"session_id": "child", "event": "Stop"}, harness="codex", home=tmp_path)
+    session_push._run_hook({"session_id": "parent", "event": "Stop"}, harness="codex", home=tmp_path)
+    assert [(p["session_id"], p["agent_id"], p["agent_version"], p["parent_session_id"]) for p in observed] == [
+        ("child", "agent-uuid", "1.0.0", "parent"),
+        ("parent", None, None, None),
+    ]
+
+    # A valid subagent queued for another user cannot be replayed by this user's drain.
+    adapter = get_adapter("codex")
+    other_source = adapter.resolve_session_source({"session_id": "queued"}, home=tmp_path)
+    other_line = other_source.path.read_text().strip()
+    other_payload = base.build_payload(
+        "queued",
+        [other_line],
+        0,
+        "Stop",
+        0,
+        cwd=project,
+        session_jsonl=other_source.path,
+        harness="codex",
+        identity_scope="recovery",
+    )
+    other_payload["harness"] = "codex"
+    other_payload["end_byte_offsets"] = [other_source.path.stat().st_size]
+    telemetry_buffer.enqueue(
+        other_payload,
+        destination="http://server",
+        user_id="other-user",
+        db_path=db,
+        provenance=adapter.outbox_provenance(other_source, other_payload),
+    )
+    # This user's queued recovery still credits a verified subagent.
+    recovered = record("recovered", thread_source="subagent", agent_role="quick-fixer")
+    old = time.time() - 300
+    os.utime(recovered, (old, old))
+    # Missing/truncated queued proof must be held before sending, then explicitly quarantined.
+    damaged_payload = dict(
+        other_payload,
+        session_id="damaged",
+        lines=[damaged.read_text().strip()],
+        end_byte_offsets=[damaged.stat().st_size],
+    )
+    damaged_source = adapter.resolve_session_source({"session_id": "damaged"}, home=tmp_path)
+    telemetry_buffer.enqueue(
+        damaged_payload,
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+        provenance=adapter.outbox_provenance(damaged_source, damaged_payload),
+    )
+    damaged.write_text("{truncated")
+    assert not base.drain_outbox(cfg, home=tmp_path, db_path=db, post=post)
+    assert {hold[3] for hold in telemetry_buffer.held_sessions(db_path=db)} == {"damaged"}
+    session_push._recover_sessions("codex", home=tmp_path)
+    assert any(
+        p["session_id"] == "recovered" and (p["agent_id"], p["agent_version"]) == ("agent-uuid", "1.0.0")
+        for p in observed
+    )
+    assert not any(p["session_id"] in {"queued", "damaged"} for p in observed)
+    assert len(telemetry_buffer.pending(destination="http://server", user_id="other-user", db_path=db)) == 1
+    assert telemetry_buffer.quarantine_held_session("http://server", "user", "codex", "damaged", db_path=db) == 1
+    assert not telemetry_buffer.is_held("http://server", "user", "codex", "damaged", db_path=db)
+    assert db.with_suffix(".quarantined.jsonl").exists()
+
+
+def test_detached_codex_workers_drop_stale_parent_markers(tmp_path, monkeypatch):
+    ensure_loaded()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_HOME", "codex-home")
+    monkeypatch.setenv("OBSERVAL_AGENT_ID", "stale-parent")
+    monkeypatch.setenv("OBSERVAL_AGENT_NAME", "stale-parent")
+    spawned = []
+    monkeypatch.setattr(session_push.subprocess, "Popen", lambda argv, **kw: spawned.append(kw["env"]))
+    for args in (("--recover",), ("--drain-outbox",), ("--finalize-session", "child")):
+        session_push._spawn_worker(*args, harness="codex")
+    assert len(spawned) == 3
+    assert all(
+        env["CODEX_HOME"] == str(tmp_path / "codex-home")
+        and "OBSERVAL_AGENT_ID" not in env
+        and "OBSERVAL_AGENT_NAME" not in env
+        for env in spawned
+    )
+    assert os.environ["OBSERVAL_AGENT_ID"] == "stale-parent"
+
+
+def test_child_role_does_not_inherit_parent_delegation_or_other_project(tmp_path, monkeypatch):
+    ensure_loaded()
+    project = tmp_path / "project"
+    other = tmp_path / "other"
+    monkeypatch.setattr(
+        "observal_cli.lockfile.read_registry_lockfile",
+        lambda: (
+            {},
+            {
+                "harnesses": {
+                    "codex": {
+                        "agents": [
+                            {
+                                "name": "quick-fixer",
+                                "id": "agent-uuid",
+                                "version": "1",
+                                "scope": "project",
+                                "directory": str(project),
+                            }
+                        ]
+                    }
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "observal_cli.delegation.tasks.delegated_agent",
+        lambda cwd, session_ids: ("parent-agent", "2") if "parent" in session_ids else None,
+    )
+    path = rollout(tmp_path, "child", str(other))
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "child",
+                    "cwd": str(other),
+                    "thread_source": "subagent",
+                    "agent_role": "quick-fixer",
+                    "parent_thread_id": "parent",
+                },
+            }
+        )
+        + "\n"
+    )
+    source = get_adapter("codex").resolve_session_source({"session_id": "child"}, home=tmp_path)
+    assert base._resolve_agent(
+        source.cwd,
+        [],
+        source.path,
+        harness="codex",
+        session_ids=("child", source.parent_session_id),
+        identity_scope="recovery",
+    ) == (None, None)
+    assert get_adapter("codex").outbox_provenance(source, {"agent_id": "parent-agent", "agent_version": "2"}) is None
+
+
 def test_recovery_ignores_both_ambient_markers_and_delivers_unattributed(tmp_path, monkeypatch):
     config(tmp_path)
     db = tmp_path / "queue.db"
