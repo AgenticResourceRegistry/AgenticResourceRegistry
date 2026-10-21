@@ -139,6 +139,11 @@ def _build_registry_scope(agent: Agent | None, agent_config: dict | None) -> Reg
 REPORT_TIMEOUT_MINUTES = 10
 
 
+# Scheduled runs drift by seconds, so the report from one period back can end
+# just after the new window starts. A sliver that small is not an overlap.
+_BASELINE_SLACK = timedelta(hours=1)
+
+
 def insight_report_job_id(report_id) -> str:
     """arq job id for generating one report.
 
@@ -148,6 +153,36 @@ def insight_report_job_id(report_id) -> str:
     report pending forever. Duplicate inputs are caught before the insert.
     """
     return f"insight-report:{report_id}"
+
+
+async def find_baseline_report(
+    db, *, agent_id, agent_version: str | None, period_start: datetime, period_end: datetime
+) -> InsightReport | None:
+    """Pick the completed report covering the window just before this one.
+
+    Regression detection diffs raw totals, so the baseline has to be a
+    separate window of the same length. The latest report for the version
+    usually overlaps the new one, and two reports over the same sessions
+    always read as "stable". With no such window, the report gets no
+    previous data and the section says it cannot compare.
+    """
+    length = period_end - period_start
+    stmt = (
+        select(InsightReport)
+        .where(
+            InsightReport.agent_id == agent_id,
+            InsightReport.agent_version == agent_version,
+            InsightReport.status == InsightReportStatus.completed,
+            InsightReport.period_end <= period_start + _BASELINE_SLACK,
+            InsightReport.period_end >= period_start - length,
+        )
+        .order_by(InsightReport.period_end.desc(), InsightReport.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    for report in result.scalars().all():
+        if report.period_end - report.period_start == length:
+            return report
+    return None
 
 
 async def _reap_stale_reports() -> int:
@@ -427,19 +462,13 @@ async def discover_and_queue_reports() -> int:
                     )
                     continue
 
-                # Find the most recent completed report for regression linking
-                prev_report_stmt = (
-                    select(InsightReport)
-                    .where(
-                        InsightReport.agent_id == agent.id,
-                        InsightReport.agent_version == latest_version.version,
-                        InsightReport.status == InsightReportStatus.completed,
-                    )
-                    .order_by(InsightReport.created_at.desc())
-                    .limit(1)
+                prev_report = await find_baseline_report(
+                    db,
+                    agent_id=agent.id,
+                    agent_version=latest_version.version,
+                    period_start=period_start,
+                    period_end=now,
                 )
-                prev_result = await db.execute(prev_report_stmt)
-                prev_report = prev_result.scalar_one_or_none()
 
                 # Create a new report record
                 report = InsightReport(
