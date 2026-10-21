@@ -1776,7 +1776,13 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
 @router.post("/token/revoke")
 @limiter.limit(ds.get_sync("security.rate_limit_auth", "10/minute"))
 async def revoke_token(request: Request, req: RevokeRequest):
-    """Revoke a refresh token so it can no longer be used."""
+    """Revoke a refresh token so it can no longer be used.
+
+    An access token carries no link to the refresh token that minted it (each has its
+    own random jti), so one already issued stays valid until it expires. /auth/logout is the
+    call that ends a session at once: it blacklists the presented access token and
+    every token issued to the user so far.
+    """
     optic.debug("revoke_token called")
     try:
         payload = decode_refresh_token(req.refresh_token)
