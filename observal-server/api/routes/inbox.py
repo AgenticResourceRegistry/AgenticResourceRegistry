@@ -43,6 +43,9 @@ router = APIRouter(prefix="/api/v1/inbox", tags=["inbox"])
 # caller may see. The cap only bounds how much one request can pull; anything
 # beyond it and the caller should be paginating rather than scrolling.
 _MAX_PAGE_SIZE = 100
+# The offset goes to PostgreSQL as a bigint, so an unbounded page overflows int64
+# inside asyncpg. No inbox gets anywhere near this many pages.
+_MAX_PAGE = 100_000
 
 
 def _to_response(item: InboxItem) -> InboxItemResponse:
@@ -141,7 +144,7 @@ async def list_inbox(
     subject_type: str | None = Query(None, max_length=32),
     q: str | None = Query(None, max_length=200),
     sort: str = Query("newest", pattern="^(newest|oldest)$"),
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=_MAX_PAGE),
     page_size: int = Query(25, ge=1, le=_MAX_PAGE_SIZE),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),

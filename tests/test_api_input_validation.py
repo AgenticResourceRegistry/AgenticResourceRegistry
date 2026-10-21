@@ -264,3 +264,73 @@ def test_team_requests_reject_blank_names(name):
 
     assert _field_errors(TeamCreateRequest, name=name).get("name") == "string_too_short"
     assert _field_errors(TeamUpdateRequest, name=name).get("name") == "string_too_short"
+
+
+# ── OBS-1470: out-of-range numbers and ids fail validation, not the query ────
+
+
+def _route_client(router):
+    import uuid
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from api.deps import get_current_user, get_db, get_registry_user
+    from models.user import UserRole
+
+    user = SimpleNamespace(id=uuid.uuid4(), role=UserRole.super_admin, username="root", email="r@example.com")
+    db = MagicMock(name="db")
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_registry_user] = lambda: user
+    app.dependency_overrides[get_db] = lambda: db
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test"), db
+
+
+def _routers():
+    from api.routes import dashboard, exec_dashboard, inbox, insights
+    from api.routes.admin import router as admin_router
+    from api.routes.agent import router as agent_router
+
+    return {
+        "inbox": inbox.router,
+        "dashboard": dashboard.router,
+        "exec": exec_dashboard.router,
+        "insights": insights.router,
+        "admin": admin_router,
+        "agent": agent_router,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router", "path"),
+    [
+        ("inbox", "/api/v1/inbox?page=99999999999999999999"),
+        ("inbox", "/api/v1/inbox?page=100001"),
+        ("dashboard", "/api/v1/overview/top-agents?limit=-1"),
+        ("dashboard", "/api/v1/overview/top-agents?limit=0"),
+        ("exec", "/api/v1/exec/top-agents?limit=-1"),
+        ("exec", "/api/v1/exec/developer-breakdown?limit=0"),
+        ("admin", "/api/v1/admin/retention/preview?days=99999999"),
+        ("insights", "/api/v1/insights/reports/not-a-uuid"),
+        ("insights", "/api/v1/insights/reports/not-a-uuid/export/html"),
+        ("agent", f"/api/v1/agents/{'0' * 8}-0000-0000-0000-{'0' * 12}/insights/reports/not-a-uuid"),
+    ],
+)
+async def test_out_of_range_parameters_are_rejected_before_the_database(router, path):
+    client, db = _route_client(_routers()[router])
+    async with client:
+        resp = await client.get(path)
+    assert resp.status_code == 422, resp.text
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_insights_report_mutations_reject_non_uuid_ids():
+    client, db = _route_client(_routers()["insights"])
+    async with client:
+        deleted = await client.delete("/api/v1/insights/reports/not-a-uuid")
+        applied = await client.post("/api/v1/insights/reports/not-a-uuid/apply", json={})
+    assert (deleted.status_code, applied.status_code) == (422, 422)
+    db.execute.assert_not_called()
