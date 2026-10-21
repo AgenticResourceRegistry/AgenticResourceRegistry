@@ -69,6 +69,22 @@ async def _comments(db, review, threads, user):
     return [c for c in rows if c.submission_id not in drafts or drafts[c.submission_id].reviewer_id == user.id]
 
 
+async def _public_request(db, review, thread):
+    if thread.change_request_id is None:
+        return False
+    return (
+        await db.scalar(
+            select(ReviewSubmission.id).where(
+                ReviewSubmission.id == thread.change_request_id,
+                ReviewSubmission.review_id == review.id,
+                ReviewSubmission.verdict == "request_changes",
+                ReviewSubmission.state != "draft",
+            )
+        )
+        is not None
+    )
+
+
 def _render_comment(comment):
     return {
         "id": comment.id,
@@ -113,6 +129,7 @@ async def threads(
                 select(ReviewSubmission).where(
                     ReviewSubmission.review_id == review.id,
                     ReviewSubmission.verdict == "request_changes",
+                    ReviewSubmission.state != "draft",
                 )
             )
         ).all()
@@ -152,7 +169,7 @@ async def threads(
             "comments": by_thread[row.id],
         }
         for row in rows
-        if by_thread[row.id]
+        if by_thread[row.id] or row.change_request_id in requests
     ]
 
 
@@ -161,7 +178,7 @@ async def _thread(db, review, thread_id, user):
     if row is None or row.review_id != review.id:
         raise HTTPException(404, "Thread not found")
     visible = await _comments(db, review, [row], user)
-    if not visible:
+    if not visible and not await _public_request(db, review, row):
         raise HTTPException(404, "Thread not found")
     return row
 
@@ -247,7 +264,7 @@ async def reply(
             )
             .limit(1)
         )
-        if public is None:
+        if public is None and not await _public_request(db, review, thread):
             raise HTTPException(409, "Submit your draft before replying publicly")
     comment = ReviewComment(
         thread_id=thread_id,

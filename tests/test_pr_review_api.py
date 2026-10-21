@@ -704,6 +704,61 @@ async def test_reopening_withdrawn_review_reopens_blocking_request_thread(api):
 
 
 @pytest.mark.asyncio
+async def test_empty_linked_request_tombstone_is_visible_withdrawable_and_replyable(api):
+    client, current, (author, reviewer, outsider, _), (rid, number), factory = api
+    base = f"/api/v1/reviews/{number}"
+    current[0] = reviewer
+    request = await client.post(base + "/submissions", json={"verdict": "request_changes", "body": "Deleted opening"})
+    assert request.status_code == 201, request.text
+    request_id = uuid.UUID(request.json()["id"])
+    async with factory() as db:
+        linked = await db.scalar(select(ReviewThread).where(ReviewThread.change_request_id == request_id))
+        opening = await db.scalar(select(ReviewComment).where(ReviewComment.thread_id == linked.id))
+        await db.delete(opening)  # Downgraded worker removed the opening; migration restores only the link.
+        review = await db.get(Review, rid)
+        draft = ReviewSubmission(
+            review_id=rid,
+            revision_id=review.head_revision_id,
+            reviewer_id=reviewer.id,
+            state="draft",
+            verdict="request_changes",
+            body="Private draft",
+        )
+        db.add(draft)
+        await db.flush()
+        empty = ReviewThread(review_id=rid, created_by=reviewer.id)
+        private = ReviewThread(review_id=rid, created_by=reviewer.id, change_request_id=draft.id)
+        db.add_all([empty, private])
+        await db.commit()
+        thread_id, empty_id, private_id = linked.id, empty.id, private.id
+    current[0] = author
+    listed = await client.get(base + "/threads")
+    assert listed.status_code == 200, listed.text
+    tombstone = next(row for row in listed.json() if row["id"] == str(thread_id))
+    assert tombstone["comments"] == []
+    assert tombstone["change_request"]["submission_id"] == str(request_id)
+    assert tombstone["change_request"]["status"] == "blocking"
+    assert {str(empty_id), str(private_id)}.isdisjoint({row["id"] for row in listed.json()})
+    for hidden_id in (empty_id, private_id):
+        assert (await client.post(base + f"/threads/{hidden_id}/comments", json={"body": "Hidden"})).status_code == 404
+    current[0] = outsider
+    assert (await client.get(base + "/threads")).status_code == 404
+    assert (await client.post(base + f"/threads/{thread_id}/comments", json={"body": "Hidden"})).status_code == 404
+    current[0] = reviewer
+    withdrawn = await client.post(base + f"/submissions/{request_id}/withdraw-request", json={"reason": "Resolved"})
+    assert withdrawn.status_code == 200, withdrawn.text
+    tombstone = next(row for row in (await client.get(base + "/threads")).json() if row["id"] == str(thread_id))
+    assert tombstone["comments"] == []
+    assert tombstone["change_request"]["status"] == "withdrawn"
+    current[0] = author
+    reply = await client.post(base + f"/threads/{thread_id}/comments", json={"body": "Thanks"})
+    assert reply.status_code == 201, reply.text
+    tombstone = next(row for row in (await client.get(base + "/threads")).json() if row["id"] == str(thread_id))
+    assert [comment["body"] for comment in tombstone["comments"]] == ["Thanks"]
+    assert "Deleted opening" not in str(tombstone)
+
+
+@pytest.mark.asyncio
 async def test_disputed_request_can_be_withdrawn_without_a_revision(api):
     client, current, (author, reviewer, outsider, second), (rid, number), factory = api
     base = f"/api/v1/reviews/{number}"

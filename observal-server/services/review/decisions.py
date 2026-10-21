@@ -532,10 +532,11 @@ async def sync_state(db, review, *, actor_id=None, policy=None):
     return result
 
 
-async def submit_verdict(db, review, user, verdict, body="", *, policy=None):
+async def submit_verdict(db, review, user, verdict, body="", *, policy=None, review_locked=False):
     if verdict not in ("approve", "request_changes", "comment"):
         raise HTTPException(422, "Invalid verdict")
-    await _lock_review(db, review)
+    if not review_locked:
+        await _lock_review(db, review)
     subject, version = await _target(db, review)
     if verdict == "comment":
         if not (can_review(subject, await review_scope(db, user)) or _own_work(subject, version, user.id)):
@@ -623,8 +624,9 @@ async def may_withdraw_request(db, review, submission, user):
     )
 
 
-async def dismiss(db, review, submission, user, reason, *, policy=None, withdraw_request=False):
-    await _lock_review(db, review)
+async def dismiss(db, review, submission, user, reason, *, policy=None, withdraw_request=False, review_locked=False):
+    if not review_locked:
+        await _lock_review(db, review)
     await db.refresh(submission, with_for_update=True)
     if review.state in (ReviewState.closed, ReviewState.published):
         raise HTTPException(409, "Review is closed")
