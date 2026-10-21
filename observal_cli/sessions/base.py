@@ -1207,7 +1207,9 @@ def _resolve_agent(
 
     # A Codex rollout may share a workspace with other sessions. Only an
     # indexed child session, never the workspace, identifies its agent.
-    delegated = delegated_agent("" if harness == "codex" else cwd, session_ids)
+    delegated = delegated_agent(
+        "" if harness == "codex" else cwd, session_ids[:1] if harness == "codex" else session_ids
+    )
     if delegated:
         return delegated
 
