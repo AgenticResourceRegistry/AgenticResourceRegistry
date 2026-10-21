@@ -151,7 +151,7 @@ async def top_mcps(
 
 @router.get("/overview/top-agents", response_model=list[TopAgentItem])
 async def top_agents(
-    limit: int = Query(6, le=50),
+    limit: int = Query(6, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_registry_user),
 ):
@@ -222,7 +222,7 @@ async def top_agents(
 )
 async def agent_leaderboard(
     window: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
-    limit: int = Query(20, le=50),
+    limit: int = Query(20, ge=1, le=50),
     user: str | None = Query(None, description="Filter by creator email or username"),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_registry_user),
@@ -360,7 +360,7 @@ async def agent_leaderboard(
 )
 async def component_leaderboard(
     window: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
-    limit: int = Query(20, le=50),
+    limit: int = Query(20, ge=1, le=50),
     user: str | None = Query(None, description="Filter by creator email or username"),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_registry_user),

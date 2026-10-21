@@ -3,6 +3,8 @@
 
 """Agent-scoped insight report routes."""
 
+import uuid
+
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,7 +62,7 @@ async def create_agent_insight_report(
 @router.get("/{agent_id}/insights/reports/{report_id}", response_model=InsightReportResponse)
 async def get_agent_insight_report(
     agent_id: str,
-    report_id: str,
+    report_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
@@ -77,7 +79,7 @@ async def get_agent_insight_report(
 @router.post("/{agent_id}/insights/reports/{report_id}/apply")
 async def apply_agent_insight_report_suggestions(
     agent_id: str,
-    report_id: str,
+    report_id: uuid.UUID,
     body: ApplySuggestionsRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
@@ -92,7 +94,7 @@ async def apply_agent_insight_report_suggestions(
 @router.get("/{agent_id}/insights/reports/{report_id}/export/html", response_class=HTMLResponse)
 async def export_agent_insight_report_html(
     agent_id: str,
-    report_id: str,
+    report_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
