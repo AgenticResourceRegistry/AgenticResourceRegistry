@@ -350,7 +350,10 @@ def _safe_data(value, schema: str | None = None):
         }
     if isinstance(value, (list, tuple)):
         return [_safe_data(item, schema) for item in value]
-    return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    # JSON's default=str would stringify unknown objects *after* sanitization.
+    return _safe_text(str(value))
 
 
 _RICH_TAGS = frozenset(
@@ -394,9 +397,10 @@ def rprint(*values, **kwargs):
 
 
 def output_json(value):
-    from observal_cli.render import output_json as render_json
-
-    render_json(_safe_data(value, "output"))
+    """Render pull's schema-aware, redacted report without the generic JSON sink."""
+    # Sanitize individual values before serialization, including unknown server
+    # fields and objects that would otherwise be stringified by default=str.
+    print(json.dumps(_safe_data(value, "output"), ensure_ascii=False, indent=2))
 
 
 def _safe_error(error: CliError) -> CliError:

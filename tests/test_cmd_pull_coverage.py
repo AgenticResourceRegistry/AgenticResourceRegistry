@@ -3603,6 +3603,36 @@ def test_pull_short_secret_json_keeps_schema(pull_app, boundaries, tmp_path, sec
     assert data["warnings"] == ["<secret>"]
 
 
+def test_pull_json_redacts_reflected_server_fields_and_keeps_report_shape(pull_app, boundaries, tmp_path):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    boundaries.get.return_value = _agent_detail(qualified_name=f"acme/{secret}")
+    boundaries.post.return_value = {
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+        "warnings": [f"server echoed {secret}"],
+    }
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    data = json.loads(result.stdout)
+    assert data["agent"]["qualified_name"] == "acme/<secret>"
+    assert data["warnings"] == ["server echoed <secret>"]
+    assert "status" in data["lock"]
+    assert data["files"][0]["status"]
+
+
+def test_pull_json_masks_unknown_object_before_serialization(capsys):
+    class ReflectedValue:
+        def __str__(self):
+            return "DUMMY_SECRET_FOR_TEST"
+
+    token = cmd_pull._pull_secrets.set({"DUMMY_SECRET_FOR_TEST"})
+    try:
+        cmd_pull.output_json({"warnings": [ReflectedValue()]})
+        assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret>"]
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
 def test_pull_setup_flag_keys_are_masked_without_changing_execution(pull_app, boundaries, tmp_path, monkeypatch):
     command = ["claude", "-e", "a=a", "-H", "Header-a: a", "--", "server"]
     boundaries.post.return_value = {
@@ -3736,6 +3766,7 @@ def test_pull_audit_thread_keeps_http_filters_after_parent_scope_exits(monkeypat
     from observal_cli import audit
 
     secret = "DUMMY_SECRET_FOR_TEST"
+    canary = "harmless-httpcore-canary"
     started, release, finished = threading.Event(), threading.Event(), threading.Event()
     monkeypatch.setattr(audit, "optic", MagicMock())
     monkeypatch.setattr(
@@ -3745,7 +3776,7 @@ def test_pull_audit_thread_keeps_http_filters_after_parent_scope_exits(monkeypat
     def send(*_args, **_kwargs):
         started.set()
         assert release.wait(5)
-        logging.getLogger("httpcore.http11").debug("header: %s", secret)
+        logging.getLogger("httpcore.http11").debug("diagnostic: %s", canary)
         finished.set()
         raise httpx.ConnectError(f"reflected {secret}")
 
@@ -3767,9 +3798,11 @@ def test_pull_audit_thread_keeps_http_filters_after_parent_scope_exits(monkeypat
             break
         sleep(0.01)
     assert secret not in caplog.text
+    assert canary not in caplog.text
     audit.optic.debug.assert_called_once_with("cli audit POST error: {}", "ConnectError")
-    logging.getLogger("httpcore.http11").debug("header: %s", secret)
-    assert secret in caplog.text
+    logging.getLogger("httpcore.http11").debug("diagnostic: %s", canary)
+    assert canary in caplog.text
+    assert secret not in caplog.text
 
 
 def test_pull_real_httpcore_logs_hide_reflected_response_header(reflected_http_server, monkeypatch, caplog):
