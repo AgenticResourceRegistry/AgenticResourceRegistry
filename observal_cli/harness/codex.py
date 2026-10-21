@@ -127,12 +127,12 @@ class CodexAdapter(BaseAdapter):
         role = self.session_subagent_name(session_jsonl)
         if not role:
             return None
-        entry = _lookup_lockfile_agent(cwd, agent_name=role)
+        entry = _lookup_lockfile_agent(cwd, agent_name=role, harness="codex")
         if not entry or (cwd and entry.get("scope") == "project" and entry.get("directory") != cwd):
             return None, None
         return entry.get("id") or entry.get("name"), entry.get("version")
 
-    def _source(self, path: Path) -> SessionSource:
+    def _source(self, path: Path, root: Path | None = None) -> SessionSource:
         """Use only metadata recorded by this rollout, never the hook process cwd."""
         meta = self._session_meta(path)
         return SessionSource(
@@ -141,10 +141,14 @@ class CodexAdapter(BaseAdapter):
             path,
             cwd=meta.get("cwd") if isinstance(meta.get("cwd"), str) else "",
             parent_session_id=self._parent_thread_id(path),
+            sessions_root=root,
         )
 
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
-        root = self._sessions_root(home)
+        return self._resolve_from_root(event, self._sessions_root(home))
+
+    def _resolve_from_root(self, event: dict, root: Path) -> SessionSource | None:
+        """Resolve a rollout only from this lexical sessions directory."""
         if not root.is_dir():
             return None
         session_id = str(event.get("session_id") or event.get("thread_id") or "")
@@ -162,7 +166,7 @@ class CodexAdapter(BaseAdapter):
             path = max(candidates, key=lambda item: item.stat().st_mtime)
         except OSError:
             return None
-        return self._source(path)
+        return self._source(path, root)
 
     def discover_session_sources(
         self,
@@ -178,7 +182,7 @@ class CodexAdapter(BaseAdapter):
             try:
                 modified_at = path.stat().st_mtime
                 if modified_at >= cutoff:
-                    sources.append(self._source(path))
+                    sources.append(self._source(path, root))
             except OSError:
                 continue
         return sorted(sources, key=lambda source: source.path.stat().st_mtime if source.path else 0, reverse=True)
@@ -199,9 +203,20 @@ class CodexAdapter(BaseAdapter):
                 ):
                     return None
                 identity = "rollout-subagent"
+        # Bind the original bytes as well as the fitted payload. Oversized
+        # strings can differ in raw source while producing identical fit_line text.
+        try:
+            end_offset = (payload.get("end_byte_offsets") or [payload.get("total_offset", 0)])[-1]
+            with source.path.open("rb") as transcript:
+                prefix = transcript.read(end_offset)
+            raw_hash = hashlib.sha256(prefix).hexdigest() if len(prefix) == end_offset else None
+        except (OSError, TypeError, ValueError, AttributeError):
+            raw_hash = None
         return {
             "session_id": source.session_id,
             "path": os.path.abspath(source.path) if source.path else "",
+            "sessions_root": str(source.sessions_root) if source.sessions_root else None,
+            "raw_prefix_hash": raw_hash,
             "source_kind": "codex-rollout",
             "identity": identity,
             "agent_id": payload.get("agent_id"),
@@ -213,6 +228,8 @@ class CodexAdapter(BaseAdapter):
 
     def validate_outbox_provenance(self, item) -> bool:
         """Only a session-bound delegated identity can authorize attributed replay."""
+        from observal_cli.sessions.base import fit_line
+
         proof = item.provenance
         if proof is None:
             return not item.payload.get("agent_id") and not item.payload.get("agent_version")
@@ -221,12 +238,20 @@ class CodexAdapter(BaseAdapter):
         path = proof.get("path")
         if proof.get("source_kind") != "codex-rollout" or not isinstance(path, str) or not path.endswith(".jsonl"):
             return False
-        # Check the lexical Codex location before resolving links: ~/.codex
-        # itself may be a symlink to another volume.
+        # Use the root discovered when queued, not the current CODEX_HOME.
+        # Older proofs have no root and are valid only in this user's default tree.
         source_path = Path(path)
+        recorded_root = proof.get("sessions_root")
+        if recorded_root is None:
+            root = Path(os.path.abspath(Path.home() / ".codex" / "sessions"))
+        elif isinstance(recorded_root, str):
+            root = Path(recorded_root)
+            if root.name != "sessions" or not root.is_absolute() or os.path.abspath(recorded_root) != recorded_root:
+                return False
+        else:
+            return False
         if (
             self._session_id(source_path) != item.session_id
-            or not any(parent.name == "sessions" and parent.parent.name == ".codex" for parent in source_path.parents)
             or not source_path.is_absolute()
             or os.path.abspath(path) != path
             or item.payload.get("session_id") != item.session_id
@@ -234,14 +259,29 @@ class CodexAdapter(BaseAdapter):
         ):
             return False
         try:
+            if not source_path.is_relative_to(root) or not source_path.resolve().is_relative_to(root.resolve()):
+                return False
+            # Neither a different user's tree nor a symlink into it may supply a rollout.
+            if hasattr(os, "getuid") and (
+                root.stat().st_uid != os.getuid() or source_path.stat().st_uid != os.getuid()
+            ):
+                return False
             if item.end_offset < 0 or item.end_offset > source_path.stat().st_size:
                 return False
-            source = self._source(source_path)
+            # The claimed rollout must be discoverable from exactly the stored root.
+            discovered = self._resolve_from_root({"session_id": item.session_id, "transcript_path": path}, root)
+            if discovered is None or discovered.path != source_path:
+                return False
             # Read only the queued byte prefix. Later appends cannot invalidate
             # a final batch, and the proof need not scan a growing rollout.
             with source_path.open("rb") as transcript:
                 prefix = transcript.read(item.end_offset)
             if len(prefix) != item.end_offset:
+                return False
+            raw_hash = proof.get("raw_prefix_hash")
+            if raw_hash is not None and (
+                not isinstance(raw_hash, str) or raw_hash != hashlib.sha256(prefix).hexdigest()
+            ):
                 return False
             consumed = prefix
             lines = []
@@ -260,7 +300,9 @@ class CodexAdapter(BaseAdapter):
                 start < 0
                 or start > len(lines)
                 or not isinstance(posted, list)
-                or lines[start : start + len(posted)] != posted
+                or not all(isinstance(line, str) for line in posted)
+                or [fit_line(line) for line in lines[start : start + len(posted)]] != posted
+                or (raw_hash is None and any(fit_line(line) != line for line in lines))
                 or len(posted_offsets) != len(posted)
                 or any(offset != offsets[start + index] for index, offset in enumerate(posted_offsets[:-1]))
                 or (posted and posted_offsets[-1] != item.end_offset)
@@ -275,7 +317,7 @@ class CodexAdapter(BaseAdapter):
                     return False
                 hasher = hashlib.sha256()
                 for line in lines[:count]:
-                    hasher.update(hashlib.sha256(line.encode("utf-8", errors="replace")).hexdigest().encode())
+                    hasher.update(hashlib.sha256(fit_line(line).encode("utf-8", errors="replace")).hexdigest().encode())
                     hasher.update(b"\n")
                 if item.payload["session_hash"] != hasher.hexdigest():
                     return False
@@ -284,7 +326,7 @@ class CodexAdapter(BaseAdapter):
             meta = first.get("payload") if first.get("type") == "session_meta" else None
             if isinstance(meta, dict) and meta.get("id") and meta["id"] != item.session_id:
                 return False
-        except (OSError, ValueError, IndexError, TypeError, AttributeError):
+        except (OSError, ValueError, IndexError, TypeError, AttributeError, RuntimeError, StopIteration):
             return False
         identity = proof.get("identity")
         if identity == "unattributed":
@@ -313,7 +355,7 @@ class CodexAdapter(BaseAdapter):
                 isinstance(meta, dict)
                 and meta.get("id") == item.session_id
                 and (
-                    self.resolve_session_agent_identity(source_path, source.cwd)
+                    self.resolve_session_agent_identity(source_path, discovered.cwd)
                     == (item.payload.get("agent_id"), item.payload.get("agent_version"))
                 )
             )

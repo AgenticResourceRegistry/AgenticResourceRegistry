@@ -151,7 +151,7 @@ def test_cli_lists_and_reviews_only_verified_held_session(tmp_path, monkeypatch)
     monkeypatch.setattr(
         adapter,
         "resolve_session_source",
-        lambda event: adapter._source(path) if event.get("session_id") == "held" else None,
+        lambda event: adapter._source(path, path.parent) if event.get("session_id") == "held" else None,
     )
     body = payload("held", [line], "wrong", "1")
     outbox.enqueue(body, destination="http://server", user_id="user", db_path=db)

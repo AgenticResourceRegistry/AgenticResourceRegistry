@@ -409,6 +409,7 @@ def test_hold_all_ranges_before_post_and_review_atomically(tmp_path):
             {
                 "session_id": "held",
                 "path": str(path.resolve()),
+                "sessions_root": str(root),
                 "source_kind": "codex-rollout",
                 "identity": "unattributed",
             },
