@@ -42,24 +42,21 @@ Input/Output contract:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-_PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+from observal_cli.shared.utils import hook_python_cmd
 
 _OBSERVAL_HOOK_NAME = "observal-telemetry"
 
 
 def _python_cmd() -> str:
-    """Return python command with PYTHONPATH set if needed.
+    """Return the interpreter invocation for Antigravity hooks.
 
-    Handles three platforms:
-      - Native Windows: set "PYTHONPATH=..." && python.exe
-      - WSL (Linux under Windows): wsl.exe /path/to/python
-      - macOS / Linux: PYTHONPATH=... python (or bare python if importable)
+    Under WSL, agy is a Windows binary, so the hook has to go back into
+    Linux through wsl.exe. Everywhere else this is the shared hook
+    interpreter.
     """
     import subprocess
 
-    # WSL: agy is a Windows binary, so hook commands need wsl.exe prefix
     try:
         is_wsl = subprocess.run(["wslpath", "-w", "/"], capture_output=True).returncode == 0
     except Exception:
@@ -67,20 +64,7 @@ def _python_cmd() -> str:
 
     if is_wsl:
         return f"wsl.exe {sys.executable}"
-
-    # Check if observal_cli is importable without PYTHONPATH
-    try:
-        import importlib.util
-
-        if importlib.util.find_spec("observal_cli") is not None:
-            return sys.executable
-    except Exception:
-        pass
-
-    # Not importable: set PYTHONPATH to the package root
-    if sys.platform == "win32":
-        return f'set "PYTHONPATH={_PKG_ROOT}" && {sys.executable}'
-    return f"PYTHONPATH={_PKG_ROOT} {sys.executable}"
+    return hook_python_cmd()
 
 
 def build_antigravity_hooks(*_args, **_kwargs) -> dict:
