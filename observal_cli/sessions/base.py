@@ -585,6 +585,20 @@ def batch_ranges(lines: list[str]) -> list[tuple[int, int]]:
 # ---------------------------------------------------------------------------
 
 
+def _unsafe_bound_final_source(item, cursor_entry: dict | None) -> bool:
+    """Check a known final's bound source against its durable end position."""
+    if not item.final or cursor_entry is None or "source_path" not in cursor_entry:
+        return False
+    source_path = cursor_entry["source_path"]
+    try:
+        if not isinstance(source_path, str) or not source_path or not Path(source_path).is_absolute():
+            return True
+        source_stat = Path(source_path).stat()
+        return not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size < item.end_offset
+    except (OSError, ValueError):
+        return True
+
+
 def drain_outbox(
     config: dict,
     *,
@@ -639,6 +653,10 @@ def drain_outbox(
             cursor_before_post = _cursor_entry(item.checkpoint_key, home)
             # The marker can be set after the unlocked fast check above.
             shrunk_before_post = bool(cursor_before_post and cursor_before_post.get("source_shrunk"))
+            if not shrunk_before_post and _unsafe_bound_final_source(item, cursor_before_post):
+                offset, line_count = read_cursor(item.checkpoint_key, home=home)
+                _write_cursor_unlocked(item.checkpoint_key, offset, line_count, home=home, source_shrunk=True)
+                shrunk_before_post = True
         if shrunk_before_post:
             blocked.add((item.harness, item.session_id))
             continue
@@ -801,22 +819,13 @@ def drain_outbox(
                 # Do not delete the batch on a stale ACK, even when the
                 # shrink marker was already present at the snapshot.
                 return False
-            if item.final and current_entry is not None and "source_path" in current_entry:
-                source_path = current_entry["source_path"]
-                try:
-                    if not isinstance(source_path, str) or not source_path or not Path(source_path).is_absolute():
-                        raise ValueError("invalid local source path")
-                    source_stat = Path(source_path).stat()
-                    unsafe_source = not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size < item.end_offset
-                except (OSError, ValueError):
-                    unsafe_source = True
-                if unsafe_source:
-                    # Already holding the cursor lock; calling the public marker
-                    # helper here would deadlock. Preserve the final for repair.
-                    offset, line_count = read_cursor(item.checkpoint_key, home=home)
-                    _write_cursor_unlocked(item.checkpoint_key, offset, line_count, home=home, source_shrunk=True)
-                    blocked.add((item.harness, item.session_id))
-                    continue
+            if _unsafe_bound_final_source(item, current_entry):
+                # Already holding the cursor lock; calling the public marker
+                # helper here would deadlock. Preserve the final for repair.
+                offset, line_count = read_cursor(item.checkpoint_key, home=home)
+                _write_cursor_unlocked(item.checkpoint_key, offset, line_count, home=home, source_shrunk=True)
+                blocked.add((item.harness, item.session_id))
+                continue
             if telemetry_buffer.replay_held(
                 destination=destination,
                 user_id=user_id,
@@ -1050,8 +1059,11 @@ def drain_session_source(
         # An interrupted spool may already contain some replay chunks. Never
         # remove an older final (or deliver a later neighbor) until *every*
         # replay chunk is durable, including the new final audit metadata.
-        source_lines, _, _ = read_new_records(source.path, 0)
+        source_lines, source_offsets, source_bytes = read_new_records(source.path, 0)
+        if source_offsets and not extra_records:
+            source_offsets[-1] = source_bytes
         source_lines.extend(extra_records)
+        source_offsets.extend([source_bytes] * len(extra_records))
         if (
             replay_held
             and not metadata_suffix
@@ -1087,41 +1099,65 @@ def drain_session_source(
                 )
             return True
         queued = telemetry_buffer.pending(destination=destination, user_id=user_id, limit=100000, db_path=db_path)
-        replay = {
-            (item.start_line, item.end_line): item
-            for item in queued
-            if item.harness == source.harness
-            and item.session_id == source.session_id
-            and item.checkpoint_key == source.checkpoint_key
-        }
+        replay = sorted(
+            (
+                item
+                for item in queued
+                if item.harness == source.harness
+                and item.session_id == source.session_id
+                and item.checkpoint_key == source.checkpoint_key
+            ),
+            key=lambda item: (item.final, -item.end_line),
+        )
+        # Walk actual durable ranges rather than reconstructing spooling's
+        # line/byte boundaries. Overlapping old finals are not replay coverage.
+        covered: set[int] = set()
+        position = 0
         replacement = None
-        for start in range(0, len(source_lines), MAX_CHUNK_SIZE):
-            end = min(start + MAX_CHUNK_SIZE, len(source_lines))
-            chunk = replay.get((start, end - 1))
-            if (
-                chunk is None
-                or chunk.payload.get("lines") != source_lines[start:end]
-                or (
-                    end == len(source_lines)
-                    and not metadata_suffix
+        while position < len(source_lines):
+            chunk = next(
+                (
+                    item
+                    for item in replay
+                    if item.start_line == position
+                    and position <= item.end_line < len(source_lines)
+                    and item.payload.get("lines") == source_lines[position : item.end_line + 1]
+                    and item.payload.get("end_byte_offsets") == source_offsets[position : item.end_line + 1]
+                    and item.end_offset == source_offsets[item.end_line]
                     and (
-                        not chunk.final
-                        or chunk.payload.get("total_line_count") != len(source_lines)
-                        or chunk.payload.get("session_hash") != session_hash
+                        item.end_line < len(source_lines) - 1
+                        or (metadata_suffix and not item.final)
+                        or (
+                            item.final
+                            and not metadata_suffix
+                            and item.payload.get("total_line_count") == len(source_lines)
+                            and item.payload.get("hashed_line_count") == hashed_line_count
+                            and item.payload.get("total_offset") == source_bytes
+                            and item.payload.get("session_hash") == session_hash
+                        )
                     )
-                )
-            ):
+                ),
+                None,
+            )
+            if chunk is None:
                 return False
-            if end == len(source_lines):
+            covered.add(chunk.id)
+            position = chunk.end_line + 1
+            if position == len(source_lines):
                 replacement = chunk
         if metadata_suffix:
-            replacement = replay.get((retained_total, retained_total - 1))
+            replacement = next(
+                (item for item in replay if item.start_line == retained_total and item.end_line == retained_total - 1),
+                None,
+            )
             if (
                 replacement is None
                 or not replacement.final
                 or replacement.payload.get("total_line_count") != retained_total
                 or replacement.payload.get("hashed_line_count") != hashed_line_count
                 or replacement.payload.get("session_hash") != session_hash
+                or replacement.end_offset != source_bytes
+                or replacement.payload.get("total_offset") != source_bytes
             ):
                 return False
         for old in old_batches:
@@ -1132,10 +1168,7 @@ def drain_session_source(
                 or old.payload.get("lines") != source_lines[old.start_line : old.end_line + 1]
             ):
                 return False
-            reused = (
-                old.start_line % MAX_CHUNK_SIZE == 0
-                and old.end_line == min(old.start_line + MAX_CHUNK_SIZE, len(source_lines)) - 1
-            )
+            reused = old.id in covered
             if reused:
                 if (
                     old.final

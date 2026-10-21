@@ -430,6 +430,72 @@ def test_cursor_missing_retained_usage_does_not_clear_hold_after_blank_append(tm
     )
 
 
+def test_byte_split_replay_retires_old_final_only_after_complete_durable_spool(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    path = tmp_path / "session.jsonl"
+    records = ['{"n":' + str(i) + ',"padding":"' + "x" * 900_000 + '"}' for i in range(11)]
+    path.write_text("\n".join(records[:10]) + "\n")
+    source = SessionSource("claude-code", "session", path)
+    assert base.drain_session_source(
+        source, _config(), hook_event="Stop", final=True, spool_only=True, home=tmp_path, db_path=db
+    )
+    old = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert [(item.start_line, item.end_line) for item in old] == [(0, 8), (9, 9)]
+    old_final = old[-1]
+    telemetry_buffer.set_replay_hold(old_final, db_path=db)
+    base.write_cursor(source.checkpoint_key, 0, 0, home=tmp_path, preserve_finalized=False)
+    with path.open("a") as file:
+        file.write(records[10] + "\n")
+
+    enqueue = telemetry_buffer.enqueue
+    calls = 0
+
+    def interrupted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("crash mid-spool")
+        return enqueue(*args, **kwargs)
+
+    monkeypatch.setattr(telemetry_buffer, "enqueue", interrupted)
+    with pytest.raises(RuntimeError, match="crash mid-spool"):
+        base.drain_session_source(
+            source, _config(), hook_event="Reconcile", final=True, spool_only=True, home=tmp_path, db_path=db
+        )
+    monkeypatch.setattr(telemetry_buffer, "enqueue", enqueue)
+    pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert any(item.id == old_final.id and item.final for item in pending)
+    assert telemetry_buffer.replay_held(
+        destination="http://server", user_id="user", harness="claude-code", session_id="session", db_path=db
+    )
+    sent = []
+
+    def ack(payload, _cfg):
+        sent.append((payload["session_id"], payload["start_offset"], len(payload["lines"])))
+        return {"acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1, "integrity_ok": True}
+
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "healthy", "start_offset": 0, "lines": ['{"n":0}']},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    assert not base.drain_outbox(_config(), home=tmp_path, db_path=db, post=ack)
+    assert sent == [("healthy", 0, 1)]
+    assert base.drain_session_source(
+        source, _config(), hook_event="Reconcile", final=True, spool_only=True, home=tmp_path, db_path=db
+    )
+    assert not telemetry_buffer.replay_held(
+        destination="http://server", user_id="user", harness="claude-code", session_id="session", db_path=db
+    )
+    pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
+    assert [(item.start_line, item.end_line) for item in pending] == [(0, 8), (9, 10)]
+    assert pending[-1].final and all(item.id != old_final.id for item in pending)
+    assert base.drain_outbox(_config(), home=tmp_path, db_path=db, post=ack)
+    assert sent == [("healthy", 0, 1), ("session", 0, 9), ("session", 9, 2)]
+    assert base.read_cursor_state(source.checkpoint_key, home=tmp_path) == (path.stat().st_size, 11, True)
+
+
 def test_inflight_ack_cannot_retire_a_held_final(tmp_path: Path):
     db = tmp_path / "outbox.db"
     _queue(db, "session")

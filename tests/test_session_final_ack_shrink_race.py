@@ -204,6 +204,43 @@ def test_legacy_final_without_path_still_checks_cursor_marker(tmp_path: Path):
     assert not base.cursor_source_shrunk("legacy", home=tmp_path)
 
 
+@pytest.mark.parametrize("metadata_only", [False, True])
+def test_predrain_truncated_bound_final_blocks_post_with_zero_cursor_and_allows_neighbor(
+    tmp_path: Path, metadata_only: bool
+):
+    source, db = _pending_final(tmp_path)
+    if metadata_only:
+        # Replace the queued record-bearing final with a metadata-only audit.
+        item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
+        assert telemetry_buffer.accept_item(item, db_path=db)
+        base.write_cursor(source.checkpoint_key, source.path.stat().st_size, 1, home=tmp_path)
+        assert base.drain_session_source(
+            source, CONFIG, hook_event="Stop", final=True, spool_only=True, home=tmp_path, db_path=db
+        )
+    base.write_cursor(source.checkpoint_key, 0, 0, home=tmp_path)
+    source.path.write_text("")
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "healthy", "lines": ['{"n":0}'], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    posted = []
+
+    def post(payload, config):
+        posted.append(payload["session_id"])
+        return _ack(payload, config)
+
+    assert not base.drain_outbox(CONFIG, home=tmp_path, db_path=db, post=post)
+    assert posted == ["healthy"]
+    assert base.cursor_source_shrunk(source.checkpoint_key, home=tmp_path)
+    _assert_final_pending(source, db)
+    assert base.read_cursor(source.checkpoint_key, home=tmp_path) == (0, 0)
+    source.path.write_text('{"type":"system"}\n')
+    assert not base.drain_outbox(CONFIG, home=tmp_path, db_path=db, post=post)
+    assert posted == ["healthy"]
+
+
 def test_local_source_path_survives_cursor_writes_and_is_not_sent(tmp_path: Path):
     source, db = _pending_final(tmp_path)
     state_file = tmp_path / ".observal" / "sync_state.json"
