@@ -435,6 +435,14 @@ def resolve_registry_reference(item_type: str, reference: str) -> str:
         "prompts": "prompt",
         "sandboxes": "sandbox",
     }.get(item_type, item_type)
+    if not reference.strip():
+        # A blank reference would build /api/v1/<type>s/ and surface as an opaque 307.
+        fail(
+            ErrorCategory.USAGE,
+            f"The {item_type} reference is empty.",
+            operation=f"Resolve {item_type} reference",
+            remediation=f"Pass a {item_type} name such as namespace/slug, a UUID, an @alias, or a list row number.",
+        )
     resolved = (
         config.resolve_alias(reference, expected_type=item_type)
         if reference.isdigit()
