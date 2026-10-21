@@ -386,18 +386,24 @@ resolves attribution from Agentic Resource Registry's own state:
 
 1. `observal agent pull` records the agent name, id, version, scope, pull
    time, and directory under the `pi` harness in `~/.observal/lockfile.json`.
-2. The pull also records that agent as `active_agent` in
+2. A user-scope pull also records that agent as `active_agent` in
    `~/.observal/config.json`, and `/agent` updates the entry whenever you
-   swap profiles.
-3. On `session_start`, the extension reads `active_agent` and looks it up in
-   the lockfile entry for the configured server URL, matching by id first and
-   then by name.
-4. The session payload is sent with the resolved `agent_id` and
+   swap profiles. A project-scope pull leaves `active_agent` alone, because
+   every Pi session on the machine reads it.
+3. On `session_start`, the extension first looks in the lockfile, for the
+   configured server URL, for a project-scope install whose directory contains
+   the session's working directory. The deepest such directory wins, so an
+   agent pulled into a subproject overrides one pulled into its parent.
+4. Outside every project install, the extension uses `active_agent`, looked up
+   in the same lockfile by id first and then by name. An `active_agent` that
+   the lockfile lists only as project-scope installs is ignored outside those
+   projects. Older CLIs wrote it on project-scope pulls too, and applying it
+   everywhere tagged unrelated sessions as that agent.
+5. The session payload is sent with the resolved `agent_id` and
    `agent_version`.
-5. If there is no `active_agent`, or it has no `id`, the session is sent with
-   a null agent id.
+6. If neither step finds an agent, the session is sent with a null agent id.
    If there is an `active_agent` but no lockfile match, the stored id is sent
-   as-is; no directory-based guessing takes place.
+   as-is.
 
 ---
 
