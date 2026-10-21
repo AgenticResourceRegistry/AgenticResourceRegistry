@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """CLI-side audit event emission.
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from contextvars import copy_context
 from datetime import UTC, datetime
 
 from loguru import logger as optic
@@ -60,6 +62,15 @@ def emit_cli_audit(
             if resp.status_code >= 400:
                 optic.debug("cli audit POST failed: status={}", resp.status_code)
         except Exception as e:
-            optic.debug("cli audit POST error: {}", e)
+            from observal_cli.client import _pull_reporting_secrets
 
-    threading.Thread(target=_send, daemon=True).start()
+            if _pull_reporting_secrets.get() is not None:
+                # The exception may contain a reflected request URL or header.
+                optic.debug("cli audit POST error: {}", type(e).__name__)
+            else:
+                optic.debug("cli audit POST error: {}", e)
+
+    # Thread creation happens inside pull's reporting scope, but a new thread
+    # otherwise loses the context used by the HTTPX/httpcore log filters.
+    context = copy_context()
+    threading.Thread(target=lambda: context.run(_send), daemon=True).start()

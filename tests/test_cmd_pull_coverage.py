@@ -3355,6 +3355,142 @@ def test_pull_dummy_errors_are_sanitized_at_boundary(pull_app_boundary, boundari
         assert error["result"]["setup_commands"][0]["executable"] == "<secret>"
 
 
+@pytest.mark.parametrize("kind", ["request", "status", "unexpected"])
+def test_pull_transport_and_unexpected_errors_mask_debug_after_scope(pull_app_boundary, boundaries, tmp_path, kind):
+    import httpx
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    request = httpx.Request("POST", f"https://example.test/{secret}")
+    if kind == "request":
+        failure = httpx.ConnectError(f"reflected {secret}", request=request)
+        category = "unavailable"
+    elif kind == "status":
+        response = httpx.Response(422, request=request, headers={"x-request-id": secret})
+        failure = httpx.HTTPStatusError(f"reflected {secret}", request=request, response=response)
+        category = "validation"
+    else:
+        failure = RuntimeError(f"reflected {secret}")
+        category = "unexpected"
+    boundaries.post.side_effect = failure
+    # The minimal test app has no root --debug option; enable the same renderer branch.
+    from observal_cli import errors
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(errors, "debug_requested", lambda *_args: True)
+        result = _invoke(pull_app_boundary, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert secret not in result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["category"] == category
+    assert error["detail"] == type(failure).__name__
+    if kind == "status":
+        assert error["http_status"] == 422
+        assert error["request_id"] == "<secret>"
+    assert cmd_pull._pull_secrets.get() is None
+
+
+@pytest.mark.parametrize("kind", ["request", "status", "unexpected"])
+@pytest.mark.parametrize(
+    ("secret", "reflected"),
+    [
+        ("DUMMY/path/to", r"DUMMY\/path\/to"),
+        ("DUMMY/ñ\\path/to", r"DUMMY\/\u00f1\\path\/to"),
+    ],
+)
+def test_pull_repr_doubled_json_escapes_mask_debug_json(
+    pull_app_boundary, boundaries, tmp_path, kind, secret, reflected
+):
+    import httpx
+
+    from observal_cli import errors
+
+    request = httpx.Request("POST", "https://example.test/agent")
+    if kind == "request":
+        failure = httpx.ConnectError(f"reflected {reflected}", request=request)
+        category = "unavailable"
+    elif kind == "status":
+        response = httpx.Response(422, request=request)
+        failure = httpx.HTTPStatusError(f"reflected {reflected}", request=request, response=response)
+        category = "validation"
+    else:
+        failure = ValueError(f"reflected {reflected}")
+        category = "unexpected"
+    boundaries.post.side_effect = failure
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(errors, "debug_requested", lambda *_args: True)
+        result = _invoke(pull_app_boundary, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code != 0
+    detail = json.loads(result.stderr)["error"]
+    assert detail["category"] == category
+    assert detail["detail"] == type(failure).__name__
+    assert cmd_pull._pull_secrets.get() is None
+
+
+@pytest.mark.parametrize("kind", ["request", "status", "unexpected", "usage"])
+@pytest.mark.parametrize("output", ["json", "table"])
+def test_pull_actual_debug_cli_fails_closed_on_repr_credentials(boundaries, tmp_path, kind, output):
+    import click
+    import httpx
+
+    secret = "DUMMY'\"token"
+    root = typer.Typer(cls=ErrorHandlingGroup)
+    agent = typer.Typer()
+    cmd_pull.register_pull(agent)
+    root.add_typer(agent, name="agent")
+
+    @root.callback()
+    def debug_root(debug: bool = typer.Option(False, "--debug")):
+        assert debug
+
+    request = httpx.Request("POST", "https://example.test/agent")
+    if kind == "request":
+        failure = httpx.ConnectError(f"reflected {secret}", request=request)
+        category = "unavailable"
+    elif kind == "status":
+        response = httpx.Response(422, request=request, headers={"x-request-id": f"id-{secret}"})
+        failure = httpx.HTTPStatusError(f"reflected {secret}", request=request, response=response)
+        category = "validation"
+    elif kind == "usage":
+        failure = click.UsageError(f"invalid {secret!r}")
+        category = "usage"
+    else:
+        failure = ValueError(f"reflected {secret}")
+        category = "unexpected"
+    boundaries.post.side_effect = failure
+    result = RUNNER.invoke(
+        root,
+        [
+            "--debug",
+            "agent",
+            "pull",
+            "acme/reviewer",
+            "--harness",
+            "claude-code",
+            "--dir",
+            str(tmp_path / "project"),
+            "--no-prompt",
+            "--env",
+            f"TOKEN={secret}",
+            "--output",
+            output,
+        ],
+    )
+    assert result.exit_code != 0
+    assert secret not in result.output
+    assert repr(secret)[1:-1] not in result.output
+    assert "DUMMY" not in result.output
+    if output == "json":
+        error = json.loads(result.stderr)["error"]
+        assert error["category"] == category
+        assert error["detail"] == type(failure).__name__
+        if kind == "status":
+            assert error["http_status"] == 422
+            assert error["request_id"] == "id-<secret>"
+        if kind == "usage":
+            assert error["message"] == "Invalid pull arguments."
+    else:
+        assert type(failure).__name__ in result.stderr
+
+
 def test_pull_dummy_delegated_skill_stdout_is_sanitized(pull_app, boundaries, tmp_path):
     secret = "DUMMY_SECRET_FOR_TEST"
     target = tmp_path / "project"
@@ -3591,6 +3727,51 @@ def reflected_http_server():
         server.server_close()
 
 
+def test_pull_audit_thread_keeps_http_filters_after_parent_scope_exits(monkeypatch, caplog):
+    import logging
+    import threading
+
+    import httpx
+
+    from observal_cli import audit
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    monkeypatch.setattr(audit, "optic", MagicMock())
+    monkeypatch.setattr(
+        "observal_cli.config.load", lambda: {"access_token": "test", "server_url": "https://example.test"}
+    )
+
+    def send(*_args, **_kwargs):
+        started.set()
+        assert release.wait(5)
+        logging.getLogger("httpcore.http11").debug("header: %s", secret)
+        finished.set()
+        raise httpx.ConnectError(f"reflected {secret}")
+
+    monkeypatch.setattr(httpx, "post", send)
+    caplog.set_level(logging.DEBUG, logger="httpcore.http11")
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        audit.emit_cli_audit("agent.pull", resource_name=secret)
+        assert started.wait(5)
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+        release.set()
+    assert finished.wait(5)
+    # Wait for the worker's exception handler as well as the transport call.
+    from time import sleep
+
+    for _ in range(100):
+        if audit.optic.debug.called:
+            break
+        sleep(0.01)
+    assert secret not in caplog.text
+    audit.optic.debug.assert_called_once_with("cli audit POST error: {}", "ConnectError")
+    logging.getLogger("httpcore.http11").debug("header: %s", secret)
+    assert secret in caplog.text
+
+
 def test_pull_real_httpcore_logs_hide_reflected_response_header(reflected_http_server, monkeypatch, caplog):
     import logging
 
@@ -3744,6 +3925,23 @@ def test_pull_json_serialized_and_double_encoded_reflections_are_masked(capsys):
         cmd_pull._pull_secrets.reset(token)
 
 
+def test_pull_json_escaped_slash_reflections_mask_warnings_and_errors(capsys):
+    from observal_cli.errors import CliError, ErrorCategory
+
+    secret = "DUMMY/path/to"
+    forms = [secret, r"DUMMY\/path\/to", r"DUMMY\/path/to", r"DUMMY%252fpath\/to"]
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        cmd_pull.output_json({"warnings": forms})
+        assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret>"] * len(forms)
+        for form in forms:
+            failure = CliError(ErrorCategory.VALIDATION, form, operation="Pull agent", detail=form)
+            assert cmd_pull._safe_error(failure).message == "<secret>"
+            assert cmd_pull._safe_error(failure).detail == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
 def test_pull_form_encoded_space_reflections_in_json_markup_and_errors(capsys):
     from urllib.parse import quote_plus
 
@@ -3787,6 +3985,21 @@ def test_pull_unicode_json_and_mixed_percent_reflections_are_masked():
     twice_encoded = quote(quote(secret, safe=""), safe="")
     mixed = "DUMMY%255f" + quote("ñ", safe="") + r"\[ok]"
     assert cmd_pull._mask_values(f"{serialized} {twice_encoded} {mixed}", {secret}) == "<secret> <secret> <secret>"
+
+
+def test_pull_repr_escaped_json_choices_mix_with_raw_and_url_encodings():
+    secret = "DUMMY/ñ\\path/to"
+    # repr doubles each JSON backslash, but other pieces can remain raw or URL encoded.
+    forms = (r"DUMMY\\/\\u00f1\\\\path\\/to", r"DUMMY\\/ñ\\\\path%2fto", r"DUMMY\/\\u00f1\\\\path/to")
+    assert cmd_pull._mask_values(" | ".join(forms), {secret}) == " | ".join(["<secret>"] * len(forms))
+    assert cmd_pull._mask_values(r"DUMMY\\/\\u00f1\\\\path\\/tx", {secret}) != "<secret>"
+
+
+def test_pull_repr_quote_choices_in_mixed_warnings():
+    secret = "DUMMY'\"token"
+    forms = (r"DUMMY\'\"token", r"DUMMY\'\\\"token", r"DUMMY%27\"token", r"DUMMY\'%22token")
+    assert cmd_pull._mask_values(" | ".join(forms), {secret}) == " | ".join(["<secret>"] * len(forms))
+    assert cmd_pull._mask_values(r"DUMMY\'\"tokex", {secret}) == r"DUMMY\'\"tokex"
 
 
 def test_pull_reverse_bitset_accepts_mixed_url_json_and_raw_choices():
@@ -3855,6 +4068,23 @@ def test_pull_many_impossible_secrets_skip_reverse_scans():
     subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
 
 
+def test_pull_common_prefix_impossible_suffix_skips_reverse_scans():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "text = 'a' * 100_000\n"
+        "secrets = {f'a{i:04d}' for i in range(100)}\n"
+        "start = monotonic()\n"
+        "assert _mask_values(text, secrets) == text\n"
+        "assert monotonic() - start < 3.0\n"
+        "assert _mask_values('a' * 100_000 + 'a00%39%39', secrets) == 'a' * 100_000 + '<secret>'\n"
+        "assert _mask_values('a' * 100_000 + 'a0099', secrets) == 'a' * 100_000 + '<secret>'\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
 def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
     script = (
         "import sys\n"
@@ -3867,8 +4097,8 @@ def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
         "text = '\\\\' * 100_000 + 'Q'\n"
         "assert _mask_values(text, {secret}) == text\n"
         "# An attainable lowercase-hex ending must not be rejected by the fast path.\n"
-        "assert _mask_values('\\\\' * 100_000 + '%5a', {secret}) == '\\\\' * 99_936 + '<secret>'\n"
-        "assert _mask_values('\\\\' * 80 + 'Q', {'\\\\' * 32 + 'Q'}) == '\\\\' * 16 + '<secret>'\n"
+        "assert _mask_values('\\\\' * 100_000 + '%5a', {secret}) == '\\\\' * 99_872 + '<secret>'\n"
+        "assert _mask_values('\\\\' * 80 + 'Q', {'\\\\' * 32 + 'Q'}) == '<secret>'\n"
         "if sys.platform == 'linux':\n"
         "    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - baseline_rss < 96 * 1024\n"
     )
