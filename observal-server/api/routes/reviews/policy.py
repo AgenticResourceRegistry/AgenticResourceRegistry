@@ -25,7 +25,8 @@ from services.review.policy import parse_policy, policy_for
 router = APIRouter(tags=["reviews"])
 
 
-async def _team_owner(db, team_id, user):
+async def _team_owner(db, team_id, user, *, action: str):
+    # Shared by reads and writes, so the 403 names what the caller actually tried.
     team = await db.get(Team, team_id)
     if team is None:
         raise HTTPException(404, "Teamspace not found")
@@ -38,7 +39,7 @@ async def _team_owner(db, team_id, user):
             )
         )
         if membership is None:
-            raise HTTPException(403, "Only team owners may edit review policy")
+            raise HTTPException(403, f"Only team owners may {action}")
     return team
 
 
@@ -101,7 +102,7 @@ async def put_org_policy(
 async def get_team_policy(
     team_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    await _team_owner(db, team_id, user)
+    await _team_owner(db, team_id, user, action="view review policy")
     value = await ds.get(f"review.policy.team.{team_id}", default="")
     return json.loads(value) if value else None
 
@@ -114,7 +115,7 @@ async def put_team_policy(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    await _team_owner(db, team_id, user)
+    await _team_owner(db, team_id, user, action="edit review policy")
     result = await _write(db, f"review.policy.team.{team_id}", data, user.id, team_id=team_id)
     audit_detail(request, action="review.policy_changed", resource_type="team", resource_id=team_id)
     return result
