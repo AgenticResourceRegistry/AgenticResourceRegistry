@@ -25,6 +25,7 @@ import services.dynamic_settings as ds
 from database import async_session
 from models.mcp import ListingStatus
 from models.user import User, UserRole, is_deleted_account
+from services.auth_header import bearer_token
 from services.jwt_service import decode_access_token
 from services.redis import get_redis
 from services.registry_namespace import _namespace_slug_parts, identity_for_user
@@ -131,10 +132,10 @@ async def get_current_user(
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    if not authorization or not authorization.startswith("Bearer "):
+    token = bearer_token(authorization)
+    if token is None:
         optic.trace("request has no Bearer token")
         raise HTTPException(status_code=401, detail="Missing credentials")
-    token = authorization.removeprefix("Bearer ").strip()
     user = await _authenticate_via_jwt(token, db)
     if not user:
         optic.debug("authentication failed - token invalid or expired")
@@ -164,9 +165,9 @@ async def optional_current_user(
     Raises HTTP 401 if a Bearer token is present but invalid/expired -
     this distinguishes 'no credentials' from 'bad credentials'.
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    token = bearer_token(authorization)
+    if token is None:
         return None
-    token = authorization.removeprefix("Bearer ").strip()
     user = await _authenticate_via_jwt(token, db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
