@@ -11,6 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.deps import get_current_user, get_db, get_registry_user
@@ -514,6 +515,82 @@ async def test_draft_private_until_submitted_and_invalid_anchor_rejected(api):
         row = await db.get(ReviewSubmission, uuid.UUID(submitted.json()["id"]))
         assert row.state == "submitted"
         assert await db.scalar(select(ReviewComment).where(ReviewComment.submission_id == row.id))
+
+
+@pytest.mark.asyncio
+async def test_discard_draft_removes_only_pending_comments(api):
+    client, current, (_, reviewer, _, _), (_, number), factory = api
+    current[0] = reviewer
+    base = f"/api/v1/reviews/{number}"
+    created = await client.post(base + "/threads", json={"body": "private", "as_draft": True})
+    assert created.status_code == 201, created.text
+    draft_id = (await client.get(base + "/submissions/draft")).json()["submission_id"]
+    discarded = await client.delete(base + "/submissions/draft")
+    assert discarded.status_code == 200 and discarded.json() == {"discarded": True}
+    assert (await client.get(base + "/submissions/draft")).json() == {"submission_id": None, "comments": []}
+    async with factory() as db:
+        assert await db.get(ReviewSubmission, uuid.UUID(draft_id)) is None
+        assert await db.get(ReviewComment, uuid.UUID(created.json()["id"])) is None
+
+    created = await client.post(base + "/threads", json={"body": "published", "as_draft": True})
+    assert created.status_code == 201, created.text
+    submitted = await client.post(base + "/submissions", json={"verdict": "approve"})
+    assert submitted.status_code == 201, submitted.text
+    assert (await client.delete(base + "/submissions/draft")).json() == {"discarded": True}
+    async with factory() as db:
+        assert (await db.get(ReviewSubmission, uuid.UUID(submitted.json()["id"]))).state == "submitted"
+        assert await db.get(ReviewComment, uuid.UUID(created.json()["id"])) is not None
+    assert (await client.get(base + "/gate")).json()["approvals"] == 1
+
+
+@pytest.mark.asyncio
+async def test_discard_waits_for_submit_and_rechecks_draft_state():
+    from api.routes.reviews.submissions import discard
+
+    review = Review(id=uuid.uuid4())
+    user = User(id=uuid.uuid4())
+
+    class SubmitWinsRace:
+        """Model READ COMMITTED: submit commits while SELECT FOR UPDATE waits."""
+
+        def __init__(self):
+            self.state = "draft"
+            self.deleted = False
+
+        async def scalar(self, statement):
+            sql = str(statement.compile(dialect=postgresql.dialect()))
+            assert "FROM review_submissions" in sql
+            assert "review_submissions.state =" in sql
+            assert "review_submissions.review_id =" in sql
+            assert "review_submissions.reviewer_id =" in sql
+            # An unlocked lookup returns the old draft; a locking lookup waits for
+            # submit and PostgreSQL rechecks the draft predicate against the new state.
+            if statement._for_update_arg is not None:
+                assert sql.endswith("FOR UPDATE")
+                self.state = "submitted"
+                return None
+            self.state = "submitted"
+            return ReviewSubmission(id=uuid.uuid4(), review_id=review.id, reviewer_id=user.id, state="draft")
+
+        async def scalars(self, statement):
+            self.deleted = True
+            raise AssertionError("Discard read comments after the draft was submitted")
+
+        async def execute(self, statement):
+            self.deleted = True
+            raise AssertionError("Discard deleted a submitted review")
+
+        async def delete(self, row):
+            self.deleted = True
+            raise AssertionError("Discard deleted a submitted review")
+
+        async def commit(self):
+            self.deleted = True
+            raise AssertionError("Discard committed a deletion")
+
+    db = SubmitWinsRace()
+    assert await discard(review=review, db=db, user=user) == {"discarded": True}
+    assert db.state == "submitted" and not db.deleted
 
 
 @pytest.mark.asyncio

@@ -22,14 +22,14 @@ from services.review.decisions import _lock_review, dismiss, gate, submit_verdic
 router = APIRouter()
 
 
-async def _my_draft(db, review, user):
-    return await db.scalar(
-        select(ReviewSubmission).where(
-            ReviewSubmission.review_id == review.id,
-            ReviewSubmission.reviewer_id == user.id,
-            ReviewSubmission.state == "draft",
-        )
+async def _my_draft(db, review, user, *, for_update=False):
+    query = select(ReviewSubmission).where(
+        ReviewSubmission.review_id == review.id,
+        ReviewSubmission.reviewer_id == user.id,
+        ReviewSubmission.state == "draft",
     )
+    # PostgreSQL rechecks the draft predicate after waiting for a concurrent submit.
+    return await db.scalar(query.with_for_update() if for_update else query)
 
 
 @router.get("/{ref}/submissions/draft")
@@ -52,7 +52,7 @@ async def draft(
 async def discard(
     review: Review = Depends(get_review), db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    row = await _my_draft(db, review, user)
+    row = await _my_draft(db, review, user, for_update=True)
     if row:
         comments = (await db.scalars(select(ReviewComment).where(ReviewComment.submission_id == row.id))).all()
         thread_ids = [c.thread_id for c in comments]
