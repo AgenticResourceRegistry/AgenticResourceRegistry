@@ -904,7 +904,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
   function initState(ctx: ExtensionContext): ObservalState {
-    const config = loadConfig();
+    const config = loadConfig(ctx.cwd);
     const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
     const sessionId = ctx.sessionManager.getSessionId();
 
@@ -1042,7 +1042,7 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function loadConfig(): ObservalConfig | null {
+  function loadConfig(cwd: string): ObservalConfig | null {
     try {
       if (!fs.existsSync(CONFIG_PATH)) return null;
       const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
@@ -1059,10 +1059,12 @@ export default function (pi: ExtensionAPI) {
       if (delegatedAgent) {
         config.agent_id = delegatedAgent;
         if (process.env.OBSERVAL_AGENT_VERSION) config.agent_version = process.env.OBSERVAL_AGENT_VERSION;
-      } else if (data.active_agent?.id) {
-        const binding = resolvePiAgentBinding(String(data.active_agent.id), data.active_agent.name, data.active_agent.version);
-        config.agent_id = binding.id;
-        if (binding.version) config.agent_version = binding.version;
+      } else {
+        const binding = sessionAgentBinding(cwd, data.active_agent);
+        if (binding) {
+          config.agent_id = binding.id;
+          if (binding.version) config.agent_version = binding.version;
+        }
       }
       return config;
     } catch {
@@ -1070,11 +1072,44 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /**
+   * The agent a Pi session in `cwd` belongs to.
+   *
+   * A project-scope pull installs its agent for one directory, so it binds only
+   * sessions inside that directory; the deepest one wins when projects nest. The
+   * global active_agent comes from a user-scope pull or /agent and covers the rest
+   * of the machine. Older CLIs also wrote active_agent on project-scope pulls,
+   * which tagged every session anywhere as that agent, so an active_agent the
+   * lockfile knows only as project installs is not applied outside them.
+   */
+  function sessionAgentBinding(cwd: string, active: any): { id: string; version?: string } | null {
+    const agents = piLockfileAgents();
+    const project = agents
+      .filter((item) => item?.scope === "project" && typeof item.id === "string" && item.id
+        && typeof item.directory === "string" && item.directory && isSameOrUnder(cwd, item.directory))
+      .sort((a, b) => b.directory.length - a.directory.length
+        || String(b.pulled_at ?? "").localeCompare(String(a.pulled_at ?? "")))[0];
+    if (project) return { id: project.id, version: normalizeAgentVersion(project.version) };
+    if (!active?.id) return null;
+    const binding = resolvePiAgentBinding(String(active.id), active.name, active.version);
+    const installs = agents.filter((item) => item?.id === binding.id);
+    if (installs.length > 0 && installs.every((item) => item?.scope === "project")) return null;
+    return binding;
+  }
+
+  function piLockfileAgents(): Array<Record<string, any>> {
+    const agents = currentRegistryLockfile()?.harnesses?.pi?.agents;
+    return Array.isArray(agents) ? agents : [];
+  }
+
   function currentRegistryLockfile(): Record<string, any> | null {
     try {
-      const config = loadConfig();
-      if (!config || !fs.existsSync(LOCKFILE_PATH)) return null;
-      const url = new URL(config.server_url);
+      // Read server_url directly: loadConfig consults this lockfile to bind the
+      // session's agent, and calling back into it recursed until the stack overflowed.
+      if (!fs.existsSync(CONFIG_PATH) || !fs.existsSync(LOCKFILE_PATH)) return null;
+      const serverUrl = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")).server_url;
+      if (!serverUrl) return null;
+      const url = new URL(serverUrl);
       url.hash = "";
       url.search = "";
       url.pathname = url.pathname.replace(/\/$/, "");
@@ -1098,8 +1133,7 @@ export default function (pi: ExtensionAPI) {
 
   function findPiLockfileAgent(agent: string, name: string): Record<string, any> | null {
     try {
-      const agents = currentRegistryLockfile()?.harnesses?.pi?.agents;
-      if (!Array.isArray(agents)) return null;
+      const agents = piLockfileAgents();
       const keys = new Set([agent, name, safeAgentName(agent), safeAgentName(name)].filter(Boolean));
       return agents.find((item) => keys.has(String(item?.id ?? "")))
         ?? agents.find((item) => keys.has(String(item?.name ?? "")) || keys.has(safeAgentName(String(item?.name ?? ""))))
