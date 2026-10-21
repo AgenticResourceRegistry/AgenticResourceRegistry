@@ -966,7 +966,10 @@ async def restore_deleted_agent(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     restore_name = req.name if req and req.name else agent.name
-    restore_slug = slugify(restore_name) if req and req.name else agent.slug
+    try:
+        restore_slug = slugify(restore_name) if req and req.name else agent.slug
+    except ValueError as exc:  # a reserved slug such as "draft"
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if await identity_exists(db, Agent, agent.namespace, restore_slug, exclude_id=agent.id):
         raise HTTPException(
             status_code=409,

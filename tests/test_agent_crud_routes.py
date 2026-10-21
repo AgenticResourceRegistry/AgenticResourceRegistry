@@ -1113,6 +1113,17 @@ async def test_restore_detects_active_identity_collision(boundaries, monkeypatch
     assert caught.value.detail == "Agent 'alice/renamed-agent' already exists. Restore with a new name."
 
 
+async def test_restore_rejects_a_reserved_slug_as_bad_input(boundaries, monkeypatch):
+    monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=_agent(deleted_at=NOW)))
+    db = _db()
+
+    with pytest.raises(HTTPException) as caught:
+        await crud.restore_deleted_agent(str(AGENT_ID), AgentRestoreRequest(name="draft"), db=db, current_user=_user())
+
+    assert (caught.value.status_code, caught.value.detail) == (422, "Slug 'draft' is reserved")
+    db.commit.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("restore_request", "expected_name", "expected_slug"),
     [
