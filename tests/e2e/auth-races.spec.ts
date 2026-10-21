@@ -4,6 +4,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { test, expect, type Page } from "@playwright/test";
 
+// These tests import Vite-served source modules, unavailable from CI's built Docker app.
+test.use({ baseURL: process.env.CI ? "http://localhost:3104" : "http://localhost:3000" });
+
 const jwt = (sub: string, suffix: string) => `${btoa('{"alg":"none"}')}.${btoa(JSON.stringify({ sub }))}.${suffix}`;
 const A = jwt("actor-a", "access");
 const B = jwt("actor-b", "access");
@@ -1030,6 +1033,191 @@ for (const kind of ["agents", "mcps"]) {
     await page.unrouteAll({ behavior: "wait" });
   });
 }
+
+const exportHtml = (page: Page) => page.evaluate(async () => {
+  const { insights } = await import("/src/lib/api.ts");
+  return insights.exportHtml("agent", "report").then(() => "ok", (err: Error) => err.name);
+});
+
+test("HTML export 200 downloads once after same-actor rotation during response or blob decoding", async ({ page }) => {
+  for (const phase of ["response", "blob"]) {
+    await seed(page, A, AR);
+    const pending = barrier();
+    let calls = 0;
+    let downloads = 0;
+    page.on("download", () => { downloads++; });
+    await page.route("**/api/v1/agents/*/insights/reports/*/export/html", async (route) => {
+      calls++;
+      expect(route.request().headers().authorization).toBe(`Bearer ${A}`);
+      if (phase === "response") { pending.entered(); await pending.gate; }
+      await route.fulfill({ body: "private-A", contentType: "text/html" });
+    });
+    if (phase === "blob") {
+      await page.evaluate(() => {
+        const original = Response.prototype.blob;
+        Response.prototype.blob = async function (...args) {
+          if (this.url.includes("/export/html")) {
+            (window as any).blobEntered = true;
+            await new Promise<void>((resolve) => { (window as any).releaseBlob = resolve; });
+          }
+          return original.apply(this, args);
+        };
+      });
+    }
+    const result = exportHtml(page);
+    if (phase === "response") await pending.started;
+    else await expect.poll(() => page.evaluate(() => (window as any).blobEntered ?? false)).toBe(true);
+    await page.evaluate(({ access, refresh }) => {
+      sessionStorage.setItem("observal_access_token", access);
+      localStorage.setItem("observal_refresh_token", refresh);
+      (window as any).releaseBlob?.();
+    }, { access: jwt("actor-a", `export-${phase}`), refresh: jwt("actor-a", `export-refresh-${phase}`) });
+    if (phase === "response") pending.release();
+    expect(await result).toBe("ok");
+    await expect.poll(() => downloads).toBe(1);
+    expect(calls).toBe(1);
+    await page.unrouteAll({ behavior: "wait" });
+    await page.reload();
+  }
+});
+
+test("HTML export 200 cannot download A after B switches during response or blob decoding", async ({ page }) => {
+  for (const phase of ["response", "blob"]) {
+    await seed(page, A, AR);
+    const pending = barrier();
+    let calls = 0;
+    let downloads = 0;
+    page.on("download", () => { downloads++; });
+    await page.route("**/api/v1/agents/*/insights/reports/*/export/html", async (route) => {
+      calls++;
+      expect(route.request().headers().authorization).toBe(`Bearer ${A}`);
+      if (phase === "response") { pending.entered(); await pending.gate; }
+      await route.fulfill({ body: "private-A", contentType: "text/html" });
+    });
+    if (phase === "blob") {
+      await page.evaluate(() => {
+        const original = Response.prototype.blob;
+        Response.prototype.blob = async function (...args) {
+          if (this.url.includes("/export/html")) {
+            (window as any).blobEntered = true;
+            await new Promise<void>((resolve) => { (window as any).releaseBlob = resolve; });
+          }
+          return original.apply(this, args);
+        };
+      });
+    }
+    const result = exportHtml(page);
+    if (phase === "response") await pending.started;
+    else await expect.poll(() => page.evaluate(() => (window as any).blobEntered ?? false)).toBe(true);
+    await page.evaluate(({ b, br }) => {
+      sessionStorage.setItem("observal_access_token", b);
+      localStorage.setItem("observal_refresh_token", br);
+      (window as any).releaseBlob?.();
+    }, { b: B, br: BR });
+    if (phase === "response") pending.release();
+    expect(await result).toBe("AuthContextChanged");
+    expect(calls).toBe(1);
+    expect(downloads).toBe(0);
+    expect(await page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBeNull();
+    await page.unrouteAll({ behavior: "wait" });
+    await page.reload();
+  }
+});
+
+test("HTML export 401 response retries rotated A bearer but never B bearer", async ({ page }) => {
+  for (const actor of ["actor-a", "actor-b"]) {
+    await seed(page, A, AR);
+    const pending = barrier();
+    const rotated = jwt(actor, "export-response-access");
+    const refresh = jwt(actor, "export-response-refresh");
+    const bearers: Array<string | undefined> = [];
+    let refreshes = 0;
+    let downloads = 0;
+    page.on("download", () => { downloads++; });
+    await page.route("**/api/v1/agents/*/insights/reports/*/export/html", async (route) => {
+      bearers.push(route.request().headers().authorization);
+      if (bearers.length === 1) { pending.entered(); await pending.gate; }
+      await route.fulfill(bearers.length === 1 ? { status: 401 } : { body: "private-A", contentType: "text/html" });
+    });
+    await page.route("**/api/v1/auth/token/refresh", async (route) => {
+      refreshes++;
+      await route.fulfill({ status: 401 });
+    });
+    const result = exportHtml(page);
+    await pending.started;
+    await page.evaluate(({ access, refresh }) => {
+      sessionStorage.setItem("observal_access_token", access);
+      localStorage.setItem("observal_refresh_token", refresh);
+    }, { access: rotated, refresh });
+    pending.release();
+    expect(await result).toBe(actor === "actor-a" ? "ok" : "AuthContextChanged");
+    expect(bearers).toEqual(actor === "actor-a" ? [`Bearer ${A}`, `Bearer ${rotated}`] : [`Bearer ${A}`]);
+    expect(refreshes).toBe(0);
+    if (actor === "actor-a") await expect.poll(() => downloads).toBe(1);
+    else expect(downloads).toBe(0);
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("HTML export 401 retries a superseded A refresh with the winner's bearer, never B's", async ({ page }) => {
+  for (const actor of ["actor-a", "actor-b"]) {
+    await seed(page, A, AR);
+    const pending = barrier();
+    const rotated = jwt(actor, "export-winner-access");
+    const refresh = jwt(actor, "export-winner-refresh");
+    const bearers: Array<string | undefined> = [];
+    let refreshes = 0;
+    let downloads = 0;
+    page.on("download", () => { downloads++; });
+    await page.route("**/api/v1/agents/*/insights/reports/*/export/html", async (route) => {
+      bearers.push(route.request().headers().authorization);
+      await route.fulfill(bearers.length === 1 ? { status: 401 } : { body: "private-A", contentType: "text/html" });
+    });
+    await page.route("**/api/v1/auth/token/refresh", async (route) => {
+      refreshes++;
+      pending.entered(); await pending.gate;
+      await route.fulfill({ status: 401 }); // winner rotated shared refresh before stale response
+    });
+    const result = exportHtml(page);
+    await pending.started;
+    await page.evaluate(({ access, refresh }) => {
+      sessionStorage.setItem("observal_access_token", access);
+      localStorage.setItem("observal_refresh_token", refresh);
+    }, { access: rotated, refresh });
+    pending.release();
+    expect(await result).toBe(actor === "actor-a" ? "ok" : "AuthContextChanged");
+    expect(bearers).toEqual(actor === "actor-a" ? [`Bearer ${A}`, `Bearer ${rotated}`] : [`Bearer ${A}`]);
+    expect(refreshes).toBe(1);
+    if (actor === "actor-a") await expect.poll(() => downloads).toBe(1);
+    else expect(downloads).toBe(0);
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("HTML export superseded 401 without a new A bearer cannot replay", async ({ page }) => {
+  await seed(page, A, AR);
+  const pending = barrier();
+  let exports = 0;
+  let refreshes = 0;
+  let downloads = 0;
+  page.on("download", () => { downloads++; });
+  await page.route("**/api/v1/agents/*/insights/reports/*/export/html", (route) => {
+    exports++;
+    return route.fulfill({ status: 401 });
+  });
+  await page.route("**/api/v1/auth/token/refresh", async (route) => {
+    refreshes++;
+    pending.entered(); await pending.gate;
+    await route.fulfill({ status: 401 });
+  });
+  const result = exportHtml(page);
+  await pending.started;
+  await page.evaluate((refresh) => localStorage.setItem("observal_refresh_token", refresh), jwt("actor-a", "export-winner-refresh"));
+  pending.release();
+  expect(await result).toBe("AuthContextChanged");
+  expect([exports, refreshes, downloads]).toEqual([1, 1, 0]);
+  expect(await page.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBe(A);
+});
 
 test("HTML export mismatch never retries or downloads", async ({ page }) => {
   await seed(page, A, BR);
