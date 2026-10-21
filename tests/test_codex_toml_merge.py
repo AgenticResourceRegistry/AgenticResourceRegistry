@@ -5,8 +5,10 @@
 """Adversarial Codex MCP TOML pull regressions (dummy secrets only)."""
 
 import builtins
+import errno
 import json
 import os
+import stat
 import sys
 import tomllib
 from pathlib import Path
@@ -841,6 +843,76 @@ def test_cooperating_writers_wait_on_same_lock(tmp_path):
     thread.join(timeout=3)
     assert finished.is_set()
     assert tomllib.loads(path.read_text()) == {"mcp_servers": {"demo": {"command": "ok"}}}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory flock is POSIX-only")
+def test_renamed_lock_cannot_split_two_pull_transactions(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    lock = tmp_path / ".config.toml.observal.lock"
+    rendering, resume, second_started, second_done = Event(), Event(), Event(), Event()
+    original = cmd_pull._toml_document
+    outcomes = {}
+
+    def paused_render(content, existing_text=None):
+        if "first" in content["mcp_servers"]:
+            rendering.set()
+            assert resume.wait(3)
+        return original(content, existing_text)
+
+    def pull(name):
+        if name == "second":
+            second_started.set()
+        try:
+            outcomes[name] = cmd_pull._write_file_checked(
+                path, {"mcp_servers": {name: {"command": name}}}, merge_mcp=True
+            )
+        except Exception as error:
+            outcomes[name] = error
+        finally:
+            if name == "second":
+                second_done.set()
+
+    monkeypatch.setattr(cmd_pull, "_toml_document", paused_render)
+    first = Thread(target=pull, args=("first",))
+    second = Thread(target=pull, args=("second",))
+    first.start()
+    try:
+        assert rendering.wait(3)
+        lock.rename(tmp_path / "retired.lock")
+        second.start()
+        assert second_started.wait(3)
+        assert not second_done.wait(0.1)
+    finally:
+        resume.set()
+        first.join(timeout=3)
+        if second.ident is not None:
+            second.join(timeout=3)
+    assert not first.is_alive() and not second.is_alive()
+    assert isinstance(outcomes["first"], CliError)
+    assert outcomes["first"].category == ErrorCategory.CONFLICT
+    assert outcomes["second"] == "created"
+    assert tomllib.loads(path.read_text())["mcp_servers"] == {"second": {"command": "second"}}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory flock is POSIX-only")
+def test_unsupported_directory_flock_fails_closed(tmp_path, monkeypatch):
+    import fcntl
+
+    path = tmp_path / "config.toml"
+    source = b'model = "gpt"\n'
+    path.write_bytes(source)
+    flock = fcntl.flock
+
+    def unsupported(fd, operation):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EOPNOTSUPP, "directory flock unsupported")
+        return flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", unsupported)
+    with pytest.raises(CliError):
+        cmd_pull._write_file_checked(path, {"mcp_servers": {"demo": {"command": "ok"}}}, merge_mcp=True)
+    assert path.read_bytes() == source
+    assert not (tmp_path / ".config.toml.observal.lock").exists()
 
 
 def test_replace_failure_keeps_original_and_removes_temp(tmp_path, monkeypatch):

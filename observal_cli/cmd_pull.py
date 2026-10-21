@@ -622,7 +622,7 @@ def _toml_write_lock(path: Path):
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
             try:
-                yield target, None
+                yield target, None, None
             finally:
                 lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
@@ -650,15 +650,42 @@ def _toml_write_lock(path: Path):
         else:
             raise _TomlConflict("Too many configuration symlinks")
 
-        fd = os.open(f".{target.name}.observal.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-        with os.fdopen(fd, "r+b") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield target, directory
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        # The directory inode cannot be renamed away from a competing writer's
+        # lock file. Serialize on it first; never fall back to lock-file-only
+        # locking on filesystems that do not support directory flock.
+        fcntl.flock(directory, fcntl.LOCK_EX)
+        try:
+            name = f".{target.name}.observal.lock"
+            fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            with os.fdopen(fd, "r+b") as lock:
+                _check_toml_lock_inode(directory, name, fd)
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                try:
+                    _check_toml_lock_inode(directory, name, fd)
+                    yield target, directory, fd
+                finally:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+        finally:
+            fcntl.flock(directory, fcntl.LOCK_UN)
     finally:
         os.close(directory)
+
+
+def _check_toml_lock_inode(directory: int, name: str, lock_fd: int) -> None:
+    """Refuse a replaced, linked, or non-regular named lock inode."""
+    try:
+        opened = os.fstat(lock_fd)
+        named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or opened.st_nlink != 1
+            or named.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise _TomlConflict("Unsafe configuration lock path")
+    except OSError as error:
+        raise _TomlConflict("Unsafe configuration lock path") from error
 
 
 def _check_toml_target(requested: Path, target: Path, dir_fd: int) -> None:
@@ -690,6 +717,7 @@ def _atomic_write_text(
     *,
     expected_bytes: bytes | object = None,
     dir_fd: int | None = None,
+    lock_fd: int | None = None,
     requested_path: Path | None = None,
     install_path: Path | None = None,
     original_target: Path | None = None,
@@ -702,6 +730,8 @@ def _atomic_write_text(
         try:
             with os.fdopen(fd, "wb") as file:
                 file.write(data)
+            if lock_fd is not None:
+                _check_toml_lock_inode(dir_fd, f".{path.name}.observal.lock", lock_fd)
             if expected_bytes is not None and _read_toml_bytes(path, dir_fd=dir_fd) != expected_bytes:
                 raise _TomlConflict("Configuration changed during pull")
             if requested_path is not None:
@@ -752,7 +782,7 @@ def _write_toml_config(
             _check_toml_target(requested_path, target, directory)
 
     check_requested(path, None)
-    with _toml_write_lock(path) as (target, directory):
+    with _toml_write_lock(path) as (target, directory, lock_fd):
         # The lexical install path and the validated canonical path must both
         # still lead to the pinned destination, even for a no-op merge.
         if directory is not None:
@@ -776,6 +806,7 @@ def _write_toml_config(
             rendered,
             expected_bytes=prior,
             dir_fd=directory,
+            lock_fd=lock_fd,
             requested_path=path,
             install_path=requested_path,
             original_target=path,

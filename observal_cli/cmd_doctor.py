@@ -801,6 +801,14 @@ def _adapter_change(target: str, action: str, dry_run: bool, output: OutputMode 
             remediation="Repair the harness configuration and retry.",
             detail=repr(error),
         )
+    except _CodexPartialUpdateError as error:
+        fail(
+            ErrorCategory.CONFLICT,
+            str(error),
+            operation=f"Doctor {action}",
+            resource=target,
+            remediation="Inspect the written directory identity and retry after restoring the Codex config path.",
+        )
     except (OSError, RuntimeError) as error:
         fail(
             ErrorCategory.UNAVAILABLE,
@@ -1629,6 +1637,88 @@ def _patch_pi(dry_run: bool) -> bool:
     return True
 
 
+class _CodexPartialUpdateError(RuntimeError):
+    """A completed Codex config write no longer appears at the requested path."""
+
+
+def _patch_codex_config(config_path: Path, dry_run: bool) -> bool:
+    """Clean the obsolete flag within the same transaction as Codex pulls."""
+    if not config_path.exists() and not config_path.is_symlink():
+        # No stale flag to remove; in particular, dry runs must not create .codex.
+        return False
+
+    def inspect(config_text: str) -> str:
+        cleaned = _without_stale_codex_hooks_key(config_text)
+        if _codex_hooks_disabled(config_text):
+            rprint(
+                f"  [yellow]Hooks are turned off under {esc('[features]')} in {esc(config_path)}; "
+                "Observal hooks will not fire.[/yellow]"
+            )
+        return cleaned
+
+    if dry_run:
+        config_text = config_path.read_text(encoding="utf-8")
+        if inspect(config_text) == config_text:
+            return False
+        rprint(f"  Would remove the stale codex_hooks key from {esc(config_path)}")
+        return True
+
+    from observal_cli.cmd_pull import (
+        _MISSING,
+        _atomic_write_text,
+        _check_toml_target,
+        _read_toml_bytes,
+        _toml_write_lock,
+        _toml_written_destination,
+    )
+
+    with _toml_write_lock(config_path) as (target, directory, lock_fd):
+        if directory is not None:
+            _check_toml_target(config_path, target, directory)
+        # Windows cannot pin a directory fd; retain its identity for the
+        # best-effort postwrite lexical-path check instead.
+        windows_directory = target.parent.stat() if directory is None else None
+        prior = _read_toml_bytes(target, dir_fd=directory)
+        config_text = prior.decode("utf-8") if prior is not _MISSING else ""
+        cleaned_config = inspect(config_text)
+        if cleaned_config == config_text:
+            return False
+        _atomic_write_text(
+            target,
+            cleaned_config,
+            expected_bytes=prior,
+            dir_fd=directory,
+            lock_fd=lock_fd,
+            requested_path=config_path,
+        )
+        try:
+            if directory is not None:
+                _check_toml_target(config_path, target, directory)
+            else:
+                resolved = config_path.resolve()
+                current = resolved.parent.stat()
+                if resolved.name != target.name or (current.st_dev, current.st_ino) != (
+                    windows_directory.st_dev,
+                    windows_directory.st_ino,
+                ):
+                    raise ValueError("Codex configuration path changed")
+        except (OSError, RuntimeError, ValueError) as error:
+            destination = (
+                _toml_written_destination(target, directory)
+                if directory is not None
+                else (
+                    f"write directory (device={windows_directory.st_dev}, inode={windows_directory.st_ino}), "
+                    f"filename={target.name!r} (not a pathname; Windows best-effort identity)"
+                )
+            )
+            raise _CodexPartialUpdateError(
+                f"Partial update: stale codex_hooks key was removed at {destination}, "
+                "but the requested Codex config path no longer names that target; hooks were not installed."
+            ) from error
+        rprint(f"  Removed the stale codex_hooks key from {esc(config_path)}")
+        return True
+
+
 def _patch_codex(dry_run: bool) -> bool:
     """Install session push hooks into ~/.codex/hooks.json."""
     optic.debug("_patch_codex: dry_run={}", dry_run)
@@ -1640,6 +1730,9 @@ def _patch_codex(dry_run: bool) -> bool:
     hooks_path = codex_dir / "hooks.json"
     config_path = codex_dir / "config.toml"
 
+    # Validate and clean config before touching hooks.json. Release the TOML
+    # lock before the hooks write so there is no cross-file lock ordering.
+    config_changed = _patch_codex_config(config_path, dry_run)
     desired = build_codex_hooks()
 
     # Load existing hooks.json if present
@@ -1664,18 +1757,6 @@ def _patch_codex(dry_run: bool) -> bool:
             needs_update = True
             break
 
-    config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    cleaned_config = _without_stale_codex_hooks_key(config_text)
-    if _codex_hooks_disabled(config_text):
-        rprint(
-            f"  [yellow]Hooks are turned off under {esc('[features]')} in {esc(config_path)}; "
-            "Observal hooks will not fire.[/yellow]"
-        )
-
-    if not needs_update and cleaned_config == config_text:
-        rprint("  [dim]Already up to date[/dim]")
-        return False
-
     # Merge hooks: preserve non-Observal hooks, add ours
     if needs_update:
         merged_hooks = existing_hooks.copy()
@@ -1699,13 +1780,9 @@ def _patch_codex(dry_run: bool) -> bool:
         verb = "Would install" if dry_run else "Installed"
         rprint(f"  {verb} hooks in {esc(hooks_path)}")
 
-    if cleaned_config != config_text:
-        if not dry_run:
-            atomic_write(config_path, cleaned_config)
-        verb = "Would remove" if dry_run else "Removed"
-        rprint(f"  {verb} the stale codex_hooks key from {esc(config_path)}")
-
-    return True
+    if not needs_update and not config_changed:
+        rprint("  [dim]Already up to date[/dim]")
+    return needs_update or config_changed
 
 
 def _patch_copilot(dry_run: bool) -> bool:
