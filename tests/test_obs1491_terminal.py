@@ -169,9 +169,11 @@ def test_concurrent_ack_cannot_steal_held_session_archive(tmp_path):
 
 
 def _spawn_test_imports(monkeypatch):
-    # Spawn reimports this test module. CI runs pytest from observal-server,
-    # where the repository's tests package is not otherwise importable.
-    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1]), prepend=os.pathsep)
+    # spawn.prepare overwrites the child's sys.path with the parent's sys.path;
+    # PYTHONPATH alone is insufficient when pytest runs from observal-server.
+    checkout = str(Path(__file__).resolve().parents[1])
+    monkeypatch.syspath_prepend(checkout)
+    monkeypatch.setenv("PYTHONPATH", checkout, prepend=os.pathsep)
 
 
 def _child_claim(db, entered, resume):
