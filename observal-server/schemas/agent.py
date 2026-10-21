@@ -24,6 +24,7 @@ from schemas.constants import (
     ModelName,
     RecommendedFlag,
     Visibility,
+    make_harness_list_validator,
     make_name_validator,
 )
 from schemas.fork import ForkProvenance
@@ -127,6 +128,7 @@ class AgentCreateRequest(BaseModel):
     _validate_name = field_validator("name")(make_name_validator("name"))
     # Every Agent has a model: a missing or blank one becomes "auto" (each harness's default).
     _normalize_model = field_validator("model_name", mode="before")(lambda v: normalize_model_name(v))
+    _validate_harnesses = field_validator("supported_harnesses")(make_harness_list_validator())
 
     @field_validator("components")
     @classmethod
@@ -171,6 +173,8 @@ class AgentUpdateRequest(BaseModel):
     components: list[ComponentRef] | None = None  # new: all component types
     external_mcps: list[ExternalMcp] | None = None
     success_criteria: SuccessCriteria | None = None
+
+    _validate_harnesses = field_validator("supported_harnesses")(make_harness_list_validator())
 
     @field_validator("model_name", mode="before")
     @classmethod
@@ -386,6 +390,7 @@ class AgentVersionCreateRequest(BaseModel):
     refresh_components: bool = False
 
     _normalize_model = field_validator("model_name", mode="before")(lambda v: normalize_model_name(v))
+    _validate_harnesses = field_validator("supported_harnesses")(make_harness_list_validator())
 
     @field_validator("version")
     @classmethod

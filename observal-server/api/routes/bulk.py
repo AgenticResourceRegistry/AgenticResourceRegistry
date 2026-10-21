@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends
 from loguru import logger as optic
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,11 +17,35 @@ from models.agent import Agent, AgentStatus, AgentVersion
 from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.bulk import BulkAgentItem, BulkAgentRequest, BulkResult, BulkResultItem
+from schemas.constants import VALID_HARNESSES, ListingVersion
 from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_telemetry import emit_registry_event
 from services.review.cutover import submit_for_review
 
 router = APIRouter(prefix="/api/v1/bulk", tags=["bulk"])
+
+_LISTING_VERSION = TypeAdapter(ListingVersion)
+
+
+def _definition_problem(item: BulkAgentItem) -> str | None:
+    """Apply AgentCreateRequest's version and harness rules to one item.
+
+    The items are checked here rather than in BulkAgentItem, so one bad agent
+    is reported on its own instead of failing the whole batch. An unknown
+    harness also has to stop here, because the web release form resends the
+    stored list and would then be rejected with no field to correct it.
+    Harness names are normalized in place, as AgentCreateRequest does.
+    """
+    try:
+        _LISTING_VERSION.validate_python(item.version)
+    except ValidationError:
+        return "Version must be semver such as 1.2.0 or 1.2.0-beta.1, at most 50 characters"
+    harnesses = [harness.replace("_", "-") for harness in item.supported_harnesses]
+    unknown = [harness for harness in harnesses if harness not in VALID_HARNESSES]
+    if unknown:
+        return f"Unknown harness(es): {', '.join(unknown)}"
+    item.supported_harnesses = harnesses
+    return None
 
 
 async def _agent_name_exists(name: str, user: User, db: AsyncSession) -> bool:
@@ -121,6 +146,12 @@ async def bulk_create_agents(
     seen_identities: set[tuple[str, str]] = set()
 
     for item in request.agents:
+        problem = _definition_problem(item)
+        if problem:
+            results.append(BulkResultItem(name=item.name, status="error", error=problem))
+            errors += 1
+            continue
+
         try:
             identity = registry_identity(current_user, item.name)
         except ValueError:

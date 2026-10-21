@@ -217,7 +217,9 @@ def make_name_validator(field_name: str = "name", max_length: int = 64):
 def make_harness_list_validator():
     """Return a classmethod that validates and normalizes each harness in a list."""
 
-    def _check(cls, v: list[str]) -> list[str]:
+    def _check(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:  # an omitted field on a partial update
+            return v
         normalized = [_normalize_harness(harness) for harness in v]
         invalid = [harness for harness in normalized if harness not in VALID_HARNESSES]
         if invalid:
