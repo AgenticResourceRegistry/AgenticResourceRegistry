@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from urllib.parse import unquote_to_bytes
 
 from fastapi.responses import JSONResponse
 from loguru import logger as optic
@@ -75,6 +76,11 @@ def _has_nul(obj: object) -> bool:
     return False
 
 
+def _query_has_nul(raw_query: bytes) -> bool:
+    """Query values feed PostgreSQL filters too, and %00 decodes to the NUL it cannot store."""
+    return b"\x00" in unquote_to_bytes(raw_query)
+
+
 def _content_type_base(header: str | None) -> str:
     """Extract the media type portion (before any parameters like charset)."""
     if not header:
@@ -87,6 +93,13 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         method = request.method.upper()
+
+        # Checked before the method gate because the list routes that filter on query values are GETs.
+        if _query_has_nul(request.scope.get("query_string", b"")):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Query parameters must not contain NUL characters"},
+            )
 
         # Only validate body-bearing methods.
         if method not in _BODY_METHODS:
