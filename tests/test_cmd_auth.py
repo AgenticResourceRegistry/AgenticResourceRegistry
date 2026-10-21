@@ -448,6 +448,31 @@ def test_login_accepts_internationalized_host_and_equivalent_punycode_override(
     )
 
 
+def test_login_rejects_idna2003_lookalike_override_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Python's IDNA codec maps ß to ss, but HTTPX sends faß.de to xn--fa-hia.de.
+    # Treating those as the same destination would expose the newly saved token
+    # on a later request to the unrelated fass.de override.
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://fass.de")
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login("https://faß.de", "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    get.assert_not_called()
+
+
+def test_login_accepts_actual_idna2008_wire_host_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://xn--fa-hia.de")
+    get, _, _ = _prepare_login(monkeypatch)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+    auth.login("https://faß.de", "ada", VALID_PASSWORD, None, False, False)
+    assert get.call_args_list[0] == call("https://faß.de/health", timeout=10)
+    password_login.assert_called_once_with(
+        "https://faß.de", "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
 def test_human_prompt_bare_host_uses_https(monkeypatch: pytest.MonkeyPatch) -> None:
     get, _, _ = _prepare_login(monkeypatch)
     monkeypatch.setattr(auth, "text_input", MagicMock(return_value="  dev.observal.io/  "))

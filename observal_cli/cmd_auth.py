@@ -135,20 +135,23 @@ def _login_server_url(value: str, *, source: str, require_scheme: bool = False) 
         if ":" in host:
             IPv6Address(host)
         else:
-            # HTTPX accepts IDNA names; do not regress valid internationalized
-            # server URLs while rejecting malformed authorities before login.
-            ascii_host = host.encode("idna").decode("ascii")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+", ascii_host):
+            # HTTPX applies IDNA2008 on the wire, which differs from Python's
+            # built-in IDNA codec (e.g. faß.de is NOT fass.de). Keep ASCII host
+            # syntax strict and validate internationalized names with HTTPX.
+            if not all(char.isalnum() or char in "._-" for char in host):
                 invalid()
-    except (ValueError, UnicodeError):
+            wire_host = httpx.URL(raw).raw_host.decode("ascii")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", wire_host):
+                invalid()
+    except (ValueError, UnicodeError, httpx.InvalidURL):
         invalid()
     return raw
 
 
 def _login_destination(url: str) -> tuple[str, str, int, str]:
     parsed = urlsplit(url)
-    host = parsed.hostname.encode("idna").decode("ascii").lower()
-    return parsed.scheme, host, parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path
+    wire_host = httpx.URL(url).raw_host.decode("ascii").lower()
+    return parsed.scheme, wire_host, parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path
 
 
 def _guard_login_override(server_url: str, override: str | None) -> None:
