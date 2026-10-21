@@ -53,8 +53,8 @@ Pick the row that matches your environment:
 Decode a freshly-issued access token to confirm the new expiry:
 
 ```bash
-# Get a fresh token
-observal auth token | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
+# Read the token saved by observal auth login
+python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["access_token"])' "$(observal config path)" | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
 ```
 
 Check the `exp` claim — it should be `iat` + your configured access token TTL (in seconds).

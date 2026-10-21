@@ -277,19 +277,20 @@ Auth endpoints are rate-limited to slow brute-force attempts:
 | Setting | Default | Scope |
 | --- | --- | --- |
 | `RATE_LIMIT_AUTH` | `10/minute` | General auth endpoints |
-| `RATE_LIMIT_AUTH_STRICT` | `5/minute` | Login, registration, and password reset |
+| `RATE_LIMIT_AUTH_STRICT` | `5/minute` | User registration |
 
 Tighten for public-facing deployments.
 
 ## Password reset
 
-Users who forget their password request a reset code via `observal auth reset-password --email <email>` or the web UI **Forgot password?** link. The server logs a 6-character code to its console:
+There is no self-service reset flow. The login page says **Forgot password? Contact your admin.** — an admin resets the account from **Admin > Users** in the web UI or with the CLI:
 
-```
-WARNING - PASSWORD RESET CODE for alice@example.com: A7X9B2 (expires in 15 minutes)
+```bash
+observal admin reset-password <email>
+observal admin reset-password <email> --generate
 ```
 
-An operator reads the log and passes the code to the user out-of-band (Slack, phone). This is deliberate: no email infrastructure needed for the default flow. If you want emailed reset codes, implement an email transport in the server.
+`--generate` has the server mint a random password and the CLI prints it once. Hand it to the user out-of-band (Slack, phone); they must change it at their next sign-in.
 
 ## Operational controls
 

@@ -71,17 +71,13 @@ Check logs (`docker compose logs -f <service>`). Three frequent causes:
 
 ### Admin forgot password
 
-```bash
-observal auth reset-password --email admin@demo.example
-```
-
-Then read the reset code from the server log:
+There is no reset code to look up. An admin resets the account directly:
 
 ```bash
-docker logs observal-api 2>&1 | grep "PASSWORD RESET CODE"
+observal admin reset-password admin@demo.example --generate
 ```
 
-Enter the code when the CLI prompts.
+Hand the printed password to the user out-of-band; they must change it at their next sign-in.
 
 ### OAuth login fails with `redirect_uri_mismatch`
 
