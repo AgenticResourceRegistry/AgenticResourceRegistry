@@ -41,6 +41,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- repair in-app help links that still point at the renamed core concepts doc
 - install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
 - support multi-artifact migration validation and import uploads
@@ -53,10 +54,6 @@ All notable changes to this project will be documented in this file.
 - let `observal auth login` sign in with Google or GitHub through `--provider`, and ask which provider a bare `--sso` should use instead of always sending it to OIDC ([#1771](https://github.com/Observal/Observal/issues/1771))
 - run hooks in pulled Claude Code agents with the CLI's own interpreter instead of bare `python3`, which cannot import a `uv tool` install ([#1773](https://github.com/Observal/Observal/issues/1773))
 - say in `agent pull` output, and in JSON as `reports_sessions`, when the pulled agent sends its sessions to the server ([#1772](https://github.com/Observal/Observal/issues/1772))
-
-### Fixes
-
-- repair in-app help links that still point at the renamed core concepts doc
 
 ### Documentation
 
