@@ -22,7 +22,7 @@ Base path: `/api/v1`.
 | `GET` | `/auth/whoami` | Current user info |
 | `POST` | `/auth/token` | Exchange credentials for JWT access + refresh tokens |
 | `POST` | `/auth/token/refresh` | Rotate refresh token for new access token |
-| `POST` | `/auth/token/revoke` | Revoke a refresh token |
+| `POST` | `/auth/token/revoke` | Revoke a refresh token. Access tokens already issued stay valid until they expire; use `/auth/logout` to end a session at once |
 | `GET` | `/auth/oauth/login` | Initiate OAuth SSO flow |
 | `GET` | `/auth/oauth/callback` | OAuth callback handler |
 
