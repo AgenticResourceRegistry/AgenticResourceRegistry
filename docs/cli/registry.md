@@ -188,7 +188,7 @@ observal registry mcp submit --submit my-server
 
 #### Valid transports
 
-`stdio`, `sse`, `streamable-http`.
+`stdio`, `sse`, `streamable-http`. The older `http` spelling is accepted and stored as `streamable-http`; any other value is rejected.
 
 #### Valid frameworks
 
