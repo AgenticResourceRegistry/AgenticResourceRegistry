@@ -11,6 +11,7 @@ from loguru import logger as optic
 from redis.exceptions import RedisError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import DataError, DBAPIError, InterfaceError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 
@@ -238,6 +239,33 @@ async def redis_error_handler(request: Request, exc: RedisError):
     return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable"})
 
 
+def _is_rejected_value(exc: DBAPIError) -> bool:
+    """True when PostgreSQL or asyncpg refused a value the client sent, not when the database failed.
+
+    SQLSTATE class 22 is PostgreSQL's "data exception" (too long, out of range,
+    malformed). asyncpg reports most of them as a generic DBAPIError carrying the
+    code, and raises its own DataError, a ValueError, while encoding a parameter
+    such as an int beyond int64 or a malformed UUID, before the query is sent.
+    """
+    if isinstance(exc, DataError):
+        return True
+    if str(getattr(exc.orig, "sqlstate", None) or "").startswith("22"):
+        return True
+    return isinstance(exc, InterfaceError) and isinstance(getattr(exc.orig, "__cause__", None), ValueError)
+
+
+async def db_value_error_handler(request: Request, exc: DBAPIError):
+    # Schemas should bound every field; this is the net for the ones that do not, so a
+    # bad value is still the client's 422 rather than our 500. Never echo the statement
+    # or parameters, which can carry other users' data.
+    if not _is_rejected_value(exc):
+        raise exc
+    optic.warning(
+        "db_value_rejected method={} path={} error={}", request.method, request.url.path, type(exc.orig).__name__
+    )
+    return JSONResponse(status_code=422, content={"detail": "A request value is not valid for its field"})
+
+
 def configure_rate_limit_handlers(app: FastAPI) -> None:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -341,6 +369,7 @@ def configure_middleware(app: FastAPI) -> None:
     configure_rate_limit_handlers(app)
     configure_version_middleware(app)
     app.add_exception_handler(RedisError, redis_error_handler)
+    app.add_exception_handler(DBAPIError, db_value_error_handler)
 
     app.add_middleware(
         SessionMiddleware,
