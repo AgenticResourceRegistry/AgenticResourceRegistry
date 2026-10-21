@@ -567,7 +567,10 @@ async def trends(
 
 
 @router.get("/dashboard/tokens", response_model=TokenStats)
-async def token_stats(range_: str | None = Query(None, alias="range")):
+async def token_stats(
+    range_: str | None = Query(None, alias="range"),
+    current_user: User = Depends(require_role(UserRole.admin)),
+):
     optic.trace("range={}", range_)
     return TokenStats(
         total_input=0, total_output=0, total_tokens=0, avg_per_trace=0, by_agent=[], by_mcp=[], over_time=[]
