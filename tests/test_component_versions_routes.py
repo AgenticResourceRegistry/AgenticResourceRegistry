@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 
 from api.deps import get_current_user, get_db, get_registry_user
 from api.routes import component_versions as versions
@@ -296,16 +297,17 @@ def _set_generated_defaults(db, component_type):
     "value",
     ["0.0.0", "1.2.3", "10.20.300", "1.2.3-beta.1", "1.2.3-rc.2"],
 )
-def test_semver_pattern_accepts_the_documented_forms(value):
-    assert versions.SEMVER_RE.fullmatch(value)
+def test_publish_request_accepts_the_documented_version_forms(value):
+    assert VersionPublishRequest(version=value, description="d").version == value
 
 
 @pytest.mark.parametrize(
     "value",
-    ["", "1", "1.2", "1.2.3.4", "v1.2.3", "1.2.3-", "1.2.3+build", "1.2.3-beta_1"],
+    ["", "1", "1.2", "1.2.3.4", "v1.2.3", "1.2.3-", "1.2.3+build", "1.2.3-beta_1", "01.2.3", "1.2.3\n"],
 )
-def test_semver_pattern_rejects_malformed_forms(value):
-    assert versions.SEMVER_RE.fullmatch(value) is None
+def test_publish_request_rejects_malformed_versions(value):
+    with pytest.raises(ValidationError):
+        VersionPublishRequest(version=value, description="d")
 
 
 @pytest.mark.asyncio
@@ -577,32 +579,20 @@ async def test_every_operation_hides_a_missing_listing_without_database_mutation
 
 
 @pytest.mark.asyncio
-async def test_publish_rejects_invalid_semver_before_resolution_or_mutation(monkeypatch):
-    resolve = AsyncMock()
-    validate = Mock()
-    inbox = AsyncMock()
-    monkeypatch.setattr(versions, "resolve_visible_listing", resolve)
-    monkeypatch.setattr(versions, "validate_and_extract", validate)
-    monkeypatch.setattr(versions, "submit_for_review", inbox)
-    db = _db()
+async def test_publish_rejects_invalid_semver_before_the_handler_runs(monkeypatch):
+    app, db = _generic_app(actor=_user(user_id=OWNER_ID))
+    publish = AsyncMock()
+    monkeypatch.setattr(versions, "_publish_version", publish)
 
-    with pytest.raises(HTTPException) as exc:
-        await versions._publish_version(
-            str(LISTING_ID),
-            _request("mcp", version="not-semver"),
-            McpListing,
-            McpVersion,
-            "mcp",
-            db,
-            _user(user_id=OWNER_ID),
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/mcps/{LISTING_ID}/versions", json={"version": "not-semver", "description": "d"}
         )
 
-    _assert_http(exc, 422, "Invalid semver string: 'not-semver'")
-    resolve.assert_not_awaited()
-    validate.assert_not_called()
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "version"]
+    publish.assert_not_awaited()
     db.execute.assert_not_awaited()
-    db.add.assert_not_called()
-    inbox.assert_not_awaited()
 
 
 @pytest.mark.asyncio

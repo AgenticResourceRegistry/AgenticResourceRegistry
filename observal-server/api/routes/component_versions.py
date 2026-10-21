@@ -13,7 +13,6 @@ Usage in each type's route file::
 
 from __future__ import annotations
 
-import re
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -48,9 +47,6 @@ from services.skill_bundle import needs_bundle_delivery, validate_skill_bundle
 from services.skill_revisions import skill_content_revision, verified_skill_revision
 from services.skill_validator import SkillValidationError
 from services.versioning import parse_semver
-
-# Semver pattern: X.Y.Z or X.Y.Z-prerelease
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$")
 
 
 async def audit(*_args, **_kwargs):
@@ -224,8 +220,6 @@ async def _publish_version(
     current_user: User,
 ) -> dict:
     optic.trace("listing_id={}, listing_model={}", listing_id, listing_model)
-    if not SEMVER_RE.match(req.version):
-        raise HTTPException(status_code=422, detail=f"Invalid semver string: {req.version!r}")
 
     listing = await resolve_visible_listing(listing_model, listing_id, db, current_user)
     if not listing:

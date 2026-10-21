@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator, StringConstraints
+from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 from observal_shared.harness_registry import get_harness_capability_matrix, get_valid_harnesses
 
@@ -27,12 +27,23 @@ from observal_shared.harness_registry import get_harness_capability_matrix, get_
 
 Visibility = Literal["public", "team"]
 
+# Exact semver with an optional prerelease tag. Release ordering and the
+# suggested next versions (1.0.1, 1.1.0, 2.0.0) both parse versions this way.
+COMPONENT_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$")
+
+
+def _check_component_version(v: str) -> str:
+    if not COMPONENT_VERSION_RE.match(v):
+        raise ValueError(f"Invalid version '{v}'. Use semver such as 1.2.0 or 1.2.0-beta.1")
+    return v
+
+
 # Bounds match the VARCHAR columns in models/. Without them an over-long value
 # reaches PostgreSQL and fails as StringDataRightTruncationError, a 500 rather
 # than a 422 that names the field.
 ListingName = Annotated[str, StringConstraints(max_length=255)]
 ListingOwner = Annotated[str, StringConstraints(max_length=255)]
-ListingVersion = Annotated[str, StringConstraints(max_length=50)]
+ListingVersion = Annotated[str, StringConstraints(max_length=50), AfterValidator(_check_component_version)]
 ModelName = Annotated[str, StringConstraints(max_length=100)]
 
 AGENT_NAME_REGEX = re.compile(r"^[a-z0-9][a-z0-9_-]*$")

@@ -10,12 +10,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from schemas.constants import ListingVersion  # noqa: TC001 - needed at runtime by Pydantic
 from schemas.skill_resources import SkillFolderSnapshot, SkillRevision
 
 
 class VersionPublishRequest(BaseModel):
     message: str | None = None
-    version: str
+    version: ListingVersion
     description: str
     changelog: str | None = None
     supported_harnesses: list[str] = []

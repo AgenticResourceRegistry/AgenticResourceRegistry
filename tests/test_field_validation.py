@@ -90,21 +90,23 @@ class TestSkillValidation:
     def test_valid_task_type_accepted(self):
         from schemas.skill import SkillSubmitRequest
 
-        r = SkillSubmitRequest(name="test-skill", version="1.0", description="desc", owner="o", task_type="code-review")
+        r = SkillSubmitRequest(
+            name="test-skill", version="1.0.0", description="desc", owner="o", task_type="code-review"
+        )
         assert r.task_type == "code-review"
 
     def test_invalid_task_type_rejected(self):
         from schemas.skill import SkillSubmitRequest
 
         with pytest.raises(ValueError, match="Valid options:"):
-            SkillSubmitRequest(name="test-skill", version="1.0", description="desc", owner="o", task_type="invalid")
+            SkillSubmitRequest(name="test-skill", version="1.0.0", description="desc", owner="o", task_type="invalid")
 
     def test_all_valid_task_types(self):
         from schemas.constants import VALID_SKILL_TASK_TYPES
         from schemas.skill import SkillSubmitRequest
 
         for tt in VALID_SKILL_TASK_TYPES:
-            r = SkillSubmitRequest(name="s", version="1.0", description="d", owner="o", task_type=tt)
+            r = SkillSubmitRequest(name="s", version="1.0.0", description="d", owner="o", task_type=tt)
             assert r.task_type == tt
 
     @pytest.mark.parametrize("slash_command", ["review", "/review", "code-review", "tdd_helper", "review2"])
@@ -113,7 +115,7 @@ class TestSkillValidation:
 
         r = SkillSubmitRequest(
             name="test-skill",
-            version="1.0",
+            version="1.0.0",
             description="desc",
             owner="o",
             task_type="code-review",
@@ -134,7 +136,7 @@ class TestSkillValidation:
         with pytest.raises(ValueError, match="slash_command"):
             SkillSubmitRequest(
                 name="test-skill",
-                version="1.0",
+                version="1.0.0",
                 description="desc",
                 owner="o",
                 task_type="code-review",
@@ -162,7 +164,7 @@ class TestSkillValidation:
         with pytest.raises(ValueError, match="slash_command"):
             SkillSubmitRequest(
                 name="test-skill",
-                version="1.0",
+                version="1.0.0",
                 description="desc",
                 owner="o",
                 task_type="code-review",
@@ -180,7 +182,7 @@ class TestHookValidation:
         from schemas.hook import HookSubmitRequest
 
         r = HookSubmitRequest(
-            name="h", version="1.0", description="d", owner="o", event="PreToolUse", handler_type="command"
+            name="h", version="1.0.0", description="d", owner="o", event="PreToolUse", handler_type="command"
         )
         assert r.event == "PreToolUse"
 
@@ -189,7 +191,7 @@ class TestHookValidation:
 
         with pytest.raises(ValueError, match="Valid options:"):
             HookSubmitRequest(
-                name="h", version="1.0", description="d", owner="o", event="pre_tool_call", handler_type="command"
+                name="h", version="1.0.0", description="d", owner="o", event="pre_tool_call", handler_type="command"
             )
 
     def test_invalid_handler_type_rejected(self):
@@ -197,7 +199,7 @@ class TestHookValidation:
 
         with pytest.raises(ValueError, match="Valid options:"):
             HookSubmitRequest(
-                name="h", version="1.0", description="d", owner="o", event="PreToolUse", handler_type="script"
+                name="h", version="1.0.0", description="d", owner="o", event="PreToolUse", handler_type="script"
             )
 
     def test_invalid_execution_mode_rejected(self):
@@ -206,7 +208,7 @@ class TestHookValidation:
         with pytest.raises(ValueError, match="Valid options:"):
             HookSubmitRequest(
                 name="h",
-                version="1.0",
+                version="1.0.0",
                 description="d",
                 owner="o",
                 event="PreToolUse",
@@ -220,7 +222,7 @@ class TestHookValidation:
         with pytest.raises(ValueError, match="Valid options:"):
             HookSubmitRequest(
                 name="h",
-                version="1.0",
+                version="1.0.0",
                 description="d",
                 owner="o",
                 event="PreToolUse",
@@ -233,7 +235,9 @@ class TestHookValidation:
         from schemas.hook import HookSubmitRequest
 
         for ev in VALID_HOOK_EVENTS:
-            r = HookSubmitRequest(name="h", version="1.0", description="d", owner="o", event=ev, handler_type="command")
+            r = HookSubmitRequest(
+                name="h", version="1.0.0", description="d", owner="o", event=ev, handler_type="command"
+            )
             assert r.event == ev
 
 
@@ -247,7 +251,7 @@ class TestPromptValidation:
         from schemas.prompt import PromptSubmitRequest
 
         r = PromptSubmitRequest(
-            name="p", version="1.0", description="d", owner="o", category="system-prompt", template="hi"
+            name="p", version="1.0.0", description="d", owner="o", category="system-prompt", template="hi"
         )
         assert r.category == "system-prompt"
 
@@ -255,14 +259,16 @@ class TestPromptValidation:
         from schemas.prompt import PromptSubmitRequest
 
         with pytest.raises(ValueError, match="Valid options:"):
-            PromptSubmitRequest(name="p", version="1.0", description="d", owner="o", category="invalid", template="hi")
+            PromptSubmitRequest(
+                name="p", version="1.0.0", description="d", owner="o", category="invalid", template="hi"
+            )
 
     def test_all_valid_categories(self):
         from schemas.constants import VALID_PROMPT_CATEGORIES
         from schemas.prompt import PromptSubmitRequest
 
         for cat in VALID_PROMPT_CATEGORIES:
-            r = PromptSubmitRequest(name="p", version="1.0", description="d", owner="o", category=cat, template="hi")
+            r = PromptSubmitRequest(name="p", version="1.0.0", description="d", owner="o", category=cat, template="hi")
             assert r.category == cat
 
 
@@ -276,7 +282,7 @@ class TestSandboxValidation:
         from schemas.sandbox import SandboxSubmitRequest
 
         r = SandboxSubmitRequest(
-            name="sb", version="1.0", description="d", owner="o", runtime_type="docker", image="python:3.11"
+            name="sb", version="1.0.0", description="d", owner="o", runtime_type="docker", image="python:3.11"
         )
         assert r.runtime_type == "docker"
 
@@ -285,7 +291,7 @@ class TestSandboxValidation:
 
         with pytest.raises(ValueError, match="Valid options:"):
             SandboxSubmitRequest(
-                name="sb", version="1.0", description="d", owner="o", runtime_type="podman", image="python:3.11"
+                name="sb", version="1.0.0", description="d", owner="o", runtime_type="podman", image="python:3.11"
             )
 
     def test_invalid_network_policy_rejected(self):
@@ -294,7 +300,7 @@ class TestSandboxValidation:
         with pytest.raises(ValueError, match="Valid options:"):
             SandboxSubmitRequest(
                 name="sb",
-                version="1.0",
+                version="1.0.0",
                 description="d",
                 owner="o",
                 runtime_type="docker",
@@ -315,7 +321,7 @@ class TestSandboxValidation:
         for rt in VALID_SANDBOX_RUNTIME_TYPES:
             r = SandboxSubmitRequest(
                 name="sb",
-                version="1.0",
+                version="1.0.0",
                 description="d",
                 owner="o",
                 runtime_type=rt,

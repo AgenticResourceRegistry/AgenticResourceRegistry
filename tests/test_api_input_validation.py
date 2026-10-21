@@ -146,3 +146,36 @@ async def test_db_value_errors_become_422_and_other_db_errors_stay_500(make_exc,
     if expected == 422:
         # The statement and its parameters never reach the client.
         assert resp.json() == {"detail": "A request value is not valid for its field"}
+
+
+# ── OBS-1471: one semver rule for component versions ─────────────────────────
+
+
+@pytest.mark.parametrize("model", _component_request_models(), ids=lambda m: m.__name__)
+@pytest.mark.parametrize("version", ["", "-1.0.0", "1 .0.0", "v1.0.0", "1.0", "01.0.0", "1.0.0 "])
+def test_component_requests_reject_non_semver_versions(model, version):
+    assert _field_errors(model, version=version).get("version") == "value_error"
+
+
+@pytest.mark.parametrize("model", _component_request_models(), ids=lambda m: m.__name__)
+@pytest.mark.parametrize("version", ["0.1.0", "1.2.3", "2.0.0-beta.1"])
+def test_component_requests_accept_semver_versions(model, version):
+    assert "version" not in _field_errors(model, version=version)
+
+
+@pytest.mark.parametrize("version", ["1.0", "01.0.0", "1.0.0\n", "1.0." + "1" * 50])
+def test_version_publish_requests_share_the_component_version_rule(version):
+    from schemas.component_version import VersionPublishRequest
+
+    assert "version" in _field_errors(VersionPublishRequest, version=version, description="d")
+    assert VersionPublishRequest(version="1.2.0-rc.1", description="d").version == "1.2.0-rc.1"
+
+
+def test_agent_component_refs_share_the_component_version_rule():
+    import uuid
+
+    from schemas.agent import ComponentRef
+
+    ref = {"component_type": "mcp", "component_id": str(uuid.uuid4())}
+    assert ComponentRef(**ref, version="1.2.0-rc.1").version == "1.2.0-rc.1"
+    assert _field_errors(ComponentRef, **ref, version="v1").get("version") == "value_error"
