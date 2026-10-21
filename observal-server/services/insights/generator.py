@@ -32,7 +32,7 @@ from .registry_match import (
     count_reused,
     validate_reuse_suggestions,
 )
-from .sections import generate_sections
+from .sections import _get_section_model, _get_synthesis_model, generate_sections
 from .session_meta_extractor import aggregate_metas, extract_all_session_metas
 from .transcript import build_session_transcript
 
@@ -162,6 +162,9 @@ async def _run_pipeline(
 
     max_concurrent = int(await ds.get("insights.facet_concurrency") or 5)
 
+    # The facet model only runs when some session still needed facets, so it
+    # belongs in models_used only then.
+    facet_model_called = bool(transcripts)
     if transcripts:
         facets_by_session.update(
             await _extract_facets_batch(
@@ -308,6 +311,7 @@ async def _run_pipeline(
                     if isinstance(result, str) and result.strip():
                         prior_transcripts[meta["session_id"]] = result
                 if prior_transcripts:
+                    facet_model_called = True
                     prior_facets_by_session.update(
                         await _extract_facets_batch(
                             transcripts=prior_transcripts,
@@ -480,12 +484,27 @@ async def _run_pipeline(
         "metrics": metrics,
         "narrative": narrative,
         "sessions_analyzed": len(session_metas),
-        "models_used": [],
+        "models_used": await _models_used(facet_model_called),
         "report_version": REPORT_VERSION,
         "regressions": [],
         "facets_summary": facets_summary,
         "cross_user_patterns": {},
     }
+
+
+async def _models_used(facet_model_called: bool) -> list[str]:
+    """Model ids the report's LLM calls ran on, in pipeline order.
+
+    An unset synthesis or facet model is not "no model": call_model falls back
+    to insights.model_sections, so that is the id recorded for the stage.
+    """
+    import services.dynamic_settings as ds
+
+    section_model = await _get_section_model()
+    models = [section_model, await _get_synthesis_model() or section_model]
+    if facet_model_called:
+        models.append(await ds.get("insights.model_facets") or section_model)
+    return list(dict.fromkeys(m for m in models if m))
 
 
 async def _emit_progress(progress_callback, phase: str, current: int, total: int, message: str) -> None:
