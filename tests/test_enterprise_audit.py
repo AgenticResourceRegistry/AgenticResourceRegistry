@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Yash Gadgil <yashgadgil08@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the enterprise audit logging system."""
@@ -229,87 +230,155 @@ class TestSetup:
         assert r1["extra"]["_chain_hash"] != r2["extra"]["_chain_hash"]
 
 
+def _audited_app(handler, *, path="/api/v1/agents", methods=("GET",)):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    from api.middleware.audit import AuditMiddleware
+
+    app = Starlette(routes=[Route(path, handler, methods=list(methods))])
+    app.add_middleware(AuditMiddleware)
+    return app
+
+
+async def _call(app, method, path, *, client=("127.0.0.1", 5000), headers=None):
+    import httpx
+
+    transport = httpx.ASGITransport(app=app, client=client)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        return await http.request(method, path, headers=headers)
+
+
 class TestMiddleware:
     """AuditMiddleware."""
 
     @pytest.mark.asyncio
     async def test_skips_health(self):
-        from api.middleware.audit import AuditMiddleware
+        from starlette.responses import PlainTextResponse
 
-        middleware = AuditMiddleware(MagicMock())
-        request = MagicMock()
-        request.method = "GET"
-        request.url.path = "/health"
-        request.state = MagicMock()
+        app = _audited_app(lambda request: PlainTextResponse("ok"), path="/health")
 
-        call_next = AsyncMock(return_value=MagicMock(status_code=200))
-        response = await middleware.dispatch(request, call_next)
-        call_next.assert_called_once()
+        with patch("api.middleware.audit.optic") as mock_optic:
+            response = await _call(app, "GET", "/health")
+            mock_optic.bind.assert_not_called()
         assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_emits_for_api(self):
-        from api.middleware.audit import AuditMiddleware
+        from starlette.responses import PlainTextResponse
 
-        middleware = AuditMiddleware(MagicMock())
-        request = MagicMock()
-        request.method = "GET"
-        request.url.path = "/api/v1/agents"
-        request.state = MagicMock()
-        request.state.request_id = "req-1"
-        request.state.audit_user = None
-        request.state.audit_action = ""
-        request.state.audit_resource_type = ""
-        request.state.audit_resource_id = ""
-        request.state.audit_resource_name = ""
-        request.state.audit_detail = ""
-        request.headers = {"x-forwarded-for": "10.0.0.1", "user-agent": "test/1.0"}
-        request.client = MagicMock()
-        request.client.host = "127.0.0.1"
-
-        call_next = AsyncMock(return_value=MagicMock(status_code=200))
+        app = _audited_app(lambda request: PlainTextResponse("ok"))
 
         with patch("api.middleware.audit.optic") as mock_optic:
             mock_bound = MagicMock()
             mock_optic.bind.return_value = mock_bound
-            await middleware.dispatch(request, call_next)
+            await _call(app, "GET", "/api/v1/agents", headers={"x-forwarded-for": "10.0.0.1", "user-agent": "test/1.0"})
             mock_optic.bind.assert_called_once()
             kwargs = mock_optic.bind.call_args[1]
             assert kwargs["audit"] is True
             assert kwargs["outcome"] == "success"
             assert kwargs["sensitivity"] == "high"
             assert kwargs["ip_address"] == "127.0.0.1"
+            assert kwargs["user_agent"] == "test/1.0"
+            assert kwargs["action"] == "get./api/v1/agents"
             mock_bound.info.assert_called_once_with("audit")
 
     @pytest.mark.asyncio
     async def test_denied_on_403(self):
-        from api.middleware.audit import AuditMiddleware
+        from starlette.responses import PlainTextResponse
 
-        middleware = AuditMiddleware(MagicMock())
-        request = MagicMock()
-        request.method = "POST"
-        request.url.path = "/api/v1/admin/settings"
-        request.state = MagicMock()
-        request.state.request_id = ""
-        request.state.audit_user = None
-        request.state.audit_action = ""
-        request.state.audit_resource_type = ""
-        request.state.audit_resource_id = ""
-        request.state.audit_resource_name = ""
-        request.state.audit_detail = ""
-        request.headers = {"x-forwarded-for": "", "user-agent": ""}
-        request.client = MagicMock()
-        request.client.host = "192.168.1.1"
-
-        call_next = AsyncMock(return_value=MagicMock(status_code=403))
+        app = _audited_app(
+            lambda request: PlainTextResponse("no", status_code=403), path="/api/v1/admin/settings", methods=("POST",)
+        )
 
         with patch("api.middleware.audit.optic") as mock_optic:
-            mock_bound = MagicMock()
-            mock_optic.bind.return_value = mock_bound
-            await middleware.dispatch(request, call_next)
+            mock_optic.bind.return_value = MagicMock()
+            await _call(app, "POST", "/api/v1/admin/settings", client=("192.168.1.1", 5000))
             kwargs = mock_optic.bind.call_args[1]
             assert kwargs["outcome"] == "denied"
             assert kwargs["actor_id"] == "anonymous"
+            assert kwargs["ip_address"] == "192.168.1.1"
+
+    @pytest.mark.asyncio
+    async def test_records_actor_and_resource_set_by_the_route(self):
+        from types import SimpleNamespace
+
+        from starlette.responses import PlainTextResponse
+
+        user = SimpleNamespace(id=uuid.uuid4(), email="a@example.com", role=SimpleNamespace(value="admin"))
+
+        async def handler(request):
+            request.state.audit_user = user
+            request.state.audit_action = "agent.delete"
+            request.state.audit_resource_type = "agent"
+            request.state.audit_resource_id = "agent-1"
+            return PlainTextResponse("ok")
+
+        app = _audited_app(handler, path="/api/v1/agents/agent-1", methods=("DELETE",))
+
+        with patch("api.middleware.audit.optic") as mock_optic:
+            mock_optic.bind.return_value = MagicMock()
+            await _call(app, "DELETE", "/api/v1/agents/agent-1")
+            kwargs = mock_optic.bind.call_args[1]
+            assert kwargs["actor_id"] == str(user.id)
+            assert kwargs["actor_email"] == "a@example.com"
+            assert kwargs["actor_role"] == "admin"
+            assert kwargs["action"] == "agent.delete"
+            assert kwargs["resource_type"] == "agent"
+            assert kwargs["resource_id"] == "agent-1"
+
+    @pytest.mark.asyncio
+    async def test_streaming_response_is_audited_when_it_starts(self):
+        from starlette.responses import StreamingResponse
+
+        emitted_before_body: list[bool] = []
+        mock_optic = MagicMock()
+
+        async def body():
+            emitted_before_body.append(mock_optic.bind.called)
+            yield b"chunk"
+
+        app = _audited_app(lambda request: StreamingResponse(body()), path="/api/v1/sessions/stream")
+
+        with patch("api.middleware.audit.optic", mock_optic):
+            response = await _call(app, "GET", "/api/v1/sessions/stream")
+        assert response.content == b"chunk"
+        assert emitted_before_body == [True]
+        mock_optic.bind.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_share_tokens_are_redacted_from_the_path(self):
+        from starlette.responses import PlainTextResponse
+
+        app = _audited_app(lambda request: PlainTextResponse("ok"), path="/api/v1/agent-shares/{token}")
+
+        with patch("api.middleware.audit.optic") as mock_optic:
+            mock_optic.bind.return_value = MagicMock()
+            await _call(app, "GET", "/api/v1/agent-shares/secret-share-token")
+            kwargs = mock_optic.bind.call_args[1]
+            assert kwargs["http_path"] == "/api/v1/agent-shares/{token}"
+            assert "secret-share-token" not in repr(mock_optic.bind.call_args)
+
+    @pytest.mark.asyncio
+    async def test_records_the_request_id_set_by_the_inner_request_id_middleware(self):
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        from api.middleware.audit import AuditMiddleware
+        from api.middleware.request_id import RequestIDMiddleware
+
+        app = Starlette(routes=[Route("/api/v1/agents", lambda request: PlainTextResponse("ok"))])
+        # Same order as configure_middleware: RequestID is added first, so Audit wraps it.
+        app.add_middleware(RequestIDMiddleware)
+        app.add_middleware(AuditMiddleware)
+
+        with patch("api.middleware.audit.optic") as mock_optic:
+            mock_optic.bind.return_value = MagicMock()
+            response = await _call(app, "GET", "/api/v1/agents")
+            kwargs = mock_optic.bind.call_args[1]
+        assert kwargs["request_id"]
+        assert kwargs["request_id"] == response.headers["x-request-id"]
 
 
 class TestCliAudit:

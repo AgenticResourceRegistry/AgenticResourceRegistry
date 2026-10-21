@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -96,6 +98,11 @@ STATS_SQL = (
     "sum(event_count) AS event_count   FROM session_stats_agg FINAL   WHERE session_id != ''   "
     "GROUP BY session_id )"
 )
+
+
+def _payload(response) -> dict:
+    assert response.media_type == "application/json"
+    return json.loads(response.body)
 
 
 def _user(
@@ -612,7 +619,7 @@ async def test_session_detail_empty_identity_preserves_identifier_and_user_isola
     query = AsyncMock(return_value=[])
     monkeypatch.setattr(sessions, "_ch_json", query)
 
-    result = await sessions.get_session(session_id, current_user=_user())
+    result = _payload(await sessions.get_session(session_id, current_user=_user()))
 
     assert result == {"session_id": session_id, "harness": "", "events": []}
     sql, params = query.await_args.args
@@ -626,7 +633,7 @@ async def test_admin_session_detail_uses_canonical_identity_for_both_event_queri
     query = AsyncMock(side_effect=[[identity], [], []])
     monkeypatch.setattr(sessions, "_ch_json", query)
 
-    result = await sessions.get_session("shared-id", after_offset=None, current_user=_user(UserRole.admin))
+    result = _payload(await sessions.get_session("shared-id", after_offset=None, current_user=_user(UserRole.admin)))
 
     params = {
         "param_sid": "shared-id",
@@ -648,7 +655,7 @@ async def test_incremental_session_detail_uses_offset_for_parent_and_subagents(m
     query = AsyncMock(side_effect=[[identity], [], []])
     monkeypatch.setattr(sessions, "_ch_json", query)
 
-    result = await sessions.get_session("session", after_offset=7, current_user=_user())
+    result = _payload(await sessions.get_session("session", after_offset=7, current_user=_user()))
 
     params = {
         "param_sid": "session",
@@ -706,7 +713,7 @@ async def test_session_detail_parses_events_subagents_and_agent_name(monkeypatch
     monkeypatch.setattr("services.session_parsers.parse_raw_events", parser)
     monkeypatch.setattr(sessions, "async_session", session_factory)
 
-    result = await sessions.get_session("session", after_offset=None, current_user=_user())
+    result = _payload(await sessions.get_session("session", after_offset=None, current_user=_user()))
 
     assert result == {
         "session_id": "session",
@@ -752,7 +759,7 @@ async def test_session_detail_without_agent_uses_default_harness_and_no_database
     monkeypatch.setattr("services.session_parsers.parse_raw_events", parser)
     monkeypatch.setattr(sessions, "async_session", session_factory)
 
-    result = await sessions.get_session("session", after_offset=None, current_user=_user())
+    result = _payload(await sessions.get_session("session", after_offset=None, current_user=_user()))
 
     assert result["service_name"] == "claude-code"
     assert result["agent_id"] is None
@@ -763,6 +770,22 @@ async def test_session_detail_without_agent_uses_default_harness_and_no_database
     assert result["max_offset"] == 0
     parser.assert_called_once_with(rows)
     session_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_session_detail_encodes_integers_beyond_64_bits_from_transcripts(monkeypatch):
+    identity = {"project_id": "project-a", "user_id": str(USER_ID), "harness": "claude-code"}
+    huge = 2**70
+    query = AsyncMock(side_effect=[[identity], [{"line_offset": 0, "raw_line": "event"}], []])
+    monkeypatch.setattr(sessions, "_ch_json", query)
+    monkeypatch.setattr(
+        "services.session_parsers.parse_raw_events",
+        MagicMock(return_value=[{"event_name": "attachment", "attributes": {"attachment_type": huge}}]),
+    )
+
+    result = _payload(await sessions.get_session("session", after_offset=None, current_user=_user()))
+
+    assert result["events"] == [{"event_name": "attachment", "attributes": {"attachment_type": huge}}]
 
 
 @pytest.mark.asyncio
@@ -780,7 +803,7 @@ async def test_session_detail_agent_resolution_failures_do_not_hide_events(monke
     monkeypatch.setattr("services.session_parsers.parse_raw_events", parser)
     monkeypatch.setattr(sessions, "async_session", _session_factory(agent_db))
 
-    result = await sessions.get_session("session", after_offset=None, current_user=_user())
+    result = _payload(await sessions.get_session("session", after_offset=None, current_user=_user()))
 
     assert result["agent_id"] == agent_id
     assert result["agent_name"] is None
@@ -1042,7 +1065,7 @@ async def test_session_detail_labels_a_deleted_agent(monkeypatch):
     monkeypatch.setattr("services.session_parsers.parse_raw_events", MagicMock(return_value=[]))
     monkeypatch.setattr(sessions, "async_session", _session_factory(_db(scalar)))
 
-    result = await sessions.get_session("session", after_offset=None, current_user=_user())
+    result = _payload(await sessions.get_session("session", after_offset=None, current_user=_user()))
 
     assert result["agent_id"] == str(AGENT_ID)
     assert result["agent_name"] == f"unknown agent ({str(AGENT_ID)[:8]})"

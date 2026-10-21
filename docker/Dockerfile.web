@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ── Build stage: install pnpm, deps, and build the Vite app ────────────────
@@ -39,7 +40,10 @@ RUN --mount=type=cache,target=/tmp/tsc-cache \
     pnpm exec tsc --noEmit --tsBuildInfoFile /tmp/tsc-cache/web.tsbuildinfo && touch /typecheck.ok
 
 FROM builder AS bundle
-RUN pnpm exec vite build
+# Precompress text assets so nginx serves them with gzip_static instead of compressing per request.
+RUN pnpm exec vite build && \
+    find dist -type f \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) \
+        -size +1k -exec gzip -9 -k {} +
 
 # ── Runtime stage: nginx serves the static SPA build ────────────────────────
 # nginx:alpine (multi-arch: linux/amd64, linux/arm64, others)

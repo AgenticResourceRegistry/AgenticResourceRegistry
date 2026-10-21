@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Dynamic settings service: DB-backed runtime configuration with Redis cache.
@@ -288,6 +289,9 @@ async def import_sso_env_once() -> int:
 # Redis key namespace for settings cache
 _CACHE_PREFIX = "settings:"
 _CACHE_TTL = 30  # seconds, short TTL for consistency, Redis is fast
+# Cached for keys with no DB row, so unset settings (most of them) skip Postgres.
+# Stored values can never contain NUL, so this cannot collide with a real value.
+_UNSET_MARKER = "\x00unset"
 
 # ─── Default values (hardcoded, no env fallback) ─────────────────────────────
 # These match the old env-var defaults from config.py. When a key is not in the
@@ -664,6 +668,8 @@ async def get(key: str, default: str | None = None) -> str:
 
         r = get_redis()
         cached = await r.get(f"{_CACHE_PREFIX}{key}")
+        if cached == _UNSET_MARKER:
+            return _default_for(key, default)
         if cached is not None:
             return cached
     except Exception:
@@ -671,20 +677,30 @@ async def get(key: str, default: str | None = None) -> str:
         pass
 
     # 2. Read from DB
-    value = await _read_from_db(key)
+    try:
+        value = await _read_from_db(key)
+    except Exception:
+        # A failed read proves nothing about the key, so it is never cached.
+        optic.warning("dynamic settings database read failed for key={}", key)
+        return _default_for(key, default)
+
+    # Cache the DB value, or the absence of a row
+    try:
+        from services.redis import get_redis
+
+        r = get_redis()
+        await r.set(f"{_CACHE_PREFIX}{key}", _UNSET_MARKER if value is None else value, ex=_CACHE_TTL)
+    except Exception:
+        pass
 
     if value is not None:
-        # Cache the DB value
-        try:
-            from services.redis import get_redis
-
-            r = get_redis()
-            await r.set(f"{_CACHE_PREFIX}{key}", value, ex=_CACHE_TTL)
-        except Exception:
-            pass
         return value
 
     # 3. Return hardcoded default
+    return _default_for(key, default)
+
+
+def _default_for(key: str, default: str | None) -> str:
     if default is not None:
         return default
     return DEFAULTS.get(key, "")
@@ -809,25 +825,25 @@ async def get_section(section_id: str) -> dict[str, str]:
 
 
 async def _read_from_db(key: str) -> str | None:
-    """Read a single setting from the database. Decrypts if sensitive."""
-    try:
-        from sqlalchemy import select
+    """Read a single setting from the database. Decrypts if sensitive.
 
-        from database import async_session
-        from models.enterprise_config import EnterpriseConfig
+    Returns None when the key has no row. Raises when the database cannot be read,
+    so callers can tell an unset key from an outage.
+    """
+    from sqlalchemy import select
 
-        async with async_session() as session:
-            result = await session.execute(select(EnterpriseConfig.value).where(EnterpriseConfig.key == key))
-            row = result.scalar_one_or_none()
-            if row is None:
-                return None
-            # Decrypt if it's an encrypted value
-            if row.startswith(_ENC_PREFIX):
-                return decrypt_value(row)
-            return row
-    except Exception:
-        optic.warning("dynamic settings database read failed for key={}", key)
-        return None
+    from database import async_session
+    from models.enterprise_config import EnterpriseConfig
+
+    async with async_session() as session:
+        result = await session.execute(select(EnterpriseConfig.value).where(EnterpriseConfig.key == key))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        # Decrypt if it's an encrypted value
+        if row.startswith(_ENC_PREFIX):
+            return decrypt_value(row)
+        return row
 
 
 async def _read_all_from_db() -> dict[str, str]:
