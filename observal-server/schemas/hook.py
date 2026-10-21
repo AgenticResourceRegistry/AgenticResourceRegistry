@@ -14,6 +14,9 @@ from schemas.constants import (
     VALID_HOOK_EXECUTION_MODES,
     VALID_HOOK_HANDLER_TYPES,
     VALID_HOOK_SCOPES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
     RecommendedFlag,
     Visibility,
     make_harness_list_validator,
@@ -23,11 +26,11 @@ from schemas.fork import ForkProvenance
 
 
 class HookSubmitRequest(BaseModel):
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
     message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     event: str
@@ -60,10 +63,10 @@ class HookSubmitRequest(BaseModel):
 
 
 class HookDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     event: str = "PreToolUse"
@@ -85,10 +88,10 @@ class HookDraftRequest(BaseModel):
 
 
 class HookUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     event: str | None = None

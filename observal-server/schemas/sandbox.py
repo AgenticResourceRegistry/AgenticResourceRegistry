@@ -12,6 +12,9 @@ from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_SANDBOX_NETWORK_POLICIES,
     VALID_SANDBOX_RUNTIME_TYPES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
     RecommendedFlag,
     Visibility,
     make_harness_list_validator,
@@ -40,11 +43,11 @@ def _validate_runtime_config(runtime_type: str | None, image: str | None, runtim
 
 
 class SandboxSubmitRequest(BaseModel):
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
     message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     runtime_type: str
@@ -74,10 +77,10 @@ class SandboxSubmitRequest(BaseModel):
 
 
 class SandboxDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     runtime_type: str = "docker"
@@ -101,10 +104,10 @@ class SandboxDraftRequest(BaseModel):
 
 
 class SandboxUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     runtime_type: str | None = None

@@ -10,6 +10,9 @@ from pydantic import BaseModel, field_validator
 from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_PROMPT_CATEGORIES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
     RecommendedFlag,
     Visibility,
     make_harness_list_validator,
@@ -19,11 +22,11 @@ from schemas.fork import ForkProvenance
 
 
 class PromptSubmitRequest(BaseModel):
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
     message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     category: str
@@ -38,10 +41,10 @@ class PromptSubmitRequest(BaseModel):
 
 
 class PromptDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     category: str = "general"
@@ -55,10 +58,10 @@ class PromptDraftRequest(BaseModel):
 
 
 class PromptUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     category: str | None = None

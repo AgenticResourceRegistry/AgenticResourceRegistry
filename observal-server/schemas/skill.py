@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serial
 from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_SKILL_TASK_TYPES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
     RecommendedFlag,
     Visibility,
     make_harness_list_validator,
@@ -25,11 +28,11 @@ from schemas.skill_resources import SkillFolderSnapshot, SkillInstallFolder, Ski
 
 class SkillSubmitRequest(BaseModel):
     extra_files: list[SkillResource] = []
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
     message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     skill_path: str = "/"
@@ -55,10 +58,10 @@ class SkillSubmitRequest(BaseModel):
 
 class SkillDraftRequest(BaseModel):
     extra_files: list[SkillResource] = []
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     skill_path: str = "/"
@@ -84,10 +87,10 @@ class SkillDraftRequest(BaseModel):
 class SkillUpdateRequest(BaseModel):
     observed_revision: SkillRevision | None = None
     extra_files: list[SkillResource] | None = None
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     skill_path: str | None = None
@@ -120,7 +123,7 @@ class SkillFolderDraftRequest(SkillFolderSnapshot):
     name: str = Field(min_length=1, max_length=255)
     version: str = Field(pattern=r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$", max_length=50)
     description: str = Field(min_length=1)
-    owner: str
+    owner: ListingOwner
     task_type: str = "general"
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"

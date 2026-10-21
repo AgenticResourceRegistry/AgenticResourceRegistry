@@ -11,14 +11,14 @@ from models.team import TeamRole
 
 
 class TeamCreateRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=255)
     handle: str | None = None
     description: str | None = None
     visibility: Literal["public", "private"] = "public"
 
 
 class TeamUpdateRequest(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=255)
     description: str | None = None
 
 
