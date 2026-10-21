@@ -681,6 +681,7 @@ def test_dashboard_route_role_contract_is_explicit():
     routes = {route.path: route for route in dashboard.router.routes if isinstance(route, APIRoute)}
     admin_paths = {
         "/api/v1/overview/trends",
+        "/api/v1/dashboard/tokens",
         "/api/v1/dashboard/harness-usage",
         "/api/v1/dashboard/sandbox-metrics",
         "/api/v1/dashboard/graphrag-metrics",
@@ -708,8 +709,6 @@ def test_dashboard_route_role_contract_is_explicit():
     for path in public_scoped_paths:
         dependencies = [item for item in routes[path].dependant.dependencies if item.name == "current_user"]
         assert [item.call for item in dependencies] == [get_registry_user], path
-
-    assert all(item.name != "current_user" for item in routes["/api/v1/dashboard/tokens"].dependant.dependencies)
 
 
 async def _dashboard_app(user=None):
@@ -739,6 +738,7 @@ async def _dashboard_app(user=None):
 async def test_admin_dashboard_routes_reject_missing_credentials_and_non_admins(monkeypatch):
     paths = [
         "/api/v1/overview/trends",
+        "/api/v1/dashboard/tokens",
         "/api/v1/dashboard/harness-usage",
         "/api/v1/dashboard/sandbox-metrics",
         "/api/v1/dashboard/graphrag-metrics",
@@ -766,13 +766,12 @@ async def test_admin_dashboard_routes_reject_missing_credentials_and_non_admins(
 
 
 @pytest.mark.asyncio
-async def test_public_token_route_and_dashboard_query_validation_do_not_touch_database():
+async def test_dashboard_query_validation_does_not_touch_database():
     app, db = await _dashboard_app()
     # Validate leaderboard query params with the Leaderboard enabled; while off the routes return 404.
     app.dependency_overrides[dashboard.require_leaderboard_enabled] = lambda: None
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        token_response = await client.get("/api/v1/dashboard/tokens", params={"range": "unexpected"})
         invalid = [
             await client.get("/api/v1/overview/top-agents", params={"limit": 51}),
             await client.get("/api/v1/overview/leaderboard", params={"window": "1d"}),
@@ -781,8 +780,6 @@ async def test_public_token_route_and_dashboard_query_validation_do_not_touch_da
             await client.get("/api/v1/overview/component-leaderboard", params={"limit": 51}),
         ]
 
-    assert token_response.status_code == 200
-    assert token_response.json()["total_tokens"] == 0
     assert [response.status_code for response in invalid] == [422, 422, 422, 422, 422]
     assert [response.json()["detail"][0]["loc"][-1] for response in invalid] == [
         "limit",
