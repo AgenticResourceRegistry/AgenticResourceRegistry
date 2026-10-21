@@ -453,7 +453,7 @@ def _check_codex(issues: list, warnings: list):
 
     if config_path.exists():
         try:
-            content = config_path.read_text()
+            content = config_path.read_text(encoding="utf-8")
         except OSError as error:
             issues.append(f"{config_path}: cannot read Codex configuration: {error}")
         else:
@@ -486,6 +486,13 @@ def _without_stale_codex_hooks_key(config_text: str) -> str:
 
     Codex never read it there: the flag only exists under ``[features]``.
     """
+    try:
+        has_key = "codex_hooks" in tomllib.loads(config_text)
+    except tomllib.TOMLDecodeError:
+        has_key = False
+    if not has_key:
+        # Nothing to drop; also never rewrite a file we cannot parse or text inside a multiline string.
+        return config_text
     first_table = re.search(r"^\s*\[", config_text, re.MULTILINE)
     head_end = first_table.start() if first_table else len(config_text)
     head = re.sub(r"^codex_hooks\s*=.*(?:\n|$)", "", config_text[:head_end], flags=re.MULTILINE)
@@ -1620,7 +1627,7 @@ def _patch_codex(dry_run: bool) -> bool:
             needs_update = True
             break
 
-    config_text = config_path.read_text() if config_path.exists() else ""
+    config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     cleaned_config = _without_stale_codex_hooks_key(config_text)
     if _codex_hooks_disabled(config_text):
         rprint(

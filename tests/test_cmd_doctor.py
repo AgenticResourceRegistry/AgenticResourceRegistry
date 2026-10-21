@@ -641,6 +641,16 @@ class TestPatchFunctions:
             for hook in group.get("hooks", [])
         )
 
+    def test_patch_codex_leaves_codex_hooks_text_inside_a_multiline_string(self, tmp_path: Path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        original = 'notes = """\ncodex_hooks = true\n"""\nmodel = "gpt-6"\n'
+        (codex_dir / "config.toml").write_text(original, encoding="utf-8")
+
+        _patch_codex(dry_run=False)
+
+        assert (codex_dir / "config.toml").read_text(encoding="utf-8") == original
+
     def test_patch_copilot_writes_project_hooks_and_wrapper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
