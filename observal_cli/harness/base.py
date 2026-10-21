@@ -360,7 +360,7 @@ class BaseAdapter:
     def allow_home_agent_profile(self, is_user_scope: bool) -> bool:
         return is_user_scope
 
-    def persist_active_agent(self, agent_id: str, name: str, version: str | None) -> None:
+    def persist_active_agent(self, agent_id: str, name: str, version: str | None, *, is_user_scope: bool) -> None:
         return None
 
     def extract_mcp_servers(self, config: dict) -> dict:

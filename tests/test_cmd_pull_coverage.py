@@ -1549,7 +1549,9 @@ def test_pull_full_project_flow_writes_every_shape_and_exact_side_effects(
         lock_status="locked",
     )
     boundaries.snapshot.assert_called_once_with(project_dir=str(target.resolve()))
-    boundaries.adapter.persist_active_agent.assert_called_once_with("agent-uuid", "reviewer", "1.4.0")
+    boundaries.adapter.persist_active_agent.assert_called_once_with(
+        "agent-uuid", "reviewer", "1.4.0", is_user_scope=False
+    )
     boundaries.emit.assert_called_once_with(
         "agent.pull",
         resource_type="agent",
@@ -2626,7 +2628,9 @@ def test_pull_json_reports_the_installed_version_and_lock(
     assert payload["lock"]["components"][0]["source"] == "fallback-latest"
     assert boundaries.upsert.call_args.kwargs["version"] == "1.0.0"
     assert boundaries.upsert.call_args.kwargs["lock_status"] == "partial"
-    boundaries.adapter.persist_active_agent.assert_called_once_with("agent-uuid", "reviewer", "1.0.0")
+    boundaries.adapter.persist_active_agent.assert_called_once_with(
+        "agent-uuid", "reviewer", "1.0.0", is_user_scope=False
+    )
 
 
 def test_component_conflicts_match_components_by_registry_id(monkeypatch: pytest.MonkeyPatch) -> None:

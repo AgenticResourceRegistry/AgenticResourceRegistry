@@ -342,9 +342,19 @@ class PiAdapter(BaseAdapter):
             )
         return skills
 
-    def persist_active_agent(self, agent_id: str, name: str, version: str | None) -> None:
+    def persist_active_agent(self, agent_id: str, name: str, version: str | None, *, is_user_scope: bool) -> None:
+        """Make the agent the machine-wide default only for a user-scope pull.
+
+        The Observal Pi extension tags every Pi session on the machine with
+        ``active_agent``, so a project-scope pull must not set it, even when the
+        same agent also has an older user-scope install. The extension reads
+        project installs from the lockfile and applies each only to sessions
+        inside its project.
+        """
         from observal_cli.config import load, save
 
+        if not is_user_scope:
+            return
         config = load()
         config["active_agent"] = {"id": agent_id, "name": name, "version": version}
         save(config)
