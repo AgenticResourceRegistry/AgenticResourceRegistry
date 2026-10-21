@@ -1321,7 +1321,7 @@ def _lookup_lockfile_agent_by_id(agent_id: str, harness: str | None = None) -> d
     return None
 
 
-def _lookup_lockfile_agent(cwd: str, agent_name: str | None = None) -> dict | None:
+def _lookup_lockfile_agent(cwd: str, agent_name: str | None = None, harness: str | None = None) -> dict | None:
     """Find the lockfile agent for a directory and optional agent name."""
     try:
         from observal_cli.lockfile import read_registry_lockfile
@@ -1329,8 +1329,8 @@ def _lookup_lockfile_agent(cwd: str, agent_name: str | None = None) -> dict | No
 
         _, data = read_registry_lockfile()
         name_matches: list[dict] = []
-        for harness in get_valid_harnesses():
-            for agent in data.get("harnesses", {}).get(harness, {}).get("agents", []):
+        for candidate_harness in (harness,) if harness else get_valid_harnesses():
+            for agent in data.get("harnesses", {}).get(candidate_harness, {}).get("agents", []):
                 same_dir = bool(cwd) and agent.get("directory") == cwd
                 same_agent = agent_name and (agent.get("name") == agent_name or agent.get("id") == agent_name)
                 if agent_name:
