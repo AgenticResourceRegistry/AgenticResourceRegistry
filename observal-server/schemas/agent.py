@@ -18,7 +18,15 @@ from pydantic import BaseModel, field_validator, model_serializer
 
 from models.agent import AgentStatus
 from observal_shared.agent_model import AUTO_MODEL, normalize_model_name
-from schemas.constants import AGENT_NAME_REGEX, RecommendedFlag, Visibility, make_name_validator
+from schemas.constants import (
+    AGENT_NAME_REGEX,
+    ListingOwner,
+    ListingVersion,
+    ModelName,
+    RecommendedFlag,
+    Visibility,
+    make_name_validator,
+)
 from schemas.fork import ForkProvenance
 from schemas.skill_resources import SkillInstallFolder
 from services.versioning import validate_semver
@@ -111,14 +119,14 @@ class ComponentRef(BaseModel):
 
 class AgentCreateRequest(BaseModel):
     name: str
-    version: str
+    version: ListingVersion
     description: str = ""
     category: str | None = None
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     prompt: str = ""
-    model_name: str = AUTO_MODEL
+    model_name: ModelName = AUTO_MODEL
     model_config_json: dict = {}
     models_by_harness: dict[str, str] = {}
     supported_harnesses: list[str] = []
@@ -158,15 +166,15 @@ class AgentCreateRequest(BaseModel):
 
 class AgentUpdateRequest(BaseModel):
     name: str | None = None
-    version: str | None = None
+    version: ListingVersion | None = None
     version_bump_type: Literal["patch", "minor", "major"] | None = None
     description: str | None = None
     category: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     prompt: str | None = None
-    model_name: str | None = None
+    model_name: ModelName | None = None
     model_config_json: dict | None = None
     models_by_harness: dict[str, str] | None = None
     supported_harnesses: list[str] | None = None
@@ -370,10 +378,10 @@ class AgentInstallResponse(BaseModel):
 
 class AgentVersionCreateRequest(BaseModel):
     message: str | None = None
-    version: str
+    version: ListingVersion
     description: str = ""
     prompt: str = ""
-    model_name: str = AUTO_MODEL
+    model_name: ModelName = AUTO_MODEL
     model_config_json: dict = {}
     models_by_harness: dict[str, str] = {}
     external_mcps: list[ExternalMcp] = []

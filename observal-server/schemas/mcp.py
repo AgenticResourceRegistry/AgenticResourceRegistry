@@ -12,6 +12,9 @@ from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_MCP_CATEGORIES,
     VALID_MCP_FRAMEWORKS,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
     RecommendedFlag,
     Visibility,
     make_harness_list_validator,
@@ -62,12 +65,12 @@ def _normalize_transport(v: str | None) -> str | None:
 
 class McpSubmitRequest(BaseModel):
     git_url: str | None = None
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
     message: str | None = None
     description: str = Field(min_length=1)
     category: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     framework: str | None = None
@@ -106,11 +109,11 @@ class McpSubmitRequest(BaseModel):
 
 
 class McpDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
     category: str = "other"
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     git_url: str | None = None
@@ -134,11 +137,11 @@ class McpDraftRequest(BaseModel):
 
 
 class McpUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
     category: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     git_url: str | None = None
