@@ -46,7 +46,7 @@ observal self downgrade --version 2.5.0 --force --output json
 observal self rollback --force --output json
 ```
 
-`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds them from `git+https://github.com/Observal/Observal@main`. The 426 error and `observal auth login` print the exact command. If it fails, as a last resort install from source: `uv tool install --force git+https://github.com/Observal/Observal@main` (dev) or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
+`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds them from `git+https://github.com/Observal/Observal@main`. Without `--version`, a CLI logged in to a server that runs a `-dev` build targets that build instead of the latest release, because no release would pass the version gate. If the server cannot be reached, upgrade falls back to GitHub releases and says so. The 426 error and `observal auth login` print the exact command. If it fails, as a last resort install from source: `uv tool install --force git+https://github.com/Observal/Observal@main` (dev) or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
 
 Standalone binary changes require a published checksum because JSON mode does not accept unsigned downloads interactively. Verify installed version after mutation.
 

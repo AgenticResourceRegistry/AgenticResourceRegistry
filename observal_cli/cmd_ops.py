@@ -1565,7 +1565,8 @@ self_app = typer.Typer(
         "  observal self upgrade\n"
         "  observal self rollback\n\n"
         "For agents: development builds (X.Y.Z-dev.N) are not on PyPI, so `upgrade --version` builds them "
-        "from `git+https://github.com/Observal/Observal@main`. If an upgrade still fails, install straight from "
+        "from `git+https://github.com/Observal/Observal@main`, and a plain `upgrade` against a dev server "
+        "targets that server's build. If an upgrade still fails, install straight from "
         "source: `uv tool install --force git+https://github.com/Observal/Observal@main` (dev) or "
         "`@v<version>` (release tag), then verify with `observal --version`."
     ),
@@ -1622,10 +1623,50 @@ def _managed_install(install, operation: str) -> None:
     )
 
 
+def _dev_server_target(output: OutputMode | str) -> str | None:
+    """Return the connected server's version when it is an unreleased development build.
+
+    No GitHub release matches a dev server, so resolving "latest" from releases
+    installs a CLI that the version gate still rejects. The server's own build
+    is the only target that works, and the executor builds it from source.
+    """
+    from packaging.version import Version
+
+    from observal_cli import version_check
+    from observal_cli.install_detector import install_spec
+
+    cfg = config.load()
+    server_url = cfg.get("server_url", "").rstrip("/")
+    token = cfg.get("access_token", "")
+    if not (server_url and token):
+        return None
+    with _command_progress(output, "Checking server version..."):
+        server = version_check._fetch_from_server(server_url, token)
+    if not server:
+        if output != "json":
+            rprint("[dim]Could not read the server version; resolving the target from GitHub releases.[/dim]")
+        return None
+    server_version = Version(server["server_version"])
+    if not server_version.is_devrelease:
+        return None
+    if output != "json":
+        rprint(
+            f"[yellow]The server runs unreleased v{esc(str(server_version))}, which no published release "
+            f"matches.[/yellow] Building it from source: [cyan]{esc(install_spec(str(server_version)))}[/cyan]"
+        )
+    return str(server_version)
+
+
 @self_app.command()
 def upgrade(
     version: str | None = typer.Option(
-        None, "--version", "-v", help="Target version to upgrade to. Defaults to the latest stable release."
+        None,
+        "--version",
+        "-v",
+        help=(
+            "Target version to upgrade to. Defaults to the latest stable release, or to the connected "
+            "server's build when that server runs an unreleased development version."
+        ),
     ),
     pre: bool = typer.Option(False, "--pre", help="Include prerelease versions when resolving latest"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip interactive confirmation prompt"),
@@ -1660,6 +1701,8 @@ def upgrade(
                 resource="target version",
                 remediation="Use a release version such as 2.5.0.",
             )
+    elif dev_target := _dev_server_target(output):
+        target = dev_target
     else:
         with _command_progress(output, "Checking for updates..."):
             release = version_check._fetch_from_github(include_pre=pre)
