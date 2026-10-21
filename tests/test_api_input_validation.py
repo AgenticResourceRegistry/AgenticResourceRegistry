@@ -179,3 +179,21 @@ def test_agent_component_refs_share_the_component_version_rule():
     ref = {"component_type": "mcp", "component_id": str(uuid.uuid4())}
     assert ComponentRef(**ref, version="1.2.0-rc.1").version == "1.2.0-rc.1"
     assert _field_errors(ComponentRef, **ref, version="v1").get("version") == "value_error"
+
+
+# ── OBS-1468: a non-string agent name is a type error, not a crash ───────────
+
+
+@pytest.mark.parametrize("field", ["name", "version"])
+@pytest.mark.parametrize("value", [123, 1.5, ["x"], {"a": 1}])
+def test_agent_update_rejects_non_string_name_and_version(field, value):
+    from schemas.agent import AgentUpdateRequest
+
+    assert _field_errors(AgentUpdateRequest, **{field: value}).get(field) == "string_type"
+
+
+@pytest.mark.parametrize("value", [123, ["x"]])
+def test_agent_restore_rejects_non_string_name(value):
+    from schemas.agent import AgentRestoreRequest
+
+    assert _field_errors(AgentRestoreRequest, name=value).get("name") == "string_type"
