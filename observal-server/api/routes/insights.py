@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from loguru import logger as optic
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import check_listing_visibility_async, get_db, get_effective_agent_permission, require_role
@@ -28,6 +28,7 @@ from schemas.insights import (
 )
 from services.insight_version_filters import agent_version_filter
 from services.insights import INSIGHTS_AVAILABLE, render_report_html
+from services.insights.batch import REPORT_TIMEOUT_MINUTES, insight_report_job_id
 from services.redis import _get_arq_pool
 
 router = APIRouter(prefix="/api/v1/insights", tags=["insights"])
@@ -135,6 +136,50 @@ async def _previous_approved_version(
         return None
     older.sort(key=lambda item: item[0], reverse=True)
     return older[0][1]
+
+
+async def _in_flight_report(
+    db: AsyncSession,
+    *,
+    agent: Agent,
+    agent_version: AgentVersion,
+    comparison_version: AgentVersion | None,
+    version_scope: str,
+    period_days: int,
+    now: datetime,
+) -> InsightReport | None:
+    """Return a pending or running report for the same inputs, if there is one.
+
+    Every report makes several model calls, so a repeated request joins the run
+    already in progress instead of paying for an identical one. The per-agent
+    advisory lock lasts until the caller's transaction ends, which covers the
+    insert that follows a miss, so two concurrent requests cannot both miss.
+    A report older than the reaper's timeout is dead, not in flight.
+    """
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"insights.generate:{agent.id}"},
+    )
+    stmt = (
+        select(InsightReport)
+        .where(
+            InsightReport.agent_id == agent.id,
+            InsightReport.agent_version_id == agent_version.id,
+            InsightReport.comparison_agent_version_id.is_not_distinct_from(
+                comparison_version.id if comparison_version else None
+            ),
+            InsightReport.version_scope == version_scope,
+            InsightReport.status.in_([InsightReportStatus.pending, InsightReportStatus.running]),
+            InsightReport.started_at >= now - timedelta(minutes=REPORT_TIMEOUT_MINUTES),
+        )
+        .order_by(InsightReport.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    period = timedelta(days=period_days)
+    for report in result.scalars().all():
+        if report.period_end - report.period_start == period:
+            return report
+    return None
 
 
 async def _count_insight_sessions(
@@ -310,6 +355,13 @@ async def generate_insight(
         if req and req.comparison_agent_version
         else await _previous_approved_version(agent, db, agent_version)
     )
+    # A version compared with itself has no prior cohort, so the report would
+    # store a baseline its own version_comparison section says does not exist.
+    if comparison_version and comparison_version.id == agent_version.id:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Comparison version must differ from the report version ({agent_version.version}).",
+        )
     now = datetime.now(UTC)
     period_start = now - timedelta(days=period_days)
 
@@ -326,6 +378,18 @@ async def generate_insight(
             status_code=422,
             detail=f"No sessions found for this agent version ({agent_version.version}) in the last {period_days} days. Cannot generate a report.",
         )
+
+    in_flight = await _in_flight_report(
+        db,
+        agent=agent,
+        agent_version=agent_version,
+        comparison_version=comparison_version,
+        version_scope=version_scope,
+        period_days=period_days,
+        now=now,
+    )
+    if in_flight:
+        return InsightReportListItem.model_validate(in_flight)
 
     # Find previous completed report for regression linking
     prev_stmt = (
@@ -363,7 +427,7 @@ async def generate_insight(
 
     # Enqueue background job
     pool = await _get_arq_pool()
-    await pool.enqueue_job("generate_insight_report", str(report.id))
+    await pool.enqueue_job("generate_insight_report", str(report.id), _job_id=insight_report_job_id(report.id))
     await db.commit()
 
     return InsightReportListItem.model_validate(report)
