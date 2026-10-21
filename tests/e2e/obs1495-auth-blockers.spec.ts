@@ -280,6 +280,108 @@ test("current-bearer GraphQL auth error still clears its owner", async ({ page }
   expect(await page.evaluate(() => localStorage.getItem("observal_logout_intent"))).not.toBeNull();
 });
 
+test("same-tab refresh replaces stale session and review sockets once without another refresh", async ({ page, context }) => {
+  const connections: { bearer: string; subscriptions: { id: string; query: string }[]; completes: string[];
+    fail: (id: string) => void; sendNext: (data: object) => void; closed: boolean }[] = [];
+  const refreshes: string[] = [];
+  await context.route("**/api/v1/auth/token/refresh", (route) => {
+    refreshes.push(route.request().postDataJSON().refresh_token);
+    return route.fulfill({ json: { access_token: "A-new", refresh_token: "A-new-refresh" } });
+  });
+  await page.routeWebSocket("**/api/v1/graphql", (ws) => {
+    const connection = { bearer: "", subscriptions: [] as { id: string; query: string }[], completes: [] as string[],
+      fail: (id: string) => ws.send(JSON.stringify({ type: "error", id, payload: [{ message: "invalid token" }] })),
+      sendNext: (data: object) => ws.send(JSON.stringify({ type: "next", id: connection.subscriptions[0].id, payload: { data } })),
+      closed: false };
+    connections.push(connection);
+    ws.onClose(() => { connection.closed = true; });
+    ws.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.type === "connection_init") {
+        connection.bearer = message.payload?.authorization ?? "";
+        ws.send(JSON.stringify({ type: "connection_ack" }));
+      }
+      if (message.type === "subscribe") connection.subscriptions.push({ id: message.id, query: message.payload.query });
+      if (message.type === "complete") connection.completes.push(message.id);
+    });
+  });
+  await page.goto("/__auth_test__");
+  await page.evaluate(async (user) => {
+    const auth = await import("/src/lib/api.ts");
+    await auth.commitLogin({ access_token: "A-old", refresh_token: "A-refresh", user }, auth.loginStart());
+    const ws = await import("/src/lib/graphql-ws.ts");
+    (window as unknown as { received: string[]; stopSubscriptions: (() => void)[] }).received = [];
+    const received = (window as unknown as { received: string[] }).received;
+    (window as unknown as { stopSubscriptions: (() => void)[] }).stopSubscriptions = [
+      ws.subscribeToSessionUpdates((id) => received.push(id)),
+      ws.subscribeToReviewId("review-1", (event) => received.push(event.action)),
+    ];
+  }, profile);
+  await expect.poll(() => connections.length).toBe(2);
+  await expect.poll(() => connections.every((c) => c.subscriptions.length === 1)).toBe(true);
+  expect(connections.map((c) => c.bearer)).toEqual(["Bearer A-old", "Bearer A-old"]);
+  expect(await page.evaluate(async () => (await import("/src/lib/api.ts")).refreshAccessToken())).toBe(true);
+  for (const connection of connections.slice(0, 2)) connection.fail(connection.subscriptions[0].id);
+  await expect.poll(() => connections.length).toBe(4);
+  await expect.poll(() => connections.slice(2).every((c) => c.subscriptions.length === 1)).toBe(true);
+  await expect.poll(() => connections.slice(0, 2).every((c) => c.closed)).toBe(true);
+  expect(connections.slice(2).map((c) => c.bearer)).toEqual(["Bearer A-new", "Bearer A-new"]);
+  expect(connections.slice(2).map((c) => c.subscriptions[0].query)).toEqual(
+    connections.slice(0, 2).map((c) => c.subscriptions[0].query));
+  for (const connection of connections.slice(2)) {
+    const review = connection.subscriptions[0].query.includes("ReviewUpdated");
+    connection.sendNext(review ? { reviewUpdated: { number: 1, state: "open", action: "updated" } }
+      : { sessionUpdated: { sessionId: "session-1", eventName: "updated" } });
+  }
+  await expect.poll(() => page.evaluate(() => (window as unknown as { received: string[] }).received.length)).toBe(2);
+  expect(await page.evaluate(() => (window as unknown as { received: string[] }).received.sort()))
+    .toEqual(["session-1", "updated"]);
+  expect(refreshes).toEqual(["A-refresh"]);
+  expect(await page.evaluate(() => ({ access: sessionStorage.getItem("observal_access_token"),
+    intent: localStorage.getItem("observal_logout_intent") }))).toEqual({ access: "A-new", intent: null });
+  await page.evaluate(() => (window as unknown as { stopSubscriptions: (() => void)[] }).stopSubscriptions.forEach((stop) => stop()));
+  await expect.poll(() => connections.slice(2).every((c) => c.closed)).toBe(true);
+  expect(connections).toHaveLength(4);
+});
+
+test("stale GraphQL error after B login cannot adopt B bearer", async ({ page }) => {
+  const connections: { bearer: string; subscribed: boolean; fail: () => void; closed: boolean }[] = [];
+  await page.routeWebSocket("**/api/v1/graphql", (ws) => {
+    const connection = { bearer: "", subscribed: false, closed: false, fail: () => {} };
+    connections.push(connection);
+    ws.onClose(() => { connection.closed = true; });
+    ws.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.type === "connection_init") {
+        connection.bearer = message.payload?.authorization ?? "";
+        ws.send(JSON.stringify({ type: "connection_ack" }));
+      }
+      if (message.type === "subscribe") {
+        connection.subscribed = true;
+        connection.fail = () => ws.send(JSON.stringify({ type: "error", id: message.id, payload: [{ message: "invalid token" }] }));
+      }
+    });
+  });
+  await page.goto("/__auth_test__");
+  await page.evaluate(async (user) => {
+    const auth = await import("/src/lib/api.ts");
+    await auth.commitLogin({ access_token: "A-old", refresh_token: "A-refresh", user }, auth.loginStart());
+    (await import("/src/lib/graphql-ws.ts")).subscribeToReviewUpdates(() => {});
+  }, profile);
+  await expect.poll(() => connections[0]?.subscribed).toBe(true);
+  await page.evaluate(async () => {
+    const auth = await import("/src/lib/api.ts");
+    await auth.commitLogin({ access_token: "B-access", refresh_token: "B-refresh",
+      user: { role: "user", name: "B", email: "b@example.test" } }, auth.loginStart());
+  });
+  await expect.poll(() => connections[0].closed).toBe(true);
+  try { connections[0].fail(); } catch { /* Closed test socket cannot deliver the stale frame. */ }
+  expect(connections).toHaveLength(1);
+  expect(await page.evaluate(() => ({ access: sessionStorage.getItem("observal_access_token"),
+    refresh: localStorage.getItem("observal_refresh_token"), intent: localStorage.getItem("observal_logout_intent") })))
+    .toEqual({ access: "B-access", refresh: "B-refresh", intent: null });
+});
+
 test("old-bearer GraphQL error recovers subscription after another tab rotates", async ({ page, context }) => {
   let sendError!: () => void;
   let subscribed!: () => void;

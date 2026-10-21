@@ -52,39 +52,59 @@ function subscribe(
   onNext: (value: Parameters<Parameters<Client["subscribe"]>[1]["next"]>[0]) => void,
 ): () => void {
   const epoch = authEpoch();
-  let token: string | null;
-  let refresh: string | null;
   let stopped = false;
+  let generation = 0;
   let unsubscribe: (() => void) | undefined;
   let socket = getClient();
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    generation++;
+    unsubscribe?.();
+    dropClient(socket);
+    window.removeEventListener("observal:session-cleared", stop);
+    window.removeEventListener("storage", checkEpoch);
+  };
+  const checkEpoch = () => { if (epoch !== authEpoch()) stop(); };
+  const replace = () => {
+    // Retire the old sink before disposing it: late frames must not start a
+    // second recovery or publish events from an obsolete subscription.
+    generation++;
+    unsubscribe?.();
+    dropClient(socket);
+    socket = getClient();
+    start();
+  };
   const start = () => {
-    token = getAccessToken();
-    refresh = localStorage.getItem("observal_refresh_token");
+    const current = ++generation;
+    const token = getAccessToken();
+    const refresh = localStorage.getItem("observal_refresh_token");
     unsubscribe = socket.subscribe(payload, {
-      next: (value) => { if (!stopped && epoch === authEpoch()) onNext(value); },
+      next: (value) => { if (!stopped && current === generation && epoch === authEpoch()) onNext(value); },
       complete: () => {},
-      error: (err) => { void handleError(err); },
+      error: (err) => { void handleError(err, current, token, refresh); },
     });
   };
-  const handleError = async (err: unknown) => {
-    if (stopped || !epoch || epoch !== authEpoch() || !token || getAccessToken() !== token) return;
+  const handleError = async (err: unknown, current: number, token: string | null, refresh: string | null) => {
+    if (stopped || current !== generation) return;
+    if (!epoch || epoch !== authEpoch()) { stop(); return; }
+    if (!token) return;
     if (!isAuthError(err)) { console.error("GraphQL subscription failed", err); return; }
+    const latest = getAccessToken();
+    if (latest && latest !== token) { replace(); return; }
     if (localStorage.getItem("observal_refresh_token") !== refresh) {
       try {
         const result = await refreshAccessTokenWithReason();
-        if (stopped || epoch !== authEpoch()) return;
-        if (result === "ok") {
-          dropClient(socket);
-          socket = getClient();
-          start();
-          return;
-        }
+        if (stopped || current !== generation) return;
+        if (epoch !== authEpoch()) { stop(); return; }
+        if (result === "ok" && getAccessToken()) { replace(); return; }
         // A failed recovery cannot attribute the old socket's auth error to
         // the rotated session; report the closed subscription instead.
         console.error("GraphQL subscription recovery failed", err);
         return;
       } catch {
-        if (stopped || epoch !== authEpoch()) return;
+        if (stopped || current !== generation) return;
+        if (epoch !== authEpoch()) { stop(); return; }
         console.error("GraphQL subscription recovery failed", err);
         return;
       }
@@ -94,8 +114,10 @@ function subscribe(
     clearSession();
     window.location.href = sessionExpiredLoginUrl();
   };
+  window.addEventListener("observal:session-cleared", stop);
+  window.addEventListener("storage", checkEpoch);
   start();
-  return () => { stopped = true; unsubscribe?.(); dropClient(socket); };
+  return stop;
 }
 
 export function subscribeToSessionUpdates(
