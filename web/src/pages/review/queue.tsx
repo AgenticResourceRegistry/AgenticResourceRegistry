@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Check, MessageSquare, Search } from "lucide-react";
@@ -34,12 +34,12 @@ function checkStatusLabel(checks: ReviewSummary["checks"]): string {
   return checks.pass > 0 ? "Checks passed" : "No checks recorded";
 }
 
-function ReviewRow({ item, nested = false }: { item: ReviewSummary; nested?: boolean }) {
+function ReviewRow({ item, nested = false, selected = false }: { item: ReviewSummary; nested?: boolean; selected?: boolean }) {
   const approvals = item.gate.approvals;
   const required = item.gate.required;
   const { experimentalReviewChecks } = useDeploymentConfig();
   const checksLabel = experimentalReviewChecks ? checkStatusLabel(item.checks) : null;
-  return <Link to="/review/$number" params={{ number: String(item.number) }}
+  return <Link to="/review/$number" params={{ number: String(item.number) }} aria-current={selected ? "true" : undefined}
     className={`group grid grid-cols-[28px_minmax(0,1fr)] items-start gap-3 border-b border-border px-4 py-3.5 transition-colors last:border-0 hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring sm:grid-cols-[28px_minmax(0,1fr)_auto] ${nested ? "sm:pl-12" : ""}`}>
     <ReviewTypeGlyph type={item.subject_type} />
     <div className="min-w-0 space-y-1">
@@ -79,6 +79,9 @@ export default function ReviewQueue() {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState(0);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // Only j/k should scroll; clicks, filter changes and refetches leave the viewport alone.
+  const keyboardMove = useRef(false);
   useEffect(() => { if (tabFromUrl) setTab(tabFromUrl === "teamspaces" && !canReviewTeamspaces ? "agents" : tabFromUrl); }, [tabFromUrl, canReviewTeamspaces]);
   useEffect(() => { const timer = window.setTimeout(() => setQuery(search.trim()), 250); return () => window.clearTimeout(timer); }, [search]);
   const { data: me } = useQuery({ queryKey: ["auth", "whoami"], queryFn: auth.whoami });
@@ -111,13 +114,22 @@ export default function ReviewQueue() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.altKey || event.metaKey || event.ctrlKey) return;
-      if (event.key === "j" || event.key === "k") { event.preventDefault(); setSelection(index => Math.max(0, Math.min(ordered.length - 1, index + (event.key === "j" ? 1 : -1)))); }
+      if (event.key === "j" || event.key === "k") {
+        event.preventDefault();
+        const next = Math.max(0, Math.min(ordered.length - 1, selection + (event.key === "j" ? 1 : -1)));
+        if (next !== selection) { keyboardMove.current = true; setSelection(next); }
+      }
       if (event.key === "Enter" && ordered[selection]) window.location.assign(`/review/${ordered[selection].number}`);
       if (event.key === "o" && ordered[selection]) window.open(`/review/${ordered[selection].number}`, "_blank", "noopener");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [ordered, selection]);
+  useEffect(() => {
+    if (!keyboardMove.current) return;
+    keyboardMove.current = false;
+    rowRefs.current[selection]?.scrollIntoView({ block: "nearest" });
+  }, [selection]);
   const tabs = canReviewTeamspaces ? ["agents", "components", "teamspaces"] as const : ["agents", "components"] as const;
   return <div className="w-full space-y-5 px-4 py-6 sm:px-6">
     <h1 className="sr-only">Review</h1>
@@ -135,7 +147,7 @@ export default function ReviewQueue() {
       {tab === "teamspaces" ? teamPending ? <div className="space-y-2 p-4"><Skeleton className="h-16" /><Skeleton className="h-16" /></div> : teamError ? <div className="p-8 text-sm text-destructive">Could not load requests.</div> : requests?.length ? requests.map(team => <Link key={team.team_id} to="/review/teamspace/$teamId" params={{ teamId: team.team_id }} className="flex items-start gap-3 border-b border-border px-4 py-4 text-sm last:border-0 hover:bg-muted/40"><span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-xs font-semibold">T</span><span className="min-w-0 flex-1"><span className="font-semibold">{team.name}</span><span className="ml-2 inline-flex rounded-full bg-info/10 px-2 py-0.5 text-xs text-info">Requests public visibility</span><span className="mt-1 block text-xs text-muted-foreground">A teamspace visibility decision; individual items still require review.</span></span><ArrowUpRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" /></Link>) : <p className="p-10 text-center text-sm text-muted-foreground">No teamspace requests need a decision.</p>
       : isPending ? <div className="space-y-2 p-4"><Skeleton className="h-16" /><Skeleton className="h-16" /><Skeleton className="h-16" /></div>
       : isError ? <div className="p-8 text-center text-sm">Could not load reviews. <button className="underline underline-offset-4" type="button" onClick={() => refetch()}>Try again</button></div>
-      : ordered.length ? ordered.map((item, index) => <div key={item.id} className={index === selection ? "bg-muted/20" : ""}><ReviewRow item={item} nested={children.has(item.number) && item.subject_type !== "agent"} /></div>)
+      : ordered.length ? ordered.map((item, index) => <div key={item.id} ref={element => { rowRefs.current[index] = element; }} className={index === selection ? "bg-primary/10 shadow-[inset_3px_0_0_var(--color-primary)]" : ""}><ReviewRow item={item} selected={index === selection} nested={children.has(item.number) && item.subject_type !== "agent"} /></div>)
       : <div className="p-12 text-center"><Check className="mx-auto size-6 text-muted-foreground" aria-hidden="true" /><p className="mt-3 text-sm font-semibold">{hasNextPage ? "No matches on this page" : "Nothing to review here"}</p><p className="mt-1 text-xs text-muted-foreground">{hasNextPage ? "Load more reviews to keep searching." : "Try another filter or come back after the next submission."}</p></div>}
     </div>
     {tab !== "teamspaces" && <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground"><p>{ordered.length} reviews · j/k to select · Enter to open · o for new tab{me && getUserRole() === "super_admin" ? " · Policy in Settings" : ""}</p>{hasNextPage && <button type="button" onClick={() => fetchNextPage()} disabled={isFetchingNextPage} className="rounded-[var(--radius-control-compact)] border border-border bg-card px-3 py-2 font-medium text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">{isFetchingNextPage ? "Loading reviews…" : "Load more reviews"}</button>}</div>}

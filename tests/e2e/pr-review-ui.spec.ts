@@ -65,6 +65,28 @@ test("review queue shows pinned dependencies in the Observal shell", async ({ pa
   await expect.poll(() => queueRequests.some(url => url.includes("q=verify+source"))).toBe(true);
 });
 
+test("review queue marks the j/k selection and keeps it on screen", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 600 });
+  await page.addInitScript(() => {
+    sessionStorage.setItem("observal_access_token", "review-ui-test");
+    localStorage.setItem("observal_user_role", "reviewer");
+  });
+  await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0, by_kind: {}, by_subject_type: {} } }));
+  await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id, username: "reviewer", name: "Review Tester", role: "reviewer" } }));
+  const items = Array.from({ length: 12 }, (_, index) => summary(100 + index, `Agent: queue row ${index}`, "agent"));
+  await page.route("**/api/v1/reviews?*", route => route.fulfill({ json: { items, total: items.length, limit: 100, offset: 0 } }));
+  await page.goto("/review");
+  const selected = page.getByTestId("review-list").locator("a[aria-current='true']");
+  await expect(selected).toHaveCount(1);
+  await expect(selected).toContainText("Agent: queue row 0");
+  for (let step = 0; step < items.length - 1; step += 1) await page.keyboard.press("j");
+  await expect(selected).toHaveCount(1);
+  await expect(selected).toContainText(`Agent: queue row ${items.length - 1}`);
+  await expect(selected).toBeInViewport();
+  await page.keyboard.press("k");
+  await expect(selected).toContainText(`Agent: queue row ${items.length - 2}`);
+});
+
 for (const checksEnabled of [true, false]) test(`review queue ${checksEnabled ? "distinguishes failures, warnings, skipped, and absent checks" : "hides checks while the experiment is off"}`, async ({ page }) => {
   const cases = [
     { title: "Failed checks", checks: { pass: 2, fail: 1, warn: 1, skipped: 0 }, label: "Checks failing" },
