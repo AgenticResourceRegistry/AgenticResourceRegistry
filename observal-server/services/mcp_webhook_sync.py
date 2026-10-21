@@ -499,7 +499,7 @@ async def _sync_listing(db: AsyncSession, sync: McpWebhookSync, request: SyncReq
     git_url = listing.git_url
     if not git_url:
         raise SyncError("The listing has no git repository URL")
-    url_err = _validate_git_url(git_url)
+    url_err = await asyncio.to_thread(_validate_git_url, git_url)
     if url_err:
         raise SyncError(url_err)
 
