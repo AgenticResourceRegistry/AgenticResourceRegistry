@@ -456,7 +456,11 @@ def test_headless_not_ready_asks_the_harness_its_own_login_command(monkeypatch):
     assert kiro.headless_not_ready() is None and claude.headless_not_ready() is None
     assert calls == [["/bin/kiro-cli", "whoami"], ["/bin/claude", "auth", "status"]]
     monkeypatch.setenv("RC", "1")
-    assert kiro.headless_not_ready() == "Kiro is not logged in. Run `kiro-cli login`, then delegate again."
+    assert "kiro-cli login" in kiro.headless_not_ready()
+    calls.clear()
+    monkeypatch.setenv("KIRO_API_KEY", "k")  # headless API-key auth needs no login, so the check is not asked
+    assert kiro.headless_not_ready() is None and calls == []
+    monkeypatch.delenv("KIRO_API_KEY")
     assert "claude auth login" in claude.headless_not_ready()
     # A check that does not answer never blocks; a harness with no reliable check is never asked.
     monkeypatch.setenv("TIMEOUT", "1")
@@ -466,6 +470,7 @@ def test_headless_not_ready_asks_the_harness_its_own_login_command(monkeypatch):
 
 
 def test_start_refuses_a_harness_that_is_not_logged_in(tmp_path, monkeypatch):
+    ensure_loaded()
     monkeypatch.setattr(service, "check_ready", REAL_CHECK_READY)
     monkeypatch.setattr(service.client, "get", lambda *_a, **_k: _agent_entry())
     monkeypatch.setattr(service, "headless_harnesses", lambda: ["kiro"])
