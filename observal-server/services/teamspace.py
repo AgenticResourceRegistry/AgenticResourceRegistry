@@ -183,13 +183,24 @@ async def resolve_publish_target(
     target_visibility = (visibility or "public").strip().lower()
     if target_visibility not in {"public", "team"}:
         raise HTTPException(status_code=422, detail="visibility must be 'public' or 'team'")
+    # Slugs are ASCII, so a name with no ASCII letter or digit ("中文", "!!!", "")
+    # has none, and some names map to reserved slugs. Both are bad input, the
+    # same 422 that bulk publishing returns through registry_identity.
+    try:
+        slug = slugify(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if team_id is None:
         if target_visibility == "team":
             raise HTTPException(status_code=422, detail="Team visibility requires a teamspace")
+        try:
+            namespace = namespace_for_user(user)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return PublishTarget(
-            namespace=namespace_for_user(user),
-            slug=slugify(name),
+            namespace=namespace,
+            slug=slug,
             team_id=None,
             visibility="public",
             owner=user.username or user.email,
@@ -221,7 +232,7 @@ async def resolve_publish_target(
     # recorded reviewed_by decision instead of a silent skip.
     return PublishTarget(
         namespace=team.handle,
-        slug=slugify(name),
+        slug=slug,
         team_id=team.id,
         visibility=target_visibility,
         owner=team.handle,

@@ -197,3 +197,70 @@ def test_agent_restore_rejects_non_string_name(value):
     from schemas.agent import AgentRestoreRequest
 
     assert _field_errors(AgentRestoreRequest, name=value).get("name") == "string_type"
+
+
+# ── OBS-1469: a name that cannot become a slug is a 422 ──────────────────────
+
+
+def _publisher():
+    import uuid
+    from types import SimpleNamespace
+
+    from models.user import UserRole
+
+    return SimpleNamespace(id=uuid.uuid4(), role=UserRole.user, username="alice", email="a@example.com")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["中文", "🚀", "ééé", "!!!", "___", "...", "", "   ", "draft"])
+@pytest.mark.parametrize("in_team", [False, True])
+async def test_publish_target_rejects_names_without_a_slug(name, in_team):
+    import uuid
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from services.teamspace import resolve_publish_target
+
+    db = MagicMock()
+    db.get = AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4(), handle="tools", is_private=False))
+    db.execute = AsyncMock()
+    with pytest.raises(HTTPException) as exc:
+        await resolve_publish_target(db, _publisher(), name, team_id=uuid.uuid4() if in_team else None)
+    assert exc.value.status_code == 422
+    # Rejected before any team lookup, so the error is about the name and nothing else.
+    db.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_publish_target_still_slugs_ordinary_names():
+    from unittest.mock import MagicMock
+
+    from services.teamspace import resolve_publish_target
+
+    target = await resolve_publish_target(MagicMock(), _publisher(), "My Tool")
+    assert (target.namespace, target.slug) == ("alice", "my-tool")
+
+
+@pytest.mark.asyncio
+async def test_publish_target_reports_unusable_username_as_422():
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from services.teamspace import resolve_publish_target
+
+    user = _publisher()
+    user.username = None
+    with pytest.raises(HTTPException) as exc:
+        await resolve_publish_target(MagicMock(), user, "My Tool")
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_team_requests_reject_blank_names(name):
+    from schemas.team import TeamCreateRequest, TeamUpdateRequest
+
+    assert _field_errors(TeamCreateRequest, name=name).get("name") == "string_too_short"
+    assert _field_errors(TeamUpdateRequest, name=name).get("name") == "string_too_short"

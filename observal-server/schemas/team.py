@@ -3,22 +3,26 @@
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from models.team import TeamRole
 
+# A blank name created a nameless teamspace whose handle fell back to "team".
+# The length bound is the VARCHAR(255) column.
+TeamName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+
 
 class TeamCreateRequest(BaseModel):
-    name: str = Field(max_length=255)
+    name: TeamName
     handle: str | None = None
     description: str | None = None
     visibility: Literal["public", "private"] = "public"
 
 
 class TeamUpdateRequest(BaseModel):
-    name: str | None = Field(default=None, max_length=255)
+    name: TeamName | None = None
     description: str | None = None
 
 
