@@ -106,7 +106,7 @@ For CI/CD pipelines and scripts where no browser is available, use the
 
 ```bash
 export OBSERVAL_TOKEN="your-api-token-here"
-observal agents list
+observal agent list
 ```
 
 The CLI checks `OBSERVAL_TOKEN` before reading `~/.observal/config.json`.

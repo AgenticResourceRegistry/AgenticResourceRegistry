@@ -208,8 +208,8 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 
 ### Via CLI
 - [ ] Log in as User A via CLI (`observal auth login`)
-- [ ] Run `observal component version list <component-slug>` → verify current versions shown
-- [ ] Run `observal component version publish <component-slug>` → follow interactive prompts
+- [ ] Run `observal registry version list <component-type> <listing>` → verify current versions shown
+- [ ] Run `observal registry version publish <component-type> <listing>` → follow interactive prompts
 - [ ] Verify CLI confirms version submitted for review
 
 ---
@@ -313,7 +313,7 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 
 ### Edit pending items via CLI
 - [ ] Log in as User A via CLI
-- [ ] Run edit command for a pending component (e.g. `observal skill edit <slug>`)
+- [ ] Run edit command for a pending component (e.g. `observal registry skill edit <skill-id>`)
 - [ ] Verify start-edit lock is acquired (check review queue from another session)
 - [ ] Complete the edit → verify cancel-edit releases the lock
 

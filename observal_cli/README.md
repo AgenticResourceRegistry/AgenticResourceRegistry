@@ -38,7 +38,6 @@ observal doctor                      # check harness compatibility
 
 ```
 observal auth login       # connect to server (initializes admin on first run)
-observal auth register    # create a new account
 observal auth logout      # clear saved credentials
 observal auth whoami      # show current user
 observal auth status      # check connectivity and buffer status
@@ -97,7 +96,6 @@ observal scan [--harness <harness>]                          # discover what's i
 observal reconcile --dry-run --output json                    # preview recoverable sessions
 observal doctor patch --all-harnesses --output json         # install hooks for every harness
 observal doctor patch --harness <harness> --output json      # install hooks for a specific harness
-observal use <profile>                               # swap harness config from a profile
 observal doctor --output json                        # diagnose harness/Observal issues
 observal doctor support bundle --output json         # create a redacted support archive
 observal config show                                 # show current config

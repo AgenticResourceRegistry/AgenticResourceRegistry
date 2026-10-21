@@ -53,7 +53,7 @@ See [docs/adding-a-harness.md, File Checklist](https://github.com/Observal/Obser
 
 ## Acceptance criteria
 
-- [ ] `observal pull <agent> --harness <name>` writes correct config and the agent is usable in the harness.
+- [ ] `observal agent pull <agent> --harness <name>` writes correct config and the agent is usable in the harness.
 - [ ] `observal scan --harness <name>` discovers installed components.
 - [ ] MCP servers are installable and functional within the harness.
 - [ ] Skills are installable and functional within the harness.

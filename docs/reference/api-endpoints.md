@@ -23,8 +23,6 @@ Base path: `/api/v1`.
 | `POST` | `/auth/token` | Exchange credentials for JWT access + refresh tokens |
 | `POST` | `/auth/token/refresh` | Rotate refresh token for new access token |
 | `POST` | `/auth/token/revoke` | Revoke a refresh token |
-| `POST` | `/auth/request-reset` | Request password reset (code logged to server console) |
-| `POST` | `/auth/reset-password` | Reset password with code + new password |
 | `GET` | `/auth/oauth/login` | Initiate OAuth SSO flow |
 | `GET` | `/auth/oauth/callback` | OAuth callback handler |
 
