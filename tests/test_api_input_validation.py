@@ -400,3 +400,58 @@ def test_cache_key_treats_lowercase_bearer_as_an_identity():
     assert _request_key_builder(lambda: None, request=request("bearer a")) != _request_key_builder(
         lambda: None, request=request("bearer b")
     )
+
+
+# ── OBS-1463 item 6: agent harnesses are checked against the registry ────────
+
+
+def test_agent_requests_validate_supported_harnesses():
+    import uuid
+
+    from schemas.agent import AgentCreateRequest, AgentUpdateRequest, AgentVersionCreateRequest
+
+    prompt_ref = [{"component_type": "prompt", "component_id": str(uuid.uuid4())}]
+    create = {"name": "agt", "version": "1.0.0", "owner": "o", "components": prompt_ref}
+    for model, base in (
+        (AgentCreateRequest, create),
+        (AgentUpdateRequest, {}),
+        (AgentVersionCreateRequest, {"version": "1.0.0"}),
+    ):
+        assert _field_errors(model, **base, supported_harnesses=["nope"]).get("supported_harnesses") == "value_error"
+        assert model(**base, supported_harnesses=["claude_code"]).supported_harnesses == ["claude-code"]
+    # Omitting the field on a partial update keeps the stored list.
+    assert AgentUpdateRequest().supported_harnesses is None
+
+
+@pytest.mark.asyncio
+async def test_bulk_agents_report_bad_versions_and_harnesses_per_item():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from api.routes.bulk import bulk_create_agents
+    from schemas.bulk import BulkAgentRequest
+
+    request = BulkAgentRequest(
+        dry_run=True,
+        agents=[
+            {"name": "bad-version", "version": "1.0\n"},
+            {"name": "bad-harness", "supported_harnesses": ["claude_code", "vscode"]},
+        ],
+    )
+    result = await bulk_create_agents(request, db=AsyncMock(), current_user=MagicMock())
+
+    assert [(item.name, item.status) for item in result.results] == [
+        ("bad-version", "error"),
+        ("bad-harness", "error"),
+    ]
+    assert "version" in result.results[0].error.lower()
+    assert "vscode" in result.results[1].error
+    assert "claude" not in result.results[1].error
+
+
+def test_bulk_agent_harnesses_are_normalized_like_agent_create():
+    from api.routes.bulk import _definition_problem
+    from schemas.bulk import BulkAgentItem
+
+    item = BulkAgentItem(name="agt", supported_harnesses=["claude_code", "pi"])
+    assert _definition_problem(item) is None
+    assert item.supported_harnesses == ["claude-code", "pi"]
