@@ -1198,6 +1198,32 @@ def test_registry_reference_preserves_bare_and_uuid_aliases(monkeypatch, resolve
     get.assert_not_called()
 
 
+@pytest.mark.parametrize("reference", ["", "   "])
+def test_registry_reference_rejects_blank_input_as_usage_error(monkeypatch, reference):
+    get = MagicMock()
+    monkeypatch.setattr(client, "get", get)
+
+    with pytest.raises(CliError) as error:
+        client.resolve_registry_reference("agents", reference)
+
+    assert error.value.category == ErrorCategory.USAGE
+    assert error.value.contract_exit_code == ExitCode.USAGE
+    assert error.value.message == "The agent reference is empty."
+    get.assert_not_called()
+
+
+def test_agent_show_with_blank_id_exits_with_usage_error(monkeypatch):
+    get = MagicMock()
+    monkeypatch.setattr(client, "get", get)
+
+    result = CliRunner().invoke(app, ["agent", "show", ""])
+
+    assert result.exit_code == ExitCode.USAGE
+    assert "reference is empty" in result.output
+    assert "307" not in result.output
+    get.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("item", "expected"),
     [
