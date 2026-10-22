@@ -71,3 +71,16 @@ async def test_facet_model_is_omitted_when_no_facets_were_extracted(monkeypatch)
     report = await _run(monkeypatch, settings, transcript="")
 
     assert report["models_used"] == ["bedrock/opus"]
+
+
+def test_joined_model_ids_are_not_bounded_by_the_column():
+    """Three Bedrock inference-profile ARNs join to more than 255 characters,
+    and a bounded column fails the commit of an otherwise finished report."""
+    from models.insight_report import InsightReport
+
+    arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/" + "x" * 16
+    joined = ", ".join([arn + "a", arn + "b", arn + "c"])
+
+    column_length = InsightReport.__table__.c.llm_model_used.type.length
+    assert len(joined) > 255
+    assert column_length is None

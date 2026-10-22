@@ -58,7 +58,7 @@ class InsightReport(Base):
     narrative: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     sessions_analyzed: Mapped[int] = mapped_column(Integer, default=0)
-    llm_model_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    llm_model_used: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
