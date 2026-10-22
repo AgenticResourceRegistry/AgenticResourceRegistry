@@ -29,11 +29,12 @@ Visibility = Literal["public", "team"]
 
 # Exact semver with an optional prerelease tag. Release ordering and the
 # suggested next versions (1.0.1, 1.1.0, 2.0.0) both parse versions this way.
-COMPONENT_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$")
+# Callers use fullmatch, because a trailing "$" also matches before a final "\n".
+COMPONENT_VERSION_RE = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?")
 
 
 def _check_component_version(v: str) -> str:
-    if not COMPONENT_VERSION_RE.match(v):
+    if not COMPONENT_VERSION_RE.fullmatch(v):
         raise ValueError(f"Invalid version '{v}'. Use semver such as 1.2.0 or 1.2.0-beta.1")
     return v
 
