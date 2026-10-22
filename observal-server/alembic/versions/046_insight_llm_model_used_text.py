@@ -28,10 +28,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "insight_reports",
-        "llm_model_used",
-        type_=sa.String(255),
-        existing_type=sa.Text(),
-        postgresql_using="left(llm_model_used, 255)",
-    )
+    # Narrowing would cut the stored ids, and upgrading again cannot restore
+    # them, so refuse while any report holds a value that does not fit.
+    too_long = op.get_bind().scalar(sa.text("SELECT count(*) FROM insight_reports WHERE length(llm_model_used) > 255"))
+    if too_long:
+        raise RuntimeError(
+            f"{too_long} insight report(s) have llm_model_used longer than 255 characters, "
+            "which VARCHAR(255) cannot hold. Shorten or clear those values before downgrading."
+        )
+    op.alter_column("insight_reports", "llm_model_used", type_=sa.String(255), existing_type=sa.Text())
