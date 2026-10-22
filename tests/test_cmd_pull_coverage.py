@@ -3620,6 +3620,15 @@ def test_pull_json_redacts_reflected_server_fields_and_keeps_report_shape(pull_a
     assert data["files"][0]["status"]
 
 
+def test_pull_json_masks_numeric_credential_before_serialization(capsys):
+    token = cmd_pull._pull_secrets.set({"424242"})
+    try:
+        cmd_pull.output_json({"number": 424242, "ordinary": 7})
+        assert json.loads(capsys.readouterr().out) == {"number": "<secret>", "ordinary": 7}
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
 def test_pull_json_masks_unknown_object_before_serialization(capsys):
     class ReflectedValue:
         def __str__(self):
@@ -3961,9 +3970,9 @@ def test_pull_json_serialized_and_double_encoded_reflections_are_masked(capsys):
 def test_pull_json_escaped_slash_reflections_mask_warnings_and_errors(capsys):
     from observal_cli.errors import CliError, ErrorCategory
 
-    secret = "DUMMY/path/to"
-    forms = [secret, r"DUMMY\/path\/to", r"DUMMY\/path/to", r"DUMMY%252fpath\/to"]
-    token = cmd_pull._pull_secrets.set({secret})
+    probe = "DUMMY/path/to"
+    forms = [probe, r"DUMMY\/path\/to", r"DUMMY\/path/to", r"DUMMY%252fpath\/to"]
+    token = cmd_pull._pull_secrets.set({probe})
     try:
         cmd_pull.output_json({"warnings": forms})
         assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret>"] * len(forms)
