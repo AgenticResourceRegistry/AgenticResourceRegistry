@@ -69,7 +69,7 @@ observal inbox count --output json
 observal inbox count --facets --facet-state open --output json
 ```
 
-The basic result includes `unread`, `action_required`, `open`, `done`, and `dismissed`. `unread` and `action_required` count only open items, so `unread` matches the unread items the default Open list shows. `--facets` also returns `by_kind` and `by_subject_type`; `--facet-state` restricts those breakdowns and requires `--facets`.
+The basic result includes `unread`, `action_required`, `open`, `done`, and `dismissed`. `unread` and `action_required` count only open items, so `unread` matches the unread items the default Open list shows. `--facets` also returns `unread_by_state`, the `scope_total`, `scope_unread`, and `scope_action_required` counts for one folder, and `by_kind` and `by_subject_type`. `--facet-state` picks that folder (`open`, `done`, `dismissed`, or `all`) and requires `--facets`.
 
 ## Show an item
 

@@ -765,13 +765,33 @@ async def test_reviewer_copy_of_a_decision_is_rechecked_after_losing_membership(
         )
         await db.commit()
         assert await visibility.visible_to(db, reviewer_copy, reviewer) is True
-        assert (await inbox_count(facets=False, facet_state=InboxState.open, db=db, current_user=reviewer)).unread == 1
+        assert (
+            await inbox_count(
+                facets=False,
+                facet_state="open",
+                unread=None,
+                action_required=None,
+                q=None,
+                db=db,
+                current_user=reviewer,
+            )
+        ).unread == 1
 
         await db.delete(membership)
         await db.commit()
 
         assert await visibility.visible_to(db, reviewer_copy, reviewer) is False
-        assert (await inbox_count(facets=False, facet_state=InboxState.open, db=db, current_user=reviewer)).unread == 0
+        assert (
+            await inbox_count(
+                facets=False,
+                facet_state="open",
+                unread=None,
+                action_required=None,
+                q=None,
+                db=db,
+                current_user=reviewer,
+            )
+        ).unread == 0
         # The submitter's own decision notice still reads regardless.
         assert await visibility.visible_to(db, author_copy, owner) is True
 
@@ -1141,10 +1161,18 @@ async def _list(db, user, **overrides):
     return await list_inbox(**params, db=db, current_user=user)
 
 
-async def _counts(db, user, *, facets=False, facet_state=InboxState.open):
+async def _counts(db, user, *, facets=False, facet_state="open", unread=None, action_required=None, q=None):
     from api.routes.inbox import inbox_count
 
-    return await inbox_count(facets=facets, facet_state=facet_state, db=db, current_user=user)
+    return await inbox_count(
+        facets=facets,
+        facet_state=getattr(facet_state, "value", facet_state),
+        unread=unread,
+        action_required=action_required,
+        q=q,
+        db=db,
+        current_user=user,
+    )
 
 
 async def _deliver_named(db, user, *, namespace, slug, kind=InboxKind.review_requested, subject_type="mcp"):
@@ -1277,6 +1305,49 @@ async def test_facets_describe_the_bucket_they_are_scoped_to(sessions):
         # Lifecycle totals are unscoped: they are what the bucket rows count.
         assert (opened.open, opened.done, opened.dismissed) == (1, 1, 0)
         assert still_open.state is InboxState.open
+
+
+@pytest.mark.asyncio
+async def test_every_number_in_the_filter_sheet_matches_the_list(sessions):
+    """OBS-1440: the nav badge said 3 while the Inbox folder said 6.
+
+    Folders show their unread count, so Inbox equals the badge. The Unread and
+    Needs action rows count the selected folder, the kind and type rows add up to
+    the list under the active toggles, and the All folder spans every state.
+    """
+    async with sessions() as db:
+        user = await _user(db)
+        unread_open = await _deliver_named(db, user, namespace="super", slug="a")
+        read_open = await _deliver_named(db, user, namespace="super", slug="b")
+        unread_done = await _deliver_named(db, user, namespace="super", slug="c", kind=InboxKind.review_approved)
+        read_dismissed = await _deliver_named(db, user, namespace="super", slug="d", kind=InboxKind.review_comment)
+        delivery.mark_read(db, read_open)
+        delivery.resolve(db, unread_done, state=InboxState.done)
+        delivery.mark_read(db, read_dismissed)
+        delivery.resolve(db, read_dismissed, state=InboxState.dismissed)
+        await db.commit()
+
+        for folder, state in (("open", InboxState.open), ("done", InboxState.done), ("all", None)):
+            counts = await _counts(db, user, facets=True, facet_state=folder)
+            listed = await _list(db, user, state=state)
+            assert counts.scope_total == listed.total == sum(counts.by_kind.values()), folder
+            assert counts.scope_unread == listed.unread, folder
+            unread_only = await _counts(db, user, facets=True, facet_state=folder, unread=True)
+            unread_list = await _list(db, user, state=state, unread=True)
+            assert sum(unread_only.by_kind.values()) == unread_list.total == unread_list.unread, folder
+            action = await _list(db, user, state=state, action_required=True)
+            assert counts.scope_action_required == action.total, folder
+
+        counts = await _counts(db, user, facets=True, facet_state="all")
+        assert counts.unread_by_state == {"open": 1, "done": 1, "dismissed": 0}
+        # The Inbox folder's number is the nav badge.
+        assert counts.unread_by_state["open"] == counts.unread == 1
+        assert counts.scope_total == 4 and counts.scope_unread == 2
+        # Needs action is outstanding work: a done review request no longer counts.
+        delivery.resolve(db, unread_open, state=InboxState.done)
+        await db.commit()
+        assert (await _list(db, user, state=InboxState.done, action_required=True)).total == 0
+        assert (await _counts(db, user, facets=True, facet_state="done")).scope_action_required == 0
 
 
 @pytest.mark.asyncio

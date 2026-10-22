@@ -53,6 +53,8 @@ class InboxListResponse(BaseModel):
 
     items: list[InboxItemResponse]
     total: int
+    # Unread rows among ``total``: the same filters, so the two always agree.
+    unread: int = 0
     page: int
     page_size: int
 
@@ -72,6 +74,14 @@ class InboxCountResponse(BaseModel):
     open: int
     done: int = 0
     dismissed: int = 0
+    # The rest is filled only when facets are requested.
+    # Unread items per folder: what each folder in the filter sheet shows.
+    unread_by_state: dict[str, int] = Field(default_factory=dict)
+    # The selected folder (or every folder) under the active search.
+    scope_total: int = 0
+    scope_unread: int = 0
+    scope_action_required: int = 0
+    # Also narrowed by the Unread and Needs action toggles, so they add up to the list.
     by_kind: dict[str, int] = Field(default_factory=dict)
     by_subject_type: dict[str, int] = Field(default_factory=dict)
 
