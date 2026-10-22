@@ -228,15 +228,18 @@ def pending(
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT id, destination, user_id, harness, session_id, checkpoint_key, "
-            "start_line, end_line, end_offset, final, payload, attempts "
-            "FROM session_outbox AS item WHERE destination = ? AND user_id = ? "
-            "ORDER BY (end_line < start_line), "
-            "(SELECT MIN(first.id) FROM session_outbox AS first WHERE first.destination = item.destination "
-            "AND first.user_id = item.user_id AND first.harness = item.harness "
-            "AND first.session_id = item.session_id), "
-            "start_line, id LIMIT ?",
-            (destination.rstrip("/"), user_id, limit),
+            # Group once for each session's first row; a correlated MIN() per row rescans the whole
+            # destination for every row, which takes seconds on a few thousand queued batches.
+            "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id FROM session_outbox "
+            "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
+            "SELECT item.id, item.destination, item.user_id, item.harness, item.session_id, "
+            "item.checkpoint_key, item.start_line, item.end_line, item.end_offset, item.final, "
+            "item.payload, item.attempts "
+            "FROM session_outbox AS item JOIN firsts "
+            "ON firsts.harness = item.harness AND firsts.session_id = item.session_id "
+            "WHERE item.destination = ? AND item.user_id = ? "
+            "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
+            (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
         ).fetchall()
         return [
             OutboxItem(
