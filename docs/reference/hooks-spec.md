@@ -62,7 +62,7 @@ Source: `observal_cli/constants.py:VALID_HOOK_EXECUTION_MODES`.
 
 Telemetry is delivered by the session push hook, which reads the local harness transcript and sends session records to `/api/v1/ingest/session`. It uses the CLI configuration in `~/.observal/config.json`; it does not require a `curl` wrapper, a telemetry environment variable, or an API key header.
 
-For Claude Code, `observal doctor patch --harness claude-code` writes **two** Observal-managed command hooks into `~/.claude/settings.json`: `UserPromptSubmit` and `Stop`. Each runs the installed Python interpreter with `-m observal_cli.hooks.session_push --harness claude-code`. The `_observal` marker on each matcher group lets subsequent patches update Observal hooks without replacing user hooks.
+For Claude Code, `observal doctor patch --harness claude-code` writes **two** Observal-managed command hooks into `~/.claude/settings.json`: `UserPromptSubmit` and `Stop`. Each runs the installed Python interpreter with `-m observal_cli.hooks.session_push --harness claude-code`. Later patches recognize Observal's own hooks by their command, so user-authored hooks are left alone.
 
 For Kiro, the current IDE/CLI reads `.kiro/hooks/observal.json` with `UserPromptSubmit` and `Stop` triggers. Legacy CLI 2.x (without the IDE) uses inline `userPromptSubmit` and `stop` hooks on its agent profile. Both use `-m observal_cli.hooks.session_push --harness kiro`, not `curl`. See `observal_cli/harness_specs/kiro_hooks_spec.py` for the exact formats.
 
