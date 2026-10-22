@@ -14,7 +14,7 @@
  */
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useBlocker } from "@tanstack/react-router";
 import {
 	AlertTriangle,
 	ArrowLeftRight,
@@ -653,12 +653,13 @@ export default function SettingsPage() {
 	}));
 	const anyDirty = navAreas.some((area) => area.dirty);
 
-	useEffect(() => {
-		if (!anyDirty) return;
-		const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-		window.addEventListener("beforeunload", warn);
-		return () => window.removeEventListener("beforeunload", warn);
-	}, [anyDirty]);
+	// Drafts live only in this page, so leaving it (a sidebar link, back, a tab
+	// close or reload) would drop them silently. The router asks first.
+	const leaveBlocker = useBlocker({
+		shouldBlockFn: () => anyDirty,
+		enableBeforeUnload: () => anyDirty,
+		withResolver: true,
+	});
 
 	// ── Search ──────────────────────────────────────────────────────────
 	const searchIndex = useMemo(() => {
@@ -1314,6 +1315,33 @@ export default function SettingsPage() {
 					)}
 				</div>
 			</div>
+
+			<Dialog
+				open={leaveBlocker.status === "blocked"}
+				onOpenChange={(open) => {
+					if (!open && leaveBlocker.status === "blocked") leaveBlocker.reset();
+				}}
+			>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2 text-sm">
+							<AlertTriangle className="h-4 w-4 text-warning" />
+							Leave with unsaved changes?
+						</DialogTitle>
+						<DialogDescription className="text-xs">
+							Changes you haven't saved on this page will be lost.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button size="sm" variant="outline" onClick={() => leaveBlocker.status === "blocked" && leaveBlocker.reset()}>
+							Keep editing
+						</Button>
+						<Button size="sm" variant="destructive" onClick={() => leaveBlocker.status === "blocked" && leaveBlocker.proceed()}>
+							Discard and leave
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 
 			<Dialog open={showLeaderboardConfirm} onOpenChange={setShowLeaderboardConfirm}>
 				<DialogContent className="max-w-md">
