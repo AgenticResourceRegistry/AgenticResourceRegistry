@@ -15,17 +15,17 @@ Both columns are nullable: pre-existing reports predate the columns (and never
 had the data), and a run may legitimately produce no version impact or an
 empty offer. No backfill is needed — null is the correct value for old rows.
 
-Revision ID: 023_insight_analysis_payload
-Revises: 022_user_recommendations
-Create Date: 2026-08-03
+Revision ID: 046_insight_analysis_payload
+Revises: 045_usage_ping_default_on
+Create Date: 2026-10-22
 """
 
 import sqlalchemy as sa
 
 from alembic import op
 
-revision = "023_insight_analysis_payload"
-down_revision = "022_user_recommendations"
+revision = "046_insight_analysis_payload"
+down_revision = "045_usage_ping_default_on"
 branch_labels = None
 depends_on = None
 
