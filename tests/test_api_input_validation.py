@@ -152,7 +152,7 @@ async def test_db_value_errors_become_422_and_other_db_errors_stay_500(make_exc,
 
 
 @pytest.mark.parametrize("model", _component_request_models(), ids=lambda m: m.__name__)
-@pytest.mark.parametrize("version", ["", "-1.0.0", "1 .0.0", "v1.0.0", "1.0", "01.0.0", "1.0.0 "])
+@pytest.mark.parametrize("version", ["", "-1.0.0", "1 .0.0", "v1.0.0", "1.0", "01.0.0", "1.0.0 ", "1.0.0\n"])
 def test_component_requests_reject_non_semver_versions(model, version):
     assert _field_errors(model, version=version).get("version") == "value_error"
 
