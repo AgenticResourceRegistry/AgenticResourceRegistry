@@ -220,6 +220,19 @@ def test_batch_past_a_quarantined_gap_is_accepted_without_blocking_later_session
     assert base.read_cursor("gappy", home=tmp_path)[1] == 7
 
 
+def test_batch_past_a_gap_is_accepted_when_the_server_skipped_some_lines(tmp_path: Path):
+    # Re-sent lines and ignorable records count as skipped, not ingested, yet they are stored.
+    db = tmp_path / "outbox.db"
+    _enqueue_lines(db, "gappy", 5, 2)
+
+    def post(payload, _cfg):
+        return {"acknowledged_line": 2, "ingested": 1, "skipped": 1, "errors": 0}
+
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
+    assert base.read_cursor("gappy", home=tmp_path)[1] == 7
+
+
 def test_respooled_earlier_lines_are_sent_before_later_batches(tmp_path: Path):
     db = tmp_path / "outbox.db"
     _enqueue_lines(db, "gappy", 5, 2)

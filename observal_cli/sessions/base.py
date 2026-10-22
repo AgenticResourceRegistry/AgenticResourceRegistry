@@ -597,7 +597,9 @@ def _checkpoint_gap_is_permanent(
 
     if item.end_line < item.start_line or acknowledged_line + 1 >= item.start_line:
         return False
-    stored_whole_batch = acknowledgement.get("ingested") == len(item.payload.get("lines") or [])
+    # The server counts lines it already had and ignorable records as skipped; both are stored.
+    handled = int(acknowledgement.get("ingested") or 0) + int(acknowledgement.get("skipped") or 0)
+    stored_whole_batch = handled == len(item.payload.get("lines") or [])
     if int(acknowledgement.get("errors") or 0) or not stored_whole_batch:
         return False
     return not telemetry_buffer.holds_line(
