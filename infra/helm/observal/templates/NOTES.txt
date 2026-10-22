@@ -26,7 +26,7 @@ Observal has been installed! 🎉
   ⚠️  Remove before real use: set config.seedDemoAccounts=false
 {{- end }}
 
-{{- if .Values.postgresql.enabled }}
+{{- if include "observal.postgres.embedded" . }}
 
 ⚠️  WARNING: In-cluster PostgreSQL is running.
    This is for DEV/EVAL only: no replication, no PITR, no automated failover.
@@ -34,9 +34,28 @@ Observal has been installed! 🎉
    See: docs/self-hosting/kubernetes-helm.md
 {{- end }}
 
-{{- if .Values.clickhouse.enabled }}
+{{- if include "observal.clickhouse.embedded" . }}
 
 ⚠️  WARNING: In-cluster ClickHouse is running (same caveat as above).
+{{- end }}
+
+{{- if include "observal.redis.embedded" . }}
+
+⚠️  WARNING: In-cluster Redis is running (same caveat as above).
+{{- end }}
+
+{{- if or .Values.externalPostgres.enabled .Values.externalClickhouse.enabled .Values.externalRedis.enabled }}
+
+  External services:
+{{- if .Values.externalPostgres.enabled }}
+    PostgreSQL: {{ if .Values.externalPostgres.existingSecret }}Secret {{ .Values.externalPostgres.existingSecret }}{{ else }}{{ .Values.externalPostgres.host }}:{{ .Values.externalPostgres.port }}{{ end }}
+{{- end }}
+{{- if .Values.externalClickhouse.enabled }}
+    ClickHouse: {{ if .Values.externalClickhouse.existingSecret }}Secret {{ .Values.externalClickhouse.existingSecret }}{{ else }}{{ .Values.externalClickhouse.host }}:{{ .Values.externalClickhouse.port }}{{ end }}
+{{- end }}
+{{- if .Values.externalRedis.enabled }}
+    Redis: {{ if .Values.externalRedis.existingSecret }}Secret {{ .Values.externalRedis.existingSecret }}{{ else }}{{ .Values.externalRedis.host }}:{{ .Values.externalRedis.port }}{{ end }}
+{{- end }}
 {{- end }}
 
   Useful commands:

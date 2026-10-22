@@ -16,7 +16,7 @@ helm install observal oci://ghcr.io/observal/charts/observal \
   --namespace observal
 ```
 
-For production deployments, use managed PostgreSQL, ClickHouse, and Redis services by setting `postgresql.enabled=false`, `clickhouse.enabled=false`, and `redis.enabled=false`, then providing the matching external connection URLs.
+For production deployments, use managed PostgreSQL, ClickHouse, and Redis services by setting `externalPostgres.enabled`, `externalClickhouse.enabled`, and `externalRedis.enabled`, then either referencing a Secret holding the connection URL (`existingSecret`) or providing `host`, `port`, and credentials.
 
 See the Kubernetes deployment guide for the full values reference and operational notes:
 
