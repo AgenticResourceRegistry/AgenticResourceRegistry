@@ -431,7 +431,13 @@ async def discover_and_queue_reports() -> int:
 
         for agent in agents:
             try:
-                # Held until this agent's commit or rollback below.
+                latest_version = agent.latest_version
+                if not latest_version or latest_version.status != AgentStatus.approved:
+                    continue
+
+                # Held until this agent's transaction ends, so every path below
+                # commits or rolls back, skips included. Committing a read-only
+                # transaction is safe here because the session does not expire on commit.
                 await lock_agent_reports(db, agent.id)
 
                 # Check if there's already a recent report (completed or in-progress)
@@ -455,12 +461,10 @@ async def discover_and_queue_reports() -> int:
 
                 # Skip if a report was generated within the last period
                 if latest_report and latest_report.created_at > period_start:
+                    await db.commit()
                     continue
 
                 # Count new sessions for the latest approved version by default.
-                latest_version = agent.latest_version
-                if not latest_version or latest_version.status != AgentStatus.approved:
-                    continue
                 since_str = period_start.strftime("%Y-%m-%d %H:%M:%S")
                 session_count = await _count_agent_sessions(
                     str(agent.id),
@@ -476,6 +480,7 @@ async def discover_and_queue_reports() -> int:
                         sessions=session_count,
                         min_required=min_sessions,
                     )
+                    await db.commit()
                     continue
 
                 prev_report = await find_baseline_report(

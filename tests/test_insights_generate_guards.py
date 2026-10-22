@@ -204,3 +204,38 @@ async def test_cron_takes_the_route_lock_before_its_recent_report_check():
     assert lock[1] == {"key": f"insights.generate:{agent.id}"}
     assert "insight_reports.status IN" in str(recent[0])
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skip", ["recent_report", "too_few_sessions"])
+async def test_cron_releases_the_lock_for_an_agent_it_skips(skip):
+    """The lock is transaction scoped, so a skipped agent has to end its
+    transaction too. Otherwise its lock stays held while the cron counts
+    sessions for later agents, and a manual generate for it waits."""
+    import services.dynamic_settings as ds
+    from models.agent import AgentStatus
+    from services.insights import batch
+
+    version = SimpleNamespace(id=uuid.uuid4(), version="1.0.0", status=AgentStatus.approved)
+    agent = SimpleNamespace(id=uuid.uuid4(), name="pr-verify-qa", latest_version=version)
+    agents = MagicMock()
+    agents.scalars.return_value.all.return_value = [agent]
+    recent = SimpleNamespace(created_at=datetime.now(UTC))
+    db = _db(agents, MagicMock(), _scalars(recent) if skip == "recent_report" else _scalars())
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+    settings = {"insights.batch_period_days": 14, "insights.min_sessions": 5}
+
+    with (
+        patch.object(batch, "_reap_stale_reports", new=AsyncMock(return_value=0)),
+        patch.object(batch, "async_session", new=MagicMock(return_value=session)),
+        patch.object(batch, "_count_agent_sessions", new=AsyncMock(return_value=1)),
+        patch.object(ds, "get_sync_bool", return_value=True),
+        patch.object(ds, "get_sync_int", side_effect=lambda key, default: settings.get(key, default)),
+    ):
+        assert await batch.discover_and_queue_reports() == 0
+
+    assert "pg_advisory_xact_lock" in str(db.execute.await_args_list[1].args[0])
+    db.commit.assert_awaited_once()
+    db.add.assert_not_called()
