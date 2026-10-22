@@ -2,17 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import {
-	Activity,
-	Check,
-	HelpCircle,
-	ChevronsUpDown,
-	Eye,
-	EyeOff,
-	Loader2,
-	Sparkles,
-} from "lucide-react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Check, ChevronsUpDown, Eye, EyeOff, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,7 +22,6 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import { useHelp } from "@/components/wiki/help-context";
 import { admin } from "@/lib/api";
 import { useInsightsModelProviders, useInsightsModels } from "@/hooks/use-api";
 import { ModelCombobox } from "./model-combobox";
@@ -45,13 +35,32 @@ import {
 	detectProviderFromKey,
 	getInsightsStatus,
 } from "./insights-constants";
+import {
+	AdvancedGroup,
+	CardFooter,
+	SettingRow,
+	SettingsCard,
+	SettingsGroup,
+	StatusBadge,
+	SwitchStateLabel
+} from "./settings-ui";
+import { rowDomId } from "./settings-helpers";
 
 interface InsightsSectionProps {
 	entries: { key: string; value: string; is_sensitive?: boolean; is_set?: boolean }[];
 	onSave: (key: string, value: string) => Promise<void>;
 	onRevoke: (key: string) => void;
 	refetch: () => void;
+	onDirtyChange?: (sectionId: string, dirty: boolean) => void;
 }
+
+/** Server defaults for the advanced numbers, used when no row is stored. */
+const ADVANCED_DEFAULTS: Record<string, string> = {
+	"insights.batch_period_days": "14",
+	"insights.min_sessions": "5",
+	"insights.facet_max_calls": "100",
+	"insights.facet_concurrency": "25",
+};
 
 interface TestResult {
 	success: boolean;
@@ -61,8 +70,7 @@ interface TestResult {
 	hint?: string;
 }
 
-export function InsightsSection({ entries, onSave, onRevoke, refetch }: InsightsSectionProps) {
-	const helpCtx = useHelp();
+export function InsightsSection({ entries, onSave, onRevoke, refetch, onDirtyChange }: InsightsSectionProps) {
 	const getEntryValue = useCallback(
 		(key: string) => {
 			const entry = entries.find((e) => e.key === key);
@@ -102,31 +110,28 @@ export function InsightsSection({ entries, onSave, onRevoke, refetch }: Insights
 	const providerCatalog = useInsightsModelProviders();
 	const modelCatalog = useInsightsModels(provider);
 
-	// Initialize from entries
+	// Sync from entries. A field only follows the server when it has not been edited,
+	// so saving one card (which refetches) never discards drafts in another.
+	const lastStored = useRef<Record<string, string>>({});
 	useEffect(() => {
-		const sections = getEntryValue("insights.model_sections");
-		const synthesis = getEntryValue("insights.model_synthesis");
-		const facets = getEntryValue("insights.model_facets");
-		const base = getEntryValue("insights.api_base");
-		const version = getEntryValue("insights.api_version");
-		const batch = getEntryValue("insights.batch_enabled");
-		const period = getEntryValue("insights.batch_period_days");
-		const sessions = getEntryValue("insights.min_sessions");
-		const maxCalls = getEntryValue("insights.facet_max_calls");
-		const concurrency = getEntryValue("insights.facet_concurrency");
+		const sync = (key: string, setter: (update: (current: string) => string) => void, fallback = "") => {
+			const next = getEntryValue(key) || fallback;
+			const previous = lastStored.current[key];
+			setter((current) => (previous === undefined || current === previous ? next : current));
+			lastStored.current[key] = next;
+		};
+		sync("insights.model_sections", setModelSections);
+		sync("insights.model_synthesis", setModelSynthesis);
+		sync("insights.model_facets", setModelFacets);
+		sync("insights.api_base", setApiBase);
+		sync("insights.api_version", setApiVersion);
+		sync("insights.batch_period_days", setBatchPeriod, "14");
+		sync("insights.min_sessions", setMinSessions, "5");
+		sync("insights.facet_max_calls", setMaxFacetCalls, "100");
+		sync("insights.facet_concurrency", setFacetConcurrency, "25");
+		setBatchEnabled(getEntryValue("insights.batch_enabled") !== "false");
 
-		setModelSections(sections);
-		setModelSynthesis(synthesis);
-		setModelFacets(facets);
-		setApiBase(base);
-		setApiVersion(version);
-		setBatchEnabled(batch !== "false");
-		setBatchPeriod(period || "14");
-		setMinSessions(sessions || "5");
-		setMaxFacetCalls(maxCalls || "100");
-		setFacetConcurrency(concurrency || "25");
-
-		const detected = detectProvider(sections);
+		const detected = detectProvider(getEntryValue("insights.model_sections"));
 		if (detected) setProvider(detected);
 	}, [entries, getEntryValue]);
 
@@ -237,26 +242,53 @@ export function InsightsSection({ entries, onSave, onRevoke, refetch }: Insights
 		}
 	}, [modelSections, modelSynthesis, modelFacets]);
 
-	const handleUseRecommended = useCallback(async () => {
+	// Typed values are drafted per card and saved from the card footer.
+	const handleUseRecommended = useCallback(() => {
 		if (!provider || !RECOMMENDED_MODELS[provider]) return;
 		const rec = RECOMMENDED_MODELS[provider];
 		setModelSections(rec.sections);
 		setModelSynthesis(rec.synthesis);
 		setModelFacets(rec.facets);
-		await Promise.all([
-			handleSave("insights.model_sections", rec.sections),
-			handleSave("insights.model_synthesis", rec.synthesis),
-			handleSave("insights.model_facets", rec.facets),
-		]);
-	}, [provider, handleSave]);
+	}, [provider]);
 
-	const handleModelChange = useCallback(
-		(key: string, setter: (v: string) => void) => (value: string) => {
-			setter(value);
-			handleSave(key, value);
-		},
-		[handleSave],
-	);
+	const providerDrafts: [string, string][] = [
+		["insights.api_base", apiBase],
+		...(showApiVersion ? ([["insights.api_version", apiVersion]] as [string, string][]) : []),
+	];
+	const modelDrafts: [string, string][] = [
+		["insights.model_sections", modelSections],
+		["insights.model_synthesis", modelSynthesis],
+		["insights.model_facets", modelFacets],
+	];
+	const advancedDrafts: [string, string][] = [
+		["insights.batch_period_days", batchPeriod],
+		["insights.min_sessions", minSessions],
+		["insights.facet_max_calls", maxFacetCalls],
+		["insights.facet_concurrency", facetConcurrency],
+	];
+	const storedOrDefault = useCallback((key: string) => getEntryValue(key) || ADVANCED_DEFAULTS[key] || "", [getEntryValue]);
+	const changed = (drafts: [string, string][]) => drafts.filter(([key, value]) => value !== storedOrDefault(key));
+	const providerChanged = showBaseUrl ? changed(providerDrafts) : [];
+	const modelsChanged = changed(modelDrafts);
+	const advancedChanged = changed(advancedDrafts);
+	const anyDirty = providerChanged.length + modelsChanged.length + advancedChanged.length > 0;
+	useEffect(() => {
+		onDirtyChange?.("insights", anyDirty);
+	}, [anyDirty, onDirtyChange]);
+	useEffect(() => () => onDirtyChange?.("insights", false), [onDirtyChange]);
+
+	const [savingCard, setSavingCard] = useState<string | null>(null);
+	const saveCard = async (card: string, drafts: [string, string][]) => {
+		setSavingCard(card);
+		try {
+			for (const [key, value] of drafts) await handleSave(key, value);
+		} finally {
+			setSavingCard(null);
+		}
+	};
+	const resetDrafts = (drafts: [string, string][], setters: Record<string, (value: string) => void>) => {
+		for (const [key] of drafts) setters[key]?.(storedOrDefault(key));
+	};
 
 	const handleProviderChange = useCallback(
 		(id: ProviderId | "") => {
@@ -286,382 +318,284 @@ export function InsightsSection({ entries, onSave, onRevoke, refetch }: Insights
 		[onSave, provider, refetch],
 	);
 
-	// Status config
-	const statusConfig = {
-		not_configured: { color: "bg-zinc-400", label: "Not configured" },
-		partial: { color: "bg-amber-400", label: "Partially configured" },
-		ready: { color: "bg-emerald-400", label: "Ready" },
+	const statusLabel = { not_configured: "Not configured", partial: "Partially configured", ready: "Ready" }[status];
+	const statusTone = ({ not_configured: "neutral", partial: "warning", ready: "success" } as const)[status];
+	const ids = {
+		provider: rowDomId("insights.provider") + "-control",
+		apiKey: rowDomId("insights.api_key") + "-control",
+		apiBase: rowDomId("insights.api_base") + "-control",
+		apiVersion: rowDomId("insights.api_version") + "-control",
+		batch: rowDomId("insights.batch_enabled") + "-control",
+	};
+	// The advanced limits are counts; anything but a positive whole number is unusable.
+	const numberError = (value: string) => (/^[1-9]\d*$/.test(value.trim()) ? undefined : "Enter a whole number of 1 or more");
+	const advancedInvalid = advancedDrafts.some(([, value]) => !!numberError(value));
+	const numberRow = (key: string, label: string, value: string, setter: (value: string) => void) => {
+		const error = numberError(value);
+		return (
+			<SettingRow key={key} settingKey={key} label={label} htmlFor={rowDomId(key) + "-control"} error={error}>
+				<Input
+					id={rowDomId(key) + "-control"}
+					type="number"
+					min={1}
+					step={1}
+					value={value}
+					aria-invalid={!!error}
+					onChange={(event) => setter(event.target.value)}
+					className={cn("min-h-9 flex-1 py-2 text-sm tabular-nums", error && "border-destructive/60")}
+				/>
+			</SettingRow>
+		);
 	};
 
 	return (
-		<section className="mb-6 mt-2">
-			{/* Header */}
-			<div className="flex items-center justify-between mb-1">
-				<h3 className={cn("text-sm font-semibold uppercase tracking-wider text-foreground/80 flex items-center gap-1.5", helpCtx.helpActive && "cursor-help ring-2 ring-primary/60 ring-offset-2 ring-offset-background rounded-sm")} onClick={(event) => { if ((event.ctrlKey || event.metaKey) && helpCtx.openHelp({ sectionTitle: "Agent File Insights" })) event.preventDefault(); }}>
-					<Activity className="h-3.5 w-3.5" />
-					Agent File Insights
-					<button type="button" className="text-muted-foreground hover:text-primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); helpCtx.openHelp({ sectionTitle: "Agent File Insights" }); }} aria-label="Open Agent File Insights documentation">
-						<HelpCircle className="h-3.5 w-3.5" />
-					</button>
-				</h3>
-				<div className="flex items-center gap-1.5">
-					<div className={cn("h-2 w-2 rounded-full", statusConfig[status].color)} />
-					<span className="text-xs text-muted-foreground">
-						{statusConfig[status].label}
-					</span>
-				</div>
-			</div>
-			<p className="text-xs text-foreground/60 mb-3">
-				Configure LLM provider for the insights engine. Supports any LiteLLM-compatible provider.
-			</p>
+		<>
+			<SettingsGroup
+				id="provider"
+				title="Agent File Insights"
+				description="Configure LLM provider for the insights engine. Supports any LiteLLM-compatible provider."
+				docsTitle="Agent File Insights"
+				tools={<StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>}
+			>
+				<SettingsCard
+					footer={
+						<CardFooter
+							dirtyCount={providerChanged.length}
+							saving={savingCard === "provider"}
+							onSave={() => void saveCard("provider", providerChanged)}
+							onDiscard={() => resetDrafts(providerDrafts, { "insights.api_base": setApiBase, "insights.api_version": setApiVersion })}
+						/>
+					}
+				>
+					<SettingRow
+						settingKey="insights.provider"
+						label="Provider"
+						htmlFor={ids.provider}
+						error={providerCatalog.isError ? "Failed to load LiteLLM providers." : undefined}
+					>
+						<Popover open={providerOpen} onOpenChange={setProviderOpen}>
+							<PopoverTrigger asChild>
+								<Button
+									id={ids.provider}
+									variant="outline"
+									role="combobox"
+									aria-expanded={providerOpen}
+									className={cn("min-h-9 flex-1 justify-between text-sm font-normal", !provider && "text-muted-foreground")}
+								>
+									{selectedProvider?.label || provider || "Select provider..."}
+									<ChevronsUpDown className="size-3.5 shrink-0 opacity-50" aria-hidden="true" />
+								</Button>
+							</PopoverTrigger>
+							<PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+								<Command>
+									<CommandInput placeholder="Search providers..." />
+									<CommandList>
+										<CommandEmpty>No provider found.</CommandEmpty>
+										<CommandGroup>
+											{providerOptions.map((p) => (
+												<CommandItem key={p.id} value={`${p.label} ${p.id}`} onSelect={() => handleProviderChange(p.id)}>
+													<Check className={cn("mr-2 h-3.5 w-3.5", provider === p.id ? "opacity-100" : "opacity-0")} />
+													<span>{p.label}</span>
+													<span className="ml-auto text-xs text-muted-foreground">{p.model_count}</span>
+												</CommandItem>
+											))}
+										</CommandGroup>
+									</CommandList>
+								</Command>
+							</PopoverContent>
+						</Popover>
+					</SettingRow>
 
-			{/* Main card */}
-			<div className="rounded-lg border border-border bg-card p-5 space-y-5">
-				{/* Provider selector */}
-				<div>
-					<label className="text-sm font-medium text-foreground block mb-2">Provider</label>
-					<Popover open={providerOpen} onOpenChange={setProviderOpen}>
-						<PopoverTrigger asChild>
-							<Button
-								variant="outline"
-								role="combobox"
-								aria-expanded={providerOpen}
-								className={cn(
-									"w-full max-w-xs justify-between h-9 text-sm",
-									!provider && "text-muted-foreground",
+					<SettingRow settingKey="insights.api_key" label="API Key" htmlFor={ids.apiKey}>
+						<div className="flex flex-1 flex-col gap-2">
+							<div className="relative">
+								<Input
+									id={ids.apiKey}
+									type={showApiKey ? "text" : "password"}
+									value={apiKeyValue}
+									onChange={(e) => setApiKeyValue(e.target.value)}
+									placeholder={isKeySet("insights.api_key") ? "Key is set, enter new value to replace" : "sk-ant-... or sk-... or Bedrock API key"}
+									autoComplete="new-password"
+									spellCheck={false}
+									className="min-h-9 py-2 pr-10 font-mono text-xs"
+									onKeyDown={(e) => {
+										if (e.key === "Enter") handleApiKeySave();
+									}}
+								/>
+								<button
+									type="button"
+									className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+									onClick={() => setShowApiKey(!showApiKey)}
+									aria-label={showApiKey ? "Hide key" : "Show key"}
+									aria-pressed={showApiKey}
+								>
+									{showApiKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+								</button>
+							</div>
+							<div className="flex flex-wrap justify-end gap-2">
+								<Button size="sm" variant="outline" onClick={handleApiKeySave} disabled={!apiKeyValue || saving["insights.api_key"]}>
+									{saving["insights.api_key"] ? <Loader2 className="animate-spin" aria-hidden="true" /> : "Save"}
+								</Button>
+								<Button size="sm" variant="outline" onClick={handleTestConnection} disabled={testingConnection}>
+									{testingConnection && <Loader2 className="animate-spin" aria-hidden="true" />}
+									Test Connection
+								</Button>
+								{isKeySet("insights.api_key") && (
+									<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => onRevoke("insights.api_key")}>
+										Revoke
+									</Button>
 								)}
-							>
-								{selectedProvider?.label || provider || "Select provider..."}
-								<ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
-							</Button>
-						</PopoverTrigger>
-						<PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-							<Command>
-								<CommandInput placeholder="Search providers..." />
-								<CommandList>
-									<CommandEmpty>No provider found.</CommandEmpty>
-									<CommandGroup>
-										{providerOptions.map((p) => (
-											<CommandItem
-												key={p.id}
-												value={`${p.label} ${p.id}`}
-												onSelect={() => handleProviderChange(p.id)}
-											>
-												<Check
-													className={cn(
-														"mr-2 h-3.5 w-3.5",
-														provider === p.id ? "opacity-100" : "opacity-0",
-													)}
-												/>
-												<span>{p.label}</span>
-												<span className="ml-auto text-xs text-muted-foreground">{p.model_count}</span>
-											</CommandItem>
-										))}
-									</CommandGroup>
-								</CommandList>
-							</Command>
-						</PopoverContent>
-					</Popover>
-					{providerCatalog.isError && (
-						<p className="mt-1.5 text-xs text-destructive">Failed to load LiteLLM providers.</p>
-					)}
-				</div>
-
-				{/* API Key */}
-				<div className="space-y-1.5">
-					<label className="text-sm font-medium text-foreground">API Key</label>
-					<div className="flex items-center gap-2">
-						<div className="relative flex-1 max-w-md">
-							<Input
-								type={showApiKey ? "text" : "password"}
-								value={apiKeyValue}
-								onChange={(e) => setApiKeyValue(e.target.value)}
-								placeholder={
-									isKeySet("insights.api_key")
-										? "Key is set, enter new value to replace"
-										: "sk-ant-... or sk-... or Bedrock API key"
-								}
-								className="h-9 text-sm font-mono pr-9"
-								onKeyDown={(e) => {
-									if (e.key === "Enter") handleApiKeySave();
-								}}
-							/>
-							<button
-								type="button"
-								className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-								onClick={() => setShowApiKey(!showApiKey)}
-								tabIndex={-1}
-							>
-								{showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-							</button>
-						</div>
-						<Button
-							size="sm"
-							variant="outline"
-							className="h-9 px-3 text-xs"
-							onClick={handleApiKeySave}
-							disabled={!apiKeyValue || saving["insights.api_key"]}
-						>
-							{saving["insights.api_key"] ? (
-								<Loader2 className="h-3.5 w-3.5 animate-spin" />
-							) : (
-								"Save"
-							)}
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							className="h-9 px-3 text-xs"
-							onClick={handleTestConnection}
-							disabled={testingConnection}
-						>
-							{testingConnection && (
-								<Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-							)}
-							Test Connection
-						</Button>
-						{isKeySet("insights.api_key") && (
-							<Button
-								size="sm"
-								variant="ghost"
-								className="h-9 px-2 text-xs text-destructive hover:text-destructive"
-								onClick={() => onRevoke("insights.api_key")}
-							>
-								Revoke
-							</Button>
-						)}
-					</div>
-					{/* Test result banner */}
-					{testResult && (
-						<div
-							className={cn(
-								"rounded-md px-3 py-2 text-xs flex items-start gap-2",
-								testResult.success
-									? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-									: "bg-destructive/10 border border-destructive/20 text-destructive",
-							)}
-						>
-							{testResult.success ? (
-								<>
-									<Check className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-									<span>
-										Connected to <span className="font-mono font-medium">{testResult.model}</span>
-										{testResult.latency_ms != null && ` (${testResult.latency_ms}ms)`}
-									</span>
-								</>
-							) : (
-								<div className="space-y-0.5">
-									<p className="font-medium">{testResult.error}</p>
-									{testResult.hint && (
-										<p className="text-muted-foreground">{testResult.hint}</p>
+							</div>
+							{testResult && (
+								<div
+									role="status"
+									className={cn(
+										"flex items-start gap-2 rounded-lg border px-3 py-2 text-xs",
+										testResult.success ? "border-success/20 bg-success/10 text-success" : "border-destructive/20 bg-destructive/10 text-destructive",
+									)}
+								>
+									{testResult.success ? (
+										<>
+											<Check className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+											<span>
+												Connected to <span className="font-mono font-medium">{testResult.model}</span>
+												{testResult.latency_ms != null && ` (${testResult.latency_ms}ms)`}
+											</span>
+										</>
+									) : (
+										<div className="space-y-0.5">
+											<p className="font-medium">{testResult.error}</p>
+											{testResult.hint && <p className="text-muted-foreground">{testResult.hint}</p>}
+										</div>
 									)}
 								</div>
 							)}
 						</div>
-					)}
-				</div>
+					</SettingRow>
 
-
-				{/* Divider */}
-				<div className="border-t border-border/50" />
-
-				{/* Models heading */}
-				<div className="space-y-1">
-					<p className="text-sm font-medium text-foreground">Models</p>
-					<p className="text-xs text-muted-foreground">
-						Only Sections Model is required. Others fall back to it if left empty.
-					</p>
-					{modelCatalog.isError && (
-						<p className="text-xs text-destructive">Failed to load LiteLLM models for {provider}.</p>
-					)}
-				</div>
-
-				{/* Model selectors - aligned grid */}
-				<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-					<ModelCombobox
-						label="Sections Model"
-						subtitle="Writes the detailed report. Use your best model."
-						value={modelSections}
-						onChange={handleModelChange("insights.model_sections", setModelSections)}
-						suggestions={suggestions}
-						placeholder="Required"
-					/>
-					<ModelCombobox
-						label="Synthesis Model"
-						subtitle="Aggregates patterns. Falls back to Sections if empty."
-						value={modelSynthesis}
-						onChange={handleModelChange("insights.model_synthesis", setModelSynthesis)}
-						suggestions={suggestions}
-						placeholder="Optional"
-					/>
-					<ModelCombobox
-						label="Facets Model"
-						subtitle="Scans each session. Runs many times, use cheapest."
-						value={modelFacets}
-						onChange={handleModelChange("insights.model_facets", setModelFacets)}
-						suggestions={suggestions}
-						placeholder="Optional"
-					/>
-				</div>
-
-				{/* Use Recommended */}
-				{showRecommended && (
-					<Button
-						variant="outline"
-						size="sm"
-						className="h-8 text-xs"
-						onClick={handleUseRecommended}
-						disabled={saving["insights.model_sections"]}
+					<SettingRow
+						settingKey="insights.api_base"
+						label="Base URL"
+						htmlFor={ids.apiBase}
+						labelNote={selectedProviderMetadata?.requiresBaseUrl ? `(required for ${selectedProvider?.label || provider})` : "(optional)"}
+						hidden={!showBaseUrl}
 					>
-						<Sparkles className="h-3.5 w-3.5 mr-1.5" />
-						Use recommended models
-					</Button>
-				)}
+						<Input
+							id={ids.apiBase}
+							value={apiBase}
+							onChange={(e) => setApiBase(e.target.value)}
+							placeholder={selectedProviderMetadata?.baseUrlHint || "https://..."}
+							spellCheck={false}
+							className="min-h-9 flex-1 py-2 font-mono text-xs"
+						/>
+					</SettingRow>
+					<SettingRow settingKey="insights.api_version" label="API Version" htmlFor={ids.apiVersion} hidden={!showBaseUrl || !showApiVersion}>
+						<Input
+							id={ids.apiVersion}
+							value={apiVersion}
+							onChange={(e) => setApiVersion(e.target.value)}
+							placeholder="2024-08-01-preview"
+							spellCheck={false}
+							className="min-h-9 flex-1 py-2 font-mono text-xs"
+						/>
+					</SettingRow>
+				</SettingsCard>
+			</SettingsGroup>
 
-				{/* Base URL - above advanced */}
-				{showBaseUrl && (
-					<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
-						<div className="space-y-1.5">
-							<label className="text-xs font-medium text-muted-foreground">
-								Base URL
-								{selectedProviderMetadata?.requiresBaseUrl ? (
-									<span className="font-normal text-foreground ml-1">(required for {selectedProvider?.label || provider})</span>
-								) : (
-									<span className="font-normal ml-1">(optional)</span>
-								)}
-							</label>
-							<Input
-								value={apiBase}
-								onChange={(e) => setApiBase(e.target.value)}
-								placeholder={selectedProviderMetadata?.baseUrlHint || "https://..."}
-								className="h-8 text-xs font-mono"
-								onBlur={() => {
-									if (apiBase !== getEntryValue("insights.api_base")) {
-										handleSave("insights.api_base", apiBase);
-									}
-								}}
-								onKeyDown={(e) => {
-									if (e.key === "Enter") handleSave("insights.api_base", apiBase);
-								}}
-							/>
-						</div>
-						{showApiVersion && (
-							<div className="space-y-1.5">
-								<label className="text-xs font-medium text-muted-foreground">API Version</label>
-								<Input
-									value={apiVersion}
-									onChange={(e) => setApiVersion(e.target.value)}
-									placeholder="2024-08-01-preview"
-									className="h-8 text-xs font-mono"
-									onBlur={() => {
-										if (apiVersion !== getEntryValue("insights.api_version")) {
-											handleSave("insights.api_version", apiVersion);
-										}
-									}}
-									onKeyDown={(e) => {
-										if (e.key === "Enter") handleSave("insights.api_version", apiVersion);
-									}}
-								/>
+			<SettingsGroup
+				id="models"
+				title="Models"
+				description={
+					<>
+						Only Sections Model is required. Others fall back to it if left empty.
+						{modelCatalog.isError && <span className="block text-destructive">Failed to load LiteLLM models for {provider}.</span>}
+					</>
+				}
+				tools={
+					showRecommended ? (
+						<Button variant="outline" size="sm" onClick={handleUseRecommended}>
+							<Sparkles aria-hidden="true" />
+							Use recommended models
+						</Button>
+					) : undefined
+				}
+			>
+				<SettingsCard
+					footer={
+						<CardFooter
+							dirtyCount={modelsChanged.length}
+							saving={savingCard === "models"}
+							onSave={() => void saveCard("models", modelsChanged)}
+							onDiscard={() =>
+								resetDrafts(modelDrafts, {
+									"insights.model_sections": setModelSections,
+									"insights.model_synthesis": setModelSynthesis,
+									"insights.model_facets": setModelFacets,
+								})
+							}
+						/>
+					}
+				>
+					{(
+						[
+							["insights.model_sections", "Sections Model", "Writes the detailed report. Use your best model.", modelSections, setModelSections, "Required"],
+							["insights.model_synthesis", "Synthesis Model", "Aggregates patterns. Falls back to Sections if empty.", modelSynthesis, setModelSynthesis, "Optional"],
+							["insights.model_facets", "Facets Model", "Scans each session. Runs many times, use cheapest.", modelFacets, setModelFacets, "Optional"],
+						] as const
+					).map(([key, label, subtitle, value, setter, placeholder]) => (
+						<SettingRow key={key} settingKey={key} label={label} description={subtitle}>
+							<div className="flex-1">
+								<ModelCombobox hideLabel label={label} subtitle={subtitle} value={value} onChange={setter} suggestions={suggestions} placeholder={placeholder} />
 							</div>
-						)}
-					</div>
-				)}
+						</SettingRow>
+					))}
+				</SettingsCard>
+			</SettingsGroup>
 
-				{/* Advanced settings */}
-				<details className="group rounded-md border border-border/70">
-					<summary className="flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none hover:bg-muted/30 transition-colors text-sm font-medium text-foreground/70">
-						Advanced
-					</summary>
-					<div className="px-4 pb-4 pt-2 space-y-4 border-t border-border/50">
-						<div className="flex items-center justify-between">
-							<div>
-								<p className="text-sm font-medium">Batch Processing</p>
-								<p className="text-xs text-muted-foreground">
-									Automatically generate reports on schedule
-								</p>
-							</div>
-							<Switch
-								checked={batchEnabled}
-								onCheckedChange={(checked) => {
-									setBatchEnabled(checked);
-									handleSave("insights.batch_enabled", String(checked));
-								}}
-							/>
-						</div>
-
-						<div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-							<div className="space-y-1">
-								<label className="text-xs text-muted-foreground">
-									Batch Period (days)
-								</label>
-								<Input
-									type="number"
-									min={1}
-									value={batchPeriod}
-									onChange={(e) => setBatchPeriod(e.target.value)}
-									className="h-8 text-sm"
-									onBlur={() => {
-										if (batchPeriod !== getEntryValue("insights.batch_period_days")) {
-											handleSave("insights.batch_period_days", batchPeriod);
-										}
-									}}
-								/>
-							</div>
-							<div className="space-y-1">
-								<label className="text-xs text-muted-foreground">
-									Min Sessions
-								</label>
-								<Input
-									type="number"
-									min={1}
-									value={minSessions}
-									onChange={(e) => setMinSessions(e.target.value)}
-									className="h-8 text-sm"
-									onBlur={() => {
-										if (minSessions !== getEntryValue("insights.min_sessions")) {
-											handleSave("insights.min_sessions", minSessions);
-										}
-									}}
-								/>
-							</div>
-							<div className="space-y-1">
-								<label className="text-xs text-muted-foreground">
-									Max Facet Calls
-								</label>
-								<Input
-									type="number"
-									min={1}
-									value={maxFacetCalls}
-									onChange={(e) => setMaxFacetCalls(e.target.value)}
-									className="h-8 text-sm"
-									onBlur={() => {
-										if (maxFacetCalls !== getEntryValue("insights.facet_max_calls")) {
-											handleSave("insights.facet_max_calls", maxFacetCalls);
-										}
-									}}
-								/>
-							</div>
-							<div className="space-y-1">
-								<label className="text-xs text-muted-foreground">
-									Facet Concurrency
-								</label>
-								<Input
-									type="number"
-									min={1}
-									value={facetConcurrency}
-									onChange={(e) => setFacetConcurrency(e.target.value)}
-									className="h-8 text-sm"
-									onBlur={() => {
-										if (facetConcurrency !== getEntryValue("insights.facet_concurrency")) {
-											handleSave("insights.facet_concurrency", facetConcurrency);
-										}
-									}}
-								/>
-							</div>
-						</div>
-					</div>
-				</details>
-			</div>
-		</section>
+			<AdvancedGroup id="insights-advanced" title="Advanced" description="Batch processing and facet limits." count={5}>
+				<SettingsCard
+					flush
+					footer={
+						<CardFooter
+							dirtyCount={advancedChanged.length}
+							invalid={advancedInvalid}
+							saving={savingCard === "advanced"}
+							onSave={() => void saveCard("advanced", advancedChanged)}
+							onDiscard={() =>
+								resetDrafts(advancedDrafts, {
+									"insights.batch_period_days": setBatchPeriod,
+									"insights.min_sessions": setMinSessions,
+									"insights.facet_max_calls": setMaxFacetCalls,
+									"insights.facet_concurrency": setFacetConcurrency,
+								})
+							}
+						/>
+					}
+				>
+					<SettingRow
+						settingKey="insights.batch_enabled"
+						label="Batch Processing"
+						htmlFor={ids.batch}
+						layout="inline"
+						description="Automatically generate reports on schedule"
+					>
+						<SwitchStateLabel checked={batchEnabled} />
+						<Switch
+							id={ids.batch}
+							checked={batchEnabled}
+							aria-label="Batch Processing"
+							onCheckedChange={(checked) => {
+								setBatchEnabled(checked);
+								handleSave("insights.batch_enabled", String(checked));
+							}}
+						/>
+					</SettingRow>
+					{numberRow("insights.batch_period_days", "Batch Period (days)", batchPeriod, setBatchPeriod)}
+					{numberRow("insights.min_sessions", "Min Sessions", minSessions, setMinSessions)}
+					{numberRow("insights.facet_max_calls", "Max Facet Calls", maxFacetCalls, setMaxFacetCalls)}
+					{numberRow("insights.facet_concurrency", "Facet Concurrency", facetConcurrency, setFacetConcurrency)}
+				</SettingsCard>
+			</AdvancedGroup>
+		</>
 	);
 }
