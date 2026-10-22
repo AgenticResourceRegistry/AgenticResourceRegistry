@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """observal inbox: the signed-in user's work and event feed."""
@@ -32,6 +33,7 @@ inbox_app = typer.Typer(
 )
 
 _STATES = ("open", "done", "dismissed")
+_FACET_STATES = (*_STATES, "all")
 _SORTS = ("newest", "oldest")
 _KINDS = (
     "review_requested",
@@ -283,7 +285,7 @@ def inbox_list(
 def inbox_count(
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
     facets: bool = typer.Option(False, "--facets", help="Include kind and subject-type counts"),
-    facet_state: str | None = typer.Option(None, "--facet-state", help=f"Facet state: {', '.join(_STATES)}"),
+    facet_state: str | None = typer.Option(None, "--facet-state", help=f"Facet state: {', '.join(_FACET_STATES)}"),
 ):
     """Show unread and needs-action counts.
 
@@ -309,7 +311,7 @@ def inbox_count(
             )
         params["facet_state"] = _validate(
             facet_state,
-            _STATES,
+            _FACET_STATES,
             "facet state",
             operation="Count inbox items",
         )

@@ -10,6 +10,7 @@
 // SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com>
+// SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
@@ -112,9 +113,9 @@ import type {
 	InboxItem,
 	InboxItemDetail,
 	InboxListResponse,
+	InboxCountOptions,
 	InboxCounts,
 	InboxFilters,
-	InboxState,
 } from "./types";
 import { sessionExpiredLoginUrl } from "./safe-next";
 
@@ -1264,14 +1265,18 @@ export const inbox = {
 		get<InboxListResponse>(`/inbox${inboxQuery(filters)}`),
 	// Facets are opt-in: the nav badge polls this every minute for one number
 	// and should not pay for the sidebar's per-kind breakdown.
-	counts: (opts: { facets?: boolean; facetState?: InboxState } = {}) =>
-		get<InboxCounts>(
-			`/inbox/count${
-				opts.facets
-					? `?facets=true${opts.facetState ? `&facet_state=${opts.facetState}` : ""}`
-					: ""
-			}`,
-		),
+	counts: (opts: InboxCountOptions = {}) => {
+		const params = new URLSearchParams();
+		if (opts.facets) {
+			params.set("facets", "true");
+			if (opts.facetState) params.set("facet_state", opts.facetState);
+			if (opts.unread) params.set("unread", "true");
+			if (opts.actionRequired) params.set("action_required", "true");
+			if (opts.q) params.set("q", opts.q);
+		}
+		const query = params.toString();
+		return get<InboxCounts>(`/inbox/count${query ? `?${query}` : ""}`);
+	},
 	detail: (id: string) => get<InboxItemDetail>(`/inbox/${id}`),
 	read: (id: string) => post<InboxItem>(`/inbox/${id}/read`),
 	unread: (id: string) => post<InboxItem>(`/inbox/${id}/unread`),

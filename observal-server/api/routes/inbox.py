@@ -83,8 +83,12 @@ def _apply_filters(
         stmt = stmt.where(InboxItem.state == state)
     if kind is not None:
         stmt = stmt.where(InboxItem.kind == kind)
-    if action_required is not None:
-        stmt = stmt.where(InboxItem.action_required == action_required)
+    if action_required is True:
+        # "Needs action" means outstanding work. A resolved item keeps its flag,
+        # but it is not waiting on anyone, and its row shows no action marker.
+        stmt = stmt.where(InboxItem.action_required == True, InboxItem.state == InboxState.open)  # noqa: E712
+    elif action_required is False:
+        stmt = stmt.where(or_(InboxItem.action_required == False, InboxItem.state != InboxState.open))  # noqa: E712
     if unread is not None:
         stmt = stmt.where(InboxItem.read_at.is_(None) if unread else InboxItem.read_at.is_not(None))
     if subject_type is not None:
@@ -166,6 +170,10 @@ async def list_inbox(
 
     count_stmt = select(func.count()).select_from(base.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
+    # How many of exactly these rows are unread, for the list's own summary line.
+    unread_total = (
+        await db.execute(select(func.count()).select_from(base.where(InboxItem.read_at.is_(None)).subquery()))
+    ).scalar() or 0
 
     # `id` breaks ties in the same direction as the timestamp. Two items
     # delivered in one fan-out share a `created_at` to the microsecond, and an
@@ -181,6 +189,7 @@ async def list_inbox(
     return InboxListResponse(
         items=[_to_response(item) for item in rows],
         total=total,
+        unread=unread_total,
         page=page,
         page_size=page_size,
     )
@@ -189,31 +198,39 @@ async def list_inbox(
 @router.get("/count", response_model=InboxCountResponse)
 async def inbox_count(
     facets: bool = Query(False),
-    facet_state: InboxState | None = Query(InboxState.open),
+    facet_state: str = Query("open", pattern="^(open|done|dismissed|all)$"),
+    unread: bool | None = Query(None),
+    action_required: bool | None = Query(None),
+    q: str | None = Query(None, max_length=200),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
     """Badge counts, and optionally the per-facet breakdown behind them.
 
-    Unread counts unread items in the Open bucket only, so the badge matches the
-    unread rows the Inbox lists by default. An item resolved by someone else's
-    action (a peer approved, the review was published or closed) moves to Done
-    and stops counting; the event that resolved it arrives as its own message.
-    Action-required likewise counts only OPEN items: work already done is not
-    outstanding.
+    ``unread`` counts unread items in the Open bucket only, so the badge matches
+    the unread rows the Inbox lists by default. An item resolved by someone
+    else's action moves to Done and stops counting; the event that resolved it
+    arrives as its own message. ``action_required`` counts only OPEN items: work
+    already done is not outstanding.
 
     Every count carries the visibility filter. A badge that ticks up for an item
     the caller cannot open would disclose the item just as surely as listing it.
 
     ``facets`` is opt-in because the two callers want different things. The nav
-    badge polls this on a timer for one number; the inbox sidebar loads it once
-    per view and needs the breakdown. ``facet_state`` scopes that breakdown to
-    the bucket the sidebar is showing, so its per-kind numbers add up to the
-    list beside them instead of describing a different set of rows.
+    badge polls this on a timer for one number; the inbox filter sheet loads it
+    per view and needs the breakdown. The breakdown describes the same rows as
+    the list beside it:
+
+    * ``unread_by_state`` gives each folder's unread count, the number shown on
+      the folder (``open`` always equals the badge).
+    * ``scope_*`` count the selected folder (``facet_state``, or every state for
+      ``all``) under the active search.
+    * ``by_kind`` and ``by_subject_type`` additionally apply the Unread and Needs
+      action toggles, so they add up to the list the user is looking at.
     """
     mine = (InboxItem.user_id == current_user.id, visibility.visible_filter(current_user))
 
-    unread = (
+    unread_count = (
         await db.execute(
             select(func.count(InboxItem.id)).where(
                 *mine,
@@ -240,7 +257,7 @@ async def inbox_count(
     )
 
     response = InboxCountResponse(
-        unread=unread,
+        unread=unread_count,
         action_required=action,
         open=by_state.get(InboxState.open, 0),
         done=by_state.get(InboxState.done, 0),
@@ -249,13 +266,62 @@ async def inbox_count(
     if not facets:
         return response
 
-    scoped = (*mine, InboxItem.state == facet_state) if facet_state is not None else mine
+    unread_by_state = dict(
+        (
+            await db.execute(
+                select(InboxItem.state, func.count(InboxItem.id))
+                .where(*mine, InboxItem.read_at.is_(None))
+                .group_by(InboxItem.state)
+            )
+        ).all()
+    )
+    response.unread_by_state = {state.value: unread_by_state.get(state, 0) for state in InboxState}
+
+    state = None if facet_state == "all" else InboxState(facet_state)
+    scope = _apply_filters(
+        select(InboxItem.id).where(*mine),
+        state=state,
+        kind=None,
+        action_required=None,
+        unread=None,
+        subject_type=None,
+        q=q,
+    ).subquery()
+    scoped = select(InboxItem).where(InboxItem.id.in_(select(scope.c.id)))
+    response.scope_total = (await db.execute(select(func.count()).select_from(scoped.subquery()))).scalar() or 0
+    response.scope_unread = (
+        await db.execute(select(func.count()).select_from(scoped.where(InboxItem.read_at.is_(None)).subquery()))
+    ).scalar() or 0
+    response.scope_action_required = (
+        await db.execute(
+            select(func.count()).select_from(
+                _apply_filters(
+                    scoped,
+                    state=None,
+                    kind=None,
+                    action_required=True,
+                    unread=None,
+                    subject_type=None,
+                ).subquery()
+            )
+        )
+    ).scalar() or 0
+
+    toggled = _apply_filters(
+        select(InboxItem.id).where(InboxItem.id.in_(select(scope.c.id))),
+        state=None,
+        kind=None,
+        action_required=action_required,
+        unread=unread,
+        subject_type=None,
+    ).subquery()
+    in_view = InboxItem.id.in_(select(toggled.c.id))
     kinds = (
-        await db.execute(select(InboxItem.kind, func.count(InboxItem.id)).where(*scoped).group_by(InboxItem.kind))
+        await db.execute(select(InboxItem.kind, func.count(InboxItem.id)).where(in_view).group_by(InboxItem.kind))
     ).all()
     subjects = (
         await db.execute(
-            select(InboxItem.subject_type, func.count(InboxItem.id)).where(*scoped).group_by(InboxItem.subject_type)
+            select(InboxItem.subject_type, func.count(InboxItem.id)).where(in_view).group_by(InboxItem.subject_type)
         )
     ).all()
     response.by_kind = {kind.value: count for kind, count in kinds}

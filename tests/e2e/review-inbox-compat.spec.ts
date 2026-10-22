@@ -41,12 +41,16 @@ test("new review notices render in the existing inbox", async ({ page }, testInf
           open: 1,
           done: 0,
           dismissed: 0,
+          unread_by_state: { open: 1, done: 0, dismissed: 0 },
+          scope_total: 1,
+          scope_unread: 1,
+          scope_action_required: 1,
           by_kind: { review_ready: 1 },
           by_subject_type: { skill: 1 },
         }
       : pathname.endsWith(`/${id}`)
         ? { ...item, history: [] }
-        : { items: [item], total: 1, page: 1, page_size: 25 };
+        : { items: [item], total: 1, unread: 1, page: 1, page_size: 25 };
     await route.fulfill({ json: body });
   });
   await page.route("**/api/v1/auth/whoami", (route) =>

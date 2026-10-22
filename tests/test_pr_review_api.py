@@ -768,7 +768,17 @@ async def test_reviewers_hear_only_about_reviews_requested_from_them(api, monkey
 
     async def badge(user):
         async with factory() as db:
-            return (await inbox_count(facets=False, facet_state=InboxState.open, db=db, current_user=user)).unread
+            return (
+                await inbox_count(
+                    facets=False,
+                    facet_state="open",
+                    unread=None,
+                    action_required=None,
+                    q=None,
+                    db=db,
+                    current_user=user,
+                )
+            ).unread
 
     # Opening the review notifies nobody: no reviewer has been requested yet.
     async with factory() as db:
