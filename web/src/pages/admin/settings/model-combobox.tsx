@@ -26,6 +26,8 @@ interface ModelComboboxProps {
 	subtitle: string;
 	placeholder?: string;
 	disabled?: boolean;
+	/** Render the label for screen readers only, when a settings row already shows it. */
+	hideLabel?: boolean;
 }
 
 export function ModelCombobox({
@@ -36,6 +38,7 @@ export function ModelCombobox({
 	subtitle,
 	placeholder = "Select or type model...",
 	disabled,
+	hideLabel,
 }: ModelComboboxProps) {
 	const [open, setOpen] = useState(false);
 	const [inputValue, setInputValue] = useState(value);
@@ -107,10 +110,12 @@ export function ModelCombobox({
 
 	return (
 		<div className="flex flex-col space-y-1.5">
-			<div className="min-h-[2.5rem]">
-				<p className="text-sm font-medium text-foreground leading-tight">{label}</p>
-				<p className="text-xs text-muted-foreground leading-relaxed mt-0.5">{subtitle}</p>
-			</div>
+			{!hideLabel && (
+				<div className="min-h-[2.5rem]">
+					<p className="text-sm font-medium text-foreground leading-tight">{label}</p>
+					<p className="text-xs text-muted-foreground leading-relaxed mt-0.5">{subtitle}</p>
+				</div>
+			)}
 			<Popover open={open} onOpenChange={setOpen}>
 				<PopoverTrigger asChild>
 					<div className="relative">
@@ -124,6 +129,7 @@ export function ModelCombobox({
 							onKeyDown={handleInputKeyDown}
 							placeholder={placeholder}
 							disabled={disabled}
+							aria-label={label}
 							className={cn(
 								"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs font-mono shadow-sm transition-colors",
 								"placeholder:text-muted-foreground placeholder:font-sans",
