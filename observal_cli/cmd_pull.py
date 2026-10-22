@@ -351,7 +351,10 @@ def _safe_data(value, schema: str | None = None):
     if isinstance(value, (list, tuple)):
         return [_safe_data(item, schema) for item in value]
     if value is None or isinstance(value, (bool, int, float)):
-        return value
+        # A server may reflect a numeric credential as a JSON number. Preserve
+        # its type unless its serialized spelling contains a tracked secret.
+        serialized = json.dumps(value)
+        return "<secret>" if _safe_text(serialized) != serialized else value
     # JSON's default=str would stringify unknown objects *after* sanitization.
     return _safe_text(str(value))
 
