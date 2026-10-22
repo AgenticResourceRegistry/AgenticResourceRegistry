@@ -139,8 +139,9 @@ async def test_repeat_request_returns_the_in_flight_report(entry):
     db.add.assert_not_called()
     pool.enqueue_job.assert_not_awaited()
 
-    lock_sql = str(db.execute.await_args_list[0].args[0])
-    assert "pg_advisory_xact_lock" in lock_sql
+    lock = db.execute.await_args_list[0].args
+    assert "pg_advisory_xact_lock" in str(lock[0])
+    assert lock[1] == {"key": f"insights.generate:{agent.id}"}
     lookup_sql = str(db.execute.await_args_list[1].args[0])
     assert "insight_reports.status IN" in lookup_sql
     assert "insight_reports.started_at >=" in lookup_sql
@@ -167,3 +168,39 @@ async def test_in_flight_report_for_another_period_does_not_block_a_new_run():
     pool.enqueue_job.assert_awaited_once_with(
         "generate_insight_report", str(new_report.id), _job_id=f"insight-report:{new_report.id}"
     )
+
+
+@pytest.mark.asyncio
+async def test_cron_takes_the_route_lock_before_its_recent_report_check():
+    """Without the lock, a cron pass overlapping a manual request could miss its
+    uncommitted pending row and queue a second report for the same agent."""
+    import services.dynamic_settings as ds
+    from models.agent import AgentStatus
+    from services.insights import batch
+
+    version = SimpleNamespace(id=uuid.uuid4(), version="1.0.0", status=AgentStatus.approved)
+    agent = SimpleNamespace(id=uuid.uuid4(), name="pr-verify-qa", latest_version=version)
+    agents = MagicMock()
+    agents.scalars.return_value.all.return_value = [agent]
+    db = _db(agents, MagicMock(), _scalars())
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+    settings = {"insights.batch_period_days": 14, "insights.min_sessions": 1}
+
+    with (
+        patch.object(batch, "_reap_stale_reports", new=AsyncMock(return_value=0)),
+        patch.object(batch, "async_session", new=MagicMock(return_value=session)),
+        patch.object(batch, "_count_agent_sessions", new=AsyncMock(return_value=19)),
+        patch.object(batch, "_get_arq_pool", new=AsyncMock(return_value=SimpleNamespace(enqueue_job=AsyncMock()))),
+        patch.object(batch, "find_baseline_report", new=AsyncMock(return_value=None)),
+        patch.object(ds, "get_sync_bool", return_value=True),
+        patch.object(ds, "get_sync_int", side_effect=lambda key, default: settings.get(key, default)),
+    ):
+        assert await batch.discover_and_queue_reports() == 1
+
+    _, lock, recent = (call.args for call in db.execute.await_args_list)
+    assert "pg_advisory_xact_lock" in str(lock[0])
+    assert lock[1] == {"key": f"insights.generate:{agent.id}"}
+    assert "insight_reports.status IN" in str(recent[0])
+    db.commit.assert_awaited_once()

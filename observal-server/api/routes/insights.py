@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from loguru import logger as optic
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import check_listing_visibility_async, get_db, get_effective_agent_permission, require_role
@@ -28,7 +28,12 @@ from schemas.insights import (
 )
 from services.insight_version_filters import agent_version_filter
 from services.insights import INSIGHTS_AVAILABLE, render_report_html
-from services.insights.batch import REPORT_TIMEOUT_MINUTES, find_baseline_report, insight_report_job_id
+from services.insights.batch import (
+    REPORT_TIMEOUT_MINUTES,
+    find_baseline_report,
+    insight_report_job_id,
+    lock_agent_reports,
+)
 from services.redis import _get_arq_pool
 
 router = APIRouter(prefix="/api/v1/insights", tags=["insights"])
@@ -156,10 +161,7 @@ async def _in_flight_report(
     insert that follows a miss, so two concurrent requests cannot both miss.
     A report older than the reaper's timeout is dead, not in flight.
     """
-    await db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"insights.generate:{agent.id}"},
-    )
+    await lock_agent_reports(db, agent.id)
     stmt = (
         select(InsightReport)
         .where(

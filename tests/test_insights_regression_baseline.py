@@ -155,7 +155,7 @@ async def test_cron_batch_links_only_a_non_overlapping_baseline():
 
     added: list = []
     db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[agents, no_recent])
+    db.execute = AsyncMock(side_effect=[agents, MagicMock(), no_recent])
     db.add = MagicMock(side_effect=added.append)
     session = MagicMock()
     session.__aenter__ = AsyncMock(return_value=db)

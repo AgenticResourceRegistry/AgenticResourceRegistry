@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from database import async_session
 from models.agent import Agent, AgentStatus, AgentVersion
@@ -153,6 +153,19 @@ def insight_report_job_id(report_id) -> str:
     report pending forever. Duplicate inputs are caught before the insert.
     """
     return f"insight-report:{report_id}"
+
+
+async def lock_agent_reports(db, agent_id) -> None:
+    """Serialize report creation for one agent until ``db``'s transaction ends.
+
+    The generate route and the cron both check for an existing report and then
+    insert one. Without a shared lock, one of them can miss the other's
+    uncommitted row and queue a duplicate run.
+    """
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"insights.generate:{agent_id}"},
+    )
 
 
 async def find_baseline_report(
@@ -418,6 +431,9 @@ async def discover_and_queue_reports() -> int:
 
         for agent in agents:
             try:
+                # Held until this agent's commit or rollback below.
+                await lock_agent_reports(db, agent.id)
+
                 # Check if there's already a recent report (completed or in-progress)
                 latest_report_stmt = (
                     select(InsightReport)
