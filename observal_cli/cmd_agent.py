@@ -1224,8 +1224,7 @@ def agent_fork(
     if directory is not None:
         rprint(f"[dim]Next:[/dim] observal agent publish --update --dir {esc(directory)}")
     rprint(f"[dim]Submit:[/dim] observal agent publish --submit {esc(result['id'])}")
-    for warning in result.get("warnings") or []:
-        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+    _print_warnings(result)
 
 
 @agent_app.command(name="install")
@@ -1817,20 +1816,30 @@ def agent_build(
     if output != "json":
         console.print(table)
 
-    scope_payload = {"components": components}
+    declared = data.get("supported_harnesses", [])
+    scope_payload = {"components": components, "supported_harnesses": declared}
     client.add_publish_target(scope_payload, team, visibility)
     with _progress(output, "Checking agent composition scope..."):
         scope_result = client.post("/api/v1/agents/validate", scope_payload)
     issues = scope_result.get("issues", [])
+    warnings: list[str] = []
     for issue in issues:
-        errors.append(issue.get("message", "Component is not valid for this agent target"))
+        message = issue.get("message", "Component is not valid for this agent target")
+        if issue.get("severity") == "warning":
+            warnings.append(message)
+        else:
+            errors.append(message)
 
     result = {
         "valid": not errors,
         "agent": data.get("name"),
         "components": component_results,
         "issues": issues,
+        "supported_harnesses": scope_result.get("supported_harnesses", declared),
     }
+    if output != "json":
+        for warning in warnings:
+            rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
     if errors:
         if output != "json":
             rprint(f"\n[red]{len(errors)} component issue(s):[/red]")
@@ -1848,6 +1857,11 @@ def agent_build(
         output_json(result)
     else:
         rprint("\n[green]✓ All components valid.[/green]")
+
+
+def _print_warnings(result: dict) -> None:
+    for warning in result.get("warnings") or []:
+        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
 
 
 # Statuses whose version is not published yet and is amended in place (a new review revision).
@@ -2072,6 +2086,7 @@ def agent_publish(
             output_json(result)
             return
         rprint(f"[green]✓ Draft saved![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        _print_warnings(result)
         return
 
     if update:
@@ -2128,6 +2143,7 @@ def agent_publish(
             f"[green]✓ Agent updated in place![/green] ID: [bold]{esc(result['id'])}[/bold]  v{esc(result.get('version', '?'))}"
         )
         print_draft_save(result, f"observal agent publish --submit {result.get('id', '<id>')}")
+        _print_warnings(result)
     else:
         with _progress(output, "Submitting agent for review..."):
             result = client.post("/api/v1/agents", payload)
@@ -2140,6 +2156,7 @@ def agent_publish(
         rprint(f"  Pull: [cyan]observal agent pull {esc(client.canonical_name(result))}[/cyan]")
         if status != "approved":
             rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
+        _print_warnings(result)
 
 
 @agent_app.command(name="release")
@@ -2245,8 +2262,7 @@ def agent_release(
 
     rprint(f"[green]✓ Version {esc(new_version)} submitted for review[/green]")
     print_review_link(result)
-    for warning in result.get("warnings", []):
-        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+    _print_warnings(result)
 
 
 @agent_app.command(name="versions")

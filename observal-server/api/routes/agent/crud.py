@@ -39,7 +39,7 @@ from schemas.agent import (
 )
 from services.cache import invalidate_namespace
 from services.config_generator import validate_mcp_command
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_fork import agent_fork_counts, provenance_for, provenance_for_many
 from services.registry_namespace import identity_exists, slugify
 from services.registry_telemetry import emit_registry_event
@@ -207,8 +207,10 @@ async def create_agent(
         components = all_crefs
         external_mcps = version.external_mcps
 
-    version.required_capabilities = infer_required_features(_AgentProxy(), skill_listings=skill_listings_map)
-    version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(version, _AgentProxy(), skill_listings=skill_listings_map)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     # Flush pending AgentComponent + goal rows so the snapshot builder picks
     # them up via its own SELECTs (the relationship cache is empty).
@@ -245,7 +247,11 @@ async def create_agent(
     )
 
     return _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        warnings=harness_warnings,
     ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
@@ -818,8 +824,14 @@ async def update_agent(
             current_user=current_user,
         )
 
-    # Re-infer harness features only when components or external_mcps changed
-    if req.components is not None or req.mcp_server_ids is not None or req.external_mcps is not None:
+    # Re-infer harness features when components, external_mcps or the declared harnesses changed
+    harness_warnings: list[str] = []
+    if (
+        req.components is not None
+        or req.mcp_server_ids is not None
+        or req.external_mcps is not None
+        or req.supported_harnesses is not None
+    ):
         if not agent.latest_version:
             raise HTTPException(status_code=400, detail="Agent has no version to update features on")
         current_comps = (
@@ -837,8 +849,10 @@ async def update_agent(
             components = current_comps
             external_mcps = agent.external_mcps
 
-        agent.required_capabilities = infer_required_features(_AgentProxy(), skill_listings=skill_listings_map_update)
-        agent.inferred_supported_harnesses = compute_supported_harnesses(agent.required_capabilities)
+        try:
+            harness_warnings = apply_harness_inference(agent, _AgentProxy(), skill_listings=skill_listings_map_update)
+        except NoCompatibleHarnessError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     snapshot_fields = (
         "version",
@@ -885,7 +899,11 @@ async def update_agent(
     )
 
     response = _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        warnings=harness_warnings,
     )
     return response.model_copy(update=pushed) if pushed else response
 

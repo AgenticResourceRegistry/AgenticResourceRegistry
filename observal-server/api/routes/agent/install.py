@@ -6,6 +6,8 @@
 
 """Agent install, download stats, traces, resolve, manifest, and validate routes."""
 
+from types import SimpleNamespace
+
 from fastapi import Depends, HTTPException, Query, Request
 from loguru import logger as optic
 from sqlalchemy import select
@@ -40,6 +42,12 @@ from schemas.agent import (
 )
 from services.harness import generate_agent_config
 from services.harness.helpers import AliasCollisionError
+from services.harness_capability_inference import (
+    compute_supported_harnesses,
+    infer_required_features,
+    split_supported_harnesses,
+    unsupported_harness_reason,
+)
 from services.registry_telemetry import emit_registry_event
 from services.skill_bundle import (
     SKILL_EXTRA_FILES_FEATURE,
@@ -622,7 +630,7 @@ async def validate_agent_composition(
     """Validate a set of components for compatibility before publishing an agent."""
     optic.trace("req={}", req)
     if not req.components:
-        return ValidationResult(valid=True, issues=[])
+        return ValidationResult(valid=True, issues=[], supported_harnesses=req.supported_harnesses)
 
     from services.agent_resolver import validate_component_ids
 
@@ -643,4 +651,23 @@ async def validate_agent_composition(
         )
         for e in errors
     ]
-    return ValidationResult(valid=len(issues) == 0, issues=issues)
+
+    # The same harness check publish applies: declared harnesses that can't run the components are left out.
+    skill_ids = [c.component_id for c in req.components if c.component_type == "skill"]
+    skill_listings: dict = {}
+    if skill_ids:
+        rows = (await db.execute(select(SkillListing).where(SkillListing.id.in_(skill_ids)))).scalars().all()
+        skill_listings = {row.id: row for row in rows}
+    required = infer_required_features(SimpleNamespace(components=req.components), skill_listings=skill_listings)
+    kept, dropped = split_supported_harnesses(req.supported_harnesses, compute_supported_harnesses(required))
+    if dropped:
+        outcome = "so publish leaves it out of supported harnesses" if kept else "and no declared harness can run them"
+        issues.extend(
+            ValidationIssue(
+                severity="warning" if kept else "error",
+                message=f"{unsupported_harness_reason(harness, required)}, which the components need, {outcome}.",
+            )
+            for harness in dropped
+        )
+    valid = not any(issue.severity == "error" for issue in issues)
+    return ValidationResult(valid=valid, issues=issues, supported_harnesses=kept)

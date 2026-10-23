@@ -310,6 +310,8 @@ class AgentSummary(BaseModel):
 
 class AgentValidateRequest(BaseModel):
     components: list[ComponentRef] = []
+    # Declared harnesses to check against what the components need; empty places no limit.
+    supported_harnesses: list[str] = []
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
 
@@ -324,6 +326,8 @@ class ValidationIssue(BaseModel):
 class ValidationResult(BaseModel):
     valid: bool
     issues: list[ValidationIssue] = []
+    # The declared harnesses that can run the components, as publish will store them.
+    supported_harnesses: list[str] = []
 
 
 class AgentInstallRequest(BaseModel):

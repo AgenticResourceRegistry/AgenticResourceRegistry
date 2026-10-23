@@ -31,6 +31,7 @@ from schemas.agent import (
     SuccessCriteria,
     SuccessMetric,
 )
+from services import harness_capability_inference as inference
 from services.teamspace import PublishTarget
 
 pytestmark = pytest.mark.usefixtures("no_open_review")
@@ -286,8 +287,8 @@ def boundaries(monkeypatch):
     monkeypatch.setattr(crud, "emit_registry_event", emit)
     monkeypatch.setattr(crud, "invalidate_namespace", invalidate)
     monkeypatch.setattr(crud, "validate_mcp_command", validate_command)
-    monkeypatch.setattr(crud, "infer_required_features", MagicMock(return_value=["mcp_servers"]))
-    monkeypatch.setattr(crud, "compute_supported_harnesses", MagicMock(return_value=["kiro"]))
+    monkeypatch.setattr(inference, "infer_required_features", MagicMock(return_value=["mcp_servers"]))
+    monkeypatch.setattr(inference, "compute_supported_harnesses", MagicMock(return_value=["codex", "kiro"]))
     monkeypatch.setattr(crud, "_resolve_component_names", names)
     monkeypatch.setattr(crud, "_resolve_component_identities", identities)
     monkeypatch.setattr(crud, "_resolve_component_statuses", statuses)
@@ -435,7 +436,7 @@ async def test_create_team_agent_with_typed_components_maps_response_and_audit(b
     boundaries.submit.assert_awaited_once_with(db, "agent", new_agent, version, USER_ID)
     assert version.success_criteria == criteria.model_dump()
     assert version.required_capabilities == ["mcp_servers"]
-    assert version.inferred_supported_harnesses == ["kiro"]
+    assert version.inferred_supported_harnesses == ["codex", "kiro"]
     assert [(link.component_type, link.resolved_version, link.order_index) for link in links] == [
         ("mcp", "2.0.0", 0),
         ("skill", "3.0.0", 1),
@@ -866,7 +867,7 @@ async def test_update_typed_components_refreshes_features_snapshot_and_response(
     assert agent.external_mcps == [{"name": "local", "command": "python", "args": ["main.py"], "env": {}, "url": None}]
     assert agent.latest_version.success_criteria == criteria.model_dump()
     assert agent.required_capabilities == ["mcp_servers"]
-    assert agent.inferred_supported_harnesses == ["kiro"]
+    assert agent.inferred_supported_harnesses == ["codex", "kiro"]
     assert db.delete.await_args_list[0].args[0] is old_mcp
     assert db.delete.await_args_list[1].args[0] is old_skill
     added = [call.args[0] for call in db.add.call_args_list]
