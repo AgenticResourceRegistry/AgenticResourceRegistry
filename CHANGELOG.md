@@ -55,6 +55,7 @@ All notable changes to this project will be documented in this file.
 - run hooks in pulled Claude Code agents with the CLI's own interpreter instead of bare `python3`, which cannot import a `uv tool` install ([#1773](https://github.com/Observal/Observal/issues/1773))
 - say in `agent pull` output, and in JSON as `reports_sessions`, when the pulled agent sends its sessions to the server ([#1772](https://github.com/Observal/Observal/issues/1772))
 - correct docs still describing the removed password reset code flow and CLI commands that do not exist
+- point the rate-limit and token-expiry help links at sections that still exist
 
 ### Documentation
 

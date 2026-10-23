@@ -57,14 +57,14 @@ export const SETTING_DOCS: Record<string, DocRef> = {
 	// Security
 	"security.allow_internal_git_urls": { file: "self-hosting/trusted-proxies.md", anchor: "allow-internal-git-urls", label: "Allow Internal Git URLs" },
 	"security.allow_draft_install": { file: "self-hosting/trusted-proxies.md", anchor: "ssrf-protection", label: "Draft Install" },
-	"security.rate_limit_auth": { file: "self-hosting/trusted-proxies.md", anchor: "auth-rate-limit", label: "Auth Rate Limit" },
-	"security.rate_limit_auth_strict": { file: "self-hosting/trusted-proxies.md", anchor: "strict-auth-rate-limit", label: "Strict Auth Rate Limit" },
+	"security.rate_limit_auth": { file: "self-hosting/authentication.md", anchor: "rate-limits", label: "Auth Rate Limit" },
+	"security.rate_limit_auth_strict": { file: "self-hosting/authentication.md", anchor: "rate-limits", label: "Strict Auth Rate Limit" },
 	"security.trusted_proxy_ips": { file: "self-hosting/trusted-proxies.md", anchor: "trusted-proxy-ips", label: "Trusted Proxy IPs" },
 
 	// Token Expiry
-	"jwt.access_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "access-tokens", label: "Access Tokens" },
-	"jwt.refresh_token_expire_days": { file: "self-hosting/token-expiry.md", anchor: "refresh-tokens", label: "Refresh Tokens" },
-	"jwt.hooks_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "hooks-tokens", label: "Hooks Tokens" },
+	"jwt.access_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "recommended-configurations", label: "Access Tokens" },
+	"jwt.refresh_token_expire_days": { file: "self-hosting/token-expiry.md", anchor: "recommended-configurations", label: "Refresh Tokens" },
+	"jwt.hooks_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "recommended-configurations", label: "Hooks Tokens" },
 
 	// SAML
 	"saml.idp_entity_id": { file: "self-hosting/saml-settings.md", anchor: "idp-entity-id", label: "IdP Entity ID" },
