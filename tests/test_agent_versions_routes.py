@@ -30,6 +30,7 @@ from schemas.agent import (
     SuccessCriteria,
     SuccessMetric,
 )
+from services import harness_capability_inference as inference
 from services.agent_lock import PinnedListing
 
 NOW = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
@@ -248,7 +249,7 @@ def boundaries(monkeypatch):
     lock = AsyncMock(return_value={})
     pinned = AsyncMock(return_value={})
     infer = MagicMock(return_value=[])
-    compute = MagicMock(return_value=[])
+    compute = MagicMock(return_value=["kiro"])
     generate = MagicMock(return_value={"files": {}})
     build_snapshot = AsyncMock(return_value="snapshot: generated\n")
     resolve_model = AsyncMock(return_value=("resolved-model", []))
@@ -264,8 +265,8 @@ def boundaries(monkeypatch):
     monkeypatch.setattr(agent_lock, "attach_pinned_components", attach)
     monkeypatch.setattr(agent_lock, "lock_agent_version", lock)
     monkeypatch.setattr(agent_lock, "pinned_versions", pinned)
-    monkeypatch.setattr(routes, "infer_required_features", infer)
-    monkeypatch.setattr(routes, "compute_supported_harnesses", compute)
+    monkeypatch.setattr(inference, "infer_required_features", infer)
+    monkeypatch.setattr(inference, "compute_supported_harnesses", compute)
     monkeypatch.setattr(routes, "generate_agent_config", generate)
     monkeypatch.setattr(routes, "audit", legacy_audit)
     monkeypatch.setattr(snapshot, "build_yaml_snapshot", build_snapshot)
@@ -558,7 +559,7 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
     boundaries.load.return_value = agent
     boundaries.pins.update({("mcp", MCP_ID): "4.1.0", ("skill", SKILL_ID): "3.2.0"})
     boundaries.infer.return_value = ["mcp_servers", "skills"]
-    boundaries.compute.return_value = ["kiro", "claude-code"]
+    boundaries.compute.return_value = ["claude-code", "codex", "kiro"]
     skill_listing = SimpleNamespace(id=SKILL_ID, name="Reviewer")
     mcp_listing = SimpleNamespace(id=MCP_ID, name="GitHub")
     db = _creation_db(
@@ -611,7 +612,7 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
     assert version.success_criteria == criteria.model_dump()
     assert version.is_prerelease is True
     assert version.required_capabilities == ["mcp_servers", "skills"]
-    assert version.inferred_supported_harnesses == ["kiro", "claude-code"]
+    assert version.inferred_supported_harnesses == ["claude-code", "codex", "kiro"]
     assert version.yaml_snapshot == "snapshot: generated\n"
     assert version.harness_configs == {"kiro": {"agent_profile": {"content": "review"}}}
     assert [(link.component_type, link.component_id, link.resolved_version, link.order_index) for link in links] == [
@@ -695,6 +696,38 @@ async def test_create_draft_skips_queue_and_has_no_warning(boundaries):
     boundaries.generate.assert_not_called()
     boundaries.publish.assert_not_awaited()
     assert len(db.statements) == 2
+
+
+async def test_create_leaves_out_declared_harnesses_that_cannot_run_the_components(boundaries):
+    boundaries.load.return_value = _agent()
+    boundaries.infer.return_value = ["skills"]
+    boundaries.compute.return_value = ["kiro"]
+    db = _creation_db(_result(one=None), _result(scalar=None))
+
+    response = await routes._create_agent_version(
+        str(AGENT_ID), _request(save_as_draft=True, supported_harnesses=["cursor", "kiro"]), db, _user()
+    )
+
+    version = next(call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], AgentVersion))
+    assert version.supported_harnesses == ["kiro"]
+    assert response["supported_harnesses"] == ["kiro"]
+    assert response["warnings"] == ["cursor has no skills support, so it was left out of supported harnesses."]
+
+
+async def test_create_refuses_when_no_declared_harness_can_run_the_components(boundaries):
+    boundaries.load.return_value = _agent()
+    boundaries.infer.return_value = ["skills"]
+    boundaries.compute.return_value = ["kiro"]
+    db = _creation_db(_result(one=None), _result(scalar=None))
+
+    with pytest.raises(HTTPException) as caught:
+        await routes._create_agent_version(
+            str(AGENT_ID), _request(save_as_draft=True, supported_harnesses=["cursor"]), db, _user()
+        )
+
+    assert caught.value.status_code == 422
+    assert "cursor has no skills support" in caught.value.detail
+    db.commit.assert_not_awaited()
 
 
 async def test_create_snapshot_failure_aborts_before_notification_or_commit(boundaries):

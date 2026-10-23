@@ -124,6 +124,8 @@ observal agent build --dir ./my-agent --output json
 observal agent publish --dir ./my-agent --output json
 ```
 
+`agent build` also checks `supported_harnesses` against what the components need. A declared harness that cannot run them, such as Cursor for an Agent with a skill folder (Cursor has no skills support), comes back as a warning, and publish leaves it out. JSON output lists the harnesses that will be stored in `supported_harnesses`. If no declared harness can run the components, build and publish fail; declare one the error names. Report dropped harnesses to the user.
+
 Use `--draft` to save without review and `--submit AGENT_UUID --message 'Address feedback'` to submit an existing draft or push a revision. The response contains `review_number` and `review_url`: open `observal review show N`, read `observal review threads N`, address feedback and resubmit; approval and publication are separate decisions. Team publication uses an explicit target:
 
 ```bash

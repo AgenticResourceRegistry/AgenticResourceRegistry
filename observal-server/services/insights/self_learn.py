@@ -650,7 +650,7 @@ async def _refresh_capability_inference(version: AgentVersion, db: AsyncSession)
     previously did not, so insight-generated versions silently lost the
     harness-compatibility warnings shown at pull time.
     """
-    from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+    from services.harness_capability_inference import apply_harness_inference
 
     components = (
         (await db.execute(select(AgentComponent).where(AgentComponent.agent_version_id == version.id))).scalars().all()
@@ -670,8 +670,7 @@ async def _refresh_capability_inference(version: AgentVersion, db: AsyncSession)
             self.external_mcps = version.external_mcps
 
     try:
-        version.required_capabilities = infer_required_features(_VersionProxy(), skill_listings=skill_listings)
-        version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+        apply_harness_inference(version, _VersionProxy(), skill_listings=skill_listings)
     except Exception as e:  # pragma: no cover - inference must never block the apply
         optic.warning("self_learn_capability_inference_failed: version={}, error={}", version.version, str(e))
 
