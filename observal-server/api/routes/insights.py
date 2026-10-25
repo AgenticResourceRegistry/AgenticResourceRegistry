@@ -192,6 +192,40 @@ async def _in_flight_report(
     return None
 
 
+async def _in_flight_component_report(
+    db: AsyncSession,
+    *,
+    listing_id: UUID,
+    component_type: str,
+    component_version_id: UUID | None,
+    period_days: int,
+    now: datetime,
+) -> InsightReport | None:
+    """Return a pending or running report for the same component, version and period, if there is one.
+
+    Same contract as ``_in_flight_report``: a repeated request joins the run in progress instead of
+    paying for an identical set of model calls, and the lock covers the insert that follows a miss.
+    """
+    await lock_agent_reports(db, listing_id)
+    result = await db.execute(
+        select(InsightReport)
+        .where(
+            InsightReport.subject_type == "component",
+            InsightReport.component_type == component_type,
+            InsightReport.component_id == listing_id,
+            InsightReport.component_version_id.is_not_distinct_from(component_version_id),
+            InsightReport.status.in_([InsightReportStatus.pending, InsightReportStatus.running]),
+            InsightReport.started_at >= now - timedelta(minutes=REPORT_TIMEOUT_MINUTES),
+        )
+        .order_by(InsightReport.created_at.desc())
+    )
+    period = timedelta(days=period_days)
+    for report in result.scalars().all():
+        if report.period_end - report.period_start == period:
+            return report
+    return None
+
+
 async def _count_insight_sessions(
     *,
     agent: Agent,
@@ -524,6 +558,16 @@ async def generate_component_insight(
     coverage = summary["coverage"].model_dump(mode="json")
     if summary["present_sessions"] == 0:
         raise HTTPException(status_code=422, detail={"message": "No verified present sessions", "coverage": coverage})
+    in_flight = await _in_flight_component_report(
+        db,
+        listing_id=listing.id,
+        component_type=component_type,
+        component_version_id=request.component_version_id,
+        period_days=request.period_days,
+        now=now,
+    )
+    if in_flight:
+        return InsightReportListItem.model_validate(in_flight)
     report = InsightReport(
         subject_type="component",
         agent_id=None,
@@ -546,7 +590,7 @@ async def generate_component_insight(
     db.add(report)
     await db.flush()
     pool = await _get_arq_pool()
-    await pool.enqueue_job("generate_insight_report", str(report.id))
+    await pool.enqueue_job("generate_insight_report", str(report.id), _job_id=insight_report_job_id(report.id))
     await db.commit()
     return InsightReportListItem.model_validate(report)
 

@@ -156,16 +156,17 @@ def insight_report_job_id(report_id) -> str:
     return f"insight-report:{report_id}"
 
 
-async def lock_agent_reports(db, agent_id) -> None:
-    """Serialize report creation for one agent until ``db``'s transaction ends.
+async def lock_agent_reports(db, subject_id) -> None:
+    """Serialize report creation for one agent or component until ``db``'s transaction ends.
 
-    The generate route and the cron both check for an existing report and then
+    The generate routes and the cron both check for an existing report and then
     insert one. Without a shared lock, one of them can miss the other's
-    uncommitted row and queue a duplicate run.
+    uncommitted row and queue a duplicate run. Agent and listing ids are UUIDs,
+    so one key space serves both.
     """
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"insights.generate:{agent_id}"},
+        {"key": f"insights.generate:{subject_id}"},
     )
 
 
