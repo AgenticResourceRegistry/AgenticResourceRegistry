@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import pytest
 
 from services.clickhouse import _query
-from services.retention import _delete_batch, _purge_layer_orphans, _purge_session_facets, _purge_session_orphans
+from services.retention import _delete_batch, _purge_session_facets, _purge_session_orphans
 
 _URL = os.getenv("OBSERVAL_CH_RETENTION_URL")
 _PG_URL = os.getenv("OBSERVAL_PG_RETENTION_URL")
@@ -271,7 +271,6 @@ async def test_retention_scopes_session_and_shared_snapshot():
 
     assert await _delete_batch("session_events", "timestamp", project, cutoff)
     await _purge_session_orphans(project, cutoff)
-    await _purge_layer_orphans(project, cutoff)
     keep = {("alice", "claude-code", "keep"), ("alice", "pi", "same")}
     for table in (
         "session_events",
@@ -285,7 +284,7 @@ async def test_retention_scopes_session_and_shared_snapshot():
             (r["user_id"], r["harness"], r["session_id"])
             for r in await _rows(table, project, "user_id,harness,session_id")
         } == keep, table
-    remaining = {("alice", shared), ("alice", other), ("bob", other)}
+    remaining = {("alice", shared), ("bob", shared), ("alice", other), ("bob", other)}  # snapshots are kept
     for table, column in (
         ("layer_snapshots", "hash"),
         ("layer_components", "layer_hash"),
@@ -296,8 +295,7 @@ async def test_retention_scopes_session_and_shared_snapshot():
         (r["user_id"], r["session_id"]) for r in await _rows("session_events", other_project, "user_id,session_id")
     } == {("bob", "same")}
 
-    # Last reference expires; Alice's old shared snapshot is now removable,
-    # while Bob's newly uploaded, never-used snapshot survives the time cutoff.
+    # Last reference expires: the activity goes, the configuration snapshots stay.
     response = await _query(
         "DELETE FROM session_events WHERE project_id = {pid:String} AND user_id = 'alice' "
         "AND harness = 'claude-code' AND session_id = 'keep' SETTINGS lightweight_deletes_sync = 1",
@@ -306,16 +304,11 @@ async def test_retention_scopes_session_and_shared_snapshot():
     )
     response.raise_for_status()
     await _purge_session_orphans(project, cutoff)
-    await _purge_layer_orphans(project, cutoff)
     assert {r["session_id"] for r in await _rows("component_activity", project, "session_id")} == {"same"}
-    assert {r["user_id"] for r in await _rows("layer_snapshots", project, "user_id") if r["user_id"] == "bob"} == {
-        "bob"
-    }
-    assert {r["hash"] for r in await _rows("layer_snapshots", project, "hash")} == {other}
+    assert {r["hash"] for r in await _rows("layer_snapshots", project, "hash")} == {shared, other}
     # Idempotent retry after any partial cleanup must not remove fresh data.
     await _purge_session_orphans(project, cutoff)
-    await _purge_layer_orphans(project, cutoff)
-    assert {r["hash"] for r in await _rows("layer_snapshots", project, "hash")} == {other}
+    assert {r["hash"] for r in await _rows("layer_snapshots", project, "hash")} == {shared, other}
 
 
 @pytest.mark.skipif(not _PG_URL, reason="requires disposable retention_proof_pg PostgreSQL")

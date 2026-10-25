@@ -87,33 +87,6 @@ async def test_scoped_session_orphan_cleanup():
 
 
 @pytest.mark.asyncio
-async def test_layer_cleanup_keeps_shared_hash_for_retained_user():
-    with patch("services.clickhouse._query", new=AsyncMock(return_value=_mock_response())) as query:
-        from services.retention import _purge_layer_orphans
-
-        result = await _purge_layer_orphans("test-pid", "2026-04-01 00:00:00.000")
-
-    assert set(result) == {"layer_snapshots", "layer_components", "layer_component_extractions"}
-    snapshot_sql = query.call_args_list[0].args[0]
-    assert "uploaded_at < {cutoff:String}" in snapshot_sql
-    assert "(user_id, hash) NOT IN" in snapshot_sql
-    assert "SELECT DISTINCT user_id, layer_hash FROM session_events" in snapshot_sql
-    for call in query.call_args_list[1:]:
-        assert "(user_id, layer_hash) NOT IN" in call.args[0]
-        assert "SELECT DISTINCT user_id, hash FROM layer_snapshots" in call.args[0]
-
-
-@pytest.mark.asyncio
-async def test_layer_cleanup_stops_if_source_or_snapshot_delete_fails():
-    with patch("services.clickhouse._query", new=AsyncMock(return_value=_mock_response(500))) as query:
-        from services.retention import _purge_layer_orphans
-
-        with pytest.raises(RuntimeError, match="layer_snapshots"):
-            await _purge_layer_orphans("test-pid", "2026-04-01")
-    assert query.await_count == 1
-
-
-@pytest.mark.asyncio
 async def test_count_based_purge_uses_daily_aggregation():
     """Count-based purge queries daily counts, not OFFSET."""
     with (
@@ -137,3 +110,14 @@ async def test_count_based_purge_uses_daily_aggregation():
         assert "ORDER BY day DESC" in first_sql
         assert "LIMIT 730" in first_sql
         assert "OFFSET" not in first_sql
+
+
+def test_scheduled_retention_never_deletes_layer_snapshots():
+    """Senders cache "already uploaded" per hash, so a deleted snapshot is never re-sent (the admin purge agrees)."""
+    import inspect
+
+    from services import retention
+
+    source = inspect.getsource(retention)
+    assert "DELETE FROM layer_" not in source
+    assert "_purge_layer_orphans" not in source
