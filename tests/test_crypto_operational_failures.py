@@ -63,23 +63,6 @@ def test_unreadable_active_key_fails_operationally_without_replacing(
     assert original_read_bytes(signing_path) == original_pem
 
 
-def test_corrupt_required_retired_key_fails_operationally(key_manager: KeyManager, tmp_path: Path) -> None:
-    token = key_manager.sign_token({"sub": "retired"})
-    retired_kid = key_manager.get_kid()
-    key_manager.rotate_key()
-    assert key_manager.verify_token(token)["sub"] == "retired"
-
-    retired_path = tmp_path / "keys" / f"retired_{retired_kid}.pem"
-    corrupt_pem = b"not a public key"
-    retired_path.write_bytes(corrupt_pem)
-
-    # Looking up another key must not erase the manager's validated identity for K1.
-    assert key_manager.find_public_key("genuinely-unknown-key") is None
-    with pytest.raises(KeyStoreUnavailableError):
-        key_manager.verify_token(token)
-    assert retired_path.read_bytes() == corrupt_pem
-
-
 def test_unreadable_unrelated_retired_key_does_not_block_required_key(
     key_manager: KeyManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -111,27 +94,6 @@ def test_malformed_unrelated_retired_key_does_not_block_required_key(key_manager
     assert (tmp_path / "keys" / f"retired_{retired_kid}.pem").exists()
 
 
-def test_unreadable_required_retired_key_fails_operationally(
-    key_manager: KeyManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    token = key_manager.sign_token({"sub": "retired"})
-    retired_kid = key_manager.get_kid()
-    key_manager.rotate_key()
-    assert key_manager.verify_token(token)["sub"] == "retired"
-    retired_path = tmp_path / "keys" / f"retired_{retired_kid}.pem"
-    original_read_bytes = Path.read_bytes
-
-    def read_bytes(path: Path) -> bytes:
-        if path == retired_path:
-            raise PermissionError("test-only unreadable required key")
-        return original_read_bytes(path)
-
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
-
-    with pytest.raises(KeyStoreUnavailableError):
-        key_manager.verify_token(token)
-
-
 def test_retired_key_directory_listing_failure_is_operational(
     key_manager: KeyManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -151,90 +113,6 @@ def test_retired_key_directory_listing_failure_is_operational(
 
     with pytest.raises(KeyStoreUnavailableError):
         key_manager.verify_token(token)
-
-
-def test_corrupt_retired_key_after_peer_rotation_fails_operationally(key_manager: KeyManager, tmp_path: Path) -> None:
-    token = key_manager.sign_token({"sub": "retired"})
-    retired_kid = key_manager.get_kid()
-    peer = KeyManager(key_dir=str(tmp_path / "keys"))
-    peer.initialize()
-    peer.rotate_key()
-    retired_path = tmp_path / "keys" / f"retired_{retired_kid}.pem"
-    retired_path.write_bytes(b"not a public key")
-
-    with pytest.raises(KeyStoreUnavailableError):
-        key_manager.verify_token(token)
-
-
-def test_missing_required_retired_key_fails_operationally(key_manager: KeyManager, tmp_path: Path) -> None:
-    token = key_manager.sign_token({"sub": "retired"})
-    retired_kid = key_manager.get_kid()
-    key_manager.rotate_key()
-    retired_path = tmp_path / "keys" / f"retired_{retired_kid}.pem"
-    retired_path.unlink()
-
-    with pytest.raises(KeyStoreUnavailableError):
-        key_manager.verify_token(token)
-    assert not retired_path.exists()
-
-
-def test_replaced_required_retired_key_fails_operationally(key_manager: KeyManager, tmp_path: Path) -> None:
-    token = key_manager.sign_token({"sub": "retired"})
-    retired_kid = key_manager.get_kid()
-    key_manager.rotate_key()
-    retired_path = tmp_path / "keys" / f"retired_{retired_kid}.pem"
-    replacement_manager = KeyManager(key_dir=str(tmp_path / "replacement"))
-    replacement_manager.initialize()
-    replacement_pem = replacement_manager.get_public_key_pem().encode()
-    retired_path.write_bytes(replacement_pem)
-
-    with pytest.raises(KeyStoreUnavailableError):
-        key_manager.verify_token(token)
-    assert retired_path.read_bytes() == replacement_pem
-
-
-def test_backdated_corrupt_retired_key_is_treated_as_expired(key_manager: KeyManager, tmp_path: Path) -> None:
-    token = key_manager.sign_token({"sub": "expired"})
-    retired_kid = key_manager.get_kid()
-    key_manager.rotate_key()
-    retired_path = tmp_path / "keys" / f"retired_{retired_kid}.pem"
-    retired_path.write_bytes(b"not a public key")
-    backdated_at = time.time() - 31 * 86400
-    os.utime(retired_path, (backdated_at, backdated_at))
-    key_manager.rotate_key()
-
-    with pytest.raises(pyjwt.InvalidTokenError, match="Unknown key id"):
-        key_manager.verify_token(token)
-
-
-def test_corrupt_retired_key_retention_tracks_eligible_file_mtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    key_dir = tmp_path / "keys"
-    key_dir.mkdir()
-    manager = KeyManager(key_dir=str(key_dir), retired_key_retention_days=1)
-    manager.initialize()
-    token = manager.sign_token({"sub": "retired"})
-    retired_kid = manager.get_kid()
-    manager.rotate_key()
-    retired_path = key_dir / f"retired_{retired_kid}.pem"
-    retired_at = retired_path.stat().st_mtime
-    corrupted_at = retired_at + 23 * 3600
-    retired_path.write_bytes(b"not a public key")
-    os.utime(retired_path, (corrupted_at, corrupted_at))
-    current_time = [corrupted_at]
-    monkeypatch.setattr(crypto.time, "time", lambda: current_time[0])
-
-    with pytest.raises(KeyStoreUnavailableError):
-        manager.verify_token(token)
-
-    current_time[0] = retired_at + 25 * 3600
-    with pytest.raises(KeyStoreUnavailableError):
-        manager.verify_token(token)
-
-    current_time[0] = corrupted_at + 86400 + 1
-    with pytest.raises(pyjwt.InvalidTokenError, match="Unknown key id"):
-        manager.verify_token(token)
 
 
 def test_expired_corrupt_retired_key_remains_an_invalid_credential(

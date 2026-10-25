@@ -145,26 +145,6 @@ async def test_refresh_key_store_failure_returns_service_unavailable(auth_app: A
 
 
 @pytest.mark.asyncio
-async def test_corrupt_required_retired_key_returns_service_unavailable(auth_app: AuthApp) -> None:
-    app, manager, key_dir = auth_app
-    token = _access_token(manager)
-    retired_kid = manager.get_kid()
-    peer = KeyManager(key_dir=str(key_dir))
-    peer.initialize()
-    peer.rotate_key()
-    assert peer.verify_token(token)["type"] == "access"
-
-    retired_path = key_dir / f"retired_{retired_kid}.pem"
-    retired_path.write_bytes(b"not a public key")
-
-    response = await _get_whoami(app, token)
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Authentication service temporarily unavailable"}
-    assert token not in response.text
-
-
-@pytest.mark.asyncio
 async def test_key_directory_listing_failure_returns_service_unavailable(
     auth_app: AuthApp, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -191,28 +171,6 @@ async def test_key_directory_listing_failure_returns_service_unavailable(
     assert [response.status_code for response in responses] == [503, 503]
     for response in responses:
         assert response.json() == {"detail": "Authentication service temporarily unavailable"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["missing", "corrupt"])
-async def test_jwks_key_store_failure_returns_service_unavailable(auth_app: AuthApp, failure: str) -> None:
-    app, manager, key_dir = auth_app
-    token = _access_token(manager)
-    retired_kid = manager.get_kid()
-    manager.rotate_key()
-    assert manager.verify_token(token)["type"] == "access"
-    retired_path = key_dir / f"retired_{retired_kid}.pem"
-    if failure == "missing":
-        retired_path.unlink()
-    else:
-        retired_path.write_bytes(b"not a public key")
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/v1/auth/.well-known/jwks.json")
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Authentication service temporarily unavailable"}
 
 
 @pytest.mark.asyncio

@@ -106,34 +106,6 @@ class _ActiveKey:
     pem: bytes
 
 
-@dataclass(frozen=True, slots=True)
-class _RetiredKey:
-    public_key: PublicKey
-    kid: str
-    signature: tuple[int, int, int, int, int]
-    pem: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class _RetiredKeyIdentity:
-    kid: str
-    expires_at: float
-
-
-def _is_required_retired_file(
-    required_kid: str | None,
-    retired_kid: str,
-    identity: _RetiredKeyIdentity | None,
-    now: float,
-) -> bool:
-    if required_kid is None:
-        return False
-    identity_is_retained = identity is not None and identity.expires_at >= now
-    return (required_kid == retired_kid and (identity is None or identity_is_retained)) or (
-        identity_is_retained and identity is not None and identity.kid == required_kid
-    )
-
-
 class KeyManager:
     """Manage ES256 or RS256 JWT keys while retaining old verification keys."""
 
@@ -154,10 +126,6 @@ class KeyManager:
         # snapshots in one step; the key, kid and algorithm can never be mixed.
         self._state_lock = RLock()
         self._active: _ActiveKey | None = None
-        self._retired_files: dict[str, _RetiredKey] = {}
-        self._invalid_retired_files: dict[str, tuple[tuple[int, int, int, int, int], bytes]] = {}
-        # Preserve locally validated key identities through retired-file loss/corruption.
-        self._retired_key_identities: dict[str, _RetiredKeyIdentity] = {}
         self._retired_keys: dict[str, PublicKey] = {}
         self._warned_uncoordinated = False
 
@@ -216,11 +184,7 @@ class KeyManager:
                     self._refresh_active_key()
                     active = self._require_active()
                     if include_retired or (kid is not None and kid != active.kid):
-                        self._load_retired_keys(
-                            prune=False,
-                            required_kid=kid,
-                            require_complete_set=include_retired,
-                        )
+                        self._load_retired_keys(prune=False)
             except KeyStoreUnavailableError:
                 raise
             except (OSError, TypeError, ValueError, RuntimeError, UnsupportedAlgorithm):
@@ -479,117 +443,35 @@ class KeyManager:
                 if path.stat().st_mtime >= cutoff:
                     continue
                 path.unlink()
-                self._retired_key_identities.pop(path.name, None)
                 optic.info("removed expired retired JWT key file {}", path.name)
             except OSError:
                 optic.warning("could not prune retired key file {}", path.name)
 
-    def _load_retired_keys(
-        self,
-        *,
-        prune: bool = True,
-        required_kid: str | None = None,
-        require_complete_set: bool = False,
-    ) -> None:
+    def _load_retired_keys(self, *, prune: bool = True) -> None:
         if prune:
             self._prune_retired_keys()
-        now = time.time()
-        cutoff = now - self._retired_key_retention_seconds
+        cutoff = time.time() - self._retired_key_retention_seconds
         active_kid = self._require_active().kid
-        files: dict[str, _RetiredKey] = {}
-        invalid_files: dict[str, tuple[tuple[int, int, int, int, int], bytes]] = {}
         eligible: dict[str, PublicKey] = {}
-        observed_paths: set[str] = set()
-        required_key_unavailable = False
         for path in self._retired_key_paths():
             retired_kid = path.name[len("retired_") : -len(".pem")]
-            known_identity = self._retired_key_identities.get(path.name)
             try:
-                metadata = path.stat()
-            except OSError:
-                optic.warning("could not inspect retired JWT key file {}", path.name)
-                if _is_required_retired_file(required_kid, retired_kid, known_identity, now):
-                    required_key_unavailable = True
-                continue
-            observed_paths.add(path.name)
-            if metadata.st_mtime < cutoff:
-                self._retired_key_identities.pop(path.name, None)
-                continue
-            # Managed replacements change inode; timestamps also track expiry and mode changes.
-            signature = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
-            if known_identity is not None:
-                # Retention follows the current file mtime even when its bytes are now damaged.
-                known_identity = _RetiredKeyIdentity(
-                    kid=known_identity.kid,
-                    expires_at=metadata.st_mtime + self._retired_key_retention_seconds,
-                )
-                self._retired_key_identities[path.name] = known_identity
-            required_for_file = _is_required_retired_file(required_kid, retired_kid, known_identity, now)
-            cached = self._retired_files.get(path.name)
-            try:
-                pem = path.read_bytes()
-            except OSError:
-                optic.warning("could not read retired JWT key file {}", path.name)
-                if required_for_file:
-                    required_key_unavailable = True
-                continue
-            if cached is not None and cached.signature == signature and cached.pem == pem:
-                entry = cached
-            else:
-                invalid_signature = (signature, pem)
-                if self._invalid_retired_files.get(path.name) == invalid_signature:
-                    invalid_files[path.name] = invalid_signature
-                    if required_for_file:
-                        required_key_unavailable = True
+                if path.stat().st_mtime < cutoff:
                     continue
-                try:
-                    pub = serialization.load_pem_public_key(pem)
-                    if not isinstance(pub, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
-                        raise TypeError(f"Unsupported retired JWT key type: {type(pub).__name__}")
-                    _algorithm_for_key(pub)
-                except (TypeError, ValueError, UnsupportedAlgorithm):
-                    optic.warning("could not load retired JWT key file {}", path.name)
-                    invalid_files[path.name] = invalid_signature
-                    if required_for_file:
-                        required_key_unavailable = True
-                    continue
-                entry = _RetiredKey(pub, _kid_from_public_key(pub), signature, pem)
-            if retired_kid != entry.kid or (known_identity is not None and known_identity.kid != entry.kid):
+                pub = serialization.load_pem_public_key(path.read_bytes())
+                if not isinstance(pub, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
+                    raise TypeError(f"Unsupported retired JWT key type: {type(pub).__name__}")
+                _algorithm_for_key(pub)
+            except (OSError, TypeError, ValueError, UnsupportedAlgorithm):
+                optic.warning("could not load retired JWT key file {}", path.name)
+                continue
+            kid = _kid_from_public_key(pub)
+            if retired_kid != kid:
                 optic.warning("retired JWT key identity changed in file {}", path.name)
-                invalid_files[path.name] = (signature, pem)
-                if required_for_file or entry.kid == required_kid:
-                    required_key_unavailable = True
                 continue
-            files[path.name] = entry
-            self._retired_key_identities[path.name] = _RetiredKeyIdentity(
-                kid=entry.kid,
-                expires_at=metadata.st_mtime + self._retired_key_retention_seconds,
-            )
-            if entry.kid != active_kid:
-                eligible[entry.kid] = entry.public_key
-        self._retired_files = files
-        self._invalid_retired_files = invalid_files
+            if kid != active_kid:
+                eligible[kid] = pub
         self._retired_keys = eligible
-        for name, identity in tuple(self._retired_key_identities.items()):
-            if name not in observed_paths and identity.expires_at < now:
-                del self._retired_key_identities[name]
-        known_retained_key_unavailable = any(
-            identity.kid != active_kid and identity.expires_at >= now and identity.kid not in eligible
-            for identity in self._retired_key_identities.values()
-        )
-        if (
-            required_kid is not None
-            and required_kid != active_kid
-            and required_kid not in eligible
-            and (
-                required_key_unavailable
-                or any(
-                    identity.kid == required_kid and identity.expires_at >= now
-                    for identity in self._retired_key_identities.values()
-                )
-            )
-        ) or (require_complete_set and known_retained_key_unavailable):
-            raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
 
 
 _key_manager: KeyManager | None = None
