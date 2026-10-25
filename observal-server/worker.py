@@ -75,8 +75,8 @@ class WorkerSettings:
         backfill_layer_components,
         project_component_activity,
         backfill_component_activity,
-        run_review_checks,
         replay_activity_revision,
+        run_review_checks,
     ]
     cron_jobs = [
         cron(sync_component_sources, hour={0, 6, 12, 18}, minute={0}),  # Every 6 hours

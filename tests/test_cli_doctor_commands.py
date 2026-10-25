@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 import observal_cli.cmd_doctor as doctor_module
 from observal_cli import pi_extension
 from observal_cli.harness.protocol import NotSupportedError
+from observal_cli.shared import launcher
 
 # Fixed regardless of what observal-cli version this test environment actually
 # resolves (which varies across invocation contexts) - keeps Pi stale/current/newer
@@ -67,6 +68,8 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleN
     prompt = MagicMock(side_effect=AssertionError("unexpected prompt"))
     monkeypatch.setattr(httpx, "get", network)
     monkeypatch.setattr(subprocess, "run", process)
+    # Hook launchers probe the interpreter in a subprocess (observal_cli.shared.launcher); pin its answer.
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
     monkeypatch.setattr(doctor_module.typer, "confirm", prompt)
     monkeypatch.setattr(pi_extension, "get_current_version", lambda: CLI_VERSION)
     return SimpleNamespace(network=network, process=process, prompt=prompt)

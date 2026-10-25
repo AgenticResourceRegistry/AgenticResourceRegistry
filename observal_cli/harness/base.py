@@ -135,9 +135,6 @@ class BaseAdapter:
         """
         return None
 
-    def session_worker_environment(self) -> dict[str, str]:
-        """Environment overrides needed by detached session delivery workers."""
-        return {}
     def prepare_mcp_setup_command(self, command: list[str], scope: str) -> list[str]:
         """Return the harness-native setup command with its requested install scope."""
         return command
@@ -197,6 +194,10 @@ class BaseAdapter:
     ) -> tuple[str, dict | None]:
         """Read the entry a pull wrote; by default the pull output is the installed config."""
         return self.read_installed_mcp(scope, directory, alias)
+
+    def session_worker_environment(self) -> dict[str, str]:
+        """Environment overrides needed by detached session delivery workers."""
+        return {}
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         _check_feature(self.harness_name, "scan_home")
