@@ -185,6 +185,10 @@ class BaseAdapter:
         """Whether the manifest may carry hashes but must not upload file bytes."""
         return False
 
+    def layer_projection(self, display_path: str, path: Path, project_dir: str | None) -> bytes | None:
+        """Stable bytes hashed in place of a file the harness rewrites on its own, or None for the file itself."""
+        return None
+
     def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
         """Return (verified|missing|unverified, entry); unsupported harnesses are unverified."""
         return "unverified", None

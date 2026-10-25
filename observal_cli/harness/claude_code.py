@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger as optic
+
 from observal_cli.discovery.adapter_support import RichAdapterScanner
 from observal_cli.discovery.models import AdapterDiscoveryResult, DiagnosticCode, DiscoveryScope
 from observal_cli.discovery.redact import redact_text
@@ -251,6 +253,32 @@ class ClaudeCodeAdapter(BaseAdapter):
 
     def redact_layer_content(self, display_path: str) -> bool:
         return display_path in {"user:.claude.json", "project:.mcp.json"}
+
+    def layer_projection(self, display_path: str, path: Path, project_dir: str | None) -> bytes | None:
+        """Hash the MCP registrations in ~/.claude.json, not the whole file.
+
+        Claude Code rewrites that file on every run (feature caches, usage counters, the state of every
+        project), so hashing it whole gave nearly every session a new layer identity. Only the user-level
+        servers and this project's local servers decide what the session could call.
+        """
+        if display_path != "user:.claude.json":
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            optic.warning("layer: {} is unreadable, hashing the raw file: {}", display_path, type(error).__name__)
+            return None
+        if not isinstance(data, dict):
+            return None
+        projects = data.get("projects")
+        local = projects.get(str(Path(project_dir).resolve())) if project_dir and isinstance(projects, dict) else None
+        projection = {
+            "mcpServers": data.get("mcpServers") if isinstance(data.get("mcpServers"), dict) else {},
+            "local": local.get("mcpServers")
+            if isinstance(local, dict) and isinstance(local.get("mcpServers"), dict)
+            else {},
+        }
+        return json.dumps(projection, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
     def standalone_hook_binding(
         self, config_path: str, config_snippet: dict, written: list[tuple[Path, Path]]
