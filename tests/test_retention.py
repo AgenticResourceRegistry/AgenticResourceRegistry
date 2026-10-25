@@ -72,7 +72,6 @@ async def test_scoped_session_orphan_cleanup():
 
     assert set(result) == {
         "session_stats_agg",
-        "session_checkpoints",
         "component_activity",
         "component_activity_publications",
         "session_capabilities",

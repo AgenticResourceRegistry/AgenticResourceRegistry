@@ -275,7 +275,6 @@ async def test_retention_scopes_session_and_shared_snapshot():
     for table in (
         "session_events",
         "session_stats_agg",
-        "session_checkpoints",
         "component_activity",
         "component_activity_publications",
         "session_capabilities",
@@ -284,6 +283,11 @@ async def test_retention_scopes_session_and_shared_snapshot():
             (r["user_id"], r["harness"], r["session_id"])
             for r in await _rows(table, project, "user_id,harness,session_id")
         } == keep, table
+    # The resume position of an expired session stays, so a resumed session sends only its new lines.
+    assert {
+        (r["user_id"], r["harness"], r["session_id"])
+        for r in await _rows("session_checkpoints", project, "user_id,harness,session_id")
+    } == {(user, harness, sid) for p, user, harness, sid, *_ in source if p == project}
     remaining = {("alice", shared), ("bob", shared), ("alice", other), ("bob", other)}  # snapshots are kept
     for table, column in (
         ("layer_snapshots", "hash"),
