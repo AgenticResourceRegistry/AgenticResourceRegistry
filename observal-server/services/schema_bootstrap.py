@@ -42,8 +42,15 @@ async def schema_state(connection: AsyncConnection) -> str:
     has_objects = await connection.scalar(
         text("""
             SELECT EXISTS (
-                SELECT 1 FROM pg_catalog.pg_class
-                WHERE relnamespace = current_schema()::regnamespace
+                SELECT 1 FROM pg_catalog.pg_class AS c
+                WHERE c.relnamespace = current_schema()::regnamespace
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pg_catalog.pg_depend AS d
+                      WHERE d.classid = 'pg_catalog.pg_class'::regclass
+                        AND d.objid = c.oid
+                        AND d.refclassid = 'pg_catalog.pg_extension'::regclass
+                        AND d.deptype = 'e'
+                  )
             ) OR EXISTS (
                 SELECT 1 FROM pg_catalog.pg_type AS t
                 WHERE t.typnamespace = current_schema()::regnamespace
