@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, CheckCircle2, Clock3, Loader2, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/layouts/page-header";
-import type { InsightReport } from "@/lib/types";
+import type { CoverageFacts, InsightReport } from "@/lib/types";
 
 /** The same report shell and status hierarchy used for Agent Insights, with component-specific facts. */
 export function ComponentReportFrame({ report, children }: { report: InsightReport; children: ReactNode }) {
@@ -84,14 +84,6 @@ export function EvidencePanel({ summary, stats, children }: {
     </section>
   );
 }
-
-type CoverageFacts = {
-  presence: { present_sessions: number; legacy_hash_sessions?: number; snapshot_missing_sessions?: number };
-  projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
-  attribution_state: string;
-  reasons: string[];
-  limitations: string[];
-};
 
 export function CoveragePanel({ coverage, children }: { coverage: CoverageFacts | null | undefined; children?: ReactNode }) {
   return (
