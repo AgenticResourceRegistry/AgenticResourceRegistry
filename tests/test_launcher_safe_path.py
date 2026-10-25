@@ -691,7 +691,10 @@ def test_windows_bootstrap_sets_the_agent_and_package_root_without_shell_quoting
     assert not set(code) & set('%$`\\"!'), "nothing any shell would expand or unquote"
     called = []
     monkeypatch.setattr(runpy, "run_module", lambda module, **kwargs: called.append((module, kwargs)))
-    monkeypatch.delenv("OBSERVAL_AGENT_ID", raising=False)
+    # The bootstrap writes os.environ itself. delenv alone records nothing when the variable is unset, so
+    # set it first: teardown then removes what the bootstrap wrote instead of leaking it into later tests.
+    monkeypatch.setenv("OBSERVAL_AGENT_ID", "placeholder")
+    monkeypatch.delenv("OBSERVAL_AGENT_ID")
     monkeypatch.setattr(sys, "path", list(sys.path))
     exec(compile(code, "<bootstrap>", "exec"), {})
     assert os.environ["OBSERVAL_AGENT_ID"] == "a1%PATH%$x"
