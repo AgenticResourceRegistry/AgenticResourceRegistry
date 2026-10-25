@@ -381,7 +381,8 @@ def login(
 ):
     """Connect to Observal.
 
-    Human mode asks for the server URL; leave it blank for http://localhost.
+    Human mode asks for the server URL; blank uses OBSERVAL_SERVER_URL when
+    configured, otherwise http://localhost.
     On a fresh server, creates the first admin account. On an initialized
     server, authenticates with credentials or browser SSO. Set
     OBSERVAL_PASSWORD or OBSERVAL_PASSWORD_FILE to avoid exposing a password
@@ -408,8 +409,12 @@ def login(
         selected = str(stored.get("server_url") or "http://localhost:80")
         source = "OBSERVAL_SERVER_URL" if override else "configured"
     else:
-        selected = text_input("Server URL (leave blank for http://localhost)", default="") or "http://localhost"
-        source = "prompt"
+        if override:
+            selected = text_input("Server URL (leave blank to use OBSERVAL_SERVER_URL)", default="") or override
+            source = "OBSERVAL_SERVER_URL" if selected == override else "prompt"
+        else:
+            selected = text_input("Server URL (leave blank for http://localhost)", default="") or "http://localhost"
+            source = "prompt"
 
     server_url = _login_server_url(selected, source=source, require_scheme=source == "OBSERVAL_SERVER_URL")
     _guard_login_override(server_url, override)

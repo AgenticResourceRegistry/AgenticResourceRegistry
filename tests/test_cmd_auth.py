@@ -487,6 +487,52 @@ def test_human_prompt_bare_host_uses_https(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
+@pytest.mark.parametrize("override", ["https://dev.example.com", "http://localhost:8080", "https://faß.de"])
+def test_human_blank_prompt_selects_environment_server(override: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get, _, _ = _prepare_login(monkeypatch)
+    prompt = MagicMock(return_value="")
+    monkeypatch.setattr(auth, "text_input", prompt)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+
+    auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+
+    prompt.assert_called_once_with("Server URL (leave blank to use OBSERVAL_SERVER_URL)", default="")
+    assert get.call_args_list[0] == call(f"{override}/health", timeout=10)
+    password_login.assert_called_once_with(
+        override, "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
+def test_human_prompt_override_rejects_different_server_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://dev.example.com")
+    monkeypatch.setattr(auth, "text_input", MagicMock(return_value="https://other.example.com"))
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize("override", ["bare.example", "https://user:secret@evil.example"])
+def test_human_blank_prompt_rejects_invalid_override_without_echo(
+    override: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    prompt = MagicMock(return_value="")
+    monkeypatch.setattr(auth, "text_input", prompt)
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    assert override not in str(exc_info.value) and "secret" not in str(exc_info.value)
+    assert override not in prompt.call_args.args[0]
+    get.assert_not_called()
+
+
 def test_json_login_rejects_bare_environment_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OBSERVAL_SERVER_URL", "bare.example")
     get = MagicMock()
@@ -599,6 +645,46 @@ def test_real_file_login_persists_normalized_destination_and_tokens(
     monkeypatch.setattr(auth.client, "_request_with_retry", request)
     auth.client.get("/api/v1/auth/me")
     assert request.call_args.args[:2] == ("get", "https://dev.observal.io/api/v1/auth/me")
+
+
+def test_human_blank_override_persists_actual_login_server(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    config_file.write_text(json.dumps({"server_url": "http://localhost", "access_token": "old-token"}))
+    override = "https://dev.example.com"
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get, post = _mock_login_http(monkeypatch)
+    from observal_cli.main import app
+
+    result = CliRunner().invoke(
+        app, ["auth", "login", "--email", "ada@example.test", "--password", VALID_PASSWORD, "--no-setup"], input="\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "leave blank to use OBSERVAL_SERVER_URL" in result.output
+    assert get.call_args_list[0] == call(f"{override}/health", timeout=10)
+    assert post.call_args.args[0] == f"{override}/api/v1/auth/login"
+    saved = auth.config.load_persisted()
+    assert saved["server_url"] == override
+    assert saved["access_token"] == ACCESS_TOKEN
+
+
+def test_json_no_server_selects_override_instead_of_persisted_url(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    config_file.write_text(json.dumps({"server_url": "http://localhost"}))
+    override = "https://dev.example.com"
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get, post = _mock_login_http(monkeypatch)
+
+    result = _run_json_login()
+
+    assert result.exit_code == 0, result.output
+    assert get.call_args_list[0] == call(f"{override}/health", timeout=10)
+    assert post.call_args.args[0] == f"{override}/api/v1/auth/login"
+    assert auth.config.load_persisted()["server_url"] == override
 
 
 def test_json_invalid_server_is_redacted_and_preserves_file(

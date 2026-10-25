@@ -41,7 +41,7 @@ OBSERVAL_PASSWORD_FILE=/path/to/password observal auth login --server dev.observ
 OBSERVAL_CURRENT_PASSWORD_FILE=/path/to/current OBSERVAL_NEW_PASSWORD_FILE=/path/to/new observal auth change-password --output json
 ```
 
-Bare login hosts use HTTPS by default; specify `http://` explicitly for an intentional development/self-hosted HTTP server. A blank human prompt chooses `http://localhost`; bare `localhost` uses HTTPS. Login saves the successfully reached server URL and credentials. A conflicting `OBSERVAL_SERVER_URL` override blocks login (including after localhost port fallback); unset it or set it to the chosen full URL before retrying. Fresh-server JSON bootstrap can require `--name`. SSO JSON emits an authorization event followed by an authenticated event. A username becomes the Registry namespace and can become immutable after ownership is established.
+Bare login hosts use HTTPS by default; specify `http://` explicitly for an intentional development/self-hosted HTTP server. A blank human prompt chooses `OBSERVAL_SERVER_URL` if set, otherwise `http://localhost`; bare `localhost` uses HTTPS. Login saves the successfully reached server URL and credentials. A conflicting `OBSERVAL_SERVER_URL` override blocks login (including after localhost port fallback); unset it or set it to the chosen full URL before retrying. Fresh-server JSON bootstrap can require `--name`. SSO JSON emits an authorization event followed by an authenticated event. A username becomes the Registry namespace and can become immutable after ownership is established.
 
 At every CLI startup, bundled Observal skill trees are hash-checked against the packaged copies. Drift causes complete replacement of only the six Observal-managed skill directories, including stale extra files.
 
