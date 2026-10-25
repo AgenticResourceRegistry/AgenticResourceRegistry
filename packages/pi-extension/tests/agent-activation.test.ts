@@ -235,19 +235,22 @@ try {
   assert.match(notices.at(-1)!, /Cannot identify pi-mcp-adapter/);
   assert.equal(uploads.length, beforeUnknown);
   assert(!fs.existsSync(pendingPath));
-  // Adapter 4.x uses the same active mcp-adapter.json as 3.x; a later major is not assumed.
-  writeJson(manifest, { version: "4.0.0" });
-  const adapter4 = await activate("one");
-  assert.deepEqual(statuses(adapter4), { "one-probe": "verified", "two-probe": "unverified" });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(piDir, "mcp-adapter.json"), "utf8")),
-    { mcpServers: { "one-probe": one } });
-  await activate("default");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(piDir, "mcp-adapter.json"), "utf8")), originalAdapter);
-  writeJson(manifest, { version: "5.0.0" });
-  const beforeFive = uploads.length;
+  // Adapter 4.x, 5.x and 6.x use the same active mcp-adapter.json as 3.x (4.0.0 from its sources,
+  // 5.0.0 and 6.0.0 from live sessions); a later major is not assumed.
+  for (const version of ["4.0.0", "5.0.0", "6.0.0"]) {
+    writeJson(manifest, { version });
+    const supported = await activate("one");
+    assert.deepEqual(statuses(supported), { "one-probe": "verified", "two-probe": "unverified" }, version);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(piDir, "mcp-adapter.json"), "utf8")),
+      { mcpServers: { "one-probe": one } }, version);
+    await activate("default");
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(piDir, "mcp-adapter.json"), "utf8")), originalAdapter, version);
+  }
+  writeJson(manifest, { version: "7.0.0" });
+  const beforeSeven = uploads.length;
   await runtime.commands.get("agent")!("one", ctx);
   assert.match(notices.at(-1)!, /Cannot identify pi-mcp-adapter/);
-  assert.equal(uploads.length, beforeFive);
+  assert.equal(uploads.length, beforeSeven);
   assert(!fs.existsSync(pendingPath));
   fs.rmSync(manifest);
   const configPath = path.join(configDir, "config.json");

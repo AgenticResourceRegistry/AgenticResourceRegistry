@@ -37,7 +37,7 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 | Agent profiles | Project and user scope, as `AGENTS.md` |
 | Hook bridge | Pi extension (no shell hooks) |
 | Extension events | `session_start`, `agent_end`, `session_shutdown`, `tool_call`, `tool_result` |
-| MCP servers | Active `.pi/mcp-adapter.json` / `~/.pi/agent/mcp-adapter.json` for adapter 3.x and 4.x; `mcp.json` for adapter 2.x or Pi built-in MCP |
+| MCP servers | Active `.pi/mcp-adapter.json` / `~/.pi/agent/mcp-adapter.json` for adapter 3.x to 6.x; `mcp.json` for adapter 2.x or Pi built-in MCP |
 | Agent prompt | Registry rules are written into the generated `AGENTS.md` |
 | Guidance files | Scanned from `AGENTS.md`, `~/.pi/agent/AGENTS.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` |
 | Skills | `.pi/skills/{name}/SKILL.md` and `~/.pi/agent/skills/{name}/SKILL.md` |
@@ -91,7 +91,7 @@ observal agent pull <agent-name> --harness pi --scope project
 Project pulls write the rules to `AGENTS.md` in the project root, which Pi
 reads directly, and the agent's MCP servers and skills to
 `.pi/agents/{agent-name}/`. `/agent` handles only user-scope profiles, so
-activate a project profile explicitly. With `pi-mcp-adapter` 3.x or 4.x, copy its
+activate a project profile explicitly. With `pi-mcp-adapter` 3.x to 6.x, copy its
 MCP config to the path that adapter actually loads:
 
 ```bash
@@ -147,7 +147,7 @@ observal doctor
 | MCP config | `.pi/agents/{agent}/mcp.json` | `~/.pi/agent/agents/{agent}/mcp.json` |
 | Skill definition | `.pi/agents/{agent}/skills/{name}/SKILL.md` | `~/.pi/agent/agents/{agent}/skills/{name}/SKILL.md` |
 | Active agent rules | `AGENTS.md` | `~/.pi/agent/AGENTS.md` |
-| Active MCP config | `.pi/mcp-adapter.json` (adapter 3.x/4.x), `.pi/mcp.json` (2.x) | `~/.pi/agent/mcp-adapter.json` (adapter 3.x/4.x), `~/.pi/agent/mcp.json` (2.x) |
+| Active MCP config | `.pi/mcp-adapter.json` (adapter 3.x to 6.x), `.pi/mcp.json` (2.x) | `~/.pi/agent/mcp-adapter.json` (adapter 3.x to 6.x), `~/.pi/agent/mcp.json` (2.x) |
 | Active skills | `.pi/skills/{name}/SKILL.md` | `~/.pi/agent/skills/{name}/SKILL.md` |
 | Guidance files | `AGENTS.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` | `~/.pi/agent/AGENTS.md` |
 | Telemetry extension | – | `~/.pi/agent/extensions/observal.ts` |
@@ -163,7 +163,7 @@ Pi MCP configs use the `mcpServers` key.
 
 Pi MCP support varies by Pi version. Install and configure `pi-mcp-adapter`
 for the adapter-specific result identities verified by component insights;
-its 2.x releases read active `mcp.json` and its 3.x and 4.x releases read active
+its 2.x releases read active `mcp.json` and its 3.x to 6.x releases read active
 `mcp-adapter.json`. Pulling an agent records an MCP-entry
 fingerprint from the generated profile, but **does not activate that profile**:
 use `/agent` or activate the project config before starting the session. Refresh
@@ -189,8 +189,9 @@ and session list for authorized owners. Other component types do not gain
 observed-call reports from this integration.
 
 This is fixture-verified for `pi-mcp-adapter` 2.38.0 and 4.0.0 (proxy and direct-tool calls),
-with relevant result shapes checked against the 3.2.0 and 4.0.0 sources. A
-later major version is not recognised until it has been checked the same way. An adapter that changes its result details or
+with relevant result shapes checked against the 3.2.0 and 4.0.0 sources. Versions 5.0.0 and
+6.0.0 were checked with live sessions: `/agent` activation, then every MCP call attributed
+exactly as the transcript shows. A later major version is not recognised until it has been checked the same way. An adapter that changes its result details or
 config resolution needs new sanitized fixtures and extractor verification
 before its calls can be treated as measured use. Existing session hashes are
 sender-cached; changes **during** a session cannot be proven stable, and
@@ -315,7 +316,7 @@ profile active:
    both MCP paths (when present), `skills/`, and `sandboxes/` into
    `~/.pi/agent/agents/default/`. An older default backup gains its missing
    adapter config once, before any swap removes it.
-2. For adapter 3.x or 4.x it activates the generated profile `mcp.json` **only** at
+2. For adapter 3.x to 6.x it activates the generated profile `mcp.json` **only** at
    `mcp-adapter.json`; adapter 2.x uses `mcp.json`. It never writes both active
    MCP paths for a selected agent, which could start the same server twice under built-in MCP
    and the adapter. Conflicting MCP configs inside a profile are rejected
@@ -488,8 +489,8 @@ agent. Run `/agent` inside Pi, or copy the profile into `~/.pi/agent/` by hand.
 `sandboxes/` into the `default` profile. Later swaps install only what the
 chosen profile contains, so a profile without `SYSTEM.md` leaves Pi with no
 `SYSTEM.md`. Edit the profile directory, not the active files, if you want
-changes to survive a swap. `/agent` detects an installed `pi-mcp-adapter` 2.x,
-3.x or 4.x from Pi's managed npm package manifest; it **does not** guess from the
+changes to survive a swap. `/agent` detects an installed `pi-mcp-adapter` 2.x
+to 6.x from Pi's managed npm package manifest; it **does not** guess from the
 presence of `mcp.json` or `mcp-adapter.json`. If the adapter was installed
 manually or its version cannot be identified, set `pi_mcp_runtime` to
 `"adapter3"` (or `"adapter2"`) explicitly in `~/.observal/config.json` before
@@ -514,5 +515,5 @@ does not update `active_agent`, so its sessions keep whatever binding
 `~/.observal/config.json` already holds, or carry no agent id if it has none.
 
 **MCP config is Pi-specific.** Generated profiles use `mcp.json` with the
-`mcpServers` key. Adapters 3.x and 4.x load the active `mcp-adapter.json`; adapter 2.x
+`mcpServers` key. Adapters 3.x to 6.x load the active `mcp-adapter.json`; adapter 2.x
 loads active `mcp.json`. Neither uses Claude Code or Kiro MCP paths.
