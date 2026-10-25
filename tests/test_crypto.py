@@ -198,23 +198,6 @@ class TestKeyGeneration:
 
 
 class TestKeyPersistence:
-    def test_missing_posix_lock_support_emits_warning(self, tmp_key_dir, monkeypatch):
-        import io
-
-        from loguru import logger
-
-        import services.crypto as crypto_mod
-
-        output = io.StringIO()
-        handler_id = logger.add(output, format="{message}", level="WARNING")
-        try:
-            monkeypatch.setattr(crypto_mod, "fcntl", None)
-            KeyManager(key_dir=tmp_key_dir).initialize()
-        finally:
-            logger.remove(handler_id)
-
-        assert "without cross-process coordination" in output.getvalue()
-
     def test_managed_startup_does_not_bypass_lock_permission_error(self, tmp_key_dir, monkeypatch):
         if os.name == "nt":
             pytest.skip("POSIX advisory locking is unavailable")

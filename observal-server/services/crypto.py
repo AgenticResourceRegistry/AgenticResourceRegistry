@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import errno
+import fcntl
 import hashlib
 import os
 import tempfile
@@ -21,13 +22,6 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-try:
-    import fcntl as _fcntl
-except ImportError:  # pragma: no cover - exercised on Windows
-    fcntl = None
-else:
-    fcntl = _fcntl
 
 import jwt
 from cryptography.exceptions import UnsupportedAlgorithm
@@ -123,7 +117,6 @@ class KeyManager:
         self._state_lock = RLock()
         self._active: _ActiveKey | None = None
         self._retired_keys: dict[str, PublicKey] = {}
-        self._warned_uncoordinated = False
 
     @property
     def algorithm(self) -> SigningAlgorithm:
@@ -215,13 +208,6 @@ class KeyManager:
 
     @contextmanager
     def _signing_lock(self, *, shared: bool = False, create: bool = False) -> Iterator[None]:
-        if fcntl is None:
-            if not self._warned_uncoordinated:
-                optic.warning("fcntl is unavailable; JWT key operations are running without cross-process coordination")
-                self._warned_uncoordinated = True
-            yield
-            return
-
         lock_path = self._key_dir / ".signing.lock"
         flags = (os.O_CREAT | os.O_RDWR) if create else (os.O_RDONLY if shared else os.O_RDWR)
         descriptor = os.open(lock_path, flags, 0o600)
