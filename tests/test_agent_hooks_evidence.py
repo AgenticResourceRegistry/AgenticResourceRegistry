@@ -54,9 +54,9 @@ def project(monkeypatch, tmp_path):
     (root / ".claude" / "hooks" / "probe-fail.sh").write_bytes(SCRIPT)
     hook = _hook()
     settings = agent_hooks.plan_settings(
-        root / ".claude" / "settings.json", "project:.claude/settings.json", None, "probe-agent", [hook]
+        root / ".claude" / "settings.local.json", "project:.claude/settings.local.json", None, "probe-agent", [hook]
     )
-    agent_hooks.write_settings(root / ".claude" / "settings.json", settings.data)
+    agent_hooks.write_settings(root / ".claude" / "settings.local.json", settings.data)
     return root
 
 
@@ -81,7 +81,7 @@ def _component(**overrides) -> dict:
         "hook_event": "PostToolUse",
         "hook_command": _hook().gated,
         "hook_agent": "probe-agent",
-        "hook_config": "project:.claude/settings.json",
+        "hook_config": "project:.claude/settings.local.json",
         "hook_script": "project:.claude/hooks/probe-fail.sh",
         "hook_integrity": f"sha256-{hashlib.sha256(SCRIPT).hexdigest()}",
         "hook_placement": "gated_settings",
@@ -95,11 +95,11 @@ def _status(project: Path, component: dict | None = None) -> str:
 
 
 def _settings(project: Path) -> dict:
-    return json.loads((project / ".claude" / "settings.json").read_text())
+    return json.loads((project / ".claude" / "settings.local.json").read_text())
 
 
 def _write_settings(project: Path, data: dict) -> None:
-    (project / ".claude" / "settings.json").write_text(json.dumps(data))
+    (project / ".claude" / "settings.local.json").write_text(json.dumps(data))
 
 
 def test_a_gated_hook_in_settings_is_verified(project):

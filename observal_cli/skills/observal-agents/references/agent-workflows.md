@@ -58,7 +58,7 @@ Inspect `files`, `warnings`, `setup_commands`, `reports_sessions`, `agent.versio
 observal scan --harness kiro --output json
 ```
 
-Claude Code runs an Agent file's hooks only in interactive sessions. When the user needs an Agent's hooks to run in headless sessions (`claude -p --agent`, delegation), offer `--hooks=settings`, which moves them into `settings.json` behind a gate that runs them only while that Agent is active. Always show the plan first and apply only after the user agrees:
+Claude Code runs an Agent file's hooks only in interactive sessions. When the user needs an Agent's hooks to run in headless sessions (`claude -p --agent`, delegation), offer `--hooks=settings`, which moves them into `settings.local.json` (project scope, kept out of version control because the command holds this machine's interpreter path) or `~/.claude/settings.json` (user scope) behind a gate that runs them only while that Agent is active. Always show the plan first and apply only after the user agrees:
 
 ```bash
 observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --hooks=settings --dry-run --no-prompt --output json

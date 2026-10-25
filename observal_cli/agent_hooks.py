@@ -126,7 +126,10 @@ def settings_location(scope: str, target_dir: Path) -> tuple[Path, str]:
     """The settings file Claude Code reads for the scope, and its layer display path."""
     if scope == "user":
         return Path.home() / ".claude" / "settings.json", "user:settings.json"
-    return target_dir / ".claude" / "settings.json", "project:.claude/settings.json"
+    # The gate command holds this machine's interpreter path, so project scope uses the local settings file
+    # Claude Code keeps out of version control; a teammate who pulled a committed path would get an error on
+    # every matching event.
+    return target_dir / ".claude" / "settings.local.json", "project:.claude/settings.local.json"
 
 
 def _canonical(value: object) -> bytes:
