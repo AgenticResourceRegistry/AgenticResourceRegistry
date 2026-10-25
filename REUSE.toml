@@ -130,6 +130,11 @@ SPDX-FileCopyrightText = "2026 Observal Contributors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = ["tests/fixtures/component_insights/claude_code/hook_session_standalone_output_2_1_310.jsonl", "tests/fixtures/component_insights/claude_code/hook_session_standalone_blocked_2_1_310.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_agent_load_2_1_310.jsonl"]
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "tests/fixtures/model_display_cases.json"
 SPDX-FileCopyrightText = "2026 Aryan Iyappan <aryaniyappan2006@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
