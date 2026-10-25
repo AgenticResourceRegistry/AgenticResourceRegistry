@@ -144,13 +144,22 @@ async def test_build_session_transcript_reads_codex_and_kiro_rows(monkeypatch):
                 ]
             }
 
+    from services.insights.scope import SessionKey
+
+    session = SessionKey("default", "user-1", "codex", "local-session")
+
     async def query(sql, params):
         assert "content_preview" in sql
-        assert params == {"param_sid": "local-session"}
+        assert params == {
+            "param_project_id": "default",
+            "param_user_id": "user-1",
+            "param_harness": "codex",
+            "param_sid": "local-session",
+        }
         return Response()
 
     monkeypatch.setattr(transcript, "get_query", lambda: query)
-    assert await transcript.build_session_transcript("local-session") == "[User]: Codex task\n[User]: Kiro task"
+    assert await transcript.build_session_transcript(session) == "[User]: Codex task\n[User]: Kiro task"
 
 
 @pytest.mark.asyncio
@@ -225,14 +234,16 @@ async def test_extract_facets_batch_never_uses_db_concurrently(monkeypatch):
         await asyncio.sleep(0)
         return {"brief_summary": session_id}
 
-    async def store(session_id: str, _agent_id: str, _facets: dict, db) -> None:
-        await db.store(session_id)
+    async def store(session, _agent_id: str, _facets: dict, db) -> None:
+        await db.store(session.session_id)
 
     monkeypatch.setattr(generator, "extract_facets", extract)
     monkeypatch.setattr(generator, "store_facets", store)
 
     db = SingleUseSession()
-    transcripts = {f"s{i}": "transcript" for i in range(14)}
+    from services.insights.scope import SessionKey
+
+    transcripts = {SessionKey("default", "user-1", "pi", f"s{i}"): "transcript" for i in range(14)}
     facets = await generator._extract_facets_batch(
         transcripts=transcripts,
         session_metas={},
@@ -242,4 +253,4 @@ async def test_extract_facets_batch_never_uses_db_concurrently(monkeypatch):
     )
 
     assert set(facets) == set(transcripts)
-    assert sorted(db.stored) == sorted(transcripts)
+    assert sorted(db.stored) == sorted(key.session_id for key in transcripts)

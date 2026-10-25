@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 def package_root() -> str:
@@ -128,7 +128,7 @@ def windows_module_command(module: str, env: dict[str, str] | None = None) -> st
     from hex-encoded ``-c`` code, so no value needs shell quoting.
     """
     code = _windows_bootstrap(module, env)
-    interpreter = '"' + Path(sys.executable).as_posix() + '"'
+    interpreter = '"' + PureWindowsPath(sys.executable).as_posix() + '"'
     return f'{interpreter} -I -c "{code}"' if code else f"{interpreter} -I -m {module}"
 
 

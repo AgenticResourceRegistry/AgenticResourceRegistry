@@ -8,7 +8,7 @@ title: "Hooks specification"
 
 The schema Observal uses for hook definitions -- both the registry hook type (`observal registry hook`) and hooks wired into harness configs by `observal agent pull` / `observal doctor patch`.
 
-Claude Code session hooks currently use `HOOKS_SPEC_VERSION = "12"` in `observal_cli/harness_specs/claude_code_hooks_spec.py`. Other harnesses have their own hook specs.
+Claude Code session hooks currently use `HOOKS_SPEC_VERSION = "13"` in `observal_cli/harness_specs/claude_code_hooks_spec.py`. Other harnesses have their own hook specs.
 
 ## Where hooks live
 

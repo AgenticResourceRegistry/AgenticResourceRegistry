@@ -100,6 +100,9 @@ class TestWorkerSettings:
             "cron:purge_inbox_items": 7,
             "cron:submit_usage_ping": 4 * 7,
             "cron:reproject_discovery_entries": 4 * 7,
+            "cron:backfill_layer_components": 7,
+            "cron:backfill_component_activity": 7,
+            "cron:replay_activity_revision": 12 * 24 * 7,
         }
 
         week_start = datetime(2026, 1, 5, tzinfo=UTC)  # a Monday

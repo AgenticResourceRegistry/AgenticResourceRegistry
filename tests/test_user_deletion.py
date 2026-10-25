@@ -134,12 +134,12 @@ def test_shell_is_recognised_without_the_marker_column():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("module", ["api.routes.auth", "api.routes.sso_saml"])
-async def test_token_issuers_refuse_a_shell_and_keep_its_revocation(monkeypatch, module):
+async def test_token_issuer_refuses_a_shell_and_keeps_its_revocation(monkeypatch):
     """No sign-in path may mint tokens for, or clear revoked_user of, a deleted account."""
-    import importlib
+    import api.routes.auth as routes
+    import api.routes.sso_saml as sso
 
-    routes = importlib.import_module(module)
+    assert sso._issue_tokens is routes._issue_tokens  # SAML sign-in shares the one issuer
     redis = _Redis({f"revoked_user:{USER_ID}": "1"})
     monkeypatch.setattr(routes, "get_redis", lambda: redis)
     minted = MagicMock(return_value=("t", 1))

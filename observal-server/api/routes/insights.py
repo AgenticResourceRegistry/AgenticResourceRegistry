@@ -412,6 +412,7 @@ async def generate_insight(
     )
 
     report = InsightReport(
+        subject_type="agent",
         agent_id=agent.id,
         triggered_by=current_user.id,
         status=InsightReportStatus.pending,

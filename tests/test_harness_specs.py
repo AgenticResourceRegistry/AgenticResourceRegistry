@@ -29,12 +29,15 @@ def test_claude_get_desired_hooks_has_metadata():
 
 def test_claude_hook_command_uses_forward_slashes_on_windows(monkeypatch):
     # Claude Code runs hooks through Git Bash on Windows, which strips backslashes.
-    monkeypatch.setattr(claude_code_hooks_spec.sys, "platform", "win32")
-    monkeypatch.setattr(claude_code_hooks_spec.sys, "executable", r"C:\Users\dev user\uv\python.exe")
+    from observal_cli.shared import launcher
+
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    monkeypatch.setattr(launcher.sys, "executable", r"C:\Users\dev user\uv\python.exe")
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
 
     command = claude_code_hooks_spec.get_desired_hooks()["Stop"][0]["hooks"][0]["command"]
 
-    assert command.startswith("'C:/Users/dev user/uv/python.exe' -m observal_cli.hooks.session_push")
+    assert command.startswith('"C:/Users/dev user/uv/python.exe" -I -m observal_cli.hooks.session_push')
     assert "\\" not in command
 
 
