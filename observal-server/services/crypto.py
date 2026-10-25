@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Ravi Chopra <shivamchopra1234567890@gmail.com>
+# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Asymmetric JWT signing, verification, JWKS publication, and key rotation."""
@@ -7,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import os
 import time
@@ -108,15 +110,23 @@ class KeyManager:
             pass
 
         signing_path = self._key_dir / "signing.pem"
-        if signing_path.exists():
-            self._load_private_key(signing_path)
-            if _algorithm_for_key(self.get_private_key()) != self._algorithm:
-                optic.info("JWT algorithm changed; retiring current signing key")
-                self._retire_current_key()
+        lock_fd = os.open(self._key_dir / ".signing.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if signing_path.exists():
+                self._load_private_key(signing_path)
+                if _algorithm_for_key(self.get_private_key()) != self._algorithm:
+                    optic.info("JWT algorithm changed; retiring current signing key")
+                    self._retire_current_key()
+                    self._generate_key_pair(signing_path)
+            else:
                 self._generate_key_pair(signing_path)
-        else:
-            self._generate_key_pair(signing_path)
-        self._load_retired_keys()
+            self._load_retired_keys()
+        finally:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
         optic.info("JWT signing key ready (alg={}, kid={})", self._algorithm, self._kid)
 
     def get_private_key(self) -> PrivateKey:

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the asymmetric key management service (services/crypto.py).
@@ -15,9 +16,11 @@ Covers:
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, TypeAlias
 
 import jwt as pyjwt
 import pytest
@@ -34,6 +37,92 @@ from services.crypto import (
     get_key_manager,
     init_key_manager,
 )
+
+from .spawn_support import start_spawned_test_process
+
+if TYPE_CHECKING:
+    from multiprocessing.queues import Queue
+    from multiprocessing.synchronize import Barrier
+
+_StartupReadyResult: TypeAlias = tuple[int, str | None, str | None, str | None]
+_StartupVerifiedResult: TypeAlias = tuple[int, list[str] | None, str | None]
+
+
+def _concurrent_startup_worker(
+    key_dir: str,
+    start_barrier: Barrier,
+    worker_index: int,
+    verify_queue: Queue,
+    ready_queue: Queue,
+    verified_queue: Queue,
+) -> None:
+    try:
+        start_barrier.wait(timeout=20)
+        manager = KeyManager(key_dir=key_dir, algorithm="RS256")
+        manager.initialize()
+        token = manager.sign_token({"sub": "startup-worker"})
+        ready_queue.put((worker_index, manager.get_kid(), token, None))
+    except BaseException as exc:
+        ready_queue.put((worker_index, None, None, repr(exc)))
+        raise
+
+    try:
+        tokens = verify_queue.get(timeout=45)
+        subjects = [manager.verify_token(token)["sub"] for token in tokens]
+        verified_queue.put((worker_index, subjects, None))
+    except BaseException as exc:
+        verified_queue.put((worker_index, None, repr(exc)))
+        raise
+
+
+def _run_concurrent_startup_workers(
+    key_dir: str,
+    additional_tokens: tuple[str, ...] = (),
+) -> tuple[list[_StartupReadyResult], list[_StartupVerifiedResult]]:
+    worker_count = 4
+    if os.name == "nt":
+        pytest.skip("Windows multi-process key-store coordination is unsupported")
+
+    context = multiprocessing.get_context("spawn")
+    start_barrier = context.Barrier(worker_count + 1)
+    ready_queue = context.Queue()
+    verified_queue = context.Queue()
+    verify_queues = [context.Queue() for _ in range(worker_count)]
+    workers = [
+        context.Process(
+            target=_concurrent_startup_worker,
+            args=(key_dir, start_barrier, index, verify_queues[index], ready_queue, verified_queue),
+        )
+        for index in range(worker_count)
+    ]
+
+    try:
+        for worker in workers:
+            start_spawned_test_process(worker)
+        start_barrier.wait(timeout=20)
+        ready_results = [ready_queue.get(timeout=45) for _ in workers]
+        assert all(error is None for _, _, _, error in ready_results), ready_results
+
+        tokens = [*additional_tokens, *(token for _, _, token, _ in ready_results)]
+        for verify_queue in verify_queues:
+            verify_queue.put(tokens)
+        verified_results = [verified_queue.get(timeout=45) for _ in workers]
+        assert all(error is None for _, _, error in verified_results), verified_results
+
+        for worker in workers:
+            worker.join(timeout=45)
+            assert not worker.is_alive(), "key-manager startup worker did not exit"
+            assert worker.exitcode == 0
+
+        return sorted(ready_results), sorted(verified_results)
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+            worker.join(timeout=5)
+        for queue in [ready_queue, verified_queue, *verify_queues]:
+            queue.close()
+            queue.join_thread()
 
 
 @pytest.fixture()
@@ -100,6 +189,42 @@ class TestKeyGeneration:
 
 
 class TestKeyPersistence:
+    def test_concurrent_process_startup_shares_one_signing_key(self, tmp_key_dir):
+        startup_results, verified_results = _run_concurrent_startup_workers(tmp_key_dir)
+        manager = KeyManager(key_dir=tmp_key_dir, algorithm="RS256")
+        manager.initialize()
+
+        assert {kid for _, kid, _, _ in startup_results} == {manager.get_kid()}
+        assert all(subjects == ["startup-worker"] * 4 for _, subjects, _ in verified_results)
+
+    def test_concurrent_process_startup_serializes_algorithm_migration(self, tmp_key_dir):
+        seed = KeyManager(key_dir=tmp_key_dir, algorithm="ES256")
+        seed.initialize()
+        old_kid = seed.get_kid()
+        old_token = seed.sign_token({"sub": "before-algorithm-migration"})
+
+        startup_results, verified_results = _run_concurrent_startup_workers(tmp_key_dir, (old_token,))
+        manager = KeyManager(key_dir=tmp_key_dir, algorithm="RS256")
+        manager.initialize()
+
+        assert len({kid for _, kid, _, _ in startup_results}) == 1
+        assert {kid for _, kid, _, _ in startup_results} == {manager.get_kid()}
+        assert all(
+            subjects == ["before-algorithm-migration", *(["startup-worker"] * 4)] for _, subjects, _ in verified_results
+        )
+        assert manager.verify_token(old_token)["sub"] == "before-algorithm-migration"
+        assert (Path(tmp_key_dir) / f"retired_{old_kid}.pem").exists()
+
+    def test_concurrent_process_startup_preserves_existing_key(self, tmp_key_dir):
+        seed = KeyManager(key_dir=tmp_key_dir, algorithm="RS256")
+        seed.initialize()
+        existing_kid = seed.get_kid()
+
+        startup_results, verified_results = _run_concurrent_startup_workers(tmp_key_dir)
+
+        assert {kid for _, kid, _, _ in startup_results} == {existing_kid}
+        assert all(subjects == ["startup-worker"] * 4 for _, subjects, _ in verified_results)
+
     def test_loads_existing_key_on_restart(self, tmp_key_dir):
         # First boot: generate
         km1 = KeyManager(key_dir=tmp_key_dir)
