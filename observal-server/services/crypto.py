@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import base64
-import errno
 import fcntl
 import hashlib
 import os
@@ -33,8 +32,6 @@ SigningAlgorithm = Literal["ES256", "RS256"]
 PrivateKey: TypeAlias = ec.EllipticCurvePrivateKey | rsa.RSAPrivateKey
 PublicKey: TypeAlias = ec.EllipticCurvePublicKey | rsa.RSAPublicKey
 SUPPORTED_ALGORITHMS = frozenset({"ES256", "RS256"})
-KEY_STORE_LOCK_TIMEOUT_SECONDS = 5.0
-_KEY_STORE_LOCK_RETRY_SECONDS = 0.05
 
 
 def _b64url(data: bytes) -> str:
@@ -132,7 +129,7 @@ class KeyManager:
             except OSError:
                 optic.warning("could not restrict JWT key directory permissions")
 
-            with self._signing_lock(create=True):
+            with self._signing_lock():
                 try:
                     signing_path.lstat()
                 except FileNotFoundError:
@@ -207,39 +204,11 @@ class KeyManager:
         return jwt.decode(token, pub, algorithms=[expected_algorithm])
 
     @contextmanager
-    def _signing_lock(self, *, shared: bool = False, create: bool = False) -> Iterator[None]:
+    def _signing_lock(self) -> Iterator[None]:
         lock_path = self._key_dir / ".signing.lock"
-        flags = (os.O_CREAT | os.O_RDWR) if create else (os.O_RDONLY if shared else os.O_RDWR)
-        descriptor = os.open(lock_path, flags, 0o600)
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            if create:
-                try:
-                    os.chmod(lock_path, 0o600)
-                except OSError:
-                    optic.warning("could not restrict JWT signing lock permissions")
-
-            operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
-            deadline = time.monotonic() + KEY_STORE_LOCK_TIMEOUT_SECONDS
-            while True:
-                try:
-                    fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
-                    break
-                except OSError as exc:
-                    if exc.errno == errno.EINTR:
-                        if time.monotonic() >= deadline:
-                            raise
-                        continue
-                    if not isinstance(exc, BlockingIOError) and exc.errno not in {
-                        errno.EACCES,
-                        errno.EAGAIN,
-                        errno.EWOULDBLOCK,
-                    }:
-                        raise
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise
-                    time.sleep(min(_KEY_STORE_LOCK_RETRY_SECONDS, remaining))
-
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
             try:
                 yield
             finally:
