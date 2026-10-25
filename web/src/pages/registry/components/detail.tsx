@@ -207,6 +207,8 @@ export default function ComponentDetailPage({
   // Component Insights exist for MCPs (observed calls), skills (loads and invocations) and hooks (recorded runs).
   const insightType = type === "mcps" ? "mcp" : type === "skills" ? "skill" : type === "hooks" ? "hook" : null;
   const showInsights = insightType !== null && canEdit;
+  // A shared /components/...?tab=insights link opens the tab for those who may see it (owners and admins).
+  useEffect(() => { if (search.tab === "insights" && showInsights) setActiveTab("insights"); }, [id, search.tab, showInsights]);
   const { data: reportPages, isLoading: reportsLoading, isError: reportsError, hasNextPage, fetchNextPage, isFetchingNextPage } = useComponentInsightReports(insightType ?? "mcp", id, showInsights);
   const componentReports = reportPages?.pages.flat() ?? [];
   const generateComponentInsight = useGenerateComponentInsight();
@@ -636,7 +638,7 @@ export default function ComponentDetailPage({
                  <ul className="divide-y divide-border border-y border-border">
                    {componentReports.map((report) => <li key={report.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
                      <Link to="/insights/$reportId" params={{ reportId: report.id }} className="font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
-                       {new Date(report.created_at).toLocaleDateString()} report
+                       {new Date(report.created_at).toLocaleString()} · {report.component_version ? `v${report.component_version}` : "all versions"}
                      </Link>
                      <span className="text-muted-foreground">{report.status}</span>
                    </li>)}
