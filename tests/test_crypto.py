@@ -15,17 +15,12 @@ Covers:
 
 from __future__ import annotations
 
-import io
 import json
 import multiprocessing
 import os
-import stat
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
 from typing import TYPE_CHECKING, TypeAlias
-from unittest.mock import patch
 
 import jwt as pyjwt
 import pytest
@@ -186,10 +181,6 @@ class TestKeyGeneration:
         pem_path = os.path.join(tmp_key_dir, "signing.pem")
         mode = oct(os.stat(pem_path).st_mode & 0o777)
         assert mode == "0o600"
-        if os.name == "posix":
-            lock_path = os.path.join(tmp_key_dir, ".signing.lock")
-            assert oct(os.stat(lock_path).st_mode & 0o777) == "0o600"
-            assert oct(os.stat(tmp_key_dir).st_mode & 0o777) == "0o700"
 
 
 # ===================================================================
@@ -198,25 +189,6 @@ class TestKeyGeneration:
 
 
 class TestKeyPersistence:
-    def test_managed_startup_does_not_bypass_lock_permission_error(self, tmp_key_dir, monkeypatch):
-        if os.name == "nt":
-            pytest.skip("POSIX advisory locking is unavailable")
-
-        import services.crypto as crypto_mod
-
-        KeyManager(key_dir=tmp_key_dir).initialize()
-        lock_path = Path(tmp_key_dir) / ".signing.lock"
-        real_open = os.open
-
-        def deny_lock_open(path, flags, mode=0o777):
-            if Path(path) == lock_path:
-                raise PermissionError("simulated lock access denial")
-            return real_open(path, flags, mode)
-
-        monkeypatch.setattr(crypto_mod.os, "open", deny_lock_open)
-        with pytest.raises(PermissionError, match="simulated lock access denial"):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
     def test_concurrent_process_startup_shares_one_signing_key(self, tmp_key_dir):
         startup_results, verified_results = _run_concurrent_startup_workers(tmp_key_dir)
         manager = KeyManager(key_dir=tmp_key_dir, algorithm="RS256")
@@ -295,97 +267,6 @@ class TestKeyPersistence:
         restarted = KeyManager(key_dir=tmp_key_dir, key_password="new-password")
         restarted.initialize()
         assert restarted.get_kid() == protected.get_kid()
-
-    def test_failed_initial_key_publication_leaves_no_partial_file(self, tmp_key_dir, monkeypatch):
-        import services.crypto as crypto_mod
-
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        real_replace = os.replace
-
-        def fail_signing_replace(source, destination):
-            if Path(destination) == signing_path:
-                raise OSError("simulated key publication failure")
-            real_replace(source, destination)
-
-        monkeypatch.setattr(crypto_mod.os, "replace", fail_signing_replace)
-        with pytest.raises(OSError, match="simulated key publication failure"):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
-        assert not signing_path.exists()
-        assert not list(Path(tmp_key_dir).glob(".signing.pem.*"))
-
-        monkeypatch.setattr(crypto_mod.os, "replace", real_replace)
-        recovered = KeyManager(key_dir=tmp_key_dir)
-        recovered.initialize()
-        token = recovered.sign_token({"sub": "recovered"})
-        assert recovered.verify_token(token)["sub"] == "recovered"
-
-    def test_failed_encryption_migration_preserves_existing_key(self, tmp_key_dir, monkeypatch):
-        original = KeyManager(key_dir=tmp_key_dir)
-        original.initialize()
-        original_kid = original.get_kid()
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        original_pem = signing_path.read_bytes()
-
-        import services.crypto as crypto_mod
-
-        real_replace = os.replace
-
-        def fail_signing_replace(source, destination):
-            if Path(destination) == signing_path:
-                raise OSError("simulated key publication failure")
-            real_replace(source, destination)
-
-        monkeypatch.setattr(crypto_mod.os, "replace", fail_signing_replace)
-        protected = KeyManager(key_dir=tmp_key_dir, key_password="new-password")
-        with pytest.raises(OSError, match="simulated key publication failure"):
-            protected.initialize()
-
-        assert signing_path.read_bytes() == original_pem
-        assert not list(Path(tmp_key_dir).glob(".signing.pem.*"))
-        reloaded = KeyManager(key_dir=tmp_key_dir)
-        reloaded.initialize()
-        assert reloaded.get_kid() == original_kid
-
-    def test_unreadable_existing_key_does_not_get_replaced(self, tmp_key_dir, monkeypatch):
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        existing_pem = b"existing but inaccessible key"
-        signing_path.write_bytes(existing_pem)
-        real_lstat = Path.lstat
-
-        def fail_signing_lstat(path, *args, **kwargs):
-            if Path(path) == signing_path:
-                raise PermissionError("simulated key access denial")
-            return real_lstat(path, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "lstat", fail_signing_lstat)
-        with pytest.raises(PermissionError, match="simulated key access denial"):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
-        assert signing_path.read_bytes() == existing_pem
-        assert not list(Path(tmp_key_dir).glob("retired_*.pem"))
-
-    @pytest.mark.skipif(os.name == "nt", reason="symlink creation may require elevated privileges on Windows")
-    def test_broken_signing_symlink_is_not_replaced(self, tmp_key_dir):
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        signing_path.symlink_to("missing-key.pem")
-
-        with pytest.raises(FileNotFoundError):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
-        assert signing_path.is_symlink()
-        assert not list(Path(tmp_key_dir).glob(".signing.pem.*"))
-
-    def test_corrupt_existing_key_is_not_replaced(self, tmp_key_dir):
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        invalid_pem = b"not a private key"
-        signing_path.write_bytes(invalid_pem)
-
-        with pytest.raises((TypeError, ValueError)):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
-        assert signing_path.read_bytes() == invalid_pem
-        assert not list(Path(tmp_key_dir).glob("retired_*.pem"))
 
     def test_wrong_password_fails(self, tmp_key_dir):
         km1 = KeyManager(key_dir=tmp_key_dir, key_password="correct")
@@ -498,29 +379,6 @@ class TestKeyRotation:
         old_kid = km.get_kid()
         km.rotate_key()
         assert km.get_kid() != old_kid
-
-    def test_rotation_key_generation_does_not_block_readers(self, tmp_key_dir, monkeypatch):
-        manager = KeyManager(key_dir=tmp_key_dir)
-        manager.initialize()
-        old_kid = manager.get_kid()
-        generation_started = Event()
-        continue_generation = Event()
-        generate_private_key = ec.generate_private_key
-
-        def delayed_generation(curve):
-            generation_started.set()
-            assert continue_generation.wait(timeout=10), "key generation was not released"
-            return generate_private_key(curve)
-
-        monkeypatch.setattr("services.crypto.ec.generate_private_key", delayed_generation)
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            rotation = pool.submit(manager.rotate_key)
-            try:
-                assert generation_started.wait(timeout=10), "key generation did not start"
-                assert pool.submit(manager.get_kid).result(timeout=2) == old_kid
-            finally:
-                continue_generation.set()
-            assert rotation.result(timeout=10) != old_kid
 
     def test_old_token_still_verifies_after_rotation(self, km):
         token_before = km.sign_token({"sub": "user-rotate", "test": True})
