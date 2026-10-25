@@ -527,6 +527,7 @@ async def test_skill_report_generation_uses_skill_evidence_never_mcp_calls(monke
     monkeypatch.setattr(skill_queries, "skill_activity_summary", skill)
     pool = SimpleNamespace(enqueue_job=AsyncMock())
     monkeypatch.setattr(insights, "_get_arq_pool", AsyncMock(return_value=pool))
+    monkeypatch.setattr(insights, "_in_flight_component_report", AsyncMock(return_value=None))
 
     item = await insights.generate_component_insight("skill", "team/review", None, db, user)
     assert item.component_type == "skill" and item.status == "pending"
@@ -534,4 +535,63 @@ async def test_skill_report_generation_uses_skill_evidence_never_mcp_calls(monke
     assert "evidence" in added[0].coverage and "calls" not in added[0].coverage
     skill.assert_awaited_once()
     mcp.assert_not_awaited()
-    pool.enqueue_job.assert_awaited_once_with("generate_insight_report", str(added[0].id))
+    pool.enqueue_job.assert_awaited_once_with(
+        "generate_insight_report", str(added[0].id), _job_id=insights.insight_report_job_id(added[0].id)
+    )
+
+
+@pytest.mark.asyncio
+async def test_repeated_component_generate_joins_the_run_in_progress(monkeypatch):
+    """Every report makes several model calls; an identical request must not pay for a second run."""
+    from datetime import UTC, datetime, timedelta
+
+    from api.routes import insights
+    from services.component_activity import skill_queries
+    from services.component_activity.skill_queries import build_skill_coverage
+
+    now = datetime.now(UTC)
+    running = SimpleNamespace(
+        id=uuid.uuid4(),
+        subject_type="component",
+        agent_id=None,
+        project_id="default",
+        component_type="skill",
+        component_id=uuid.uuid4(),
+        component_version_id=None,
+        component_version=None,
+        component_name="team/review",
+        coverage={},
+        status="running",
+        period_start=now - timedelta(days=14),
+        period_end=now,
+        started_at=now,
+        created_at=now,
+        completed_at=None,
+        error_message=None,
+        sessions_analyzed=0,
+        progress_phase="running",
+        progress_message="",
+        progress_current=0,
+        progress_total=0,
+        progress_percent=0,
+        agent_version=None,
+        llm_model_used=None,
+    )
+    db = SimpleNamespace(add=AsyncMock(), flush=AsyncMock(), commit=AsyncMock())
+    ref = SimpleNamespace(component_version_id=None, qualified_name="team/review")
+    monkeypatch.setattr(
+        insights, "_authorize_component", AsyncMock(return_value=(SimpleNamespace(id=running.component_id), ref, None))
+    )
+    coverage = build_skill_coverage({"present_sessions": 2}, {"projection_complete_sessions": 2}, 515)
+    monkeypatch.setattr(
+        skill_queries, "skill_activity_summary", AsyncMock(return_value={"present_sessions": 2, "coverage": coverage})
+    )
+    monkeypatch.setattr(insights, "_in_flight_component_report", AsyncMock(return_value=running))
+    pool = SimpleNamespace(enqueue_job=AsyncMock())
+    monkeypatch.setattr(insights, "_get_arq_pool", AsyncMock(return_value=pool))
+
+    item = await insights.generate_component_insight("skill", "team/review", None, db, SimpleNamespace(id=uuid.uuid4()))
+
+    assert item.id == running.id
+    pool.enqueue_job.assert_not_awaited()
+    db.commit.assert_not_awaited()
