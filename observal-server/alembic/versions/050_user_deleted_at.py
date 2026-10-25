@@ -3,16 +3,16 @@
 
 """Mark deleted accounts; the row remains as a scrubbed shell.
 
-Revision ID: 032_user_deleted_at
-Revises: 031_component_privacy
+Revision ID: 050_user_deleted_at
+Revises: 049_component_privacy
 """
 
 import sqlalchemy as sa
 
 from alembic import op
 
-revision = "032_user_deleted_at"
-down_revision = "031_component_privacy"
+revision = "050_user_deleted_at"
+down_revision = "049_component_privacy"
 branch_labels = None
 depends_on = None
 

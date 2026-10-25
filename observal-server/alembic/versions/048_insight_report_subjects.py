@@ -3,8 +3,8 @@
 
 """Scope insight report subjects and invalidate unscoped facet cache entries.
 
-Revision ID: 030_insight_report_subjects
-Revises: 029_projection_generation
+Revision ID: 048_insight_report_subjects
+Revises: 047_projection_generation
 """
 
 import sqlalchemy as sa
@@ -12,8 +12,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "030_insight_report_subjects"
-down_revision = "029_projection_generation"
+revision = "048_insight_report_subjects"
+down_revision = "047_projection_generation"
 branch_labels = None
 depends_on = None
 

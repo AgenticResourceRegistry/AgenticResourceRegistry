@@ -5,7 +5,7 @@
 
 Runs against the same isolated databases as ``test_phase3_activity_api.py``
 (see docs/testing/database-integration-tests.md): ClickHouse
-``observal_phase22_ci`` on :18123 at migration 008, and PostgreSQL
+``observal_phase22_ci`` on :18123 at migration 009, and PostgreSQL
 ``observal_phase14_ci`` on :15432 for the projection generation sequence.
 """
 

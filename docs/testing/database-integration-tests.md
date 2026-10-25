@@ -16,7 +16,7 @@ They are **opt-in**. `make test` and CI exclude the directory, and every file al
 |---|---|---|
 | `test_phase0_publication.py` | Publication and deduplication rules, on test-only `phase0_ci_*` tables | Your populated local development ClickHouse database `observal` |
 | `test_phase14_presence.py` | Component snapshot indexing and presence | ClickHouse `observal_phase14_ci` + PostgreSQL `observal_phase14_ci` |
-| `test_phase22_migration.py` | ClickHouse migration 007 through the migration runner | ClickHouse `observal_phase22_ci` on port 18123 |
+| `test_phase22_migration.py` | ClickHouse migration 008 through the migration runner | ClickHouse `observal_phase22_ci` on port 18123 |
 | `test_phase25_activity.py` | Session records become exact, deduplicated activity rows | ClickHouse `observal_phase22_ci` on 18123 + PostgreSQL `observal_phase14_ci` on 15432 |
 | `test_phase3_activity_api.py` | Activity summary and sessions; isolation between users and projects | Same pair as above |
 | `test_phase4_insights.py` | Component reports end to end | ClickHouse `observal_phase4_ci` on 18124 + PostgreSQL `observal_phase4_ci` on 15433 |

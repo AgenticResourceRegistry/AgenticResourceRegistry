@@ -3,14 +3,14 @@
 
 """Allocate globally ordered layer and activity projection attempt generations.
 
-Revision ID: 029_projection_generation
-Revises: 030_agent_share_manifests
+Revision ID: 047_projection_generation
+Revises: 046_insight_llm_model_used_text
 """
 
 from alembic import op
 
-revision = "029_projection_generation"
-down_revision = "030_agent_share_manifests"
+revision = "047_projection_generation"
+down_revision = "046_insight_llm_model_used_text"
 branch_labels = None
 depends_on = None
 

@@ -3,14 +3,14 @@
 
 """Remove older component analysis that may contain cross-user prompt excerpts.
 
-Revision ID: 031_component_privacy
-Revises: 030_insight_report_subjects
+Revision ID: 049_component_privacy
+Revises: 048_insight_report_subjects
 """
 
 from alembic import op
 
-revision = "031_component_privacy"
-down_revision = "030_insight_report_subjects"
+revision = "049_component_privacy"
+down_revision = "048_insight_report_subjects"
 branch_labels = None
 depends_on = None
 

@@ -68,7 +68,7 @@ def test_placement_needs_a_valid_binding_agent():
 
 def test_the_column_defaults_existing_rows_to_frontmatter():
     sql = (
-        Path(__file__).resolve().parents[1] / "observal-server/clickhouse/migrations/010_hook_placement.sql"
+        Path(__file__).resolve().parents[1] / "observal-server/clickhouse/migrations/011_hook_placement.sql"
     ).read_text()
     assert (
         "ALTER TABLE layer_components ADD COLUMN IF NOT EXISTS binding_placement LowCardinality(String) "

@@ -112,7 +112,8 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
         try:
             async with fresh.connect() as conn:
                 assert (
-                    await conn.scalar(text("SELECT version_num FROM alembic_version")) == "046_component_insights_merge"
+                    await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                    == "053_mcp_webhook_sync_timestamps"
                 )
                 assert await conn.scalar(text("SELECT COUNT(*) FROM skill_versions")) == 0
                 assert await conn.scalar(text("SELECT COUNT(*) FROM agent_share_manifests")) == 0
@@ -196,7 +197,8 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
             assert repaired.returncode == 0, repaired.stderr[-1000:] + repaired.stdout[-1000:]
             async with fresh.connect() as conn:
                 assert (
-                    await conn.scalar(text("SELECT version_num FROM alembic_version")) == "046_component_insights_merge"
+                    await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                    == "053_mcp_webhook_sync_timestamps"
                 )
                 assert await conn.scalar(text("SELECT COUNT(*) FROM agent_share_items")) == 0
                 for table in recommended_tables:
@@ -238,7 +240,8 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
             assert "Running database migrations" in upgraded.stdout
             async with fresh.connect() as conn:
                 assert (
-                    await conn.scalar(text("SELECT version_num FROM alembic_version")) == "046_component_insights_merge"
+                    await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                    == "053_mcp_webhook_sync_timestamps"
                 )
                 assert (
                     await conn.scalar(
@@ -289,7 +292,7 @@ async def test_actual_packaged_init_from_empty_postgres_creates_revision_and_res
                 async with fresh.begin() as conn:
                     assert (
                         await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                        == "046_component_insights_merge"
+                        == "053_mcp_webhook_sync_timestamps"
                     )
                     await conn.execute(text(f"UPDATE skill_versions SET {clear} WHERE id = :id"), {"id": version_id})
             cleared = subprocess.run(
