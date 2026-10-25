@@ -516,6 +516,10 @@ def insights_show(
             rprint(
                 "  [dim]This report predates evidence-backed analysis; generate a new report to assess sessions.[/dim]"
             )
+        elif analysis.get("state") == "unavailable":
+            rprint(
+                "  [yellow]The interpretation could not run (the evidence sample or the model failed); generate the report again.[/yellow]"
+            )
         elif analysis.get("state") != "assessed" or not analysis.get("findings"):
             rprint("  [dim]No grounded interpretive findings in this sample; this does not mean unused.[/dim]")
         else:

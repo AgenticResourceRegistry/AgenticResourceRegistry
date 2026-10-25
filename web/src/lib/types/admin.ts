@@ -157,7 +157,7 @@ export interface ComponentInsightNarrative {
 	summary?: string;
 	component_analysis?: {
 		version: number;
-		state: "assessed" | "unknown";
+		state: "assessed" | "unknown" | "unavailable";
 		findings: ComponentInsightFinding[];
 		evidence?: Record<string, string>;
 		sampled_sessions: number;
