@@ -43,10 +43,6 @@ KEY_STORE_LOCK_TIMEOUT_SECONDS = 5.0
 _KEY_STORE_LOCK_RETRY_SECONDS = 0.05
 
 
-class KeyStoreUnavailableError(RuntimeError):
-    """Raised when managed JWT key material is unavailable during normal operation."""
-
-
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
@@ -162,92 +158,46 @@ class KeyManager:
             raise RuntimeError("KeyManager has not been initialized")
         return self._active
 
-    def _refresh_active_key(self) -> None:
-        """Observe the authoritative private key; never generate or migrate on reads."""
-        path = self._key_dir / "signing.pem"
-        try:
-            pem = path.read_bytes()
-            if self._active is None or pem != self._active.pem:
-                self._load_private_key(path, allow_migration=False, pem=pem)
-        except KeyStoreUnavailableError:
-            raise
-        except (OSError, TypeError, ValueError, RuntimeError, UnsupportedAlgorithm):
-            raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
-
-    def _snapshot(
-        self, *, kid: str | None = None, include_retired: bool = False
-    ) -> tuple[_ActiveKey, dict[str, PublicKey]]:
-        with self._state_lock:
-            self._require_active()
-            try:
-                with self._signing_lock(shared=True):
-                    self._refresh_active_key()
-                    active = self._require_active()
-                    if include_retired or (kid is not None and kid != active.kid):
-                        self._load_retired_keys(prune=False)
-            except KeyStoreUnavailableError:
-                raise
-            except (OSError, TypeError, ValueError, RuntimeError, UnsupportedAlgorithm):
-                raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
-            return active, self._retired_keys if include_retired or (kid is not None and kid != active.kid) else {}
-
     def get_private_key(self) -> PrivateKey:
-        return self._snapshot()[0].private_key
+        return self._require_active().private_key
 
     def get_public_key(self) -> PublicKey:
-        return self._snapshot()[0].public_key
+        return self._require_active().public_key
 
     def get_kid(self) -> str:
-        return self._snapshot()[0].kid
+        return self._require_active().kid
 
     def get_public_key_pem(self) -> str:
-        active, _ = self._snapshot()
-        return active.public_key.public_bytes(
-            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-        ).decode()
+        return (
+            self.get_public_key()
+            .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+            .decode()
+        )
 
     def get_jwks(self) -> dict:
-        active, retired = self._snapshot(include_retired=True)
-        optic.trace("building JWT JWKS with {} retired keys", len(retired))
-        keys = [_public_key_to_jwk(active.public_key, active.kid)]
-        keys.extend(_public_key_to_jwk(pub, kid) for kid, pub in retired.items())
+        self._prune_retired_keys()
+        optic.trace("building JWT JWKS with {} retired keys", len(self._retired_keys))
+        keys = [_public_key_to_jwk(self.get_public_key(), self.get_kid())]
+        keys.extend(_public_key_to_jwk(pub, kid) for kid, pub in self._retired_keys.items())
         return {"keys": keys}
 
     def rotate_key(self) -> str:
         optic.info("rotating JWT signing key")
-        new_key = self._generate_private_key()
-        with self._state_lock, self._signing_lock():
-            self._refresh_active_key()
-            if self._require_active().algorithm != self._algorithm:
-                raise RuntimeError("Configured JWT signing algorithm conflicts with the active key in the shared store")
-            try:
-                self._retire_current_key()
-                pem = self._write_private_key(self._key_dir / "signing.pem", new_key)
-                self._set_active_key(new_key, pem)
-                self._load_retired_keys()
-            except Exception:
-                # An error after os.replace may mean the new key was published.
-                # Reconcile under the same lock; never automatically rotate again.
-                optic.warning("JWT rotation failed; active key may have changed; inspect the key store before retrying")
-                try:
-                    self._refresh_active_key()
-                    self._load_retired_keys(prune=False)
-                except Exception:
-                    # Loguru's exception diagnostics can include the private key from local frames.
-                    optic.error("could not reconcile JWT key state after failed rotation")
-                raise
-            return self._require_active().kid
+        self._retire_current_key()
+        self._generate_key_pair(self._key_dir / "signing.pem")
+        return self.get_kid()
 
     def find_public_key(self, kid: str) -> PublicKey | None:
-        active, retired = self._snapshot(kid=kid)
-        return active.public_key if kid == active.kid else retired.get(kid)
+        self._prune_retired_keys()
+        active = self._require_active()
+        if kid == active.kid:
+            return active.public_key
+        return self._retired_keys.get(kid)
 
     def sign_token(self, payload: dict) -> str:
-        active, _ = self._snapshot()
-        if active.algorithm != self._algorithm:
-            raise RuntimeError("Configured JWT signing algorithm conflicts with the active key in the shared store")
+        active = self._require_active()
         optic.trace("signing JWT token with kid={}", active.kid)
-        return jwt.encode(payload, active.private_key, algorithm=active.algorithm, headers={"kid": active.kid})
+        return jwt.encode(payload, active.private_key, algorithm=self._algorithm, headers={"kid": active.kid})
 
     def verify_token(self, token: str) -> dict:
         optic.trace("verifying JWT token")
@@ -274,13 +224,7 @@ class KeyManager:
 
         lock_path = self._key_dir / ".signing.lock"
         flags = (os.O_CREAT | os.O_RDWR) if create else (os.O_RDONLY if shared else os.O_RDWR)
-        try:
-            descriptor = os.open(lock_path, flags, 0o600)
-        except OSError:
-            if create:
-                raise
-            raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
-
+        descriptor = os.open(lock_path, flags, 0o600)
         try:
             if create:
                 try:
@@ -297,31 +241,25 @@ class KeyManager:
                 except OSError as exc:
                     if exc.errno == errno.EINTR:
                         if time.monotonic() >= deadline:
-                            raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
+                            raise
                         continue
                     if not isinstance(exc, BlockingIOError) and exc.errno not in {
                         errno.EACCES,
                         errno.EAGAIN,
                         errno.EWOULDBLOCK,
                     }:
-                        raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
+                        raise
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
+                        raise
                     time.sleep(min(_KEY_STORE_LOCK_RETRY_SECONDS, remaining))
 
             try:
                 yield
             finally:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                except OSError:
-                    raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
-            try:
-                os.close(descriptor)
-            except OSError:
-                raise KeyStoreUnavailableError("JWT signing-key store is unavailable") from None
+            os.close(descriptor)
 
     def _atomic_write(self, path: Path, data: bytes) -> None:
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -408,70 +346,42 @@ class KeyManager:
         self._set_active_key(key, pem)
 
     def _retire_current_key(self) -> None:
-        active = self._require_active()
-        retired_path = self._key_dir / f"retired_{active.kid}.pem"
-        pem = active.public_key.public_bytes(
-            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        if self._active is None:
+            return
+        retired_path = self._key_dir / f"retired_{self._active.kid}.pem"
+        retired_path.write_bytes(
+            self._active.public_key.public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
         )
-        try:
-            retired_path.lstat()
-        except FileNotFoundError:
-            pass
-        else:
-            existing = serialization.load_pem_public_key(retired_path.read_bytes())
-            if (
-                existing.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-                != pem
-            ):
-                raise RuntimeError(f"Conflicting retired JWT key record: {retired_path.name}")
-        self._atomic_write(retired_path, pem)
-
-    def _retired_key_paths(self) -> list[Path]:
-        """Enumerate retired keys without suppressing directory I/O errors."""
-        with os.scandir(self._key_dir) as entries:
-            return [
-                self._key_dir / entry.name
-                for entry in entries
-                if entry.name.startswith("retired_") and entry.name.endswith(".pem")
-            ]
+        os.chmod(retired_path, 0o600)
+        self._retired_keys[self._active.kid] = self._active.public_key
 
     def _prune_retired_keys(self) -> None:
-        """Only called while holding exclusive coordination (never from a read)."""
         cutoff = time.time() - self._retired_key_retention_seconds
-        for path in self._retired_key_paths():
+        for path in self._key_dir.glob("retired_*.pem"):
             try:
                 if path.stat().st_mtime >= cutoff:
                     continue
+                kid = path.stem.removeprefix("retired_")
                 path.unlink()
-                optic.info("removed expired retired JWT key file {}", path.name)
+                self._retired_keys.pop(kid, None)
+                optic.info("removed expired retired JWT key kid={}", kid)
             except OSError:
                 optic.warning("could not prune retired key file {}", path.name)
 
-    def _load_retired_keys(self, *, prune: bool = True) -> None:
-        if prune:
-            self._prune_retired_keys()
-        cutoff = time.time() - self._retired_key_retention_seconds
-        active_kid = self._require_active().kid
-        eligible: dict[str, PublicKey] = {}
-        for path in self._retired_key_paths():
-            retired_kid = path.name[len("retired_") : -len(".pem")]
+    def _load_retired_keys(self) -> None:
+        self._prune_retired_keys()
+        for path in self._key_dir.glob("retired_*.pem"):
             try:
-                if path.stat().st_mtime < cutoff:
-                    continue
                 pub = serialization.load_pem_public_key(path.read_bytes())
                 if not isinstance(pub, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
-                    raise TypeError(f"Unsupported retired JWT key type: {type(pub).__name__}")
+                    raise TypeError(type(pub).__name__)
                 _algorithm_for_key(pub)
-            except (OSError, TypeError, ValueError, UnsupportedAlgorithm):
-                optic.warning("could not load retired JWT key file {}", path.name)
-                continue
-            kid = _kid_from_public_key(pub)
-            if retired_kid != kid:
-                optic.warning("retired JWT key identity changed in file {}", path.name)
-                continue
-            if kid != active_kid:
-                eligible[kid] = pub
-        self._retired_keys = eligible
+                self._retired_keys[_kid_from_public_key(pub)] = pub
+            except (OSError, TypeError, ValueError):
+                optic.warning("could not load retired key file {}", path.name)
 
 
 _key_manager: KeyManager | None = None

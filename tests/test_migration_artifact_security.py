@@ -185,16 +185,6 @@ class TestExpiredToken:
                 await download_artifact(token="expired.token.here", db=mock_db)
             assert exc_info.value.status_code == 403
 
-    @skip_if_no_module
-    @pytest.mark.asyncio
-    async def test_download_endpoint_propagates_key_store_unavailability(self):
-        error = _migrate_mod.KeyStoreUnavailableError("JWT signing-key store is unavailable")
-        with (
-            patch.object(_migrate_mod, "verify_token", side_effect=error),
-            pytest.raises(_migrate_mod.KeyStoreUnavailableError),
-        ):
-            await _migrate_mod.download_artifact(token="valid.token.here", db=AsyncMock())
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 10.3.3: Purged artifact → 404

@@ -28,5 +28,5 @@ async def jwks() -> JSONResponse:
     km = get_key_manager()
     return JSONResponse(
         content=km.get_jwks(),
-        headers={"Cache-Control": "public, no-cache, must-revalidate"},
+        headers={"Cache-Control": "public, max-age=3600"},
     )

@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """JWT token generation and validation for unified browser/CLI auth.
@@ -72,8 +71,7 @@ def create_refresh_token(user_id: uuid.UUID, role: UserRole, groups: list[str] |
 def decode_token(token: str) -> dict:
     """Decode and validate a JWT token using the configured public key set.
 
-    Raises jwt.InvalidTokenError for rejected tokens and KeyStoreUnavailableError
-    when the signing-key store cannot be read.
+    Raises jwt.InvalidTokenError (or subclass) on failure.
     """
     from services.crypto import verify_token
 

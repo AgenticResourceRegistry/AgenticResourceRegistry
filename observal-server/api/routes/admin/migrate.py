@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Admin data migration routes."""
@@ -25,7 +24,7 @@ from schemas.migration import (
     MigrationJobResponse,
     StartExportRequest,
 )
-from services.crypto import KeyStoreUnavailableError, sign_token, verify_token
+from services.crypto import sign_token, verify_token
 from services.redis import _get_arq_pool
 from services.security_events import EventType, SecurityEvent, Severity, emit_security_event
 
@@ -419,8 +418,6 @@ async def download_artifact(
 
     try:
         claims = verify_token(token)
-    except KeyStoreUnavailableError:
-        raise
     except Exception:
         raise HTTPException(status_code=403, detail="Invalid or expired download token")
 

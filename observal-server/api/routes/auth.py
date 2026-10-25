@@ -5,7 +5,6 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -51,7 +50,6 @@ from schemas.auth import (
 )
 from schemas.sso_health import make_check
 from services import sso_diagnostics
-from services.crypto import KeyStoreUnavailableError
 from services.jwt_service import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
 from services.redis import get_redis
 from services.registry_namespace import is_valid_namespace, rename_namespace, user_has_listings
@@ -824,8 +822,6 @@ async def oauth_callback(request: Request, db: AsyncSession = Depends(get_db)):
         access_token, refresh_token, expires_in = await _issue_tokens(user, groups=groups)
         await db.commit()
         diag.append(make_check("issue_tokens", "Issue JWT access + refresh tokens", "pass"))
-    except KeyStoreUnavailableError:
-        raise
     except HTTPException:
         raise  # _issue_tokens already raised the right thing
     except Exception as e:
@@ -1602,8 +1598,6 @@ async def logout(
         payload = decode_access_token(token)
         jti = payload.get("jti")
         exp = payload.get("exp")
-    except KeyStoreUnavailableError:
-        raise
     except Exception:
         jti = None
         exp = None
@@ -1632,8 +1626,6 @@ async def logout(
                     await redis.delete(f"refresh_jti:{refresh_jti}")
                 except RedisError:
                     pass
-        except KeyStoreUnavailableError:
-            raise
         except Exception:
             pass  # Best-effort
 

@@ -603,7 +603,7 @@ async def test_oidc_callback_early_failures(monkeypatch, case, token):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["lookup", "create", "race", "tokens", "key_store", "auth_service", "handoff"])
+@pytest.mark.parametrize("failure", ["lookup", "create", "race", "tokens", "auth_service", "handoff"])
 async def test_oidc_callback_storage_failures(monkeypatch, failure):
     token = {"userinfo": {"email": "sso@example.test", "name": "SSO", "sub": "sub"}}
     oidc = SimpleNamespace(authorize_access_token=AsyncMock(return_value=token))
@@ -628,18 +628,10 @@ async def test_oidc_callback_storage_failures(monkeypatch, failure):
         db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate"))
     elif failure == "tokens":
         auth._issue_tokens.side_effect = RuntimeError("signing unavailable")
-    elif failure == "key_store":
-        auth._issue_tokens.side_effect = auth.KeyStoreUnavailableError("JWT signing-key store is unavailable")
     elif failure == "auth_service":
         auth._issue_tokens.side_effect = HTTPException(status_code=503, detail="Auth service unavailable")
     else:
         redis.setex.side_effect = RedisError("unavailable")
-
-    if failure == "key_store":
-        with pytest.raises(auth.KeyStoreUnavailableError):
-            await auth.oauth_callback(_request(), db)
-        persist.assert_not_awaited()
-        return
 
     if failure == "auth_service":
         with pytest.raises(HTTPException) as exc:
@@ -959,26 +951,6 @@ async def test_logout_revokes_access_refresh_and_emits_audit(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await auth.logout(_request(headers={}), LogoutRequest(), _user())
     assert exc.value.status_code == 503
-
-
-@pytest.mark.parametrize("failure", ["access-token", "refresh-token"])
-@pytest.mark.asyncio
-async def test_logout_propagates_key_store_failures(monkeypatch, failure):
-    redis = FakeRedis()
-    monkeypatch.setattr(auth, "get_redis", lambda: redis)
-    error = auth.KeyStoreUnavailableError("JWT signing-key store is unavailable")
-    if failure == "access-token":
-        monkeypatch.setattr(auth, "decode_access_token", MagicMock(side_effect=error))
-    else:
-        monkeypatch.setattr(auth, "decode_access_token", lambda _token: {})
-        monkeypatch.setattr(auth, "decode_refresh_token", MagicMock(side_effect=error))
-
-    with pytest.raises(auth.KeyStoreUnavailableError):
-        await auth.logout(
-            _request(headers={"authorization": "Bearer access-token"}),
-            LogoutRequest(refresh_token="refresh-token"),
-            _user(),
-        )
 
 
 @pytest.mark.asyncio
