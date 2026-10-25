@@ -165,6 +165,15 @@ export interface ComponentInsightNarrative {
 	};
 }
 
+/** The coverage fields every component kind (MCP, skill, hook) reports, as the shared panel reads them. */
+export type CoverageFacts = {
+  presence: { present_sessions: number; legacy_hash_sessions?: number; snapshot_missing_sessions?: number };
+  projection: { projection_complete_sessions: number; projection_pending_sessions: number; projection_failed_sessions: number; unsupported_present_sessions: number };
+  attribution_state: string;
+  reasons: string[];
+  limitations: string[];
+};
+
 export interface ComponentInsightCoverage {
 	attribution_state: "observed" | "no_observed_calls" | "attribution_not_possible";
 	presence: { present_sessions: number; present_users: number; eligible_sessions: number; legacy_hash_sessions?: number; snapshot_missing_sessions?: number };
