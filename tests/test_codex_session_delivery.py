@@ -99,8 +99,12 @@ def test_relative_codex_home_is_absolute_in_detached_worker(tmp_path: Path, monk
     adapter = get_adapter("codex")
     assert adapter.resolve_session_source({"session_id": SESSION_ID}).path == session
 
+    from observal_cli.shared import launcher
+
     spawned = []
     monkeypatch.setattr(session_push, "drain_session_source", lambda *_args, **_kwargs: True)
+    # The launcher probes its own interpreter once per process; a cold probe would be captured as the worker.
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
     monkeypatch.setattr(session_push.subprocess, "Popen", lambda argv, **kwargs: spawned.append((argv, kwargs)))
     session_push._run_hook({"session_id": SESSION_ID, "event": "Stop"}, harness="codex")
 
