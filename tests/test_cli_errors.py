@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the CLI HTTP client and its user-facing failures."""
@@ -472,7 +473,7 @@ def test_every_leaf_command_exposes_json_machine_output():
             leaves.append(command)
 
     walk(root)
-    assert len(leaves) == 212
+    assert len(leaves) == 254
     for command in leaves:
         output = next((parameter for parameter in command.params if parameter.name == "output"), None)
         assert output is not None, command.name
@@ -722,7 +723,7 @@ def test_root_group_enforces_error_contract_for_all_commands():
                 walk(child)
 
     walk(root)
-    assert len(executable) == 218
+    assert len(executable) == 260
 
 
 @pytest.mark.parametrize(

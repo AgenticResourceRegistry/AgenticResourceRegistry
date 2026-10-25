@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
@@ -22,6 +23,7 @@ class SkillListing(Base):
         Index("ix_skill_listings_namespace", "namespace"),
         Index("ix_skill_listings_submitted_by", "submitted_by"),
         Index("ix_skill_listings_team_id", "team_id"),
+        Index("ix_skill_listings_forked_from_id", "forked_from_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -33,9 +35,6 @@ class SkillListing(Base):
     team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True
     )
-    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("component_bundles.id"), nullable=True
-    )
     submitted_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     co_authors: Mapped[list] = mapped_column(JSON, default=list)
     unique_agents: Mapped[int] = mapped_column(Integer, default=0)
@@ -46,6 +45,14 @@ class SkillListing(Base):
         onupdate=lambda: datetime.now(UTC),
     )
     is_recommended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    forked_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_listings.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("skill_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    forked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     latest_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("skill_versions.id", use_alter=True, ondelete="SET NULL"),
@@ -61,6 +68,10 @@ class SkillListing(Base):
     latest_version: Mapped[SkillVersion | None] = relationship(
         foreign_keys=[latest_version_id], lazy="selectin", uselist=False, post_update=True
     )
+
+    @property
+    def is_fork(self) -> bool:
+        return self.forked_from_id is not None or self.forked_from_ref is not None
 
     @property
     def qualified_name(self) -> str:
@@ -178,6 +189,18 @@ class SkillListing(Base):
         self.latest_version.delivery_mode = value
 
     @property
+    def extra_files(self) -> list[dict]:
+        # JSON columns are not mutable-tracked: prevent in-place edits that
+        # appear to work but disappear when the session commits.
+        return deepcopy(self.latest_version.extra_files) if self.latest_version else []
+
+    @extra_files.setter
+    def extra_files(self, value: list[dict]) -> None:
+        if not self.latest_version:
+            raise RuntimeError(f"{type(self).__name__} has no latest_version; cannot set extra_files")
+        self.latest_version.extra_files = value
+
+    @property
     def script_content(self) -> str | None:
         return self.latest_version.script_content if self.latest_version else None
 
@@ -279,6 +302,9 @@ class SkillVersion(Base):
     delivery_mode: Mapped[str] = mapped_column(String(20), server_default="git_fetch", nullable=False)
     script_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     script_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Phase 2 must project/defer this field on list and lock queries. Do not
+    # defer it globally yet: version publishing snapshots all loaded columns.
+    extra_files: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     validated: Mapped[bool] = mapped_column(Boolean, default=False)
     target_agents: Mapped[list] = mapped_column(JSON, default=list)
     task_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -286,5 +312,23 @@ class SkillVersion(Base):
     is_editing: Mapped[bool] = mapped_column(Boolean, default=False)
     editing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     editing_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    # Saved drafts inherit only from an approved base. Existing versions stay
+    # NULL until their first explicit revision-bearing write or review.
+    base_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("skill_versions.id", name="fk_skill_versions_base_version_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    base_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    requires_global_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    pre_public_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    pre_public_reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", name="fk_skill_versions_pre_public_reviewed_by", ondelete="SET NULL"),
+        nullable=True,
+    )
+    pre_public_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     listing: Mapped[SkillListing] = relationship(back_populates="versions", foreign_keys=[listing_id])

@@ -1,6 +1,6 @@
 {
   "name": "observal-pi",
-  "version": "1.13.1",
+  "version": "1.16.0-dev.0",
   "type": "module",
   "description": "Observal session telemetry for Pi \u2014 zero-dependency extension that pushes session traces to your Observal server",
   "keywords": [
@@ -25,7 +25,7 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0"
   },
   "scripts": {
-    "test": "node --experimental-strip-types tests/acknowledged-delivery.test.ts && node --experimental-strip-types tests/capability-attribution.test.ts && node --experimental-strip-types tests/delegated-attribution.test.ts && node --experimental-strip-types tests/token-refresh.test.ts"
+    "test": "node --experimental-strip-types tests/acknowledged-delivery.test.ts && node --experimental-strip-types tests/capability-attribution.test.ts && node --experimental-strip-types tests/delegated-attribution.test.ts && node --experimental-strip-types tests/token-refresh.test.ts && node --experimental-strip-types tests/stale-session-recovery.test.ts"
   },
   "files": [
     "extensions/",

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Mutation retries and idempotency
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Mutation retries and idempotency"
+---
 
 Agents must distinguish a rejected mutation from a mutation whose result is unknown.
 

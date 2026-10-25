@@ -12,9 +12,14 @@ methods they support; the feature gate runs before the override.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger as optic
 
 from observal_cli.harness.protocol import (
     METHOD_FEATURE_MAP,
@@ -90,6 +95,9 @@ def _check_feature(harness_name: str, method_name: str) -> None:
         raise NotSupportedError(harness_name, method_name)
 
 
+HEADLESS_READY_TIMEOUT_SECONDS = 15
+
+
 class BaseAdapter:
     """Base class providing feature-gated defaults for all protocol methods.
 
@@ -103,6 +111,15 @@ class BaseAdapter:
     headless_binary: str | None = None
     # headless_command passes the task on stdin, so its length and cmd.exe quoting never matter.
     headless_task_on_stdin = False
+    # Environment variables the harness sets for the commands it runs, so a command can tell
+    # which harness started it (delegation runs in the caller's harness by default).
+    caller_env_markers: tuple[str, ...] = ()
+    # A quick command that exits non-zero exactly when headless_command would fail before doing
+    # any work (no usable login), and what to tell the user then. Empty: nothing reliable to ask.
+    headless_ready_argv: tuple[str, ...] = ()
+    headless_not_ready_hint = ""
+    # Credentials that authenticate a headless run without a login: when any is set the check is skipped.
+    headless_ready_skip_env: tuple[str, ...] = ()
     managed_agent_profiles: tuple[str, ...] = ()
     managed_skills: tuple[str, ...] = ()
     managed_mcp_files: tuple[str, ...] = ()
@@ -117,6 +134,10 @@ class BaseAdapter:
         ``None`` means the caller should fall back to its static path table.
         """
         return None
+
+    def session_worker_environment(self) -> dict[str, str]:
+        """Environment overrides needed by detached session delivery workers."""
+        return {}
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         _check_feature(self.harness_name, "scan_home")
@@ -245,6 +266,10 @@ class BaseAdapter:
         """Finalize aged session sources by default."""
         return True
 
+    def reports_sessions_outside_pull(self) -> bool:
+        """Session telemetry comes from the hook files a pull writes."""
+        return False
+
     def is_session_final(self, event: dict[str, Any]) -> bool:
         """Recognize common final lifecycle event names."""
         event_name = str(
@@ -301,12 +326,45 @@ class BaseAdapter:
     def requires_explicit_agent_id(self) -> bool:
         return False
 
+    def attributes_by_directory(self) -> bool:
+        return True
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        return None
+
     def headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         _check_headless(self.harness_name)
         return self._headless_command(request)
 
     def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         raise NotSupportedError(self.harness_name, "headless_command")
+
+    def headless_not_ready(self) -> str | None:
+        """Why this harness cannot run a delegated agent right now; None when it can, or cannot tell."""
+        if not self.headless_ready_argv:
+            return None
+        if any(os.environ.get(name) for name in self.headless_ready_skip_env):
+            return None
+        binary = shutil.which(self.headless_ready_argv[0])
+        if binary is None:
+            return None
+        try:
+            proc = subprocess.run(
+                [binary, *self.headless_ready_argv[1:]],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=HEADLESS_READY_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # A check that does not answer never blocks a delegation, but the skipped check is logged.
+            optic.warning(
+                "headless readiness check skipped: harness={} reason={}", self.harness_name, type(exc).__name__
+            )
+            return None
+        if proc.returncode == 0:
+            return None
+        return self.headless_not_ready_hint or f"`{' '.join(self.headless_ready_argv)}` failed."
 
     def parse_headless_output(self, plan: HeadlessPlan, stdout: str) -> HeadlessResult:
         """Plain-text harnesses: the answer is stdout, or the file the harness wrote it to."""

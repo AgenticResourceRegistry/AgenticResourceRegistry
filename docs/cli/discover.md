@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal discover`
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal discover"
+---
 
 Find approved registry resources for the task at hand and use them in the current session, without building an Agent first.
 
@@ -21,7 +22,7 @@ Pass the task as one shell-escaped argument (single-quote it and escape any embe
 | Option | Description |
 | --- | --- |
 | `--type`, `-t` | Restrict to `agent`, `mcp`, `skill`, `hook`, `prompt`, or `sandbox` |
-| `--harness`, `-i` | Only resources that list this harness as supported |
+| `--harness`, `-i` | Only resources that explicitly list this harness as supported. Resources that declare no harnesses are left out (support is unknown, not implied); drop the flag to see them. Remote A2A agents are kept, since they run elsewhere. |
 | `--limit`, `-n` | Number of results, 1 through 25 (default 5) |
 | `--include-unapproved` | Also return your own pending or rejected submissions |
 | `--output`, `-o` | Table or JSON output |
@@ -37,7 +38,7 @@ JSON returns `query`, `harness`, `count`, and `results[]`. Important result fiel
 | `obs:nativeRef` | `namespace/slug@version`, usable with the registry and agent commands |
 | `obs:approval` | `approved`, `pending`, `rejected`, `archived`, `draft` |
 | `obs:availability` | `now`, `next-session`, `explicit-install`, `not-approved`, `archived`, `unsupported-in-harness` |
-| `obs:supportedHarnesses` | Harnesses the publisher declared; empty means unrestricted |
+| `obs:supportedHarnesses` | Harnesses the publisher declared; empty means support is unknown (not unrestricted). Policy: `--harness` search needs positive evidence, so it leaves out resources that declare no harnesses; `inspect` and `use` only refuse a resource that declares other harnesses, so a resource that declares none stays usable. |
 | `obs:artifactDigest` | SHA-256 of the exact artifact bytes |
 
 An empty `results` array is a successful answer: nothing matched. Try fewer or different words before concluding the resource does not exist.
@@ -67,7 +68,8 @@ observal discover use urn:air:observal.acme.com:mcp:9a1b... --harness kiro --out
 What happens depends on the kind:
 
 - **Skills and prompts** are text. The exact approved version is fetched from its permanent URL and printed (JSON: `content`, `activated: true`, `mode: context`). The use is recorded in the capability lock.
-- **MCP servers, agents, sandboxes, and hooks** change your setup. Nothing is written; the response carries `next_step`, the existing install command (`observal registry mcp install …`, `observal agent pull …`), which confirms before touching harness config and takes effect after a restart. JSON: `activated: false`, `mode: next-session`.
+- **MCP servers, agents, and hooks** change your setup. Nothing is written; the response carries `next_step`, the existing install command (`observal registry mcp install …`, `observal agent pull …`), which confirms before touching harness config and takes effect after a restart. JSON: `activated: false`, `mode: next-session`.
+- **Sandboxes** have no install command; they reach a machine only inside an Agent. `next_step` is `observal agent add sandbox <uuid> [--version V]`, run in an Agent directory (`observal agent init`); `reason` says to then `observal agent publish` and `observal agent pull <agent> --harness <harness>`. JSON: `activated: false`, `mode: next-session`.
 
 Unapproved resources are refused without `--yes`. A resource whose `obs:supportedHarnesses` excludes the detected harness is refused; pass `--harness` to override the detection.
 
@@ -75,7 +77,7 @@ Unapproved resources are refused without `--yes`. A resource whose `obs:supporte
 
 Every activation appends one line to `~/.observal/capability_lock.jsonl`: timestamp, harness, working directory, identifier, kind, version, digest, and mode. `agent pull` and the component install commands append too. Session upload (`session_push` hooks and `observal reconcile`) attaches the lines that fall inside a session's harness, directory, and time window as `capabilities_used`, which is how Observal knows which resources a session relied on. Nothing secret is stored.
 
-Entries older than 30 days are pruned. Related: [`observal agent init --from-capabilities`](agent.md) turns the resources used in a directory into a draft Agent.
+Entries older than 30 days are pruned. Related: [`observal agent init --from-capabilities`](/cli/agent) turns the resources used in a directory into a draft Agent.
 
 ## Exit codes
 

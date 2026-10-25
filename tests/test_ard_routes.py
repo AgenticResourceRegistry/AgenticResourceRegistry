@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """ARD endpoints, artifact endpoint, and conformance against the vendored spec tool."""
@@ -19,18 +20,21 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.pool import NullPool
 
 import services.dynamic_settings as ds
 from api.deps import get_db
 from api.ratelimit import limiter
 from api.routes import ard, artifacts
-from models.discovery_entry import DiscoveryKind
+from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle, DiscoveryVisibility
 from models.mcp import ListingStatus
+from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership
 from models.user import UserRole
-from services.discovery.projection import reproject_all
+from services.discovery.adapters import NATIVE_MODELS
+from services.discovery.projection import project_entity, reproject_all
+from services.discovery.serialize import availability
 from tests import discovery_support as fx
 
 VENDOR = Path(__file__).resolve().parents[1] / "observal-server" / "vendor" / "ard"
@@ -115,6 +119,58 @@ def _client(app):
 
 
 # ── Search ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_public_fork_links_and_search_facet_follow_live_visibility(sessions, settings):
+    owner, _, source = await _seed(sessions)
+    settings["public"] = True
+    async with sessions() as db:
+        fork = await fx.skill(db, owner, name="Forked Review", slug="forked-review")
+        fork.forked_from_id = source.id
+        fork.forked_from_version_id = source.latest_version_id
+        fork.forked_from_ref = "do-not-serialize/secret@9.9.9"
+        await db.flush()
+        await reproject_all(db, ctx=fx.CTX)
+        fork_id, source_id = fork.id, source.id
+    urn = f"urn:air:observal.example.com:skill:{source_id}"
+    fork_urn = f"urn:air:observal.example.com:skill:{fork_id}"
+    search_body = {"query": {"text": "review", "filter": {"obs:forksOf": urn}}}
+    async with _client(_app(sessions)) as client:
+        found = await client.post("/api/v1/ard/search", json=search_body)
+        assert found.status_code == 200, found.text
+        assert [row["identifier"] for row in found.json()["results"]] == [fork_urn]
+        assert found.json()["results"][0]["obs:forkedFrom"] == urn
+        invalid = await client.post(
+            "/api/v1/ard/search",
+            json={"query": {"text": "review", "filter": {"obs:forksOf": [urn, urn]}}},
+        )
+        assert invalid.status_code == 400 and invalid.json()["errorCode"] == "INVALID_ARGUMENT"
+        assert (await client.get(f"/api/v1/ard/entries/{fork_urn}")).json()["obs:forkedFrom"] == urn
+        listing = await client.get("/api/v1/ard/agents")
+        assert next(row for row in listing.json()["items"] if row["identifier"] == fork_urn)["obs:forkedFrom"] == urn
+        manifest = await client.get("/.well-known/ard.json")
+        assert next(row for row in manifest.json()["entries"] if row["identifier"] == fork_urn)["obs:forkedFrom"] == urn
+        assert "do-not-serialize" not in str((found.json(), listing.json(), manifest.json()))
+
+        # No reprojection: the native row must win over a stale public ARD entry.
+        async with sessions() as db:
+            native = await db.get(type(source), source_id)
+            native.is_private = True
+            await db.commit()
+        assert (await client.post("/api/v1/ard/search", json=search_body)).json()["results"] == []
+        detail = await client.get(f"/api/v1/ard/entries/{fork_urn}")
+        assert "obs:forkedFrom" not in detail.json()
+        assert "do-not-serialize" not in detail.text
+
+        async with sessions() as db:
+            native = await db.get(type(source), source_id)
+            native.is_private = False
+            native_fork = await db.get(type(source), fork_id)
+            native_fork.is_private = True
+            await db.commit()
+        assert (await client.post("/api/v1/ard/search", json=search_body)).json()["results"] == []
+        assert "obs:forkedFrom" not in (await client.get(f"/api/v1/ard/entries/{fork_urn}")).json()
 
 
 @pytest.mark.asyncio
@@ -533,6 +589,147 @@ async def test_artifact_serves_bytes_with_digest(sessions, settings):
     assert resp.headers["X-Artifact-Digest"].startswith("sha256:")
     assert resp.headers["Cache-Control"] == "private, no-store"
     assert "Look for auth bugs" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_bundled_skill_artifact_is_not_activatable_as_partial_skill(sessions, settings):
+    owner, stranger, skill = await _seed(sessions)
+    async with sessions() as db:
+        version = (await db.execute(select(SkillVersion).where(SkillVersion.listing_id == skill.id))).scalar_one()
+        version.extra_files = [{"path": "scripts/run.sh", "content": "echo complete", "executable": True}]
+        entry = await project_entity(db, DiscoveryKind.skill, skill.id, ctx=fx.CTX)
+        await db.commit()
+        assert entry.activatable is False
+        assert entry.raw_entry["obs:artifactScope"] == "preview"
+        assert availability(entry) == "explicit-install"
+    async with _client(_app(sessions, owner)) as client:
+        result = await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")
+        assert result.status_code == 409
+        assert result.json()["errorCode"] == "COMPLETE_FOLDER_REQUIRED"
+        assert "echo complete" not in result.text
+    # ARD now denies strangers outside the owner's teamspace before disclosing
+    # whether this resource-bearing version exists.
+    async with _client(_app(sessions, stranger)) as client:
+        assert (await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stale_public_skill_discovery_entry_cannot_expose_privatized_release(sessions, settings):
+    owner, stranger, skill = await _seed(sessions)
+    async with sessions() as db:
+        listing = await db.get(SkillListing, skill.id)
+        listing.is_private = True  # Discovery projection has not caught up yet.
+        await db.commit()
+    async with _client(_app(sessions, stranger)) as client:
+        assert (await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")).status_code == 404
+    async with _client(_app(sessions, owner)) as client:
+        allowed = await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")
+        assert allowed.status_code == 200
+        assert allowed.headers["Cache-Control"].startswith("private")
+
+
+@pytest.mark.asyncio
+async def test_stale_approved_artifact_cannot_bypass_global_re_review(sessions, settings):
+    owner, stranger, skill = await _seed(sessions)
+    async with sessions() as db:
+        version = (await db.execute(select(SkillVersion).where(SkillVersion.listing_id == skill.id))).scalar_one()
+        version.requires_global_review = True
+        await db.commit()
+    async with _client(_app(sessions, stranger)) as client:
+        assert (await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")).status_code == 404
+    async with _client(_app(sessions, owner)) as client:
+        result = await client.get(f"/api/v1/artifacts/skill/{skill.id}/1.2.0")
+        assert result.status_code == 200
+        assert result.headers["Cache-Control"].startswith("private")
+
+
+# "listing" removes the versions too (a real cascade); "listing-only" leaves them, so each EXISTS is tested alone.
+_REMOVALS = [(kind, drop) for kind in NATIVE_MODELS for drop in ("listing", "listing-only", "version")] + [
+    (DiscoveryKind.agent, "soft-delete")  # only agents have deleted_at
+]
+
+
+async def _list_identifiers(client) -> set[str]:
+    body = (await client.get("/api/v1/ard/agents", params={"pageSize": 50})).json()
+    assert body["total"] == len(body["items"])  # one page, so the count and the items must agree
+    return {item["identifier"] for item in body["items"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "drop"), _REMOVALS, ids=[f"{k.value}-{d}" for k, d in _REMOVALS])
+async def test_entry_whose_source_was_removed_outside_the_orm_is_not_served(sessions, settings, kind, drop):
+    """A cascade or manual SQL write skips the reprojection hook; reads must not advertise the entry."""
+    owner, _, _ = await _seed(sessions)
+    listing_model, version_model, fk = NATIVE_MODELS[kind]
+    async with sessions() as db:
+        entry = (
+            (
+                await db.execute(
+                    select(DiscoveryEntry)
+                    .where(
+                        DiscoveryEntry.kind == kind,
+                        DiscoveryEntry.lifecycle_status == DiscoveryLifecycle.approved,
+                        DiscoveryEntry.visibility == DiscoveryVisibility.public,
+                    )
+                    .order_by(DiscoveryEntry.display_name)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        urn, name, entity_id, version = entry.ard_identifier, entry.display_name, entry.local_entity_id, entry.version
+    async with _client(_app(sessions, owner)) as client:
+        before = await _list_identifiers(client)
+        assert urn in before
+        assert (await client.get(f"/api/v1/artifacts/{kind.value}/{entity_id}/{version}")).status_code == 200
+
+    async with sessions() as db:
+        if drop == "soft-delete":
+            await db.execute(update(listing_model).where(listing_model.id == entity_id).values(deleted_at=fx.NOW))
+        else:
+            if drop != "listing-only":
+                await db.execute(delete(version_model).where(getattr(version_model, fk) == entity_id))
+            if drop.startswith("listing"):
+                await db.execute(delete(listing_model).where(listing_model.id == entity_id))
+        await db.commit()
+        entry = (
+            await db.execute(select(DiscoveryEntry).where(DiscoveryEntry.local_entity_id == entity_id))
+        ).scalar_one()
+        assert entry.tombstoned_at is None  # the index was never told
+
+    async with _client(_app(sessions, owner)) as client:
+        found = await client.post("/api/v1/ard/search", json={"query": {"text": name}, "pageSize": 25})
+        assert urn not in {r["identifier"] for r in found.json()["results"]}
+        assert (await client.get(f"/api/v1/ard/entries/{urn}")).status_code == 404
+        assert (await client.get(f"/api/v1/artifacts/{kind.value}/{entity_id}/{version}")).status_code == 404
+        assert await _list_identifiers(client) == before - {urn}  # nothing else was hidden
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "nulled", [("local_entity_id",), ("local_version_id",), ("local_entity_id", "local_version_id")]
+)
+@pytest.mark.parametrize("kind", list(NATIVE_MODELS))
+async def test_local_entry_without_source_ids_is_not_hidden(sessions, settings, kind, nulled):
+    """Pre-pointer rows (NULL ids) cannot be checked against the registry, so they are left to the safety net."""
+    owner, _, _ = await _seed(sessions)
+    async with sessions() as db:
+        entry = (
+            (
+                await db.execute(
+                    select(DiscoveryEntry)
+                    .where(DiscoveryEntry.kind == kind, DiscoveryEntry.lifecycle_status == DiscoveryLifecycle.approved)
+                    .order_by(DiscoveryEntry.display_name)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        urn = entry.ard_identifier
+        await db.execute(update(DiscoveryEntry).where(DiscoveryEntry.id == entry.id).values({c: None for c in nulled}))
+        await db.commit()
+    async with _client(_app(sessions, owner)) as client:
+        assert urn in await _list_identifiers(client)
 
 
 @pytest.mark.asyncio

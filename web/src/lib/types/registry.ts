@@ -18,7 +18,41 @@ export interface RegistryResolution {
 	qualified_name: string;
 }
 
+export interface ForkProvenance {
+	available: boolean;
+	id?: string | null;
+	type?: string | null;
+	namespace?: string | null;
+	slug?: string | null;
+	qualified_name?: string | null;
+	version?: string | null;
+	forked_at?: string | null;
+}
+
+export interface ForkDiff {
+	version: string;
+	base_version: string;
+	diff: string;
+	unchanged: boolean;
+}
+
+export interface ForkRequest {
+	name: string;
+	version: string;
+	team_id?: string | null;
+	visibility?: "public" | "team";
+}
+
+export interface ForksResponse<T> {
+	items: T[];
+	total: number;
+	page: number;
+	page_size: number;
+}
+
 export interface RegistryItem {
+	forked_from?: ForkProvenance | null;
+	fork_count?: number;
 	id: string;
 	name: string;
 	namespace?: string;
@@ -30,6 +64,10 @@ export interface RegistryItem {
 	description?: string;
 	status?: string;
 	rejection_reason?: string;
+	review_number?: number | null;
+	review_url?: string | null;
+	/** Set when a draft save pushed a new revision to the open review. */
+	review_revision?: number | null;
 	created_at?: string;
 	updated_at?: string;
 	is_recommended?: boolean;
@@ -110,6 +148,7 @@ export interface AgentComponentReference {
 	component_name?: string;
 	mcp_name?: string;
 	resolved_version?: string;
+	config_override?: Record<string, unknown> | null;
 	status?: string;
 }
 
@@ -163,7 +202,10 @@ export interface ComponentVersionSummary {
 	description: string;
 	changelog: string | null;
 	status: string;
+	requires_global_review?: boolean;
 	rejection_reason: string | null;
+	review_number?: number | null;
+	review_url?: string | null;
 	download_count: number;
 	supported_harnesses: string[];
 	released_by: string;
@@ -182,6 +224,7 @@ export interface ComponentVersionSummary {
 	source_path?: string;
 	requirements?: string[];
 	// Skill fields
+	delivery_mode?: "git_fetch" | "registry_direct";
 	skill_path?: string;
 	git_url?: string;
 	git_ref?: string;
@@ -219,10 +262,42 @@ export interface ComponentVersionsResponse {
 
 export type ComponentVersionDetail = ComponentVersionSummary;
 
+export type McpWebhookSyncStatus = "queued" | "syncing" | "success" | "skipped" | "failed";
+
+export type McpWebhookProvider = "github" | "gitlab";
+
+export interface McpWebhookSync {
+	enabled: boolean;
+	id?: string | null;
+	provider?: McpWebhookProvider | null;
+	webhook_url?: string | null;
+	/** Present only right after sync is first turned on or the secret is rotated. */
+	secret?: string | null;
+	sync_on_push: boolean;
+	sync_on_release: boolean;
+	branch?: string | null;
+	last_delivery_at?: string | null;
+	last_event?: string | null;
+	last_sync_status?: McpWebhookSyncStatus | null;
+	last_sync_error?: string | null;
+	last_synced_at?: string | null;
+	last_synced_sha?: string | null;
+	last_version?: string | null;
+	created_at?: string | null;
+}
+
+export interface McpWebhookSyncRequest {
+	sync_on_push: boolean;
+	sync_on_release: boolean;
+	branch: string | null;
+	provider?: McpWebhookProvider | null;
+}
+
 export interface BulkResultItem {
 	name: string;
 	status: "created" | "skipped" | "error";
 	agent_id?: string | null;
+	review_number?: number | null;
 	error?: string | null;
 }
 
@@ -296,112 +371,99 @@ export interface AgentVersionOutdated {
 	summary: { total: number; outdated: number; unlocked: number; archived: number };
 }
 
-// ── Review ──────────────────────────────────────────────────────────
+// ── Skill Folder Resources ───────────────────────────────────────────
 
-export interface McpValidationResult {
-	stage: string;
-	passed: boolean;
-	details?: string;
-	run_at?: string;
+/** A file resource in a skill folder (for authoring). */
+export interface SkillResource {
+	path: string;
+	content: string;
+	executable?: boolean;
+	/** Only present for binary files */
+	encoding?: "base64";
 }
 
-export interface ReviewComponentBlocker {
-	component_type: string;
-	component_id: string;
-	name: string;
-	status: string;
+/** A file in a skill version manifest (from server). */
+export interface SkillManifestFile {
+	path: string;
+	size: number;
+	sha256: string;
+	mode: "0644" | "0755";
 }
 
-export interface ReviewItem {
-	id: string;
-	name?: string;
-	description?: string;
-	version?: string;
-	owner?: string;
-	type?: string;
-	listing_type?: string;
-	submitted_by?: string;
-	submitted_at?: string;
-	created_at?: string;
-	updated_at?: string;
-	status?: string;
-	mcp_validated?: boolean;
-	validation_results?: McpValidationResult[];
-	components_ready?: boolean;
-	component_blockers?: ReviewComponentBlocker[];
-	blocking_components?: ReviewComponentBlocker[];
-	bundle_id?: string;
-	bundle_name?: string;
-	rejection_reason?: string;
+/** Manifest for a skill version's files. */
+export interface SkillVersionManifest {
+	listing_id: string;
+	version_id: string;
+	revision: string;
+	files: SkillManifestFile[];
+}
 
-	// Common detail fields
-	git_url?: string;
-	git_ref?: string;
-	supported_harnesses?: string[];
+/** Owner-only pointer to the current immutable reviewed release. */
+export interface SkillApprovedBase {
+	listing_id: string;
+	version_id: string;
+	version: string;
+	revision: string;
+	delivery_mode: "registry_direct" | "git_fetch";
+	import_required: boolean;
+}
 
-	// MCP-specific
-	transport?: string;
-	framework?: string;
-	docker_image?: string;
-	command?: string;
-	args?: string[];
-	url?: string;
-	headers?: unknown[];
-	auto_approve?: string[];
-	tools_schema?: Record<string, unknown>;
-	environment_variables?: unknown[];
-	setup_instructions?: string;
+export interface SkillSuccessorRequest {
+	version: string;
+	description: string;
 	changelog?: string;
+	base_version_id: string;
+	observed_base_revision: string;
+}
 
-	// Skill-specific
-	skill_path?: string;
-	skill_md_content?: string;
-	validated?: boolean;
-	target_agents?: string[];
+/** Request body for creating a folder draft. */
+export interface SkillFolderDraftRequest {
+	name: string;
+	version: string;
+	description: string;
+	owner: string;
 	task_type?: string;
-	slash_command?: string;
+	skill_md_content: string;
+	extra_files: SkillResource[];
+	supported_harnesses?: string[];
+	team_id?: string;
+	visibility?: "public" | "team";
+}
 
-	// Hook-specific
-	event?: string;
-	execution_mode?: string;
-	handler_type?: string;
-	handler_config?: Record<string, unknown>;
-	scope?: string;
-	tool_filter?: string[];
-	priority?: number;
-	script_content?: string;
-	script_filename?: string;
-	source_url?: string;
-	source_ref?: string;
-	source_path?: string;
-	resolved_sha?: string;
-	requirements?: string[];
+/** Request body for replacing all files in a skill version. */
+export interface SkillFilesReplaceRequest {
+	observed_revision: string;
+	skill_md_content: string;
+	extra_files?: SkillResource[];
+}
 
-	// Prompt-specific
-	category?: string;
-	template?: string;
-	variables?: unknown[];
-	model_hints?: Record<string, unknown>;
-	tags?: string[];
+/** A single file operation for PATCH. */
+export interface SkillFileOperation {
+	action: "put" | "delete" | "rename";
+	path?: string;
+	new_path?: string;
+	file?: SkillResource;
+}
 
-	// Sandbox-specific
-	runtime_type?: string;
-	image?: string;
-	resource_limits?: Record<string, unknown>;
-	network_policy?: string;
-	entrypoint?: string;
-	sandbox_path?: string;
-	validated_at?: string;
+/** Request body for patching files in a skill version. */
+export interface SkillFilesPatchRequest {
+	observed_revision: string;
+	operations: SkillFileOperation[];
+}
 
-	// Agent-specific
-	prompt?: string;
-	model_name?: string;
-	model_config_json?: Record<string, unknown>;
-	external_mcps?: unknown[];
-	required_capabilities?: string[];
-	component_count?: number;
-	components?: { component_type: string; component_id: string }[];
-	success_criteria?: SuccessCriteria | null;
+/** Response from file read endpoint (text files). */
+export interface SkillFileContents {
+	version_id: string;
+	revision: string;
+	file: SkillManifestFile;
+	content: string;
+	encoding: "utf-8";
+}
+
+/** Binary previews are octet-stream attachments, never JSON. */
+export interface SkillBinaryContents {
+	encoding: "binary";
+	content: Blob;
 }
 
 // ── Scores ──────────────────────────────────────────────────────────

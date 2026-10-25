@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Quickstart
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Quickstart"
+---
 
 Go from zero to "my first trace in the Observal dashboard" in about five minutes. This assumes you have Docker running.
 
@@ -23,7 +24,7 @@ By the end of this guide you will have:
 curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
 ```
 
-No Python required. For alternative install methods, see [Installation](../).
+No Python required. For alternative install methods, see [Installation](/getting-started/installation).
 
 > \[!NOTE] You need Docker Engine ≥ 24.0 with Compose v2 (`docker compose`, not `docker-compose`). Homebrew's Docker formula is outdated. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages. Verify with `docker version` and `docker compose version`.
 
@@ -42,11 +43,11 @@ That's it. The `.env.example` ships with working defaults. The core services com
 | Service               | URL                     | Purpose                        |
 | --------------------- | ----------------------- | ------------------------------ |
 | `observal-lb` (nginx) | `http://localhost`      | Reverse proxy (API + Web)      |
-| `observal-web`        | `http://localhost:3000` | Web UI (Next.js, direct)       |
+| `observal-web`        | `http://localhost:3000` | Web UI (Vite, direct)          |
 | `observal-api`        | internal                | FastAPI backend                |
 | `observal-worker`     | internal                | Background jobs (arq)          |
 | `observal-init`       | internal                | Runs DB migrations, then exits |
-| `observal-db`         | `localhost:5432`        | PostgreSQL 16                  |
+| `observal-db`         | `localhost:5432`        | PostgreSQL 18                  |
 | `observal-clickhouse` | `localhost:8123`        | ClickHouse                     |
 | `observal-redis`      | `localhost:6379`        | Redis                          |
 
@@ -59,7 +60,7 @@ curl http://localhost/health
 # → {"status": "ok"}
 ```
 
-Hitting a port conflict? See [Self-Hosting → Ports and volumes](../self-hosting/ports-and-volumes.md).
+Hitting a port conflict? See [Self-Hosting → Ports and volumes](/self-hosting/ports-and-volumes).
 
 ## 3. Log in
 
@@ -123,13 +124,13 @@ Browse what the community has published:
 
 ```bash
 observal agent list
-observal agent show <agent-name>
+observal agent show <namespace>/<slug>
 ```
 
 Install one into your harness:
 
 ```bash
-observal agent pull <agent-name> --harness <harness-name>
+observal agent pull <namespace>/<slug> --harness <harness-name>
 ```
 
 This writes agent files, skills, hooks, and direct MCP configs into the right places for your harness.
@@ -158,8 +159,8 @@ Observal indexes session transcript records into canonical events and aggregates
 
 | You want to...                      | Go to                             |
 | ----------------------------------- | --------------------------------- |
-| Understand registry identity        | [Core concepts](../core-concepts/) |
-| Understand session tracking         | [Session tracking and reconciliation](../core-concepts/session-tracking.md) |
-| Learn what to do with traces        | [Use Cases](../use-cases/)        |
-| Configure the server for production | [Self-Hosting](../self-hosting/)  |
-| Deep-dive on a CLI command          | [CLI Reference](../cli/)          |
+| Understand registry identity        | [Core concepts](/core-concepts) |
+| Understand session tracking         | [Session tracking and reconciliation](/core-concepts/session-tracking) |
+| Learn what to do with traces        | [Use Cases](/use-cases)        |
+| Configure the server for production | [Self-Hosting](/self-hosting)  |
+| Deep-dive on a CLI command          | [CLI Reference](/cli)          |

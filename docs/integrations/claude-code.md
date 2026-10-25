@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Rishika Kaur <kaurrishika377@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Claude Code
+---
+# SPDX-FileCopyrightText: 2026 Rishika Kaur <kaurrishika377@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Claude Code"
+---
 
 Claude Code is a first-class Observal harness integration. Observal can install Claude Code agents, register MCP servers, add hooks, install skills, and collect session telemetry.
 
@@ -17,6 +18,8 @@ There are two ways the hooks get installed:
 
 - `observal agent pull` embeds them in the generated agent profile's `hooks:` frontmatter.
 - `observal doctor patch` writes them into `~/.claude/settings.json` for all Claude Code sessions.
+
+A session is credited to an agent only when the agent ran. That means a session started with `claude --agent <name>` (or the `agent` setting), or a subagent transcript whose agent type is a pulled agent. A pulled agent in the folder doesn't claim the other sessions started there.
 
 ---
 
@@ -70,7 +73,9 @@ observal agent pull <agent-name> --harness claude-code --scope user
 
 User agents are written to `~/.claude/agents/{name}.md`.
 
-### 4. Install global session hooks (optional)
+### 4. Install global session hooks
+
+`observal auth login` installs these automatically when Claude Code is already present. To install or repair them by hand:
 
 ```bash
 observal doctor patch
@@ -176,13 +181,23 @@ observal reconcile
 
 ## MCP servers
 
-`observal agent pull` does not write `.mcp.json`. For each command-based MCP server in the agent, it runs:
+`observal agent pull` does not write `.mcp.json`. It registers each MCP server in the agent with `claude mcp add` and lists it under `mcpServers:` in the agent profile.
+
+Command-based servers:
 
 ```bash
-claude mcp add <name> -- <command> <args...>
+claude mcp add --scope <scope> <name> -e KEY=value -- <command> <args...>
 ```
 
-and lists the server under `mcpServers:` in the agent profile. URL-based (`sse` or `streamable-http`) servers are preserved as-is in the generated config and referenced by name in the profile. The `claude` CLI must be on `PATH`; if it is missing or a command fails, the pull reports an error after writing the agent files and does not record the install.
+URL-based servers (`streamable-http` maps to Claude Code's `http` transport, `sse` stays `sse`):
+
+```bash
+claude mcp add --transport http --scope <scope> <name> <url> -H "Header: value"
+```
+
+A project-scope pull registers servers in Claude Code's `local` scope (this project, only you), running the command from the pull's `--dir`. A user-scope pull registers them in Claude Code's `user` scope, so the agent finds them in every project. Before registering, the pull runs `claude mcp remove --scope <scope> <name>`, so pulling again replaces a server of the same name in that scope instead of failing. Header and environment values are masked in the pull's output.
+
+The `claude` CLI must be on `PATH`; if it is missing or a command fails, the pull reports an error after writing the agent files and does not record the install.
 
 `observal scan` discovers MCP servers from the project `.mcp.json` and from the user's Claude Code configuration, including plugins.
 

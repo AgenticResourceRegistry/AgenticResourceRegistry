@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral coverage for the authenticated API escape hatch."""
@@ -187,6 +188,8 @@ def test_default_output_renders_generic_table(api_call, monkeypatch: pytest.Monk
         ["GET", "/api/v1/%252e%252e/health"],
         ["GET", "/api/v1/teams%253Fadmin=true"],
         ["GET", "/api/v1/teams", "--param", "broken"],
+        ["GET", "C:/Program Files/Git/api/v1/../health"],
+        ["GET", "C:/Program Files/Git/health"],
     ],
 )
 def test_invalid_method_path_and_params_fail_before_http(arguments, api_call):
@@ -194,6 +197,25 @@ def test_invalid_method_path_and_params_fail_before_http(arguments, api_call):
 
     assert result.exit_code == 7
     api_call.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "api/v1/mcps/abc",
+        "C:/Program Files/Git/api/v1/mcps/abc",
+        "C:\\Program Files\\Git\\api\\v1\\mcps\\abc",
+    ],
+)
+def test_git_bash_converted_and_slashless_paths_reach_the_endpoint(path, api_call):
+    _allow(api_call, {"id": "abc"})
+
+    result = runner.invoke(api_app, ["GET", path, "--output", "json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"id": "abc"}
+    assert api_call.call_args.args == ("GET", "/api/v1/mcps/abc")
+    assert ("Git Bash" in result.stderr) is path.startswith("C:")
 
 
 def test_json_validation_error_keeps_stdout_clean(api_call, monkeypatch: pytest.MonkeyPatch):

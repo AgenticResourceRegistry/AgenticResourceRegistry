@@ -14,7 +14,6 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,7 +24,7 @@ from rich import print as rprint
 
 from observal_cli import config
 from observal_cli.constants import REDIRECT_ALLOWLIST
-from observal_cli.install_detector import InstallInfo, InstallMethod
+from observal_cli.install_detector import SOURCE_SPEC, InstallInfo, InstallMethod, install_spec, pip_install_prefix
 
 GITHUB_REPO = "Observal/Observal"
 
@@ -52,7 +51,7 @@ def execute(
     elif install_info.method == InstallMethod.PIPX:
         _install_via_pipx(target_version, direction, spinner)
     elif install_info.method == InstallMethod.PIP:
-        _install_via_pip(target_version, direction, spinner)
+        _install_via_pip(target_version, direction, spinner, install_info)
     elif install_info.method == InstallMethod.BINARY:
         _install_binary(install_info, target_version, direction, spinner, interactive=interactive)
     else:
@@ -64,44 +63,40 @@ def execute(
 
 
 def _install_via_uv(target_version: str, direction: str, spinner) -> None:
-    with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
-        result = subprocess.run(
-            ["uv", "tool", "install", f"observal-cli=={target_version}", "--force"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    if result.returncode != 0:
-        rprint(f"[red]{direction.capitalize()} failed:[/red] {result.stderr.strip()}")
-        raise typer.Exit(1)
+    _install_with_source_fallback(
+        lambda spec: ["uv", "tool", "install", spec, "--force"], target_version, direction, spinner
+    )
 
 
 def _install_via_pipx(target_version: str, direction: str, spinner) -> None:
-    with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
-        result = subprocess.run(
-            ["pipx", "install", f"observal-cli=={target_version}", "--force"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    if result.returncode != 0:
-        rprint(f"[red]{direction.capitalize()} failed:[/red] {result.stderr.strip()}")
-        raise typer.Exit(1)
+    _install_with_source_fallback(lambda spec: ["pipx", "install", spec, "--force"], target_version, direction, spinner)
 
 
-def _install_via_pip(target_version: str, direction: str, spinner) -> None:
-    # Uses sys.executable to target the current Python environment. If the CLI
-    # is installed via uv or pipx, those paths are used instead.
-    with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", f"observal-cli=={target_version}", "--quiet"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    if result.returncode != 0:
-        rprint(f"[red]{direction.capitalize()} failed:[/red] {result.stderr.strip()}")
-        raise typer.Exit(1)
+def _install_via_pip(target_version: str, direction: str, spinner, install_info: InstallInfo) -> None:
+    prefix = pip_install_prefix(install_info)
+    _install_with_source_fallback(lambda spec: [*prefix, spec, "--quiet"], target_version, direction, spinner)
+
+
+def _install_with_source_fallback(
+    argv_for, target_version: str, direction: str, spinner, repo: str | None = None
+) -> None:
+    """Install from PyPI; if the release is missing there, build its git tag; else leave the install alone."""
+    from observal_cli.install_detector import SOURCE_REPO, tag_spec
+
+    specs = [install_spec(target_version)]
+    if specs[0] != SOURCE_SPEC:
+        specs.append(tag_spec(target_version, repo or SOURCE_REPO))
+    errors = []
+    for spec in specs:
+        with spinner(f"{direction.removesuffix('e').capitalize()}ing to v{target_version}..."):
+            result = subprocess.run(argv_for(spec), capture_output=True, text=True, timeout=300 if "@" in spec else 120)
+        if result.returncode == 0:
+            return
+        errors.append(f"{spec}: {result.stderr.strip()}")
+    rprint(f"[red]{direction.capitalize()} failed; the installed CLI was left unchanged.[/red]")
+    for error in errors:
+        rprint(f"  {error}")
+    raise typer.Exit(1)
 
 
 def _install_binary(
@@ -113,6 +108,12 @@ def _install_binary(
     interactive: bool = True,
 ) -> None:
     """Download and install standalone binary with checksum verification."""
+    if install_spec(target_version) == SOURCE_SPEC:
+        rprint(
+            f"[red]v{target_version} is a development build with no standalone binary.[/red]\n"
+            f"Install it from source: uv tool install --force {SOURCE_SPEC}"
+        )
+        raise typer.Exit(1)
     system = platform.system().lower()
     machine = platform.machine().lower()
 

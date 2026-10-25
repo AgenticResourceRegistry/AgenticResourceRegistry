@@ -1,8 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Environment variables
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Environment variables"
+---
 
 Complete reference for security-relevant server and CLI environment variables. Defaults are in `.env.example` and built into the CLI.
 
@@ -23,7 +25,7 @@ Every credential listed with file support accepts `NAME_FILE=/path/to/secret` in
 | `MAX_REQUEST_SIZE_MB`    | `10`                           | Maximum request body size for ordinary endpoints                                                                                                              |
 | `MAX_MIGRATION_REQUEST_SIZE_MB` | `6144`                | Maximum combined multipart request size for Admin migration import and validation uploads                                                                     |
 | `RATE_LIMIT_AUTH`        | `10/minute`                    | General auth-endpoint rate limit                                                                                                                              |
-| `RATE_LIMIT_AUTH_STRICT` | `5/minute`                     | Login and password-reset rate limit                                                                                                                           |
+| `RATE_LIMIT_AUTH_STRICT` | `5/minute`                     | User registration rate limit                                                                                                                                  |
 
 ### Databases
 
@@ -72,10 +74,12 @@ These environment variables are **not required** if you use Bedrock API keys (re
 
 | Variable               | Default          | Description                                                                     |
 | ---------------------- | ---------------- | ------------------------------------------------------------------------------- |
-| `ALLOW_INTERNAL_URLS`  | `false`          | Allow internal/private Git URLs (for GitLab / GHE)                              |
+| `ALLOW_INTERNAL_GIT_URLS` | `false` | Allow internal/private Git URLs (for GitLab / GHE) |
 | `GIT_CLONE_TOKEN`      | -                | Auth token for private repos. Supports `GIT_CLONE_TOKEN_FILE`.                                                    |
+| `GIT_CLONE_TOKEN_HOSTS` | - | Comma-separated exact HTTPS Git hosts allowed to receive `GIT_CLONE_TOKEN` (e.g. `github.com,gitlab.example.com`). Required for authenticated clones; add `:port` for nonstandard ports. |
 | `GIT_CLONE_TOKEN_USER` | `x-access-token` | Token username: `x-access-token` (GitHub), `oauth2` or `private-token` (GitLab) |
 | `GIT_CLONE_TIMEOUT`    | `120`            | Clone timeout, seconds                                                          |
+| `WEBHOOK_PUBLIC_URL`   | -                | Public base URL GitHub and GitLab use for webhook deliveries when the rest of Observal is private. Shown as the webhook URL in the MCP **Sync** tab. Unset means the deployment's normal public URL. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync#private-deployments) |
 
 ### Demo accounts (seeded on first startup if no users exist)
 
@@ -140,12 +144,12 @@ Example CI usage:
 
 ```bash
 export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-export OBSERVAL_API_KEY=<key>
+export OBSERVAL_API_KEY='replace-with-your-key'
 
 observal ops traces --limit 100 --output json | jq
 ```
 
 ## Related
 
-* [Self-Hosting → Configuration](../self-hosting/configuration.md), narrative view, grouped by concern
-* [Config files](config-files.md), `~/.observal/` file layout
+* [Self-Hosting → Configuration](/self-hosting/configuration), narrative view, grouped by concern
+* [Config files](/reference/config-files), `~/.observal/` file layout

@@ -1,4 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Inbox delivery, lifecycle, idempotency, and read-time visibility.
@@ -292,6 +295,36 @@ async def test_redelivery_reopens_a_resolved_item(sessions):
 
 
 @pytest.mark.asyncio
+async def test_reopened_review_updates_visibility_and_namespace_snapshot(sessions):
+    async with sessions() as db:
+        reviewer = await _user(db, role=UserRole.reviewer)
+        team_id = uuid.uuid4()
+        subject = _subject(is_private=True, team_id=team_id, namespace="old-team", slug="draft")
+        initial = await delivery.deliver_one(db, kind=InboxKind.review_requested, user_id=reviewer.id, subject=subject)
+        delivery.resolve(db, initial, state=InboxState.done, actor_id=reviewer.id)
+        await db.commit()
+
+        published = _subject(
+            type=subject.type,
+            id=subject.id,
+            name=subject.name,
+            version=subject.version,
+            is_private=False,
+            team_id=None,
+            namespace="new-owner",
+            slug="draft",
+        )
+        again = await delivery.deliver_one(db, kind=InboxKind.review_requested, user_id=reviewer.id, subject=published)
+        await db.commit()
+
+        assert again.id == initial.id
+        assert again.state == InboxState.open
+        assert again.is_private_subject is False
+        assert again.team_id is None
+        assert again.subject_namespace == "new-owner"
+
+
+@pytest.mark.asyncio
 async def test_dismissed_update_notice_stays_dismissed_on_redelivery(sessions):
     """``observal outdated`` re-reports the same fact on every run.
 
@@ -405,11 +438,16 @@ async def test_decision_clears_every_reviewers_request_item(sessions):
             latest_version = None
 
         entity = _Entity()
-        delivered = await sources.on_review_requested(
-            db, entity, subject_type="mcp", actor_id=submitter.id, version="1.0.0"
+        # Three reviewers were requested on this version.
+        delivered = await delivery.deliver(
+            db,
+            kind=InboxKind.review_requested,
+            recipients=[deciding.id, other.id, admin.id],
+            subject=sources.subject_from_entity(entity, "mcp", version="1.0.0"),
+            actor_id=submitter.id,
         )
         await db.commit()
-        assert delivered == 3
+        assert len(delivered) == 3
 
         await sources.on_review_decided(
             db,
@@ -441,6 +479,43 @@ async def test_decision_clears_every_reviewers_request_item(sessions):
             )
         ).scalar_one()
         assert approval.state == InboxState.open
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_closes_all_reviewers_without_faking_an_outcome(sessions):
+    from services.inbox import sources
+
+    async with sessions() as db:
+        reviewers = [await _user(db, UserRole.reviewer) for _ in range(2)]
+        author = await _user(db)
+
+        class _Entity:
+            id = uuid.uuid4()
+            name = "withdrawn-skill"
+            namespace = None
+            slug = None
+            team_id = None
+            is_private = False
+
+        entity = _Entity()
+        await delivery.deliver(
+            db,
+            kind=InboxKind.review_requested,
+            recipients=[r.id for r in reviewers],
+            subject=sources.subject_from_entity(entity, "skill", version="1.2.0"),
+            actor_id=author.id,
+        )
+        await db.commit()
+        assert (
+            await sources.on_review_withdrawn(db, entity, subject_type="skill", actor_id=author.id, version="1.2.0")
+            >= 2
+        )
+        await db.commit()
+        for reviewer in reviewers:
+            items = (await db.execute(select(InboxItem).where(InboxItem.user_id == reviewer.id))).scalars().all()
+            assert len(items) == 1 and items[0].kind == InboxKind.review_requested
+            assert items[0].state == InboxState.done
+        assert (await db.execute(select(InboxItem).where(InboxItem.user_id == author.id))).scalars().all() == []
 
 
 @pytest.mark.asyncio
@@ -719,6 +794,71 @@ async def test_removed_member_stops_seeing_a_private_subject(sessions):
 
 
 @pytest.mark.asyncio
+async def test_reviewer_copy_of_a_decision_is_rechecked_after_losing_membership(sessions):
+    """OBS-1440: requested reviewers now hear approvals and publications.
+
+    Those kinds skip the membership re-check for the submitter, but a reviewer's
+    copy is not theirs in that sense: once removed from the private team, the
+    reviewer stops seeing it, in the row check and in the SQL count alike.
+    """
+    from api.routes.inbox import inbox_count
+    from services.inbox.registry import REVIEWER_AUDIENCE
+
+    async with sessions() as db:
+        owner = await _user(db)
+        reviewer = await _user(db)
+        team = Team(id=uuid.uuid4(), name="T", handle="t", created_by=owner.id)
+        db.add(team)
+        await db.flush()
+        membership = TeamMembership(team_id=team.id, user_id=reviewer.id, role=TeamRole.reviewer)
+        db.add(membership)
+        await db.commit()
+
+        subject = await _listed_subject(db, owner, team_id=team.id, is_private=True)
+        author_copy = await delivery.deliver_one(
+            db, kind=InboxKind.review_approved, user_id=owner.id, subject=subject, context={"review_number": 1}
+        )
+        reviewer_copy = await delivery.deliver_one(
+            db,
+            kind=InboxKind.review_approved,
+            user_id=reviewer.id,
+            subject=subject,
+            context={"review_number": 1, "audience": REVIEWER_AUDIENCE},
+        )
+        await db.commit()
+        assert await visibility.visible_to(db, reviewer_copy, reviewer) is True
+        assert (
+            await inbox_count(
+                facets=False,
+                facet_state="open",
+                unread=None,
+                action_required=None,
+                q=None,
+                db=db,
+                current_user=reviewer,
+            )
+        ).unread == 1
+
+        await db.delete(membership)
+        await db.commit()
+
+        assert await visibility.visible_to(db, reviewer_copy, reviewer) is False
+        assert (
+            await inbox_count(
+                facets=False,
+                facet_state="open",
+                unread=None,
+                action_required=None,
+                q=None,
+                db=db,
+                current_user=reviewer,
+            )
+        ).unread == 0
+        # The submitter's own decision notice still reads regardless.
+        assert await visibility.visible_to(db, author_copy, owner) is True
+
+
+@pytest.mark.asyncio
 async def test_public_subjects_stay_visible(sessions):
     async with sessions() as db:
         user = await _user(db)
@@ -905,12 +1045,8 @@ async def test_registry_actions_keep_uuid_fallback_for_legacy_namespaces(session
 
 
 @pytest.mark.asyncio
-async def test_review_links_open_the_tab_holding_the_item(sessions):
-    """The review queue opens on the agents tab by default.
-
-    A component review that linked to a bare /review dropped the reviewer on a
-    tab that does not contain the submission they were sent to look at.
-    """
+async def test_legacy_review_links_open_the_review_queue(sessions):
+    """Existing inbox items still link to the review queue after cutover."""
     async with sessions() as db:
         user = await _user(db)
         agent_item = await delivery.deliver_one(
@@ -926,8 +1062,8 @@ async def test_review_links_open_the_tab_holding_the_item(sessions):
             subject=_subject(type="mcp", id=uuid.uuid4()),
         )
         await db.commit()
-        assert agent_item.action_url == "/review?tab=agents"
-        assert mcp_item.action_url == "/review?tab=components"
+        assert agent_item.action_url == "/review"
+        assert mcp_item.action_url == "/review"
 
 
 @pytest.mark.asyncio
@@ -1087,10 +1223,18 @@ async def _list(db, user, **overrides):
     return await list_inbox(**params, db=db, current_user=user)
 
 
-async def _counts(db, user, *, facets=False, facet_state=InboxState.open):
+async def _counts(db, user, *, facets=False, facet_state="open", unread=None, action_required=None, q=None):
     from api.routes.inbox import inbox_count
 
-    return await inbox_count(facets=facets, facet_state=facet_state, db=db, current_user=user)
+    return await inbox_count(
+        facets=facets,
+        facet_state=getattr(facet_state, "value", facet_state),
+        unread=unread,
+        action_required=action_required,
+        q=q,
+        db=db,
+        current_user=user,
+    )
 
 
 async def _deliver_named(db, user, *, namespace, slug, kind=InboxKind.review_requested, subject_type="mcp"):
@@ -1170,6 +1314,37 @@ async def test_counts_omit_facets_unless_asked(sessions):
 
 
 @pytest.mark.asyncio
+async def test_badge_counts_only_unread_open_items(sessions):
+    """OBS-1440: the badge said 19 while the Open bucket listed 4.
+
+    Items resolved by someone else's action sit in Done or Dismissed; the event
+    that resolved them arrives as its own message. The badge counts only the
+    unread rows the default Open list shows.
+    """
+    async with sessions() as db:
+        user = await _user(db)
+        still_open = await _deliver_named(db, user, namespace="super", slug="still-open")
+        withdrawn = await _deliver_named(db, user, namespace="super", slug="withdrawn")
+        dropped = await _deliver_named(db, user, namespace="super", slug="dropped")
+        delivery.resolve(db, withdrawn, state=InboxState.done)
+        delivery.resolve(db, dropped, state=InboxState.dismissed)
+        await db.commit()
+
+        counts = await _counts(db, user)
+        assert counts.unread == 1
+        assert counts.unread == (await _list(db, user, state=InboxState.open, unread=True)).total
+
+        delivery.mark_read(db, still_open)
+        await db.commit()
+        assert (await _counts(db, user)).unread == 0
+
+        # Reopening a resolved item brings it back into the badge.
+        delivery.resolve(db, withdrawn, state=InboxState.open)
+        await db.commit()
+        assert (await _counts(db, user)).unread == 1
+
+
+@pytest.mark.asyncio
 async def test_facets_describe_the_bucket_they_are_scoped_to(sessions):
     """Sidebar numbers must add up to the list beside them, not a different set."""
     async with sessions() as db:
@@ -1192,6 +1367,49 @@ async def test_facets_describe_the_bucket_they_are_scoped_to(sessions):
         # Lifecycle totals are unscoped: they are what the bucket rows count.
         assert (opened.open, opened.done, opened.dismissed) == (1, 1, 0)
         assert still_open.state is InboxState.open
+
+
+@pytest.mark.asyncio
+async def test_every_number_in_the_filter_sheet_matches_the_list(sessions):
+    """OBS-1440: the nav badge said 3 while the Inbox folder said 6.
+
+    Folders show their unread count, so Inbox equals the badge. The Unread and
+    Needs action rows count the selected folder, the kind and type rows add up to
+    the list under the active toggles, and the All folder spans every state.
+    """
+    async with sessions() as db:
+        user = await _user(db)
+        unread_open = await _deliver_named(db, user, namespace="super", slug="a")
+        read_open = await _deliver_named(db, user, namespace="super", slug="b")
+        unread_done = await _deliver_named(db, user, namespace="super", slug="c", kind=InboxKind.review_approved)
+        read_dismissed = await _deliver_named(db, user, namespace="super", slug="d", kind=InboxKind.review_comment)
+        delivery.mark_read(db, read_open)
+        delivery.resolve(db, unread_done, state=InboxState.done)
+        delivery.mark_read(db, read_dismissed)
+        delivery.resolve(db, read_dismissed, state=InboxState.dismissed)
+        await db.commit()
+
+        for folder, state in (("open", InboxState.open), ("done", InboxState.done), ("all", None)):
+            counts = await _counts(db, user, facets=True, facet_state=folder)
+            listed = await _list(db, user, state=state)
+            assert counts.scope_total == listed.total == sum(counts.by_kind.values()), folder
+            assert counts.scope_unread == listed.unread, folder
+            unread_only = await _counts(db, user, facets=True, facet_state=folder, unread=True)
+            unread_list = await _list(db, user, state=state, unread=True)
+            assert sum(unread_only.by_kind.values()) == unread_list.total == unread_list.unread, folder
+            action = await _list(db, user, state=state, action_required=True)
+            assert counts.scope_action_required == action.total, folder
+
+        counts = await _counts(db, user, facets=True, facet_state="all")
+        assert counts.unread_by_state == {"open": 1, "done": 1, "dismissed": 0}
+        # The Inbox folder's number is the nav badge.
+        assert counts.unread_by_state["open"] == counts.unread == 1
+        assert counts.scope_total == 4 and counts.scope_unread == 2
+        # Needs action is outstanding work: a done review request no longer counts.
+        delivery.resolve(db, unread_open, state=InboxState.done)
+        await db.commit()
+        assert (await _list(db, user, state=InboxState.done, action_required=True)).total == 0
+        assert (await _counts(db, user, facets=True, facet_state="done")).scope_action_required == 0
 
 
 @pytest.mark.asyncio

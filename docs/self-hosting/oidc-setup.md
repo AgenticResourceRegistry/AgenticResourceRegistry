@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# OIDC / OAuth 2.0 SSO Setup Guide
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "OIDC / OAuth 2.0 SSO Setup Guide"
+---
 
 This guide walks you through configuring OpenID Connect (OIDC) / OAuth 2.0
 Single Sign-On for Observal. It covers environment variable
@@ -179,7 +180,7 @@ Setting `deployment.sso_only=true` locks down Observal to IdP authentication exc
 - **Manual user creation via the admin panel is disabled.** Admins cannot
   create accounts directly; accounts are provisioned through the IdP.
 - **The CLI uses the device authorization flow** (RFC 8628) automatically when
-  SSO-only mode is detected. See [cli-sso.md](cli-sso.md) for instructions.
+  SSO-only mode is detected. See [cli-sso.md](/self-hosting/cli-sso) for instructions.
 - **CI/CD pipelines** should use `OBSERVAL_TOKEN` (an API token generated from
   the web UI) rather than username/password authentication.
 
@@ -200,7 +201,7 @@ your organization:
 
 **Recommendation:** Use OIDC unless your deployment requires SAML for
 compliance or existing infrastructure reasons. Either protocol can be combined
-with [SCIM provisioning](scim-setup.md) for automated user lifecycle management
+with [SCIM provisioning](/self-hosting/scim-setup) for automated user lifecycle management
 (pre-provisioning and deprovisioning).
 
 ---

@@ -1,10 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-
-# Token Expiry Settings
+---
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Token Expiry Settings"
+---
 
 Most deployments don't need to change these. The defaults (60-minute access tokens, 30-day refresh tokens) work well for typical teams. Read on if you have compliance requirements, high-security needs, or users complaining about session behavior.
 
@@ -55,8 +53,8 @@ Pick the row that matches your environment:
 Decode a freshly-issued access token to confirm the new expiry:
 
 ```bash
-# Get a fresh token
-observal auth token | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
+# Read the token saved by observal auth login
+python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["access_token"])' "$(observal config path)" | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
 ```
 
 Check the `exp` claim — it should be `iat` + your configured access token TTL (in seconds).

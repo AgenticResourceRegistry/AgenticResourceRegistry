@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shape discovery entries into the JSON the ARD endpoints return."""
@@ -42,7 +43,7 @@ def availability(entry: DiscoveryEntry, harness: str | None = None) -> str:
         return AVAILABILITY_DELEGATE
     if harness and entry.supported_harnesses and harness not in entry.supported_harnesses:
         return AVAILABILITY_UNSUPPORTED
-    if entry.kind == DiscoveryKind.hook:
+    if entry.kind == DiscoveryKind.hook or (entry.kind == DiscoveryKind.skill and not entry.activatable):
         return AVAILABILITY_EXPLICIT
     if entry.kind in _NOW_KINDS:
         return AVAILABILITY_NOW
@@ -77,7 +78,9 @@ def _truncate(text: str | None, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def search_result_item(ranked: Ranked, *, source: str, harness: str | None = None) -> dict[str, Any]:
+def search_result_item(
+    ranked: Ranked, *, source: str, harness: str | None = None, forked_from: str | None = None
+) -> dict[str, Any]:
     """One entry of ``results`` in an ARD Search response.
 
     Only ``identifier`` is required by the spec; we include what a client
@@ -107,15 +110,21 @@ def search_result_item(ranked: Ranked, *, source: str, harness: str | None = Non
         "obs:artifactDigest": entry.artifact_digest,
         "obs:publisher": entry.publisher_domain,
     }
+    if forked_from:
+        item["obs:forkedFrom"] = forked_from
     # The organization named on a remote agent's card, as the card states it.
     if is_a2a(entry) and (provider := (entry.raw_entry or {}).get("obs:provider")):
         item["obs:provider"] = provider
     return item
 
 
-def entry_document(entry: DiscoveryEntry) -> dict[str, Any]:
-    """The complete ARD entry as published (``raw_entry`` is rebuilt on every change)."""
-    return dict(entry.raw_entry or {})
+def entry_document(entry: DiscoveryEntry, *, forked_from: str | None = None) -> dict[str, Any]:
+    """Enrich the projection with a live, public-only upstream link."""
+    result = dict(entry.raw_entry or {})
+    result.pop("obs:forkedFrom", None)  # Never trust stale projected provenance.
+    if forked_from:
+        result["obs:forkedFrom"] = forked_from
+    return result
 
 
 def registry_entry(publisher_domain: str, base_url: str, *, display_name: str = "Observal") -> dict[str, Any]:
@@ -134,17 +143,26 @@ def registry_entry(publisher_domain: str, base_url: str, *, display_name: str = 
     }
 
 
-def manifest(entries: list[DiscoveryEntry], *, publisher_domain: str, base_url: str) -> dict[str, Any]:
+def manifest(
+    entries: list[DiscoveryEntry],
+    *,
+    publisher_domain: str,
+    base_url: str,
+    upstreams: dict | None = None,
+) -> dict[str, Any]:
     """The ``/.well-known/ard.json`` document: registry entry first, then resources."""
     return {
         "@context": ["https://agenticresourcediscovery.org/context/v1", {"obs": "https://observal.io/ns#"}],
-        "entries": [registry_entry(publisher_domain, base_url), *(entry_document(e) for e in entries)],
+        "entries": [
+            registry_entry(publisher_domain, base_url),
+            *(entry_document(e, forked_from=(upstreams or {}).get((e.kind, e.local_entity_id))) for e in entries),
+        ],
     }
 
 
-def list_item(entry: DiscoveryEntry) -> dict[str, Any]:
+def list_item(entry: DiscoveryEntry, *, forked_from: str | None = None) -> dict[str, Any]:
     """Compact row for ARD List (``GET /agents``)."""
-    return {
+    item = {
         "identifier": entry.ard_identifier,
         "displayName": entry.display_name,
         "type": entry.media_type,
@@ -158,3 +176,6 @@ def list_item(entry: DiscoveryEntry) -> dict[str, Any]:
         "obs:recommended": recommended(entry),
         "updatedAt": entry.updated_at_source.isoformat() if entry.updated_at_source else None,
     }
+    if forked_from:
+        item["obs:forkedFrom"] = forked_from
+    return item

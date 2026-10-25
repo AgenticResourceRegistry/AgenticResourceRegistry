@@ -18,7 +18,10 @@ push session JSONL incrementally to the server.
 
 import hashlib
 import json
+import re
+import shutil
 import sys
+import tomllib
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -251,33 +254,60 @@ def _check_observal_config(issues: list, warnings: list):
             issues.append(f"Cannot reach Observal server at {server_url}: {e}")
 
 
+def _valid_claude_hook_entries(hooks: dict) -> bool:
+    """Validate traversed groups; leave unrelated non-list events untouched."""
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            if event in ("UserPromptSubmit", "Stop"):
+                return False
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                return False
+            handlers = group.get("hooks", [])
+            if not isinstance(handlers, list):
+                return False
+            for handler in handlers:
+                if (
+                    not isinstance(handler, dict)
+                    or not isinstance(handler.get("command", ""), str)
+                    or not isinstance(handler.get("url", ""), str)
+                ):
+                    return False
+    return True
+
+
 def _check_claude_code(issues: list, warnings: list):
     optic.trace("issues={}, warnings={}", issues, warnings)
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
         rprint("  [dim]No ~/.claude/settings.json found[/dim]")
+        if shutil.which("claude") or (settings_path.parent / "projects").is_dir():
+            warnings.append(
+                "Claude Code session push hooks not installed. "
+                "Run `observal doctor patch --harness claude-code` to inject them."
+            )
         return
 
     data = _load_json(settings_path)
     if data is None:
         issues.append(f"{settings_path}: not valid JSON.")
         return
+    if not isinstance(data.get("hooks", {}), dict) or not isinstance(data.get("env", {}), dict):
+        issues.append(f"{settings_path}: hooks and env must be JSON objects.")
+        return
+    if not _valid_claude_hook_entries(data.get("hooks", {})):
+        issues.append(f"{settings_path}: hooks contain malformed event entries.")
+        return
 
     if data.get("disableAllHooks"):
         issues.append(f"{settings_path}: `disableAllHooks` is true. Observal hooks will not fire.")
 
-    # Check if session push hooks are installed
-    hooks = data.get("hooks", {})
-    has_session_push = False
-    for event in ("UserPromptSubmit", "Stop"):
-        groups = hooks.get(event, [])
-        for g in groups:
-            for h in g.get("hooks", []):
-                if "observal_cli.hooks.session_push" in h.get("command", ""):
-                    has_session_push = True
-                    break
+    # Require both session delivery events, not merely one installed hook.
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
 
-    if not has_session_push:
+    hooks = data.get("hooks", {})
+    if ClaudeCodeAdapter().detect_hooks(settings_path.parent) != "installed":
         warnings.append(
             "Claude Code session push hooks not installed. "
             "Run `observal doctor patch --harness claude-code` to inject them."
@@ -421,14 +451,52 @@ def _check_codex(issues: list, warnings: list):
             "Codex session push hooks not installed. Run `observal doctor patch --harness codex` to inject them."
         )
 
-    # Check codex_hooks flag
     if config_path.exists():
         try:
-            content = config_path.read_text()
-            if "codex_hooks = false" in content:
-                issues.append(f"{config_path}: `codex_hooks = false`. Observal hooks will not fire.")
+            content = config_path.read_text(encoding="utf-8")
         except OSError as error:
             issues.append(f"{config_path}: cannot read Codex configuration: {error}")
+        else:
+            if _codex_hooks_disabled(content):
+                issues.append(f"{config_path}: hooks are turned off under [features]. Observal hooks will not fire.")
+            if _without_stale_codex_hooks_key(content) != content:
+                warnings.append(
+                    f"{config_path}: the top-level `codex_hooks` key is not a Codex setting, so Codex warns on "
+                    "every run. Run `observal doctor patch --harness codex` to remove it."
+                )
+
+
+def _codex_hooks_disabled(config_text: str) -> bool:
+    """Return whether Codex config turns hooks off.
+
+    Hooks are on by default since they became stable. ``[features].hooks`` turns them
+    off, and Codex still reads the older name ``codex_hooks`` in that table.
+    """
+    try:
+        features = tomllib.loads(config_text).get("features")
+    except tomllib.TOMLDecodeError:
+        return False
+    if not isinstance(features, dict):
+        return False
+    return features.get("hooks") is False or features.get("codex_hooks") is False
+
+
+def _without_stale_codex_hooks_key(config_text: str) -> str:
+    """Drop the top-level ``codex_hooks`` key that earlier ``doctor patch`` runs wrote.
+
+    Codex never read it there: the flag only exists under ``[features]``.
+    """
+    try:
+        has_key = "codex_hooks" in tomllib.loads(config_text)
+    except tomllib.TOMLDecodeError:
+        has_key = False
+    if not has_key:
+        # Nothing to drop; also never rewrite a file we cannot parse or text inside a multiline string.
+        return config_text
+    first_table = re.search(r"^\s*\[", config_text, re.MULTILINE)
+    head_end = first_table.start() if first_table else len(config_text)
+    head = re.sub(r"^codex_hooks\s*=.*(?:\n|$)", "", config_text[:head_end], flags=re.MULTILINE)
+    return head + config_text[head_end:]
 
 
 def _check_copilot(issues: list, warnings: list):
@@ -1263,7 +1331,16 @@ def _patch_claude_code(dry_run: bool) -> bool:
     rprint("[cyan]Claude Code - session push hooks[/cyan]")
 
     settings_path = Path.home() / ".claude" / "settings.json"
-    if not settings_path.exists():
+    if settings_path.exists():
+        current = _load_json(settings_path)
+        if (
+            current is None
+            or not isinstance(current.get("hooks", {}), dict)
+            or not isinstance(current.get("env", {}), dict)
+            or not _valid_claude_hook_entries(current.get("hooks", {}))
+        ):
+            raise ValueError(f"Cannot patch invalid Claude Code settings: {settings_path}")
+    else:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
     desired_hooks = get_desired_hooks()
@@ -1516,7 +1593,7 @@ def _patch_pi(dry_run: bool) -> bool:
 
 
 def _patch_codex(dry_run: bool) -> bool:
-    """Install session push hooks into ~/.codex/hooks.json and enable codex_hooks flag."""
+    """Install session push hooks into ~/.codex/hooks.json."""
     optic.debug("_patch_codex: dry_run={}", dry_run)
     from observal_cli.harness_specs.codex_hooks_spec import build_codex_hooks
 
@@ -1550,16 +1627,15 @@ def _patch_codex(dry_run: bool) -> bool:
             needs_update = True
             break
 
-    # Also check if codex_hooks flag needs enabling
-    needs_flag = False
-    if config_path.exists():
-        content = config_path.read_text()
-        if "codex_hooks" not in content or "codex_hooks = false" in content:
-            needs_flag = True
-    else:
-        needs_flag = True
+    config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    cleaned_config = _without_stale_codex_hooks_key(config_text)
+    if _codex_hooks_disabled(config_text):
+        rprint(
+            f"  [yellow]Hooks are turned off under {esc('[features]')} in {esc(config_path)}; "
+            "Observal hooks will not fire.[/yellow]"
+        )
 
-    if not needs_update and not needs_flag:
+    if not needs_update and cleaned_config == config_text:
         rprint("  [dim]Already up to date[/dim]")
         return False
 
@@ -1586,22 +1662,11 @@ def _patch_codex(dry_run: bool) -> bool:
         verb = "Would install" if dry_run else "Installed"
         rprint(f"  {verb} hooks in {esc(hooks_path)}")
 
-    # Enable codex_hooks flag in config.toml
-    if needs_flag:
+    if cleaned_config != config_text:
         if not dry_run:
-            codex_dir.mkdir(parents=True, exist_ok=True)
-            if config_path.exists():
-                content = config_path.read_text()
-                if "codex_hooks = false" in content:
-                    content = content.replace("codex_hooks = false", "codex_hooks = true")
-                elif "codex_hooks" not in content:
-                    content = f"codex_hooks = true\n{content}"
-                atomic_write(config_path, content)
-            else:
-                atomic_write(config_path, "codex_hooks = true\n")
-
-        verb = "Would enable" if dry_run else "Enabled"
-        rprint(f"  {verb} codex_hooks flag in {esc(config_path)}")
+            atomic_write(config_path, cleaned_config)
+        verb = "Would remove" if dry_run else "Removed"
+        rprint(f"  {verb} the stale codex_hooks key from {esc(config_path)}")
 
     return True
 

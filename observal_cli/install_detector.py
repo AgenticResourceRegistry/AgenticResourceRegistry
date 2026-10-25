@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -16,6 +17,9 @@ from enum import Enum
 from pathlib import Path
 
 INSTALLER_URL = "https://raw.githubusercontent.com/Observal/Observal/main/install.sh"
+# Development builds (X.Y.Z-dev.N) come from main and are never published to PyPI.
+SOURCE_REPO = "git+https://github.com/Observal/Observal"
+SOURCE_SPEC = f"{SOURCE_REPO}@main"
 
 
 class InstallMethod(Enum):
@@ -44,7 +48,11 @@ def detect() -> InstallInfo:
     if _cached_info is not None:
         return _cached_info
 
-    binary_path = Path(shutil.which("observal") or sys.executable).resolve()
+    # Prefer the entry point actually invoked; PATH may contain another Observal
+    # installation (for example a mise Python alongside a pipx/uv tool).
+    invoked = Path(sys.argv[0])
+    entry_point = invoked if invoked.name in {"observal", "observal.exe"} and invoked.is_file() else None
+    binary_path = (entry_point or Path(sys.executable)).resolve()
     path_str = str(binary_path).lower()
 
     info = _detect_from_path(binary_path, path_str)
@@ -54,17 +62,83 @@ def detect() -> InstallInfo:
     return info
 
 
+def install_spec(target_version: str) -> str:
+    """Return the pip-style requirement that installs ``target_version``.
+
+    Published versions are pinned on PyPI. Development builds are not published,
+    so they are built from the source repository instead.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        if Version(target_version).is_devrelease:
+            return SOURCE_SPEC
+    except InvalidVersion:
+        pass
+    return f"observal-cli=={target_version}"
+
+
+def tag_spec(target_version: str, repo: str = SOURCE_REPO) -> str:
+    """Requirement that builds ``target_version`` from its release tag (``vX.Y.Z[-rc.N]``)."""
+    from packaging.version import Version
+
+    v = Version(target_version)
+    tag = f"v{v.base_version}"
+    if v.pre:
+        tag += f"-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[v.pre[0]] }.{v.pre[1]}"
+    return f"{repo}@{tag}"
+
+
+def pip_interpreter(info: InstallInfo) -> str:
+    """Read the console script's interpreter instead of assuming sys.executable owns it.
+
+    An invoked entry point may belong to a different Python environment than
+    the interpreter running this module (or the first `observal` on PATH).
+    """
+    try:
+        with info.path.open("rb") as script:
+            first_line = script.readline(4096).decode("utf-8").strip()
+        if first_line.startswith("#!"):
+            # Console scripts with long or spaced paths use a shell-wrapper
+            # shebang. Only a Python executable is safe to use for `-m pip`.
+            tokens = shlex.split(first_line[2:])
+            if tokens:
+                interpreter = tokens[0]
+                name = Path(interpreter).name.lower()
+                if re.fullmatch(r"(?:pythonw?|pypy)(?:[0-9.]+)?(?:\.exe)?", name) and Path(interpreter).is_file():
+                    return interpreter
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return sys.executable
+
+
+def pip_install_prefix(info: InstallInfo) -> list[str]:
+    """Choose an installer for the CLI's Python, even when that venv has no pip."""
+    interpreter = pip_interpreter(info)
+    try:
+        has_pip = (
+            subprocess.run([interpreter, "-m", "pip", "--version"], capture_output=True, timeout=5).returncode == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        has_pip = False
+    if not has_pip and shutil.which("uv"):
+        return ["uv", "pip", "install", "--python", interpreter]
+    return [interpreter, "-m", "pip", "install"]
+
+
 def upgrade_command(target_version: str, install_info: InstallInfo | None = None) -> str:
     """Return the command users should run to install a specific CLI version."""
     info = install_info or detect()
-    package = f"observal-cli=={target_version}"
+    package = install_spec(target_version)
 
+    if package == SOURCE_SPEC and info.method not in (InstallMethod.UV_TOOL, InstallMethod.PIPX, InstallMethod.PIP):
+        return f"uv tool install --force {shlex.quote(package)}"
     if info.method == InstallMethod.UV_TOOL:
         return f"uv tool install --force {shlex.quote(package)}"
     if info.method == InstallMethod.PIPX:
         return f"pipx install --force {shlex.quote(package)}"
     if info.method == InstallMethod.PIP:
-        return f"{shlex.quote(sys.executable)} -m pip install {shlex.quote(package)}"
+        return shlex.join([*pip_install_prefix(info), package])
     if info.method == InstallMethod.BINARY and info.managed_by == "curl":
         return f"curl -fsSL {INSTALLER_URL} | bash -s -- --version {_release_tag(target_version)}"
     if info.method == InstallMethod.SYSTEM_PACKAGE and info.managed_by:
@@ -107,29 +181,19 @@ def _detect_from_path(binary_path: Path, path_str: str) -> InstallInfo:
             managed_by=managed_by,
         )
 
-    uv_tool_dir = Path.home() / ".local" / "share" / "uv" / "tools"
-    if str(binary_path).startswith(str(uv_tool_dir)):
+    uv_tool_dirs = [Path.home() / ".local" / "share" / "uv" / "tools"]
+    if os.environ.get("XDG_DATA_HOME"):
+        uv_tool_dirs.append(Path(os.environ["XDG_DATA_HOME"]) / "uv" / "tools")
+    if os.environ.get("UV_TOOL_DIR"):
+        uv_tool_dirs.append(Path(os.environ["UV_TOOL_DIR"]))
+    if any(binary_path.is_relative_to(directory.resolve()) for directory in uv_tool_dirs) or _uv_owns_executable(
+        binary_path
+    ):
         return InstallInfo(
             method=InstallMethod.UV_TOOL,
             path=binary_path,
             writable=True,
             managed_by="uv",
-        )
-
-    if _check_uv_tool_list():
-        return InstallInfo(
-            method=InstallMethod.UV_TOOL,
-            path=binary_path,
-            writable=True,
-            managed_by="uv",
-        )
-
-    if _check_pipx_list():
-        return InstallInfo(
-            method=InstallMethod.PIPX,
-            path=binary_path,
-            writable=True,
-            managed_by="pipx",
         )
 
     return InstallInfo(
@@ -140,32 +204,25 @@ def _detect_from_path(binary_path: Path, path_str: str) -> InstallInfo:
     )
 
 
-def _check_uv_tool_list() -> bool:
-    """Check if observal-cli is in uv tool list output."""
-    try:
-        r = subprocess.run(
-            ["uv", "tool", "list"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return r.returncode == 0 and "observal-cli" in r.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False
+def _uv_owns_executable(binary_path: Path) -> bool:
+    """Match the actual entry point, not merely a similarly named installed UV tool.
 
-
-def _check_pipx_list() -> bool:
-    """Check if observal-cli is in pipx list output."""
-    try:
-        r = subprocess.run(
-            ["pipx", "list"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return r.returncode == 0 and "observal-cli" in r.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    UV copies Windows launchers into a separate bin directory; environment path
+    checks alone cannot identify them. `--show-paths` reports their exact path.
+    """
+    if not shutil.which("uv"):
         return False
+    try:
+        result = subprocess.run(["uv", "tool", "list", "--show-paths"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        match = re.fullmatch(r"\s*-\s+observal(?:\.exe)?\s+\((.+)\)\s*", line, flags=re.IGNORECASE)
+        if match and Path(match.group(1)).resolve() == binary_path.resolve():
+            return True
+    return False
 
 
 def _is_pipx_path(binary_path: Path) -> bool:

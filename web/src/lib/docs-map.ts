@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -56,14 +57,14 @@ export const SETTING_DOCS: Record<string, DocRef> = {
 	// Security
 	"security.allow_internal_git_urls": { file: "self-hosting/trusted-proxies.md", anchor: "allow-internal-git-urls", label: "Allow Internal Git URLs" },
 	"security.allow_draft_install": { file: "self-hosting/trusted-proxies.md", anchor: "ssrf-protection", label: "Draft Install" },
-	"security.rate_limit_auth": { file: "self-hosting/trusted-proxies.md", anchor: "auth-rate-limit", label: "Auth Rate Limit" },
-	"security.rate_limit_auth_strict": { file: "self-hosting/trusted-proxies.md", anchor: "strict-auth-rate-limit", label: "Strict Auth Rate Limit" },
+	"security.rate_limit_auth": { file: "self-hosting/authentication.md", anchor: "rate-limits", label: "Auth Rate Limit" },
+	"security.rate_limit_auth_strict": { file: "self-hosting/authentication.md", anchor: "rate-limits", label: "Strict Auth Rate Limit" },
 	"security.trusted_proxy_ips": { file: "self-hosting/trusted-proxies.md", anchor: "trusted-proxy-ips", label: "Trusted Proxy IPs" },
 
 	// Token Expiry
-	"jwt.access_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "access-tokens", label: "Access Tokens" },
-	"jwt.refresh_token_expire_days": { file: "self-hosting/token-expiry.md", anchor: "refresh-tokens", label: "Refresh Tokens" },
-	"jwt.hooks_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "hooks-tokens", label: "Hooks Tokens" },
+	"jwt.access_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "recommended-configurations", label: "Access Tokens" },
+	"jwt.refresh_token_expire_days": { file: "self-hosting/token-expiry.md", anchor: "recommended-configurations", label: "Refresh Tokens" },
+	"jwt.hooks_token_expire_minutes": { file: "self-hosting/token-expiry.md", anchor: "recommended-configurations", label: "Hooks Tokens" },
 
 	// SAML
 	"saml.idp_entity_id": { file: "self-hosting/saml-settings.md", anchor: "idp-entity-id", label: "IdP Entity ID" },
@@ -116,6 +117,7 @@ export const SETTING_DOCS: Record<string, DocRef> = {
 export const SECTION_DOCS: Record<string, DocRef> = {
 	"Authentication": { file: "self-hosting/authentication.md", label: "Authentication Settings" },
 	"Agent Insights": { file: "insights-config.md", label: "Agent Insights Configuration" },
+	"Agent File Insights": { file: "insights-config.md", label: "Agent File Insights Configuration" },
 	"Deployment": { file: "self-hosting/deployment-settings.md", label: "Deployment Settings" },
 	"Security": { file: "self-hosting/trusted-proxies.md", label: "Trusted Proxies & Network Security" },
 	"SSO": { file: "self-hosting/authentication.md", label: "SSO Configuration" },
@@ -126,7 +128,7 @@ export const SECTION_DOCS: Record<string, DocRef> = {
 	"Data Migration": { file: "self-hosting/data-migration.md", label: "Data Migration" },
 	"Appearance": { file: "self-hosting/miscellaneous.md", anchor: "appearance", label: "Appearance" },
 	"Trace Privacy": { file: "self-hosting/miscellaneous.md", anchor: "trace-privacy", label: "Trace Privacy" },
-	"Registered Agents Only": { file: "self-hosting/miscellaneous.md", anchor: "registered-agents-only", label: "Registered Agents Only" },
+	"Registered Agent Files Only": { file: "self-hosting/miscellaneous.md", anchor: "registered-agents-only", label: "Registered Agent Files Only" },
 	"Telemetry Purge": { file: "self-hosting/data-retention.md", anchor: "purge-traces-and-insights", label: "Purge Traces & Insights" },
 	"Observability": { file: "self-hosting/observability-settings.md", label: "Observability Settings" },
 	"Miscellaneous": { file: "self-hosting/miscellaneous.md", label: "Miscellaneous Settings" },
@@ -138,17 +140,16 @@ export const SECTION_DOCS: Record<string, DocRef> = {
 export const PAGE_DOCS: Record<string, DocRef> = {
 	// Traces
 	"traces": { file: "core-concepts/session-tracking.md", label: "Session Tracking" },
-	"traces.detail": { file: "self-hosting/telemetry.md", label: "Telemetry Configuration" },
+	"traces.detail": { file: "core-concepts/session-tracking.md", label: "Session Tracking" },
 
 	// Registry
-	"agents": { file: "core-concepts/README.md", label: "Core Concepts" },
-	"agents.builder": { file: "core-concepts/README.md", label: "Core Concepts" },
+	"agents": { file: "core-concepts/index.md", label: "Core Concepts" },
+	"agents.builder": { file: "core-concepts/index.md", label: "Core Concepts" },
 	"agents.install": { file: "getting-started/quickstart.md", label: "Quickstart" },
-	"components": { file: "core-concepts/README.md", label: "Core Concepts" },
+	"components": { file: "core-concepts/index.md", label: "Core Concepts" },
 
 	// Admin
 	"audit-log": { file: "reference/api-endpoints.md", label: "API Reference" },
 	"sso": { file: "self-hosting/authentication.md", label: "SSO" },
-	"diagnostics": { file: "self-hosting/troubleshooting.md", label: "Troubleshooting" },
 	"migration": { file: "self-hosting/data-migration.md", label: "Data Migration" },
 };

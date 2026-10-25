@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Harness adapter protocol, context, and registry."""
@@ -180,6 +181,7 @@ def generate_agent_config(
     hook_listings: dict | None = None,
     prompt_listings: dict | None = None,
     sandbox_listings: dict | None = None,
+    skill_folder_names: dict | None = None,
 ) -> dict:
     """Generate harness-specific config for an agent.
 
@@ -225,7 +227,7 @@ def generate_agent_config(
         None if emit_prompt_files else prompt_listings,
         sandbox_listings,
     )
-    skill_configs = _build_skill_configs(agent, skill_listings)
+    skill_configs = _build_skill_configs(agent, skill_listings, folder_names=skill_folder_names)
     hook_configs = _build_hook_configs(agent, hook_listings)
     compatibility_warnings = _check_harness_compatibility(agent, harness)
 

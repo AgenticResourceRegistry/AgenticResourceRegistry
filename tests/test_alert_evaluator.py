@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for alert evaluation engine, SSRF protection, and webhook delivery."""
 
+import asyncio
+import threading
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -260,6 +263,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=0.25,
@@ -308,6 +316,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=0.05,
@@ -353,6 +366,11 @@ class TestEvaluateAlerts:
                 return_value=mock_session_ctx,
             ),
             patch(
+                "services.alert_evaluator.watchable_target_id",
+                new_callable=AsyncMock,
+                side_effect=lambda _db, _user, _type, target_id: target_id,
+            ),
+            patch(
                 "services.alert_evaluator._query_metric",
                 new_callable=AsyncMock,
                 return_value=None,
@@ -363,33 +381,62 @@ class TestEvaluateAlerts:
 
 
 class TestAlertRouteSSRF:
-    def test_validate_webhook_url_rejects_private(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_rejects_private(self):
         from api.routes.alert import _validate_webhook_url
 
         with patch("api.routes.alert.is_private_url", return_value=True):
             with pytest.raises(Exception) as exc_info:
-                _validate_webhook_url("http://10.0.0.1/hook")
+                await _validate_webhook_url("http://10.0.0.1/hook")
             assert exc_info.value.status_code == 400
             assert "private" in exc_info.value.detail.lower()
 
-    def test_validate_webhook_url_rejects_non_http(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_rejects_non_http(self):
         from api.routes.alert import _validate_webhook_url
 
         with pytest.raises(Exception) as exc_info:
-            _validate_webhook_url("ftp://example.com/hook")
+            await _validate_webhook_url("ftp://example.com/hook")
         assert exc_info.value.status_code == 400
         assert "http" in exc_info.value.detail.lower()
 
-    def test_validate_webhook_url_allows_empty(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_allows_empty(self):
         from api.routes.alert import _validate_webhook_url
 
-        _validate_webhook_url("")
+        await _validate_webhook_url("")
 
-    def test_validate_webhook_url_allows_public_https(self):
+    @pytest.mark.asyncio
+    async def test_validate_webhook_url_allows_public_https(self):
         from api.routes.alert import _validate_webhook_url
 
         with patch("api.routes.alert.is_private_url", return_value=False):
-            _validate_webhook_url("https://hooks.slack.com/services/T00/B00/xxx")
+            await _validate_webhook_url("https://hooks.slack.com/services/T00/B00/xxx")
+
+    @pytest.mark.asyncio
+    async def test_slow_dns_does_not_block_event_loop(self):
+        from api.routes.alert import _validate_webhook_url
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_dns(_url):
+            started.set()
+            release.wait(timeout=5)
+            return True
+
+        with patch("api.routes.alert.is_private_url", side_effect=slow_dns):
+            task = asyncio.create_task(_validate_webhook_url("https://example.com/hook"))
+            try:
+                # This timer cannot fire if the DNS lookup blocks the event loop.
+                assert await asyncio.wait_for(asyncio.to_thread(started.wait, 2), timeout=3)
+                await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+                assert not task.done()
+            finally:
+                release.set()
+            with pytest.raises(Exception) as exc_info:
+                await task
+            assert exc_info.value.status_code == 400
 
 
 class TestAlertHistorySchema:
@@ -454,3 +501,72 @@ class TestAlertRuleUpdateSchema:
         update = AlertRuleUpdate(status="active", webhook_url="https://example.com/hook")
         assert update.status == "active"
         assert update.webhook_url == "https://example.com/hook"
+
+
+class TestAlertRuleCreateValidation:
+    def test_valid_rule_accepted(self):
+        from schemas.alert import AlertRuleCreate
+
+        rule = AlertRuleCreate(name="ok", metric="token_usage", threshold=1.0, condition="below")
+        assert rule.metric == "token_usage"
+        assert rule.target_type == "all"
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"metric": "banana"},
+            {"metric": "error_rate"},
+            {"metric": "latency_p99"},
+            {"condition": "sideways"},
+            {"target_type": "galaxy"},
+        ],
+    )
+    def test_unhandled_values_rejected(self, kwargs):
+        from pydantic import ValidationError
+
+        from schemas.alert import AlertRuleCreate
+
+        fields = {"name": "bad", "metric": "token_usage", "threshold": 1.0, "condition": "above", **kwargs}
+        with pytest.raises(ValidationError):
+            AlertRuleCreate(**fields)
+
+
+class TestAlertCooldown:
+    @pytest.mark.asyncio
+    async def test_recent_trigger_suppresses_refire(self):
+        from datetime import UTC, datetime, timedelta
+
+        from services.alert_evaluator import evaluate_alerts
+
+        rule = MagicMock()
+        rule.id = uuid.uuid4()
+        rule.name = "Token Usage"
+        rule.metric = "token_usage"
+        rule.threshold = 100.0
+        rule.condition = "above"
+        rule.target_type = "all"
+        rule.target_id = ""
+        rule.webhook_url = "https://example.com/webhook"
+        rule.status = "active"
+        rule.last_triggered = datetime.now(UTC) - timedelta(minutes=1)
+
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = [rule]
+        mock_result = MagicMock()
+        mock_result.scalars.return_value = mock_scalars
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.add = MagicMock()
+        mock_db.commit = AsyncMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("services.alert_evaluator.async_session", return_value=mock_session_ctx),
+            patch("services.alert_evaluator._query_metric", new_callable=AsyncMock, return_value=500.0),
+            patch("services.alert_evaluator._deliver_webhook_signed", new_callable=AsyncMock) as mock_deliver,
+        ):
+            await evaluate_alerts({})
+        mock_deliver.assert_not_called()
+        mock_db.add.assert_not_called()

@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Observe MCP activity in sessions
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Observe MCP activity in sessions"
+---
 
 Observal identifies MCP and tool activity from the session transcript recorded by each coding harness. It does not intercept MCP transport traffic.
 
@@ -60,4 +61,4 @@ observal ops traces --turn --limit 10
 
 ## Next
 
-[Debug agent failures](debug-agent-failures.md) explains how to investigate failures using session evidence.
+[Debug agent failures](/use-cases/debug-agent-failures) explains how to investigate failures using session evidence.

@@ -34,6 +34,7 @@ from observal_cli.shared.utils import (
     first_content_line,
     parse_frontmatter_field,
 )
+from observal_shared.agent_model import is_auto_model
 
 if TYPE_CHECKING:
     from observal_cli.discovery.bounded_walk import AggregateDiscoveryBudget
@@ -45,6 +46,12 @@ class ClaudeCodeAdapter(BaseAdapter):
     home_markers = (".claude",)
     headless_binary = "claude"
     headless_task_on_stdin = True
+    caller_env_markers = ("CLAUDECODE",)
+    # Exits 1 only when there is no credential at all; an API key, Bedrock or Vertex counts as one.
+    headless_ready_argv = ("claude", "auth", "status")
+    headless_not_ready_hint = (
+        "Claude Code is not logged in. Run `claude auth login` (or set ANTHROPIC_API_KEY), then delegate again."
+    )
     managed_agent_profiles = ("user:agents/{name}.md", "project:.claude/agents/{name}.md")
     managed_skills = ("user:skills/{name}/SKILL.md",)
 
@@ -109,6 +116,22 @@ class ClaudeCodeAdapter(BaseAdapter):
                 )
             )
         return sorted(sources, key=lambda source: str(source.path))
+
+    def attributes_by_directory(self) -> bool:
+        # A session runs as an agent only through `--agent` or the `agent` setting,
+        # which the transcript records; a pulled agent in the folder proves nothing.
+        return False
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        # Claude Code writes agent-<id>.meta.json beside each subagent transcript.
+        if session_jsonl is None or session_jsonl.parent.name != "subagents":
+            return None
+        try:
+            meta = json.loads(session_jsonl.with_suffix(".meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        agent_type = meta.get("agentType") if isinstance(meta, dict) else None
+        return agent_type if isinstance(agent_type, str) and agent_type else None
 
     def related_session_sources(self, source: SessionSource, home: Path | None = None) -> list[SessionSource]:
         if source.path is None or source.parent_session_id is not None:
@@ -232,18 +255,23 @@ class ClaudeCodeAdapter(BaseAdapter):
         hooks = data.get("hooks", {})
         if not hooks:
             return "missing"
-        found = 0
-        for _evt, groups in hooks.items():
+        installed_events = set()
+        has_observal_hook = False
+        for event, groups in hooks.items():
             if not isinstance(groups, list):
                 continue
-            for g in groups:
-                for h in g.get("hooks", []):
-                    cmd = h.get("command", "")
-                    url = h.get("url", "")
-                    if any(m in cmd or m in url for m in _OBSERVAL_HOOK_MARKERS):
-                        found += 1
-                        break
-        return "installed" if found >= 3 else ("partial" if found > 0 else "missing")
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    command, url = hook.get("command", ""), hook.get("url", "")
+                    if any(marker in command or marker in url for marker in _OBSERVAL_HOOK_MARKERS):
+                        has_observal_hook = True
+                    if (
+                        event in ("UserPromptSubmit", "Stop")
+                        and hook.get("type") == "command"
+                        and command.endswith(" -m observal_cli.hooks.session_push --harness claude-code")
+                    ):
+                        installed_events.add(event)
+        return "installed" if len(installed_events) == 2 else ("partial" if has_observal_hook else "missing")
 
     # ── Private scanning helpers ──────────────────────────────────
 
@@ -640,7 +668,8 @@ class ClaudeCodeAdapter(BaseAdapter):
         if saved or not agent_detail:
             return saved
         legacy = agent_detail.get("model_name")
-        return legacy.strip() if isinstance(legacy, str) and legacy.strip() else None
+        # "auto" (or blank) leaves the choice to Claude Code's own default.
+        return None if is_auto_model(legacy) else legacy.strip()
 
     def apply_install_options(self, options: dict, tools: str | None) -> None:
         if tools:

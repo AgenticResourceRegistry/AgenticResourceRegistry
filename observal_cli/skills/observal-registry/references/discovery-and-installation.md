@@ -1,5 +1,6 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Discovery and installation
@@ -21,7 +22,7 @@ observal discover inspect urn:air:... --output json
 observal discover use urn:air:... --output json
 ```
 
-Skills and prompts load into the current session; other kinds return the install command below as `next_step`. The `observal` skill's Discovery reference covers the fields in detail.
+Skills and prompts load into the current session; MCP servers, hooks, and agents return the install command below as `next_step`. Sandboxes have no install command: their `next_step` is `observal agent add sandbox <uuid>`, which only edits a local `observal-agent.yaml`. The `observal` skill's Discovery reference covers the fields in detail.
 
 For kind-specific browsing and filters, use the registry list commands. Start broad with natural-language search, then narrow only when needed.
 
@@ -80,6 +81,11 @@ observal registry mcp install NAMESPACE/SLUG --harness kiro --no-prompt --output
 observal registry mcp install NAMESPACE/SLUG --harness cursor --version 2.1.0 --no-prompt --output json
 observal registry skill install NAMESPACE/SLUG --harness claude-code --scope project --output json
 observal registry skill install NAMESPACE/SLUG --harness kiro --scope user --version 1.2.0 --output json
+observal registry skill install NAMESPACE/SLUG --harness kiro --scope user --version 1.3.0 --check-upgrade --output json
+observal registry skill install NAMESPACE/SLUG --harness kiro --scope user --version 1.3.0 --upgrade --output json
+observal registry skill backups list --output json
+observal registry skill backups restore BACKUP_ID --output json
+observal registry skill backups prune BACKUP_ID --output json
 observal registry hook install NAMESPACE/SLUG --harness kiro --output json
 observal registry hook install NAMESPACE/SLUG --harness claude-code --platform darwin --dir . --output json
 observal registry hook install NAMESPACE/SLUG --harness claude-code --version 1.0.0 --dir . --output json
@@ -91,7 +97,7 @@ Use raw output only when the user explicitly asks for a config snippet or raw re
 observal registry mcp install NAMESPACE/SLUG --harness claude-code --raw
 ```
 
-Never combine raw and JSON modes. JSON MCP installation requires `--no-prompt`; missing required values return a nonzero `error.result.needs_input` response before install generation. Raw mode is the only template workflow that may intentionally contain placeholders. Never print supplied environment or header values.
+Complete registry folders have managed receipts; upgrades require both exact reviewed provenance and an unchanged complete installed tree. Preview with `--check-upgrade` (it lists `added`, `removed`, `modified` and `mode_changed` paths), then opt in with `--upgrade`. A first install needs no backup root; replacing a folder does, so use `--backup-root DIR` only for a private, Git-ignored, same-filesystem root outside harness skill discovery. Backups are retained until explicitly pruned; restore refuses local modifications. Older unreceipted folders need an unambiguous exact-version lock entry and matching reviewed folder bytes; untracked folders cannot be silently adopted. Git and resource-less direct skills retain their existing install semantics. Never combine raw and JSON modes. JSON MCP installation requires `--no-prompt`; missing required values return a nonzero `error.result.needs_input` response before install generation. Raw mode is the only template workflow that may intentionally contain placeholders. Never print supplied environment or header values.
 
 ## Verification
 

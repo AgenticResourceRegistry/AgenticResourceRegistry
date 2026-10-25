@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Observal Contributors
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, test } from "@playwright/test";
@@ -32,7 +32,6 @@ test.describe("administration surfaces", () => {
     ["/users", "Users"],
     ["/audit-log", "Audit Log"],
     ["/security-events", "Security Events"],
-    ["/diagnostics", "Diagnostics"],
   ] as const) {
     test(`${heading} exposes its administration heading`, async ({ page }) => {
       await page.goto(path);

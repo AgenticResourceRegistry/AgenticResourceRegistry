@@ -7,10 +7,11 @@
  */
 
 const VISIBLE_DOC_PATHS = [
-	"core-concepts/README.md",
+	"core-concepts/index.md",
 	"core-concepts/session-tracking.md",
 	"getting-started/installation.md",
 	"getting-started/quickstart.md",
+	"getting-started/observal-skill.md",
 	"cli/prompt.md",
 	"insights-config.md",
 	"insights-setup.md",
@@ -22,7 +23,7 @@ const VISIBLE_DOC_PATHS = [
 	"registry-hook-helper.md",
 	"registry-sandbox-helper.md",
 	"licensing.md",
-	"self-hosting/README.md",
+	"self-hosting/index.md",
 	"self-hosting/authentication.md",
 	"self-hosting/configuration.md",
 	"self-hosting/deployment-settings.md",
@@ -35,7 +36,6 @@ const VISIBLE_DOC_PATHS = [
 	"self-hosting/observability-settings.md",
 	"self-hosting/resource-tuning.md",
 	"self-hosting/miscellaneous.md",
-	"self-hosting/telemetry.md",
 	"self-hosting/databases.md",
 	"self-hosting/docker-compose.md",
 	"self-hosting/ports-and-volumes.md",
@@ -54,10 +54,11 @@ const VISIBLE_DOC_PATHS = [
 ];
 
 const docModules = import.meta.glob<string>([
-	"../../../docs/core-concepts/README.md",
+	"../../../docs/core-concepts/index.md",
 	"../../../docs/core-concepts/session-tracking.md",
 	"../../../docs/getting-started/installation.md",
 	"../../../docs/getting-started/quickstart.md",
+	"../../../docs/getting-started/observal-skill.md",
 	"../../../docs/cli/prompt.md",
 	"../../../docs/insights-config.md",
 	"../../../docs/insights-setup.md",
@@ -69,7 +70,7 @@ const docModules = import.meta.glob<string>([
 	"../../../docs/registry-hook-helper.md",
 	"../../../docs/registry-sandbox-helper.md",
 	"../../../docs/licensing.md",
-	"../../../docs/self-hosting/README.md",
+	"../../../docs/self-hosting/index.md",
 	"../../../docs/self-hosting/authentication.md",
 	"../../../docs/self-hosting/configuration.md",
 	"../../../docs/self-hosting/deployment-settings.md",
@@ -82,7 +83,6 @@ const docModules = import.meta.glob<string>([
 	"../../../docs/self-hosting/observability-settings.md",
 	"../../../docs/self-hosting/resource-tuning.md",
 	"../../../docs/self-hosting/miscellaneous.md",
-	"../../../docs/self-hosting/telemetry.md",
 	"../../../docs/self-hosting/databases.md",
 	"../../../docs/self-hosting/docker-compose.md",
 	"../../../docs/self-hosting/ports-and-volumes.md",

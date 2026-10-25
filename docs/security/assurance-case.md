@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Security assurance case
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Security assurance case"
+---
 
 ## Claim
 
@@ -39,7 +40,7 @@ A host-level compromise, malicious administrator, compromised identity provider,
 
 Passwords use scrypt with a per-user salt. Tokens use configurable ES256 or RS256 asymmetric signing, short-lived access tokens, refresh-token revocation, and published JWKS. Role, team, visibility, ownership, and admin dependencies enforce authorization at API boundaries. Redis-backed revocation fails closed.
 
-Evidence: [`models/user.py`](../../observal-server/models/user.py), [`services/crypto.py`](../../observal-server/services/crypto.py), and [Authentication and SSO](../self-hosting/authentication.md).
+Evidence: [`models/user.py`](https://github.com/Observal/Observal/blob/main/observal-server/models/user.py), [`services/crypto.py`](https://github.com/Observal/Observal/blob/main/observal-server/services/crypto.py), and [Authentication and SSO](/self-hosting/authentication).
 
 ### Credential and key protection
 
@@ -47,31 +48,31 @@ Operator credentials support bounded `NAME_FILE` inputs, direct and file values 
 
 End-user password hashes and issued-token metadata remain in their purpose-built database records. They are not deployer secrets and do not belong in shared host secret files.
 
-Evidence: [`observal_shared/secrets.py`](../../packages/observal-shared/observal_shared/secrets.py), [Configuration](../self-hosting/configuration.md), and [Environment variables](../reference/environment-variables.md).
+Evidence: [`observal_shared/secrets.py`](https://github.com/Observal/Observal/blob/main/packages/observal-shared/observal_shared/secrets.py), [Configuration](/self-hosting/configuration), and [Environment variables](/reference/environment-variables).
 
 ### Network confidentiality
 
 Remote deployments are expected to terminate TLS 1.2 or TLS 1.3 using Caddy, nginx, an enterprise load balancer, or a cloud ingress. Standard HTTPS clients retain certificate and hostname verification. The server package exposes HTTP and data-service ports only on loopback by default. A non-loopback plaintext listener requires an explicit bind setting.
 
-Evidence: [Single-node deployment](../self-hosting/single-node-deploy.md), [`docker/nginx.production.conf`](../../docker/nginx.production.conf), and [Requirements](../self-hosting/requirements.md).
+Evidence: [Single-node deployment](/self-hosting/single-node-deploy), [`docker/nginx.production.conf`](https://github.com/Observal/Observal/blob/main/docker/nginx.production.conf), and [Requirements](/self-hosting/requirements).
 
 ### Untrusted input containment
 
 Pydantic schemas, enums, length bounds, allowlists, namespace validation, and database constraints reject malformed input. Outbound URL paths use SSRF guards. Redirects, archive paths, XML, SVG, host headers, proxy headers, and request sizes receive dedicated validation. Containers add non-root execution, read-only filesystems, temporary filesystems, and `no-new-privileges` where supported.
 
-Evidence: [Trusted proxies and network security](../self-hosting/trusted-proxies.md), [`services/ssrf_guard.py`](../../observal-server/services/ssrf_guard.py), and [`docker/docker-compose.yml`](../../docker/docker-compose.yml).
+Evidence: [Trusted proxies and network security](/self-hosting/trusted-proxies), [`services/ssrf_guard.py`](https://github.com/Observal/Observal/blob/main/observal-server/services/ssrf_guard.py), and [`docker/docker-compose.yml`](https://github.com/Observal/Observal/blob/main/docker/docker-compose.yml).
 
 ### Cryptographic and supply-chain integrity
 
 JWT signing can switch between ES256 and RS256 without recompilation. Algorithm changes retain old public verification keys for the token transition window and reject header or key-type confusion. Release artifacts carry GitHub keyless Sigstore provenance, and release tags are signed and verified with the release workflow's OIDC identity before publication.
 
-Evidence: [`services/crypto.py`](../../observal-server/services/crypto.py), [Release verification](release-verification.md), and [the release workflow](../../.github/workflows/release.yml).
+Evidence: [`services/crypto.py`](https://github.com/Observal/Observal/blob/main/observal-server/services/crypto.py), [Release verification](/security/release-verification), and [the release workflow](https://github.com/Observal/Observal/blob/main/.github/workflows/release.yml).
 
 ### Detection and recovery
 
 Security-sensitive administration emits audit and security events. Health checks, diagnostics, backup guidance, key backup guidance, retention controls, and vulnerability reporting support detection and recovery. Private vulnerability reports have documented acknowledgement and remediation targets.
 
-Evidence: [Security policy](../../SECURITY.md), [Backup and restore](../self-hosting/backup-and-restore.md), and [Authentication and SSO](../self-hosting/authentication.md).
+Evidence: [Security policy](https://github.com/Observal/Observal/blob/main/SECURITY.md), [Backup and restore](/self-hosting/backup-and-restore), and [Authentication and SSO](/self-hosting/authentication).
 
 ## Common implementation weakness mitigations
 

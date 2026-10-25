@@ -1,13 +1,13 @@
-<!--
-SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-# Deployment Settings
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Deployment Settings"
+---
 
 Core deployment configuration that affects how Observal is reachable, how authentication redirects work, and which origins are allowed to make requests.
 
-## SSO Only Mode {#sso-only-mode}
+## SSO Only Mode
 
 Disable all password-based authentication, forcing users to log in via SAML or OAuth.
 
@@ -22,7 +22,7 @@ Disable all password-based authentication, forcing users to log in via SAML or O
 
 **Recovery:** If locked out, set `deployment.sso_only` to `false` directly in the database (`dynamic_settings` table) and restart the API.
 
-## Frontend URL {#frontend-url}
+## Frontend URL
 
 The base URL where users access the Observal web UI in their browser.
 
@@ -41,7 +41,7 @@ The base URL where users access the Observal web UI in their browser.
 - Using `http://` when your proxy terminates TLS will break OAuth callbacks
 - Not matching the exact hostname users type (e.g. `www.` vs bare domain)
 
-## Public API URL {#public-api-url}
+## Public API URL
 
 The externally-reachable URL of the Observal API server.
 
@@ -55,7 +55,7 @@ The externally-reachable URL of the Observal API server.
 
 **When to set:** When the API is behind a reverse proxy with a different external hostname than the container sees internally. Without this, the CLI may try to connect to an internal Docker hostname.
 
-## OTLP Endpoint Override {#otlp-endpoint-override}
+## OTLP Endpoint Override
 
 Override the OpenTelemetry HTTP endpoint for telemetry ingestion.
 
@@ -68,7 +68,7 @@ Override the OpenTelemetry HTTP endpoint for telemetry ingestion.
 
 **When to set:** High-traffic deployments where telemetry volume would overwhelm the main API, or when you want to route telemetry through a separate network path for isolation.
 
-## CORS Origins {#cors-origins}
+## CORS Origins
 
 Origins allowed to make cross-origin browser requests to the API.
 
@@ -82,3 +82,14 @@ Origins allowed to make cross-origin browser requests to the API.
 | `*` | Allow all origins (not recommended for production) |
 
 **When to set:** When the frontend URL differs from the API URL (which is almost always in production). Typically set to match your Frontend URL value.
+
+## Leaderboard
+
+Show or hide the Leaderboard. Toggle it from **Settings > Interface**. The Leaderboard is deprecated and will be removed in a future release.
+
+**Affects:** The Leaderboard entry in the sidebar and command menu, the "Leaderboard" link on the home page, the `/leaderboard` page, and the `/api/v1/overview/leaderboard` and `/api/v1/overview/component-leaderboard` endpoints. Ranking data is kept either way.
+
+| Value | Effect |
+|-------|--------|
+| `false` (default) | Entry points are hidden, `/leaderboard` redirects to the home page, and both endpoints return 404 |
+| `true` | The Leaderboard is available and shows a deprecation notice |

@@ -54,6 +54,7 @@ def parse_rows(rows: list[dict]) -> list[dict]:
     events: list[dict] = []
     # Maps toolUseId -> index in events list for merge-on-result
     tool_use_index: dict[str, int] = {}
+    latest_model = ""
 
     # A sub-execution's prompt is supplied by the client rather than read from
     # the transcript, so it arrives appended and would otherwise sort after the
@@ -77,6 +78,8 @@ def parse_rows(rows: list[dict]) -> list[dict]:
 
         payload = line.get("payload")
         if isinstance(payload, dict):
+            if payload.get("type") == "assistant":
+                latest_model = extract_usage(line)["model"] or latest_model
             _handle_ide_payload(
                 payload,
                 pick_timestamp(line.get("timestamp"), row_ts, ingested_at),
@@ -104,18 +107,22 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             row_credits = row.get("credits") or data.get("credits")
             credits = _as_credits(row_credits)
             if row_credits and credits is not None:
+                attributes = {"credits": str(row_credits)}
+                if latest_model:
+                    attributes["model"] = latest_model
                 events.append(
                     {
                         "timestamp": ts,
                         "event_name": "kiro_credits",
                         "body": f"{credits:.4f} credits",
-                        "attributes": {"credits": str(row_credits), "model": "Kiro Auto"},
+                        "attributes": attributes,
                         "service_name": harness,
                     }
                 )
         elif kind == "Prompt":
             _handle_prompt(data, ts, harness, events)
         elif kind == "AssistantMessage":
+            latest_model = extract_usage(line)["model"] or latest_model
             _handle_assistant_message(data, ts, harness, events, tool_use_index)
         elif kind == "ToolResults":
             _handle_tool_results(data, ts, harness, events, tool_use_index)
@@ -456,6 +463,40 @@ def _extract_result_text(result_content: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Write-path helpers - called by session_ingest's harness dispatch
+# ---------------------------------------------------------------------------
+
+
+def extract_usage(parsed: dict) -> dict:
+    """Extract Kiro's model from CLI assistant blocks (no token counts in JSONL).
+
+    The Claude Code usage extractor reads ``message.model``; Kiro's CLI puts
+    ``modelId`` inside each content block's ``data`` instead. IDE records may
+    carry a model on the payload, but must never be interpreted as Claude rows.
+    """
+    model = ""
+    if parsed.get("kind") == "AssistantMessage":
+        data = dict_field(parsed, "data")
+        for item in list_field(data, "content"):
+            if not isinstance(item, dict):
+                continue
+            block = item.get("data")
+            if isinstance(block, dict):
+                model = str_field(block, "modelId") or model
+    else:
+        payload = parsed.get("payload")
+        if isinstance(payload, dict) and payload.get("type") == "assistant":
+            model = str_field(payload, "modelId")
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "model": model,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Write-path extras - called by ingest_classify.get_extra_rows()
 # ---------------------------------------------------------------------------
 
@@ -497,7 +538,7 @@ def extra_ingest_rows(
             "tool_id": None,
             "content_preview": f"{total_credits:.6f} credits",
             "content_length": 0,
-            "raw_line": json.dumps({"kind": "KiroCredits", "credits": total_credits, "model": "Kiro Auto"}),
+            "raw_line": json.dumps({"kind": "KiroCredits", "credits": total_credits}),
             "credits": total_credits,
         }
     ]

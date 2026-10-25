@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the Codex trace-viewer parser's token usage events."""
+"""Tests for the Codex trace-viewer parser and ingest classifier."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import pytest
 
 from services.session_parsers import parse_raw_events
+from services.session_parsers.ingest_classify import _classify_codex, _preview_codex
 
 
 def _token_count_row(info: object) -> dict:
@@ -70,3 +71,82 @@ def test_token_count_tolerates_malformed_usage(info, input_tokens: str, cache_re
     assert events[0]["attributes"]["input_tokens"] == input_tokens
     assert events[0]["attributes"]["cache_read_tokens"] == cache_read_tokens
     assert events[0]["attributes"]["output_tokens"] == "0"
+
+
+def _user_message(*texts: str) -> dict:
+    return {
+        "timestamp": "2026-10-18T09:00:00.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text} for text in texts],
+        },
+    }
+
+
+# User turns as Codex 0.163 writes them for `codex exec`: only response_item messages.
+ENVIRONMENT = _user_message("<environment_context>\n  <cwd>/home/me/repo</cwd>\n</environment_context>")
+AGENTS_MD = _user_message("# AGENTS.md instructions for /home/me/repo\n\n<INSTRUCTIONS>be terse</INSTRUCTIONS>")
+PROMPT = _user_message("run the tests before saying it's done")
+ECHO = {
+    "timestamp": "2026-10-18T09:00:00.001Z",
+    "type": "event_msg",
+    "payload": {"type": "user_message", "message": "run the tests before saying it's done"},
+}
+DEVELOPER = {
+    "type": "response_item",
+    "payload": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "<skills>"}]},
+}
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (PROMPT, "user_prompt"),
+        (_user_message("<environment_context>...</environment_context>", "fix the parser"), "user_prompt"),
+        (ENVIRONMENT, "system"),
+        (AGENTS_MD, "system"),
+        (_user_message("   "), "system"),
+        (ECHO, "system"),
+        (DEVELOPER, "system"),
+    ],
+)
+def test_classify_codex_user_messages(line: dict, expected: str):
+    assert _classify_codex(line) == expected
+
+
+CUSTOM_CALL = {
+    "type": "response_item",
+    "payload": {"type": "custom_tool_call", "name": "apply_patch", "input": "*** Begin Patch", "call_id": "c1"},
+}
+CUSTOM_OUTPUT = {
+    "type": "response_item",
+    "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "ok"}]},
+}
+
+
+def test_custom_tool_calls_are_tool_events():
+    assert (_classify_codex(CUSTOM_CALL), _classify_codex(CUSTOM_OUTPUT)) == ("tool_call", "tool_result")
+    rows = [{"raw_line": json.dumps(line), "harness": "codex"} for line in (CUSTOM_CALL, CUSTOM_OUTPUT)]
+
+    call, result = parse_raw_events(rows)
+
+    assert (call["event_name"], call["attributes"]["tool_name"]) == ("hook_pretooluse", "apply_patch")
+    assert call["attributes"]["tool_input"] == "*** Begin Patch"
+    assert (result["event_name"], result["attributes"]["tool_response"]) == ("hook_posttooluse", "ok")
+
+
+def test_trace_view_shows_each_typed_prompt_once():
+    rows = [{"raw_line": json.dumps(line), "harness": "codex"} for line in (ENVIRONMENT, AGENTS_MD, PROMPT, ECHO)]
+
+    prompts = [event for event in parse_raw_events(rows) if event["event_name"] == "hook_userpromptsubmit"]
+
+    assert [event["attributes"]["tool_input"] for event in prompts] == ["run the tests before saying it's done"]
+
+
+def test_prompt_preview_skips_injected_context_blocks():
+    line = _user_message("<environment_context>...</environment_context>", "fix the parser")
+
+    assert _preview_codex(line, "user_prompt") == "fix the parser"
+    assert _preview_codex(ENVIRONMENT, "system").startswith("<environment_context>")

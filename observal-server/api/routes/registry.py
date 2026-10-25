@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Canonical registry identifier resolution."""
@@ -35,9 +36,10 @@ from models.sandbox import SandboxListing, SandboxVersion
 from models.skill import SkillListing, SkillVersion
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
-from services.inbox import sources as inbox
+from services import dynamic_settings as _ds
 from services.registry_namespace import identity_exists
-from services.teamspace import review_publication_to_public, team_membership
+from services.skill_identity import rebind_skill_identity, snapshot_skill_identity
+from services.teamspace import review_publication_to_public, skill_transition_needs_rollout_gate, team_membership
 
 router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
 
@@ -220,6 +222,22 @@ async def update_registry_visibility(
             if not membership or membership.role not in (TeamRole.owner, TeamRole.reviewer):
                 raise HTTPException(status_code=403, detail="Only team owners and reviewers can change visibility")
 
+    identity_snapshot = None
+    if item_type == "skill" and (req.visibility == "team") != listing.is_private:
+        original_team_id, original_private = listing.team_id, listing.is_private
+        await db.execute(select(SkillListing.id).where(SkillListing.id == listing.id).with_for_update())
+        await db.refresh(listing, attribute_names=["is_private", "team_id"])
+        if listing.is_private != original_private or listing.team_id != original_team_id:
+            raise HTTPException(status_code=409, detail="Skill visibility changed; refresh before updating")
+        if original_team_id is not None and not privileged:
+            membership = await team_membership(db, original_team_id, current_user.id)
+            if not membership or membership.role not in (TeamRole.owner, TeamRole.reviewer):
+                raise HTTPException(status_code=403, detail="Team membership changed; refresh before updating")
+        if await skill_transition_needs_rollout_gate(db, listing.id):
+            if not await _ds.get_bool("registry.skill_folder_delivery_enabled", False):
+                raise HTTPException(status_code=409, detail="Skill folder visibility requires global version re-review")
+            identity_snapshot = await snapshot_skill_identity(db, listing)
+
     if req.visibility == "team" and item_type != "agent":
         # Installs can pin any approved version of an agent, not just its latest,
         # so every approved version of a public agent has to keep resolving.
@@ -232,14 +250,20 @@ async def update_registry_visibility(
                 AgentComponent.component_id == listing.id,
                 Agent.is_private == False,  # noqa: E712
                 Agent.deleted_at.is_(None),
-                AgentVersion.status == AgentStatus.approved,
+                AgentVersion.status.in_((AgentStatus.approved, AgentStatus.pending))
+                if item_type == "skill"
+                else AgentVersion.status == AgentStatus.approved,
             )
             .limit(1)
         )
         if public_agent_ref is not None:
             raise HTTPException(
                 status_code=409,
-                detail="Cannot make this component team-only while an approved public agent version uses it",
+                detail=(
+                    "Cannot make this skill team-only while a pending or approved public agent version uses it"
+                    if item_type == "skill"
+                    else "Cannot make this component team-only while an approved public agent version uses it"
+                ),
             )
 
     if item_type == "agent":
@@ -284,6 +308,24 @@ async def update_registry_visibility(
                 status_code=409,
                 detail="Agent visibility conflicts with one or more component visibility settings",
             )
+        if req.visibility == "public":
+            skill_ids = sorted({ref["component_id"] for ref in component_refs if ref["component_type"] == "skill"})
+            if skill_ids:
+                # Hold share locks through the visibility commit. Skill
+                # privatization takes the same rows FOR UPDATE before checking
+                # public-agent dependencies, so neither transition can slip
+                # between this validation and the agent's public state.
+                rows = (
+                    await db.execute(
+                        select(SkillListing.id, SkillListing.is_private)
+                        .where(SkillListing.id.in_(skill_ids))
+                        .order_by(SkillListing.id)
+                        .with_for_update(read=True)
+                    )
+                ).all()
+                visible = dict(rows)
+                if any(visible.get(skill_id, True) for skill_id in skill_ids):
+                    raise HTTPException(status_code=409, detail="Public agent pins a private or missing skill")
 
     was_private = bool(listing.is_private)
     if destination_team is not None and team_id is None:
@@ -292,24 +334,18 @@ async def update_registry_visibility(
         listing.owner = destination_team.handle
     listing.is_private = req.visibility == "team"
     returned_to_review = await review_publication_to_public(listing, current_user, db, was_private=was_private)
-    if returned_to_review:
-        # Going team-private → public re-queues every approved version, so the
-        # reviewers who now own that decision need to hear about it. The listing
-        # is public by this point, which is what decides the recipient set.
-        await inbox.on_review_requested(
-            db,
-            listing,
-            subject_type=item_type,
-            actor_id=current_user.id,
-            version=getattr(listing.latest_version, "version", None),
-        )
-
+    if identity_snapshot is not None:
+        rebind_skill_identity(listing, identity_snapshot)
     request.state.audit_action = "registry.visibility.update"
     request.state.audit_resource_type = item_type
     request.state.audit_resource_id = str(listing.id)
     request.state.audit_resource_name = listing.qualified_name
     request.state.audit_detail = f"visibility={req.visibility}, returned_to_review={returned_to_review}"
     await db.commit()
+    if item_type == "skill":
+        # A reversal can select a different installable pointer. The status
+        # property delegates to this relationship, not latest_version_id.
+        await db.refresh(listing, attribute_names=["latest_version"])
     return {
         "id": listing.id,
         "type": item_type,

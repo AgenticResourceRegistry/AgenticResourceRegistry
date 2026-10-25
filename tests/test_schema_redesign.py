@@ -1,45 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Harishankar <harishankar0301@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the agent-centric schema redesign."""
 
-import uuid
-
 import pytest
-
-
-def _review_db():
-    """AsyncSession stand-in for the review endpoints.
-
-    A review decision delivers inbox items in the same transaction, wrapping
-    each insert in a SAVEPOINT. A bare AsyncMock returns a coroutine from
-    begin_nested(), which is not an async context manager, so one is supplied.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    db = AsyncMock()
-    # add() is synchronous. Leaving it as an AsyncMock attribute makes the
-    # un-awaited call in deliver_one emit a RuntimeWarning, which fails under
-    # -W error.
-    db.add = MagicMock()
-    nested = MagicMock()
-    nested.__aenter__ = AsyncMock(return_value=None)
-    nested.__aexit__ = AsyncMock(return_value=False)
-    db.begin_nested = MagicMock(return_value=nested)
-
-    # Every query answers empty rather than a bare AsyncMock: delivery reads
-    # rows (recipients, sibling request items) with .scalars().all(), and an
-    # AsyncMock result turns that chain into a coroutine with no .all(). These
-    # tests assert on the decision itself, so empty is the truthful answer.
-    def _empty_result(*_args, **_kwargs):
-        result = MagicMock()
-        result.scalars.return_value.all.return_value = []
-        result.scalar_one_or_none.return_value = None
-        return result
-
-    db.execute = AsyncMock(side_effect=_empty_result)
-    return db
 
 
 class TestComponentSourceModel:
@@ -381,12 +347,6 @@ class TestFeedbackSubmissionUpdates:
         col = Feedback.__table__.c.listing_type
         assert col.type.length >= 50
 
-    def test_submission_listing_type_wider(self):
-        from models.submission import Submission
-
-        col = Submission.__table__.c.listing_type
-        assert col.type.length >= 50
-
 
 class TestDownloadTracking:
     """Tests for download tracking with bot prevention (#93)."""
@@ -496,94 +456,3 @@ class TestMcpValidationField:
         col = McpVersion.__table__.columns["mcp_validated"]
         # default is False
         assert col.default.arg is False
-
-    @pytest.mark.asyncio
-    async def test_approve_allows_non_validated_mcp(self):
-        """Review approve should allow MCPs regardless of validation status."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from api.routes.review import approve
-        from models.mcp import ListingStatus
-        from models.user import UserRole
-
-        # Create a mock MCP listing with mcp_validated=False
-        listing = MagicMock()
-        listing.id = uuid.uuid4()
-        listing.name = "test-mcp"
-        listing.status = ListingStatus.pending
-        listing.mcp_validated = False
-
-        mock_db = _review_db()
-        mock_user = MagicMock()
-        mock_user.role = UserRole.admin
-
-        # Patch _find_listing to return our mock
-        import api.routes.review as review_mod
-
-        original_find = review_mod._find_listing
-        review_mod._find_listing = AsyncMock(return_value=("mcp", listing))
-
-        try:
-            result = await approve(str(listing.id), mock_db, mock_user)
-            assert result["status"] == "approved"
-        finally:
-            review_mod._find_listing = original_find
-
-    @pytest.mark.asyncio
-    async def test_approve_allows_validated_mcp(self):
-        """Review approve should allow MCPs that passed validation."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from api.routes.review import approve
-        from models.mcp import ListingStatus
-        from models.user import UserRole
-
-        listing = MagicMock()
-        listing.id = uuid.uuid4()
-        listing.name = "validated-mcp"
-        listing.status = ListingStatus.pending
-        listing.mcp_validated = True
-
-        mock_db = _review_db()
-        mock_user = MagicMock()
-        mock_user.role = UserRole.admin
-
-        import api.routes.review as review_mod
-
-        original_find = review_mod._find_listing
-        review_mod._find_listing = AsyncMock(return_value=("mcp", listing))
-
-        try:
-            result = await approve(str(listing.id), mock_db, mock_user)
-            assert result["status"] == "approved"
-        finally:
-            review_mod._find_listing = original_find
-
-    @pytest.mark.asyncio
-    async def test_approve_non_mcp_not_affected(self):
-        """Non-MCP listings should not be affected by validation check."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from api.routes.review import approve
-        from models.mcp import ListingStatus
-        from models.user import UserRole
-
-        listing = MagicMock()
-        listing.id = uuid.uuid4()
-        listing.name = "test-skill"
-        listing.status = ListingStatus.pending
-
-        mock_db = _review_db()
-        mock_user = MagicMock()
-        mock_user.role = UserRole.admin
-
-        import api.routes.review as review_mod
-
-        original_find = review_mod._find_listing
-        review_mod._find_listing = AsyncMock(return_value=("skill", listing))
-
-        try:
-            result = await approve(str(listing.id), mock_db, mock_user)
-            assert result["status"] == "approved"
-        finally:
-            review_mod._find_listing = original_find

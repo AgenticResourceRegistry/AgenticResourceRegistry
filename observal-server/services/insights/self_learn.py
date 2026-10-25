@@ -41,7 +41,6 @@ from models.mcp import ListingStatus
 from models.prompt import PromptListing, PromptVersion
 from models.skill import SkillListing, SkillVersion
 from models.user import User
-from services.inbox import sources as inbox
 from services.registry_namespace import slugify
 from services.registry_recommender import (
     ALL_COMPONENT_TYPES,
@@ -51,6 +50,7 @@ from services.registry_recommender import (
     resolve_component_any_type,
     visibility_clause,
 )
+from services.review.cutover import submit_for_review
 from services.versioning import bump_version
 
 
@@ -181,10 +181,10 @@ async def apply_insight_suggestions(
             resolved = await _resolve_reusable_component(feature, agent, db)
             if not resolved:
                 optic.info(
-                    "self_learn_reuse_rejected",
-                    agent=agent.name,
-                    component_id=str(existing_id),
-                    declared_type=feature.get("feature"),
+                    "self_learn_reuse_rejected: agent={}, component_id={}, declared_type={}",
+                    agent.name,
+                    str(existing_id),
+                    feature.get("feature"),
                 )
                 continue
             linked_existing.append(resolved)
@@ -331,13 +331,13 @@ async def apply_insight_suggestions(
     await db.commit()
 
     optic.info(
-        "self_learn_applied",
-        report_id=report_id,
-        agent=agent.name,
-        version_created=applied["agent_version"] is not None,
-        skills_created=len(applied["skills"]),
-        hooks_created=len(applied["hooks"]),
-        prompts_created=len(applied["prompts"]),
+        "self_learn_applied: report_id={}, agent={}, version_created={}, skills_created={}, hooks_created={}, prompts_created={}",
+        report_id,
+        agent.name,
+        applied["agent_version"] is not None,
+        len(applied["skills"]),
+        len(applied["hooks"]),
+        len(applied["prompts"]),
     )
 
     return applied
@@ -468,7 +468,7 @@ async def _create_agent_version_with_additions(
     latest_version = latest_result.scalar_one_or_none()
 
     if not latest_version:
-        optic.warning("self_learn_no_approved_version", agent=agent.name)
+        optic.warning("self_learn_no_approved_version: agent={}", agent.name)
         return None
 
     # Build the new prompt with additions, skipping exact duplicates already present.
@@ -511,7 +511,7 @@ async def _create_agent_version_with_additions(
             if not (await db.execute(dup_stmt)).scalar_one_or_none():
                 break
         else:
-            optic.error("self_learn_version_exhaustion", agent=agent.name)
+            optic.error("self_learn_version_exhaustion: agent={}", agent.name)
             return None
 
     total_linked = len(new_components) + len(linked_existing)
@@ -587,9 +587,9 @@ async def _create_agent_version_with_additions(
     for resolved in linked_existing:
         if resolved.id in carried_ids:
             optic.info(
-                "self_learn_reuse_already_attached",
-                agent=agent.name,
-                component=resolved.qualified_name,
+                "self_learn_reuse_already_attached: agent={}, component={}",
+                agent.name,
+                resolved.qualified_name,
             )
             continue
         carried_ids.add(resolved.id)
@@ -614,7 +614,7 @@ async def _create_agent_version_with_additions(
 
     # A pending self-learned version sits in the same queue as a hand-released
     # one; the reviewers who will clear it are told the same way.
-    await inbox.on_review_requested(db, agent, subject_type="agent", actor_id=actor_id, version=new_ver)
+    await submit_for_review(db, "agent", agent, new_version, actor_id)
 
     return {
         "id": str(new_version.id),
@@ -673,7 +673,7 @@ async def _refresh_capability_inference(version: AgentVersion, db: AsyncSession)
         version.required_capabilities = infer_required_features(_VersionProxy(), skill_listings=skill_listings)
         version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
     except Exception as e:  # pragma: no cover - inference must never block the apply
-        optic.warning("self_learn_capability_inference_failed", version=version.version, error=str(e))
+        optic.warning("self_learn_capability_inference_failed: version={}, error={}", version.version, str(e))
 
 
 def _build_additions_text(config_additions: list[dict]) -> str:
@@ -953,7 +953,7 @@ async def _create_skill_listing(
             supported_harnesses=["claude-code", "kiro", "pi"],
         )
     except (SkillValidationError, ValidationError) as e:
-        optic.warning("self_learn_skill_validation_failed", name=name, errors=str(e))
+        optic.warning("self_learn_skill_validation_failed: name={}, errors={}", name, str(e))
         return None
 
     # Check for existing
@@ -996,7 +996,7 @@ async def _create_skill_listing(
 
     # Self-learned components enter the same review queue as hand-submitted
     # ones, so the reviewers who own that queue hear about them the same way.
-    await inbox.on_review_requested(db, listing, subject_type="skill", actor_id=actor_id, version=version.version)
+    await submit_for_review(db, "skill", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1086,7 +1086,7 @@ async def _create_hook_listing(
             supported_harnesses=["claude-code", "kiro", "pi"],
         )
     except ValidationError as e:
-        optic.warning("self_learn_hook_validation_failed", name=name, errors=str(e))
+        optic.warning("self_learn_hook_validation_failed: name={}, errors={}", name, str(e))
         return None
 
     # Check for existing
@@ -1132,7 +1132,7 @@ async def _create_hook_listing(
     listing.latest_version_id = version.id
 
     # Same review queue as a hand-submitted hook, so the same notification.
-    await inbox.on_review_requested(db, listing, subject_type="hook", actor_id=actor_id, version=version.version)
+    await submit_for_review(db, "hook", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1271,7 +1271,7 @@ async def _create_prompt_listing(
             supported_harnesses=[],
         )
     except ValidationError as e:
-        optic.warning("self_learn_prompt_validation_failed", name=name, errors=str(e))
+        optic.warning("self_learn_prompt_validation_failed: name={}, errors={}", name, str(e))
         return None
 
     # Check for existing
@@ -1312,7 +1312,7 @@ async def _create_prompt_listing(
     listing.latest_version_id = version.id
 
     # Same review queue as a hand-submitted prompt, so the same notification.
-    await inbox.on_review_requested(db, listing, subject_type="prompt", actor_id=actor_id, version=version.version)
+    await submit_for_review(db, "prompt", listing, version, actor_id)
 
     return {
         "id": str(listing.id),

@@ -1,4 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +21,7 @@ import {
 	FileDiff,
 	GitPullRequest,
 	Inbox as InboxIcon,
+	Layers,
 	ListFilter,
 	Loader2,
 	Megaphone,
@@ -85,7 +88,9 @@ import {
 	INBOX_KIND_LABELS,
 	INBOX_KIND_REASONS,
 	INBOX_SUBJECT_LABELS,
+	type InboxCounts,
 	type InboxFilters,
+	type InboxFolder,
 	type InboxItem,
 	type InboxKind,
 	type InboxSort,
@@ -105,6 +110,9 @@ const KIND_META: Record<InboxKind, { icon: LucideIcon; tone: InsightTone }> = {
 	review_approved: { icon: CircleCheck, tone: "success" },
 	review_rejected: { icon: CircleX, tone: "destructive" },
 	review_comment: { icon: MessageSquare, tone: "info" },
+	review_approval: { icon: CircleCheck, tone: "success" },
+	review_dismissed: { icon: CircleX, tone: "warning" },
+	review_ready: { icon: GitPullRequest, tone: "primary" },
 	change_requested: { icon: FileDiff, tone: "warning" },
 	team_join_requested: { icon: UserPlus, tone: "primary" },
 	team_join_decided: { icon: Users, tone: "info" },
@@ -118,11 +126,19 @@ const KIND_META: Record<InboxKind, { icon: LucideIcon; tone: InsightTone }> = {
 /** Kinds whose detail panel really is a summary of a proposed change. */
 const CHANGE_KINDS = new Set<InboxKind>(["review_requested", "change_requested"]);
 
-const BUCKETS: { key: InboxState; label: string; icon: LucideIcon }[] = [
+/** Folders in the filter sheet. Each one's number is its unread count, like a mail client. */
+const BUCKETS: { key: InboxFolder; label: string; icon: LucideIcon }[] = [
 	{ key: "open", label: "Inbox", icon: InboxIcon },
 	{ key: "done", label: "Done", icon: Check },
 	{ key: "dismissed", label: "Dismissed", icon: X },
+	{ key: "all", label: "All", icon: Layers },
 ];
+
+const STATE_LABELS: Record<InboxState, string> = {
+	open: "Open",
+	done: "Done",
+	dismissed: "Dismissed",
+};
 
 const SORT_LABELS: Record<InboxSort, string> = {
 	newest: "Newest to oldest",
@@ -310,12 +326,15 @@ function RailRow({
 	count,
 	active,
 	onClick,
+	emphasis = false,
 }: {
 	icon?: LucideIcon;
 	label: string;
 	count?: number;
 	active: boolean;
 	onClick: () => void;
+	/** Bold the row, as a mail client does for a folder holding unread mail. */
+	emphasis?: boolean;
 }) {
 	return (
 		<button
@@ -327,6 +346,7 @@ function RailRow({
 				active
 					? "bg-surface-raised font-medium text-foreground ring-1 ring-border"
 					: "text-muted-foreground hover:bg-surface-raised hover:text-foreground",
+				emphasis && "font-semibold text-foreground",
 			)}
 		>
 			{Icon && <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
@@ -352,22 +372,13 @@ function InboxRail({
 	markAllDisabled,
 	className,
 }: {
-	bucket: InboxState;
+	bucket: InboxFolder;
 	unreadOnly: boolean;
 	kind: InboxKind | undefined;
 	subjectType: string | undefined;
 	actionOnly: boolean;
-	counts:
-		| {
-				open: number;
-				done: number;
-				dismissed: number;
-				action_required: number;
-				by_kind: Partial<Record<InboxKind, number>>;
-				by_subject_type: Record<string, number>;
-		  }
-		| undefined;
-	onBucket: (b: InboxState) => void;
+	counts: InboxCounts | undefined;
+	onBucket: (b: InboxFolder) => void;
 	onUnreadOnly: (value: boolean) => void;
 	onKind: (k: InboxKind | undefined) => void;
 	onSubjectType: (t: string | undefined) => void;
@@ -392,8 +403,13 @@ function InboxRail({
 		.filter((t) => bySubject[t] > 0)
 		.sort((a, b) => bySubject[b] - bySubject[a]);
 
-	const bucketCount = (b: InboxState) =>
-		b === "open" ? counts?.open : b === "done" ? counts?.done : counts?.dismissed;
+	// A folder shows how much in it is unread, so Inbox always matches the nav
+	// badge. The list header beside the sheet gives the folder's full size.
+	const unreadByState = counts?.unread_by_state ?? {};
+	const folderUnread = (b: InboxFolder) =>
+		b === "all"
+			? (unreadByState.open ?? 0) + (unreadByState.done ?? 0) + (unreadByState.dismissed ?? 0)
+			: (unreadByState[b] ?? 0);
 
 	return (
 		<aside data-testid="inbox-rail" className={cn("overflow-y-auto p-3", className)}>
@@ -403,7 +419,8 @@ function InboxRail({
 						key={entry.key}
 						icon={entry.icon}
 						label={entry.label}
-						count={bucketCount(entry.key)}
+						count={folderUnread(entry.key)}
+						emphasis={folderUnread(entry.key) > 0}
 						active={bucket === entry.key}
 						onClick={() => onBucket(entry.key)}
 					/>
@@ -419,21 +436,22 @@ function InboxRail({
 				<RailRow
 					icon={EyeOff}
 					label="Unread"
+					count={counts?.scope_unread}
 					active={unreadOnly}
 					onClick={() => onUnreadOnly(!unreadOnly)}
 				/>
 				<RailRow
 					icon={CircleDot}
 					label="Needs action"
-					count={counts?.action_required}
+					count={counts?.scope_action_required}
 					active={actionOnly}
 					onClick={() => onActionOnly(!actionOnly)}
 				/>
 				{presentKinds.map((k) => (
 					<RailRow
 						key={k}
-						icon={KIND_META[k].icon}
-						label={INBOX_KIND_LABELS[k]}
+						icon={KIND_META[k]?.icon ?? Megaphone}
+						label={INBOX_KIND_LABELS[k] ?? k.replaceAll("_", " ")}
 						count={byKind[k]}
 						active={kind === k}
 						onClick={() => onKind(kind === k ? undefined : k)}
@@ -505,6 +523,7 @@ function InboxRail({
 							onKind(undefined);
 							onSubjectType(undefined);
 							onActionOnly(false);
+							onUnreadOnly(false);
 						}}
 					>
 						Clear filters
@@ -551,8 +570,10 @@ function ItemRow({
 	selected,
 	onCheck,
 	onSelect,
+	showState,
 }: {
 	item: InboxItem;
+	showState: boolean;
 	checked: boolean;
 	bulkActive: boolean;
 	selected: boolean;
@@ -569,6 +590,15 @@ function ItemRow({
 
 	return (
 		<li className="group relative min-w-0">
+			{/* Unread marker in the row's left gutter, like a mail client. Read rows
+			    drop it and fade, so what is new stands out at a glance. */}
+			{!item.read && (
+				<span
+					aria-hidden="true"
+					data-testid="inbox-unread-dot"
+					className="pointer-events-none absolute top-1/2 left-[2px] z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-primary"
+				/>
+			)}
 			<ListItem
 				selected={selected}
 				onClick={onSelect}
@@ -581,13 +611,18 @@ function ItemRow({
 						className={cn(
 							"transition-opacity duration-[120ms]",
 							showCheckbox ? "opacity-0" : "group-hover:opacity-0",
+							item.read && !showCheckbox && "opacity-50",
 						)}
 					/>
 				</ListItemLeading>
 
 				<ListItemCopy>
-					<ListItemTitle className={cn(!item.read && "font-semibold")}>{item.title}</ListItemTitle>
-					<ListItemSub>
+					<ListItemTitle
+						className={cn(item.read ? "font-normal text-muted-foreground" : "font-semibold")}
+					>
+						{item.title}
+					</ListItemTitle>
+					<ListItemSub className={cn(item.read && "opacity-80")}>
 						{subjectPath(item)} · {relativeTime(item.created_at)}
 					</ListItemSub>
 					{/* The dot and the pill below are hidden while the hover cluster is
@@ -595,6 +630,7 @@ function ItemRow({
 					<span className="sr-only">
 						{item.read ? "Read" : "Unread"}
 						{item.action_required && item.state === "open" ? ", needs action" : ""}
+						{showState && item.state !== "open" ? `, ${STATE_LABELS[item.state].toLowerCase()}` : ""}
 					</span>
 				</ListItemCopy>
 
@@ -604,6 +640,12 @@ function ItemRow({
 				>
 					{item.action_required && item.state === "open" && (
 						<TriangleAlert className="h-3.5 w-3.5 shrink-0 text-warning" />
+					)}
+					{/* The All folder mixes states, so resolved rows say which. */}
+					{showState && item.state !== "open" && (
+						<span className="shrink-0 rounded-full bg-surface-raised px-1.5 py-px text-4xs text-muted-foreground ring-1 ring-border">
+							{STATE_LABELS[item.state]}
+						</span>
 					)}
 				</ListItemTrailing>
 			</ListItem>
@@ -826,7 +868,7 @@ function DetailPane({ itemId, fallback }: { itemId: string; fallback: InboxItem 
 // ── Page ───────────────────────────────────────────────────────────────
 
 export default function InboxPage() {
-	const [bucket, setBucket] = useState<InboxState>("open");
+	const [bucket, setBucket] = useState<InboxFolder>("open");
 	const [unreadOnly, setUnreadOnly] = useState(false);
 	const [actionOnly, setActionOnly] = useState(false);
 	const [kind, setKind] = useState<InboxKind | undefined>();
@@ -853,7 +895,7 @@ export default function InboxPage() {
 
 	const listFilters: InboxFilters = useMemo(
 		() => ({
-			state: bucket,
+			...(bucket === "all" ? {} : { state: bucket }),
 			...(unreadOnly ? { unread: true } : {}),
 			...(actionOnly ? { action_required: true } : {}),
 			...(kind ? { kind } : {}),
@@ -865,7 +907,14 @@ export default function InboxPage() {
 	);
 
 	const { data, isLoading, isFetching, isError, refetch } = useInbox({ ...listFilters, page });
-	const { data: counts } = useInboxCounts(true, { facets: true, facetState: bucket });
+	// The sheet's numbers describe this exact view: folder, search, and toggles.
+	const { data: counts } = useInboxCounts(true, {
+		facets: true,
+		facetState: bucket,
+		unread: unreadOnly,
+		actionRequired: actionOnly,
+		q: query,
+	});
 	const readAll = useReadAll();
 	const bulk = useBulkAction();
 	const markRead = useMarkRead();
@@ -874,6 +923,7 @@ export default function InboxPage() {
 	// Trust the server's page size, not a copy of its default: the numbers below
 	// must describe the response they annotate.
 	const total = data?.total ?? 0;
+	const listUnread = data?.unread ?? 0;
 	const pageSize = data?.page_size ?? 25;
 	const firstRow = (page - 1) * pageSize + 1;
 	const lastRow = (page - 1) * pageSize + items.length;
@@ -896,6 +946,9 @@ export default function InboxPage() {
 		[items, selected],
 	);
 	const allChecked = items.length > 0 && visibleSelected.length === items.length;
+	// The All folder mixes states, so offer each transition the selection allows.
+	const selectionHasOpen = items.some((item) => selected.has(item.id) && item.state === "open");
+	const selectionHasResolved = items.some((item) => selected.has(item.id) && item.state !== "open");
 	const someChecked = visibleSelected.length > 0 && !allChecked;
 
 	const resetPage = () => {
@@ -913,8 +966,21 @@ export default function InboxPage() {
 	};
 
 	const runBulk = (action: "read" | "unread" | "done" | "dismiss" | "reopen") => {
-		if (visibleSelected.length === 0) return;
-		bulk.mutate({ ids: visibleSelected, action });
+		// In the All folder a selection mixes states. Done and Dismiss resolve only
+		// open rows and Reopen touches only resolved ones, so Done never turns a
+		// dismissed row into a done one. Read and Unread apply to every row.
+		const ids = items
+			.filter((item) => selected.has(item.id))
+			.filter((item) =>
+				action === "done" || action === "dismiss"
+					? item.state === "open"
+					: action === "reopen"
+						? item.state !== "open"
+						: true,
+			)
+			.map((item) => item.id);
+		if (ids.length === 0) return;
+		bulk.mutate({ ids, action });
 		setSelected(new Set());
 	};
 
@@ -952,7 +1018,7 @@ export default function InboxPage() {
 		subjectType,
 		actionOnly,
 		counts,
-		onBucket: (b: InboxState) => {
+		onBucket: (b: InboxFolder) => {
 			setBucket(b);
 			resetPage();
 		},
@@ -1038,25 +1104,35 @@ export default function InboxPage() {
 									}
 								/>
 							) : (
-								groups.map((section) => (
-									<div key={section.label || "all"} className="mt-3 first:mt-0">
-										{section.label && <GroupHeading>{section.label}</GroupHeading>}
+								<>
+									{/* The list's own size and unread count, under every active filter. */}
+									<p
+										data-testid="inbox-summary"
+										className="mb-2 px-[11px] text-3xs tabular-nums text-muted-foreground"
+									>
+										{`${total} ${total === 1 ? "notification" : "notifications"} · ${listUnread} unread`}
+									</p>
+									{groups.map((section) => (
+										<div key={section.label || "all"} className="mt-3 first:mt-0">
+											{section.label && <GroupHeading>{section.label}</GroupHeading>}
 
-										<ul className="grid min-w-0 gap-1">
-											{section.items.map((item) => (
-												<ItemRow
-													key={item.id}
-													item={item}
-													checked={selected.has(item.id)}
-													bulkActive={visibleSelected.length > 0}
-													selected={item.id === selectedId}
-													onCheck={(value) => toggleOne(item.id, value)}
-													onSelect={() => openItem(item)}
-												/>
-											))}
-										</ul>
-									</div>
-								))
+											<ul className="grid min-w-0 gap-1">
+												{section.items.map((item) => (
+													<ItemRow
+														key={item.id}
+														item={item}
+														showState={bucket === "all"}
+														checked={selected.has(item.id)}
+														bulkActive={visibleSelected.length > 0}
+														selected={item.id === selectedId}
+														onCheck={(value) => toggleOne(item.id, value)}
+														onSelect={() => openItem(item)}
+													/>
+												))}
+											</ul>
+										</div>
+									))}
+								</>
 							)}
 						</div>
 
@@ -1074,10 +1150,12 @@ export default function InboxPage() {
 								<span className="text-3xs text-muted-foreground">
 									{visibleSelected.length > 0 ? `${visibleSelected.length} selected` : "Select all"}
 								</span>
-								<div className="ml-auto flex items-center gap-1">
+								{/* Up to five actions in a narrow pane: wrap them instead of
+								    letting the last one run under the detail pane. */}
+								<div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
 									{visibleSelected.length > 0 ? (
 										<>
-											{bucket === "open" ? (
+											{selectionHasOpen && (
 												<>
 													<Button
 														variant="ghost"
@@ -1098,7 +1176,8 @@ export default function InboxPage() {
 														Dismiss
 													</Button>
 												</>
-											) : (
+											)}
+											{selectionHasResolved && (
 												<Button
 													variant="ghost"
 													size="sm"
@@ -1117,6 +1196,15 @@ export default function InboxPage() {
 											>
 												<Eye className="h-3.5 w-3.5" />
 												Read
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={bulk.isPending}
+												onClick={() => runBulk("unread")}
+											>
+												<EyeOff className="h-3.5 w-3.5" />
+												Unread
 											</Button>
 										</>
 									) : (
@@ -1176,7 +1264,9 @@ export default function InboxPage() {
 						) : (
 							<PaneState
 								icon={InboxIcon}
-								title={filtersActive ? "No matching notifications" : "You are all caught up"}
+								title={
+									filtersActive ? "No matching notifications" : "You are all caught up"
+								}
 								copy={
 									filtersActive
 										? "Try clearing a filter or searching for something else."

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
+from observal_shared.agent_model import is_auto_model
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from schemas.constants import HARNESS_CAPABILITIES
 from services.shared.utils import registry_item_slug
@@ -241,8 +242,8 @@ def _model_name_to_frontmatter(model_name: str) -> str:
          'claude-opus-4-6-20250725'   -> 'opus'
          'gpt-4o'                     -> 'gpt-4o'  (passthrough)
     """
-    if not model_name:
-        return ""
+    if is_auto_model(model_name):
+        return ""  # "auto" leaves the choice to Claude Code's own default.
     lower = model_name.lower()
     for keyword, short in _MODEL_SHORT_NAMES.items():
         if keyword in lower:
@@ -460,6 +461,8 @@ def _build_mcp_configs(
 def _build_skill_configs(
     agent: Agent,
     skill_listings: dict | None = None,
+    *,
+    folder_names: dict | None = None,
 ) -> list[dict]:
     """Build skill metadata from registry skill components.
 
@@ -467,6 +470,7 @@ def _build_skill_configs(
     that harness-specific generators turn into skill files.
     """
     skill_listings = skill_listings or {}
+    folder_names = folder_names or {}
     skills: list[dict] = []
     local_names = _local_registry_names(skill_listings)
 
@@ -476,14 +480,16 @@ def _build_skill_configs(
         listing = skill_listings.get(comp.component_id)
         if not listing:
             continue
+        delivery_mode = getattr(listing, "delivery_mode", "git_fetch")
         skills.append(
             {
-                "name": _sanitize_name(local_names[comp.component_id]),
+                "name": folder_names.get(comp.component_id, _sanitize_name(local_names[comp.component_id])),
                 "description": getattr(listing, "description", "") or "",
                 "slash_command": getattr(listing, "slash_command", None),
                 "task_type": getattr(listing, "task_type", ""),
-                "git_url": getattr(listing, "git_url", None),
-                "git_ref": getattr(listing, "git_ref", None) or "main",
+                "delivery_mode": delivery_mode,
+                "git_url": getattr(listing, "git_url", None) if delivery_mode == "git_fetch" else None,
+                "git_ref": (getattr(listing, "git_ref", None) or "main") if delivery_mode == "git_fetch" else None,
                 "skill_path": getattr(listing, "skill_path", None) or "/",
                 "skill_md_content": getattr(listing, "skill_md_content", None),
                 "script_content": getattr(listing, "script_content", None),
@@ -547,8 +553,18 @@ def _get_hook_scripts_dir(harness: str) -> str:
     return HARNESS_REGISTRY.get(harness, {}).get("hook_scripts_dir", "")
 
 
-def _merge_hook_components_into_config(hooks_content: dict, hook_configs: list[dict], harness: str) -> None:
-    """Merge user-submitted hook components into the harness hooks config dict (in-place)."""
+def _merge_hook_components_into_config(
+    hooks_content: dict,
+    hook_configs: list[dict],
+    harness: str,
+    script_command: str | None = None,
+) -> None:
+    """Merge user-submitted hook components into the harness hooks config dict (in-place).
+
+    ``script_command`` is a ``str.format`` template with a ``{filename}`` field for
+    harnesses that run a hook script from somewhere other than ``hook_scripts_dir``
+    relative to the working directory.
+    """
     from services.harness import ensure_loaded, get_adapter
 
     ensure_loaded()
@@ -557,6 +573,7 @@ def _merge_hook_components_into_config(hooks_content: dict, hook_configs: list[d
         raise ValueError(f"No adapter registered for harness: {harness!r}")
     events_map = _get_hook_events_map(harness)
     scripts_dir = _get_hook_scripts_dir(harness)
+    script_command = script_command or (f"{scripts_dir}/{{filename}}" if scripts_dir else None)
     hooks_dict = hooks_content.setdefault("hooks", {})
 
     for hc in hook_configs:
@@ -567,12 +584,12 @@ def _merge_hook_components_into_config(hooks_content: dict, hook_configs: list[d
         handler_config = hc.get("handler_config", {})
         command = handler_config.get("command", "")
         script_filename = hc.get("script_filename")
-        if not command and script_filename and scripts_dir:
-            command = f"{scripts_dir}/{script_filename}"
+        if not command and script_filename and script_command:
+            command = script_command.format(filename=script_filename)
         elif not command:
             continue
-        elif script_filename and scripts_dir:
-            command = f"{scripts_dir}/{script_filename}"
+        elif script_filename and script_command:
+            command = script_command.format(filename=script_filename)
 
         hooks_dict.setdefault(ide_event, []).append(adapter.format_hook_component(command))
 
@@ -588,6 +605,8 @@ def _collect_hook_script_files(hook_configs: list[dict], hook_listings: dict | N
         script_content = hc.get("script_content")
         script_filename = hc.get("script_filename")
         if script_content and script_filename:
+            if script_filename in (".", "..") or "/" in script_filename or "\\" in script_filename:
+                raise ValueError(f"Hook script filename must not contain path segments: {script_filename!r}")
             files.append(
                 {
                     "path": f"{scripts_dir}/{script_filename}",

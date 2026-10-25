@@ -62,7 +62,7 @@ def _entry(spec: dict) -> DiscoveryEntry:
         artifact_url=f"https://bench.test/api/v1/artifacts/{kind.value}/{slug}/1.0.0",
         native_ref=f"bench/{slug}@1.0.0",
         local_entity_id=uuid.uuid5(uuid.NAMESPACE_URL, slug),
-        source_kind=DiscoverySourceKind.local,
+        source_kind=DiscoverySourceKind.mirrored,  # synthetic catalog entry: no native row backs it
         publisher_domain="bench.test",
         visibility=DiscoveryVisibility.public,
         lifecycle_status=DiscoveryLifecycle.approved,

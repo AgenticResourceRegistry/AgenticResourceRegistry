@@ -16,6 +16,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { draftSavedToast, reviewToast } from "@/lib/review-toast";
 import {
   dashboard,
   registry,
@@ -23,9 +24,30 @@ import {
   bulk,
   admin,
 } from "@/lib/api";
-import type { LeaderboardWindow, SetRecommendedRequest } from "@/lib/types";
+import type { ForkRequest, LeaderboardWindow, SetRecommendedRequest } from "@/lib/types";
 
 // ── Agent-specific ──────────────────────────────────────────────────
+
+export function useForkAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ForkRequest }) => registry.fork("agents", id, body),
+    onSuccess: (_fork, { id }) => {
+      qc.invalidateQueries({ queryKey: ["registry", "agents"] });
+      qc.invalidateQueries({ queryKey: ["registry", "agents", "my"] });
+      qc.invalidateQueries({ queryKey: ["registry", "agents", id] });
+      toast.success("Agent File fork created as a draft");
+    },
+  });
+}
+
+export function useAgentForks(id: string, page: number, enabled = true) {
+  return useQuery({
+    queryKey: ["registry", "agents", id, "forks", page],
+    queryFn: () => registry.forks("agents", id, page),
+    enabled: enabled && !!id,
+  });
+}
 
 export function useMyAgents(enabled = true) {
   return useQuery({
@@ -102,10 +124,10 @@ export function useArchiveAgent() {
     mutationFn: (id: string) => registry.archive(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success("Agent archived");
+      toast.success("Agent File archived");
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to archive agent");
+      toast.error(err.message || "Failed to archive Agent File");
     },
   });
 }
@@ -116,10 +138,10 @@ export function useUnarchiveAgent() {
     mutationFn: (id: string) => registry.unarchive(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success("Agent restored");
+      toast.success("Agent File restored");
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to restore agent");
+      toast.error(err.message || "Failed to restore Agent File");
     },
   });
 }
@@ -130,10 +152,10 @@ export function useRestoreDeletedAgent() {
     mutationFn: (vars: { id: string; name?: string }) => registry.restoreDeletedAgent(vars.id, vars.name ? { name: vars.name } : undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success("Agent restored");
+      toast.success("Agent File restored");
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to restore agent");
+      toast.error(err.message || "Failed to restore Agent File");
     },
   });
 }
@@ -144,10 +166,10 @@ export function useDeleteAgent() {
     mutationFn: (id: string) => registry.delete("agents", id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success("Agent deleted");
+      toast.success("Agent File deleted");
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to delete agent");
+      toast.error(err.message || "Failed to delete Agent File");
     },
   });
 }
@@ -172,9 +194,10 @@ export function useUpdateDraft() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { id: string; body: unknown }) => registry.updateDraft(vars.id, vars.body),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success("Draft updated");
+      qc.invalidateQueries({ queryKey: ["pr-review"] });
+      draftSavedToast(result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to update draft");
@@ -189,10 +212,10 @@ export function useUpdateAgent() {
     onSuccess: (_data: unknown, vars: { id: string; body: unknown }) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
       qc.invalidateQueries({ queryKey: ["registry", "agents", vars.id] });
-      toast.success("Agent updated successfully");
+      toast.success("Agent File updated successfully");
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to update agent");
+      toast.error(err.message || "Failed to update Agent File");
     },
   });
 }
@@ -201,10 +224,11 @@ export function useSubmitDraft() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => registry.submitDraft(id),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      qc.invalidateQueries({ queryKey: ["review"] });
-      toast.success("Agent submitted for review");
+      qc.invalidateQueries({ queryKey: ["pr-review"] });
+      qc.invalidateQueries({ queryKey: ["pr-reviews"] });
+      reviewToast("Agent File submitted for review", result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to submit draft");
@@ -219,10 +243,10 @@ export function useCreateAgentVersion() {
   return useMutation({
     mutationFn: (vars: { agentId: string; body: unknown }) =>
       registry.createVersion(vars.agentId, vars.body),
-    onSuccess: (_data, vars) => {
+    onSuccess: (result, vars) => {
       qc.invalidateQueries({ queryKey: ["agent-versions", vars.agentId] });
       qc.invalidateQueries({ queryKey: ["registry", "agents", vars.agentId] });
-      toast.success("New version released successfully");
+      reviewToast("New version submitted for review", result);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to release version");
@@ -246,7 +270,7 @@ export function useBulkCreateAgents() {
     mutationFn: bulk.createAgents,
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["registry", "agents"] });
-      toast.success(`Created ${data.created} agents`);
+      reviewToast(`Submitted ${data.created} Agent Files for review`, data.results.find(item => item.review_number) ?? {});
     },
     onError: (err: Error) => {
       toast.error(err.message || "Bulk create failed");

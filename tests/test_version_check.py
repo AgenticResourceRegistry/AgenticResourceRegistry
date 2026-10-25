@@ -11,6 +11,7 @@ import importlib.metadata
 import json
 import stat
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
@@ -1308,6 +1309,45 @@ def test_check_version_compatibility_skips_invalid_cli_version(
         version_check.httpx,
         "get",
         MagicMock(return_value=response(data={"server_version": "2.0.0"})),
+    )
+
+    assert version_check.check_version_compatibility("https://registry.example.test") is None
+
+
+def test_check_version_compatibility_dev_server_prints_source_install(
+    messages: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from observal_cli import install_detector
+
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.13.1")
+    monkeypatch.setattr(version_check, "_read_cache", lambda: None)
+    monkeypatch.setattr(
+        version_check.httpx,
+        "get",
+        MagicMock(return_value=response(data={"server_version": "1.15.0-dev.0"})),
+    )
+    monkeypatch.setattr(
+        install_detector,
+        "detect",
+        lambda: install_detector.InstallInfo(install_detector.InstallMethod.UV_TOOL, Path("/x/observal"), True, "uv"),
+    )
+
+    with pytest.raises(typer.Exit) as error:
+        version_check.check_version_compatibility("https://registry.example.test")
+
+    assert error.value.exit_code == 1
+    assert "uv tool install --force git+https://github.com/Observal/Observal@main" in messages[0]
+    assert "observal-cli==" not in messages[0]
+
+
+def test_check_version_compatibility_accepts_matching_prerelease_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.15.0-dev.0")
+    monkeypatch.setattr(version_check, "_read_cache", lambda: None)
+    monkeypatch.setattr(
+        version_check.httpx,
+        "get",
+        MagicMock(return_value=response(data={"server_version": "1.15.0-dev.0"})),
     )
 
     assert version_check.check_version_compatibility("https://registry.example.test") is None

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
@@ -135,35 +136,94 @@ if ! curl -fsSL -o "$TMPDIR/$ARTIFACT" "$URL"; then
     die "Download failed. Check that $VERSION exists at https://github.com/$GITHUB_REPO/releases"
 fi
 
-# ── Unpack ───────────────────────────────────────────────────
+# ── Stage and preserve previous package ────────────────────
+
+INSTALL_DIR="${INSTALL_DIR%/}"
+[ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "." ] || die "Choose a dedicated install directory"
+PARENT=$(dirname "$INSTALL_DIR")
+BACKUP_ROOT="${INSTALL_DIR}.backups"
+MARKER="${INSTALL_DIR}.upgrade-in-progress"
+[ ! -L "$INSTALL_DIR" ] && [ ! -L "$BACKUP_ROOT" ] || die "Install or backup path is a symlink"
+[ ! -e "$MARKER" ] || die "Interrupted upgrade marker at $MARKER; inspect the backup and restore manually before retrying"
+
+USE_SUDO=0
+if [ ! -w "$PARENT" ]; then
+    command -v sudo >/dev/null 2>&1 || die "Cannot write to $PARENT; run with suitable permissions"
+    USE_SUDO=1
+fi
+fs() {
+    if [ "$USE_SUDO" = 1 ]; then sudo "$@"; else "$@"; fi
+}
+fs mkdir -p "$PARENT"
 
 if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
     if [ "$FORCE" = "1" ]; then
-        info "Overwriting existing installation at $INSTALL_DIR"
+        info "Preparing a backup of $INSTALL_DIR before replacement"
     else
         warn "Directory $INSTALL_DIR already exists and is not empty."
-        printf 'Overwrite? [y/N]: '
+        printf 'Back up and replace? [y/N]: '
         read -r confirm </dev/tty
         [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || die "Aborted."
     fi
 fi
+[ ! -e "$INSTALL_DIR" ] || [ -d "$INSTALL_DIR" ] || die "Install path is not a directory"
 
-info "Unpacking to $INSTALL_DIR..."
-if [ -w "$(dirname "$INSTALL_DIR")" ]; then
-    mkdir -p "$INSTALL_DIR"
-    tar -xzf "$TMPDIR/$ARTIFACT" -C "$INSTALL_DIR" --strip-components=1
-else
-    sudo mkdir -p "$INSTALL_DIR"
-    sudo tar -xzf "$TMPDIR/$ARTIFACT" -C "$INSTALL_DIR" --strip-components=1
-    sudo chown -R "$(id -u):$(id -g)" "$INSTALL_DIR"
+STAGE=$(fs mktemp -d "${INSTALL_DIR}.stage.XXXXXX")
+if [ "$USE_SUDO" = 1 ]; then fs chown "$(id -u):$(id -g)" "$STAGE"; fi
+info "Unpacking to staging directory..."
+if ! tar -xzf "$TMPDIR/$ARTIFACT" -C "$STAGE" --strip-components=1; then
+    fs rm -rf "$STAGE"
+    die "Invalid package archive; existing installation was not touched"
+fi
+[ -f "$STAGE/setup.sh" ] && [ ! -L "$STAGE/setup.sh" ] || die "Package has no regular setup.sh"
+if [ -d "$INSTALL_DIR" ]; then
+    for protected in .env secrets; do
+        [ ! -L "$INSTALL_DIR/$protected" ] || die "Existing $protected is a symlink; inspect it before upgrading"
+        if [ -e "$INSTALL_DIR/$protected" ]; then
+            fs rm -rf "$STAGE/$protected"
+            cp -a "$INSTALL_DIR/$protected" "$STAGE/$protected"
+        fi
+    done
 fi
 
-# ── Run setup ───────────────────────────────────────────────
+# Keep the old directory intact as a sibling backup; moving directories on the
+# same filesystem avoids extracting over live files. The marker makes an
+# interrupted upgrade visible to the next invocation. Only backup the package
+# here: a database snapshot/downgrade is an independent operator action.
+BACKUP_DIR=""
+if [ -d "$INSTALL_DIR" ]; then
+    fs mkdir -p "$BACKUP_ROOT"
+    BACKUP_DIR="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    [ ! -e "$BACKUP_DIR" ] || die "Backup already exists at $BACKUP_DIR"
+fi
+# mkdir is an exclusive cooperating-installer claim; two simultaneous upgrades
+# cannot both pass a non-atomic existence check and swap the same destination.
+if ! fs mkdir "$MARKER"; then
+    fs rm -rf "$STAGE"
+    die "Another upgrade owns $MARKER; inspect it before retrying"
+fi
+if [ -n "$BACKUP_DIR" ]; then fs mv "$INSTALL_DIR" "$BACKUP_DIR"; fi
+fs mv "$STAGE" "$INSTALL_DIR"
 
+# ── Run setup and restore on ordinary failure ───────────────
+
+setup_ok=0
 if ( : </dev/tty ) 2>/dev/null; then
     info "Running guided setup..."
-    OBSERVAL_INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/setup.sh" </dev/tty
+    OBSERVAL_INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/setup.sh" </dev/tty && setup_ok=1
 else
     info "No terminal detected; using safe setup defaults..."
-    OBSERVAL_INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/setup.sh" </dev/null
+    OBSERVAL_INSTALL_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/setup.sh" </dev/null && setup_ok=1
 fi
+if [ "$setup_ok" != 1 ]; then
+    warn "Setup failed; retaining failed package for inspection. Database changes are NOT rolled back."
+    fs mv "$INSTALL_DIR" "${INSTALL_DIR}.failed-$$"
+    if [ -n "$BACKUP_DIR" ]; then
+        fs cp -a "$BACKUP_DIR" "$INSTALL_DIR"
+        fs rmdir "$MARKER"
+        die "Previous package restored from $BACKUP_DIR; verify database compatibility before restarting"
+    fi
+    die "First install failed; inspect $MARKER and restore manually"
+fi
+fs rmdir "$MARKER"
+if [ -n "$BACKUP_DIR" ]; then info "Previous package and configuration retained at $BACKUP_DIR"; fi

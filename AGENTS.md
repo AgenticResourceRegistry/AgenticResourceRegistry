@@ -25,7 +25,7 @@ Ten harnesses are registered in `packages/observal-shared/observal_shared/harnes
 | Harness | Hook spec | Session parser | Capabilities | Harness-specific e2e |
 |---|---|---|---|---|
 | Claude Code | yes | `claude-code` | hooks, mcp_servers, skills | no |
-| Kiro | yes | `kiro` | hooks, mcp_servers | yes (9 specs) |
+| Kiro | yes | `kiro` | hooks, mcp_servers, skills | yes (9 specs) |
 | Cursor | no | `cursor` | hooks, mcp_servers | no |
 | Pi | no | `pi` | hooks, mcp_servers, skills | no |
 | Codex CLI | yes | `codex` | hooks, mcp_servers, skills | no |
@@ -147,17 +147,17 @@ observal
 ├── auth                     # login, logout, whoami, status, change-password, set-username
 ├── config                   # show, set, path, alias, aliases
 ├── registry                 # component parent group
-│   ├── mcp                  #   submit, list, show, install, edit, delete, co-authors
-│   ├── skill                #   submit, list, show, install, edit, delete, co-authors
-│   ├── hook                 #   submit, list, show, install, edit, delete, co-authors
-│   ├── prompt               #   submit, list, show, edit, render, delete, co-authors
-│   ├── sandbox              #   submit, list, show, edit, delete, co-authors
+│   ├── mcp                  #   submit, list, show, fork, install, edit, delete, co-authors, sync
+│   ├── skill                #   submit, list, show, fork, fork-listing, install, edit, delete, co-authors
+│   ├── hook                 #   submit, list, show, fork, install, edit, delete, co-authors
+│   ├── prompt               #   submit, list, show, fork, edit, render, delete, co-authors
+│   ├── sandbox              #   submit, list, show, fork, edit, delete, co-authors
 │   ├── models               #   inspect registry-backed harness model data
 │   ├── version              #   component version commands
 │   ├── recommend            #   components recommended from your own sessions
 │   ├── bulk                 #   mixed component submission from one JSON file
 │   └── a2a                  #   submit, list, review, remove remote A2A agents
-├── agent                    # create, bulk-create, list, my, show, install, archive,
+├── agent                    # create, bulk-create, list, my, show, fork, install, archive,
 │                            # unarchive, delete, init, add, build, publish, release,
 │                            # versions, transfer-owner, co-authors
 │   └── pull                 #   install agent into harness (primary workflow)
@@ -181,9 +181,9 @@ observal
 
 REST at `/api/v1/`. GraphQL at `/api/v1/graphql` (read-only telemetry layer with subscriptions).
 
-Key route files: `ard.py`, `ard_imports.py` (remote A2A agents), `auth.py`, `mcp.py`, `skill.py`, `hook.py`, `prompt.py`, `sandbox.py`, `review.py`, `feedback.py`, `dashboard.py`, `insights.py`, `reconcile.py`, `ingest.py`, `telemetry.py`, `alert.py`, `config.py`, `sessions.py`, `device_auth.py`, `jwks.py`, `component_source.py`, `component_versions.py`, `agent_versions.py`, `bulk.py`, `support.py`, `preview.py`, `audit.py`, `registry_models.py`.
+Key route files: `ard.py`, `ard_imports.py` (remote A2A agents), `auth.py`, `mcp.py`, `skill.py`, `skill_files.py`, `hook.py`, `prompt.py`, `sandbox.py`, `feedback.py`, `dashboard.py`, `insights.py`, `ingest.py`, `telemetry.py`, `alert.py`, `config.py`, `sessions.py`, `device_auth.py`, `jwks.py`, `component_source.py`, `component_versions.py`, `agent_versions.py`, `bulk.py`, `support.py`, `preview.py`, `audit.py`, `registry.py`.
 
-Sub-packages: `agent/` (crud, install, draft), `admin/` (enterprise_settings, users, org, retention).
+Sub-packages: `agent/` (crud, install, draft), `admin/` (enterprise_settings, users, retention), `reviews/` (detail, threads, submissions, actions).
 
 ## Database architecture
 
@@ -251,7 +251,7 @@ Loguru-based. `observal ops logs` streams `~/.observal/logs/dev.log`.
 - Import: `from loguru import logger as optic`
 - Format: `optic.debug("msg: x={}", x)` (positional only, never f-strings)
 - **Never pass `exc_info=`.** Loguru ignores it, so the traceback is silently dropped and `exc_info` lands in `extra` as a literal. Use `optic.exception(...)` or `optic.opt(exception=True).error(...)`.
-- **Avoid structlog-style keyword args** (`optic.info("event_name", key=value)`). Loguru does not interpolate them into the message; they land in `record["extra"]`. The stderr and file sinks render `{message}` only, so those values are invisible in `docker logs` and `dev.log` — only the ring-buffer sink (SSE `/admin/logs/stream`, support bundle) retains them. About 30 legacy call sites still do this (`jobs/catalog.py`, `services/dynamic_settings.py`, `services/insights/self_learn.py`, `services/strategic_insights.py`, `api/routes/{dashboard,insights}.py`); convert them when you touch them, don't add new ones.
+- **Avoid structlog-style keyword args** (`optic.info("event_name", key=value)`). Loguru does not interpolate them into the message; they land in `record["extra"]`. The stderr and file sinks render `{message}` only, so those values are invisible in `docker logs` and `dev.log` — only the ring-buffer sink (SSE `/admin/logs/stream`, support bundle) retains them. The legacy call sites have been converted to positional formatting; format arguments positionally and never add new keyword-arg calls.
 - Never log secrets, tokens, keys, JWT payloads. Log IDs and counts only.
 - Log format (console/json) configured via `observability.log_format` dynamic setting.
 - `logging_config.py` configures a separate structlog pipeline used by parts of the insights engine. Loguru (`optic`) is the default for new code.

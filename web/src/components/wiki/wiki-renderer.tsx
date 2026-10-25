@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import { Info, AlertTriangle, Lightbulb, ShieldAlert } from "lucide-react";
+import { listDocPaths } from "@/lib/docs-loader";
 
 function MermaidBlock({ chart }: { chart: string }) {
 	const id = useId().replace(/:/g, "");
@@ -71,26 +72,68 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 	);
 }
 
+const HEADING_ID = /\s*\{#([a-z0-9-]+)\}$/;
+
+// Headings with an explicit anchor arrive as "Heading {#id}" (see stripDocNoise).
+function splitHeading(children: React.ReactNode): { id?: string; children: React.ReactNode } {
+	const parts = Array.isArray(children) ? [...children] : [children];
+	const last = parts[parts.length - 1];
+	if (typeof last !== "string") return { children };
+	const match = last.match(HEADING_ID);
+	if (!match) return { children };
+	parts[parts.length - 1] = last.replace(HEADING_ID, "");
+	return { id: match[1], children: parts };
+}
+
 function extractId(children: unknown, props: Record<string, unknown>): string {
 	if (props.id) return props.id as string;
 	return String(children).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-$/, "");
 }
 
+function frontmatterTitle(frontmatter: string): string | undefined {
+	const raw = frontmatter.match(/^title:\s*(.+?)\s*$/m)?.[1];
+	if (!raw) return undefined;
+	if (!raw.startsWith('"')) return raw;
+	try {
+		return JSON.parse(raw) as string;
+	} catch {
+		return raw.slice(1, -1);
+	}
+}
+
 function stripDocNoise(content: string): string {
 	return content
+		// Docs pages carry YAML frontmatter (SPDX comments and the page title that
+		// the docs site renders). Show the title as the page heading instead.
+		.replace(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/, (_match, frontmatter: string) => {
+			const title = frontmatterTitle(frontmatter);
+			return title ? `# ${title}\n\n` : "";
+		})
 		// Drop SPDX and other HTML comment blocks wherever they appear.
 		.replace(/<!--[\s\S]*?-->/g, "")
-		// Drop explicit heading anchor hints used by some markdown generators.
-		.replace(/\{#[a-z0-9-]+\}/g, "")
+		// Docs pages pin a heading's id with an `<a id="...">` line above it, so
+		// deep links keep working on the docs site. Carry the id onto the heading.
+		.replace(/^<a id="([a-z0-9-]+)"><\/a>\s*\n(#{1,6} .+)$/gm, "$2 {#$1}")
 		.trim();
+}
+
+const DOCS_SITE = "https://docs.observal.io";
+
+// Docs pages link to each other by docs-site route (`/cli/config`, `/self-hosting`).
+// Map a route back to the bundled markdown file, preferring a folder's index page.
+function routeToDocPath(route: string, known: string[]): string | undefined {
+	return [`${route}.md`, `${route}/index.md`, ...(route ? [] : ["index.md"])].find((path) => known.includes(path));
 }
 
 function resolveDocHref(href: string | undefined, basePath?: string): string | undefined {
 	if (!href) return undefined;
 	if (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("#")) return href;
-	if (!href.endsWith(".md") && !href.includes(".md#")) return href;
 
 	const [pathPart, hash] = href.split("#");
+	const isMarkdownFile = pathPart.endsWith(".md");
+	const isDocRoute = pathPart.startsWith("/") && !/\.[a-z0-9]+$/i.test(pathPart);
+	if (!isMarkdownFile && !isDocRoute) return href;
+
 	const baseDir = basePath?.includes("/") ? basePath.split("/").slice(0, -1).join("/") : "";
 	const rawParts = (pathPart.startsWith("/") ? pathPart.slice(1) : `${baseDir}/${pathPart}`).split("/");
 	const normalized: string[] = [];
@@ -99,38 +142,47 @@ function resolveDocHref(href: string | undefined, basePath?: string): string | u
 		if (part === "..") normalized.pop();
 		else normalized.push(part);
 	}
-	const docPath = normalized.join("/");
-	return `/wiki?doc=${encodeURIComponent(docPath)}${hash ? `#${hash}` : ""}`;
+	const joined = normalized.join("/");
+	const route = (isMarkdownFile ? joined.replace(/\.md$/, "").replace(/(^|\/)index$/, "") : joined).replace(/\/$/, "");
+	const fragment = hash ? `#${hash}` : "";
+	const docPath = routeToDocPath(route, listDocPaths());
+	// The wiki bundles a curated subset of pages. Send the rest to the docs site.
+	if (!docPath) return `${DOCS_SITE}/${route}${fragment}`;
+	return `/wiki?doc=${encodeURIComponent(docPath)}${fragment}`;
 }
 
 function createComponents(basePath?: string): Components {
 	return {
-	h1: ({ children, ...props }) => {
-		const id = extractId(children, props);
+	h1: ({ children: raw, ...props }) => {
+		const { id: anchor, children } = splitHeading(raw);
+		const id = anchor ?? extractId(children, props);
 		return (
 			<h1 id={id} className="scroll-mt-20 text-3xl font-bold mt-10 mb-5 pb-3 border-b border-border">
 				{children}
 			</h1>
 		);
 	},
-	h2: ({ children, ...props }) => {
-		const id = extractId(children, props);
+	h2: ({ children: raw, ...props }) => {
+		const { id: anchor, children } = splitHeading(raw);
+		const id = anchor ?? extractId(children, props);
 		return (
 			<h2 id={id} className="scroll-mt-20 text-xl font-semibold mt-10 mb-4 pb-2 border-b border-primary/30 text-foreground">
 				{children}
 			</h2>
 		);
 	},
-	h3: ({ children, ...props }) => {
-		const id = extractId(children, props);
+	h3: ({ children: raw, ...props }) => {
+		const { id: anchor, children } = splitHeading(raw);
+		const id = anchor ?? extractId(children, props);
 		return (
 			<h3 id={id} className="scroll-mt-20 text-lg font-semibold mt-8 mb-3 text-foreground">
 				{children}
 			</h3>
 		);
 	},
-	h4: ({ children, ...props }) => {
-		const id = extractId(children, props);
+	h4: ({ children: raw, ...props }) => {
+		const { id: anchor, children } = splitHeading(raw);
+		const id = anchor ?? extractId(children, props);
 		return (
 			<h4 id={id} className="scroll-mt-20 text-base font-semibold mt-7 mb-2 text-foreground">
 				{children}

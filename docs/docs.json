@@ -1,0 +1,357 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Observal",
+  "colors": {
+    "primary": "#018399",
+    "light": "#16A7BF",
+    "dark": "#01505E"
+  },
+  "logo": {
+    "light": "/images/logo-light.png",
+    "dark": "/images/logo-dark.png",
+    "href": "https://observal.io"
+  },
+  "favicon": "/images/favicon.png",
+  "navigation": {
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "icon": "github",
+          "href": "https://github.com/Observal/Observal"
+        },
+        {
+          "anchor": "observal.io",
+          "icon": "globe",
+          "href": "https://observal.io"
+        },
+        {
+          "anchor": "Contributing Guide",
+          "icon": "arrow-up-right-from-square",
+          "href": "https://github.com/Observal/Observal/blob/main/CONTRIBUTING.md"
+        },
+        {
+          "anchor": "Fuzzing Guide",
+          "icon": "arrow-up-right-from-square",
+          "href": "https://github.com/Observal/Observal/blob/main/fuzz/README.md"
+        },
+        {
+          "anchor": "AI Policy",
+          "icon": "arrow-up-right-from-square",
+          "href": "https://github.com/Observal/Observal/blob/main/AI_POLICY.md"
+        }
+      ]
+    },
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "getting-started/quickstart",
+          "getting-started/onboarding"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "core-concepts/index",
+          "core-concepts/session-tracking"
+        ]
+      },
+      {
+        "group": "Use Cases",
+        "pages": [
+          "use-cases/index",
+          "use-cases/observe-mcp-traffic",
+          "use-cases/share-agent-configs",
+          "use-cases/debug-agent-failures",
+          "use-cases/team-registry",
+          "use-cases/fork-and-customize",
+          "use-cases/teamspaces",
+          "use-cases/mcp-repo-sync"
+        ]
+      },
+      {
+        "group": "CLI Reference",
+        "pages": [
+          "cli/index",
+          "cli/api",
+          "cli/idempotency",
+          "cli/auth",
+          "cli/config",
+          "cli/discover",
+          "cli/scan",
+          "cli/share",
+          "cli/outdated",
+          "cli/reconcile",
+          "cli/inbox",
+          "cli/pull",
+          "cli/registry",
+          "cli/recommend",
+          "cli/component",
+          "cli/models",
+          "cli/agent",
+          "cli/team",
+          "cli/ops",
+          "cli/admin",
+          {
+            "group": "observal doctor",
+            "pages": [
+              "cli/doctor",
+              "cli/support"
+            ]
+          },
+          "cli/self",
+          "cli/prompt",
+          {
+            "group": "observal server",
+            "pages": [
+              "cli/server",
+              "cli/migrate"
+            ]
+          },
+          {
+            "group": "observal registry skill",
+            "pages": [
+              "cli/skill",
+              "skill-folder-workflow",
+              "skill-folder-rollout"
+            ]
+          }
+        ]
+      },
+      {
+        "group": "Self-Hosting",
+        "pages": [
+          "self-hosting/index",
+          "self-hosting/requirements",
+          "self-hosting/single-node-deploy",
+          "self-hosting/production-deploy",
+          "self-hosting/docker-compose",
+          "self-hosting/aws-terraform",
+          "self-hosting/gcp-terraform",
+          "self-hosting/configuration",
+          "self-hosting/usage-reporting",
+          "self-hosting/ports-and-volumes",
+          "self-hosting/databases",
+          "self-hosting/authentication",
+          "self-hosting/upgrades",
+          "self-hosting/backup-and-restore",
+          "self-hosting/troubleshooting"
+        ]
+      },
+      {
+        "group": "Integrations",
+        "pages": [
+          "integrations/copilot",
+          "integrations/cursor",
+          "integrations/goose",
+          "integrations/kiro",
+          "integrations/opencode",
+          "integrations/pi"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/environment-variables",
+          "reference/api-endpoints",
+          "reference/hooks-spec",
+          "reference/config-files"
+        ]
+      },
+      {
+        "group": "Security",
+        "pages": [
+          "security/assurance-case",
+          "security/release-verification"
+        ]
+      },
+      {
+        "group": "Architecture Decisions",
+        "pages": [
+          "adr/0001-agentic-resource-discovery"
+        ]
+      },
+      {
+        "group": "Contributing",
+        "pages": [
+          "code-review",
+          "DEVELOPMENT_GUIDE",
+          "testing/Testing_Guide"
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Observal/Observal"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Observal/Observal",
+      "website": "https://observal.io"
+    }
+  },
+  "redirects": [
+    {
+      "source": "/core-concepts/core-concepts",
+      "destination": "/core-concepts"
+    },
+    {
+      "source": "/use-cases/use-cases",
+      "destination": "/use-cases"
+    },
+    {
+      "source": "/cli-reference/cli",
+      "destination": "/cli"
+    },
+    {
+      "source": "/cli-reference/api",
+      "destination": "/cli/api"
+    },
+    {
+      "source": "/cli-reference/idempotency",
+      "destination": "/cli/idempotency"
+    },
+    {
+      "source": "/cli-reference/auth",
+      "destination": "/cli/auth"
+    },
+    {
+      "source": "/cli-reference/config",
+      "destination": "/cli/config"
+    },
+    {
+      "source": "/cli-reference/discover",
+      "destination": "/cli/discover"
+    },
+    {
+      "source": "/cli-reference/scan",
+      "destination": "/cli/scan"
+    },
+    {
+      "source": "/cli-reference/share",
+      "destination": "/cli/share"
+    },
+    {
+      "source": "/cli-reference/outdated",
+      "destination": "/cli/outdated"
+    },
+    {
+      "source": "/cli-reference/reconcile",
+      "destination": "/cli/reconcile"
+    },
+    {
+      "source": "/cli-reference/inbox",
+      "destination": "/cli/inbox"
+    },
+    {
+      "source": "/cli-reference/pull",
+      "destination": "/cli/pull"
+    },
+    {
+      "source": "/cli-reference/registry",
+      "destination": "/cli/registry"
+    },
+    {
+      "source": "/cli-reference/recommend",
+      "destination": "/cli/recommend"
+    },
+    {
+      "source": "/cli-reference/component",
+      "destination": "/cli/component"
+    },
+    {
+      "source": "/cli-reference/models",
+      "destination": "/cli/models"
+    },
+    {
+      "source": "/cli-reference/agent",
+      "destination": "/cli/agent"
+    },
+    {
+      "source": "/cli-reference/team",
+      "destination": "/cli/team"
+    },
+    {
+      "source": "/cli-reference/ops",
+      "destination": "/cli/ops"
+    },
+    {
+      "source": "/cli-reference/admin",
+      "destination": "/cli/admin"
+    },
+    {
+      "source": "/cli-reference/doctor",
+      "destination": "/cli/doctor"
+    },
+    {
+      "source": "/cli-reference/doctor/support",
+      "destination": "/cli/support"
+    },
+    {
+      "source": "/cli-reference/self",
+      "destination": "/cli/self"
+    },
+    {
+      "source": "/cli-reference/prompt",
+      "destination": "/cli/prompt"
+    },
+    {
+      "source": "/cli-reference/server",
+      "destination": "/cli/server"
+    },
+    {
+      "source": "/cli-reference/server/migrate",
+      "destination": "/cli/migrate"
+    },
+    {
+      "source": "/cli-reference/skill",
+      "destination": "/cli/skill"
+    },
+    {
+      "source": "/cli-reference/skill/skill-folder-workflow",
+      "destination": "/skill-folder-workflow"
+    },
+    {
+      "source": "/cli-reference/skill/skill-folder-rollout",
+      "destination": "/skill-folder-rollout"
+    },
+    {
+      "source": "/self-hosting/self-hosting",
+      "destination": "/self-hosting"
+    },
+    {
+      "source": "/architecture-decisions/0001-agentic-resource-discovery",
+      "destination": "/adr/0001-agentic-resource-discovery"
+    },
+    {
+      "source": "/contributing/contributing",
+      "destination": "https://github.com/Observal/Observal/blob/main/CONTRIBUTING.md"
+    },
+    {
+      "source": "/contributing/code-review",
+      "destination": "/code-review"
+    },
+    {
+      "source": "/contributing/development_guide",
+      "destination": "/DEVELOPMENT_GUIDE"
+    },
+    {
+      "source": "/contributing/testing_guide",
+      "destination": "/testing/Testing_Guide"
+    },
+    {
+      "source": "/contributing/fuzz",
+      "destination": "https://github.com/Observal/Observal/blob/main/fuzz/README.md"
+    },
+    {
+      "source": "/contributing/ai_policy",
+      "destination": "https://github.com/Observal/Observal/blob/main/AI_POLICY.md"
+    }
+  ]
+}

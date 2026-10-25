@@ -1,5 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Tanvi Reddy <tanvi.reddy330@gmail.com>
+# SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Deterministic route tests for the SAML service provider endpoints."""
@@ -19,6 +20,7 @@ from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
 from api.deps import get_db
+from api.routes import auth as auth_routes
 from api.routes import sso_saml as saml
 from models.user import UserRole
 from services.security_events import EventType, Severity
@@ -486,23 +488,24 @@ def test_decrypt_sp_key_prefers_external_material(monkeypatch, settings):
 
 
 @pytest.mark.asyncio
-async def test_issue_tokens_persists_refresh_session_and_clears_user_revocation(monkeypatch, settings):
+async def test_issue_tokens_persists_refresh_session_without_lifting_revocation(monkeypatch, settings):
     settings.values["jwt.refresh_token_expire_days"] = 7
     redis = MagicMock()
     redis.setex = AsyncMock()
     redis.delete = AsyncMock()
+    redis.get = AsyncMock(return_value="1700000000")  # a timestamp revocation from an earlier logout
     access = MagicMock(return_value=("access", 900))
     refresh = MagicMock(return_value=("refresh", "refresh-jti"))
-    monkeypatch.setattr(saml, "create_access_token", access)
-    monkeypatch.setattr(saml, "create_refresh_token", refresh)
-    monkeypatch.setattr(saml, "get_redis", lambda: redis)
+    monkeypatch.setattr(auth_routes, "create_access_token", access)
+    monkeypatch.setattr(auth_routes, "create_refresh_token", refresh)
+    monkeypatch.setattr(auth_routes, "get_redis", lambda: redis)
     user = _user(role=UserRole.reviewer)
 
     assert await saml._issue_tokens(user) == ("access", "refresh", 900)
-    access.assert_called_once_with(USER_ID, UserRole.reviewer)
-    refresh.assert_called_once_with(USER_ID, UserRole.reviewer)
+    access.assert_called_once_with(USER_ID, UserRole.reviewer, groups=None)
+    refresh.assert_called_once_with(USER_ID, UserRole.reviewer, groups=None)
     redis.setex.assert_awaited_once_with("refresh_jti:refresh-jti", 7 * 86400, str(USER_ID))
-    redis.delete.assert_awaited_once_with(f"revoked_user:{USER_ID}")
+    redis.delete.assert_not_awaited()  # logging in must never resurrect tokens revoked earlier
 
 
 @pytest.mark.parametrize(

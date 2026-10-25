@@ -8,7 +8,7 @@
 
 [project]
 name = "observal-server"
-version = "1.13.1"
+version = "1.16.0-dev.0"
 description = "Observal API server"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -34,7 +34,7 @@ dependencies = [
     "google-cloud-aiplatform>=1.60.0",
     "redis[hiredis]>=5.0",
     "arq",
-    "strawberry-graphql[fastapi]>=0.315.4",
+    "strawberry-graphql[fastapi]>=0.327.2",
     "authlib>=1.6.11",
     "itsdangerous",
     # >=50.0.0: PYSEC-2026-3552 (PKCS#7 decrypt Bleichenbacher oracle).
@@ -51,6 +51,8 @@ dependencies = [
     "loguru>=0.7.0",
     "prometheus-fastapi-instrumentator>=7.0.0",
     "urllib3>=2.8.0",
+    "aiohttp>=3.14.4",
+    "certifi>=2026.10.19",
     "idna>=3.15",
     "orjson>=3.10.0",
     "xxhash>=3.4.0",

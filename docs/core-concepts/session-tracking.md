@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Session tracking and reconciliation
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Session tracking and reconciliation"
+---
 
 Observal turns local harness conversations into indexed session events. This page explains the complete path from a harness source through durable delivery, server parsing, reconciliation, and recovery.
 

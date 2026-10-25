@@ -1,7 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal auth`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal auth"
+---
 
 Authentication and account management.
 
@@ -10,10 +12,10 @@ Authentication and account management.
 | Command | Description |
 | --- | --- |
 | `observal auth login` | Authenticate with credentials or browser SSO |
-| `observal auth logout` | Revoke the remote session when possible and clear local credentials |
+| `observal auth logout` | Sign out every session for this account (CLI, hooks, web) and clear local credentials |
 | `observal auth whoami` | Show the authenticated user |
 | `observal auth status` | Check authenticated server and local outbox health |
-| `observal auth change-password` | Change the current user's password |
+| `observal auth change-password` | Change the current user's password; signs out every other session, this CLI stays signed in |
 | `observal auth set-username` | Set or update the registry namespace username |
 
 ## Login
@@ -29,7 +31,7 @@ Login accepts `server`, `email`, `password`, `name`, `sso`, `saml`, `provider`, 
 
 Human login always asks for the server URL unless `--server` is supplied; leave the prompt blank to use `http://localhost`. On a fresh server, provide email, name, and a password to create the first administrator. JSON mode never prompts, uses the configured server or local default, and requires complete credential inputs.
 
-Successful human login synchronizes the bundled skills, creates the initial layer snapshot, and runs doctor. Select `no-setup` to skip the snapshot and doctor. JSON mode skips those post-login steps.
+Successful human login first installs the Claude Code session hooks when Claude Code is already present (a `~/.claude` directory or a `claude` binary on `PATH`), then synchronizes the bundled skills, creates the initial layer snapshot, and runs doctor. A Claude Code settings file that is not valid JSON is left untouched with a note to run `observal doctor patch --harness claude-code`. Select `no-setup` to skip the snapshot and doctor. JSON mode skips those post-login steps.
 
 `provider` picks the browser SSO provider: `oidc`, `saml`, `google` or `github`. It implies `sso`, and the CLI rejects a provider the server has not enabled, or `saml` combined with a different `provider`. A bare `sso` uses the only enabled provider, or asks which one when the server enables several. JSON mode and non-interactive input never ask, so a bare `sso` there falls back to the server default (OIDC, then SAML); pass `provider` to choose.
 
@@ -59,6 +61,8 @@ observal auth logout --output json
 ```
 
 Logout always removes local tokens when the local configuration is readable. Remote revocation is best effort and is reported separately in JSON. Use `observal doctor cleanup` to remove Observal-managed harness hooks.
+
+A logout from any device, including the web UI, also signs out the hooks on every other machine. When a hook's token refresh is rejected, the hooks stop retrying until the next `observal auth login`, and every other `observal` command prints a notice that sessions are not being sent.
 
 ## Current user
 
@@ -116,9 +120,9 @@ The username is the user's registry namespace. It must follow the namespace rule
 
 Password and token variables support a corresponding `_FILE` form. Do not set a direct value and its file form together.
 
-Full list: [Environment variables](../reference/environment-variables.md).
+Full list: [Environment variables](/reference/environment-variables).
 
 ## Related
 
-* [`observal config`](config.md): local configuration
-* [Self-hosting authentication](../self-hosting/authentication.md): server authentication and SSO
+* [`observal config`](/cli/config): local configuration
+* [Self-hosting authentication](/self-hosting/authentication): server authentication and SSO

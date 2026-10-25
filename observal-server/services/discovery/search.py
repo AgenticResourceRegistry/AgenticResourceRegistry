@@ -23,12 +23,12 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import String, and_, cast, or_, select
 
 from api.sanitize import escape_like
 from api.search import keyword_tokens
-from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle
-from services.discovery.identity import normalize_media_type
+from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle, DiscoverySourceKind
+from services.discovery.identity import MEDIA_TYPE_A2A, normalize_media_type
 from services.discovery.visibility import DEFAULT_LIFECYCLES, visible_entries_predicate
 
 if TYPE_CHECKING:
@@ -51,7 +51,18 @@ _FIELD_WEIGHTS: tuple[tuple[str, float], ...] = (
     ("description", 0.5),
 )
 _MIN_PARTIAL_LEN = 4
+# Cap on hyphen-separated parts expanded per token or display name (also keeps SQLite under its expression depth).
+_MAX_HYPHEN_PARTS = 8
+_MAX_NAME_PARTS = 32  # display-name words considered for hyphen-joined runs
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+# A trailing "@1.0.0" or "@latest" on a qualified reference selects a version; it is not a search word.
+# Only after a word character, so "@scope/pkg" and "user@example.com" survive; the version-shaped
+# pattern stops at the first character that cannot be part of a version, so "pr@1.0,other" keeps "other".
+_VERSION_SUFFIX_RE = re.compile(
+    r"(?<=[A-Za-z0-9_-])@(?:v?\d+(?:\.\d[\w+-]*)*(?:[-+][\w.+-]*)?(?!\w|\.\w)|(?:latest|stable|next|beta|alpha|rc)(?![\w.@/-]))"
+)
+# Only a whole whitespace-delimited token shaped "namespace/slug" names a namespace.
+_QUALIFIED_TOKEN_RE = re.compile(r"@?([a-z0-9][\w.-]*)/@?[a-z0-9][\w.-]*")
 
 
 class InvalidSearchRequestError(ValueError):
@@ -78,6 +89,7 @@ class SearchFilters:
     capabilities: list[str] = field(default_factory=list)
     publishers: list[str] = field(default_factory=list)
     versions: list[str] = field(default_factory=list)
+    forks_of: str | None = None
     lifecycles: tuple[DiscoveryLifecycle, ...] = DEFAULT_LIFECYCLES
     activatable_only: bool = False
 
@@ -127,6 +139,11 @@ class SearchFilters:
                     except ValueError:
                         raise InvalidSearchRequestError(f"unknown lifecycle in filter: {v}") from None
                 filters.lifecycles = tuple(lifecycles)
+            elif key == "obs:forksOf":
+                refs = values(key)
+                if len(refs) != 1 or len(refs[0]) > 255:
+                    raise InvalidSearchRequestError("obs:forksOf requires one source identifier")
+                filters.forks_of = refs[0]
             elif key == "obs:activatable":
                 filters.activatable_only = str(values(key)[0]).lower() in ("true", "1", "yes")
             else:
@@ -138,17 +155,50 @@ class SearchFilters:
 
 
 def _words(text: str | None) -> list[str]:
-    return _WORD_RE.findall((text or "").lower())
+    """Lower-cased words; ``_`` and ``-`` are the same separator so ``pr_verify`` finds ``pr-verify``."""
+    return [w.replace("_", "-") for w in _WORD_RE.findall((text or "").lower())]
 
 
-def _fields(entry: DiscoveryEntry) -> dict[str, set[str]]:
-    slug = (entry.native_ref or "").split("@", 1)[0].split("/")[-1]
+def _qualified(entry: DiscoveryEntry) -> tuple[str, str]:
+    """``(namespace, slug)`` from the native ref ``namespace/slug@version``; either may be empty."""
+    ref = (entry.native_ref or "").split("@", 1)[0]
+    namespace, _, slug = ref.rpartition("/")
+    return namespace, slug
+
+
+def _query_namespaces(text: str) -> frozenset[str]:
+    """Namespaces of the tokens that are real ``namespace/slug`` references."""
+    stripped = _VERSION_SUFFIX_RE.sub(" ", text.lower())
+    matches = (_QUALIFIED_TOKEN_RE.fullmatch(t) for t in stripped.split())
+    return frozenset(m.group(1) for m in matches if m)
+
+
+def _fields(entry: DiscoveryEntry, namespaces: frozenset[str] = frozenset()) -> dict[str, set[str]]:
+    namespace, slug = _qualified(entry)
+    display = _words(entry.display_name)
+    name = set(display) | set(_words(slug.replace("-", " "))) | set(_words(slug))
+    # Hyphen-joined runs of the display name, so "release-notes" matches "Release Notes Writer".
+    # Runs start at every part (bounded run length and name length) so a trailing "Release Notes" is found too.
+    parts = [p for w in display for p in w.split("-") if p][:_MAX_NAME_PARTS]
+    name |= {
+        "-".join(parts[i:j])
+        for i in range(len(parts))
+        for j in range(i + 2, min(i + _MAX_HYPHEN_PARTS, len(parts)) + 1)
+    }
+    capabilities = set(w for c in [*(entry.capabilities or []), *(entry.tags or [])] for w in _words(c))
+    if namespace.lower() in namespaces:  # only a qualified "namespace/slug" token names its namespace
+        name |= set(_words(namespace))
     return {
-        "name": set(_words(entry.display_name)) | set(_words(slug.replace("-", " "))) | set(_words(slug)),
+        "name": name,
         "queries": set(w for q in (entry.representative_queries or []) for w in _words(q)),
-        "capabilities": set(w for c in [*(entry.capabilities or []), *(entry.tags or [])] for w in _words(c)),
+        "capabilities": capabilities,
         "description": set(_words(entry.description)),
     }
+
+
+def _spaced(text: str) -> str:
+    """Words joined by single spaces with hyphens as spaces, for phrase containment checks."""
+    return " ".join(w for word in _words(text) for w in word.split("-") if w)
 
 
 def _match_quality(token: str, words: set[str]) -> float:
@@ -166,9 +216,10 @@ def _match_quality(token: str, words: set[str]) -> float:
 
 def query_tokens(text: str) -> list[str]:
     """Tokens used for ranking: the registry's keyword tokenizer, falling back to raw words."""
-    tokens = keyword_tokens(text)
+    text = _VERSION_SUFFIX_RE.sub(" ", text)
+    tokens = [t.replace("_", "-") for t in keyword_tokens(text)]
     if tokens:
-        return tokens
+        return list(dict.fromkeys(tokens))
     return [w for w in dict.fromkeys(_words(text)) if len(w) >= 2]
 
 
@@ -177,7 +228,7 @@ def _display_map(text: str, tokens: list[str]) -> dict[str, str]:
     display: dict[str, str] = {}
     for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", text):
         for token in keyword_tokens(word) or [word.lower()]:
-            display.setdefault(token, word)
+            display.setdefault(token.replace("_", "-"), word)
     return {t: display.get(t, t) for t in tokens}
 
 
@@ -194,17 +245,20 @@ def rank_entries(text: str, entries: list[DiscoveryEntry]) -> list[Ranked]:
     if not tokens:
         return []
     display = _display_map(text, tokens)
-    phrase = " ".join(tokens)
+    namespaces = _query_namespaces(text)
+    phrase = _spaced(" ".join(tokens))
     ranked: list[Ranked] = []
 
     for entry in entries:
-        fields = _fields(entry)
+        fields = _fields(entry, namespaces)
         total = 0.0
         matched: list[str] = []
         for token in tokens:
             best = 0.0
+            # The tokenizer stems plural endings; the word as typed must still match exactly.
+            variants = {token, display[token].lower().replace("_", "-")}
             for name, weight in _FIELD_WEIGHTS:
-                quality = _match_quality(token, fields[name])
+                quality = max(_match_quality(v, fields[name]) for v in variants)
                 if quality:
                     best = max(best, quality * weight)
             if best:
@@ -214,8 +268,10 @@ def rank_entries(text: str, entries: list[DiscoveryEntry]) -> list[Ranked]:
             continue
         relevance = total / len(tokens)
         coverage = len(matched) / len(tokens)
-        haystack = " ".join(_words(" ".join([entry.display_name or "", *(entry.representative_queries or [])])))
-        phrase_hit = 1.0 if (len(tokens) == 1 or phrase in haystack) else 0.0
+        haystack = _spaced(" ".join([entry.display_name or "", *(entry.representative_queries or [])]))
+        namespace, slug = _qualified(entry)
+        qualified = _spaced(f"{namespace} {slug}")
+        phrase_hit = 1.0 if (len(tokens) == 1 or phrase in haystack or phrase in qualified) else 0.0
         # Weighted so a perfect name match with every token present scores exactly 100.
         score = round(100 * (0.7 * relevance + 0.2 * coverage + 0.1 * phrase_hit))
         ranked.append(Ranked(entry=entry, score=max(1, score), matched_on=matched))
@@ -247,6 +303,7 @@ def _query_fingerprint(text: str, filters: SearchFilters, user_id: str | None) -
             "c": sorted(filters.capabilities),
             "p": sorted(filters.publishers),
             "v": sorted(filters.versions),
+            "forks_of": filters.forks_of,
             "l": sorted(lc.value for lc in filters.lifecycles),
             "a": filters.activatable_only,
             "u": user_id,
@@ -296,14 +353,32 @@ def _apply_filters(stmt, filters: SearchFilters):
         stmt = stmt.where(DiscoveryEntry.version.in_(filters.versions))
     if filters.activatable_only:
         stmt = stmt.where(DiscoveryEntry.activatable.is_(True))
+    if filters.harnesses:
+        # In SQL so the candidate LIMIT never drops declared entries behind newer undeclared ones.
+        # Undeclared harnesses mean "unknown", never "all". Remote A2A agents run elsewhere, so
+        # they need no harness (mirrors serialize.is_a2a).
+        declared = cast(DiscoveryEntry.supported_harnesses, String)
+        stmt = stmt.where(
+            or_(
+                and_(
+                    DiscoveryEntry.source_kind == DiscoverySourceKind.imported,
+                    DiscoveryEntry.media_type == MEDIA_TYPE_A2A,
+                ),
+                *(
+                    declared.like(f"%{escape_like(json.dumps(h))}%", escape="\\")
+                    for h in dict.fromkeys(filters.harnesses)
+                ),
+            )
+        )
     return stmt
 
 
 def _post_filter(entry: DiscoveryEntry, filters: SearchFilters) -> bool:
-    """Filters over JSON list columns, applied in Python for dialect portability."""
+    """Harness, tag and capability filters over JSON list columns, applied in Python for dialect portability."""
     if filters.harnesses:
-        supported = set(entry.supported_harnesses or [])
-        if supported and not (supported & set(filters.harnesses)):
+        # The SQL LIKE is only a prefilter (case-insensitive on SQLite); ids match exactly, as availability() does.
+        remote_a2a = entry.source_kind == DiscoverySourceKind.imported and entry.media_type == MEDIA_TYPE_A2A
+        if not remote_a2a and not (set(entry.supported_harnesses or []) & set(filters.harnesses)):
             return False
     if filters.tags:
         tags = {t.lower() for t in (entry.tags or [])}
@@ -349,9 +424,25 @@ async def search_entries(
 
     stmt = select(DiscoveryEntry).where(visible_entries_predicate(user, lifecycles=filters.lifecycles))
     stmt = _apply_filters(stmt, filters)
-    stmt = stmt.where(or_(*(DiscoveryEntry.search_document.like(f"%{escape_like(t)}%") for t in tokens)))
+
+    # search_document stores words split on every non-alphanumeric, so a hyphenated token
+    # ("pr-verify") must be prefiltered by its parts; ranking still scores the whole token.
+    # Parts of one token are ANDed (so "pr-verify" is not matched by every "pr..."), tokens are ORed.
+    def _token_clause(token: str):
+        parts = [p for p in re.split(r"[-_]+", token) if p][:_MAX_HYPHEN_PARTS]
+        return and_(*(DiscoveryEntry.search_document.like(f"%{escape_like(p)}%") for p in parts))
+
+    stmt = stmt.where(or_(*(_token_clause(t) for t in tokens)))
     stmt = stmt.order_by(DiscoveryEntry.last_seen_at.desc(), DiscoveryEntry.ard_identifier).limit(CANDIDATE_LIMIT)
     candidates = [e for e in (await db.execute(stmt)).scalars().all() if _post_filter(e, filters)]
+    if filters.forks_of:
+        # A search facet must never reveal team-private forks, even to an admin.
+        from services.discovery.forks import public_upstreams
+
+        public_links = await public_upstreams(db, candidates)
+        candidates = [
+            entry for entry in candidates if public_links.get((entry.kind, entry.local_entity_id)) == filters.forks_of
+        ]
 
     ranked = rank_entries(text, candidates)
     page = ranked[offset : offset + page_size]

@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for Redis service and arq worker: Phase 5."""
@@ -78,6 +79,49 @@ class TestWorkerSettings:
         from worker import WorkerSettings
 
         assert WorkerSettings.max_jobs == 15
+
+    def test_cron_jobs_run_the_intended_number_of_times_per_week(self):
+        from datetime import UTC, datetime, timedelta
+
+        from arq.cron import next_cron
+
+        from worker import WorkerSettings
+
+        # arq treats an omitted minute= as every minute, so hour= alone fires 60 times per hour.
+        expected_runs_per_week = {
+            "cron:sync_component_sources": 4 * 7,
+            "cron:evaluate_alerts": 60 * 24 * 7,
+            "cron:run_review_checks": 4 * 60 * 24 * 7,
+            "cron:maintain_clickhouse": 6 * 7,
+            "cron:batch_generate_insights": 1,
+            "cron:run_retention_purge": 4 * 7,
+            "cron:purge_migration_artifacts": 4 * 7,
+            "cron:refresh_user_profiles": 7,
+            "cron:purge_inbox_items": 7,
+            "cron:submit_usage_ping": 4 * 7,
+            "cron:reproject_discovery_entries": 4 * 7,
+        }
+
+        week_start = datetime(2026, 1, 5, tzinfo=UTC)  # a Monday
+        week_end = week_start + timedelta(days=7)
+        job_names = [job.name for job in WorkerSettings.cron_jobs]
+        assert len(job_names) == len(set(job_names)), f"duplicate cron jobs registered: {job_names}"
+
+        actual_runs_per_week = {}
+        for job in WorkerSettings.cron_jobs:
+            # next_cron rather than job.calculate_next, which mutates the shared CronJob.
+            schedule = {
+                field: getattr(job, field)
+                for field in ("month", "day", "weekday", "hour", "minute", "second", "microsecond")
+            }
+            runs = 0
+            run_at = next_cron(week_start - timedelta(seconds=1), **schedule)
+            while run_at < week_end:
+                runs += 1
+                run_at = next_cron(run_at, **schedule)
+            actual_runs_per_week[job.name] = runs
+
+        assert actual_runs_per_week == expected_runs_per_week
 
 
 # --- Docker compose ---

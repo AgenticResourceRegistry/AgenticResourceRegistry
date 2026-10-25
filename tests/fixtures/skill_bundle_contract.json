@@ -1,0 +1,31 @@
+{
+  "note": "Phase 1 proposed opt-in contract. Phase 2 must implement it using the existing config_snippet.skill (standalone) and config_snippet.skill_components (agent pull) envelopes. Paths in files are relative to destination. Direct skills never clone, even if an old row has git coordinates.",
+  "submit": {
+    "name": "Example", "version": "1.0.0", "description": "Example skill", "owner": "kaushik", "task_type": "general", "delivery_mode": "registry_direct", "skill_md_content": "# Example\n", "script_filename": "run.sh", "script_content": "", "extra_files": [{"path": "assets/icon.bin", "content": "AP8=", "encoding": "base64", "executable": false}]
+  },
+  "edit": {
+    "extra_files": [], "script_content": null, "script_filename": null
+  },
+  "edit_inherit": {"description": "Updated without changing bundle"},
+  "release": {
+    "version": "1.1.0", "description": "New bundle", "extra": {"task_type": "general", "extra_files": [{"path": "assets/icon.bin", "content": "AP8=", "encoding": "base64", "executable": false}]}
+  },
+  "standalone_request": {"harness": "claude-code", "scope": "project", "version": "1.0.0", "supported_features": ["skill_extra_files_v1"]},
+  "agent_request": {"harness": "claude-code", "options": {"scope": "project"}, "version": "1.0.0", "supported_features": ["skill_extra_files_v1"]},
+  "standalone": {
+    "listing_id": "11111111-1111-4111-8111-111111111111", "harness": "claude-code", "version": "1.0.0", "version_id": "22222222-2222-4222-8222-222222222222", "warnings": [],
+    "config_snippet": {"skills": {"path": ".claude/skills/Example/SKILL.md", "content": "# Example\n"}, "skill": {"id": "11111111-1111-4111-8111-111111111111", "name": "Example", "version": "1.0.0", "version_id": "22222222-2222-4222-8222-222222222222", "delivery_mode": "registry_direct", "skill_md_content": "# Example\n", "script_filename": "run.sh", "script_content": "", "extra_files": [{"path": "assets/icon.bin", "content": "AP8=", "encoding": "base64", "executable": false}], "destination": ".claude/skills/Example", "files": [
+      {"path": "SKILL.md", "size": 10, "sha256": "8ef0b048ad51a9d2ccaf9177716d7c83159a1d8c22fd37aa2b7d03c11b21b40d", "mode": "0644"},
+      {"path": "scripts/run.sh", "size": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "mode": "0755"},
+      {"path": "assets/icon.bin", "size": 2, "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8", "mode": "0644"}
+    ]}}
+  },
+  "agent": {
+    "agent_id": "33333333-3333-4333-8333-333333333333", "harness": "claude-code", "version": "1.0.0", "warnings": [],
+    "config_snippet": {"skill_components": [{"id": "11111111-1111-4111-8111-111111111111", "name": "Example", "version": "1.0.0", "version_id": "22222222-2222-4222-8222-222222222222", "path": ".claude/skills/Example/SKILL.md", "destination": ".claude/skills/Example", "delivery_mode": "registry_direct", "skill_md_content": "# Example\n", "script_filename": "run.sh", "script_content": "", "extra_files": [{"path": "assets/icon.bin", "content": "AP8=", "encoding": "base64", "executable": false}], "files": [
+      {"path": "SKILL.md", "size": 10, "sha256": "8ef0b048ad51a9d2ccaf9177716d7c83159a1d8c22fd37aa2b7d03c11b21b40d", "mode": "0644"},
+      {"path": "scripts/run.sh", "size": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "mode": "0755"},
+      {"path": "assets/icon.bin", "size": 2, "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8", "mode": "0644"}
+    ]}]}
+  }
+}

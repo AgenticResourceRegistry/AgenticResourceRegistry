@@ -3,8 +3,6 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
-
 from slowapi import Limiter
 from starlette.requests import Request
 
@@ -39,19 +37,12 @@ def _get_real_ip(request: Request) -> str:
 
 
 def _get_rate_limit_key(request: Request) -> str:
-    """Prefer authenticated identity, then token hash, then trusted-proxy-aware IP."""
-    state = getattr(request, "state", None)
-    user = getattr(state, "current_user", None) or getattr(state, "user", None)
+    """Use validated identity when available, otherwise the trusted-proxy-aware IP."""
+    user = getattr(request.state, "current_user", None)
     if user is not None:
         user_id = getattr(user, "id", None)
         if user_id:
             return f"user:{user_id}"
-
-    auth = request.headers.get("authorization", "")
-    scheme, _, token = auth.partition(" ")
-    if scheme.lower() == "bearer" and token.strip():
-        digest = hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
-        return f"token:{digest}"
 
     return f"ip:{_get_real_ip(request)}"
 

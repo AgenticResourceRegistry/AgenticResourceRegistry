@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Dheirav <dheirav2005@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Pi
+---
+# SPDX-FileCopyrightText: 2026 Dheirav <dheirav2005@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Pi"
+---
 
 Pi is a first-class Observal harness integration. Observal can install Pi agent
 profiles, configure MCP servers, expose skills, install the telemetry extension,
@@ -41,7 +42,7 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 | Guidance files | Scanned from `AGENTS.md`, `~/.pi/agent/AGENTS.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` |
 | Skills | `.pi/skills/{name}/SKILL.md` and `~/.pi/agent/skills/{name}/SKILL.md` |
 | Session parsing | Pi JSONL parser |
-| Telemetry | Pi session transcripts delivered through the extension; `observal reconcile --harness pi` is accepted but finds no sessions |
+| Telemetry | Pi session transcripts delivered through the extension; `observal reconcile --harness pi` re-pushes recent sessions found under the Pi agent directory's `sessions/` folder |
 | Model selection | Registry-backed Pi model catalog (`observal registry models list --harness pi`) |
 
 ---

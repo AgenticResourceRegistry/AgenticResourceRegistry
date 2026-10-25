@@ -1,11 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# AWS deployment with Terraform
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "AWS deployment with Terraform"
+---
 
 End state: an Observal install running in your own AWS account, fronted by an Application Load Balancer with HTTPS, with managed Postgres + Redis, ECS Fargate for the stateless app tier, and a single EC2 host for ClickHouse. Prometheus and Grafana are optional through `observability_stack`.
 
-This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Observal, use [Docker Compose setup](docker-compose.md) instead.
+This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Observal, use [Docker Compose setup](/self-hosting/docker-compose) instead.
 
 ## What gets provisioned
 
@@ -15,7 +17,7 @@ A single `terraform apply` creates:
 * **Application Load Balancer** with HTTPS (ACM certificate, DNS-validated) when you supply a domain; HTTP-only otherwise. Path-based rules: `/api/*` → api service, optional `/grafana/*` → Grafana, default → web
 * **ECS Fargate cluster** running:
   * `api` (FastAPI): 2 tasks by default, autoscales 2–10 on CPU
-  * `web` (Next.js): 2 tasks by default, autoscales 2–6 on CPU
+  * `web` (Vite): 2 tasks by default, autoscales 2–6 on CPU
   * `worker` (arq background jobs): 1 task by default, autoscales 1–5 on CPU
   * `init` (one-shot migrations + seeds): runs as a Fargate `RunTask` whenever `image_tag` changes
 * **RDS Postgres 16**: Multi-AZ on `prod`, encrypted, automated daily backups, Performance Insights, Enhanced Monitoring, log exports
@@ -36,9 +38,9 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 | Terraform ≥ 1.6                                                                                                                         | `brew install terraform` or use [tenv](https://tofuutils.github.io/tenv/)  |
 | AWS CLI v2                                                                                                                              | `brew install awscli` - also used by the one-shot init task runner         |
 | [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | shell access into the data host                                            |
-| IAM principal with sufficient rights                                                                                                    | see [Required IAM permissions](aws-terraform.md#required-iam-permissions)  |
+| IAM principal with sufficient rights                                                                                                    | see [Required IAM permissions](/self-hosting/aws-terraform#required-iam-permissions)  |
 | (Optional) Route 53 hosted zone                                                                                                         | required for HTTPS on a custom domain                                      |
-| (Recommended) S3 bucket + DynamoDB table                                                                                                | remote Terraform state - see [Remote state](aws-terraform.md#remote-state) |
+| (Recommended) S3 bucket + DynamoDB table                                                                                                | remote Terraform state - see [Remote state](/self-hosting/aws-terraform#remote-state) |
 
 ## Quickstart
 
@@ -158,7 +160,7 @@ log_retention_days  = 30             # CloudWatch log group retention
 image_tag           = "v1.4.0"       # specific Observal release; "latest" pulls main
 ```
 
-See [Configuration](configuration.md) for the meaning of each application setting.
+See [Configuration](/self-hosting/configuration) for the meaning of each application setting.
 
 ### Bring Your Own VPC
 
@@ -196,9 +198,40 @@ The ALB SG must allow inbound TCP 80/443 from your desired CIDRs. The ECS SG mus
 
 A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/Observal/Observal/blob/main/infra/terraform/aws/examples/byovpc/README.md).
 
+### Git webhooks on a private install
+
+[MCP repository sync](/use-cases/mcp-repo-sync) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Observal, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
+
+```hcl
+alb_scheme             = "internal"
+enable_webhook_ingress = true
+webhook_providers      = ["github", "gitlab"]   # default ["github"]
+```
+
+Terraform then adds an API Gateway HTTP API in front of the existing ALB:
+
+* One route per provider, `POST /api/v1/webhooks/<provider>/mcp/{sync_id}`. Everything else, including other methods, other paths and `..` segments, gets `404` from API Gateway and never reaches the VPC, so the UI, API and login stay private.
+* A VPC link in the private subnets that connects API Gateway to the ALB's listener, so there are no public subnets, internet gateway or second load balancer. With `enable_tls`, API Gateway connects over HTTPS and checks the ALB certificate against `domain_name`.
+* A security group rule that lets the VPC link, and nothing else new, reach the ALB.
+* Throttling (`webhook_throttle_rate_limit`, `webhook_throttle_burst_limit`), access logs in CloudWatch, and `WEBHOOK_PUBLIC_URL` on the API so the MCP **Sync** tab shows the public webhook URL.
+
+The webhook URL is the API's `https://<id>.execute-api.<region>.amazonaws.com` address, shown by the `webhook_public_url` output. To use your own hostname instead, set `webhook_domain_name` (and `webhook_route53_zone_id` if the public zone differs from `route53_zone_id`); Terraform adds the certificate, custom domain and DNS record, and turns off the `execute-api` address.
+
+The receiver rejects any delivery that is not authenticated for that listing (a GitHub HMAC signature or the GitLab secret token), and limits each webhook URL to 60 deliveries a minute.
+
+Things to know:
+
+* The ALB must be internal. API Gateway connects to the addresses the ALB's DNS name resolves to, and an internet-facing ALB resolves to public addresses the VPC link cannot reach; Terraform stops with an error in that case. An internet-facing ALB that is open to the internet does not need this.
+* There is no source IP allowlist. GitHub and GitLab do not sign their source addresses, and the providers' ranges change, while every delivery is already authenticated. If you need one, put a REST API with a resource policy, or AWS WAF, in front instead.
+* A VPC link with no traffic for 60 days goes inactive, and the next delivery fails while AWS reprovisions it, which takes a few minutes. GitHub does not retry failed deliveries automatically; use **Redeliver** on the hook, or run the sync by hand from the **Sync** tab.
+* API Gateway throttling is approximate and meant as a backstop. Requests over the limit get `429` and show as failed in the provider's delivery log.
+* VPC links are not available in every Availability Zone (for example `use1-az3`). If `terraform apply` reports an unsupported zone, use private subnets in other zones.
+* Turning it on adds `WEBHOOK_PUBLIC_URL` to the API task definition, which rolls the API tasks once.
+* Cost: about $1 per million deliveries; the VPC link itself is free.
+
 ## Required IAM permissions
 
-The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](aws-terraform.md#hardened-iam-policy).
+The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](/self-hosting/aws-terraform#hardened-iam-policy).
 
 | Service                             | Managed policy                    |
 | ----------------------------------- | --------------------------------- |
@@ -332,6 +365,7 @@ Rough monthly baseline in `us-east-1` at on-demand rates (May 2026):
 | RDS `db.t4g.small` Multi-AZ         | $50          |
 | ElastiCache (2× `cache.t4g.micro`)  | $25          |
 | ALB                                 | $20          |
+| Webhook API Gateway (only with `enable_webhook_ingress`) | \<$1 |
 | NAT Gateway                         | $33 + egress |
 | EBS gp3 100 GB                      | $8           |
 | S3 backups (1 GB cold)              | $0.10        |
@@ -349,8 +383,8 @@ The defaults are safe but conservative. Before pointing real traffic at this:
 * [ ] Add CloudWatch alarms on RDS `CPUUtilization`, `FreeableMemory`, ECS service CPU, ALB `HTTPCode_Target_5XX_Count`
 * [ ] Attach AWS WAF to the ALB
 * [ ] Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
-* [ ] Configure Observal SSO. See [Authentication and SSO](authentication.md)
-* [ ] Test the [backup and restore](backup-and-restore.md) procedure end-to-end
+* [ ] Configure Observal SSO. See [Authentication and SSO](/self-hosting/authentication)
+* [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 * [ ] Replace the GitHub tarball download in `user-data.sh.tftpl` with an artifact URL you control
 
 ## Troubleshooting
@@ -384,4 +418,4 @@ To re-run by hand: `$(terraform output -raw init_run_task_command)`.
 
 **RDS storage is full.** `max_allocated_storage` autoscales up to 500 GB by default. Raise `db_max_allocated_storage_gb` if you have heavier audit-log volume.
 
-For application-level issues (login fails, traces missing) see [Troubleshooting](troubleshooting.md).
+For application-level issues (login fails, traces missing) see [Troubleshooting](/self-hosting/troubleshooting).

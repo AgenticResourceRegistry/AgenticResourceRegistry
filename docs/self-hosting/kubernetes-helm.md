@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Ravi Chopra <shivamchopra1234567890@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Kubernetes Deployment with Helm
+---
+# SPDX-FileCopyrightText: 2026 Ravi Chopra <shivamchopra1234567890@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Kubernetes Deployment with Helm"
+---
 
 Deploy Observal onto a Kubernetes cluster using the official Helm chart.
 

@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Web Frontend
@@ -9,7 +10,7 @@ Vite 8 / React 19 / TypeScript 6 / TanStack Router / Tailwind CSS 4 / Playwright
 
 The web UI is one of three ways to interact with Observal, alongside the CLI and the bundled observal skill. It covers:
 
-- **Browsing and installing agents** from the registry
+- **Browsing and installing agents and components** from the registry (Agentic Resources)
 - **Viewing session traces** with conversation replay, span tree, and token counts
 - **Admin operations** such as review queue, user management, insights, and audit logs
 - **Agent building** with component assembly and live YAML preview
@@ -50,13 +51,15 @@ src/routes/
 ├── _authed.tsx                     # Authenticated layout and guard
 ├── _authed/
 │   ├── index.tsx                   #   Registry home
+│   ├── resources/
+│   │   └── $type.tsx               #   Agentic Resources list (agents | mcps | skills | hooks | prompts | sandboxes)
 │   ├── agents/
-│   │   ├── index.tsx               #   Agent list
+│   │   ├── index.tsx               #   Redirect to /resources/agents
 │   │   ├── $agentId.tsx            #   Agent detail
 │   │   ├── builder.tsx             #   Agent builder
 │   │   └── $agentId/insights/$reportId.tsx
 │   ├── components/
-│   │   ├── index.tsx               #   Component browser
+│   │   ├── index.tsx               #   Redirect to /resources/mcps
 │   │   └── $componentId.tsx        #   Component detail
 │   ├── leaderboard.tsx             #   Agent leaderboard
 │   ├── insights/$reportId.tsx      #   Insight report detail
@@ -69,8 +72,7 @@ src/routes/
 │   │   ├── sso.tsx
 │   │   ├── users.tsx
 │   │   ├── audit-log.tsx
-│   │   ├── security-events.tsx
-│   │   └── diagnostics.tsx
+│   │   └── security-events.tsx
 │   ├── _user.tsx                   #   User layout
 │   └── _user/
 │       ├── account.tsx

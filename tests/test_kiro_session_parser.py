@@ -35,6 +35,32 @@ def _cli_row(record: dict) -> dict:
     }
 
 
+def test_ide_credits_show_model_observed_in_assistant_payload():
+    assistant = _ide_row({"type": "assistant", "content": "hello", "modelId": "claude-opus-5.5"})
+    credits = _cli_row({"kind": "KiroCredits", "credits": 1.25, "data": {}})
+    credits["credits"] = 1.25
+    events = parse_raw_events([assistant, credits])
+    assert events[-1]["attributes"]["model"] == "claude-opus-5.5"
+
+
+def test_cli_credits_show_observed_model_not_a_guessed_auto_model():
+    assistant = _cli_row(
+        {
+            "kind": "AssistantMessage",
+            "data": {
+                "content": [
+                    {"kind": "toolUse", "data": {"modelId": "claude-opus-5.5", "name": "read", "toolUseId": "t1"}}
+                ]
+            },
+        }
+    )
+    credits = _cli_row({"kind": "KiroCredits", "data": {}, "credits": 1.25})
+    credits["credits"] = 1.25
+    events = parse_raw_events([assistant, credits])
+    assert events[-1]["attributes"]["model"] == "claude-opus-5.5"
+    assert "model" not in parse_raw_events([credits])[0]["attributes"]
+
+
 # ── IDE: text must reach the viewer ───────────────────────────────
 
 

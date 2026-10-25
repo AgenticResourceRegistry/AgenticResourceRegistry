@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Verify an Observal release
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Verify an Observal release"
+---
 
 Observal release artifacts have GitHub keyless Sigstore provenance attestations. Release tags created after this policy was introduced are signed separately with gitsign. These checks prove different things:
 

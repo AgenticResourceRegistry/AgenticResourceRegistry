@@ -15,11 +15,13 @@ from schemas.constants import (
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 
 class PromptSubmitRequest(BaseModel):
     name: str
     version: str
+    message: str | None = None
     description: str
     owner: str
     team_id: uuid.UUID | None = None
@@ -68,6 +70,13 @@ class PromptUpdateRequest(BaseModel):
 
 
 class PromptListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
+    review_number: int | None = None
+    review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -102,6 +111,8 @@ class PromptListingResponse(BaseModel):
 
 
 class PromptListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str

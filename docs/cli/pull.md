@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal agent pull`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal agent pull"
+---
 
 Install a complete Agent into a harness. Pull resolves the Agent version to install, asks the server for harness-native config built from the exact component versions that Agent version pinned, merges generated files safely, installs bundled skills and hooks, runs required harness setup, and records exact installed state in `observal.lock` and the local lockfile.
 
@@ -45,13 +46,13 @@ observal agent pull alice/reviewer --harness cursor --no-prompt --strict
 | `--strict` / `--no-strict` | Refuse an install that does not match its lock; defaults to `OBSERVAL_STRICT` |
 | `--output`, `-o` | Table or JSON output |
 
-Unknown harnesses, unsupported scopes, malformed assignments, unused harness model overrides, unsupported model or tool options, invalid versions, and `--upgrade` combined with `--version` fail locally with validation exit code 7.
+Unknown harnesses, unsupported scopes, malformed assignments, unused harness model overrides, unsupported model or tool options, invalid versions, and `--upgrade` combined with `--version` fail locally with validation exit code 7. A project-scope pull of an Agent with MCP servers also fails this way for Goose, which only reads a user-level MCP config: pull with `--scope user` instead.
 
 ## Pinned versions
 
 Pulls are pinned at two levels.
 
-**Components.** Every Agent version pins each of its MCP servers, skills, hooks, prompts, and sandboxes to one exact component version, identified by its version id and a content digest. Pull always installs those pinned versions. A component that ships a newer version never changes what an existing Agent version installs; the Agent's author releases a new Agent version to move it (see [`observal agent release --refresh-components`](agent.md#release-and-versions)).
+**Components.** Every Agent version pins each of its MCP servers, skills, hooks, prompts, and sandboxes to one exact component version, identified by its version id and a content digest. Pull always installs those pinned versions. A component that ships a newer version never changes what an existing Agent version installs; the Agent's author releases a new Agent version to move it (see [`observal agent release --refresh-components`](/cli/agent#release-and-versions)).
 
 **The Agent version.** Pull chooses the Agent version in this order:
 
@@ -189,7 +190,7 @@ Successful JSON output has this shape:
 
 File statuses include `created`, `updated`, `merged`, `installed`, `cloned`, `would write`, and `would clone`.
 
-`agent.version` is the version that was installed and `agent.resolved_from` says why: `requested`, `upgrade`, `project-lock`, `installed`, or `latest`. `lock.status` is `locked`, `partial`, or `unlocked`; each component's `source` is `lock`, `version` (matched by its recorded version string), or `fallback-latest`. `lock.problems` lists what strict mode would refuse. `project_lock` is null for user-scope installs and dry runs. `reports_sessions` is true when written hook files contain Observal session push commands, including hooks retained during a merge. These hooks can report prompts, tool calls, and tool output to the configured server when they run, whether or not `observal doctor patch` was run. It does not guarantee successful delivery. On a failed pull, check `error.result.reports_sessions` when available: a hook file may already be on disk and active even when this pull wrote no files and the Agent was not recorded as installed.
+`agent.version` is the version that was installed and `agent.resolved_from` says why: `requested`, `upgrade`, `project-lock`, `installed`, or `latest`. `lock.status` is `locked`, `partial`, or `unlocked`; each component's `source` is `lock`, `version` (matched by its recorded version string), or `fallback-latest`. `lock.problems` lists what strict mode would refuse. `project_lock` is null for user-scope installs and dry runs. `reports_sessions` is true when written hook files contain Observal session push commands, including hooks retained during a merge. These hooks can report prompts, tool calls, and tool output to the configured server when they run, whether or not `observal doctor patch` was run. It does not guarantee successful delivery. For Pi, it is also true when the Observal Pi extension is installed, because the extension reports every Pi session. On a failed pull, check `error.result.reports_sessions` when available: a hook file may already be on disk and active even when this pull wrote no files and the Agent was not recorded as installed.
 
 Dry-run returns the same shape with `dry_run: true`, planned statuses, and `would_run` setup actions. In dry-run, `reports_sessions` predicts whether session hooks **would** be present after applying the plan; it does not mean the preview installed them. Dry-run does not write files, execute setup commands, update the lockfile or `observal.lock`, persist an active Agent, or emit a pull audit event.
 
@@ -212,8 +213,8 @@ Human mode lists every created, updated, merged, installed, cloned, or planned p
 
 ## Related
 
-* [`observal agent`](agent.md): create and publish Agents
-* [`observal scan`](scan.md): inspect installed harness content
-* [`observal outdated`](outdated.md): compare installed Agent versions
-* [`observal agent outdated`](agent.md#check-component-pins): see which components an Agent version pins behind their latest release
-* [`observal doctor`](doctor.md): verify hooks and local installation state
+* [`observal agent`](/cli/agent): create and publish Agents
+* [`observal scan`](/cli/scan): inspect installed harness content
+* [`observal outdated`](/cli/outdated): compare installed Agent versions
+* [`observal agent outdated`](/cli/agent#check-component-pins): see which components an Agent version pins behind their latest release
+* [`observal doctor`](/cli/doctor): verify hooks and local installation state

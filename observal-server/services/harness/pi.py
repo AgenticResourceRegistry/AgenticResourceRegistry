@@ -31,6 +31,8 @@ class PiAdapter(BaseHarnessAdapter):
         - ~/.pi/agent/agents/{agent}/AGENTS.md
         - ~/.pi/agent/agents/{agent}/mcp.json
         - ~/.pi/agent/agents/{agent}/skills/{name}/SKILL.md
+
+        Project scope uses the same layout under .pi/agents/{agent}/.
         """
         optic.debug("PiAdapter.format_config: agent={}", ctx.safe_name)
         options = ctx.options
@@ -45,6 +47,10 @@ class PiAdapter(BaseHarnessAdapter):
                 return p.replace("~/.pi/agent/", f"~/.pi/agent/agents/{agent_name}/", 1)
             elif p.startswith(".pi/"):
                 return p.replace(".pi/", f".pi/agents/{agent_name}/", 1)
+            elif "/" not in p:
+                # Project root files (AGENTS.md) are loaded by every pi session in
+                # the repo and may be the user's own; keep them in the agent's profile.
+                return f".pi/agents/{agent_name}/{p}"
             return p
 
         # ── Rules / Agent file (AGENTS.md) ──

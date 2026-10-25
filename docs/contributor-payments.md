@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Contributor Payments
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Contributor Payments"
+---
 
 Observal Inc. sets aside a fixed monthly budget to thank people who do sustained, meaningful work on Observal. This page explains how that works. Payments are tracked in public on our [Open Collective](https://opencollective.com/observal).
 

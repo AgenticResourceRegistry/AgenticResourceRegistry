@@ -23,6 +23,7 @@ from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib.parse import urlsplit, urlunsplit
 
 import typer
 import yaml
@@ -37,7 +38,7 @@ from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
 from observal_cli.render import OutputMode, esc, output_json, spinner
-from observal_shared.harness_registry import get_scope_aware_harnesses
+from observal_shared.harness_registry import HARNESS_REGISTRY, get_scope_aware_harnesses
 
 # Hook script names used as placeholders in server-generated agent configs.
 # Resolved to absolute paths client-side before writing to disk.
@@ -1005,6 +1006,46 @@ def _valid_setup_command(command: object) -> bool:
     return isinstance(command, list) and bool(command) and all(isinstance(argument, str) for argument in command)
 
 
+# Setup-command flags whose value carries an MCP header or environment value.
+_MASKED_SETUP_FLAGS = {"-H": ": ", "--header": ": ", "-e": "=", "--env": "="}
+
+
+def _redact_url(argument: str) -> str:
+    """Drop userinfo and query string from a URL argument; they can carry credentials."""
+    parts = urlsplit(argument)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return argument
+    host = parts.netloc.rpartition("@")[2]
+    return urlunsplit((parts.scheme, host, parts.path, "<redacted>" if parts.query else "", ""))
+
+
+def _display_setup_command(command: list[str]) -> list[str]:
+    """Return a setup command with header, environment and URL credentials masked for output."""
+    shown: list[str] = []
+    separator = None
+    for argument in command:
+        if argument == "--":
+            separator = None
+        elif separator is not None and separator in argument:
+            argument = f"{argument.split(separator, 1)[0]}{separator}<secret>"
+        else:
+            separator = _MASKED_SETUP_FLAGS.get(argument)
+            argument = _redact_url(argument)
+        shown.append(argument)
+    return shown
+
+
+def _run_reset_commands(commands: list, *, cwd: Path | None) -> None:
+    """Best-effort cleanup before setup commands; a failure means nothing was there to reset."""
+    for command in commands:
+        if not _valid_setup_command(command):
+            continue
+        try:
+            subprocess.run(command, capture_output=True, text=True, timeout=60, cwd=cwd)
+        except (OSError, subprocess.SubprocessError):
+            continue
+
+
 def _parse_assignments(values: list[str] | None, label: str) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for item in values or []:
@@ -1234,6 +1275,378 @@ def rewrite_observal_interpreter(value):
     return value
 
 
+def _preflight_existing_managed_skill_paths(
+    snippet: dict,
+    *,
+    harness: str,
+    target_dir: Path,
+    is_user_scope: bool,
+) -> None:
+    """Legacy skill/config writers must not touch *any* recorded folder owner."""
+    from observal_cli import lockfile, managed_skill
+    from observal_cli.cmd_skill import _sanitize_name, _user_skill_dest
+
+    data = lockfile.read_lockfile()
+    receipts = [
+        component["folder_receipt"]
+        for registry in data.get("registries", {}).values()
+        for section in registry.get("harnesses", {}).values()
+        for owner in [*section.get("agents", []), *section.get("standalone", [])]
+        for component in ([*owner.get("components", [])] if "components" in owner else [owner])
+        if isinstance(component.get("folder_receipt"), dict)
+    ]
+    if not receipts:
+        return
+    paths: list[Path] = []
+    for key in ("mcp_config", "hooks_config", "agent_profile", "steering_file", "hook_files", "prompt_files", "skills"):
+        entry = snippet.get(key)
+        for item in entry if isinstance(entry, list) else [entry]:
+            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                paths.append(_resolve_path(item["path"], target_dir, allow_home=is_user_scope))
+    for component in snippet.get("skill_components") or []:
+        if component.get("bundle_version_id"):
+            continue  # Managed bundle preflight performs its own ownership check.
+        if component.get("path"):
+            paths.append(_resolve_path(component["path"], target_dir, allow_home=is_user_scope).parent)
+        else:
+            name = _sanitize_name(component.get("name", "skill"))
+            paths.append(_user_skill_dest(harness, name) if is_user_scope else target_dir / ".agents/skills" / name)
+    for path in paths:
+        candidate = path.absolute()
+        for proof in receipts:
+            root = Path(proof.get("target", "")).absolute()
+            if candidate.is_relative_to(root) or candidate.resolve().is_relative_to(root.resolve()):
+                raise managed_skill.ManagedSkillError(
+                    f"Agent config or legacy skill targets a verified folder at {root}; no files were written"
+                )
+
+
+def _managed_agent_folders(
+    snippet: dict,
+    bundles: list[dict],
+    lock: dict,
+    *,
+    harness: str,
+    target_dir: Path,
+    is_user_scope: bool,
+    agent_id: str,
+    agent_version: str,
+    registry_url: str,
+    allow_agent_pin_change: bool = False,
+) -> list[tuple[dict, Path, dict, dict]]:
+    """Validate every pinned destination and ownership before any Agent file write.
+
+    The shared transaction's check runs under its per-target lock. It refuses
+    receipt-less existing folders and foreign owners; never infer ownership
+    from a matching SKILL.md or from the project pin alone.
+    """
+    from observal_cli import managed_skill
+    from observal_cli.skill_folder import BundleValidationError, validate_bundle
+
+    components = snippet.get("skill_components") or []
+    pins = {str(c.get("id")): c for c in lock.get("components", []) if c.get("type") == "skill"}
+    if lock.get("status") != "locked" or lock.get("problems"):
+        raise managed_skill.ManagedSkillError("Agent skill pins are degraded; no files were written")
+    by_id = {}
+    for bundle in bundles:
+        version_id = str(bundle.get("version_id", ""))
+        pin = pins.get(str(bundle.get("listing_id")))
+        if not version_id or version_id in by_id or not pin or str(pin.get("version_id")) != version_id:
+            raise managed_skill.ManagedSkillError("Duplicate or unpinned Agent skill folder")
+        try:
+            by_id[version_id] = validate_bundle(
+                bundle, expected_version_id=version_id, expected_digest=pin.get("digest")
+            )
+        except BundleValidationError as exc:
+            raise managed_skill.ManagedSkillError(f"Invalid pinned Agent skill folder: {exc}") from exc
+    requested = [str(c["bundle_version_id"]) for c in components if c.get("bundle_version_id")]
+    if len(requested) != len(by_id) or set(requested) != set(by_id):
+        raise managed_skill.ManagedSkillError("Missing, duplicate or unexpected Agent skill folder bundles")
+    planned = []
+    seen: set[str] = set()
+    scope = "user" if is_user_scope else "project"
+    for component in components:
+        version_id = str(component.get("bundle_version_id") or "")
+        if not version_id:
+            continue
+        bundle = by_id[version_id]
+        if component.get("path") != bundle.skill_file_path:
+            raise managed_skill.ManagedSkillError("Pinned skill folder path differs from Agent snippet")
+        raw_path = component["path"]
+        lexical = (
+            Path(raw_path).expanduser()
+            if is_user_scope and raw_path.startswith(("~/", "~\\"))
+            else target_dir / raw_path.removeprefix("~/")
+        )
+        if any(part.is_symlink() for part in (lexical, *lexical.parents)):
+            raise managed_skill.ManagedSkillError("Symlink in Agent skill destination hierarchy")
+        destination = _resolve_path(raw_path, target_dir, allow_home=is_user_scope)
+        target = destination.parent.absolute()
+        if destination.name != "SKILL.md" or str(target).casefold() in seen:
+            raise managed_skill.ManagedSkillError("Duplicate or invalid Agent skill folder destination")
+        seen.add(str(target).casefold())
+        proof = managed_skill.receipt(
+            bundle,
+            target,
+            harness,
+            scope,
+            registry_url=registry_url,
+            source="agent",
+            agent_id=agent_id,
+            agent_version=agent_version,
+        )
+        # Check all destinations, including backup location and previous receipts,
+        # before writing any folder, MCP, profile, hook or project pin.
+        managed_skill.transact(
+            bundle,
+            target,
+            proof,
+            record=lambda _data: None,
+            check=True,
+            allow_agent_pin_change=allow_agent_pin_change,
+        )
+        planned.append((bundle, target, proof, pins[str(bundle.listing_id)]))
+
+    # A config write aimed inside a verified folder would invalidate its receipt
+    # immediately after installation. Reject the whole plan before the first write.
+    nonfolder = [snippet.get(key) for key in ("mcp_config", "hooks_config", "agent_profile", "steering_file")]
+    nonfolder.extend(snippet.get(key) or [] for key in ("hook_files", "prompt_files", "skills"))
+    for entry in nonfolder:
+        for item in entry if isinstance(entry, list) else [entry]:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                continue
+            path = _resolve_path(item["path"], target_dir, allow_home=is_user_scope)
+            if any(path.is_relative_to(target) for _, target, _, _ in planned):
+                raise managed_skill.ManagedSkillError("Agent config overlaps a pinned skill folder destination")
+    return planned
+
+
+def _record_managed_agent_component(
+    data: dict,
+    *,
+    harness: str,
+    scope: str,
+    directory: Path,
+    agent_id: str,
+    agent_version: str,
+    component: dict,
+    proof: dict,
+    allow_agent_pin_change: bool = False,
+) -> None:
+    from observal_cli.lockfile import _ensure_harness, _find_agent_idx
+
+    registry = data.setdefault("registries", {}).setdefault(
+        proof["registry_url"], {"server_url": proof["registry_url"], "harnesses": {}}
+    )
+    section = _ensure_harness(registry, harness)
+    agents = section["agents"]
+    index = _find_agent_idx(agents, agent_id, scope, str(directory))
+    if index is None:
+        agent = {
+            "id": agent_id,
+            "version": agent_version,
+            "scope": scope,
+            "directory": str(directory),
+            "components": [],
+        }
+        agents.append(agent)
+    else:
+        agent = agents[index]
+        if agent.get("version") != agent_version and not allow_agent_pin_change:
+            raise RuntimeError("Agent pin changed during managed folder installation")
+    matches = [
+        c for c in agent.setdefault("components", []) if c.get("type") == "skill" and c.get("id") == component["id"]
+    ]
+    if len(matches) > 1:
+        raise RuntimeError("Ambiguous Agent skill ownership in machine lockfile")
+    if matches:
+        matches[0].update({**component, "folder_receipt": proof})
+    else:
+        agent["components"].append({**component, "folder_receipt": proof})
+
+
+def _sync_managed_agent_lock(
+    *,
+    harness: str,
+    scope: str,
+    directory: Path,
+    agent_id: str,
+    agent_version: str,
+    metadata: dict,
+    components: list[dict],
+    proofs: list[dict],
+) -> None:
+    """Update ordinary Agent metadata without discarding transaction receipts."""
+    from observal_cli import lockfile
+
+    registry_url = lockfile.current_registry_url()
+
+    def update(data: dict) -> None:
+        section = lockfile._ensure_harness(
+            data.setdefault("registries", {}).setdefault(registry_url, {"server_url": registry_url, "harnesses": {}}),
+            harness,
+        )
+        agents = section["agents"]
+        index = lockfile._find_agent_idx(agents, agent_id, scope, str(directory))
+        old = agents[index] if index is not None else {}
+        old_managed = {
+            c.get("id"): c["folder_receipt"]["target"]
+            for c in old.get("components", [])
+            if c.get("type") == "skill" and c.get("folder_receipt")
+        }
+        new_managed = {proof["listing_id"]: proof["target"] for proof in proofs}
+        if any(new_managed.get(listing_id) != target for listing_id, target in old_managed.items()):
+            raise RuntimeError("Agent upgrade would leave a managed skill folder without its ownership receipt")
+        new_components = []
+        for component in components:
+            matches = [p for p in proofs if p["listing_id"] == component.get("id")]
+            if matches:
+                current = [
+                    c
+                    for c in old.get("components", [])
+                    if c.get("id") == component.get("id") and c.get("type") == "skill"
+                ]
+                if len(current) != 1 or current[0].get("folder_receipt") != matches[0]:
+                    raise RuntimeError("Managed Agent receipt changed during pull")
+                new_components.append({**component, "folder_receipt": matches[0]})
+            else:
+                new_components.append(component)
+        entry = {**metadata, "components": new_components}
+        if index is None:
+            agents.append(entry)
+        else:
+            agents[index] = entry
+
+    lockfile.update_lockfile(update)
+
+
+def _restore_prior_managed_agent_entry(
+    *,
+    harness: str,
+    scope: str,
+    directory: Path,
+    agent_id: str,
+    previous: dict | None,
+    expected_version: str,
+) -> None:
+    """After guarded folder rollback, restore prior machine pin under its lock."""
+    from observal_cli import lockfile
+
+    def restore(data: dict) -> None:
+        registry = data.get("registries", {}).get(lockfile.current_registry_url(), {})
+        section = registry.get("harnesses", {}).get(harness, {})
+        agents = section.get("agents", [])
+        index = lockfile._find_agent_idx(agents, agent_id, scope, str(directory))
+        if index is None:
+            if previous is not None:
+                raise RuntimeError("Managed Agent lock entry disappeared during rollback")
+            return
+        current = agents[index]
+        if current.get("version") != expected_version:
+            raise RuntimeError("Managed Agent lock entry changed during rollback")
+        if previous is None:
+            if any(c.get("folder_receipt") for c in current.get("components", [])):
+                raise RuntimeError("Managed Agent still owns a folder after rollback")
+            agents.pop(index)
+        else:
+            previous_receipts = {
+                c.get("id"): c.get("folder_receipt") for c in previous.get("components", []) if c.get("folder_receipt")
+            }
+            current_receipts = {
+                c.get("id"): c.get("folder_receipt") for c in current.get("components", []) if c.get("folder_receipt")
+            }
+            if current_receipts != previous_receipts:
+                raise RuntimeError("Managed Agent folder receipt changed during rollback")
+            agents[index] = previous
+
+    lockfile.update_lockfile(restore)
+
+
+def _rollback_managed_agent_folders(applied: list[tuple[dict, dict]]) -> list[str]:
+    """Best-effort guarded rollback; never delete a locally modified tree."""
+    import shutil
+
+    from observal_cli import lockfile, managed_skill
+
+    errors = []
+    for proof, outcome in reversed(applied):
+        if outcome["action"] == "unchanged":
+            continue
+        target = Path(proof["target"])
+        try:
+            if outcome.get("backup_id") and outcome.get("backup"):
+                managed_skill.restore_backup(outcome["backup_id"])
+            else:
+                key = __import__("hashlib").sha256(str(target).encode()).hexdigest()
+                with lockfile._exclusive_lock(lockfile.CONFIG_DIR / f"skill-{key}.lock"):
+                    managed_skill.verify_tree(target, proof)
+
+                    def remove(
+                        data: dict,
+                        target: Path = target,
+                        proof: dict = proof,
+                        missing_prior: dict | None = outcome.get("missing_prior"),
+                    ) -> None:
+                        matches = managed_skill._records(data, target)
+                        if len(matches) != 1 or matches[0][1].get("folder_receipt") != proof:
+                            raise RuntimeError("Receipt changed; cannot remove initial folder")
+                        if missing_prior is not None:
+                            matches[0][1]["folder_receipt"] = missing_prior
+                        else:
+                            matches[0][1].pop("folder_receipt")
+
+                    lockfile.update_lockfile(remove)
+                    shutil.rmtree(target)
+        except (OSError, RuntimeError, ValueError) as exc:
+            errors.append(f"{target}: {exc}; keep backup and inspect before retrying")
+    return errors
+
+
+def _rollback_managed_agent_state(
+    applied: list[tuple[dict, dict]],
+    *,
+    harness: str,
+    scope: str,
+    directory: Path,
+    agent_id: str,
+    agent_version: str,
+    previous: dict | None,
+) -> list[str]:
+    """Undo receipts and the intermediate Agent entry, not just the folders."""
+    errors = _rollback_managed_agent_folders(applied)
+    if errors or not applied:
+        return errors
+    try:
+        _restore_prior_managed_agent_entry(
+            harness=harness,
+            scope=scope,
+            directory=directory,
+            agent_id=agent_id,
+            previous=previous,
+            expected_version=str(previous["version"]) if previous else agent_version,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        errors.append(f"Agent lock entry could not be restored: {exc}; inspect before retrying")
+    return errors
+
+
+def _preflight_project_mcp_config(snippet: dict, *, harness: str, is_user_scope: bool) -> None:
+    """Do not silently relocate a user-only MCP config into an unread project path."""
+    spec = HARNESS_REGISTRY[harness]
+    if is_user_scope or spec["mcp_install_mode"] != "user_only":
+        return
+    config = snippet.get("mcp_config")
+    if isinstance(config, dict) and config.get("path") and config.get("content"):
+        name = spec["display_name"]
+        fail(
+            ErrorCategory.VALIDATION,
+            f"{name} MCP extensions require a user-level config; project scope cannot install them.",
+            operation="Pull agent",
+            resource=f"{name} MCP configuration",
+            remediation="Pull with --scope user, or use an Agent without MCP extensions for project scope.",
+        )
+
+
 def write_install_snippet(
     snippet: dict,
     *,
@@ -1244,13 +1657,21 @@ def write_install_snippet(
     is_user_scope: bool,
     dry_run: bool = False,
     quiet: bool = False,
+    skill_bundles: list[dict] | None = None,
+    lock: dict | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Write every file an agent install snippet carries under *target_dir*.
 
     Shared by ``observal agent pull`` and delegation, which materializes an
     agent into a throwaway worktree. Returns ``(written, failed_skills)``;
     setup commands and install tracking stay with the caller.
+
+    When *skill_bundles* is provided (complete folder installs), bundles are
+    matched with skill_components by bundle_version_id and installed using
+    the folder bundle installer. Legacy components without a matching bundle
+    fall back to git or single-file registry_direct installs.
     """
+    _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
     written: list[tuple[str, str]] = []  # (path, status)
 
     def tracked_write(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
@@ -1293,6 +1714,138 @@ def write_install_snippet(
                     installation_tracked=False,
                 ),
             )
+
+    # Preflight all complete folders and pins before writing any activation
+    # config. A missing or duplicate bundle must never fall back to SKILL.md.
+    from observal_cli.skill_folder import BundleValidationError, validate_bundle
+
+    skill_components = snippet.get("skill_components") or []
+    bundle_by_version_id: dict[str, dict] = {}
+    skill_locks = {
+        str(component.get("id")): component
+        for component in (lock or {}).get("components", [])
+        if component.get("type") == "skill" and component.get("id")
+    }
+    if skill_bundles and ((lock or {}).get("problems") or (lock or {}).get("status") != "locked"):
+        fail(
+            ErrorCategory.CONFLICT,
+            "Agent skill pins are degraded.",
+            operation="Pull agent",
+            resource="agent lock",
+            remediation="Resolve pinned component problems before installing complete folders.",
+        )
+    for bundle in skill_bundles or []:
+        version_id = str(bundle.get("version_id", ""))
+        component = skill_locks.get(str(bundle.get("listing_id", "")))
+        if (
+            not version_id
+            or version_id in bundle_by_version_id
+            or not component
+            or str(component.get("version_id")) != version_id
+        ):
+            fail(
+                ErrorCategory.CONFLICT,
+                "Duplicate or unpinned skill folder bundle.",
+                operation="Pull agent",
+                resource="agent skills",
+                remediation="Refresh the Agent pin and try again.",
+            )
+        try:
+            validate_bundle(bundle, expected_version_id=version_id, expected_digest=component.get("digest"))
+        except BundleValidationError as error:
+            fail(
+                ErrorCategory.VALIDATION,
+                "Invalid pinned skill folder bundle.",
+                operation="Pull agent",
+                resource="agent skills",
+                remediation="Ask the server owner to investigate.",
+                detail=str(error),
+            )
+        bundle_by_version_id[version_id] = bundle
+    expected_versions = {str(sc["bundle_version_id"]) for sc in skill_components if sc.get("bundle_version_id")}
+    if expected_versions != set(bundle_by_version_id):
+        fail(
+            ErrorCategory.CONFLICT,
+            "Required skill folder bundles are missing or unexpected.",
+            operation="Pull agent",
+            resource="agent skills",
+            remediation="Refresh the Agent install response; do not install partial folders.",
+        )
+    from observal_cli.skill_folder import detect_destination_collisions
+
+    planned_destinations: set[str] = set()
+    for skill in skill_components:
+        version_id = skill.get("bundle_version_id")
+        if not version_id:
+            continue
+        validated = validate_bundle(bundle_by_version_id[str(version_id)])
+        if skill.get("path") != validated.skill_file_path:
+            fail(
+                ErrorCategory.CONFLICT,
+                "Pinned skill folder path differs from Agent snippet.",
+                operation="Pull agent",
+                resource="agent skills",
+                remediation="Refresh the Agent installation; do not activate an inconsistent folder.",
+            )
+        destination = _resolve_path(skill["path"], target_dir, allow_home=is_user_scope)
+        # Two not-yet-written bundles can target the same folder. Check the
+        # entire plan before installing the first one or writing activation.
+        destination_key = str(destination.parent).casefold()
+        if destination_key in planned_destinations:
+            fail(
+                ErrorCategory.CONFLICT,
+                "Multiple Agent skill bundles target one folder.",
+                operation="Pull agent",
+                resource=str(destination.parent),
+                remediation="Repair the Agent's pinned skill list; no folder was installed.",
+            )
+        planned_destinations.add(destination_key)
+        if destination.name != "SKILL.md" or detect_destination_collisions(destination.parent, validated):
+            fail(
+                ErrorCategory.CONFLICT,
+                "Agent skill folder destination is already occupied or invalid.",
+                operation="Pull agent",
+                resource=str(destination.parent),
+                remediation="Resolve the destination without deleting existing files, then retry.",
+            )
+
+    # Materialize required complete folders before enabling the agent profile,
+    # hooks or MCP configuration. A later write may still report partial state,
+    # but no missing required folder is activated as a successful Agent pull.
+    installed_bundle_versions: set[str] = set()
+    if not dry_run:
+        for skill in skill_components:
+            version_id = skill.get("bundle_version_id")
+            if not version_id:
+                continue
+            bundle = bundle_by_version_id[str(version_id)]
+            dest = _resolve_path(skill["path"], target_dir, allow_home=is_user_scope).parent
+            installed = _install_skill_bundle(
+                sc_name=str(skill.get("name") or "skill"),
+                bundle=bundle,
+                lock_component=skill_locks[str(bundle["listing_id"])],
+                skill_dest=dest,
+                target_dir=target_dir,
+                is_user_scope=is_user_scope,
+                harness=harness,
+                quiet=quiet,
+            )
+            if installed is None:
+                fail(
+                    ErrorCategory.UNAVAILABLE,
+                    "Required skill folder could not be installed.",
+                    operation="Pull agent",
+                    resource="agent skills",
+                    remediation="Repair the destination or filesystem before retrying.",
+                    result=_pull_failure_result(
+                        written,
+                        "install_skills",
+                        failed_skills=[str(skill.get("name") or "skill")],
+                        installation_tracked=False,
+                    ),
+                )
+            installed_bundle_versions.add(str(version_id))
+            written.append((str(installed), "installed (complete folder)"))
 
     # ── mcp_config with path key (Cursor/VSCode/Gemini) ─
     mcp_cfg = snippet.get("mcp_config")
@@ -1396,26 +1949,41 @@ def write_install_snippet(
             written.append((str(p), status))
 
     # ── Skills ────────────────────────────────────
-    # Two install modes:
-    #   1. git_url present → clone full skill directory from git
-    #   2. skill_md_content present (registry_direct) → write SKILL.md + optional script
+    # Three install modes:
+    #   1. skill_bundles present → complete folder bundle from server
+    #   2. git_url present → clone full skill directory from git
+    #   3. skill_md_content present (registry_direct) → write SKILL.md + optional script
     from observal_cli.cmd_skill import _sanitize_name, install_skill_from_git, install_skill_registry_direct
 
-    skill_components = snippet.get("skill_components") or []
     failed_skills: list[str] = []
     scope_str = "user" if is_user_scope else "project"
+
     for sc in skill_components:
         sc_name = _sanitize_name(sc.get("name", "skill"))
         git_url = sc.get("git_url")
+        bundle_version_id = sc.get("bundle_version_id")
         skill_dest = None
         if sc.get("path"):
             skill_dest = _resolve_path(sc["path"], target_dir, allow_home=is_user_scope).parent
 
+        # Check if we have a complete bundle for this skill
+        bundle = bundle_by_version_id.get(str(bundle_version_id)) if bundle_version_id else None
+
         if dry_run:
-            mode = "would clone" if git_url else "would write"
+            if bundle:
+                mode = "would install (complete folder)"
+            elif git_url:
+                mode = "would clone"
+            else:
+                mode = "would write"
             written.append((str(skill_dest) if skill_dest else f"<skill:{sc_name}>", mode))
             continue
 
+        # Bundles were installed before activation files were written.
+        if bundle and str(bundle_version_id) in installed_bundle_versions:
+            continue
+
+        # Priority 2: Git clone
         if git_url:
             result_path = tracked_skill_install(
                 sc_name,
@@ -1435,11 +2003,9 @@ def write_install_snippet(
             else:
                 failed_skills.append(sc_name)
                 if not quiet:
-                    rprint(
-                        f"[red]\u2717 Failed to install skill '{esc(sc_name)}'.[/red] Clone from {esc(git_url)} failed."
-                    )
+                    rprint(f"[red]✗ Failed to install skill '{esc(sc_name)}'.[/red] Clone from {esc(git_url)} failed.")
         else:
-            # Registry direct: SKILL.md content + optional script
+            # Priority 3: Registry direct (SKILL.md + optional script)
             result_path = tracked_skill_install(
                 sc_name,
                 install_skill_registry_direct,
@@ -1457,9 +2023,98 @@ def write_install_snippet(
             else:
                 failed_skills.append(sc_name)
                 if not quiet:
-                    rprint(f"[red]\u2717 Failed to install skill '{esc(sc_name)}'.[/red] No content available.")
+                    rprint(f"[red]✗ Failed to install skill '{esc(sc_name)}'.[/red] No content available.")
 
     return written, failed_skills
+
+
+def _install_skill_bundle(
+    *,
+    sc_name: str,
+    bundle: dict,
+    lock_component: dict | None,
+    skill_dest: Path | None,
+    target_dir: Path,
+    is_user_scope: bool,
+    harness: str,
+    quiet: bool,
+) -> Path | None:
+    """Install a complete skill folder bundle for an agent.
+
+    Args:
+        sc_name: Skill name for error messages
+        bundle: Complete folder bundle from server
+        lock_component: Lock component for digest verification (optional)
+        skill_dest: Explicit destination from skill_component path (optional)
+        target_dir: Project directory
+        is_user_scope: Whether this is a user-scope install
+        quiet: Suppress output
+
+    Returns:
+        Path to installed SKILL.md, or None on failure
+    """
+    from observal_cli.cmd_skill import _is_path_safe, _user_skill_dest
+    from observal_cli.skill_folder import (
+        BundleInstallError,
+        BundleValidationError,
+        detect_destination_collisions,
+        install_folder_bundle,
+        validate_bundle,
+    )
+
+    # The selected pin, not the bundle's own untrusted version, is authoritative.
+    expected_digest = lock_component.get("digest") if lock_component else None
+    try:
+        validated = validate_bundle(
+            bundle,
+            expected_version_id=lock_component.get("version_id") if lock_component else None,
+            expected_digest=expected_digest,
+        )
+    except BundleValidationError as e:
+        if not quiet:
+            rprint(f"[red]✗ Bundle validation failed for '{esc(sc_name)}':[/red] {esc(str(e))}")
+        return None
+
+    # Determine target directory
+    if skill_dest:
+        final_dest = skill_dest
+    elif is_user_scope:
+        final_dest = _user_skill_dest(harness, validated.folder_name)
+    else:
+        final_dest = target_dir / validated.skill_file_path.removesuffix("/SKILL.md")
+    expected_file = final_dest / "SKILL.md"
+
+    try:
+        declared_file = _resolve_path(validated.skill_file_path, target_dir, allow_home=is_user_scope)
+    except (CliError, ValueError):
+        return None
+    if expected_file != declared_file or not _is_path_safe(
+        final_dest, target_dir if not is_user_scope else final_dest.parent
+    ):
+        if not quiet:
+            rprint(f"[red]✗ Skill folder destination does not match pinned path for '{esc(sc_name)}'.[/red]")
+        return None
+
+    # Check for collisions
+    collisions = detect_destination_collisions(final_dest, validated)
+    if collisions:
+        if not quiet:
+            rprint(f"[red]✗ Destination conflicts for '{esc(sc_name)}':[/red]")
+            for collision in collisions:
+                rprint(f"  • {esc(collision)}")
+        return None
+
+    # No ownership proof or explicit backed-up replacement exists yet: refuse.
+    try:
+        installed_path = install_folder_bundle(validated, final_dest)
+        if not quiet:
+            rprint(f"[green]✓ Installed skill folder:[/green] {esc(str(final_dest))}")
+            rprint(f"  Files: {len(validated.files)}, Size: {validated.total_size:,} bytes")
+        return installed_path
+    except BundleInstallError as e:
+        if not quiet:
+            rprint(f"[red]✗ Installation failed for '{esc(sc_name)}':[/red] {esc(str(e))}")
+        return None
 
 
 def register_pull(app: typer.Typer):
@@ -1729,12 +2384,16 @@ def register_pull(app: typer.Typer):
         )
 
         with _progress(output, f"Pulling {harness} config for agent {resolved[:8]}..."):
+            from observal_cli.skill_folder import SUPPORTED_FEATURE as SKILL_FOLDER_FEATURE
+
             install_body: dict = {
                 "harness": harness,
                 "env_values": env_values,
                 "header_values": header_values,
                 "options": options,
                 "platform": sys.platform,
+                # Advertise complete skill folder support
+                "supported_features": [SKILL_FOLDER_FEATURE],
             }
             if version:
                 install_body["version"] = version
@@ -1792,6 +2451,42 @@ def register_pull(app: typer.Typer):
             )
 
         snippet = rewrite_observal_interpreter(snippet)
+        _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
+        from observal_cli import managed_skill
+
+        try:
+            _preflight_existing_managed_skill_paths(
+                snippet,
+                harness=harness,
+                target_dir=target_dir,
+                is_user_scope=is_user_scope,
+            )
+        except (managed_skill.ManagedSkillError, OSError, RuntimeError) as error:
+            fail(
+                ErrorCategory.CONFLICT,
+                str(error),
+                operation="Pull agent",
+                resource=qualified_name,
+                remediation=getattr(error, "remediation", None)
+                or "Choose another destination or perform an explicit safe migration first.",
+            )
+
+        if not result.get("skill_bundles"):
+            from observal_cli import lockfile
+
+            previous_agent = lockfile.installed_agent(
+                harness, agent_uuid, scope=options.get("scope", "project"), directory=str(target_dir)
+            )
+            if previous_agent and any(
+                component.get("folder_receipt") for component in previous_agent.get("components", [])
+            ):
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "This pinned Agent owns verified skill folders; a nonfolder pull cannot replace their receipts.",
+                    operation="Pull agent",
+                    resource=qualified_name,
+                    remediation="Keep the pinned folder release or perform an explicit manual migration first.",
+                )
 
         def disclose_telemetry() -> None:
             if output != "json" and not dry_run:
@@ -1801,9 +2496,118 @@ def register_pull(app: typer.Typer):
                     f"tool calls and tool output to {esc(server_url)} when this agent is used."
                 )
 
+        managed_plan: list[tuple[dict, Path, dict, dict]] = []
+        applied_folders: list[tuple[dict, dict]] = []
+        prior_managed_entry: dict | None = None
+        remaining_snippet = snippet
+        if result.get("skill_bundles"):
+            from copy import deepcopy
+
+            from observal_cli import lockfile, managed_skill
+
+            prior_managed_entry = deepcopy(
+                lockfile.installed_agent(
+                    harness, agent_uuid, scope=options.get("scope", "project"), directory=str(target_dir)
+                )
+            )
+            try:
+                managed_plan = _managed_agent_folders(
+                    snippet,
+                    result["skill_bundles"],
+                    lock,
+                    harness=harness,
+                    target_dir=target_dir,
+                    is_user_scope=is_user_scope,
+                    agent_id=agent_uuid,
+                    agent_version=str(installed_version),
+                    registry_url=lockfile.current_registry_url(),
+                    allow_agent_pin_change=bool(upgrade or version),
+                )
+                old_managed = {
+                    component.get("id"): component["folder_receipt"]["target"]
+                    for component in (prior_managed_entry or {}).get("components", [])
+                    if component.get("type") == "skill" and component.get("folder_receipt")
+                }
+                new_managed = {proof["listing_id"]: proof["target"] for _, _, proof, _ in managed_plan}
+                if any(new_managed.get(listing_id) != target for listing_id, target in old_managed.items()):
+                    raise managed_skill.ManagedSkillError(
+                        "Agent upgrade removes or relocates a managed skill folder; keep its pin or explicitly migrate it first"
+                    )
+                if not dry_run:
+                    for bundle, target, proof, component in managed_plan:
+
+                        def record(data: dict, component=component, proof=proof) -> None:
+                            _record_managed_agent_component(
+                                data,
+                                harness=harness,
+                                scope=options.get("scope", "project"),
+                                directory=target_dir,
+                                agent_id=agent_uuid,
+                                agent_version=str(installed_version),
+                                component=component,
+                                proof=proof,
+                                allow_agent_pin_change=bool(upgrade or version),
+                            )
+
+                        outcome = managed_skill.transact(
+                            bundle,
+                            target,
+                            proof,
+                            record=record,
+                            allow_agent_pin_change=bool(upgrade or version),
+                        )
+                        applied_folders.append((proof, outcome))
+            except managed_skill.ManagedSkillCommittedError as error:
+                # The lock already advanced for this folder, so a rollback would contradict its receipt (and the
+                # path may no longer lead to the tree). Keep every recorded folder and report a partial pull.
+                fail(
+                    ErrorCategory.CONFLICT,
+                    f"Agent pull is partially applied: {error}",
+                    operation="Pull agent",
+                    resource="agent skills",
+                    remediation=error.remediation
+                    or "Repair the reported path, then run the pull again; recorded folders verify as unchanged.",
+                    result={
+                        "folder_recovery_errors": [],
+                        "installation_tracked": True,
+                        "committed_folders": [proof["target"] for proof, _ in applied_folders]
+                        + [error.outcome["target"]],
+                    },
+                )
+            except (managed_skill.ManagedSkillError, OSError, RuntimeError, ValueError) as error:
+                recovery = _rollback_managed_agent_state(
+                    applied_folders,
+                    harness=harness,
+                    scope=options.get("scope", "project"),
+                    directory=target_dir,
+                    agent_id=agent_uuid,
+                    agent_version=str(installed_version),
+                    previous=prior_managed_entry,
+                )
+                fail(
+                    ErrorCategory.CONFLICT,
+                    f"Could not safely install pinned Agent skill folders before config writes: {error}",
+                    operation="Pull agent",
+                    resource="agent skills",
+                    remediation="Inspect the reported destination and retained backups; do not delete an unowned folder.",
+                    detail=str(error),
+                    result={"folder_recovery_errors": recovery, "installation_tracked": False},
+                )
+
+            # Delegation's write_install_snippet still uses its ephemeral installer.
+            # Pull has already installed verified folders and must not install them twice.
+            remaining_snippet = {
+                **snippet,
+                "skill_components": [
+                    component
+                    for component in snippet.get("skill_components", [])
+                    if not component.get("bundle_version_id")
+                ],
+            }
+
         try:
             written, failed_skills = write_install_snippet(
-                snippet,
+                remaining_snippet,
                 harness=harness,
                 adapter=adapter,
                 target_dir=target_dir,
@@ -1811,8 +2615,33 @@ def register_pull(app: typer.Typer):
                 is_user_scope=is_user_scope,
                 dry_run=dry_run,
                 quiet=output == "json",
+                lock=lock,
             )
+            if not dry_run:
+                written = [
+                    (str(target / "SKILL.md"), outcome["action"] + " (complete folder)")
+                    for (_, target, _, _), (_, outcome) in zip(managed_plan, applied_folders, strict=True)
+                ] + written
+            elif managed_plan:
+                written = [
+                    (str(target / "SKILL.md"), "would install (complete folder)") for _, target, _, _ in managed_plan
+                ] + written
         except CliError as error:
+            if applied_folders:
+                recovery = _rollback_managed_agent_state(
+                    applied_folders,
+                    harness=harness,
+                    scope=options.get("scope", "project"),
+                    directory=target_dir,
+                    agent_id=agent_uuid,
+                    agent_version=str(installed_version),
+                    previous=prior_managed_entry,
+                )
+                error.result = {
+                    **(error.result or {}),
+                    "folder_recovery_errors": recovery,
+                    "non_folder_writes_may_remain": True,
+                }
             # A failed write can also leave a pre-existing hook active when
             # this pull wrote no files at all. Inspect only files on disk, not
             # the proposed snippet, before describing session collection.
@@ -1833,7 +2662,9 @@ def register_pull(app: typer.Typer):
                         is_user_scope=is_user_scope,
                     )
                 )
-                error.result["reports_sessions"] = _reports_written_sessions(paths)
+                error.result["reports_sessions"] = (
+                    _reports_written_sessions(paths) or adapter.reports_sessions_outside_pull()
+                )
                 if error.result["reports_sessions"]:
                     disclose_telemetry()
             raise
@@ -1842,11 +2673,20 @@ def register_pull(app: typer.Typer):
             _reports_sessions(snippet, target_dir=target_dir, is_user_scope=is_user_scope, dry_run=True)
             if dry_run
             else _reports_written_sessions([path for path, _status in written])
-        )
+        ) or adapter.reports_sessions_outside_pull()
         if reports_sessions:
             disclose_telemetry()
 
         if failed_skills:
+            recovery = _rollback_managed_agent_state(
+                applied_folders,
+                harness=harness,
+                scope=options.get("scope", "project"),
+                directory=target_dir,
+                agent_id=agent_uuid,
+                agent_version=str(installed_version),
+                previous=prior_managed_entry,
+            )
             fail(
                 ErrorCategory.UNAVAILABLE,
                 f"Failed to install {len(failed_skills)} agent skill(s).",
@@ -1860,6 +2700,8 @@ def register_pull(app: typer.Typer):
                     failed_skills=failed_skills,
                     installation_tracked=False,
                     reports_sessions=reports_sessions,
+                    folder_recovery_errors=recovery,
+                    non_folder_writes_may_remain=True,
                 ),
             )
 
@@ -1880,28 +2722,32 @@ def register_pull(app: typer.Typer):
         setup_results: list[dict] = []
         setup_failures: list[str] = []
         setup_cmds = snippet.get("mcp_setup_commands") or []
+        # Local-scope registrations (Claude Code) belong to the directory they run in.
+        setup_cwd = target_dir if target_dir.is_dir() else None
         if setup_cmds and not dry_run:
+            _run_reset_commands(snippet.get("mcp_reset_commands") or [], cwd=setup_cwd)
             for command in setup_cmds:
                 if not _valid_setup_command(command):
                     setup_results.append({"command": [], "status": "failed", "return_code": None})
                     setup_failures.append("invalid setup command")
                     continue
+                shown = _display_setup_command(command)
                 try:
-                    process = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                    process = subprocess.run(command, capture_output=True, text=True, timeout=60, cwd=setup_cwd)
                 except FileNotFoundError:
-                    setup_results.append({"command": command, "status": "failed", "return_code": None})
+                    setup_results.append({"command": shown, "status": "failed", "return_code": None})
                     setup_failures.append(f"{command[0]} not found")
                     continue
                 except subprocess.TimeoutExpired:
-                    setup_results.append({"command": command, "status": "failed", "return_code": None})
+                    setup_results.append({"command": shown, "status": "failed", "return_code": None})
                     setup_failures.append(f"{command[0]} timed out")
                     continue
                 except OSError:
-                    setup_results.append({"command": command, "status": "failed", "return_code": None})
+                    setup_results.append({"command": shown, "status": "failed", "return_code": None})
                     setup_failures.append(f"{command[0]} could not start")
                     continue
                 status = "completed" if process.returncode == 0 else "failed"
-                setup_results.append({"command": command, "status": status, "return_code": process.returncode})
+                setup_results.append({"command": shown, "status": status, "return_code": process.returncode})
                 if process.returncode != 0:
                     setup_failures.append(f"{command[0]} exited with code {process.returncode}")
         elif setup_cmds:
@@ -1910,9 +2756,20 @@ def register_pull(app: typer.Typer):
                     setup_results.append({"command": [], "status": "failed", "return_code": None})
                     setup_failures.append("invalid setup command")
                 else:
-                    setup_results.append({"command": command, "status": "would_run", "return_code": None})
+                    setup_results.append(
+                        {"command": _display_setup_command(command), "status": "would_run", "return_code": None}
+                    )
 
         if setup_failures:
+            recovery = _rollback_managed_agent_state(
+                applied_folders,
+                harness=harness,
+                scope=options.get("scope", "project"),
+                directory=target_dir,
+                agent_id=agent_uuid,
+                agent_version=str(installed_version),
+                previous=prior_managed_entry,
+            )
             fail(
                 ErrorCategory.UNAVAILABLE,
                 f"Agent files were written, but {len(setup_failures)} MCP setup command(s) failed.",
@@ -1927,6 +2784,8 @@ def register_pull(app: typer.Typer):
                     dry_run=dry_run,
                     installation_tracked=False,
                     reports_sessions=reports_sessions,
+                    folder_recovery_errors=recovery,
+                    non_folder_writes_may_remain=True,
                 ),
             )
 
@@ -1938,21 +2797,58 @@ def register_pull(app: typer.Typer):
             from observal_cli.lockfile import upsert_agent
 
             try:
-                upsert_agent(
-                    harness,
-                    name=agent_detail.get("name", resolved),
-                    agent_id=str(agent_uuid),
-                    version=agent_version,
-                    scope=options.get("scope", "project"),
-                    directory=str(target_dir),
-                    components=lock_components,
-                    namespace=agent_detail.get("namespace"),
-                    slug=agent_detail.get("slug"),
-                    local_name=local_name,
-                    lock_digest=lock.get("digest"),
-                    lock_status=lock.get("status"),
-                )
+                if managed_plan:
+                    from datetime import UTC, datetime
+
+                    metadata = {
+                        "name": agent_detail.get("name", resolved),
+                        "id": str(agent_uuid),
+                        "version": agent_version,
+                        "scope": options.get("scope", "project"),
+                        "directory": str(target_dir),
+                        "pulled_at": datetime.now(UTC).isoformat(),
+                        "namespace": agent_detail.get("namespace"),
+                        "slug": agent_detail.get("slug"),
+                        "qualified_name": qualified_name,
+                        "local_name": local_name,
+                        "lock_digest": lock.get("digest"),
+                        "lock_status": lock.get("status"),
+                    }
+                    _sync_managed_agent_lock(
+                        harness=harness,
+                        scope=options.get("scope", "project"),
+                        directory=target_dir,
+                        agent_id=agent_uuid,
+                        agent_version=str(agent_version),
+                        metadata=metadata,
+                        components=lock_components,
+                        proofs=[proof for _, _, proof, _ in managed_plan],
+                    )
+                else:
+                    upsert_agent(
+                        harness,
+                        name=agent_detail.get("name", resolved),
+                        agent_id=str(agent_uuid),
+                        version=agent_version,
+                        scope=options.get("scope", "project"),
+                        directory=str(target_dir),
+                        components=lock_components,
+                        namespace=agent_detail.get("namespace"),
+                        slug=agent_detail.get("slug"),
+                        local_name=local_name,
+                        lock_digest=lock.get("digest"),
+                        lock_status=lock.get("status"),
+                    )
             except (OSError, RuntimeError) as error:
+                recovery = _rollback_managed_agent_state(
+                    applied_folders,
+                    harness=harness,
+                    scope=options.get("scope", "project"),
+                    directory=target_dir,
+                    agent_id=agent_uuid,
+                    agent_version=str(installed_version),
+                    previous=prior_managed_entry,
+                )
                 fail(
                     ErrorCategory.UNAVAILABLE,
                     "Agent files were written, but installation tracking failed.",
@@ -1967,6 +2863,8 @@ def register_pull(app: typer.Typer):
                         installation_tracked=False,
                         active_agent_persisted=False,
                         reports_sessions=reports_sessions,
+                        folder_recovery_errors=recovery,
+                        non_folder_writes_may_remain=True,
                     ),
                 )
 
@@ -1985,6 +2883,26 @@ def register_pull(app: typer.Typer):
                         ),
                     )
                 except (OSError, project_lock.ProjectLockError) as error:
+                    recovery: list[str] = []
+                    if managed_plan:
+                        try:
+                            current_pin = project_lock.locked_agent(target_dir, qualified_name, agent_uuid)
+                            if current_pin and current_pin.get("version") == installed_version:
+                                raise RuntimeError(
+                                    "Project pin may have advanced; retain complete new folders for inspection"
+                                )
+                            recovery = _rollback_managed_agent_folders(applied_folders)
+                            if not recovery:
+                                _restore_prior_managed_agent_entry(
+                                    harness=harness,
+                                    scope=options.get("scope", "project"),
+                                    directory=target_dir,
+                                    agent_id=agent_uuid,
+                                    previous=prior_managed_entry,
+                                    expected_version=str(installed_version),
+                                )
+                        except (OSError, RuntimeError, project_lock.ProjectLockError) as restore_error:
+                            recovery.append(str(restore_error))
                     fail(
                         ErrorCategory.UNAVAILABLE,
                         f"Agent files were written, but {PROJECT_LOCK_FILE} could not be updated.",
@@ -1996,9 +2914,11 @@ def register_pull(app: typer.Typer):
                             written,
                             "update_project_lock",
                             setup_results=setup_results,
-                            installation_tracked=True,
+                            installation_tracked=not managed_plan or bool(recovery),
                             active_agent_persisted=False,
                             reports_sessions=reports_sessions,
+                            folder_recovery_errors=recovery,
+                            non_folder_writes_may_remain=bool(managed_plan),
                         ),
                     )
 

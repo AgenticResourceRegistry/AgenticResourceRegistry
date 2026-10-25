@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from models.agent import Agent, AgentStatus
@@ -11,7 +13,6 @@ from models.agent_share import AgentShareItem, AgentShareManifest
 from models.alert import AlertRule
 from models.alert_history import AlertHistory
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.component_source import ComponentSource
 from models.discovery_entry import (
     DiscoveryEntry,
@@ -32,13 +33,24 @@ from models.insight_report import InsightReport, InsightReportStatus
 from models.insight_session_facets import InsightSessionFacets
 from models.insight_session_meta import InsightSessionMeta
 from models.mcp import ListingStatus, McpDownload, McpListing, McpValidationResult
+from models.mcp_webhook_sync import McpWebhookSync
 from models.migration_job import MigrationJob, MigrationOperation, MigrationScope, MigrationStatus
 from models.prompt import PromptDownload, PromptListing
+from models.review import (
+    Review,
+    ReviewComment,
+    ReviewEvent,
+    ReviewReviewerRequest,
+    ReviewRevision,
+    ReviewState,
+    ReviewSubmission,
+    ReviewSubscription,
+    ReviewThread,
+)
 from models.saml_config import SamlConfig
 from models.sandbox import SandboxDownload, SandboxListing
 from models.scim_token import ScimToken
 from models.skill import SkillDownload, SkillListing
-from models.submission import Submission
 from models.team import Team, TeamJoinRequestStatus, TeamMembership, TeamMembershipRequest, TeamRole
 from models.team_invite import TeamInvite
 from models.usage_ping import UsagePingState
@@ -56,7 +68,6 @@ __all__ = [
     "AlertHistory",
     "AlertRule",
     "Base",
-    "ComponentBundle",
     "ComponentDownloadRecord",
     "ComponentSource",
     "DiscoveryEntry",
@@ -83,6 +94,7 @@ __all__ = [
     "McpDownload",
     "McpListing",
     "McpValidationResult",
+    "McpWebhookSync",
     "MigrationJob",
     "MigrationOperation",
     "MigrationScope",
@@ -90,13 +102,21 @@ __all__ = [
     "PromptDownload",
     "PromptListing",
     "RecommendationFeedback",
+    "Review",
+    "ReviewComment",
+    "ReviewEvent",
+    "ReviewReviewerRequest",
+    "ReviewRevision",
+    "ReviewState",
+    "ReviewSubmission",
+    "ReviewSubscription",
+    "ReviewThread",
     "SamlConfig",
     "SandboxDownload",
     "SandboxListing",
     "ScimToken",
     "SkillDownload",
     "SkillListing",
-    "Submission",
     "Team",
     "TeamInvite",
     "TeamJoinRequestStatus",

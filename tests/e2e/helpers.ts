@@ -19,16 +19,17 @@ export async function getAccessToken(): Promise<string> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      continue;
+    }
+    if (!res.ok) throw new Error(`Login failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
     const data = await res.json();
     if (data.access_token) {
       _cachedToken = data.access_token;
       return data.access_token as string;
     }
-    if (res.status === 429) {
-      await new Promise((r) => setTimeout(r, 15_000));
-      continue;
-    }
-    throw new Error(`Login failed: ${JSON.stringify(data)}`);
+    throw new Error(`Login response missing access token (${res.status})`);
   }
   throw new Error("Login failed after retries");
 }
@@ -231,4 +232,67 @@ export function buildKiroOTLPLogPayload(options: {
       },
     ],
   };
+}
+
+let _superToken: string | null = null;
+
+/** Super admin token (cached per worker). Overriding a review's gate needs this role. */
+async function getSuperToken(): Promise<string> {
+  if (_superToken) return _superToken;
+  const email = process.env.DEMO_SUPER_EMAIL ?? "super@demo.example";
+  const password = process.env.DEMO_SUPER_PASSWORD ?? "super-changeme";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      continue;
+    }
+    if (!res.ok) throw new Error(`Super admin login failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    _superToken = (await res.json()).access_token as string;
+    return _superToken;
+  }
+  throw new Error("Super admin login failed after retries");
+}
+
+/**
+ * Publish a submitted registry item through the PR-style review API.
+ * Authors cannot count their own approval, so this uses the audited super admin override path. Returns the review number.
+ */
+export async function publishSubject(
+  subjectType: "agent" | "mcp" | "skill" | "hook" | "prompt" | "sandbox",
+  subjectId: string,
+  reason = "e2e approval",
+): Promise<number> {
+  const headers = { Authorization: `Bearer ${await getSuperToken()}`, "Content-Type": "application/json" };
+  let cursor: number | undefined;
+  for (let page = 0; page < 10; page++) {
+    const query = `state=all&type=${subjectType}&limit=100${cursor ? `&cursor=${cursor}` : ""}`;
+    const list = await fetch(`${API_BASE}/api/v1/reviews?${query}`, { headers });
+    if (!list.ok) throw new Error(`GET /reviews: ${list.status} ${await list.text()}`);
+    const body = await list.json();
+    const found = body.items.find((item: { subject_id: string }) => item.subject_id === subjectId);
+    if (found) {
+      const published = await fetch(`${API_BASE}/api/v1/reviews/${found.number}/publish`, {
+        method: "POST", headers, body: JSON.stringify({ override_reason: reason }),
+      });
+      if (!published.ok) throw new Error(`publish #${found.number}: ${published.status} ${await published.text()}`);
+      return found.number as number;
+    }
+    if (!body.next_cursor) break;
+    cursor = body.next_cursor;
+  }
+  throw new Error(`No review found for ${subjectType} ${subjectId}`);
+}
+
+/** The review number for an item, without deciding it. */
+export async function reviewNumber(subjectType: string, subjectId: string): Promise<number> {
+  const headers = { Authorization: `Bearer ${await getAccessToken()}` };
+  const list = await fetch(`${API_BASE}/api/v1/reviews?state=all&type=${subjectType}&limit=100`, { headers });
+  const found = (await list.json()).items.find((item: { subject_id: string }) => item.subject_id === subjectId);
+  if (!found) throw new Error(`No review found for ${subjectType} ${subjectId}`);
+  return found.number as number;
 }

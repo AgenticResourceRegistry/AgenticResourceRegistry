@@ -146,7 +146,7 @@ async def deliver_webhook(
     """
     # SSRF protection
     optic.debug("delivery attempt")
-    if is_private_url(webhook_url):
+    if await asyncio.to_thread(is_private_url, webhook_url):
         return DeliveryResult(
             success=False,
             status_code=None,

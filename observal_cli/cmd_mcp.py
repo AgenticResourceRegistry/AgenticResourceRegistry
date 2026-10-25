@@ -16,6 +16,7 @@ import sys
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from loguru import logger as optic
@@ -25,7 +26,9 @@ from rich.table import Table
 
 from observal_cli import client, config
 from observal_cli.analyzer import analyze_local
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_MCP_CATEGORIES
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import fuzzy_select, select_one, text_input
 from observal_cli.render import (
@@ -43,6 +46,8 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
+from observal_shared.mcp_analysis import docker_image_from_args
 
 mcp_app = typer.Typer(
     help=(
@@ -422,12 +427,10 @@ def _parse_direct_config(cfg: dict) -> dict:
         cmd = inner["command"]
         if cmd == "docker":
             parsed["framework"] = "docker"
-            # Extract docker_image: last non-flag arg
-            args = parsed["args"]
-            for arg in reversed(args):
-                if not arg.startswith("-"):
-                    parsed["docker_image"] = arg
-                    break
+            # The image is the first positional after `docker run` options, not a trailing container arg.
+            image = docker_image_from_args(parsed["args"])
+            if image:
+                parsed["docker_image"] = image
         elif cmd in ("python", "python3"):
             parsed["framework"] = "python"
         elif cmd in ("npx", "node"):
@@ -656,6 +659,8 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
         rprint(f"\n[green]{msg}[/green] ID: [bold]{result['id']}[/bold]")
         rprint(f"  Install: [cyan]observal registry mcp install {client.canonical_name(result)}[/cyan]")
         rprint(f"  Status: {status_badge(result.get('status', 'pending'))}")
+        if not draft:
+            print_review_link(result)
         return result
 
     # ── Path A: Git URL analysis ─────────────────────────────
@@ -845,10 +850,7 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
                 # Re-derive framework
                 if _command == "docker":
                     _framework = "docker"
-                    for arg in reversed(_args):
-                        if not arg.startswith("-"):
-                            _docker_image = arg
-                            break
+                    _docker_image = docker_image_from_args(_args) or _docker_image
                 elif _command in ("python", "python3"):
                     _framework = "python"
                 elif _command in ("npx", "node"):
@@ -862,10 +864,7 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
                 _args = raw_args.split() if raw_args.strip() else []
                 if _command == "docker":
                     _framework = "docker"
-                    for arg in reversed(_args):
-                        if not arg.startswith("-"):
-                            _docker_image = arg
-                            break
+                    _docker_image = docker_image_from_args(_args) or _docker_image
                 elif _command in ("python", "python3"):
                     _framework = "python"
                 elif _command in ("npx", "node"):
@@ -966,6 +965,8 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
     if _framework:
         rprint(f"  Framework: [cyan]{_framework}[/cyan]")
     rprint(f"  Status: {status_badge(result.get('status', 'pending'))}")
+    if not draft:
+        print_review_link(result)
     return result
 
 
@@ -1061,6 +1062,7 @@ def _show_impl(mcp_id, output):
                 ("Setup", esc(item.get("setup_instructions") or "none")),
                 ("Changelog", esc(item.get("changelog") or "none")),
                 ("Created", esc(relative_time(item.get("created_at")))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{esc(item['id'])}[/dim]"),
             ],
             border_style="cyan",
@@ -1303,7 +1305,10 @@ def submit(
     yes: bool = typer.Option(False, "--yes", "-y", help="Accept JSON-derived defaults"),
     config: bool = typer.Option(False, "--config", hidden=True, help="(deprecated) JSON paste is now the default"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (MCP ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (MCP ID)"
+    ),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -1347,11 +1352,12 @@ def submit(
         resolved = client.resolve_registry_reference("mcp", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/mcps/{resolved}/submit")
+            result = client.post(f"/api/v1/mcps/{resolved}/submit" + (f"?message={quote(message)}" if message else ""))
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{result['id']}[/bold]")
+            print_review_link(result)
         return
     if output != "json":
         if config:
@@ -1787,7 +1793,10 @@ def edit_mcp(
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/mcps/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("mcp", "mcps", resolved, result)
     if output == "json":
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry mcp submit --submit {result.get('id', '<id>')}")

@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: 2026 Observal Contributors
+// SPDX-FileCopyrightText: 2026 Chandhini Veerabuthiran <chandhini03@users.noreply.github.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -41,8 +42,8 @@ export type EntityKind =
   | "teamspace";
 
 const GLYPHS: Record<EntityKind, { icon: LucideIcon; label: string }> = {
-  agent: { icon: Bot, label: "Agent" },
-  mcp: { icon: Server, label: "MCP server" },
+  agent: { icon: Bot, label: "Agent File" },
+  mcp: { icon: Server, label: "MCP Client" },
   skill: { icon: Sparkles, label: "Skill" },
   hook: { icon: Webhook, label: "Hook" },
   prompt: { icon: MessageSquareText, label: "Prompt" },

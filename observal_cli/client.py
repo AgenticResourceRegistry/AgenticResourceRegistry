@@ -94,7 +94,20 @@ def _safe_detail(response: httpx.Response) -> str | None:
         return None
     # FastAPI errors use ``detail``; ARD routes use ``{"errorCode", "message"}``.
     detail = (data.get("detail") or data.get("message")) if isinstance(data, dict) else None
+    if isinstance(detail, list):
+        # Validation lists: pydantic items carry ``msg``; component checks carry ``reason``.
+        parts = [item.get("reason") or item.get("msg") for item in detail if isinstance(item, dict)]
+        detail = "; ".join(str(part).removeprefix("Value error, ") for part in parts if part)
     return detail.strip()[:500] if isinstance(detail, str) and detail.strip() else None
+
+
+def _install_command(response: httpx.Response) -> str | None:
+    """The fix command a 426 response carries, if any."""
+    try:
+        command = response.json().get("install_command")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return None
+    return command if isinstance(command, str) and command else None
 
 
 def _browse_remediation(path: str) -> str:
@@ -169,7 +182,11 @@ def _handle_error(
         fail(
             ErrorCategory.VERSION,
             detail or "The CLI and server versions are incompatible.",
-            remediation="Install the CLI version required by the server.",
+            remediation=(
+                f"Run {_install_command(response)}, then retry."
+                if _install_command(response)
+                else "Run observal self upgrade --force --output json, then retry."
+            ),
             **context,
         )
     if code == 429:
@@ -559,6 +576,36 @@ def get_text(
             http_status=response.status_code,
         )
     return response.text
+
+
+def get_bytes_with_headers(
+    path: str,
+    params: _QueryParams | None = None,
+    *,
+    operation: str | None = None,
+    resource: str | None = None,
+) -> tuple[bytes, dict[str, str]]:
+    """Read an authenticated file response without assuming it is JSON.
+
+    Used by skill-folder previews: UTF-8 files are JSON, binary files are raw
+    octet-stream attachments. The ordinary ``get`` API intentionally rejects
+    non-JSON responses.
+    """
+    operation, resource = _error_context(
+        operation,
+        resource,
+        default_operation=f"Fetch {path}",
+        default_resource=path,
+    )
+    response = _request(
+        "get",
+        path,
+        operation=operation,
+        resource=resource,
+        params=params,
+        auth_required=False,
+    )
+    return response.content, {key.lower(): value for key, value in response.headers.items()}
 
 
 def get_with_headers(

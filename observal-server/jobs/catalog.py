@@ -8,13 +8,13 @@ from loguru import logger as optic
 
 async def generate_insight_report(ctx: dict, report_id: str):
     """Background job: generate an insight report for an agent."""
-    optic.info("insight_report_started", report_id=report_id)
+    optic.info("insight_report_started: report_id={}", report_id)
     try:
         from services.insights import run_single_report
 
         await run_single_report(report_id)
     except Exception as e:
-        optic.error("insight_report_job_failed", report_id=report_id, error=str(e))
+        optic.error("insight_report_job_failed: report_id={}, error={}", report_id, str(e))
 
 
 async def batch_generate_insights(ctx: dict):
@@ -25,9 +25,9 @@ async def batch_generate_insights(ctx: dict):
 
         queued = await discover_and_queue_reports()
         if queued > 0:
-            optic.info("insight_batch_queued_reports", count=queued)
+            optic.info("insight_batch_queued_reports: count={}", queued)
     except Exception as e:
-        optic.error("insight_batch_failed", error=str(e))
+        optic.error("insight_batch_failed: error={}", str(e))
 
 
 async def refresh_user_profiles(ctx: dict):
@@ -74,7 +74,7 @@ async def refresh_user_profiles(ctx: dict):
                     # an aborted transaction: without this rollback every
                     # later user fails too, and one fault is misreported as N.
                     await db.rollback()
-                    optic.warning("user_profile_refresh_failed", user_id=str(user.id), error=str(e))
+                    optic.warning("user_profile_refresh_failed: user_id={}, error={}", str(user.id), str(e))
         optic.info("user_profiles_refreshed: count={}, skipped_inactive={}", refreshed, skipped)
     except Exception as e:
-        optic.error("user_profile_batch_failed", error=str(e))
+        optic.error("user_profile_batch_failed: error={}", str(e))

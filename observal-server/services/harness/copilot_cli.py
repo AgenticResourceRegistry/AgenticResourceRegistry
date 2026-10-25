@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Copilot CLI harness adapter for agent config generation."""
@@ -143,7 +144,7 @@ class CopilotCliAdapter(BaseHarnessAdapter):
             result["prompt_files"] = prompt_files
         if skills:
             result["skills"] = skills
-            result["skill_components"] = [s for s in skill_configs if s.get("git_url")]
+            result["skill_components"] = skill_configs
         if ctx.compatibility_warnings:
             result["_warnings"] = ctx.compatibility_warnings
 

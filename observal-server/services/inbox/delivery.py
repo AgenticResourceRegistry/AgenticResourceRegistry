@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Writing inbox items and moving them through their lifecycle.
@@ -21,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from models.inbox import InboxItem, InboxItemEvent, InboxKind, InboxState
-from services.inbox.registry import KindSpec, Subject, spec_for
+from services.inbox.registry import KindSpec, Subject, review_action_url, spec_for
 
 if TYPE_CHECKING:
     import uuid
@@ -72,6 +73,8 @@ async def deliver_one(
     """
     ctx = context or {}
     spec = spec_for(kind)
+    # Preserve legacy registry/queue links for notices without a review number.
+    action_url = review_action_url(kind, ctx) or spec.url(subject)
 
     item = InboxItem(
         user_id=user_id,
@@ -84,7 +87,7 @@ async def deliver_one(
         subject_id=subject.id,
         subject_namespace=subject.namespace,
         subject_slug=subject.slug,
-        action_url=_truncate(spec.url(subject), 500),
+        action_url=_truncate(action_url, 500),
         action_command=_truncate(spec.command(subject, ctx), 500),
         actor_id=actor_id,
         team_id=subject.team_id,
@@ -135,7 +138,20 @@ def _refresh_content(existing: InboxItem, fresh: InboxItem) -> bool:
     a decision that is no longer the one on record.
     """
     changed = False
-    for attr in ("title", "body", "action_url", "action_command", "payload"):
+    # Visibility and ownership can change between review rounds. Reopening a
+    # private team request for a global reviewer must not retain the old private
+    # snapshot (or stale namespace/team link) from the previous delivery.
+    for attr in (
+        "title",
+        "body",
+        "action_url",
+        "action_command",
+        "payload",
+        "subject_namespace",
+        "subject_slug",
+        "team_id",
+        "is_private_subject",
+    ):
         new_value = getattr(fresh, attr)
         if getattr(existing, attr) != new_value:
             setattr(existing, attr, new_value)

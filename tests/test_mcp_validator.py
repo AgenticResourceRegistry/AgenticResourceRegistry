@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ def _listing(**overrides):
         "setup_instructions": None,
         "command": None,
         "args": None,
+        "latest_version": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -121,9 +122,43 @@ def test_build_clone_url_handles_anonymous_and_token_auth(monkeypatch):
     source = "https://git.example/acme/catalog.git"
     assert validator._build_clone_url(source) == source
 
-    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "secret-token")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY_SECRET_FOR_TEST")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "git.example, github.com")
     monkeypatch.setenv("GIT_CLONE_TOKEN_USER", "oauth2")
-    assert validator._build_clone_url(source) == "https://oauth2:secret-token@git.example/acme/catalog.git"
+    assert validator._build_clone_url(source) == "https://oauth2:DUMMY_SECRET_FOR_TEST@git.example/acme/catalog.git"
+    assert validator._build_clone_url("https://GITHUB.COM/acme/repo.git") == (
+        "https://oauth2:DUMMY_SECRET_FOR_TEST@GITHUB.COM/acme/repo.git"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://attacker.example/repo.git",
+        "https://github.com.attacker.example/repo.git",
+        "https://github.com@attacker.example/repo.git",
+        "https://attacker.example@github.com/repo.git",
+        "https://github.com./repo.git",
+        "https://github.com:8443/repo.git",
+        "http://github.com/repo.git",
+    ],
+)
+def test_build_clone_url_never_authenticates_untrusted_destinations(url, monkeypatch):
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY_SECRET_FOR_TEST")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "github.com")
+    assert validator._build_clone_url(url) == url
+
+
+def test_build_clone_url_requires_explicit_hosts_and_preserves_https_port_and_query(monkeypatch):
+    monkeypatch.delenv("GIT_CLONE_TOKEN_USER", raising=False)
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY/SECRET:@")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "")
+    url = "https://git.example:8443/acme/repo.git?ref=main"
+    assert validator._build_clone_url(url) == url
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "git.example:8443")
+    assert validator._build_clone_url(url) == (
+        "https://x-access-token:DUMMY%2FSECRET%3A%40@git.example:8443/acme/repo.git?ref=main"
+    )
 
 
 def test_redact_clone_error_removes_clone_token_before_general_redaction(monkeypatch):
@@ -137,6 +172,17 @@ def test_redact_clone_error_removes_clone_token_before_general_redaction(monkeyp
     redacted_input = redactor.call_args.args[0]
     assert "secret-token" not in redacted_input
     assert validator.REDACTED in redacted_input
+
+
+def test_redact_clone_error_removes_percent_encoded_token_in_git_url(monkeypatch):
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY/SECRET:@")
+    error = RuntimeError("fatal: unable to access 'https://x-access-token:DUMMY%2FSECRET%3A%40@github.com/repo.git'")
+
+    result = validator._redact_clone_error(error)
+
+    assert "DUMMY%2FSECRET%3A%40" not in result
+    assert "DUMMY/SECRET:@" not in result
+    assert validator.REDACTED in result
 
 
 def test_redact_clone_error_without_clone_token_still_uses_secret_redactor(monkeypatch):
@@ -175,6 +221,20 @@ async def test_async_clone_delegates_to_bounded_thread(monkeypatch):
         {"depth": 2},
     )
     clone.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_authenticated_clone_disables_http_redirects(monkeypatch):
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY_SECRET_FOR_TEST")
+    clone = Mock()
+    monkeypatch.setattr(validator.Repo, "clone_from", clone)
+    url = "https://x-access-token:DUMMY_SECRET_FOR_TEST@github.com/acme/private.git"
+    await validator._async_clone(url, "/virtual/repo")
+    assert clone.call_args.kwargs["env"] == {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.followRedirects",
+        "GIT_CONFIG_VALUE_0": "false",
+    }
 
 
 def test_apply_container_detection_sets_only_missing_fields(monkeypatch):
@@ -261,6 +321,41 @@ async def test_clone_stage_records_url_security_rejection(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_validation_only_passes_token_for_allowlisted_host(monkeypatch):
+    monkeypatch.delenv("GIT_CLONE_TOKEN_USER", raising=False)
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY_SECRET_FOR_TEST")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "github.com")
+    monkeypatch.setattr(validator, "_validate_git_url", Mock(return_value=None))
+    clone = AsyncMock(side_effect=TimeoutError)
+    monkeypatch.setattr(validator, "_async_clone", clone)
+    for url, authenticated in (
+        ("https://github.com/acme/private.git", True),
+        ("https://github.com.attacker.example/acme/private.git", False),
+    ):
+        await validator._clone_and_inspect(_listing(git_url=url), _db(), "/virtual/repo")
+        expected = url.replace("https://", "https://x-access-token:DUMMY_SECRET_FOR_TEST@", 1) if authenticated else url
+        clone.assert_awaited_with(expected, "/virtual/repo")
+
+
+@pytest.mark.asyncio
+async def test_analyze_only_passes_token_for_allowlisted_host(monkeypatch):
+    monkeypatch.delenv("GIT_CLONE_TOKEN_USER", raising=False)
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY_SECRET_FOR_TEST")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "github.com")
+    monkeypatch.setattr(validator, "_validate_git_url", Mock(return_value=None))
+    _mock_tempdir(monkeypatch)
+    clone = AsyncMock(side_effect=TimeoutError)
+    monkeypatch.setattr(validator, "_async_clone", clone)
+    for url, authenticated in (
+        ("https://github.com/acme/private.git", True),
+        ("https://attacker.example/acme/private.git", False),
+    ):
+        await validator.analyze_repo(url)
+        expected = url.replace("https://", "https://x-access-token:DUMMY_SECRET_FOR_TEST@", 1) if authenticated else url
+        clone.assert_awaited_with(expected, "/virtual/repo")
+
+
+@pytest.mark.asyncio
 async def test_clone_stage_classifies_timeout(monkeypatch):
     db = _db()
     monkeypatch.setattr(validator, "_validate_git_url", Mock(return_value=None))
@@ -289,6 +384,27 @@ async def test_clone_stage_classifies_and_redacts_clone_failure(monkeypatch):
     assert result.passed is False
     assert result.details == "Failed to clone repo: credentials removed"
     redact.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_clone_stage_does_not_persist_percent_encoded_git_token(monkeypatch):
+    db = _db()
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN", "DUMMY/SECRET:@")
+    monkeypatch.setattr(validator.settings, "GIT_CLONE_TOKEN_HOSTS", "github.com")
+    monkeypatch.delenv("GIT_CLONE_TOKEN_USER", raising=False)
+    monkeypatch.setattr(validator, "_validate_git_url", Mock(return_value=None))
+    url = "https://github.com/acme/private.git"
+    authenticated = validator._build_clone_url(url)
+    monkeypatch.setattr(
+        validator, "_async_clone", AsyncMock(side_effect=RuntimeError(f"unable to access {authenticated}"))
+    )
+
+    assert await validator._clone_and_inspect(_listing(git_url=url), db, "/virtual/repo") is None
+
+    details = _added_results(db)[0].details
+    assert "DUMMY%2FSECRET%3A%40" not in details
+    assert "DUMMY/SECRET:@" not in details
+    assert validator.REDACTED in details
 
 
 @pytest.mark.asyncio
@@ -556,7 +672,7 @@ async def test_analyze_repo_classifies_clone_timeout_and_cleans_up(monkeypatch):
     [
         (
             "authentication failed",
-            "Repository is private or not accessible. Configure GIT_CLONE_TOKEN for private repos.",
+            "Repository is private or not accessible. Configure GIT_CLONE_TOKEN and GIT_CLONE_TOKEN_HOSTS for private repos.",
         ),
         ("repository not found", "Repository not found. Check the URL."),
         ("connection reset", "Failed to clone repository. Check the URL and try again."),

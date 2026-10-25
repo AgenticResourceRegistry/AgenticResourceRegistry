@@ -33,6 +33,7 @@ from services.clickhouse import (
 from services.secrets_redactor import redact_secrets
 from services.session_parsers.base import token_count, uncached_input_tokens
 from services.session_parsers.ingest_classify import extract_timestamp, get_classifier, get_extra_rows
+from services.session_parsers.kiro import extract_usage as _usage_kiro
 
 # ---------------------------------------------------------------------------
 # Per-harness token usage extraction (dispatch pattern)
@@ -40,7 +41,7 @@ from services.session_parsers.ingest_classify import extract_timestamp, get_clas
 
 
 def _usage_claude_code(parsed: dict) -> dict:
-    """Claude Code / Cursor / Kiro: usage.input_tokens, usage.output_tokens, etc."""
+    """Claude Code / Cursor: usage.input_tokens, usage.output_tokens, etc."""
     msg = parsed.get("message", {})
     usage = msg.get("usage") or {}
     return {
@@ -166,7 +167,7 @@ _UsageFn = Callable[[dict], dict]
 _USAGE_EXTRACTORS: dict[str, _UsageFn] = {
     "claude-code": _usage_claude_code,
     "codex": _usage_codex,
-    "kiro": _usage_claude_code,
+    "kiro": _usage_kiro,
     "cursor": _usage_claude_code,
     "goose": _usage_goose,
     "pi": _usage_pi,
@@ -268,7 +269,7 @@ async def _resolve_agent_id(agent_id: str | None) -> str | None:
     ~500 Postgres queries/sec.
 
     Returns the original value unchanged if it is already a UUID, None,
-    or if the name cannot be resolved.
+    or if the name matches no live agent or more than one.
     """
     if not agent_id:
         return agent_id
@@ -297,12 +298,15 @@ async def _resolve_agent_id(agent_id: str | None) -> str | None:
     resolved = None
     try:
         async with async_session() as db:
-            stmt = select(Agent.id).where(Agent.name == agent_id).limit(1)
+            # Names are not unique across namespaces: only an unambiguous live match is safe to attribute.
+            stmt = select(Agent.id).where(Agent.name == agent_id, Agent.deleted_at.is_(None)).limit(2)
             result = await db.execute(stmt)
-            row = result.scalar_one_or_none()
-            if row:
-                resolved = str(row)
+            rows = result.scalars().all()
+            if len(rows) == 1:
+                resolved = str(rows[0])
                 optic.debug("resolved agent name '{}' to UUID {}", agent_id, resolved)
+            elif rows:
+                optic.warning("agent name '{}' matches several agents; leaving the session unattributed", agent_id)
     except Exception as e:
         optic.warning("agent_id resolution failed: {}", e)
 
@@ -549,8 +553,8 @@ async def ingest_session_lines(
                 "tool_name": tool_name,
                 "tool_id": tool_id,
                 "content_preview": preview,
-                "content_length": len(raw_line.encode()),
-                "raw_line": redact_secrets(raw_line),
+                "content_length": len(raw_line.encode("utf-8", errors="replace")),
+                "raw_line": redact_secrets(raw_line.encode("utf-8", errors="replace").decode("utf-8")),
                 "credits": 0.0,
                 "parent_session_id": parent_session_id,
                 **usage,

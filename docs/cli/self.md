@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal self`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal self"
+---
 
 Inspect or change the installed CLI version.
 
@@ -118,6 +119,6 @@ Human mode may explicitly confirm an unsigned binary. JSON mode never prompts an
 
 ## Related
 
-* [`observal server`](server.md): manage server stack versions separately
-* [Upgrades](../self-hosting/upgrades.md): server and CLI upgrade procedures
-* [Environment variables](../reference/environment-variables.md): update-check settings
+* [`observal server`](/cli/server): manage server stack versions separately
+* [Upgrades](/self-hosting/upgrades): server and CLI upgrade procedures
+* [Environment variables](/reference/environment-variables): update-check settings

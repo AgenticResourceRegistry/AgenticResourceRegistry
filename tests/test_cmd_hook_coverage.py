@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -814,6 +814,7 @@ def test_edit_from_file_and_parse_failures(tmp_path, monkeypatch):
     assert "not found" in missing.output
     assert "not valid JSON" in broken.output
     put.assert_called_once_with("/api/v1/hooks/resolved/draft", valid_updates)
+    # The pending save pushed no revision (nothing changed), so it is not resubmitted.
     post.assert_called_once_with("/api/v1/hooks/resolved/start-edit")
 
 

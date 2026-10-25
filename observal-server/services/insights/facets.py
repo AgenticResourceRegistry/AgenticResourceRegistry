@@ -133,12 +133,6 @@ async def store_facets(
     await db.flush()
 
 
-async def load_cached_facets(session_id: str, db) -> dict | None:
-    """Load previously extracted facets from DB."""
-    cached = await load_cached_facets_batch([session_id], db)
-    return cached.get(session_id)
-
-
 async def load_cached_facets_batch(session_ids: list[str], db) -> dict[str, dict]:
     """Load cached facets for many sessions in one DB query."""
     if not session_ids:
@@ -154,25 +148,6 @@ async def load_cached_facets_batch(session_ids: list[str], db) -> dict[str, dict
         for row in result.scalars().all()
         if getattr(row, "session_id", None) and getattr(row, "facets", None)
     }
-
-
-async def extract_and_cache_facets(
-    session_id: str,
-    transcript: str,
-    meta: dict,
-    agent_id: str,
-    db,
-) -> dict:
-    """Extract facets with DB caching. Returns cached if available."""
-    cached = await load_cached_facets(session_id, db)
-    if cached:
-        return cached
-
-    facets = await extract_facets(session_id, transcript, meta)
-    if facets:
-        await store_facets(session_id, agent_id, facets, db)
-
-    return facets
 
 
 def aggregate_facets(all_facets: list[dict]) -> dict:

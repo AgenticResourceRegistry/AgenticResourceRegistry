@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Config files
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Config files"
+---
 
 Every file Observal reads or writes on the client (`~/.observal/`) and in each harness's config directory.
 
@@ -38,7 +39,7 @@ Every file Observal reads or writes on the client (`~/.observal/`) and in each h
 }
 ```
 
-Authentication and identity fields are managed by `observal auth`. The `config set` command accepts only `server_url`, `timeout`, `update_check`, `update_check_interval`, and `update_check_repo`. Supported environment variables override persisted values for the current invocation; see [Environment variables](environment-variables.md).
+Authentication and identity fields are managed by `observal auth`. The `config set` command accepts only `server_url`, `timeout`, `update_check`, `update_check_interval`, and `update_check_repo`. Supported environment variables override persisted values for the current invocation; see [Environment variables](/reference/environment-variables).
 
 ### Durable session outbox
 
@@ -161,5 +162,5 @@ Client-side files under `~/.observal/` are created with mode `0600` (owner read/
 
 ## Related
 
-* [Environment variables](environment-variables.md) - supported runtime overrides
-* [`observal config`](../cli/config.md), CLI surface for editing
+* [Environment variables](/reference/environment-variables) - supported runtime overrides
+* [`observal config`](/cli/config), CLI surface for editing

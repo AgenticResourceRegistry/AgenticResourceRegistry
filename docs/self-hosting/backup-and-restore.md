@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Backup and restore
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Backup and restore"
+---
 
 What to back up, how often, and how to restore. Observal has three persistent stores with very different loss profiles.
 
@@ -151,4 +152,4 @@ Ship the `/backups` directory offsite (S3, B2, rsync to another host).
 
 ## Next
 
-→ [Troubleshooting](troubleshooting.md)
+→ [Troubleshooting](/self-hosting/troubleshooting)

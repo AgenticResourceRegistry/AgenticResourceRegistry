@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """JWT token generation and validation for unified browser/CLI auth.
@@ -39,6 +40,8 @@ def create_access_token(
         "groups": groups or [],
         "jti": str(uuid.uuid4()),
         "iat": now,
+        # iat has 1s resolution; revocation compares in microseconds (services/token_revocation.py).
+        "iat_us": int(now.timestamp()) * 1_000_000 + now.microsecond,
         "exp": now + expires_delta,
     }
     token = sign_token(payload)
@@ -62,6 +65,7 @@ def create_refresh_token(user_id: uuid.UUID, role: UserRole, groups: list[str] |
         "groups": groups or [],
         "jti": jti,
         "iat": now,
+        "iat_us": int(now.timestamp()) * 1_000_000 + now.microsecond,
         "exp": now + timedelta(days=ds.get_sync_int("jwt.refresh_token_expire_days", 30)),
     }
     token = sign_token(payload)

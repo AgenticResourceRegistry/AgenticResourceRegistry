@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: 2026 Tanvi Reddy <tanvi.reddy330@gmail.com>
+// SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from "@playwright/test";
-import { loginToWebUI, API_BASE, getAccessToken } from "./helpers";
+import { loginToWebUI, API_BASE, getAccessToken, publishSubject } from "./helpers";
 
 test.describe("Component Detail Page", () => {
   // This test requires the approve endpoint to work (currently broken: CircularDependencyError).
@@ -31,10 +31,7 @@ test.describe("Component Detail Page", () => {
     const skill = await submitRes.json();
 
     // Approve it (required for detail page to show it)
-    await fetch(`${API_BASE}/api/v1/review/${skill.id}/approve`, {
-      method: "POST",
-      headers,
-    });
+    await publishSubject("skill", skill.id);
 
     await loginToWebUI(page);
     await page.goto(`/components/${skill.id}?type=skill`);
@@ -81,12 +78,7 @@ test.describe("Skill CRUD", () => {
     expect(fetched.name).toBe(skillName);
 
     // Approve
-    const approveRes = await fetch(`${API_BASE}/api/v1/review/${skillId}/approve`, {
-      method: "POST",
-      headers,
-    });
-    // Known server bug: CircularDependencyError in versioned listings (see #1044)
-    expect([200, 500]).toContain(approveRes.status);
+    await publishSubject("skill", skillId);
 
     // Delete
     const deleteRes = await fetch(`${API_BASE}/api/v1/skills/${skillId}`, {
@@ -133,12 +125,7 @@ test.describe("Hook CRUD", () => {
     expect(fetched.name).toBe(hookName);
 
     // Approve
-    const approveRes = await fetch(`${API_BASE}/api/v1/review/${hookId}/approve`, {
-      method: "POST",
-      headers,
-    });
-    // Known server bug: CircularDependencyError in versioned listings
-    expect([200, 500]).toContain(approveRes.status);
+    await publishSubject("hook", hookId);
 
     // Delete
     const deleteRes = await fetch(`${API_BASE}/api/v1/hooks/${hookId}`, {
@@ -185,12 +172,7 @@ test.describe("Sandbox CRUD", () => {
     expect(fetched.name).toBe(sandboxName);
 
     // Approve
-    const approveRes = await fetch(`${API_BASE}/api/v1/review/${sandboxId}/approve`, {
-      method: "POST",
-      headers,
-    });
-    // Known server bug: CircularDependencyError in versioned listings
-    expect([200, 500]).toContain(approveRes.status);
+    await publishSubject("sandbox", sandboxId);
 
     // Delete
     const deleteRes = await fetch(`${API_BASE}/api/v1/sandboxes/${sandboxId}`, {

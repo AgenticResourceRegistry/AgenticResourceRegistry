@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,162 +89,6 @@ def raises(error: BaseException):
         raise error
 
     return fail
-
-
-def test_review_list_filters_caches_and_renders_rows(cli, monkeypatch):
-    calls = []
-    reviews = [
-        {
-            "id": "component-123456789",
-            "type": "mcp",
-            "name": "search",
-            "version": "1.2.3",
-            "submitted_by": "alice",
-            "created_at": "created",
-        },
-        {
-            "id": "agent-987654321",
-            "listing_type": "agent",
-            "name": "builder",
-            "submitted_at": "submitted",
-        },
-    ]
-
-    def fake_get(path, params=None):
-        calls.append((path, params))
-        return reviews
-
-    monkeypatch.setattr(ops.client, "get", fake_get)
-
-    ops.review_list("mcp", "components", "table")
-
-    assert calls == [("/api/v1/review", {"type": "mcp", "tab": "components"})]
-    assert cli.saved == [(reviews, "review")]
-    table = cli.console.renderables[0]
-    assert table.title == "Pending Reviews (2)"
-    assert table.columns[1]._cells == ["mcp", "agent"]
-    assert table.columns[2]._cells == ["search", "builder"]
-    assert table.columns[5]._cells == ["relative:created", "relative:submitted"]
-    assert table.columns[6]._cells == ["component-12", "agent-987654"]
-
-
-def test_review_list_supports_json_and_empty_results(cli, monkeypatch):
-    responses = iter([[{"id": "one"}], []])
-    calls = []
-
-    def fake_get(path, params=None):
-        calls.append((path, params))
-        return next(responses)
-
-    monkeypatch.setattr(ops.client, "get", fake_get)
-
-    ops.review_list(None, None, "json")
-    ops.review_list(None, None, "table")
-
-    assert calls == [("/api/v1/review", None), ("/api/v1/review", None)]
-    assert cli.json == [[{"id": "one"}]]
-    assert cli.saved == [([{"id": "one"}], "review"), ([], "review")]
-    assert "No pending reviews" in cli.text()
-
-
-def test_review_show_resolves_and_renders_validation_details(cli, monkeypatch):
-    item = {
-        "id": "review-id",
-        "name": "filesystem",
-        "type": "mcp",
-        "status": "rejected",
-        "version": "2.0",
-        "owner": "team",
-        "submitted_by": "alice",
-        "created_at": "created",
-        "git_url": "https://example.test/repo",
-        "description": "",
-        "rejection_reason": "unsafe",
-        "mcp_validated": False,
-        "validation_results": [
-            {"stage": "clone", "passed": True},
-            {"stage": "scan", "passed": False},
-        ],
-    }
-    calls = []
-    monkeypatch.setattr(ops.config, "resolve_alias", lambda value, expected_type=None: f"resolved-{value}")
-    monkeypatch.setattr(ops.client, "get", lambda path: calls.append(path) or item)
-
-    ops.review_show("1", "table")
-
-    assert calls == ["/api/v1/review/resolved-1"]
-    output = render(cli.console.renderables[0])
-    assert "filesystem" in output
-    assert "Rejection Reason" in output
-    assert "Not validated" in output
-    assert "clone" in output and "pass" in output
-    assert "scan" in output and "fail" in output
-
-
-def test_review_show_supports_json(cli, monkeypatch):
-    item = {"id": "review-id"}
-    monkeypatch.setattr(ops.client, "get", lambda path: item)
-
-    ops.review_show("review-id", "json")
-
-    assert cli.json == [item]
-    assert cli.console.renderables == []
-
-
-@pytest.mark.parametrize(
-    ("agent", "bundle", "path", "result", "message"),
-    [
-        (False, False, "/api/v1/review/item/approve", {"name": "component"}, "Approved: component"),
-        (True, False, "/api/v1/review/agents/item/approve", {}, "Approved: item"),
-        (
-            False,
-            True,
-            "/api/v1/review/bundles/item/approve",
-            {"name": "bundle", "approved_count": 3},
-            "Bundle approved: bundle (3 components)",
-        ),
-    ],
-)
-def test_review_approve_selects_the_expected_endpoint(cli, monkeypatch, agent, bundle, path, result, message):
-    calls = []
-    monkeypatch.setattr(ops.client, "post", lambda actual: calls.append(actual) or result)
-
-    ops.review_approve("item", agent, bundle)
-
-    assert calls == [path]
-    assert message in cli.text()
-
-
-def test_review_reject_rejects_blank_reasons(cli):
-    with pytest.raises(typer.Exit) as exc_info:
-        ops.review_reject("item", "   ", False, False)
-
-    assert exc_info.value.exit_code == 7
-    assert "1 to 5,000 characters" in cli.text()
-
-
-@pytest.mark.parametrize(
-    ("agent", "bundle", "path", "result", "message"),
-    [
-        (False, False, "/api/v1/review/item/reject", {"name": "component"}, "Rejected: component"),
-        (True, False, "/api/v1/review/agents/item/reject", {}, "Rejected: item"),
-        (
-            False,
-            True,
-            "/api/v1/review/bundles/item/reject",
-            {"name": "bundle", "rejected_count": 2},
-            "Bundle rejected: bundle (2 components)",
-        ),
-    ],
-)
-def test_review_reject_posts_the_reason(cli, monkeypatch, agent, bundle, path, result, message):
-    calls = []
-    monkeypatch.setattr(ops.client, "post", lambda actual, body: calls.append((actual, body)) or result)
-
-    ops.review_reject("item", "policy violation", agent, bundle)
-
-    assert calls == [(path, {"reason": "policy violation"})]
-    assert message in cli.text()
 
 
 def test_telemetry_status_reports_server_and_outbox_state(cli, monkeypatch):
@@ -1235,6 +1079,82 @@ def test_upgrade_installs_releases_lock_and_returns_json(cli, monkeypatch):
     assert cli.lines == []
 
 
+@pytest.fixture
+def upgrade_env(cli, monkeypatch):
+    """Logged-in CLI on 1.15.0 whose installs are recorded instead of run."""
+    from observal_cli import install_detector, upgrade_lock, version_check
+
+    installs = []
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.15.0")
+    monkeypatch.setattr(install_detector, "detect", lambda: install_info())
+    monkeypatch.setattr(ops.config, "load", lambda: {"server_url": "https://obs.test/", "access_token": "tok"})
+    monkeypatch.setattr(upgrade_lock, "acquire_lock", lambda scope: "lock")
+    monkeypatch.setattr(upgrade_lock, "release_lock", lambda lock: None)
+    monkeypatch.setattr(ops, "_do_install", lambda info, target, direction, output: installs.append(target))
+    return SimpleNamespace(installs=installs, version_check=version_check)
+
+
+def test_upgrade_targets_dev_server_build_instead_of_latest_release(cli, upgrade_env, monkeypatch):
+    """OBS-1439: --pre used to offer a GitHub release that still mismatched a dev server."""
+    seen = []
+    monkeypatch.setattr(
+        upgrade_env.version_check,
+        "_fetch_from_server",
+        lambda url, token: seen.append((url, token)) or {"server_version": "1.16.0-dev.0"},
+    )
+    monkeypatch.setattr(upgrade_env.version_check, "_fetch_from_github", raises(AssertionError("asked GitHub")))
+
+    ops.upgrade(None, True, True)
+
+    assert seen == [("https://obs.test", "tok")]
+    assert upgrade_env.installs == ["1.16.0.dev0"]
+    assert "unreleased v1.16.0.dev0" in cli.text()
+    assert "git+https://github.com/Observal/Observal@main" in cli.text()
+
+
+def test_upgrade_uses_github_when_server_runs_a_release(cli, upgrade_env, monkeypatch):
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_server", lambda url, token: {"server_version": "1.15.1"}
+    )
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_github", lambda include_pre: {"latest_version": "1.15.1"}
+    )
+
+    ops.upgrade(None, True, True)
+
+    assert upgrade_env.installs == ["1.15.1"]
+    assert "unreleased" not in cli.text()
+
+
+def test_upgrade_falls_back_to_github_when_server_is_unreachable(cli, upgrade_env, monkeypatch):
+    monkeypatch.setattr(upgrade_env.version_check, "_fetch_from_server", lambda url, token: None)
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_github", lambda include_pre: {"latest_version": "1.15.1"}
+    )
+
+    ops.upgrade(None, True, True)
+
+    assert upgrade_env.installs == ["1.15.1"]
+    assert "Could not read the server version" in cli.text()
+
+
+@pytest.mark.parametrize(
+    ("version", "cfg"),
+    [("1.15.1", {"server_url": "https://obs.test", "access_token": "tok"}), (None, {"server_url": ""})],
+)
+def test_upgrade_skips_server_check_for_explicit_version_or_no_login(cli, upgrade_env, monkeypatch, version, cfg):
+    monkeypatch.setattr(ops.config, "load", lambda: cfg)
+    monkeypatch.setattr(upgrade_env.version_check, "_fetch_from_server", raises(AssertionError("asked server")))
+    monkeypatch.setattr(
+        upgrade_env.version_check, "_fetch_from_github", lambda include_pre: {"latest_version": "1.15.1"}
+    )
+
+    ops.upgrade(version, False, True)
+
+    assert upgrade_env.installs == ["1.15.1"]
+    assert "server version" not in cli.text()
+
+
 def test_downgrade_reports_empty_release_lists(cli, monkeypatch):
     from observal_cli import version_check
 
@@ -1677,7 +1597,7 @@ def test_every_admin_workflow_has_output_contract():
                 yield name, child
 
     rows = list(leaves(command))
-    assert len(rows) == 25
+    assert len(rows) == 21
     assert all(any(parameter.name == "output" for parameter in leaf.params) for _name, leaf in rows)
 
 
@@ -1727,7 +1647,9 @@ def test_admin_mutations_return_json_without_human_output(cli, monkeypatch):
         "/api/v1/admin/trace-privacy": {"trace_privacy": True},
         "/api/v1/admin/users/user-id/role": {"id": "user-id", "email": "alice@example.test", "role": "admin"},
     }
-    monkeypatch.setattr(ops.client, "get", lambda path: [user])
+    monkeypatch.setattr(
+        ops.client, "get", lambda path: {"type": "mcp"} if path.startswith("/api/v1/review/") else [user]
+    )
     monkeypatch.setattr(ops.client, "put", lambda path, body: put_results[path])
     monkeypatch.setattr(ops.client, "delete", lambda path: {})
     monkeypatch.setattr(
@@ -1746,7 +1668,6 @@ def test_admin_mutations_return_json_without_human_output(cli, monkeypatch):
     ops.admin_trace_privacy_set(True, "json")
     ops.admin_cache_clear("json")
     ops.admin_set_role("alice@example.test", "admin", "json")
-    ops.review_approve("review-id", False, False, "json")
 
     assert cli.json == [
         {"key": "secret", "value": "<redacted>", "is_sensitive": True},
@@ -1755,7 +1676,6 @@ def test_admin_mutations_return_json_without_human_output(cli, monkeypatch):
         {"trace_privacy": True},
         {"cleared": 2},
         {"id": "user-id", "email": "alice@example.test", "role": "admin"},
-        {"id": "review-id", "name": "component", "status": "approved"},
     ]
     assert "never-echo" not in cli.text()
     assert cli.lines == []
@@ -1819,8 +1739,6 @@ def test_admin_audit_json_export_stdout_and_atomic_file(cli, monkeypatch, tmp_pa
             "json",
         ],
         ["admin", "create-user", "a@example.test", "Alice", "--role", "unknown", "--output", "json"],
-        ["admin", "review", "approve", "item", "--agent", "--bundle", "--output", "json"],
-        ["admin", "review", "list", "--type", "unknown", "--output", "json"],
         ["admin", "saml-config-set", "--output", "json"],
         ["admin", "audit-log", "--source", "unknown", "--output", "json"],
     ],
@@ -1831,3 +1749,43 @@ def test_admin_json_validation_uses_shared_error_boundary(arguments):
     assert result.exit_code == 7
     assert result.stdout == ""
     assert json.loads(result.stderr)["error"]["category"] == "validation"
+
+
+def _folder_version(**overrides):
+    files = [
+        {"path": "SKILL.md", "size": 10, "sha256": "a" * 64, "mode": "0644"},
+        {"path": "scripts/run.sh", "size": 5, "sha256": "b" * 64, "mode": "0755"},
+    ]
+    return {
+        "name": "pdf-kit",
+        "version_id": "ver-2",
+        "revision": "r" * 64,
+        "files": files,
+        "base_version_id": "ver-1",
+        "base_version": "1.0.0",
+        "base_delivery_mode": "registry_direct",
+        **overrides,
+    }
+
+
+def _folder_review_api(monkeypatch, version, *, base_files=None, detail=None):
+    calls = SimpleNamespace(gets=[], posts=[])
+    base_files = (
+        base_files if base_files is not None else [{"path": "SKILL.md", "size": 9, "sha256": "c" * 64, "mode": "0644"}]
+    )
+
+    def get(path):
+        calls.gets.append(path)
+        if path.endswith("/manifest"):
+            return {"files": base_files}
+        if "/versions/" in path:
+            return version
+        return detail if detail is not None else {"type": "skill", "id": "listing-1", "version_id": "ver-2"}
+
+    monkeypatch.setattr(ops.client, "get", get)
+    monkeypatch.setattr(
+        ops.client,
+        "post",
+        lambda path, body=None: calls.posts.append((path, body)) or {"version": "1.1.0", "new_status": "x"},
+    )
+    return calls

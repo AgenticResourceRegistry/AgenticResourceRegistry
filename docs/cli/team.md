@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal team`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal team"
+---
 
 Create and govern teamspaces, members, visibility reviews, join requests, and private-team invitations.
 
@@ -233,6 +234,6 @@ The invite ID must be a UUID. Human mode prompts unless `--yes` is supplied. JSO
 
 ## Related
 
-* [`observal inbox`](inbox.md): view request and visibility decisions
-* [`observal agent`](agent.md): publish Agents to a teamspace
-* [`observal registry`](registry.md): publish components to a teamspace
+* [`observal inbox`](/cli/inbox): view request and visibility decisions
+* [`observal agent`](/cli/agent): publish Agents to a teamspace
+* [`observal registry`](/cli/registry): publish components to a teamspace

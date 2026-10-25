@@ -387,3 +387,8 @@ def test_publishing_jobs_recheck_tags_on_failed_job_reruns():
         assert jobs[name]["steps"][0]["with"]["fetch-depth"] == 0
     runs = "\n".join(step.get("run", "") for step in jobs["release"]["steps"])
     assert 'if [ "$DRAFT" = true ]; then\n  gh release edit "$VERSION" --draft=false --latest=false' in runs
+
+
+def test_next_dev_version_and_title():
+    assert release.next_dev_version("1.14") == "1.15.0-dev.0"
+    assert release.DEV_TITLE.fullmatch("chore: start 1.15 development")

@@ -20,6 +20,7 @@ Resolve these links from the skill directory. Run commands from the Observal che
 - Obtain approval before remote branch creation, pushes, PR creation, merges, workflow retries, or publishing, unless the current request explicitly authorizes that action. Preparing a PR does not authorize merging it or approving a production environment.
 - Explain before merging a preparation PR that it triggers publication, subject to the workflow approval gate. The newest verified stable release also triggers hosted deployment.
 - Never publish from `main`, merge a release branch back into `main`, rebase a release line onto `main`, force-push published history, or move an existing tag.
+- `main` carries the next minor `X.Y.0-dev.0` version, never a published release version. Release versions, changelog, and `.release.toml` live only on release branches.
 - Land ordinary fixes on `main` first. Each affected release line gets its own reviewed backport PR with `cherry-pick -x` provenance.
 - Never bypass failed checks, reviews, signing, or checksum verification. Never expose tokens, environment files, GitHub App keys, or OIDC material.
 - Production rulesets, environment restrictions, trusted publishers, deployment changes, and Terraform apply require separate authorization. This skill does not change infrastructure or provision resources.
@@ -61,7 +62,7 @@ After approval, update local `main` by fast-forward only, then run:
 uv run python tools/release.py --cut 1.14
 ```
 
-The tool creates `release/1.14` at exact canonical `main`. It rejects existing or older series and does not publish a release. Verify the resulting remote SHA and branch protection. Fetch and check out that line before preparing a release. Maintain old lines in place rather than recutting them from current `main`.
+The tool creates `release/1.14` at exact canonical `main`. It rejects existing or older series and does not publish a release. It then opens a PR on `main` titled `chore: start 1.15 development`, advancing the version files and lockfiles to `1.15.0-dev.0` so `main` never looks older than the line it feeds. That PR needs the same approval as any `main` PR, is never backported, and the release branch is never merged into `main` to achieve it. If the bump PR step fails after the branch is created, the line still exists; rerun nothing blindly, inspect the preserved `.worktrees/main-1.15.0-dev.0` and open the PR from it. Verify the resulting remote SHA and branch protection. Fetch and check out that line before preparing a release. Maintain old lines in place rather than recutting them from current `main`.
 
 ### Backport a fix
 

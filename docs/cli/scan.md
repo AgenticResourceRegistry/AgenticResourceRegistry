@@ -1,13 +1,14 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# observal scan
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal scan"
+---
 
 Discover MCP servers, hooks, and telemetry configuration across your harness configs. `scan` is **read-only** -- it shows what you have without modifying any files.
 
-To install session telemetry hooks, use [`observal doctor patch`](doctor.md). MCP commands and URLs are never rewritten.
+To install session telemetry hooks, use [`observal doctor patch`](/cli/doctor). MCP commands and URLs are never rewritten.
 
 ## Synopsis
 
@@ -17,7 +18,7 @@ observal scan [--harness <harness>] [--inventory] [--output table|json]
 
 Use `--inventory` for **local-only**, bounded harness evidence. It returns a versioned JSON document with `inventory` and `diagnostics`, or a table showing the harness, scope, component type, name, and privacy-safe source path. URLs have userinfo, fragments, and **all query parameters** removed; suspicious credentials in the URL path make a launch incomplete. Token values, raw prompts, and command arguments are not printed. Unrecognized or unsafe launches have `launch: null` and a diagnostic, not a guessed Registry identity. An empty inventory succeeds with an empty list. It never contacts Observal, writes a lockfile, or submits a component. Package-manager installations alone are not scanned or treated as configured capabilities. Component names and source filenames are user-supplied, so review the output before sharing it externally.
 
-To find approved resources for a task, use [`observal discover`](discover.md). To submit something you found locally, **you** choose to run the corresponding `observal registry <type> submit --draft` command; inventory never starts that workflow.
+To find approved resources for a task, use [`observal discover`](/cli/discover). To submit something you found locally, **you** choose to run the corresponding `observal registry <type> submit --draft` command; inventory never starts that workflow.
 
 ## Options
 
@@ -38,7 +39,7 @@ If you run `observal scan` with no flags, it auto-detects every installed harnes
    * Copilot: `.vscode/mcp.json`
    * Antigravity: `.agents/mcp_config.json` or `~/.gemini/antigravity-cli/mcp_config.json`
    * Goose: `~/.config/goose/config.yaml` (the `extensions` key)
-   * Copilot CLI: `~/.copilot/mcp-config.json`
+   * Copilot CLI: `.mcp.json` (project) or `~/.copilot/mcp-config.json` (home)
 2. Lists every MCP server found and its direct command or URL.
 3. Reports installed session telemetry hooks.
 
@@ -93,7 +94,7 @@ observal doctor patch --all-harnesses --dry-run
 
 ## Related
 
-* [`observal doctor patch`](doctor.md): instrument your harnesses (hooks, shims)
-* [`observal agent pull`](pull.md): install a full agent (also wires up MCP servers)
-* [`observal doctor`](doctor.md): diagnose instrumentation end-to-end
-* [Use Cases -- Observe MCP traffic](../use-cases/observe-mcp-traffic.md): narrative walkthrough
+* [`observal doctor patch`](/cli/doctor): instrument your harnesses (hooks, shims)
+* [`observal agent pull`](/cli/pull): install a full agent (also wires up MCP servers)
+* [`observal doctor`](/cli/doctor): diagnose instrumentation end-to-end
+* [Use Cases -- Observe MCP traffic](/use-cases/observe-mcp-traffic): narrative walkthrough

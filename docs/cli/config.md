@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal config`
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal config"
+---
 
 Manage local CLI configuration. Configuration lives in `~/.observal/config.json`; aliases live in `~/.observal/aliases.json`. Both files are written atomically with mode `0600`.
 
@@ -84,9 +85,9 @@ JSON returns an `items` array and `total`. Empty output preserves the same shape
 
 Environment values take precedence over persisted values for the current invocation. `config set` changes the file but does not replace an active environment override.
 
-See [Environment variables](../reference/environment-variables.md) for supported overrides.
+See [Environment variables](/reference/environment-variables) for supported overrides.
 
 ## Related
 
-* [Config files](../reference/config-files.md): local file schemas and permissions
-* [`observal auth`](auth.md): authentication-managed values
+* [Config files](/reference/config-files): local file schemas and permissions
+* [`observal auth`](/cli/auth): authentication-managed values

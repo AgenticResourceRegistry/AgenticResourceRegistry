@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Troubleshooting
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Troubleshooting"
+---
 
 Common failure modes and their fixes. If none of these match, open a [GitHub Discussion](https://github.com/Observal/Observal/discussions) with the output of `observal auth status` and relevant logs from `docker compose logs`.
 
@@ -40,7 +41,7 @@ POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 \
   docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-Full list in [Ports and volumes](ports-and-volumes.md).
+Full list in [Ports and volumes](/self-hosting/ports-and-volumes).
 
 ### Service stuck in `starting`
 
@@ -70,17 +71,13 @@ Check logs (`docker compose logs -f <service>`). Three frequent causes:
 
 ### Admin forgot password
 
-```bash
-observal auth reset-password --email admin@demo.example
-```
-
-Then read the reset code from the server log:
+There is no reset code to look up. An admin resets the account directly:
 
 ```bash
-docker logs observal-api 2>&1 | grep "PASSWORD RESET CODE"
+observal admin reset-password admin@demo.example --generate
 ```
 
-Enter the code when the CLI prompts.
+Hand the printed password to the user out-of-band; they must change it at their next sign-in.
 
 ### OAuth login fails with `redirect_uri_mismatch`
 
@@ -150,7 +147,7 @@ Frontend is still building. Check:
 docker compose -f docker/docker-compose.yml logs -f observal-web
 ```
 
-For local dev (running Next.js outside Docker), verify `NEXT_PUBLIC_API_URL` in `web/.env.local` matches your backend.
+For local dev (running Vite outside Docker), the dev server proxies `/api` to `http://localhost:8000` (see `web/vite.config.ts`); confirm your backend is reachable there.
 
 ### Login redirects back to login immediately
 

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +32,9 @@ _GOOSE_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd")
 _HOOK_TIMEOUT_SECONDS = 30
 _DEFAULT_EXTENSION_TIMEOUT = 300
 _PLUGIN_DIR = ".agents/plugins/observal"
+# goose runs plugin hooks through `sh -c` with PLUGIN_ROOT set to the plugin
+# directory, so a script is found whatever directory the session started in.
+_PLUGIN_SCRIPT_COMMAND = '"${{PLUGIN_ROOT}}/scripts/{filename}"'
 _PLUGIN_MANIFEST = {
     "name": "observal",
     "version": "1.0.0",
@@ -140,7 +144,7 @@ class GooseAdapter(BaseHarnessAdapter):
             }
 
         hooks_content = _goose_hooks_config(ctx.platform)
-        _merge_hook_components_into_config(hooks_content, ctx.hook_configs, "goose")
+        _merge_hook_components_into_config(hooks_content, ctx.hook_configs, "goose", _PLUGIN_SCRIPT_COMMAND)
         hooks_path = spec["hooks"][scope]
         result["hooks_config"] = {
             "path": hooks_path,
@@ -154,7 +158,11 @@ class GooseAdapter(BaseHarnessAdapter):
                 "content": json.dumps(_PLUGIN_MANIFEST, indent=2) + "\n",
             }
         ]
-        hook_files.extend(_collect_hook_script_files(ctx.hook_configs, ctx.hook_listings, "goose"))
+        # Scripts live inside the plugin, so they follow it to the home directory.
+        for script in _collect_hook_script_files(ctx.hook_configs, ctx.hook_listings, "goose"):
+            if scope == "user":
+                script["path"] = f"~/{script['path']}"
+            hook_files.append(script)
         result["hook_files"] = hook_files
 
         if ctx.skill_configs:

@@ -1,8 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal server`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal server"
+---
 
 Manage local Observal deployments. The lifecycle commands operate the embedded PostgreSQL, ClickHouse, Redis, and API processes. Upgrade, rollback, and version commands operate a local Docker Compose deployment.
 
@@ -143,7 +143,7 @@ observal server rollback \
 
 Rollback accepts only backup directories under the managed backup root. It restores PostgreSQL, atomically restores the image version, recreates containers, and checks health.
 
-**ClickHouse telemetry is not restored by this command.** JSON and human results state `clickhouse_restored: false`. Use [`observal server migrate`](migrate.md) for ClickHouse export and import.
+**ClickHouse telemetry is not restored by this command.** JSON and human results state `clickhouse_restored: false`. Use [`observal server migrate`](/cli/migrate) for ClickHouse export and import.
 
 ## Docker versions
 
@@ -168,7 +168,7 @@ All finite commands accept `--output table|json`. JSON success writes one docume
 
 ## Related
 
-* [Database migration](migrate.md)
-* [Self-hosted upgrades](../self-hosting/upgrades.md)
-* [Backup and restore](../self-hosting/backup-and-restore.md)
-* [`observal self`](self.md), for CLI binary versions
+* [Database migration](/cli/migrate)
+* [Self-hosted upgrades](/self-hosting/upgrades)
+* [Backup and restore](/self-hosting/backup-and-restore)
+* [`observal self`](/cli/self), for CLI binary versions

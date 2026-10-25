@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Regression coverage for Audit 2 PR1 ingest abuse guardrails."""
@@ -218,21 +219,13 @@ def test_alert_history_endpoint_rejects_oversized_limit_via_query_validation():
     assert resp.status_code == 404
 
 
-def test_rate_limit_key_prefers_identity_then_token_then_ip():
-    import hashlib
-
+def test_rate_limit_key_prefers_validated_identity_then_ip():
     from api.ratelimit import _get_rate_limit_key
 
     user_request = MagicMock()
     user_request.state = SimpleNamespace(current_user=SimpleNamespace(id="user-1"))
     user_request.headers = {}
     assert _get_rate_limit_key(user_request) == "user:user-1"
-
-    token_request = MagicMock()
-    token_request.state = SimpleNamespace()
-    token_request.headers = {"authorization": "Bearer secret-token"}
-    digest = hashlib.sha256(b"secret-token").hexdigest()
-    assert _get_rate_limit_key(token_request) == f"token:{digest}"
 
     ip_request = MagicMock()
     ip_request.state = SimpleNamespace()
@@ -241,6 +234,8 @@ def test_rate_limit_key_prefers_identity_then_token_then_ip():
     ip_request.client.host = "203.0.113.10"
     with patch("api.ratelimit.ds") as mock_ds:
         mock_ds.get_sync.return_value = ""
+        assert _get_rate_limit_key(ip_request) == "ip:203.0.113.10"
+        ip_request.headers = {"authorization": "Bearer secret-token"}
         assert _get_rate_limit_key(ip_request) == "ip:203.0.113.10"
 
 

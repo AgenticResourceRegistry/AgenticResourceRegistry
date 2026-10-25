@@ -190,11 +190,6 @@ resource "google_cloud_run_v2_service" "web" {
           memory = var.web_memory
         }
       }
-
-      env {
-        name  = "NEXT_PUBLIC_API_URL"
-        value = google_cloud_run_v2_service.api.uri
-      }
     }
   }
 }

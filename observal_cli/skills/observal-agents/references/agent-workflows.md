@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
@@ -9,6 +9,7 @@
 - Discover and inspect
 - Pull and verify
 - Direct create
+- Fork and edit
 - Local authoring
 - Update in place
 - Release a version
@@ -51,7 +52,7 @@ For credentials or tokens, omit `--no-prompt` and JSON output, then enter values
 
 Pulls are pinned. The first pull in a project installs the latest approved version and records it in `observal.lock` in `--dir`; later pulls install that same version even after newer ones are approved. Only add `--upgrade` (latest approved) or `--version X` when the user asks to update or pick a version. Tell the user to commit `observal.lock` so teammates and CI install the same versions. For CI, add `--strict` (or set `OBSERVAL_STRICT=1`) so an install that does not match its lock fails instead of warning.
 
-Inspect `files`, `warnings`, `setup_commands`, `reports_sessions`, `agent.version`, `agent.resolved_from`, `agent.latest_version`, and `lock` (`status`, `components`, `problems`). Report a newer `latest_version` as available rather than installing it. When `reports_sessions` is true after a successful pull, tell the user that installed session hooks may send prompts, tool calls, and tool output to the configured Observal server when this Agent is used. For a dry run, say hooks *would* be present if applied, not that they were installed. On a failed pull, inspect `error.result.reports_sessions`: if true, disclose that hooks are already on disk and may report sessions despite the failed installation. Then verify installation:
+Inspect `files`, `warnings`, `setup_commands`, `reports_sessions`, `agent.version`, `agent.resolved_from`, `agent.latest_version`, and `lock` (`status`, `components`, `problems`). Report a newer `latest_version` as available rather than installing it. When `reports_sessions` is true after a successful pull, tell the user that installed session hooks (or, for Pi, the installed Observal extension) may send prompts, tool calls, and tool output to the configured Observal server when this Agent is used. For a dry run, say hooks *would* be present if applied, not that they were installed. On a failed pull, inspect `error.result.reports_sessions`: if true, disclose that hooks are already on disk and may report sessions despite the failed installation. Then verify installation:
 
 ```bash
 observal scan --harness kiro --output json
@@ -67,11 +68,25 @@ Use for a complete one-call Agent without local component authoring:
 observal agent create --name reviewer --description 'Reviews pull requests' --prompt 'Review changes for correctness and risk' --model claude-sonnet-4-6 --harness kiro --output json
 ```
 
-Name, description, and prompt keep creation noninteractive. Use `--prompt-file` for long prompts. Verify with the returned UUID or `qualified_name`:
+Name, description, and prompt keep creation noninteractive. Use `--prompt-file` for long prompts. `--model` is optional: every Agent has a model, and a missing or blank one is saved as `auto` (each harness uses its own default). Pass a model only when the user asks for one. Verify with the returned UUID or `qualified_name`:
 
 ```bash
 observal agent show NAMESPACE/REVIEWER --output json
 ```
+
+## Fork and edit
+
+Fork only when the user wants a new independently owned Agent, rather than a release of the source. Read the approved source with `agent show --output json`, choose a new name/target, and fork once. Never retry blindly after an uncertain mutation failure: check `agent my --output json` for the new draft first.
+
+```bash
+observal agent fork NAMESPACE/SOURCE --name my-copy --dir ./my-copy --output json
+observal agent build --dir ./my-copy --output json
+observal agent publish --update --dir ./my-copy --output json
+observal agent publish --submit FORK_UUID --output json
+observal agent show FORK_UUID --output json
+```
+
+Use the fork response's `id` as `FORK_UUID`. Edit `observal-agent.yaml` before `publish --update`; its `agent_id` directs the update to the draft (public search does not include drafts). `--version X.Y.Z` selects one approved source release, and `--new-version X.Y.Z` sets the new draft version. `--team HANDLE --visibility team` puts a public source's copy into an authorized private teamspace. A private source must stay within the same teamspace. Components retain their approved pins, without forking the components. Report `warnings` for re-pinned components and the actual review status. If `forked_from.available` is false, describe the original only as **Source unavailable**; never expose saved source references. A private or unpublished fork does not add to the public fork count.
 
 ## Local authoring
 
@@ -99,7 +114,7 @@ observal agent build --dir ./my-agent --output json
 observal agent publish --dir ./my-agent --output json
 ```
 
-Use `--draft` to save without review and `--submit AGENT_UUID` to submit an existing draft. Team publication uses an explicit target:
+Use `--draft` to save without review and `--submit AGENT_UUID --message 'Address feedback'` to submit an existing draft or push a revision. The response contains `review_number` and `review_url`: open `observal review show N`, read `observal review threads N`, address feedback and resubmit; approval and publication are separate decisions. Team publication uses an explicit target:
 
 ```bash
 observal agent publish --dir ./my-agent --team platform-tools --visibility team --output json
@@ -108,7 +123,15 @@ observal agent publish --dir ./my-agent --team platform-tools --visibility publi
 
 ## Update in place
 
-Use only when the user wants to change the current listing without a reviewed version, and only while its latest version is a draft, pending, or rejected. An approved version is immutable; the update fails with a conflict that points to `agent release`. Use [Release a version](#release-a-version) instead.
+Use while the latest version is not published yet: a draft, pending review, changes requested, or rejected. This is the way to correct a **pending first release** (for example a wrong description on v1.0.0 under review): do not wait for rejection or a change request, and do not run `agent release`. The version number stays the same and, when a review is open, reviewers see the change as a **new revision of the same review**, not a new agent version. `agent release` refuses while the first release is still under review and points here. An approved version is immutable; the update fails with a conflict that points to `agent release`. Use [Release a version](#release-a-version) instead.
+
+For one field, `agent edit` needs no YAML:
+
+```bash
+observal agent edit NAMESPACE/AGENT_SLUG --description 'Reviews pull requests for risk' --output json
+```
+
+The response carries `review_number` and `review_revision` when the edit reached an open review. `publish --update` never bumps the version unless `--bump` is passed.
 
 1. Read current state with `agent show`.
 2. Preserve required fields in `observal-agent.yaml`, including `model_config_json: {}` and `external_mcps: []`.
@@ -118,6 +141,7 @@ Use only when the user wants to change the current listing without a reviewed ve
 ```bash
 observal agent build --dir ./my-agent --output json
 observal agent publish --update --dir ./my-agent --output json
+observal agent publish --submit NAMESPACE/AGENT_SLUG --message 'Clarified agent behavior' --output json
 observal agent show NAMESPACE/AGENT_SLUG --output json
 ```
 
@@ -130,7 +154,7 @@ observal agent release NAMESPACE/AGENT_SLUG --bump patch --dir ./my-agent --outp
 observal agent versions NAMESPACE/AGENT_SLUG --output json
 ```
 
-The YAML must include all required fields. Report the returned review status and version. A submitted release is not approved until review says so.
+The YAML must include all required fields. Report the returned review status and version. A submitted release is not approved until review says so. `agent release` accepts `--message` for a review revision note; check the returned `review_number` and gate before claiming publication.
 
 A release pins every component to an exact version and keeps the pins of the current release, so components do not change unless asked. To see what is behind, and to move components forward:
 

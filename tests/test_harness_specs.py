@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Madhumidha <madhumidha072005@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from observal_cli.harness_specs import claude_code_hooks_spec, kiro_hooks_spec
@@ -24,6 +25,17 @@ def test_claude_get_desired_hooks_has_metadata():
         for group in groups:
             assert "_observal" in group
             assert group["_observal"]["version"] == claude_code_hooks_spec.HOOKS_SPEC_VERSION
+
+
+def test_claude_hook_command_uses_forward_slashes_on_windows(monkeypatch):
+    # Claude Code runs hooks through Git Bash on Windows, which strips backslashes.
+    monkeypatch.setattr(claude_code_hooks_spec.sys, "platform", "win32")
+    monkeypatch.setattr(claude_code_hooks_spec.sys, "executable", r"C:\Users\dev user\uv\python.exe")
+
+    command = claude_code_hooks_spec.get_desired_hooks()["Stop"][0]["hooks"][0]["command"]
+
+    assert command.startswith("'C:/Users/dev user/uv/python.exe' -m observal_cli.hooks.session_push")
+    assert "\\" not in command
 
 
 def test_claude_get_desired_env():

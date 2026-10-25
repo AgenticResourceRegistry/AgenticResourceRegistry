@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """SAML 2.0 SSO endpoints."""
@@ -25,6 +26,7 @@ from onelogin.saml2.auth import OneLogin_Saml2_Auth
 from sqlalchemy import select
 
 from api.deps import get_db
+from api.routes.auth import _issue_tokens
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +36,6 @@ from models.saml_config import SamlConfig
 from models.user import User, UserRole
 from schemas.sso_health import all_pass, make_check
 from services import sso_diagnostics
-from services.jwt_service import create_access_token, create_refresh_token
 from services.redis import get_redis
 from services.saml import (
     build_saml_settings,
@@ -228,16 +229,6 @@ def _build_auth(config, sp_private_key: str, request_data: dict) -> OneLogin_Sam
         sp_slo_url=sp_slo_url,
     )
     return OneLogin_Saml2_Auth(request_data, old_settings=saml_settings)
-
-
-async def _issue_tokens(user: User) -> tuple[str, str, int]:
-    access_token, expires_in = create_access_token(user.id, user.role)
-    refresh_token, jti = create_refresh_token(user.id, user.role)
-    refresh_ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
-    redis = get_redis()
-    await redis.setex(f"refresh_jti:{jti}", refresh_ttl, str(user.id))
-    await redis.delete(f"revoked_user:{user.id}")
-    return access_token, refresh_token, expires_in
 
 
 _SAML_HEALTH_TIMEOUT = 10.0

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# CLI Authentication with SSO
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "CLI Authentication with SSO"
+---
 
 This guide covers authenticating the Observal CLI when your deployment uses
 SSO (SAML, OIDC, or OAuth) for login. The CLI uses the
@@ -105,7 +106,7 @@ For CI/CD pipelines and scripts where no browser is available, use the
 
 ```bash
 export OBSERVAL_TOKEN="your-api-token-here"
-observal agents list
+observal agent list
 ```
 
 The CLI checks `OBSERVAL_TOKEN` before reading `~/.observal/config.json`.

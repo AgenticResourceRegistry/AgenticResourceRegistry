@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { inbox } from "@/lib/api";
-import type { InboxFilters, InboxState } from "@/lib/types";
+import type { InboxCountOptions, InboxFilters } from "@/lib/types";
 
 const INBOX_KEY = ["inbox"] as const;
 
@@ -17,18 +18,23 @@ export function useInbox(filters: InboxFilters = {}) {
 }
 
 /**
- * Badge counts, and optionally the sidebar's per-facet breakdown.
+ * Badge counts, and optionally the filter sheet's breakdown.
  *
- * `facetState` is part of the key, not just the request. The sidebar's per-kind
- * numbers describe one bucket, so a cached Inbox response must not be handed to
- * a view showing Done.
+ * Every option is part of the key, not just the request. The sheet's numbers
+ * describe one folder under one search and toggle set, so a cached response
+ * for another view must never be shown beside this one.
  */
-export function useInboxCounts(
-	enabled = true,
-	opts: { facets?: boolean; facetState?: InboxState } = {},
-) {
+export function useInboxCounts(enabled = true, opts: InboxCountOptions = {}) {
 	return useQuery({
-		queryKey: [...INBOX_KEY, "count", opts.facets ?? false, opts.facetState ?? null],
+		queryKey: [
+			...INBOX_KEY,
+			"count",
+			opts.facets ?? false,
+			opts.facetState ?? null,
+			opts.unread ?? false,
+			opts.actionRequired ?? false,
+			opts.q ?? "",
+		],
 		queryFn: () => inbox.counts(opts),
 		// The badge should feel live without hammering the API. A minute is
 		// short enough that a review assignment does not sit unseen for long.

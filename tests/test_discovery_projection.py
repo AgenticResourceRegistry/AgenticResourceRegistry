@@ -14,7 +14,13 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from models.discovery_entry import DiscoveryEntry, DiscoveryKind, DiscoveryLifecycle, DiscoveryVisibility
+from models.discovery_entry import (
+    DiscoveryEntry,
+    DiscoveryKind,
+    DiscoveryLifecycle,
+    DiscoverySourceKind,
+    DiscoveryVisibility,
+)
 from models.mcp import ListingStatus
 from models.user import UserRole
 from services.discovery import hooks as discovery_hooks
@@ -652,6 +658,7 @@ async def test_broad_query_ranks_the_best_match_even_among_many_candidates(sessi
         old = datetime(2026, 1, 1, tzinfo=UTC)
         target = _entry("Widget Deployer", description="deploy widget")
         target.local_entity_id = uuid.uuid4()
+        target.source_kind = DiscoverySourceKind.mirrored  # no native row backs these synthetic entries
         target.media_type = "application/ai-skill+md"
         target.version = "1.0.0"
         target.artifact_url = "https://x.test/a"
@@ -663,6 +670,7 @@ async def test_broad_query_ranks_the_best_match_even_among_many_candidates(sessi
         for i in range(600):
             filler = _entry(f"Filler {i:03d}", description="widget adjacent")
             filler.local_entity_id = uuid.uuid4()
+            filler.source_kind = DiscoverySourceKind.mirrored
             filler.media_type = "application/ai-skill+md"
             filler.version = "1.0.0"
             filler.artifact_url = f"https://x.test/f{i}"

@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
@@ -11,7 +12,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from git import Repo
 from loguru import logger as optic
@@ -79,27 +80,59 @@ def _git_url_warning(url: str) -> str:
 
 
 def _build_clone_url(git_url: str) -> str:
-    """Inject auth token into git URL if configured. Supports GitHub and GitLab token formats."""
+    """Authenticate only exact, operator-trusted HTTPS Git hosts (including their port)."""
     git_token = settings.GIT_CLONE_TOKEN or ""
     if not git_token:
         return git_url
-    parsed = urlparse(git_url)
+    try:
+        parsed = urlparse(git_url)
+        # An HTTP opt-in is not an opt-in to disclose credentials in cleartext.
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return git_url
+        authority = parsed.netloc.lower()
+        allowed = {host.strip().lower() for host in settings.GIT_CLONE_TOKEN_HOSTS.split(",") if host.strip()}
+        if authority not in allowed:
+            return git_url
+    except ValueError:  # malformed authority, e.g. invalid IPv6 brackets
+        return git_url
     token_user = os.environ.get("GIT_CLONE_TOKEN_USER", "x-access-token")
-    return f"{parsed.scheme}://{token_user}:{git_token}@{parsed.hostname}{parsed.path}"
+    credentials = f"{quote(token_user, safe='')}:{quote(git_token, safe='')}"
+    return urlunparse(parsed._replace(netloc=f"{credentials}@{parsed.netloc}"))
 
 
 def _redact_clone_error(error: Exception) -> str:
     message = str(error)
     git_token = settings.GIT_CLONE_TOKEN or ""
     if git_token:
-        message = message.replace(git_token, REDACTED)
+        message = message.replace(quote(git_token, safe=""), REDACTED).replace(git_token, REDACTED)
     return redact_secrets(message)
+
+
+def _authenticated_clone_url(url: str) -> bool:
+    """Check whether this URL embeds our shared token (not caller-supplied credentials)."""
+    try:
+        return bool(settings.GIT_CLONE_TOKEN and unquote(urlparse(url).password or "") == settings.GIT_CLONE_TOKEN)
+    except ValueError:
+        return False
 
 
 async def _async_clone(clone_url: str, dest: str, depth: int = 1) -> None:
     """Clone a repo in a thread with a timeout so we don't block the event loop."""
+    options: dict[str, object] = {"depth": depth}
+    if _authenticated_clone_url(clone_url):
+        # A trusted Git host may redirect to an untrusted host. Never follow with a token.
+        options["env"] = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.followRedirects",
+            "GIT_CONFIG_VALUE_0": "false",
+        }
     await asyncio.wait_for(
-        asyncio.to_thread(Repo.clone_from, clone_url, dest, depth=depth),
+        asyncio.to_thread(Repo.clone_from, clone_url, dest, **options),
         timeout=CLONE_TIMEOUT,
     )
 
@@ -128,10 +161,28 @@ async def run_validation(listing: McpListing, db: AsyncSession):
         await _manifest_validation(listing, db, entry_point, tmp_dir)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        await _refresh_review_snapshot(listing, db)
+
+
+async def _refresh_review_snapshot(listing: McpListing, db: AsyncSession) -> None:
+    """Validation fills in derived fields (framework, command, image). Reviewers must see them, so a changed
+    version becomes a new review revision instead of leaving the review permanently out of date."""
+    from services.review.cutover import resubmit_if_changed
+    from services.review.decisions import MCP_VALIDATION_MESSAGE
+
+    version = listing.latest_version
+    if version is None:
+        return
+    try:
+        if await resubmit_if_changed(db, "mcp", listing, version, MCP_VALIDATION_MESSAGE, system_generated=True):
+            await db.commit()
+    except Exception:
+        await db.rollback()
+        optic.opt(exception=True).error("could not refresh review snapshot for MCP listing {}", listing.id)
 
 
 async def _clone_and_inspect(listing: McpListing, db: AsyncSession, tmp_dir: str) -> Path | None:
-    url_err = _validate_git_url(listing.git_url)
+    url_err = await asyncio.to_thread(_validate_git_url, listing.git_url)
     if url_err:
         db.add(McpValidationResult(listing_id=listing.id, stage="clone_and_inspect", passed=False, details=url_err))
         await db.commit()
@@ -348,7 +399,7 @@ async def _manifest_validation(listing: McpListing, db: AsyncSession, entry_poin
 async def analyze_repo(git_url: str) -> dict:
     """Clone and analyze a repo without creating a listing. Returns extracted metadata."""
     _empty = {"name": "", "description": "", "version": "0.1.0", "tools": []}
-    url_err = _validate_git_url(git_url)
+    url_err = await asyncio.to_thread(_validate_git_url, git_url)
     if url_err:
         return {**_empty, "error": url_err}
 
@@ -369,63 +420,68 @@ async def analyze_repo(git_url: str) -> dict:
             if any(h in err_msg for h in auth_hints):
                 return {
                     **_empty,
-                    "error": "Repository is private or not accessible. Configure GIT_CLONE_TOKEN for private repos.",
+                    "error": "Repository is private or not accessible. Configure GIT_CLONE_TOKEN and GIT_CLONE_TOKEN_HOSTS for private repos.",
                 }
             if "not found" in err_msg or "does not exist" in err_msg:
                 return {**_empty, "error": "Repository not found. Check the URL."}
             return {**_empty, "error": "Failed to clone repository. Check the URL and try again."}
 
-        entry_point = find_python_entry(tmp_dir)
-        env_vars = detect_env_vars(tmp_dir)
-
-        if not entry_point:
-            # Try non-Python detection; return repo name as fallback
-            non_python = detect_non_python_mcp(tmp_dir)
-            name = extract_repo_name(git_url, tmp_dir)
-            docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, name)
-            cmd, cmd_args = infer_command_args(non_python, docker_image, name)
-            base: dict = {
-                "name": name,
-                "description": "",
-                "version": "0.1.0",
-                "tools": [],
-                "environment_variables": env_vars,
-            }
-            if non_python:
-                base["framework"] = non_python
-            if docker_image:
-                base["docker_image"] = docker_image
-                base["docker_image_suggested"] = docker_suggested
-            if setup_commands:
-                base["setup_instructions"] = "\n".join(setup_commands)
-            if cmd:
-                base["command"] = cmd
-                base["args"] = cmd_args
-            return base
-
-        tree = ast.parse(entry_point.read_text(errors="ignore"))
-        server_name, server_desc, tools, issues = analyze_python_entry(tree, git_url, tmp_dir)
-        relative_entry = str(entry_point.relative_to(tmp_dir))
-        docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, server_name)
-        cmd, cmd_args = infer_command_args("python", docker_image, server_name, relative_entry)
-        result: dict = {
-            "name": server_name,
-            "description": server_desc,
-            "version": "0.1.0",
-            "tools": tools,
-            "issues": issues,
-            "environment_variables": env_vars,
-        }
-        if docker_image:
-            result["docker_image"] = docker_image
-            result["docker_image_suggested"] = docker_suggested
-        if setup_commands:
-            result["setup_instructions"] = "\n".join(setup_commands)
-        if cmd:
-            result["command"] = cmd
-            result["args"] = cmd_args
-        return result
+        return analyze_checkout(tmp_dir, git_url)
     except Exception:
         return {"name": "", "description": "", "version": "0.1.0", "tools": []}
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def analyze_checkout(tmp_dir: str, git_url: str) -> dict:
+    """Extract MCP metadata from a repository that is already checked out at ``tmp_dir``."""
+    entry_point = find_python_entry(tmp_dir)
+    env_vars = detect_env_vars(tmp_dir)
+
+    if not entry_point:
+        # Try non-Python detection; return repo name as fallback
+        non_python = detect_non_python_mcp(tmp_dir)
+        name = extract_repo_name(git_url, tmp_dir)
+        docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, name)
+        cmd, cmd_args = infer_command_args(non_python, docker_image, name)
+        base: dict = {
+            "name": name,
+            "description": "",
+            "version": "0.1.0",
+            "tools": [],
+            "environment_variables": env_vars,
+        }
+        if non_python:
+            base["framework"] = non_python
+        if docker_image:
+            base["docker_image"] = docker_image
+            base["docker_image_suggested"] = docker_suggested
+        if setup_commands:
+            base["setup_instructions"] = "\n".join(setup_commands)
+        if cmd:
+            base["command"] = cmd
+            base["args"] = cmd_args
+        return base
+
+    tree = ast.parse(entry_point.read_text(errors="ignore"))
+    server_name, server_desc, tools, issues = analyze_python_entry(tree, git_url, tmp_dir)
+    relative_entry = str(entry_point.relative_to(tmp_dir))
+    docker_image, docker_suggested, setup_commands = detect_container_image(Path(tmp_dir), git_url, server_name)
+    cmd, cmd_args = infer_command_args("python", docker_image, server_name, relative_entry)
+    result: dict = {
+        "name": server_name,
+        "description": server_desc,
+        "version": "0.1.0",
+        "tools": tools,
+        "issues": issues,
+        "environment_variables": env_vars,
+    }
+    if docker_image:
+        result["docker_image"] = docker_image
+        result["docker_image_suggested"] = docker_suggested
+    if setup_commands:
+        result["setup_instructions"] = "\n".join(setup_commands)
+    if cmd:
+        result["command"] = cmd
+        result["args"] = cmd_args
+    return result

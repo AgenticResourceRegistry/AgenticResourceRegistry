@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -61,7 +62,7 @@ export function VelocityTab() {
       <VelocityChart weekly={velocity?.weekly ?? []} />
       <div className="overflow-x-auto rounded-xl bg-card shadow-sm">
         <div className="p-4 border-b border-border">
-          <h3 className="text-sm font-medium">Best Agents</h3>
+          <h3 className="text-sm font-medium">Best Agent Files</h3>
           <p className="text-xs text-muted-foreground">Ranked by composite score (sessions × 0.4 + downloads × 0.3 + rating × 0.3)</p>
         </div>
         {agentsLoading ? (
@@ -70,14 +71,14 @@ export function VelocityTab() {
           </div>
         ) : !topAgents || topAgents.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
-            No agents with session data yet.
+            No Agent Files with session data yet.
           </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
                 <th className="text-left p-3 font-medium">#</th>
-                <th className="text-left p-3 font-medium">Agent</th>
+                <th className="text-left p-3 font-medium">Agent File</th>
                 <th className="text-left p-3 font-medium">Category</th>
                 <th className="text-left p-3 font-medium">Score</th>
                 <th className="text-left p-3 font-medium">Sessions</th>
@@ -216,7 +217,7 @@ function TimeToValue() {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/30">
-            <th className="text-left p-3 font-medium">Agent</th>
+            <th className="text-left p-3 font-medium">Agent File</th>
             <th className="text-left p-3 font-medium">Category</th>
             <th className="text-left p-3 font-medium">Deployed</th>
             <th className="text-left p-3 font-medium">Days to 100</th>

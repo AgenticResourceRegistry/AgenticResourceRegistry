@@ -5,6 +5,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import enum
@@ -21,6 +22,7 @@ from models.base import Base
 class AgentStatus(str, enum.Enum):
     draft = "draft"
     pending = "pending"
+    changes_requested = "changes_requested"
     approved = "approved"
     rejected = "rejected"
     archived = "archived"
@@ -107,6 +109,14 @@ class Agent(Base):
         onupdate=lambda: datetime.now(UTC),
     )
     is_recommended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    forked_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    forked_from_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    forked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index(
@@ -118,6 +128,7 @@ class Agent(Base):
             sqlite_where=deleted_at.is_(None),
         ),
         Index("ix_agents_team_id", "team_id"),
+        Index("ix_agents_forked_from_id", "forked_from_id"),
     )
 
     versions: Mapped[list["AgentVersion"]] = relationship(
@@ -129,6 +140,10 @@ class Agent(Base):
     latest_version: Mapped["AgentVersion | None"] = relationship(
         foreign_keys=[latest_version_id], lazy="selectin", uselist=False, post_update=True
     )
+
+    @property
+    def is_fork(self) -> bool:
+        return self.forked_from_id is not None or self.forked_from_ref is not None
 
     @property
     def qualified_name(self) -> str:

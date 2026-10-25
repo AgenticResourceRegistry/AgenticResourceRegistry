@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# SAML 2.0 Setup Guide
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "SAML 2.0 Setup Guide"
+---
 
 This guide walks you through configuring SAML 2.0 Single Sign-On (SSO) for
 Observal. It covers identity provider (IdP) configuration, service

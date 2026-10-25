@@ -134,3 +134,68 @@ def basic_event(row: dict) -> dict:
         },
         "service_name": row.get("harness", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# Insight meta records
+# ---------------------------------------------------------------------------
+# ``services.insights.session_meta_extractor`` reads Pi-style records. Each
+# harness's ``meta_records`` converts its own lines into these shapes, so the
+# extractor never branches on transcript format.
+
+
+def meta_session(cwd: str, ts: str = "") -> dict:
+    """Session header carrying the project directory."""
+    return {"type": "session", "cwd": cwd, "timestamp": ts}
+
+
+def meta_time(ts: str) -> dict:
+    """A line with no message content that still bounds the session's time range."""
+    return {"type": "time", "timestamp": ts}
+
+
+def meta_user(ts: str, text: str) -> dict:
+    """A prompt the user typed."""
+    return {
+        "type": "message",
+        "timestamp": ts,
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    }
+
+
+def meta_assistant(ts: str, model: str = "") -> dict:
+    """One model response; harness normalisers append tool calls and set ``usage``."""
+    return {"type": "message", "timestamp": ts, "message": {"role": "assistant", "model": model, "content": []}}
+
+
+def meta_tool_call(name: str, tool_id: str, args: dict, kind: str = "") -> dict:
+    """A tool call block for :func:`meta_assistant` content.
+
+    ``kind`` names what the extractor measures (``write``, ``edit``, ``bash``,
+    ``subagent``) when the harness's own tool name differs; ``args`` then use the
+    Pi argument names (``path``, ``content``, ``edits`` of ``oldText``/``newText``,
+    ``command``).
+    """
+    block = {"type": "toolCall", "name": name, "id": tool_id, "arguments": args}
+    if kind:
+        block["kind"] = kind
+    return block
+
+
+def meta_usage(input_tokens: int, output_tokens: int, cache_read: int = 0, cache_write: int = 0) -> dict:
+    """Usage for :func:`meta_assistant`, with ``input`` excluding cache reads and writes."""
+    return {"input": input_tokens, "output": output_tokens, "cacheRead": cache_read, "cacheWrite": cache_write}
+
+
+def meta_tool_result(ts: str, tool_name: str, is_error: bool, text: str) -> dict:
+    """The result of one tool call."""
+    return {
+        "type": "message",
+        "timestamp": ts,
+        "message": {
+            "role": "toolResult",
+            "toolName": tool_name,
+            "isError": is_error,
+            "content": [{"type": "text", "text": text}],
+        },
+    }

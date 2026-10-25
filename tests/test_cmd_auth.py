@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: 2026 OpenAI contributors
+# SPDX-FileCopyrightText: 2026 ahmadalguydi <ahmadalgaidy@hotmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral tests for :mod:`observal_cli.cmd_auth`."""
@@ -263,6 +264,20 @@ def test_version_check_blocks_mismatch_with_correct_remediation(
         upgrade.assert_not_called()
     else:
         upgrade.assert_called_once_with(server_version)
+
+
+def test_version_check_dev_server_gives_source_install_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    import observal_cli.version_check as version_check
+
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.13.1")
+    monkeypatch.setattr(auth.httpx, "get", lambda *_args, **_kwargs: _response(200, {"server_version": "1.15.0-dev.0"}))
+
+    with pytest.raises(CliError) as exc_info:
+        auth._ensure_cli_matches_server(SERVER_URL)
+
+    assert exc_info.value.category is ErrorCategory.VERSION
+    assert "git+https://github.com/Observal/Observal@main" in (exc_info.value.remediation or "")
+    assert "observal-cli==1.15.0-dev.0" not in (exc_info.value.remediation or "")
 
 
 def _prepare_login(
@@ -1034,6 +1049,32 @@ def test_change_password_sends_current_and_validated_password_with_bearer_token(
     assert current_password not in output
     assert VALID_PASSWORD not in output
     assert ACCESS_TOKEN not in output
+
+
+def test_change_password_keeps_this_cli_signed_in_without_printing_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server signs out every session, so the CLI must swap its one-time code for the fresh pair."""
+    auth.config.save(
+        {"server_url": SERVER_URL, "access_token": ACCESS_TOKEN, "refresh_token": "old", "api_key": "hooks"}
+    )
+    secrets = {"OBSERVAL_CURRENT_PASSWORD": "CurrentPassword1!", "OBSERVAL_NEW_PASSWORD": VALID_PASSWORD}
+    monkeypatch.setattr(auth, "_secret", lambda name, **_kwargs: secrets[name])
+    monkeypatch.setattr(
+        auth.client,
+        "put",
+        MagicMock(return_value={"message": "Password changed", "exchange_code": "one-time-code"}),
+    )
+    exchange = MagicMock(return_value={"access_token": "fresh-access", "refresh_token": "fresh-refresh"})
+    monkeypatch.setattr(auth.client, "post", exchange)
+    emitted: list[dict] = []
+    monkeypatch.setattr(auth, "output_json", emitted.append)
+
+    auth.change_password(output=auth.OutputMode.json)
+
+    saved = json.loads(auth.config.CONFIG_FILE.read_text())
+    assert (saved["access_token"], saved["refresh_token"]) == ("fresh-access", "fresh-refresh")
+    assert "api_key" not in saved  # the revoked hooks token would make every hook upload fail
+    assert exchange.call_args.args == ("/api/v1/auth/exchange", {"code": "one-time-code"})
+    assert emitted == [{"message": "Password changed"}]  # neither the code nor tokens are printed
 
 
 def test_change_password_rejects_mismatched_confirmation(
@@ -1873,14 +1914,17 @@ def test_config_storage_is_atomic_private_and_rejects_malformed_json(
 
 
 def test_post_login_setup_installs_skills_snapshots_and_runs_doctor(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import observal_cli.cmd_doctor as cmd_doctor
 
-    install = MagicMock()
-    pi_extension = MagicMock()
-    snapshot = MagicMock()
-    doctor = MagicMock()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    setup_order: list[str] = []
+    install = MagicMock(side_effect=lambda: setup_order.append("skills"))
+    pi_extension = MagicMock(side_effect=lambda: setup_order.append("pi"))
+    snapshot = MagicMock(side_effect=lambda: setup_order.append("snapshot"))
+    doctor = MagicMock(side_effect=lambda **_kwargs: setup_order.append("doctor"))
     monkeypatch.setattr(auth, "_install_observal_skill", install)
     monkeypatch.setattr(auth, "_install_or_check_pi_extension", pi_extension)
     monkeypatch.setattr(auth, "_generate_initial_layer_snapshot", snapshot)
@@ -1893,16 +1937,19 @@ def test_post_login_setup_installs_skills_snapshots_and_runs_doctor(
     snapshot.assert_called_once_with()
     assert doctor.call_args.kwargs["yes"] is False
     assert doctor.call_args.kwargs["ctx"].invoked_subcommand is None
+    assert setup_order == ["skills", "pi", "snapshot", "doctor"]
 
 
 @pytest.mark.parametrize("error", [typer.Exit(1), RuntimeError("doctor unavailable")])
 def test_post_login_setup_contains_doctor_failures(
     error: Exception,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     printed: list[str],
 ) -> None:
     import observal_cli.cmd_doctor as cmd_doctor
 
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(auth, "_install_observal_skill", MagicMock())
     monkeypatch.setattr(auth, "_install_or_check_pi_extension", MagicMock())
     monkeypatch.setattr(auth, "_generate_initial_layer_snapshot", MagicMock())

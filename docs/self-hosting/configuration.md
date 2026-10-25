@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Configuration
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Configuration"
+---
 
 Boot-time infrastructure settings live in `.env`. Credentials can use dedicated files. Runtime settings, including SSO, normally live in the admin UI, while file-backed sensitive settings remain only in process memory.
 
@@ -90,13 +91,13 @@ Inside Docker Compose, hostnames resolve via the `observal-net` bridge (e.g. `ob
 
 Optional. Configure OIDC, SAML, and SSO-only mode in **Admin → SSO**. OIDC client changes are stored immediately, then take effect after the API restarts.
 
-Full setup in [Authentication and SSO](authentication.md).
+Full setup in [Authentication and SSO](/self-hosting/authentication).
 
 ## Rate limiting
 
 ```
 RATE_LIMIT_AUTH=10/minute          # general auth endpoints
-RATE_LIMIT_AUTH_STRICT=5/minute    # login and password reset
+RATE_LIMIT_AUTH_STRICT=5/minute    # user registration
 ```
 
 Tighten for higher-traffic deployments.
@@ -127,18 +128,19 @@ SAML_SP_X509_CERT_FILE=/run/secrets/saml_sp_x509_cert
 
 Set both files together. They override database-generated SP material, are reported as externally managed, and cannot be regenerated or removed through the admin API. Replace both files and restart the API to rotate them.
 
-More: [Authentication and SSO](authentication.md).
+More: [Authentication and SSO](/self-hosting/authentication).
 
 ## Git operations (submission analysis)
 
 ```dotenv
-ALLOW_INTERNAL_URLS=false          # allow internal/private Git URLs (GitLab/GHE)
+ALLOW_INTERNAL_GIT_URLS=false      # allow internal/private Git URLs (GitLab/GHE)
 GIT_CLONE_TOKEN_FILE=/run/secrets/git_clone_token
+GIT_CLONE_TOKEN_HOSTS=github.com   # exact HTTPS hosts permitted to receive the token
 GIT_CLONE_TOKEN_USER=x-access-token
 GIT_CLONE_TIMEOUT=120              # seconds
 ```
 
-`GIT_CLONE_TOKEN_USER` varies by provider: `x-access-token` for GitHub, `oauth2` or `private-token` for GitLab.
+`GIT_CLONE_TOKEN_HOSTS` is required for authenticated clones: without it the token is never sent. List exact hostnames separated by commas (for example `github.com,gitlab.example.com`, or `git.example.com:8443` for a nonstandard port); subdomains and lookalikes are not trusted automatically. Authorities match exactly: `github.com:443` requires its own entry and does not match `github.com`. Only HTTPS clones receive credentials, even if HTTP clones are enabled. `GIT_CLONE_TOKEN_USER` varies by provider: `x-access-token` for GitHub, `oauth2` or `private-token` for GitLab.
 
 ## Observal CLI (client-side) env vars
 
@@ -150,8 +152,8 @@ Not set in `.env` on the server. These live on the CLI user's machine.
 | `OBSERVAL_ACCESS_TOKEN` / `OBSERVAL_API_KEY` | Pre-authenticate without `login` |
 | `OBSERVAL_TIMEOUT`                           | Request timeout (seconds)        |
 
-Full list: [Environment variables](../reference/environment-variables.md).
+Full list: [Environment variables](/reference/environment-variables).
 
 ## Next
 
-→ [Ports and volumes](ports-and-volumes.md)
+→ [Ports and volumes](/self-hosting/ports-and-volumes)

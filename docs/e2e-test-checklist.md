@@ -1,9 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# E2E Test Checklist
-
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "E2E Test Checklist"
+---
 
 ## Test Accounts
 
@@ -63,9 +63,9 @@
 
 ## 4. Reviewer A - Review Components via CLI
 - [ ] Log in as Reviewer A via CLI (`observal auth login`)
-- [ ] List pending submissions (`observal admin review list`)
-- [ ] Approve some components via CLI (`observal admin review approve`)
-- [ ] Reject some components via CLI with reasons (`observal admin review reject`)
+- [ ] List pending submissions (`observal review list`)
+- [ ] Approve some components via CLI (`observal review approve` then `observal review publish`)
+- [ ] Reject some components via CLI with reasons (`observal review request-changes`)
 
 ## 5. Reviewer B - Review Components via UI
 - [ ] Log in as Reviewer B via UI
@@ -94,9 +94,9 @@
 
 ## 8. Reviewer A - Review Agents via CLI
 - [ ] Log in as Reviewer A via CLI
-- [ ] List pending agent submissions (`observal admin review list`)
-- [ ] Approve some agents via CLI (`observal admin review approve`)
-- [ ] Reject some agents via CLI with reasons (`observal admin review reject`)
+- [ ] List pending agent submissions (`observal review list`)
+- [ ] Approve some agents via CLI (`observal review approve` then `observal review publish`)
+- [ ] Reject some agents via CLI with reasons (`observal review request-changes`)
 
 ## 9. Reviewer B - Review Agents via UI
 - [ ] Log in as Reviewer B via UI
@@ -208,8 +208,8 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 
 ### Via CLI
 - [ ] Log in as User A via CLI (`observal auth login`)
-- [ ] Run `observal component version list <component-slug>` → verify current versions shown
-- [ ] Run `observal component version publish <component-slug>` → follow interactive prompts
+- [ ] Run `observal registry version list <component-type> <listing>` → verify current versions shown
+- [ ] Run `observal registry version publish <component-type> <listing>` → follow interactive prompts
 - [ ] Verify CLI confirms version submitted for review
 
 ---
@@ -244,8 +244,8 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 ## 24. Reviewer A - Review Agent Versions via CLI
 
 - [ ] Log in as Reviewer A via CLI
-- [ ] Run `observal admin review list` → see pending agent version from Section 23
-- [ ] Run `observal admin review approve <id>` → approve the new agent version
+- [ ] Run `observal review list` → see pending agent version from Section 23
+- [ ] Run `observal review approve <number>` → approve the new agent version
 
 ---
 
@@ -307,13 +307,13 @@ Run sections 20–30 once with Case A, then reset and repeat with Case B.
 - [ ] Log in as User A
 - [ ] Navigate to a pending agent → open agent builder / edit page
 - [ ] Verify edit lock is acquired on mount
-- [ ] Switch to Reviewer A → run `observal admin review list` → verify agent is NOT listed
+- [ ] Switch to Reviewer A → run `observal review list` → verify agent is NOT listed
 - [ ] Switch back to User A → save edits
-- [ ] Switch to Reviewer A → run `observal admin review list` → verify agent reappears
+- [ ] Switch to Reviewer A → run `observal review list` → verify agent reappears
 
 ### Edit pending items via CLI
 - [ ] Log in as User A via CLI
-- [ ] Run edit command for a pending component (e.g. `observal skill edit <slug>`)
+- [ ] Run edit command for a pending component (e.g. `observal registry skill edit <skill-id>`)
 - [ ] Verify start-edit lock is acquired (check review queue from another session)
 - [ ] Complete the edit → verify cancel-edit releases the lock
 

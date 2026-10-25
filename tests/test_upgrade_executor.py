@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Isolated behavioral tests for the CLI upgrade executor."""
@@ -103,11 +103,9 @@ def test_execute_selects_installer_then_verifies(
     installer_args = (
         (info, "2.4.1", "upgrade", spinner)
         if method == InstallMethod.BINARY
-        else (
-            "2.4.1",
-            "upgrade",
-            spinner,
-        )
+        else ("2.4.1", "upgrade", spinner, info)
+        if method == InstallMethod.PIP
+        else ("2.4.1", "upgrade", spinner)
     )
     installer_kwargs = {"interactive": True} if method == InstallMethod.BINARY else {}
     assert events == [
@@ -181,7 +179,7 @@ def test_package_installers_build_exact_commands_and_progress(
 ) -> None:
     events: list[object] = []
     spinner = RecordingSpinner(events)
-    monkeypatch.setattr(executor.sys, "executable", "/venv/bin/python")
+    monkeypatch.setattr(executor, "pip_install_prefix", lambda _: ["/venv/bin/python", "-m", "pip", "install"])
     monkeypatch.setenv("PIP_INDEX_URL", "https://packages.example.test/simple")
 
     def run(command: list[str], **kwargs: object) -> SimpleNamespace:
@@ -190,7 +188,8 @@ def test_package_installers_build_exact_commands_and_progress(
 
     monkeypatch.setattr(executor.subprocess, "run", run)
 
-    result = getattr(executor, installer_name)("2.4.1", direction, spinner)
+    args = (install_info(InstallMethod.PIP),) if installer_name == "_install_via_pip" else ()
+    result = getattr(executor, installer_name)("2.4.1", direction, spinner, *args)
 
     assert result is None
     assert events == [
@@ -205,37 +204,39 @@ def test_package_installers_build_exact_commands_and_progress(
 
 
 @pytest.mark.parametrize(
-    ("installer_name", "direction", "returncode", "stderr", "expected_message"),
+    ("installer_name", "direction", "returncode", "stderr", "expected_stderr"),
     [
-        ("_install_via_uv", "upgrade", 7, " registry denied \n", "[red]Upgrade failed:[/red] registry denied"),
-        (
-            "_install_via_pipx",
-            "downgrade",
-            -signal.SIGTERM,
-            "terminated\n",
-            "[red]Downgrade failed:[/red] terminated",
-        ),
-        ("_install_via_pip", "upgrade", 1, "resolver failed", "[red]Upgrade failed:[/red] resolver failed"),
+        ("_install_via_uv", "upgrade", 7, " registry denied \n", "registry denied"),
+        ("_install_via_pipx", "downgrade", -signal.SIGTERM, "terminated\n", "terminated"),
+        ("_install_via_pip", "upgrade", 1, "resolver failed", "resolver failed"),
     ],
 )
-def test_package_installer_failures_raise_exit_with_exact_stderr(
+def test_package_installer_failure_tries_release_tag_then_fails_loudly(
     installer_name: str,
     direction: str,
     returncode: int,
     stderr: str,
-    expected_message: str,
+    expected_stderr: str,
     messages: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = MagicMock(return_value=completed(returncode, stderr=stderr))
     monkeypatch.setattr(executor.subprocess, "run", run)
+    monkeypatch.setattr(executor, "pip_install_prefix", lambda _: ["/venv/bin/python", "-m", "pip", "install"])
 
+    args = (install_info(InstallMethod.PIP),) if installer_name == "_install_via_pip" else ()
     with pytest.raises(typer.Exit) as error:
-        getattr(executor, installer_name)("2.4.1", direction, RecordingSpinner())
+        getattr(executor, installer_name)("2.4.1", direction, RecordingSpinner(), *args)
 
     assert error.value.exit_code == 1
-    assert messages == [expected_message]
-    assert run.call_args.kwargs == {"capture_output": True, "text": True, "timeout": 120}
+    assert run.call_count == 2
+    assert "observal-cli==2.4.1" in " ".join(run.call_args_list[0].args[0])
+    assert "git+https://github.com/Observal/Observal@v2.4.1" in " ".join(run.call_args_list[1].args[0])
+    assert messages == [
+        f"[red]{direction.capitalize()} failed; the installed CLI was left unchanged.[/red]",
+        f"  observal-cli==2.4.1: {expected_stderr}",
+        f"  git+https://github.com/Observal/Observal@v2.4.1: {expected_stderr}",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -254,9 +255,11 @@ def test_package_installer_boundary_exceptions_propagate_unchanged(
 ) -> None:
     spinner = RecordingSpinner()
     monkeypatch.setattr(executor.subprocess, "run", MagicMock(side_effect=failure))
+    monkeypatch.setattr(executor, "pip_install_prefix", lambda _: ["/venv/bin/python", "-m", "pip", "install"])
 
+    args = (install_info(InstallMethod.PIP),) if installer_name == "_install_via_pip" else ()
     with pytest.raises(type(failure)) as error:
-        getattr(executor, installer_name)("2.4.1", "upgrade", spinner)
+        getattr(executor, installer_name)("2.4.1", "upgrade", spinner, *args)
 
     assert error.value is failure
     assert spinner.events == [

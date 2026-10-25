@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal outdated`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal outdated"
+---
 
 Compare versions recorded in `~/.observal/lockfile.json` with the latest versions available from the active Observal registry. The command never installs an update.
 
@@ -23,7 +24,7 @@ The command checks:
 * Separately installed skills
 * Separately installed hooks
 
-Components bundled inside a pulled agent are not checked independently. Agent versions pin exact component versions, so update the agent when a newer agent version is reported. The exception is an agent version released before pinning: a component it never locked installs at its latest approved release, with a warning, and `--strict` refuses it. Agent authors use [`observal agent outdated`](agent.md#check-component-pins) to see which pinned components have newer releases and which are unlocked.
+Components bundled inside a pulled agent are not checked independently. Agent versions pin exact component versions, so update the agent when a newer agent version is reported. The exception is an agent version released before pinning: a component it never locked installs at its latest approved release, with a warning, and `--strict` refuses it. Agent authors use [`observal agent outdated`](/cli/agent#check-component-pins) to see which pinned components have newer releases and which are unlocked.
 
 A plain `observal agent pull` keeps an installed agent on its locked version, so the upgrade command for an agent includes `--upgrade`.
 
@@ -123,6 +124,6 @@ Use `--no-report` when no Inbox mutation is wanted. This does not make the comma
 
 ## Related
 
-* [`observal agent pull`](pull.md): update a pulled agent
-* [`observal registry`](registry.md): install a standalone component
-* [`observal config`](config.md): inspect the active server configuration
+* [`observal agent pull`](/cli/pull): update a pulled agent
+* [`observal registry`](/cli/registry): install a standalone component
+* [`observal config`](/cli/config): inspect the active server configuration

@@ -94,7 +94,7 @@ HARNESS_REGISTRY: dict[str, dict] = {
     },
     "kiro": {
         "display_name": "Kiro",
-        "capabilities": {"hooks", "mcp_servers"},
+        "capabilities": {"hooks", "mcp_servers", "skills"},
         "session_parser": "kiro",
         "scopes": ["project", "user"],
         "default_scope": "user",
@@ -283,7 +283,7 @@ HARNESS_REGISTRY: dict[str, dict] = {
         },
         "agent_profile_format": "markdown",
         "mcp_config": {
-            "project": "~/.copilot/mcp-config.json",
+            "project": ".mcp.json",
         },
         "mcp_servers_key": "mcpServers",
         "skills": {
@@ -305,7 +305,7 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "Stop": "sessionEnd",
         },
         "config_dir": ".copilot",
-        # ~/.copilot/mcp-config.json is read natively.
+        # Project .mcp.json is read natively; ~/.copilot/mcp-config.json is user-only.
         "mcp_install_mode": "file",
         "dynamic_tools": False,
         "prompt_context_injection": False,

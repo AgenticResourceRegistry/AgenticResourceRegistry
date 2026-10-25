@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Data & Retention Settings
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Data & Retention Settings"
+---
 
 Control deployment-wide telemetry retention and how aggressively expensive API responses are cached.
 
-## Purge Traces and Insights {#purge-traces-and-insights}
+## Purge Traces and Insights
 
 The **Purge Traces & Insights** danger-zone action permanently deletes telemetry and generated insight data for the deployment.
 
@@ -18,7 +19,9 @@ It does **not** delete registry agents, versions, skills, hooks, prompts, users,
 
 Use this only when you intentionally need a clean telemetry slate, for example before handing over a demo instance or after importing accidental/private trace data. The action cannot be undone from Observal; take database backups first if you may need the data later.
 
-## Application retention policy {#application-retention}
+<a id="application-retention"></a>
+
+## Application retention policy
 
 The admin retention controls store deployment-wide policy values in the following settings:
 
@@ -31,7 +34,9 @@ The admin retention controls store deployment-wide policy values in the followin
 
 The policy values are independent of registry ownership. Leave a threshold empty when that limit is not needed. If `retention.score_days` is empty, the purge uses twice `retention.trace_days`, with a 30-day minimum.
 
-## ClickHouse TTL {#data-retention}
+<a id="data-retention"></a>
+
+## ClickHouse TTL
 
 `data.retention_days` remains the separate ClickHouse TTL setting. It controls automatic expiry of raw session content and defaults to 90 days. Application retention values cannot exceed this ceiling when it is enabled.
 
@@ -46,7 +51,7 @@ The policy values are independent of registry ownership. Leave a threshold empty
 
 **When to raise:** You need longer trend windows for audits, investigations, or longitudinal agent performance analysis.
 
-## Default Cache TTL {#default-cache-ttl}
+## Default Cache TTL
 
 Default cache duration, in seconds, for ordinary API responses.
 
@@ -56,7 +61,7 @@ Default cache duration, in seconds, for ordinary API responses.
 | `5` | Very fresh data, higher database pressure |
 | `120` | Lower database load, more stale list/detail pages |
 
-## Dashboard Cache TTL {#dashboard-cache-ttl}
+## Dashboard Cache TTL
 
 Cache duration, in seconds, for expensive dashboard aggregation queries.
 
@@ -66,7 +71,7 @@ Cache duration, in seconds, for expensive dashboard aggregation queries.
 | `15` | Near-live dashboard updates, higher query load |
 | `300` | Lower query load for large deployments, charts can lag by several minutes |
 
-## OTEL Cache TTL {#otel-cache-ttl}
+## OTEL Cache TTL
 
 Cache duration, in seconds, for trace and session list endpoints.
 

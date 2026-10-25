@@ -643,6 +643,38 @@ class TestPullPi:
         assert skill.exists()
         assert "Pi Skill" in skill.read_text()
 
+    @pytest.mark.parametrize("extension_installed", [True, False])
+    def test_reports_sessions_follows_observal_extension(self, tmp_path: Path, monkeypatch, extension_installed: bool):
+        pi_dir = tmp_path / "pi-agent"
+        if extension_installed:
+            (pi_dir / "extensions").mkdir(parents=True)
+            (pi_dir / "extensions" / "observal.ts").write_text("// observal")
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(pi_dir))
+        project = tmp_path / "project"
+        project.mkdir()
+
+        with _patch_config(), _patch_get_agent(), _patch_post(_pi_snippet()):
+            result = runner.invoke(
+                cli_app,
+                [
+                    "agent",
+                    "pull",
+                    "abc123",
+                    "--harness",
+                    "pi",
+                    "--dir",
+                    str(project),
+                    "--no-prompt",
+                    "--scope",
+                    "project",
+                    "--output",
+                    "json",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["reports_sessions"] is extension_installed
+
 
 class TestPullOpenCode:
     def test_writes_rules_mcp_and_hooks(self, tmp_path: Path):
@@ -739,6 +771,90 @@ class TestPullMcpMerge:
 # ═══════════════════════════════════════════════════════════════
 # 8. Dry-run
 # ═══════════════════════════════════════════════════════════════
+
+
+class TestProjectMcpDestinations:
+    def test_goose_project_pull_with_mcp_fails_without_writes(self, tmp_path: Path, monkeypatch):
+        home, project = tmp_path / "home", tmp_path / "project"
+        home.mkdir()
+        project.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        snippet = {
+            "config_snippet": {
+                "agent_profile": {"path": ".agents/agents/my-agent.md", "content": "# My Agent"},
+                "mcp_config": {
+                    "path": "~/.config/goose/config.yaml",
+                    "content": {"extensions": {"example": {"cmd": "echo"}}},
+                },
+            }
+        }
+        for flag in ([], ["--dry-run"]):
+            with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+                result = runner.invoke(
+                    cli_app,
+                    [
+                        "agent",
+                        "pull",
+                        "abc123",
+                        "--harness",
+                        "goose",
+                        "--scope",
+                        "project",
+                        "--dir",
+                        str(project),
+                        "--no-prompt",
+                        *flag,
+                    ],
+                )
+            assert result.exit_code != 0
+            assert "Goose MCP extensions require a user-level config" in _plain(result.output).replace("\n", " ")
+            assert not list(project.iterdir())
+            assert not list(home.iterdir())
+
+    def test_copilot_cli_project_pull_writes_native_mcp_file(self, tmp_path: Path, monkeypatch):
+        home, project = tmp_path / "home", tmp_path / "project"
+        home.mkdir()
+        project.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        snippet = {
+            "config_snippet": {
+                "agent_profile": {"path": ".github/agents/my-agent.agent.md", "content": "# My Agent"},
+                "mcp_config": {
+                    "path": ".mcp.json",
+                    "content": {
+                        "mcpServers": {
+                            "example": {
+                                "type": "stdio",
+                                "command": "echo",
+                                "args": ["hello"],
+                                "tools": ["*"],
+                            }
+                        }
+                    },
+                },
+            }
+        }
+        for flag in (["--dry-run"], []):
+            with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+                result = runner.invoke(
+                    cli_app,
+                    [
+                        "agent",
+                        "pull",
+                        "abc123",
+                        "--harness",
+                        "copilot-cli",
+                        "--dir",
+                        str(project),
+                        "--no-prompt",
+                        *flag,
+                    ],
+                )
+            assert result.exit_code == 0, result.output
+            if flag:
+                assert not (project / ".mcp.json").exists()
+        assert json.loads((project / ".mcp.json").read_text())["mcpServers"]["example"]["command"] == "echo"
+        assert not list(home.iterdir())
 
 
 class TestPullDryRun:
@@ -1211,7 +1327,7 @@ class TestAgentPublish:
         assert "new-agent-uuid" in result.output
         assert "observal agent pull tester/test-agent" in result.output
         # A public publish stays in the review queue, so the CLI must say so.
-        assert "an admin must approve it" in result.output
+        assert "review is required before publication" in result.output
 
         # Verify the POST payload
         call_args = mock_post_fn.call_args
@@ -1255,7 +1371,13 @@ class TestAgentPublish:
         search_results = [{"id": "existing-uuid", "name": "test-agent"}]
         put_result = {"id": "existing-uuid", "name": "test-agent"}
 
-        with _patch_config(), _patch_get(search_results) as mock_get_fn, _patch_put(put_result) as mock_put_fn:
+        # Search by name, then read the agent's status: --update amends an unpublished version in place.
+        detail = {"id": "existing-uuid", "name": "test-agent", "version": "1.0.0", "status": "pending"}
+        with (
+            _patch_config(),
+            patch("observal_cli.client.get", side_effect=[search_results, detail]) as mock_get_fn,
+            _patch_put(put_result) as mock_put_fn,
+        ):
             result = runner.invoke(
                 cli_app,
                 ["agent", "publish", "--dir", str(tmp_path), "--update"],
@@ -1265,10 +1387,10 @@ class TestAgentPublish:
         assert "Agent updated" in result.output
         assert "existing-uuid" in result.output
 
-        # Verify GET was called with search param
-        mock_get_fn.assert_called_once()
-        get_call = mock_get_fn.call_args
-        assert get_call[1].get("params", {}).get("search") == "test-agent"
+        # Verify the lookup searched by name, then read the matched agent's status
+        assert mock_get_fn.call_count == 2
+        assert mock_get_fn.call_args_list[0][1].get("params", {}).get("search") == "test-agent"
+        assert mock_get_fn.call_args_list[1][0][0] == "/api/v1/agents/existing-uuid"
 
         # Verify PUT was called with correct endpoint
         mock_put_fn.assert_called_once()

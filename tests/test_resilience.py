@@ -4,10 +4,14 @@
 
 """Tests for resilience patterns: retries, health checks, and timeouts."""
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from redis.exceptions import AuthenticationError, AuthorizationError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 # ---------------------------------------------------------------------------
 # ClickHouse _query retries on ConnectError
@@ -169,6 +173,168 @@ class TestRedisPublishRetry:
         ):
             await publish("test-channel", {"msg": "hello"})
             assert mock_redis.publish.call_count == 2
+
+
+class TestRedisPublishRealClientErrors:
+    """publish() retries redis-py's own connection and timeout errors."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [RedisConnectionError("refused"), RedisTimeoutError("timed out")],
+        ids=["connection", "timeout"],
+    )
+    async def test_retries_redis_error_then_succeeds(self, error):
+        from services.redis import publish
+
+        mock_redis = MagicMock()
+        mock_redis.publish = AsyncMock(side_effect=[error, 1])
+        with (
+            patch("services.redis.get_redis", return_value=mock_redis),
+            patch("asyncio.sleep", new_callable=AsyncMock) as sleep,
+        ):
+            await publish("test-channel", {"msg": "hello"})
+        assert mock_redis.publish.await_count == 2
+        sleep.assert_awaited_once_with(0.5)
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_three_attempts_with_backoff(self):
+        from services.redis import publish
+
+        mock_redis = MagicMock()
+        mock_redis.publish = AsyncMock(side_effect=RedisConnectionError("refused"))
+        with (
+            patch("services.redis.get_redis", return_value=mock_redis),
+            patch("asyncio.sleep", new_callable=AsyncMock) as sleep,
+        ):
+            # Documented behaviour: log and return, never raise to the caller.
+            await publish("test-channel", {"msg": "hello"})
+        assert mock_redis.publish.await_count == 3
+        assert [c.args for c in sleep.await_args_list] == [(0.5,), (1.0,)]
+
+    @pytest.mark.asyncio
+    async def test_unrelated_error_is_not_swallowed(self):
+        from services.redis import publish
+
+        mock_redis = MagicMock()
+        mock_redis.publish = AsyncMock(side_effect=ValueError("programming error"))
+        with (
+            patch("services.redis.get_redis", return_value=mock_redis),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(ValueError, match="programming error"),
+        ):
+            await publish("test-channel", {"msg": "hello"})
+        assert mock_redis.publish.await_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [AuthenticationError("bad password"), AuthorizationError("no permission")],
+        ids=["authentication", "authorization"],
+    )
+    async def test_auth_errors_are_not_retried(self, error):
+        from services.redis import publish
+
+        mock_redis = MagicMock()
+        mock_redis.publish = AsyncMock(side_effect=error)
+        with (
+            patch("services.redis.get_redis", return_value=mock_redis),
+            patch("asyncio.sleep", new_callable=AsyncMock) as sleep,
+            pytest.raises(type(error)),
+        ):
+            await publish("test-channel", {"msg": "hello"})
+        assert mock_redis.publish.await_count == 1
+        sleep.assert_not_awaited()
+
+
+@contextmanager
+def _fake_pubsub(subscribe_effects, messages=()):
+    """Stub redis-py so each subscribe() attempt gets the next effect. Yields (pubsub, sleep)."""
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock(side_effect=subscribe_effects)
+    pubsub.unsubscribe = AsyncMock()
+    pubsub.close = AsyncMock()
+
+    async def listen():
+        for message in messages:
+            yield message
+
+    pubsub.listen = listen
+    client = MagicMock()
+    client.pubsub.return_value = pubsub
+    pool = MagicMock()
+    pool.disconnect = AsyncMock()
+    with (
+        patch("services.redis.aioredis.ConnectionPool.from_url", return_value=pool),
+        patch("services.redis.aioredis.Redis", return_value=client),
+        patch("asyncio.sleep", new_callable=AsyncMock) as sleep,
+    ):
+        yield pubsub, sleep
+
+
+class TestRedisSubscribeRealClientErrors:
+    """subscribe() reconnects on redis-py's own connection and timeout errors."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [RedisConnectionError("reset"), RedisTimeoutError("timed out")],
+        ids=["connection", "timeout"],
+    )
+    async def test_reconnects_and_delivers_messages(self, error):
+        from services.redis import subscribe
+
+        message = {"type": "message", "data": '{"n": 1}'}
+        with _fake_pubsub([error, None], messages=[message]) as (pubsub, sleep):
+            stream = subscribe("ch")
+            try:
+                received = await stream.__anext__()
+            finally:
+                await stream.aclose()
+        assert received == {"n": 1}
+        assert pubsub.subscribe.await_count == 2
+        sleep.assert_awaited_once_with(1.0)
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_five_attempts(self):
+        from services.redis import subscribe
+
+        with _fake_pubsub(RedisConnectionError("refused")) as (pubsub, sleep):
+            delivered = [m async for m in subscribe("ch")]
+        assert delivered == []
+        assert pubsub.subscribe.await_count == 5
+        assert [c.args for c in sleep.await_args_list] == [(1.0,), (2.0,), (3.0,), (4.0,), (5.0,)]
+
+    @pytest.mark.asyncio
+    async def test_unrelated_error_is_not_swallowed(self):
+        from services.redis import subscribe
+
+        with (
+            _fake_pubsub(ValueError("programming error")) as (pubsub, sleep),
+            pytest.raises(ValueError, match="programming error"),
+        ):
+            async for _ in subscribe("ch"):
+                pass
+        assert pubsub.subscribe.await_count == 1
+        sleep.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [AuthenticationError("bad password"), AuthorizationError("no permission")],
+        ids=["authentication", "authorization"],
+    )
+    async def test_auth_errors_are_not_retried(self, error):
+        from services.redis import subscribe
+
+        with (
+            _fake_pubsub(error) as (pubsub, sleep),
+            pytest.raises(type(error)),
+        ):
+            async for _ in subscribe("ch"):
+                pass
+        assert pubsub.subscribe.await_count == 1
+        sleep.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

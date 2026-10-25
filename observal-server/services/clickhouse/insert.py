@@ -146,7 +146,11 @@ async def insert_session_checkpoint(
 async def refresh_session_summary(session_id: str, project_id: str, user_id: str, harness: str) -> None:
     """Replace one session summary from canonical deduplicated rows."""
     sql = (
-        "INSERT INTO session_stats_agg "
+        "INSERT INTO session_stats_agg ("
+        "project_id, session_id, agent_id, agent_version, user_id, parent_session_id, harness, layer_hash, "
+        "first_event_time, last_event_time, event_count, prompt_count, tool_call_count, tool_result_count, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_credits, model, "
+        "summary_version, updated_at, last_source_ingest_at) "
         "SELECT project_id, session_id, "
         "coalesce(anyIf(agent_id, agent_id IS NOT NULL AND agent_id != ''), '') AS agent_id, "
         "coalesce(anyIf(agent_version, agent_version IS NOT NULL AND agent_version != ''), '') AS agent_version, "
@@ -161,7 +165,10 @@ async def refresh_session_summary(session_id: str, project_id: str, user_id: str
         "sumIf(cache_read_tokens, rendered = 1) AS cache_read_tokens, "
         "sumIf(cache_write_tokens, rendered = 1) AS cache_write_tokens, max(credits) AS total_credits, "
         "anyLastIf(model, rendered = 1 AND model != '') AS model, "
-        "toUInt64(toUnixTimestamp64Milli(now64(3))) AS summary_version, now64(3) AS updated_at "
+        # The legacy MV also writes to this ReplacingMergeTree with millisecond
+        # versions. Our canonical refresh must always win, even in the same ms.
+        "toUInt64(toUnixTimestamp64Micro(now64(6))) AS summary_version, now64(3) AS updated_at, "
+        "maxIf(ingested_at, is_source_record = 1 AND rendered = 1) AS last_source_ingest_at "
         "FROM session_events FINAL WHERE project_id = {pid:String} AND user_id = {uid:String} "
         "AND harness = {harness:String} AND session_id = {sid:String} "
         "GROUP BY project_id, session_id, user_id, harness"

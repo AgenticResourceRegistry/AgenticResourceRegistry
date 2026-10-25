@@ -31,6 +31,6 @@ def sanitize_name(name: str) -> str:
     """
     if not isinstance(name, str):
         raise TypeError(f"sanitize_name expects str, got {type(name).__name__!r}")
-    if _SAFE_NAME.match(name):
+    if _SAFE_NAME.fullmatch(name):
         return name
     return re.sub(r"[^a-zA-Z0-9_-]", "-", name)

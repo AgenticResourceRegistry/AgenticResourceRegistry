@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Releasing
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Releasing"
+---
 
 Observal develops on `main` and publishes only from protected `release/X.Y` branches. Each minor line has one branch for alpha, beta, release candidates, stable, and subsequent patches. There is no `develop` branch, per-channel branch, or SLA database.
 
@@ -32,7 +33,7 @@ From an up-to-date `main`:
 uv run python tools/release.py --cut 1.14
 ```
 
-This creates `release/1.14` at the exact current canonical `main` commit. The new minor line must be above every existing release tag; maintain older lines in place. It does not publish anything. An existing line cannot be overwritten, including if another maintainer cuts the same line concurrently.
+This creates `release/1.14` at the exact current canonical `main` commit. The new minor line must be above every existing release tag; maintain older lines in place. It does not publish anything. It also opens a PR on `main` (`chore: start 1.15 development`) advancing the version files to the next minor dev version (`1.15.0-dev.0`), so `main` never looks older than the line it feeds. That commit is metadata: it is never backported. An existing line cannot be overwritten, including if another maintainer cuts the same line concurrently.
 
 ```bash
 git fetch upstream
@@ -113,7 +114,7 @@ A release-branch push is inspected for a single release metadata commit. Branch 
 5. Publish GitHub assets and verify the registries and installed CLI.
 6. For the newest stable release only, promote GitHub latest and invoke the EC2 workflow. EC2 checks out the validated tagged commit, not `main`.
 
-The release workflow is globally serialized across lines with GitHub's `queue: max` setting, which keeps up to 100 pending runs rather than replacing an earlier pending release. Publishing jobs recompute alias eligibility from current tags, including on failed-job retries. Signing and attestation verification use `refs/heads/release/X.Y`, not `main` or a wildcard. See [release verification](../security/release-verification.md).
+The release workflow is globally serialized across lines with GitHub's `queue: max` setting, which keeps up to 100 pending runs rather than replacing an earlier pending release. Publishing jobs recompute alias eligibility from current tags, including on failed-job retries. Signing and attestation verification use `refs/heads/release/X.Y`, not `main` or a wildcard. See [release verification](/security/release-verification).
 
 An existing tag is accepted only if it points to the exact validated commit and verifies with the expected signature. A later published version on the same line makes an older preparation ineligible for republication. Use failed-job reruns for partial failures and never replace immutable package versions or tags. Correct released code with a new patch.
 

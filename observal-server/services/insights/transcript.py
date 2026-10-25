@@ -44,7 +44,7 @@ async def build_session_transcript(session_id: str) -> str:
     query = get_query()
 
     sql = """
-        SELECT line_offset, event_type, tool_name, raw_line
+        SELECT line_offset, event_type, tool_name, raw_line, content_preview
         FROM session_events FINAL
         WHERE session_id = {sid:String}
         ORDER BY line_offset ASC
@@ -86,7 +86,7 @@ def _format_rows(rows: list[dict]) -> str:
         except (json.JSONDecodeError, TypeError):
             continue
 
-        line = _format_event(event_type, tool_name, parsed)
+        line = _format_event(event_type, tool_name, parsed, row.get("content_preview", ""))
         if not line:
             continue
 
@@ -124,10 +124,10 @@ async def _summarize_transcript(session_id: str, transcript: str) -> str:
     )
 
 
-def _format_event(event_type: str, tool_name: str, parsed: dict) -> str:
+def _format_event(event_type: str, tool_name: str, parsed: dict, row_content_preview: str = "") -> str:
     """Format a single parsed JSONL event into a transcript line."""
     if event_type == "user_prompt":
-        text = _extract_text(parsed)
+        text = _extract_text(parsed) or (row_content_preview if isinstance(row_content_preview, str) else "")
         if text:
             return f"[User]: {text[:MAX_PROMPT_CHARS]}"
 
@@ -154,17 +154,31 @@ def _format_event(event_type: str, tool_name: str, parsed: dict) -> str:
 
 
 def _extract_text(parsed: dict) -> str:
-    """Extract text from a message content."""
+    """Extract a classified user prompt from Codex, Kiro or conventional messages."""
+    payload = parsed.get("payload")
+    if isinstance(payload, dict):
+        if parsed.get("type") == "event_msg" and payload.get("type") == "user_message":
+            return payload.get("message", "") if isinstance(payload.get("message"), str) else ""
+        if payload.get("type") == "user" and isinstance(payload.get("content"), str):
+            return payload["content"]  # Kiro IDE
+    if parsed.get("kind") == "Prompt" and isinstance(parsed.get("data"), dict):
+        content = parsed["data"].get("content", [])
+        if isinstance(content, list):
+            return " ".join(
+                item["data"]
+                for item in content
+                if isinstance(item, dict) and item.get("kind") == "text" and isinstance(item.get("data"), str)
+            )
     msg = parsed.get("message", parsed)
-    content = msg.get("content", "")
+    content = msg.get("content", "") if isinstance(msg, dict) else ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-        return " ".join(parts)
+        return " ".join(
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        )
     return ""
 
 
