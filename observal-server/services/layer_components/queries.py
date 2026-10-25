@@ -123,6 +123,79 @@ async def presence_cohort(
     return await _rows(sql, params)
 
 
+def _quoted_array(values: list[str]) -> str:
+    return "[" + ",".join("'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'" for value in values) + "]"
+
+
+async def presence_sample(
+    project_id: str,
+    component_type: str,
+    component_id: str,
+    component_version_id: str | None,
+    period: tuple[datetime, datetime],
+    *,
+    limit: int,
+) -> tuple[list[dict], int]:
+    """A reproducible sample of the presence cohort, and the cohort's full size.
+
+    The order is a hash of the scoped session identity, so the same cohort gives the same sample.
+    """
+    params = presence_params(project_id, component_type, component_id, component_version_id, period)
+    total = await _rows(f"SELECT count() AS n FROM ({PRESENCE_COHORT_SQL}) FORMAT JSON", params)
+    sql = (
+        f"SELECT user_id, harness, session_id FROM ({PRESENCE_COHORT_SQL}) "
+        "ORDER BY cityHash64(user_id, harness, session_id), user_id, harness, session_id "
+        "LIMIT {limit:UInt16} FORMAT JSON"
+    )
+    return await _rows(sql, params | {"param_limit": limit}), int(total[0]["n"]) if total else 0
+
+
+# Sessions whose published layer snapshot verifiably lacks the component (any version). A session with no
+# extracted snapshot is unknown, not absent, so it is in neither cohort.
+ABSENCE_COHORT_SQL = (
+    """SELECT s.user_id AS user_id, s.harness AS harness, s.session_id AS session_id
+    FROM session_stats_agg AS s FINAL
+    WHERE s.project_id = {project_id:String} AND startsWith(s.layer_hash, 'v2_')
+      AND s.last_event_time >= toDateTime64({start:String}, 3, 'UTC')
+      AND s.last_event_time < toDateTime64({end:String}, 3, 'UTC')
+      AND has({harnesses:Array(String)}, s.harness)
+      AND (s.user_id, s.layer_hash) IN (SELECT user_id, layer_hash FROM ("""
+    + _LATEST
+    + """) WHERE conflict = 0)
+      AND (s.user_id, s.harness, s.session_id) NOT IN (SELECT user_id, harness, session_id FROM ("""
+    + PRESENCE_COHORT_SQL
+    + """))"""
+)
+
+
+async def absence_sample(
+    project_id: str,
+    component_type: str,
+    component_id: str,
+    period: tuple[datetime, datetime],
+    harnesses: list[str],
+    *,
+    limit: int,
+) -> tuple[list[dict], int]:
+    """A reproducible sample of sessions without the component, and how many there are.
+
+    Absence is checked against every version of the listing, so a version-scoped report compares with
+    sessions that have none of it.
+    """
+    if not harnesses:
+        return [], 0
+    params = presence_params(project_id, component_type, component_id, None, period) | {
+        "param_harnesses": _quoted_array(harnesses)
+    }
+    total = await _rows(f"SELECT count() AS n FROM ({ABSENCE_COHORT_SQL}) FORMAT JSON", params)
+    sql = (
+        f"SELECT user_id, harness, session_id FROM ({ABSENCE_COHORT_SQL}) "
+        "ORDER BY cityHash64(user_id, harness, session_id), user_id, harness, session_id "
+        "LIMIT {limit:UInt16} FORMAT JSON"
+    )
+    return await _rows(sql, params | {"param_limit": limit}), int(total[0]["n"]) if total else 0
+
+
 async def presence_version_distribution(
     project_id: str,
     component_type: str,

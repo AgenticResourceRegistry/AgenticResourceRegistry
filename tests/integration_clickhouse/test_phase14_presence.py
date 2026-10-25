@@ -35,7 +35,7 @@ from models.user import User
 from observal_cli.layer import layer_hash_v2
 from services.layer_components import CURRENT_EXTRACTOR_VERSION, queries
 from services.layer_components.extractor import ensure_layer_components
-from services.layer_components.queries import presence_cohort, presence_coverage
+from services.layer_components.queries import absence_sample, presence_cohort, presence_coverage, presence_sample
 
 URL = os.getenv("OBSERVAL_CH_PHASE14_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="opt-in isolated CH migration proof")
@@ -608,3 +608,125 @@ async def test_presence_verification_counters_are_for_the_selected_component():
     ) == (0, 0, 1)
     scoped = await presence_coverage(project, "mcp", COMPONENT, OTHER_VERSION, period)
     assert scoped["verified_presence_sessions"] == 0, "a version-scoped query counts only that version"
+
+
+def _session_on(project: str, user: str, layer_hash: str, session: str, *, harness="claude-code", day="2026-01-01"):
+    return _session(project, user, layer_hash, session) | {
+        "harness": harness,
+        "first_event_time": f"{day} 12:00:00.000",
+        "last_event_time": f"{day} 12:00:00.000",
+    }
+
+
+@pytest.mark.asyncio
+async def test_presence_sample_is_reproducible_and_reports_the_whole_cohort():
+    project = "phase14-sample-" + uuid.uuid4().hex
+    period = (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC))
+    users = [f"u{i:02d}" for i in range(12)]
+    hashes = {user: "v2_" + f"{i:02d}".ljust(60, "a") for i, user in enumerate(users)}
+    _insert("session_stats_agg", [_session(project, user, hashes[user], f"s-{user}") for user in users])
+    _insert("layer_components", [_component(project, user, hashes[user], 1) for user in users])
+    _insert("layer_component_extractions", [_marker(project, user, hashes[user], 1, "complete") for user in users])
+    first, total = await presence_sample(project, "mcp", COMPONENT, VERSION, period, limit=5)
+    again, _ = await presence_sample(project, "mcp", COMPONENT, VERSION, period, limit=5)
+    assert total == 12 and len(first) == 5 and first == again, "the same cohort gives the same sample"
+    everything, _ = await presence_sample(project, "mcp", COMPONENT, VERSION, period, limit=100)
+    assert {row["user_id"] for row in everything} == set(users) and set(first[0]) == {
+        "user_id",
+        "harness",
+        "session_id",
+    }
+    assert await presence_sample(project, "mcp", COMPONENT, OTHER_VERSION, period, limit=5) == ([], 0)
+
+
+@pytest.mark.asyncio
+async def test_absence_cohort_is_verified_absent_sessions_on_the_same_harnesses():
+    project = "phase14-absent-" + uuid.uuid4().hex
+    other_project = project + "-other"
+    period = (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC))
+    h = {
+        name: "v2_" + name.ljust(60, "b")
+        for name in ("with", "empty", "other", "unextracted", "pi", "late", "conflict")
+    }
+    h["legacy"] = "legacy-" + "c" * 40
+    h["fail"] = "v2_" + "fail".ljust(60, "b")
+    _insert(
+        "session_stats_agg",
+        [
+            _session_on(project, "u-with", h["with"], "with"),
+            _session_on(project, "u-empty", h["empty"], "empty-zero-rows"),
+            _session_on(project, "u-other", h["other"], "other-component"),
+            _session_on(project, "u-unextracted", h["unextracted"], "unextracted"),
+            _session_on(project, "u-legacy", h["legacy"], "legacy-hash"),
+            _session_on(project, "u-pi", h["pi"], "other-harness", harness="pi"),
+            _session_on(project, "u-late", h["late"], "after-period", day="2026-02-01"),
+            _session_on(project, "u-fail", h["fail"], "failed-extraction"),
+            _session_on(other_project, "u-empty", h["empty"], "other-project"),
+        ],
+    )
+    other_component = _component(project, "u-other", h["other"], 1) | {"component_id": str(uuid.uuid4())}
+    _insert(
+        "layer_components",
+        [
+            _component(project, "u-with", h["with"], 1),
+            other_component,
+            _component(project, "u-pi", h["pi"], 1) | {"component_id": str(uuid.uuid4())},
+            _component(project, "u-late", h["late"], 1) | {"component_id": str(uuid.uuid4())},
+            _component(project, "u-fail", h["fail"], 1) | {"component_id": str(uuid.uuid4())},
+        ],
+    )
+    _insert(
+        "layer_component_extractions",
+        [
+            _marker(project, "u-with", h["with"], 1, "complete"),
+            _marker(project, "u-empty", h["empty"], 1, "complete"),
+            _marker(project, "u-other", h["other"], 1, "complete"),
+            _marker(project, "u-pi", h["pi"], 1, "complete"),
+            _marker(project, "u-late", h["late"], 1, "complete"),
+            _marker(project, "u-fail", h["fail"], 1, "failed"),
+            _marker(other_project, "u-empty", h["empty"], 1, "complete"),
+        ],
+    )
+    rows, total = await absence_sample(project, "mcp", COMPONENT, period, ["claude-code"], limit=10)
+    assert total == 2 and {row["session_id"] for row in rows} == {"empty-zero-rows", "other-component"}, (
+        "zero-row publications count as absent; unextracted, failed, legacy-hash, other-harness, "
+        "out-of-period and other-project sessions are unknown, not absent"
+    )
+    assert await absence_sample(project, "mcp", COMPONENT, period, [], limit=10) == ([], 0)
+    both, both_total = await absence_sample(project, "mcp", COMPONENT, period, ["claude-code", "pi"], limit=10)
+    assert both_total == 3 and "other-harness" in {row["session_id"] for row in both}
+    capped, capped_total = await absence_sample(project, "mcp", COMPONENT, period, ["claude-code"], limit=1)
+    assert len(capped) == 1 and capped_total == 2
+
+
+@pytest.mark.asyncio
+async def test_absence_means_no_version_of_the_listing_even_for_a_version_scoped_report():
+    project = "phase14-absent-v-" + uuid.uuid4().hex
+    period = (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC))
+    on_version, on_other, bare = ("v2_" + name.ljust(60, "d") for name in ("one", "two", "none"))
+    _insert(
+        "session_stats_agg",
+        [
+            _session_on(project, "u1", on_version, "has-version"),
+            _session_on(project, "u2", on_other, "has-other-version"),
+            _session_on(project, "u3", bare, "has-neither"),
+        ],
+    )
+    _insert(
+        "layer_components",
+        [
+            _component(project, "u1", on_version, 1),
+            _component(project, "u2", on_other, 1, component_version=OTHER_VERSION),
+        ],
+    )
+    _insert(
+        "layer_component_extractions",
+        [
+            _marker(project, user, hash_, 1, "complete")
+            for user, hash_ in (("u1", on_version), ("u2", on_other), ("u3", bare))
+        ],
+    )
+    present, _ = await presence_sample(project, "mcp", COMPONENT, VERSION, period, limit=10)
+    assert {row["session_id"] for row in present} == {"has-version"}
+    absent, _ = await absence_sample(project, "mcp", COMPONENT, period, ["claude-code"], limit=10)
+    assert {row["session_id"] for row in absent} == {"has-neither"}, "another version of the listing is not absence"
