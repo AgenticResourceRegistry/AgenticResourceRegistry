@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
-# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Private team review is never sufficient to publish any skill release globally."""
@@ -13,13 +12,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from models.base import Base
 from models.inbox import InboxItem, InboxKind, InboxState
 from models.mcp import ListingStatus
-from models.review import Review, ReviewReviewerRequest, ReviewState
+from models.review import Review, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership, TeamRole
 from models.user import UserRole
 from services import teamspace
 from services.review.cutover import submit_for_review
-from services.review.notifications import deliver_event
 from tests import discovery_support as ds
 
 
@@ -127,47 +125,28 @@ async def test_flip_resolves_team_notice_and_routes_each_round_to_correct_audien
             ).scalar_one()
             membership.role = TeamRole.owner
             listing = await ds.skill(db, owner, is_private=True, team_id=team.id, status=ListingStatus.pending)
-            review = await submit_for_review(
+            await submit_for_review(
                 db, "skill", listing, await db.get(SkillVersion, listing.latest_version_id), owner.id
             )
-            # Only requested reviewers hear about a review. Both are requested; the
-            # global reviewer is out of scope while the work is team-private.
-            for target in (team_reviewer, reviewer):
-                db.add(ReviewReviewerRequest(review_id=review.id, user_id=target.id, requested_by=owner.id))
             await db.flush()
-            for target in (team_reviewer, reviewer):
-                await deliver_event(db, review, "requested", owner.id, reviewer_id=target.id)
-            await db.commit()
-
-            async def requests(user):
-                return (
-                    (
-                        await db.execute(
-                            select(InboxItem).where(
-                                InboxItem.kind == InboxKind.review_requested, InboxItem.user_id == user.id
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-
-            assert [i.state for i in await requests(team_reviewer)] == [InboxState.open]
-            assert await requests(reviewer) == []
-
             listing.is_private = False
             await teamspace.review_publication_to_public(listing, owner, db, was_private=True)
             await db.commit()
-            assert all(i.state == InboxState.done for i in await requests(team_reviewer))
-            [global_request] = [i for i in await requests(reviewer) if i.state == InboxState.open]
-            assert not global_request.is_private_subject
-
+            rows = (
+                (await db.execute(select(InboxItem).where(InboxItem.kind == InboxKind.review_requested)))
+                .scalars()
+                .all()
+            )
+            by_user = {item.user_id: item for item in rows}
+            assert by_user[team_reviewer.id].state == InboxState.done
+            assert by_user[reviewer.id].state == InboxState.open
+            assert not by_user[reviewer.id].is_private_subject
             listing.is_private = True
             await teamspace.review_publication_to_public(listing, owner, db, was_private=False)
             await db.commit()
-            team_open = [i for i in await requests(team_reviewer) if i.state == InboxState.open]
-            assert team_open and all(i.is_private_subject for i in team_open)
-            assert all(i.state == InboxState.done for i in await requests(reviewer))
+            assert by_user[team_reviewer.id].state == InboxState.open
+            assert by_user[team_reviewer.id].is_private_subject
+            assert by_user[reviewer.id].state == InboxState.done
     finally:
         await engine.dispose()
 

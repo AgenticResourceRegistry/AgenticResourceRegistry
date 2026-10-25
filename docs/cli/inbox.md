@@ -47,7 +47,7 @@ Supported kinds are:
 * `insight_ready`
 * `system_notice`
 
-Submitting a component or Agent for review does not notify every reviewer. A `review_requested` item reaches only a reviewer someone requested on the review. Requested reviewers are then told when another reviewer approves and when the review is published. The author is told about approvals, change requests, and publication.
+Submitting a component or Agent for review sends a `review_requested` item to every reviewer who can act on it. Requesting a specific reviewer sends one more `review_requested` item to that reviewer only. Requested reviewers are then told when another reviewer approves and when the review is published. The author is told about approvals, change requests, and publication. When a review is decided, the other reviewers' copies move to Done and stop counting toward `unread`.
 
 JSON returns the direct paginated server object:
 

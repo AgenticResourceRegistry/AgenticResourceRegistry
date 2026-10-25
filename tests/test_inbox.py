@@ -668,6 +668,50 @@ async def test_resolving_stamps_and_clears_resolved_at(sessions):
 
 
 @pytest.mark.asyncio
+async def test_review_notifications_follow_item_and_team_visibility(sessions):
+    async with sessions() as db:
+        admin = await _user(db, UserRole.admin)
+        global_reviewer = await _user(db, UserRole.reviewer)
+        team_owner = await _user(db)
+        team_reviewer = await _user(db)
+        team_member = await _user(db)
+        other_owner = await _user(db)
+
+        team = Team(id=uuid.uuid4(), name="Team", handle="team", created_by=team_owner.id)
+        other = Team(id=uuid.uuid4(), name="Other", handle="other", created_by=other_owner.id)
+        db.add_all([team, other])
+        await db.flush()
+        db.add_all(
+            [
+                TeamMembership(team_id=team.id, user_id=team_owner.id, role=TeamRole.owner),
+                TeamMembership(team_id=team.id, user_id=team_reviewer.id, role=TeamRole.reviewer),
+                TeamMembership(team_id=team.id, user_id=team_member.id, role=TeamRole.member),
+                TeamMembership(team_id=other.id, user_id=other_owner.id, role=TeamRole.owner),
+            ]
+        )
+        await db.commit()
+
+        class _Entity:
+            def __init__(self, is_private, team_id):
+                self.is_private = is_private
+                self.team_id = team_id
+
+        cases = [
+            ("public", _Entity(False, None), {admin.id, global_reviewer.id}),
+            (
+                "public-team",
+                _Entity(False, team.id),
+                {admin.id, global_reviewer.id, team_owner.id, team_reviewer.id},
+            ),
+            ("team-private", _Entity(True, team.id), {team_owner.id, team_reviewer.id}),
+            ("personal-private", _Entity(True, None), {admin.id}),
+        ]
+        for label, entity, expected in cases:
+            actual = set(await recipients.reviewers_for(db, entity))
+            assert actual == expected, label
+
+
+@pytest.mark.asyncio
 async def test_team_owners_receive_team_scoped_items(sessions):
     async with sessions() as db:
         owner = await _user(db)
@@ -681,6 +725,24 @@ async def test_team_owners_receive_team_scoped_items(sessions):
 
         got = await recipients.team_owners(db, team.id)
         assert got == [owner.id]
+
+
+@pytest.mark.asyncio
+async def test_an_admin_who_is_also_a_team_reviewer_is_listed_once(sessions):
+    async with sessions() as db:
+        admin = await _user(db, UserRole.admin)
+        team = Team(id=uuid.uuid4(), name="T", handle="t", created_by=admin.id)
+        db.add(team)
+        await db.flush()
+        db.add(TeamMembership(team_id=team.id, user_id=admin.id, role=TeamRole.reviewer))
+        await db.commit()
+
+        class _Entity:
+            is_private = True
+            team_id = team.id
+
+        got = await recipients.reviewers_for(db, _Entity())
+        assert got.count(admin.id) == 1
 
 
 @pytest.mark.asyncio

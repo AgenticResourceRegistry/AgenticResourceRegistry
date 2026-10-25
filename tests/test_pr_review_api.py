@@ -747,12 +747,13 @@ async def test_review_action_items_resolve_on_verdict_and_publish(api, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_reviewers_hear_only_about_reviews_requested_from_them(api, monkeypatch):
-    """OBS-1440: submitting must not fan a review request out to every reviewer.
+async def test_review_notices_reach_reviewers_and_the_badge_counts_open_unread(api, monkeypatch):
+    """OBS-1440: every reviewer in scope hears about a submission, and the badge
+    counts only unread rows in Open.
 
-    Only explicitly requested reviewers get a request. When one approves, the
-    other hears it was reviewed; publication reaches both reviewers and the
-    author, and the badge counts exactly the unread rows in Open.
+    A reviewer request goes to that reviewer alone. When one reviewer approves,
+    a requested peer hears it was reviewed; publication reaches the requested
+    reviewer and the author, and every reviewer's request moves to Done.
     """
     from api.routes.inbox import inbox_count
     from services.inbox.delivery import deliver as real_deliver
@@ -780,22 +781,24 @@ async def test_reviewers_hear_only_about_reviews_requested_from_them(api, monkey
                 )
             ).unread
 
-    # Opening the review notifies nobody: no reviewer has been requested yet.
+    # Opening the review notifies every reviewer who can act on it, nobody else.
     async with factory() as db:
         await deliver_event(db, await db.get(Review, rid), "opened", author.id)
         await db.commit()
-    assert await items_for(reviewer) == [] and await items_for(second) == []
-
-    # Requesting both reviewers gives each one request; the author gets nothing for it.
-    current[0] = author
-    for user in (reviewer, second):
-        assert (await client.post(base + "/reviewers", json={"user_id": str(user.id)})).status_code == 201
     for user in (reviewer, second):
         [request] = await items_for(user)
         assert request.kind == InboxKind.review_requested and request.read_at is None
     assert await items_for(author) == []
     assert await items_for(outsider) == []
-    assert await badge(second) == 1
+
+    # Requesting one reviewer adds a request for that reviewer only; the author gets nothing for it.
+    current[0] = author
+    assert (await client.post(base + "/reviewers", json={"user_id": str(second.id)})).status_code == 201
+    assert len(await items_for(second)) == 2
+    assert len(await items_for(reviewer)) == 1
+    assert await items_for(author) == []
+    assert await items_for(outsider) == []
+    assert await badge(second) == 2
 
     # One reviewer approves: the other hears it has been reviewed, the author hears the approval.
     current[0] = reviewer
@@ -818,13 +821,19 @@ async def test_reviewers_hear_only_about_reviews_requested_from_them(api, monkey
         )
     assert await badge(second) == open_unread
 
-    # Publication reaches both requested reviewers except the publisher, and the author.
+    # Publication reaches the requested reviewer and the author, not the publisher.
     assert (await client.post(base + "/publish", json={})).status_code == 200
     for user in (second, author):
         published = [i for i in await items_for(user) if i.kind == InboxKind.review_approved]
         assert published and published[0].title.startswith("Published:")
     assert not [i for i in await items_for(reviewer) if i.kind == InboxKind.review_approved]
     assert all(i.state == InboxState.done for i in await items_for(second) if i.action_required)
+    assert all(i.state == InboxState.done for i in await items_for(reviewer) if i.action_required)
+    # Resolved copies no longer count toward any badge.
+    for user in (reviewer, second):
+        assert await badge(user) == len(
+            [i for i in await items_for(user) if i.state == InboxState.open and i.read_at is None]
+        )
 
 
 @pytest.mark.asyncio
