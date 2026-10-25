@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """SAML 2.0 SSO endpoints."""
@@ -35,7 +34,6 @@ from models.saml_config import SamlConfig
 from models.user import User, UserRole
 from schemas.sso_health import all_pass, make_check
 from services import sso_diagnostics
-from services.crypto import KeyStoreUnavailableError
 from services.jwt_service import create_access_token, create_refresh_token
 from services.redis import get_redis
 from services.saml import (
@@ -818,8 +816,6 @@ async def saml_acs(request: Request, db: AsyncSession = Depends(get_db)):
         access_token, refresh_token, expires_in = await _issue_tokens(user)
         await db.commit()
         diag.append(make_check("issue_tokens", "Issue JWT access + refresh tokens", "pass"))
-    except KeyStoreUnavailableError:
-        raise
     except Exception as e:
         optic.exception("saml acs: token issuance failed")
         diag.append(make_check("issue_tokens", "Issue JWT access + refresh tokens", "fail", str(e)))

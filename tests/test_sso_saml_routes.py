@@ -1051,19 +1051,6 @@ async def test_acs_reports_token_or_commit_failure(client, acs_env, failure):
 
 
 @pytest.mark.asyncio
-async def test_acs_propagates_key_store_unavailability(acs_env):
-    acs_env.issue_tokens.side_effect = saml.KeyStoreUnavailableError("JWT signing-key store is unavailable")
-    request = _request(
-        "/api/v1/sso/saml/acs",
-        body=b"SAMLResponse=assertion",
-        content_type=b"application/x-www-form-urlencoded",
-    )
-
-    with pytest.raises(saml.KeyStoreUnavailableError):
-        await saml.saml_acs(request, acs_env.db)
-
-
-@pytest.mark.asyncio
 async def test_acs_existing_local_user_success_updates_profile_and_persists_one_time_state(client, acs_env):
     acs_env.user.auth_provider = "local"
     acs_env.user.sso_subject_id = None
