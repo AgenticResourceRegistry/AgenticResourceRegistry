@@ -137,6 +137,8 @@ The model used for facet-level analysis. Facets are structured data points extra
 
 **When to set:** When anomaly detection is missing issues you care about (upgrade), or when you're paying too much for facet analysis on simple traces (downgrade).
 
+**Component reports:** an MCP, skill or hook report reads session outcomes with the Facets model (one call for each session that has no facets yet, at most 40 per report) and writes its reading with the Sections model (one call). Sessions that already have facets from an Agent report cost nothing. Reports nobody requested spend no calls.
+
 #### Batch Processing
 
 Whether Insights report generation runs periodically (batched) or is disabled.

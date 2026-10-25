@@ -496,17 +496,26 @@ async def list_reports(
     return [InsightReportListItem.model_validate(r) for r in reports]
 
 
+# Explicit allowlist per section: a future prompt or section version needs its own privacy review.
+# component_analysis v3/v4 is call-only evidence; outcomes v1 holds counts; analysis v1 is checked model text
+# written from counts and redacted friction notes (never prompts, arguments or transcripts).
+_SAFE_SECTION_VERSIONS = {"component_analysis": (3, 4), "outcomes": (1,), "analysis": (1,)}
+
+
 def _safe_component_narrative(report: InsightReport) -> dict | None:
-    """Deliver call-only evidence (v3/v4); suppress legacy prompt-bearing versions."""
-    # Explicit allowlist: a future prompt version needs its own privacy review.
-    safe_versions = (3, 4)
+    """Deliver the reviewed sections of a component narrative; suppress any other version."""
     narrative = report.narrative
     if not isinstance(narrative, dict):
         return None
-    analysis = narrative.get("component_analysis")
-    if isinstance(analysis, dict) and type(analysis.get("version")) is int and analysis["version"] in safe_versions:
-        return narrative
-    return {key: value for key, value in narrative.items() if key != "component_analysis"}
+    safe = {}
+    for key, value in narrative.items():
+        versions = _SAFE_SECTION_VERSIONS.get(key)
+        if versions is not None and not (
+            isinstance(value, dict) and type(value.get("version")) is int and value["version"] in versions
+        ):
+            continue
+        safe[key] = value
+    return safe
 
 
 async def _authorize_report(report: InsightReport, db: AsyncSession, user: User) -> None:
@@ -698,8 +707,10 @@ async def export_report_html(
                 {
                     "metrics": report.metrics,
                     "coverage": report.coverage,
-                    "summary": (_safe_component_narrative(report) or {}).get("summary"),
-                    "component_analysis": (_safe_component_narrative(report) or {}).get("component_analysis"),
+                    **{
+                        key: (_safe_component_narrative(report) or {}).get(key)
+                        for key in ("summary", "component_analysis", "outcomes", "attention", "analysis")
+                    },
                 },
                 indent=2,
             )

@@ -153,7 +153,74 @@ export interface ComponentInsightFinding {
 	evidence_refs: string[];
 }
 
-export interface ComponentInsightNarrative {
+export interface ComponentOutcomeSide {
+	/** Sessions in the whole cohort. */
+	sessions: number;
+	/** Sessions drawn into the sample. */
+	sampled: number;
+	/** Sampled sessions that have outcome data. */
+	analyzed: number;
+	achieved: number;
+	not_achieved: number;
+	unclear: number;
+	satisfied: number;
+	dissatisfied: number;
+	with_friction: number;
+	blocking_friction: number;
+	tool_failed: number;
+	friction_types: [string, number][];
+}
+
+export interface ComponentOutcomes {
+	version: number;
+	state: "assessed" | "insufficient" | "unavailable";
+	with?: ComponentOutcomeSide;
+	without?: ComponentOutcomeSide;
+	gap?: { state: "insufficient" | "no_difference" | "lower" | "higher"; min_per_side?: number; rate_with?: number; rate_without?: number; difference?: number };
+	comparison?: string;
+}
+
+export interface ComponentAttentionItem {
+	id: string;
+	severity: "attention" | "info";
+	title: string;
+	detail: string;
+	evidence: Record<string, number>;
+	suggestion: string | null;
+}
+
+export interface ComponentReadingPoint {
+	title: string;
+	detail: string;
+}
+
+export interface ComponentSuggestion {
+	action_type: "edit_component" | "change_install" | "add_companion" | "remove_or_replace" | "usage_guidance" | "collect_more_data";
+	title: string;
+	detail: string;
+	evidence: string[];
+	confidence: "low" | "medium";
+}
+
+/** A model-written reading of the report. Only `assessed` carries content. */
+export interface ComponentAnalysis {
+	version: number;
+	state: "assessed" | "insufficient" | "unknown" | "unavailable";
+	at_a_glance?: { health: "healthy" | "watch" | "needs_attention" | "insufficient_data"; summary: string };
+	what_works?: ComponentReadingPoint[];
+	friction?: ComponentReadingPoint[];
+	suggestions?: ComponentSuggestion[];
+	basis?: { sessions_with_outcomes: number; comparison_sessions_with_outcomes: number };
+}
+
+/** The sections every component report (MCP, skill, hook) carries beside its own counts. */
+export interface ComponentInterpretation {
+	outcomes?: ComponentOutcomes;
+	attention?: ComponentAttentionItem[];
+	analysis?: ComponentAnalysis;
+}
+
+export interface ComponentInsightNarrative extends ComponentInterpretation {
 	summary?: string;
 	component_analysis?: {
 		version: number;
@@ -202,7 +269,7 @@ export interface SkillInsightMetrics {
 	version_distribution: Record<string, number>;
 }
 
-export interface SkillInsightNarrative {
+export interface SkillInsightNarrative extends ComponentInterpretation {
 	summary?: string;
 }
 

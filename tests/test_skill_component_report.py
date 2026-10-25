@@ -17,6 +17,12 @@ from services.component_activity.skill_queries import build_skill_coverage
 from services.insights import component_report
 
 
+@pytest.fixture(autouse=True)
+def _no_interpretation(monkeypatch):
+    """These tests are about the deterministic counts; outcomes, attention and the model reading have their own."""
+    monkeypatch.setattr(component_report, "_interpret", AsyncMock())
+
+
 def _summary(observed: int, complete: int) -> dict:
     coverage = build_skill_coverage(
         {"present_sessions": 2, "present_users": 1},
@@ -65,7 +71,7 @@ def _report() -> SimpleNamespace:
 )
 async def test_skill_report_states_what_the_evidence_does_and_does_not_show(monkeypatch, observed, complete, phrase):
     monkeypatch.setattr(skill_queries, "skill_activity_summary", AsyncMock(return_value=_summary(observed, complete)))
-    content = await component_report.generate_component_content(_report())
+    content = await component_report.generate_component_content(_report(), None)
     assert phrase in content["narrative"]["summary"]
     metrics = content["metrics"]
     assert (metrics["confirmed_loads"], metrics["load_attempts"]) == (observed, 1)
@@ -81,7 +87,7 @@ async def test_unsupported_component_types_are_rejected():
     report = _report()
     report.component_type = "prompt"
     with pytest.raises(ValueError, match="Unsupported report subject"):
-        await component_report.generate_component_content(report)
+        await component_report.generate_component_content(report, None)
 
 
 def _hook_summary(aggregate: dict) -> dict:
@@ -119,7 +125,7 @@ async def test_hook_report_states_what_runs_do_and_do_not_show(monkeypatch, aggr
     monkeypatch.setattr(hook_queries, "hook_activity_summary", AsyncMock(return_value=_hook_summary(aggregate)))
     report = _report()
     report.component_type = "hook"
-    content = await component_report.generate_component_content(report)
+    content = await component_report.generate_component_content(report, None)
     for phrase in phrases:
         assert phrase in content["narrative"]["summary"]
     for other in ("observed_calls", "loaded_sessions", "invocations"):

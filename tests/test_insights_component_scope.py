@@ -133,6 +133,7 @@ async def test_component_content_uses_published_summary_without_claiming_missing
     }
     summary_fn = AsyncMock(return_value=summary)
     monkeypatch.setattr(component_report, "activity_summary", summary_fn)
+    monkeypatch.setattr(component_report, "_interpret", AsyncMock())
     report = SimpleNamespace(
         subject_type="component",
         project_id="default",
@@ -144,7 +145,7 @@ async def test_component_content_uses_published_summary_without_claiming_missing
         period_start="start",
         period_end="end",
     )
-    result = await component_report.generate_component_content(report)
+    result = await component_report.generate_component_content(report, None)
     assert summary_fn.await_count == 1
     assert result["coverage"]["attribution_state"] == "attribution_not_possible"
     assert "unavailable" in result["narrative"]["summary"]
@@ -317,6 +318,33 @@ def test_legacy_component_analysis_is_removed_before_delivery():
             narrative={"summary": "safe counts", "component_analysis": {"version": unreviewed_version}}
         )
         assert _safe_component_narrative(report) == {"summary": "safe counts"}
+
+
+def test_outcomes_and_analysis_are_delivered_only_at_their_reviewed_versions():
+    from api.routes.insights import _safe_component_narrative
+
+    attention = [{"id": "hook_failing", "severity": "attention"}]
+    current = SimpleNamespace(
+        narrative={
+            "summary": "safe counts",
+            "outcomes": {"version": 1, "state": "assessed"},
+            "attention": attention,
+            "analysis": {"version": 1, "state": "assessed"},
+        }
+    )
+    assert _safe_component_narrative(current) == current.narrative
+    for unreviewed in (0, 2, True, "1", None):
+        report = SimpleNamespace(
+            narrative={
+                "summary": "safe counts",
+                "outcomes": {"version": unreviewed},
+                "attention": attention,
+                "analysis": {"version": unreviewed},
+            }
+        )
+        assert _safe_component_narrative(report) == {"summary": "safe counts", "attention": attention}
+    assert _safe_component_narrative(SimpleNamespace(narrative=None)) is None
+    assert _safe_component_narrative(SimpleNamespace(narrative={"outcomes": "text"})) == {}
 
 
 @pytest.mark.asyncio

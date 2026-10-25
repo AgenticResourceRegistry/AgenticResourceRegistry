@@ -286,7 +286,7 @@ async def run_single_report(report_id: str) -> None:
 
                 await _authorize_component_report_job(db, report)
                 with recording_models() as models_used:
-                    content = await generate_component_content(report)
+                    content = await generate_component_content(report, db)
                 await _update_report_progress(db, report, "saving", 9, 9, "Saving component report")
                 report.metrics = content["metrics"]
                 report.narrative = content["narrative"]

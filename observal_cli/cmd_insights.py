@@ -511,6 +511,7 @@ def insights_show(
         rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}  Observed calls: {observed}")
         narrative = data.get("narrative") or {}
         rprint(f"  {esc(narrative.get('summary') or 'No summary available')}")
+        _render_interpretation(narrative)
         analysis = narrative.get("component_analysis") or {}
         if not analysis:
             rprint(
@@ -632,6 +633,15 @@ def insights_show(
 def _render_component_section(name: str, content: object) -> None:
     """Render selected component facts without treating missing evidence as zero."""
     rprint(f"[bold]{esc(name.replace('_', ' ').title())}[/bold]")
+    if name == "attention" and isinstance(content, list):
+        _render_attention(content)
+        return
+    if name == "analysis" and isinstance(content, dict):
+        _render_analysis(content)
+        return
+    if name == "outcomes" and isinstance(content, dict):
+        _render_outcomes(content)
+        return
     if isinstance(content, str):
         rprint(f"  {esc(content)}")
         return
@@ -662,6 +672,123 @@ def _render_component_section(name: str, content: object) -> None:
                     rprint(f"    [dim]{esc(ref)} · {esc(excerpt)}[/dim]")
 
 
+_HEALTH = {
+    "healthy": "healthy",
+    "watch": "worth watching",
+    "needs_attention": "needs attention",
+    "insufficient_data": "not enough data to judge",
+}
+_SEVERITY_MARK = {"attention": "[yellow]look at[/yellow]", "info": "[dim]note[/dim]"}
+
+
+def _percent(part: int, whole: int) -> str:
+    return f"{round(100 * part / whole)}%" if whole else "n/a"
+
+
+def _render_attention(items: list) -> None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rprint(f"  {_SEVERITY_MARK.get(item.get('severity'), '[dim]note[/dim]')} {esc(str(item.get('title', '')))}")
+        rprint(f"    {esc(str(item.get('detail', '')))}")
+        if item.get("suggestion"):
+            rprint(f"    [dim]Suggestion: {esc(str(item['suggestion']))}[/dim]")
+
+
+def _outcome_line(label: str, side: dict) -> str:
+    known = side.get("achieved", 0) + side.get("not_achieved", 0)
+    line = (
+        f"  {label} {side.get('achieved', 0)} of {known} sessions with a known outcome achieved their goal "
+        f"({_percent(side.get('achieved', 0), known)}); {side.get('analyzed', 0)} analyzed of "
+        f"{side.get('sessions', 0)} ({side.get('sampled', 0)} sampled)"
+    )
+    types = ", ".join(f"{kind.replace('_', ' ')} {count}" for kind, count in side.get("friction_types") or [])
+    return line + (f"; friction: {types}" if types else "")
+
+
+def _render_outcomes(outcomes: dict) -> None:
+    state = outcomes.get("state")
+    if state == "unavailable":
+        rprint("  [yellow]Outcomes could not be read (the session read or the model failed); generate again.[/yellow]")
+        return
+    if state != "assessed":
+        rprint("  [dim]No sessions with this component have outcome data yet.[/dim]")
+        return
+    rprint(_outcome_line("With it:   ", outcomes.get("with") or {}))
+    rprint(_outcome_line("Without it:", outcomes.get("without") or {}))
+    gap = outcomes.get("gap") or {}
+    verdict = {
+        "lower": "achieved less often with it",
+        "higher": "achieved more often with it",
+        "no_difference": "no difference large enough to report",
+        "insufficient": f"too few sessions to compare (needs {gap.get('min_per_side', 10)} with a known outcome on each side)",
+    }.get(gap.get("state"), "not assessed")
+    rprint(f"  Difference: {verdict}. These sessions differ in more than the component: an association, not a cause.")
+    rprint(f"  [dim]Without it means: {esc(str(outcomes.get('comparison', '')))}[/dim]")
+
+
+def _render_points(title: str, points: list) -> None:
+    if points:
+        rprint(f"  [bold]{title}[/bold]")
+        for point in points:
+            rprint(f"    {esc(point['title'])}: {esc(point['detail'])}")
+
+
+_EVIDENCE_LABELS = {
+    "metrics": "the counts",
+    "outcomes": "the session comparison",
+    "friction": "friction in sessions with it",
+}
+
+
+def _evidence_label(ref: str, attention: list | None) -> str:
+    """A suggestion cites an id; show the words an owner would recognise."""
+    if ref in _EVIDENCE_LABELS:
+        return _EVIDENCE_LABELS[ref]
+    title = next((i.get("title") for i in attention or [] if isinstance(i, dict) and i.get("id") == ref), None)
+    return str(title or ref.replace("_", " "))
+
+
+def _render_analysis(analysis: dict, attention: list | None = None) -> None:
+    state = analysis.get("state")
+    if state == "unavailable":
+        rprint("  [yellow]The reading could not run (the model failed); generate the report again.[/yellow]")
+    elif state == "insufficient":
+        rprint("  [dim]Too few sessions with outcome data, and nothing flagged, to write a reading yet.[/dim]")
+    elif state != "assessed":
+        rprint("  [dim]No reading was kept: it was not requested, or its answers failed the checks.[/dim]")
+    else:
+        glance = analysis.get("at_a_glance") or {}
+        rprint(
+            f"  [bold]At a glance[/bold]: {_HEALTH.get(glance.get('health'), 'unknown')}. {esc(glance.get('summary', ''))}"
+        )
+        _render_points("What works", analysis.get("what_works") or [])
+        _render_points("Friction", analysis.get("friction") or [])
+        for suggestion in analysis.get("suggestions") or []:
+            kind = str(suggestion.get("action_type", "")).replace("_", " ")
+            rprint(
+                f"  [bold]Suggestion[/bold] ({esc(kind)}, {esc(str(suggestion.get('confidence')))} confidence) "
+                f"{esc(suggestion['title'])}: {esc(suggestion['detail'])}"
+            )
+            based_on = "; ".join(_evidence_label(ref, attention) for ref in suggestion.get("evidence") or [])
+            rprint(f"    [dim]Based on: {esc(based_on)}[/dim]")
+
+
+def _render_interpretation(narrative: dict) -> None:
+    """Outcomes, attention items and the model's reading, in the order an owner wants them."""
+    if not any(key in narrative for key in ("outcomes", "attention", "analysis")):
+        rprint("  [dim]This report predates outcome analysis; generate a new report to add it.[/dim]")
+        return
+    if narrative.get("analysis"):
+        _render_analysis(narrative["analysis"], narrative.get("attention"))
+    if narrative.get("attention"):
+        rprint("  [bold]What to look at[/bold]")
+        _render_attention(narrative["attention"])
+    if narrative.get("outcomes"):
+        rprint("  [bold]Sessions with and without it[/bold]")
+        _render_outcomes(narrative["outcomes"])
+
+
 def _skill_count(metrics: dict, key: str, measured: bool, partial: bool) -> str:
     """A measured count, "not measured" for this period, or "not recorded" by the cohort's harnesses."""
     value = metrics.get(key)
@@ -680,6 +807,7 @@ def _render_skill_report(data: dict) -> None:
     measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
     rprint(f"[bold]{esc(data.get('component_name') or 'Skill')} Insights[/bold]")
     rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
+    _render_interpretation(data.get("narrative") or {})
     rows = (
         ("Present sessions", str(metrics.get("present_sessions", 0))),
         ("Sessions with a confirmed load", _skill_count(metrics, "loaded_sessions", measured, False)),
@@ -729,6 +857,7 @@ def _render_hook_report(data: dict) -> None:
     measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
     rprint(f"[bold]{esc(data.get('component_name') or 'Hook')} Insights[/bold]")
     rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
+    _render_interpretation(data.get("narrative") or {})
     rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}")
     rprint(f"  Sessions where it could run: {metrics.get('eligible_sessions', 0)}")
     if measured:

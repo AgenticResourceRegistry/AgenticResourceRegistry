@@ -26,7 +26,14 @@ from database import engine
 from models.insight_report import InsightReport
 from schemas.component_activity import ComponentRef
 from services.component_activity import mcp_projector
-from services.insights import component_evidence, configure_insights, generator, render_report_html
+from services.insights import (
+    component_evidence,
+    component_outcomes,
+    component_report,
+    configure_insights,
+    generator,
+    render_report_html,
+)
 from services.insights.component_report import generate_component_content
 from services.insights.registry_match import CatalogOffer
 from services.insights.scope import SessionKey
@@ -133,7 +140,26 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
     assert from_source, (call_ref, sample_rows)
     sampled, excerpt_map, _ = await component_evidence._sample(report)
     assert sampled and "s0-goal" not in excerpt_map and "s0-call0" in excerpt_map, (sample_rows, excerpt_map)
-    content = await generate_component_content(report)
+    # Outcomes read the real cohorts. Facet extraction is stubbed, but it is handed the real scoped transcripts.
+    extracted: dict = {}
+
+    async def extract_new(transcripts, session_metas, agent_id, db, max_concurrent):
+        extracted.update(transcripts)
+        return {key: {"outcome": "fully_achieved", "user_satisfaction": "satisfied"} for key in transcripts}
+
+    reading = {"version": 1, "state": "unknown"}
+    with monkeypatch.context() as patch:
+        patch.setattr(component_outcomes, "load_cached_facets_batch", AsyncMock(return_value={}))
+        patch.setattr(generator, "_extract_facets_batch", extract_new)
+        patch.setattr("services.dynamic_settings.get", AsyncMock(return_value=None))
+        patch.setattr(component_report, "component_analysis", AsyncMock(return_value=reading))
+        content = await generate_component_content(report, object())
+    outcomes = content["narrative"]["outcomes"]
+    assert (outcomes["state"], outcomes["with"]["sessions"], outcomes["with"]["analyzed"]) == ("assessed", 1, 1)
+    assert (outcomes["without"]["sessions"], outcomes["without"]["analyzed"]) == (0, 0)
+    assert set(extracted) == {SessionKey(project, alice, "claude-code", same_id)}, "only the present, scoped session"
+    assert "BOB ONLY" not in "".join(extracted.values()) and "ALICE ONLY" not in str(outcomes)
+    assert content["narrative"]["analysis"] == reading and content["narrative"]["attention"] == []
     assert content["narrative"]["component_analysis"]["state"] == "assessed"
     assert "ALICE ONLY" not in str(content["narrative"]["component_analysis"])
     assert (
