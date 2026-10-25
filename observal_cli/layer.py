@@ -908,8 +908,9 @@ def set_last_uploaded_hash(layer_hash: str, server_url: str = "", user_id: str =
         _LAST_UPLOADED_PATH.write_text(
             json.dumps({"hash": layer_hash, "server_url": server_url.rstrip("/"), "user_id": user_id}) + "\n"
         )
-    except OSError:
-        pass
+    except OSError as error:
+        # Not fatal: the snapshot is simply uploaded again next time. But say so, so a read-only home is visible.
+        optic.warning("layer: could not record the uploaded snapshot hash: {}", type(error).__name__)
 
 
 def was_uploaded_for(layer_hash: str, server_url: str, user_id: str) -> bool:
