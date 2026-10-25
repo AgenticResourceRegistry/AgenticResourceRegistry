@@ -267,9 +267,14 @@ async def upload_layer_snapshot(
     for record in existing:
         try:
             prior = json.loads(record["content"])
-            if prior.get("identity_status") == "identity_conflict" or {
+            if prior.get("identity_status") == "identity_conflict":
+                identity_conflict = True
+            elif hash_schema_version == 1 and {
                 key: value for key, value in prior.items() if key not in {"identity_status", "hash_schema_version"}
             } != {key: value for key, value in content.items() if key != "hash_schema_version"}:
+                # A legacy hash proves nothing about its content, so the stored copy is the only identity check.
+                # A v2 hash was verified above against the file hashes and pins, which are all that it covers:
+                # the lockfile hash, drift, sizes and contents of an honest re-upload may differ.
                 identity_conflict = True
         except (KeyError, ValueError, TypeError, AttributeError):
             identity_conflict = True
