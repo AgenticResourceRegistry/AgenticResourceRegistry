@@ -147,3 +147,31 @@ def test_entrypoint_does_not_stamp_if_fresh_init_fails(tmp_path):
     result, calls = _entrypoint_with_stub(tmp_path, "fresh", fail="init")
     assert result.returncode != 0
     assert calls == ["-m services.schema_bootstrap state", "-m services.schema_bootstrap init"]
+
+
+_PG_URL = os.environ.get("OBSERVAL_TEST_POSTGRES_URL")
+
+
+@pytest.mark.skipif(not _PG_URL, reason="requires a disposable PostgreSQL (OBSERVAL_TEST_POSTGRES_URL)")
+@pytest.mark.asyncio
+async def test_extension_owned_relations_do_not_make_a_schema_unversioned():
+    """A preinstalled extension that ships views (pg_buffercache) must not turn an empty schema away."""
+    import uuid
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    assert _PG_URL
+    schema = f"ext_{uuid.uuid4().hex[:12]}"
+    engine = create_async_engine(_PG_URL)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await connection.execute(text(f'SET search_path TO "{schema}"'))
+            await connection.execute(text(f'CREATE EXTENSION pg_buffercache SCHEMA "{schema}"'))
+            assert await schema_bootstrap.schema_state(connection) == "fresh"
+            await connection.execute(text("CREATE TABLE unrelated (id integer)"))
+            assert await schema_bootstrap.schema_state(connection) == "unversioned"
+            await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        await engine.dispose()
