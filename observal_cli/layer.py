@@ -455,10 +455,22 @@ def build_layer_manifest(
         _, registry_data = read_registry_lockfile()
     observal_files = _get_observal_managed_files(registry_data, harness, project_dir)
 
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    try:
+        adapter = get_adapter(harness)
+    except KeyError:
+        adapter = None
+
     for abs_path, display_path in files:
         # Hash the very same bytes that are included in the upload (no second
         # read after the file can change). Hash-only scans retain the mtime cache.
-        if include_content:
+        projection = adapter.layer_projection(display_path, abs_path, project_dir) if adapter else None
+        if projection is not None:
+            file_hash, size = hashlib.sha256(projection).hexdigest(), len(projection)
+            data = b"" if include_content else None
+        elif include_content:
             try:
                 data = abs_path.read_bytes()
             except OSError:
@@ -478,13 +490,9 @@ def build_layer_manifest(
 
         if include_content:
             # The harness adapter owns its sensitive shared settings paths.
-            from observal_cli.harness import ensure_loaded, get_adapter
-
-            ensure_loaded()
-            try:
-                redact_content = get_adapter(harness).redact_layer_content(display_path)
-            except KeyError:
-                redact_content = False
+            redact_content = projection is not None or (
+                adapter.redact_layer_content(display_path) if adapter else False
+            )
             if redact_content:
                 entry["content"] = ""
             else:
