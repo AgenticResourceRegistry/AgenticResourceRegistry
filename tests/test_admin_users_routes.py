@@ -29,6 +29,7 @@ from schemas.admin import (
     UserRoleUpdate,
 )
 from services.security_events import EventType, Severity
+from services.user_deletion import _ACCOUNT_ROWS
 
 ADMIN_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 TARGET_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -994,7 +995,7 @@ async def test_delete_user_scrubs_shell_commits_then_revokes_and_records_event(m
     is_admin = target_role in (UserRole.admin, UserRole.super_admin)
     # An admin target first locks the live admin rows; two remain, so it may go.
     guard = [_Result(values=[TARGET_ID, ADMIN_ID])] if is_admin else []
-    database = _db(_one(target), *guard, *[MagicMock() for _ in range(6)])
+    database = _db(_one(target), *guard, *[MagicMock() for _ in _ACCOUNT_ROWS])
 
     async def emit(_event):
         order.append("event")
@@ -1033,6 +1034,8 @@ async def test_delete_user_scrubs_shell_commits_then_revokes_and_records_event(m
         "team_memberships",
         "team_membership_requests",
         "inbox_items",
+        "mcp_webhook_syncs",
+        "agent_share_manifests",
     ]
     # The success event is recorded only after the change is committed.
     assert order == ["commit", "revoke", "event"]
@@ -1099,7 +1102,7 @@ async def test_delete_admin_count_failure_is_loud_before_any_change(monkeypatch)
 @pytest.mark.asyncio
 async def test_delete_commit_failure_records_no_success_event_or_revocation(monkeypatch):
     target = _shell_target()
-    database = _db(_one(target), *[MagicMock() for _ in range(6)])
+    database = _db(_one(target), *[MagicMock() for _ in _ACCOUNT_ROWS])
     database.commit.side_effect = IntegrityError("delete user", {}, RuntimeError("commit failed"))
     emit = AsyncMock()
     revoke = AsyncMock()
@@ -1117,7 +1120,7 @@ async def test_delete_commit_failure_records_no_success_event_or_revocation(monk
 @pytest.mark.asyncio
 async def test_delete_http_success_is_an_empty_204(route_app, monkeypatch):
     target = _shell_target()
-    database = _db(_one(target), *[MagicMock() for _ in range(6)])
+    database = _db(_one(target), *[MagicMock() for _ in _ACCOUNT_ROWS])
     _override_db(route_app, database)
     route_app.dependency_overrides[get_current_user] = lambda: _actor()
     monkeypatch.setattr(users, "emit_security_event", AsyncMock())

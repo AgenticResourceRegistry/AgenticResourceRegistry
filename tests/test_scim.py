@@ -35,6 +35,7 @@ from services.scim_service import (
     parse_scim_user,
 )
 from services.security_events import EventType, Severity
+from services.user_deletion import _ACCOUNT_ROWS
 
 USER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 OTHER_USER_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -954,7 +955,7 @@ class TestUserDeletion:
     async def test_delete_scrubs_shell_commits_then_revokes_and_emits(self, app, client, monkeypatch):
         order = []
         user = _user()
-        db = _db(_one(user), *[MagicMock() for _ in range(6)])
+        db = _db(_one(user), *[MagicMock() for _ in _ACCOUNT_ROWS])
         db.commit.side_effect = lambda: order.append(("commit", None))
 
         async def emit(event):
@@ -1023,7 +1024,7 @@ class TestUserDeletion:
     @pytest.mark.asyncio
     async def test_delete_commit_failure_does_not_emit_deleted_event(self, app, client, monkeypatch):
         user = _user()
-        db = _db(_one(user), *[MagicMock() for _ in range(6)])
+        db = _db(_one(user), *[MagicMock() for _ in _ACCOUNT_ROWS])
         db.commit.side_effect = RuntimeError("commit failed")
         emit = AsyncMock()
         revoke = AsyncMock()
