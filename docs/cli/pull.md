@@ -107,7 +107,7 @@ JSON mode cannot prompt and requires `--no-prompt`. Missing required component v
 
 ## Agent hooks in headless sessions
 
-Claude Code runs hooks defined in an Agent's file only in interactive sessions. In headless runs (`claude -p --agent …`, including Observal delegation) they don't run. `--hooks=settings` moves the Agent's command hooks into `.claude/settings.json` (or `~/.claude/settings.json` for user scope), each wrapped by `observal_cli.hook_gate`. The gate runs a hook only while that Agent is active, in interactive and headless sessions, and does nothing in other sessions.
+Claude Code runs hooks defined in an Agent's file only in interactive sessions. In headless runs (`claude -p --agent …`, including Observal delegation) they don't run. `--hooks=settings` moves the Agent's command hooks into `.claude/settings.local.json` (or `~/.claude/settings.json` for user scope), each wrapped by `observal_cli.hook_gate`. The gate runs a hook only while that Agent is active, in interactive and headless sessions, and does nothing in other sessions. Project scope uses the local settings file, which Claude Code keeps out of version control, because each wrapped command holds this machine's interpreter path.
 
 ```bash
 observal agent pull alice/reviewer --harness claude-code --hooks=settings --dry-run   # review the plan

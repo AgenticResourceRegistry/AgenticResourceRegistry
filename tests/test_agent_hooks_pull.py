@@ -154,7 +154,7 @@ def _error(result) -> dict:
 
 
 def _settings_path(env) -> Path:
-    return env.target / ".claude" / "settings.json"
+    return env.target / ".claude" / "settings.local.json"
 
 
 def _settings(env) -> dict:
@@ -184,7 +184,7 @@ def test_opt_in_places_gated_hooks_records_them_and_verifies(env):
     hook = next(component for component in kwargs["components"] if component["id"] == HOOK)
     assert hook["hook_placement"] == "gated_settings"
     assert hook["hook_command"] == gated and hook["hook_original_command"] == ORIGINAL
-    assert hook["hook_config"] == "project:.claude/settings.json"
+    assert hook["hook_config"] == "project:.claude/settings.local.json"
     assert hook["hook_agent_profile"] == "project:.claude/agents/reviewer.md"
     assert hook["hook_gate_python"] == sys.executable
     web = next(component for component in kwargs["components"] if component["id"] == WEB)

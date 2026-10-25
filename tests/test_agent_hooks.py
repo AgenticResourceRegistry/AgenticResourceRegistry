@@ -199,8 +199,8 @@ def test_version_range():
 def test_settings_location_follows_scope(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     assert agent_hooks.settings_location("project", tmp_path) == (
-        tmp_path / ".claude" / "settings.json",
-        "project:.claude/settings.json",
+        tmp_path / ".claude" / "settings.local.json",
+        "project:.claude/settings.local.json",
     )
     assert agent_hooks.settings_location("user", tmp_path) == (
         tmp_path / "home" / ".claude" / "settings.json",
