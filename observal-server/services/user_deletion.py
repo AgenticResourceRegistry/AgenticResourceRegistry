@@ -24,7 +24,9 @@ from typing import TYPE_CHECKING
 from loguru import logger as optic
 from sqlalchemy import delete, select
 
+from models.agent_share import AgentShareManifest
 from models.inbox import InboxItem
+from models.mcp_webhook_sync import McpWebhookSync
 from models.team import TeamMembership, TeamMembershipRequest
 from models.user import DELETED_AUTH_PROVIDER, DELETED_USER_NAME, User, UserRole, is_deleted_account, live_users
 from models.user_group import UserGroup
@@ -33,8 +35,19 @@ from models.user_profile import RecommendationFeedback, UserWorkProfile
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Tables whose user FK is ON DELETE CASCADE: account-scoped, not records.
-_ACCOUNT_ROWS = (UserGroup, UserWorkProfile, RecommendationFeedback, TeamMembership, TeamMembershipRequest, InboxItem)
+# Tables whose user FK is ON DELETE CASCADE: account-scoped, not records. A shell keeps its row, so the
+# cascade never fires; each of these must be deleted here or the deleted account keeps acting through it
+# (a webhook sync that still publishes, a share link that still resolves).
+_ACCOUNT_ROWS = (
+    (UserGroup, "user_id"),
+    (UserWorkProfile, "user_id"),
+    (RecommendationFeedback, "user_id"),
+    (TeamMembership, "user_id"),
+    (TeamMembershipRequest, "user_id"),
+    (InboxItem, "user_id"),
+    (McpWebhookSync, "enabled_by"),
+    (AgentShareManifest, "created_by"),
+)
 
 
 def _shell_identity(user_id) -> tuple[str, str]:
@@ -76,8 +89,8 @@ async def delete_user_account(db: AsyncSession, user: User) -> None:
     if is_deleted_account(user):
         raise ValueError("User is already deleted")
     await ensure_not_last_admin(db, user)
-    for model in _ACCOUNT_ROWS:
-        await db.execute(delete(model).where(model.user_id == user.id))
+    for model, column in _ACCOUNT_ROWS:
+        await db.execute(delete(model).where(getattr(model, column) == user.id))
     email, username = _shell_identity(user.id)
     user.email = email
     user.username = username
@@ -92,16 +105,19 @@ async def delete_user_account(db: AsyncSession, user: User) -> None:
 
 
 async def revoke_deleted_user_tokens(user_id) -> bool:
-    """Revoke outstanding access and refresh tokens for a deleted account. Best effort."""
+    """Revoke outstanding access and refresh tokens for a deleted account.
+
+    Best effort after the commit: authentication also rejects a deleted account directly, so a Redis
+    outage leaves no usable token. The failure is logged at error level for the operator.
+    """
     try:
-        import services.dynamic_settings as ds
         from services.redis import get_redis
+        from services.token_revocation import revoke_user_tokens
 
         redis = get_redis()
-        ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
-        await redis.setex(f"revoked_user:{user_id}", ttl, "1")
+        await revoke_user_tokens(redis, user_id)
         await redis.delete(f"must_change_password:{user_id}")
         return True
     except Exception as error:
-        optic.warning("could not revoke tokens for deleted user {}: {}", user_id, type(error).__name__)
+        optic.error("could not revoke tokens for deleted user {}: {}", user_id, type(error).__name__)
         return False

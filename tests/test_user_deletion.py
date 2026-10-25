@@ -84,11 +84,12 @@ async def test_revocation_sets_account_wide_key_for_refresh_lifetime(monkeypatch
     from services import user_deletion
 
     redis = _Redis({f"must_change_password:{USER_ID}": "1"})
+    revoke = AsyncMock()
     monkeypatch.setattr("services.redis.get_redis", lambda: redis)
-    monkeypatch.setattr("services.dynamic_settings.get_sync_int", lambda _k, default: 7)
+    monkeypatch.setattr("services.token_revocation.revoke_user_tokens", revoke)
 
     assert await user_deletion.revoke_deleted_user_tokens(USER_ID) is True
-    redis.setex.assert_awaited_once_with(f"revoked_user:{USER_ID}", 7 * 86400, "1")
+    revoke.assert_awaited_once_with(redis, USER_ID)
     assert f"must_change_password:{USER_ID}" not in redis.values
 
 
@@ -254,3 +255,19 @@ async def test_refresh_rejects_scim_deactivated_account_and_consumes_its_token(m
     assert (raised.value.status_code, raised.value.detail) == (401, "Account deactivated")
     issue.assert_not_called()
     assert "refresh_jti:old" not in redis.values  # the presented token cannot be retried
+
+
+def test_every_cascading_user_foreign_key_is_cleared_for_a_deleted_account():
+    """A shell keeps its users row, so no ON DELETE CASCADE ever fires; each such table must be listed."""
+    import models  # noqa: F401  (registers every table)
+    from models import Base
+    from services.user_deletion import _ACCOUNT_ROWS
+
+    listed = {(model.__table__.name, column) for model, column in _ACCOUNT_ROWS}
+    cascading = {
+        (table.name, fk.parent.name)
+        for table in Base.metadata.tables.values()
+        for fk in table.foreign_keys
+        if fk.column.table.name == "users" and (fk.ondelete or "").upper() == "CASCADE"
+    }
+    assert cascading <= listed, f"deleted accounts would keep rows in: {sorted(cascading - listed)}"
