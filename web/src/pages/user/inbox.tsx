@@ -966,8 +966,21 @@ export default function InboxPage() {
 	};
 
 	const runBulk = (action: "read" | "unread" | "done" | "dismiss" | "reopen") => {
-		if (visibleSelected.length === 0) return;
-		bulk.mutate({ ids: visibleSelected, action });
+		// In the All folder a selection mixes states. Done and Dismiss resolve only
+		// open rows and Reopen touches only resolved ones, so Done never turns a
+		// dismissed row into a done one. Read and Unread apply to every row.
+		const ids = items
+			.filter((item) => selected.has(item.id))
+			.filter((item) =>
+				action === "done" || action === "dismiss"
+					? item.state === "open"
+					: action === "reopen"
+						? item.state !== "open"
+						: true,
+			)
+			.map((item) => item.id);
+		if (ids.length === 0) return;
+		bulk.mutate({ ids, action });
 		setSelected(new Set());
 	};
 
@@ -1137,7 +1150,9 @@ export default function InboxPage() {
 								<span className="text-3xs text-muted-foreground">
 									{visibleSelected.length > 0 ? `${visibleSelected.length} selected` : "Select all"}
 								</span>
-								<div className="ml-auto flex items-center gap-1">
+								{/* Up to five actions in a narrow pane: wrap them instead of
+								    letting the last one run under the detail pane. */}
+								<div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
 									{visibleSelected.length > 0 ? (
 										<>
 											{selectionHasOpen && (

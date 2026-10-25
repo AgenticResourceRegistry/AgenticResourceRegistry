@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models import Base
-from models.inbox import InboxItem
+from models.inbox import InboxItem, InboxKind
 from models.mcp import ListingStatus
 from models.review import Review, ReviewState
 from models.skill import SkillListing, SkillVersion
@@ -23,7 +23,7 @@ from services.review.decisions import MCP_VALIDATION_MESSAGE, SYSTEM_REVISION_ME
 
 
 @pytest.mark.asyncio
-async def test_submit_creates_review_in_same_transaction_without_fanning_out(monkeypatch):
+async def test_submit_creates_review_in_same_transaction_and_notifies_reviewer(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -59,8 +59,8 @@ async def test_submit_creates_review_in_same_transaction_without_fanning_out(mon
         notice = await db.scalar(select(InboxItem).where(InboxItem.user_id == reviewer.id))
         assert review.version_id == version.id
         assert review.state.value == "open"
-        # OBS-1440: a submission notifies only reviewers someone requested, and none are yet.
-        assert notice is None
+        assert notice.kind == InboxKind.review_requested
+        assert notice.payload["review_number"] == review.number
     await engine.dispose()
 
 

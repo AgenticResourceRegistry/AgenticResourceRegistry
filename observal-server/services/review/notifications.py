@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from models.inbox import InboxItem, InboxKind, InboxState
 from models.review import ReviewComment, ReviewReviewerRequest, ReviewSubmission, ReviewSubscription
+from services.inbox import recipients
 from services.inbox.delivery import deliver, resolve
 from services.inbox.registry import REVIEWER_AUDIENCE, Subject
 from services.review.decisions import _target
@@ -81,11 +82,10 @@ async def deliver_event(
 ):
     """Deliver one review event to the people it concerns; mute exempts final outcomes.
 
-    Reviewers hear about a review only once someone requests them. Opening a
-    review notifies nobody beyond reviewers already requested on it, so a busy
-    queue does not fan out to every admin. Requested reviewers then follow the
-    review: a peer's approval and the publication both reach them, and the author
-    hears about approvals, change requests, and publication.
+    Opening a review notifies every reviewer who can act on it. A reviewer
+    request reaches only the requested reviewer. Requested reviewers then follow
+    the review: a peer's approval and the publication both reach them, and the
+    author hears about approvals, change requests, and publication.
     """
     if event in ("published", "closed", "withdrawn", "superseded"):
         await resolve_review_work(db, review, actor_id)
@@ -139,9 +139,9 @@ async def deliver_event(
         "superseded": InboxKind.review_rejected,
     }[event]
     if event == "opened":
-        # Only reviewers someone explicitly asked; re-scoping a review re-notifies
-        # those still in scope rather than everyone who could review it.
-        ids = set(requested)
+        # Everyone who can clear it. Their copies move to Done when the review is
+        # decided and stop counting toward the badge, which counts only Open items.
+        ids = set(await recipients.reviewers_for(db, subject))
     elif event == "revision":
         ids = submitted | requested
     elif event == "requested":
