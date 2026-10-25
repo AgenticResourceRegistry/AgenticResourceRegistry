@@ -90,3 +90,13 @@ These were recorded on 2026-10-01 with Claude Code 2.1.286 and Opus 4.6 on Bedro
 Interactive `--agent probe-agent` ran all five, and interactive plain ran none. Those transcripts are not kept. The shell-heavy command wrote `A B|it's` and received the exact stdin. Records name the full gated command. The interpreter and source paths in those commands were replaced with `/home/fixture/.local/share/observal/bin/python3` and `/home/fixture/observal-src`; the recording used the source-checkout `PYTHONPATH` fallback.
 
 The subagent pair shows how the two transcripts link. Every record of the subagent's own transcript has `isSidechain: true`, the same `agentId`, and `sessionId` set to the parent session's id, but nothing names the agent. The parent's main thread records the spawn twice: an assistant `tool_use` named `Agent` whose `input.subagent_type` is `probe-agent`, and the `user` record holding its single `tool_result` (same `tool_use_id`), whose top-level `toolUseResult` has `agentId` (the subagent's) and `agentType: probe-agent`. The `tool_result` text also mentions the `agentId`, but that text is model-facing output and is never read. The `agentId` and the session id agree across the two files.
+
+### Claude Code 2.1.310 sessions
+
+Three sanitized headless sessions recorded on 2026-10-25 with Claude Code 2.1.310 in an isolated `HOME`, through `claude -p`, against a live Observal stack. They show that hook and skill evidence read 2.1.310 records exactly as they read the 2.1.286 ones above, which is why the tested range in the harness registry now ends at 2.1.310.
+
+- `hook_session_standalone_output_2_1_310.jsonl`: standalone settings hooks. Two failed runs of a lint hook, one run of a syntax check hook that printed output, and Observal's own Stop session push (not a component, so not evidence).
+- `hook_session_standalone_blocked_2_1_310.jsonl`: a `PreToolUse` hook denies a destructive shell command.
+- `skill_session_agent_load_2_1_310.jsonl`: a project skill is loaded through the `Skill` tool.
+
+Every line is kept in order. Identifiers were replaced with fixture values, the home directory and project were mapped to `/home/fixture`, the Observal interpreter to `/home/fixture/venv/bin/python`, timestamps were flattened, and thinking text, signatures and long text were replaced with placeholders after their first line. Version 2.1.299, between the two recorded versions, was checked against the raw transcripts of recorded sessions rather than fixtures.

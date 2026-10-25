@@ -61,13 +61,15 @@ def test_the_tested_range_is_shared_by_the_cli_and_the_server():
     from observal_cli import agent_hooks
 
     tested = HARNESS_REGISTRY["claude-code"]["hook_evidence_tested_versions"]
-    assert (agent_hooks.TESTED_CLAUDE_CODE_MIN, agent_hooks.TESTED_CLAUDE_CODE_MAX) == tested == ((2, 1, 286),) * 2
+    assert (
+        (agent_hooks.TESTED_CLAUDE_CODE_MIN, agent_hooks.TESTED_CLAUDE_CODE_MAX) == tested == ((2, 1, 286), (2, 1, 310))
+    )
 
 
 def test_recorded_version_decides_whether_the_session_is_verified():
     recorded = extract_hook_evidence("claude-code", _rows(_session("2.1.286")))
     assert recorded.session.harness_version_unverified is False
-    for version in ("2.1.287", "2.2.0", "2.1.285", "not-a-version", None):
+    for version in ("2.1.311", "2.2.0", "2.1.285", "not-a-version", None):
         extraction = extract_hook_evidence("claude-code", _rows(_session(version)))
         assert extraction.session.harness_version_unverified is True, version
         # The evidence itself is still read: a run whose record matched is real.
@@ -77,7 +79,7 @@ def test_recorded_version_decides_whether_the_session_is_verified():
 def test_mixed_versions_in_one_session_are_unverified():
     lines = _session("2.1.286")
     record = json.loads(lines[-1])
-    record["version"] = "2.1.300"
+    record["version"] = "2.1.311"
     lines[-1] = json.dumps(record)
     assert extract_hook_evidence("claude-code", _rows(lines)).session.harness_version_unverified is True
 

@@ -191,9 +191,12 @@ def test_write_is_atomic_and_keeps_the_file_mode(tmp_path):
 def test_version_range():
     assert agent_hooks.parse_version("2.1.286 (Claude Code)") == (2, 1, 286)
     assert agent_hooks.is_tested_version("2.1.286")
-    assert not agent_hooks.is_tested_version("2.1.287")
+    assert agent_hooks.is_tested_version("2.1.299")
+    assert agent_hooks.is_tested_version("2.1.310")
+    assert not agent_hooks.is_tested_version("2.1.311")
+    assert not agent_hooks.is_tested_version("2.1.285")
     assert not agent_hooks.is_tested_version(None)
-    assert agent_hooks.tested_range() == "2.1.286"
+    assert agent_hooks.tested_range() == "2.1.286 to 2.1.310"
 
 
 def test_settings_location_follows_scope(tmp_path, monkeypatch):

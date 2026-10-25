@@ -282,15 +282,17 @@ def test_a_server_that_ignores_the_request_is_refused_before_writing(env):
 
 def test_untested_claude_code_never_blocks_the_opt_in_and_says_evidence_is_unverified(env):
     """Regression: a new opt-in on any untested version failed, and Claude Code ships several releases a week."""
-    env.version.return_value = "2.1.300"
+    env.version.return_value = "2.1.311"
     result = _pull(env, "--hooks=settings", json_output=True)
     assert result.exit_code == 0, result.stderr
     (warning,) = [w for w in json.loads(result.stdout)["warnings"] if "tested only with Claude Code" in w]
-    assert "found Claude Code 2.1.300" in warning and "reported as unverified" in warning
+    assert "found Claude Code 2.1.311" in warning and "reported as unverified" in warning
     env.installed.return_value = {"hook_placement": "settings", "hook_gate_agent": "reviewer"}
     remembered = _pull(env, json_output=True)
     assert remembered.exit_code == 0, remembered.stderr
-    assert any("tested only with Claude Code 2.1.286" in w for w in json.loads(remembered.stdout)["warnings"])
+    assert any(
+        "tested only with Claude Code 2.1.286 to 2.1.310" in w for w in json.loads(remembered.stdout)["warnings"]
+    )
 
 
 def test_flags_that_do_not_apply_are_rejected(env, monkeypatch):
@@ -403,7 +405,7 @@ def test_doctor_warns_after_an_untested_upgrade_and_when_the_gate_interpreter_mo
     assert warnings() == []
     monkeypatch.setattr(agent_hooks, "claude_code_version", lambda: "2.2.0")
     (untested,) = warnings()
-    assert "tested only with Claude Code 2.1.286; found Claude Code 2.2.0" in untested
+    assert "tested only with Claude Code 2.1.286 to 2.1.310; found Claude Code 2.2.0" in untested
     monkeypatch.setattr(agent_hooks, "claude_code_version", lambda: "2.1.286")
     component["hook_gate_python"] = str(tmp_path / "gone" / "python3")
     (moved,) = warnings()

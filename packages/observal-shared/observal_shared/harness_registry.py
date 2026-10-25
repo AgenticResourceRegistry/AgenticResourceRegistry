@@ -145,16 +145,18 @@ HARNESS_REGISTRY: dict[str, dict] = {
         "invocation_extractor": "claude-code",
         # Skill loads (Skill tool + linked expansion) and /name invocations (harness-written
         # isMeta expansion); the skill listing has no locations, so never availability.
-        # Verified against Claude Code 2.1.286 (session_parsers/claude_code_skill_evidence.py).
+        # Verified against Claude Code 2.1.286 and 2.1.310 (session_parsers/claude_code_skill_evidence.py).
         "skill_evidence_extractor": "claude-code",
         # Hook runs that printed output, failed, or blocked a tool; silent successes leave no
-        # record (session_parsers/claude_code_hook_evidence.py, Claude Code 2.1.286).
+        # record (session_parsers/claude_code_hook_evidence.py, Claude Code 2.1.286 and 2.1.310).
         "hook_evidence_extractor": "claude-code",
         # Claude Code versions whose hook records and hook inputs were recorded end to end
         # (tests/fixtures/component_insights/claude_code). Hook evidence from a session on
         # any other version is "version_unverified", and gated agent hooks warn there.
-        # Raise it only after re-recording those fixtures on the newer version.
-        "hook_evidence_tested_versions": ((2, 1, 286), (2, 1, 286)),
+        # Raise it only after recording fixtures on the newer version. 2.1.286 and 2.1.310
+        # have fixtures; 2.1.299 between them was checked against 66 recorded sessions (hook
+        # outputs, failures and blocks, and skill loads, each matching the raw transcripts).
+        "hook_evidence_tested_versions": ((2, 1, 286), (2, 1, 310)),
         "scopes": ["project", "user"],
         "default_scope": "project",
         "scope_labels": ("project (.claude/agents/)", "user (~/.claude/agents/)"),

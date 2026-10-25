@@ -58,7 +58,9 @@ if TYPE_CHECKING:
 # 4: silent successes (``ran_silently``) are attributed runs where the harness records
 # them (Pi); other harnesses never emit the kind, so their publications are unchanged.
 # 5: hooks in a session from an untested harness version are ``version_unverified``.
-HOOK_MATCHER_VERSION = 5
+# 6: the tested Claude Code range grew from 2.1.286 to 2.1.286 through 2.1.310, so sessions on a version in
+#    between, projected as ``version_unverified`` under 5, are projected again.
+HOOK_MATCHER_VERSION = 6
 _RESULT = {"ran_with_output": "success", "ran_silently": "success", "failed": "error", "blocked": "error"}
 
 
