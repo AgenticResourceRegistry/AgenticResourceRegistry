@@ -152,16 +152,20 @@ async def test_same_id_isolation_and_api_report_count_parity(monkeypatch):
     # transcript, cache key and facet input must all remain distinct.
     keys_seen = set()
 
-    async def facet(session, transcript, meta, agent_id, db):
-        assert isinstance(session, SessionKey)
-        keys_seen.add(session)
-        label = "ALICE ONLY" if session.user_id == alice else "BOB ONLY"
-        other = "BOB ONLY" if session.user_id == alice else "ALICE ONLY"
+    async def facet(_session_id, transcript, _meta):
+        label = "ALICE ONLY" if "ALICE ONLY" in transcript else "BOB ONLY"
+        other = "BOB ONLY" if label == "ALICE ONLY" else "ALICE ONLY"
         assert label in transcript and other not in transcript
         return {"goal_categories": [label], "brief_summary": label}
 
+    async def store(session, _agent_id, facets, _db):
+        assert isinstance(session, SessionKey)
+        assert facets["brief_summary"] == ("ALICE ONLY" if session.user_id == alice else "BOB ONLY")
+        keys_seen.add(session)
+
     monkeypatch.setattr(generator, "load_cached_facets_batch", AsyncMock(return_value={}))
-    monkeypatch.setattr(generator, "extract_and_cache_facets", facet)
+    monkeypatch.setattr(generator, "extract_facets", facet)
+    monkeypatch.setattr(generator, "store_facets", store)
     monkeypatch.setattr(generator, "build_catalog", AsyncMock(return_value=CatalogOffer()))
     monkeypatch.setattr(
         generator,

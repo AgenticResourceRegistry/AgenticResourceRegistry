@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from services.insights import session_meta_extractor
+from services.insights.scope import SessionKey
 from tests.test_session_meta_harness_lines import CLAUDE_CODE, PI
 
 # Pi 1.3 records a refused request (here a 401 from a bad key) as an empty assistant message.
@@ -48,17 +49,20 @@ CLAUDE_NOT_LOGGED_IN = json.dumps(
 
 @pytest.mark.asyncio
 async def test_sessions_with_prompts_but_no_response_are_skipped(monkeypatch):
+    def key(session_id: str, harness: str) -> SessionKey:
+        return SessionKey("default", "user-1", harness, session_id)
+
     transcripts = {
-        "pi-ok": ("pi", PI),
+        key("pi-ok", "pi"): PI,
         # Pi and Claude Code runs that failed before reaching the model: the prompt is all there is.
-        "pi-failed": ("pi", PI[:2]),
-        "claude-failed": ("claude-code", CLAUDE_CODE[:1]),
+        key("pi-failed", "pi"): PI[:2],
+        key("claude-failed", "claude-code"): CLAUDE_CODE[:1],
         # Runs the provider refused leave an error notice instead of a response.
-        "pi-refused": ("pi", [*PI[:2], PI_REFUSED]),
-        "claude-not-logged-in": ("claude-code", [CLAUDE_CODE[0], CLAUDE_NOT_LOGGED_IN]),
-        "claude-ok": ("claude-code", CLAUDE_CODE),
+        key("pi-refused", "pi"): [*PI[:2], PI_REFUSED],
+        key("claude-not-logged-in", "claude-code"): [CLAUDE_CODE[0], CLAUDE_NOT_LOGGED_IN],
+        key("claude-ok", "claude-code"): CLAUDE_CODE,
         # A format the extractor cannot read counts no prompts either, so it is kept.
-        "cursor": ("cursor", [json.dumps({"role": "user", "text": "hi"})]),
+        key("cursor", "cursor"): [json.dumps({"role": "user", "text": "hi"})],
     }
     monkeypatch.setattr(session_meta_extractor, "fetch_all_session_transcripts", AsyncMock(return_value=transcripts))
     monkeypatch.setattr(session_meta_extractor, "fetch_session_stats", AsyncMock(return_value={}))

@@ -107,10 +107,12 @@ def _validation_detail(items: list) -> str | None:
     """
     lines = []
     for item in items[:3]:
-        message = item.get("reason") or item.get("msg") if isinstance(item, dict) else None
+        if not isinstance(item, dict):
+            continue
+        reason = item.get("reason")
+        message = reason.removeprefix("Value error, ") if isinstance(reason, str) else item.get("msg")
         if not isinstance(message, str):
             continue
-        message = message.removeprefix("Value error, ")
         location = [str(part) for part in item.get("loc") or [] if part != "body"]
         lines.append(f"{'.'.join(location)}: {message}" if location else message)
     if len(items) > 3 and lines:
