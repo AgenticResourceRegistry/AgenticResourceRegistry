@@ -375,3 +375,24 @@ async def test_a_cross_session_finding_is_still_rejected_and_the_repair_names_th
     assert result["state"] == "assessed" and result["findings"][0]["evidence_refs"] == ["s1-call0"]
     repair_prompt = model.await_args_list[1].args[0]
     assert "rejected: One finding must be grounded in one scoped session" in repair_prompt
+
+
+@pytest.mark.asyncio
+async def test_a_failed_sample_is_unavailable_not_an_abstention(monkeypatch, report):
+    monkeypatch.setattr(evidence, "_sample", AsyncMock(side_effect=RuntimeError("clickhouse down")))
+    result = await evidence.component_findings(report)
+    assert result["state"] == "unavailable" and result["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_model_call_is_unavailable_not_an_abstention(monkeypatch, report):
+    sample = (
+        [{"refs": ["s0-call0"], "excerpts": {"s0-call0": "search (result: unknown)"}}],
+        {"s0-call0": "search (result: unknown)"},
+        False,
+    )
+    monkeypatch.setattr(evidence, "_sample", AsyncMock(return_value=sample))
+    monkeypatch.setattr(evidence, "get_call_model", lambda: AsyncMock(side_effect=TimeoutError("model timed out")))
+    result = await evidence.component_findings(report)
+    assert result["state"] == "unavailable"
+    assert result["sampled_sessions"] == 1 and result["findings"] == []

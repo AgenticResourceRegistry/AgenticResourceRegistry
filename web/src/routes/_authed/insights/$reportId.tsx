@@ -144,6 +144,8 @@ function ComponentReport({ report }: { report: InsightReport }) {
             <h3 className="text-lg font-semibold">What the published calls suggest</h3>
             {!analysis ? (
               <p className="max-w-[70ch] text-sm text-muted-foreground">This report predates evidence-backed analysis. Generate a new report to assess sampled sessions.</p>
+            ) : analysis.state === "unavailable" ? (
+              <p role="status" className="max-w-[70ch] text-sm text-destructive">The interpretation could not run because the evidence sample or the model failed. Generate the report again.</p>
             ) : analysis.state !== "assessed" || analysis.findings.length === 0 ? (
               <p className="max-w-[70ch] text-sm text-muted-foreground">No grounded findings could be drawn from the available sample. This is not evidence that the component was unused.</p>
             ) : (

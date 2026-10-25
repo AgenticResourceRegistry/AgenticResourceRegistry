@@ -228,7 +228,12 @@ def _validate(raw: object, subject: str, version: str | None, evidence: dict[str
 
 
 async def component_findings(report: InsightReport) -> dict:
-    """Repair once, then abstain. Failures never fail the deterministic report."""
+    """Repair once, then abstain. Failures never fail the deterministic report.
+
+    ``state`` says which it was: ``assessed`` (findings), ``unknown`` (the model answered, or the evidence was
+    too thin, and nothing grounded came of it) or ``unavailable`` (the sample or the model call itself failed,
+    so the owner should generate the report again, not read it as "nothing to find").
+    """
     empty = {"version": EVIDENCE_VERSION, "state": "unknown", "findings": [], "sampled_sessions": 0, "truncated": False}
     if not report.triggered_by:
         return empty
@@ -240,7 +245,7 @@ async def component_findings(report: InsightReport) -> dict:
             report.component_id,
             type(error).__name__,
         )
-        return empty
+        return {**empty, "state": "unavailable"}
     empty["sampled_sessions"] = len(sessions)
     empty["truncated"] = truncated
     if not sessions:
@@ -311,5 +316,6 @@ async def component_findings(report: InsightReport) -> dict:
             report.component_id,
             type(error).__name__,
         )
+        return {**empty, "state": "unavailable"}
     optic.info("component evidence abstained: component_id={} sampled_sessions={}", report.component_id, len(sessions))
     return empty
