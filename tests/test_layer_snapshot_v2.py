@@ -322,3 +322,27 @@ async def test_indexing_helper_soft_fails_when_extractor_is_unavailable(monkeypa
     monkeypatch.setitem(sys.modules, extractor.__name__, extractor)
     await layer_snapshot._ensure_layer_components("default", str(_user().id), "legacy-hash")
     extractor.ensure_layer_components.assert_awaited_once_with("default", str(_user().id), "legacy-hash")
+
+
+@pytest.mark.asyncio
+async def test_v2_reupload_with_different_metadata_is_not_a_conflict(monkeypatch):
+    """The v2 hash covers file hashes and pins only; lockfile hash and drift may differ on an honest re-upload."""
+    query = AsyncMock(return_value=ClickHouseResponse())
+    insert = AsyncMock()
+    monkeypatch.setattr("services.clickhouse.client._query", query)
+    monkeypatch.setattr("services.clickhouse.insert.insert_layer_snapshot", insert)
+    ensure = AsyncMock()
+    monkeypatch.setattr(layer_snapshot, "_ensure_layer_components", ensure)
+    monkeypatch.setattr("services.secrets_redactor.redact_secrets", lambda value: value)
+    first = layer_snapshot.LayerSnapshotRequest.model_validate({**_payload(), "lockfile_hash": "aaaa", "drift": {}})
+    await _UPLOAD(first, SimpleNamespace(), _user(), AsyncMock())
+    stored = insert.await_args.args[0]["content"]
+    assert "identity_conflict" not in stored
+    insert.reset_mock()
+    query.return_value = ClickHouseResponse([{"content": stored}])
+    second = layer_snapshot.LayerSnapshotRequest.model_validate(
+        {**_payload(), "lockfile_hash": "ffff", "drift": {"modified": ["x"]}}
+    )
+    result = await _UPLOAD(second, SimpleNamespace(), _user(), AsyncMock())
+    assert result.stored is False
+    insert.assert_not_awaited()
