@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal contributors
+# SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Helpers for multiprocessing tests that use package-qualified test targets."""
