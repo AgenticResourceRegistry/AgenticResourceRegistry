@@ -146,7 +146,7 @@ async def detect_layer_groups(
         r.raise_for_status()
         rows = r.json().get("data", [])
     except Exception as e:
-        optic.warning("layer groups query failed: {}", e)
+        optic.warning("layer groups query failed: {}", type(e).__name__)
         return []
 
     return [
@@ -223,7 +223,7 @@ async def fetch_layer_snapshots_for_groups(
             snapshots[layer_hash] = content
         return {key: value for key, value in snapshots.items() if key not in conflicting}
     except Exception as e:
-        optic.warning("layer snapshots fetch failed: {}", e)
+        optic.warning("layer snapshots fetch failed: {}", type(e).__name__)
         return {}
 
 

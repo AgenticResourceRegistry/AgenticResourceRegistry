@@ -18,6 +18,16 @@ CLICKHOUSE_DB = _parsed.path.strip("/") or "default"
 CLICKHOUSE_USER = _parsed.username or "default"
 CLICKHOUSE_PASSWORD = _parsed.password or ""
 
+
+def credential_headers() -> dict[str, str]:
+    """ClickHouse credentials as headers, never URL parameters.
+
+    ``raise_for_status`` puts the full request URL in its message, and callers log that message, so a
+    password in the query string ended up in logs and in the support bundle.
+    """
+    return {"X-ClickHouse-User": CLICKHOUSE_USER, "X-ClickHouse-Key": CLICKHOUSE_PASSWORD}
+
+
 _client: httpx.AsyncClient | None = None
 
 
@@ -65,11 +75,7 @@ async def _query(sql: str, params: dict | None = None, *, data: str | None = Non
     from services.clickhouse._settings import DEFAULT_QUERY_SETTINGS, _resource_overrides
 
     client = _get_client()
-    query_params: dict[str, str] = {
-        "database": CLICKHOUSE_DB,
-        "user": CLICKHOUSE_USER,
-        "password": CLICKHOUSE_PASSWORD,
-    }
+    query_params: dict[str, str] = {"database": CLICKHOUSE_DB}
     query_params.update(DEFAULT_QUERY_SETTINGS)
     if _resource_overrides:
         query_params.update(_resource_overrides)
@@ -81,7 +87,9 @@ async def _query(sql: str, params: dict | None = None, *, data: str | None = Non
 
     try:
         request_timeout = {"timeout": timeout} if timeout is not None else {}
-        resp = await client.post(CLICKHOUSE_HTTP, content=body, params=query_params, **request_timeout)
+        resp = await client.post(
+            CLICKHOUSE_HTTP, content=body, params=query_params, headers=credential_headers(), **request_timeout
+        )
         _elapsed = (time.perf_counter() - _t0) * 1000
         if resp.status_code >= 400:
             optic.warning(

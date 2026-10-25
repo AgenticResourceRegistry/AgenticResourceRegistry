@@ -245,5 +245,5 @@ async def insert_layer_snapshot(row: dict):
         r = await _client._query(sql, {"wait_for_async_insert": "1"}, data=_dumps(row))
         r.raise_for_status()
     except Exception as e:
-        optic.error("failed to insert layer snapshot: {}", e)
+        optic.error("failed to insert layer snapshot: {}", type(e).__name__)
         raise
