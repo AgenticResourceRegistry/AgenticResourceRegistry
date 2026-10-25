@@ -29,7 +29,7 @@ def test_production_activity_migration_matches_pinned_phase0_ddl():
     from services.clickhouse.migrations import _split_sql
 
     root = Path(__file__).resolve().parents[1]
-    production = _split_sql((root / "observal-server/clickhouse/migrations/007_component_activity.sql").read_text())
+    production = _split_sql((root / "observal-server/clickhouse/migrations/008_component_activity.sql").read_text())
     pinned = _split_sql(
         (root / "tests/fixtures/component_insights/clickhouse/projection_tables.sql")
         .read_text()

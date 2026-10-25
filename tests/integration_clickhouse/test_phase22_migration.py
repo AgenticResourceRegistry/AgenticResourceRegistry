@@ -42,8 +42,8 @@ async def test_production_runner_applies_activity_tables_and_is_idempotent():
     try:
         await migrations.run_clickhouse_migrations()
         versions = await _rows("SELECT version FROM clickhouse_schema_migrations")
-        assert {item["version"] for item in versions} >= {"006_layer_components", "007_component_activity"}
-        assert sum(item["version"] == "007_component_activity" for item in versions) == 1
+        assert {item["version"] for item in versions} >= {"007_layer_components", "008_component_activity"}
+        assert sum(item["version"] == "008_component_activity" for item in versions) == 1
 
         tables = await _rows(
             "SELECT name, engine, sorting_key FROM system.tables "
@@ -154,7 +154,7 @@ async def test_production_runner_applies_activity_tables_and_is_idempotent():
 
         await migrations.run_clickhouse_migrations()
         versions = await _rows("SELECT version FROM clickhouse_schema_migrations")
-        assert sum(item["version"] == "007_component_activity" for item in versions) == 1
+        assert sum(item["version"] == "008_component_activity" for item in versions) == 1
     finally:
         if client._client is not None:
             await client._client.aclose()

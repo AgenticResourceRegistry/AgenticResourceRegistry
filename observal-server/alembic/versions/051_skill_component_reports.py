@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Allow component insight reports for hooks.
+"""Allow component insight reports for skills.
 
-Revision ID: 034_hook_component_reports
-Revises: 033_skill_component_reports
+Revision ID: 051_skill_component_reports
+Revises: 050_user_deleted_at
 """
 
 from alembic import op
 
-revision = "034_hook_component_reports"
-down_revision = "033_skill_component_reports"
+revision = "051_skill_component_reports"
+down_revision = "050_user_deleted_at"
 branch_labels = None
 depends_on = None
 
@@ -26,11 +26,11 @@ def _constraint(component_types: str) -> str:
 
 def upgrade() -> None:
     op.drop_constraint("ck_insight_report_subject", "insight_reports", type_="check")
-    op.create_check_constraint("ck_insight_report_subject", "insight_reports", _constraint("'mcp', 'skill', 'hook'"))
+    op.create_check_constraint("ck_insight_report_subject", "insight_reports", _constraint("'mcp', 'skill'"))
 
 
 def downgrade() -> None:
-    # Hook reports cannot be represented under the previous constraint.
-    op.execute("DELETE FROM insight_reports WHERE subject_type = 'component' AND component_type = 'hook'")
+    # Skill reports cannot be represented under the MCP-only constraint.
+    op.execute("DELETE FROM insight_reports WHERE subject_type = 'component' AND component_type = 'skill'")
     op.drop_constraint("ck_insight_report_subject", "insight_reports", type_="check")
-    op.create_check_constraint("ck_insight_report_subject", "insight_reports", _constraint("'mcp', 'skill'"))
+    op.create_check_constraint("ck_insight_report_subject", "insight_reports", _constraint("'mcp'"))

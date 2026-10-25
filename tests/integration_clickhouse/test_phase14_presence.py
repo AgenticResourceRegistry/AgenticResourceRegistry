@@ -94,7 +94,7 @@ def _isolated_runner_proof():
         pytest.skip("isolated CH proof not configured")
     assert _rows("SELECT currentDatabase() AS db")[0]["db"] == "observal_phase14_ci"
     versions = {item["version"] for item in _rows("SELECT version FROM clickhouse_schema_migrations")}
-    assert "006_layer_components" in versions  # Runner, not fixture-only DDL.
+    assert "007_layer_components" in versions  # Runner, not fixture-only DDL.
     tables = {item["name"] for item in _rows("SELECT name FROM system.tables WHERE database = 'observal_phase14_ci'")}
     assert {"layer_components", "layer_component_extractions", "session_stats_agg"} <= tables
 

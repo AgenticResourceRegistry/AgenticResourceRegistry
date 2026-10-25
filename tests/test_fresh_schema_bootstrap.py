@@ -41,7 +41,7 @@ async def test_bootstrap_installs_sequence_search_index_and_all_listing_cleanup_
         ([False, False], "fresh"),
         ([False, True], "unversioned"),
         ([True, None], "unversioned"),
-        ([True, "031_component_privacy"], "existing"),
+        ([True, "049_component_privacy"], "existing"),
     ],
 )
 async def test_schema_state_requires_an_empty_database_or_a_recorded_revision(answers, expected):
