@@ -105,42 +105,6 @@ async def _purge_session_orphans(project_id: str, cutoff_str: str) -> dict[str, 
     return stats
 
 
-async def _purge_layer_orphans(project_id: str, cutoff_str: str) -> dict[str, int]:
-    """Keep one user's hash while ANY retained session still references it.
-
-    Fresh, not-yet-used snapshots have a grace period until the existing trace
-    cutoff. Mappings are removed only once the matching snapshot is gone.
-    """
-    from services.clickhouse import _query
-
-    response = await _query(
-        "DELETE FROM layer_snapshots WHERE project_id = {pid:String} "
-        "AND uploaded_at < {cutoff:String} "
-        "AND (user_id, hash) NOT IN ("
-        "  SELECT DISTINCT user_id, layer_hash FROM session_events "
-        "  WHERE project_id = {pid2:String} AND layer_hash IS NOT NULL AND layer_hash != ''"
-        ") SETTINGS lightweight_deletes_sync = 1",
-        {"param_pid": project_id, "param_pid2": project_id, "param_cutoff": cutoff_str},
-        timeout=RETENTION_QUERY_TIMEOUT,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Retention cleanup failed for layer_snapshots (HTTP {response.status_code})")
-    stats = {"layer_snapshots": 1}
-    for table in ("layer_components", "layer_component_extractions"):
-        response = await _query(
-            f"DELETE FROM {table} WHERE project_id = {{pid:String}} "
-            "AND (user_id, layer_hash) NOT IN ("
-            "  SELECT DISTINCT user_id, hash FROM layer_snapshots WHERE project_id = {pid2:String}"
-            ") SETTINGS lightweight_deletes_sync = 1",
-            {"param_pid": project_id, "param_pid2": project_id},
-            timeout=RETENTION_QUERY_TIMEOUT,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"Retention cleanup failed for {table} (HTTP {response.status_code})")
-        stats[table] = 1
-    return stats
-
-
 async def _purge_session_facets(project_id: str) -> int:
     """Delete facet caches with no retained source, using bounded scoped reads.
 
@@ -263,9 +227,14 @@ def _ch_string(value: str) -> str:
 
 
 async def _purge_source_orphans(project_id: str, cutoff_str: str) -> dict[str, int]:
-    """Retry-safe cleanup after source expiry or count-based source removal."""
+    """Retry-safe cleanup after source expiry or count-based source removal.
+
+    Layer snapshots and their component mappings are kept: they describe configuration, not session
+    content, and a sender that cached "already uploaded" for a hash never uploads it again, so deleting
+    one would leave every later session on that hash without verified attribution. The admin purge
+    keeps them for the same reason.
+    """
     stats = await _purge_session_orphans(project_id, cutoff_str)
-    stats.update(await _purge_layer_orphans(project_id, cutoff_str))
     stats["insight_session_facets"] = await _purge_session_facets(project_id)
     stats.update(await _purge_legacy_insight_meta(cutoff_str))
     return stats
