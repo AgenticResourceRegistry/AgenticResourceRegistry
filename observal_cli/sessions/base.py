@@ -1085,9 +1085,12 @@ def _maybe_upload_layer_snapshot(
         # Build first, then compare: a changed pin cannot reuse the old advertised hash.
         payload = build_upload_payload(project_dir=cwd or None)
         user_id = str((config or {}).get("user_id") or "")
-        if payload["hash"] != layer_hash or (
-            not needs_upload(layer_hash) and was_uploaded_for(layer_hash, server_url, user_id)
-        ):
+        if payload["hash"] != layer_hash:
+            # The configuration changed after the session advertised its hash. The advertised hash cannot be
+            # uploaded (its files are gone), so the session has no snapshot; coverage reports it as such.
+            optic.warning("layer snapshot not uploaded: the configuration changed since the session started")
+            return
+        if not needs_upload(layer_hash) and was_uploaded_for(layer_hash, server_url, user_id):
             return
 
         # POST to server
