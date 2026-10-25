@@ -156,6 +156,10 @@ def _claude_code_hook_bindings(hook_configs: list[dict]) -> list[dict]:
     return bindings
 
 
+class AliasCollisionError(ValueError):
+    """Two components would be written under the same local name."""
+
+
 def _yaml_double_quoted(value: str) -> str:
     """``value`` as a one-line YAML double-quoted scalar that parses back to exactly ``value``.
 
@@ -483,7 +487,7 @@ def _build_mcp_configs(
         entry = adapter.agent_mcp_entry(ctx)
         if entry is not None:
             if ctx.name in mcp_configs:
-                raise ValueError("MCP aliases collide after final sanitization")
+                raise AliasCollisionError("MCP aliases collide after final sanitization")
             mcp_configs[ctx.name] = entry
             if component_aliases is not None:
                 component_aliases[str(comp.component_id)] = ctx.name
@@ -498,7 +502,7 @@ def _build_mcp_configs(
             args = args.split()
         env = ext.get("env", {})
         if name in mcp_configs:
-            raise ValueError("External MCP alias collides with registry component")
+            raise AliasCollisionError("External MCP alias collides with registry component")
         mcp_configs[name] = {"command": cmd, "args": args, "env": env}
 
     _inject_agent_id(mcp_configs, str(agent.id))
