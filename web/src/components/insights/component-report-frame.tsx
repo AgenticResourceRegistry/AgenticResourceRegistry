@@ -35,7 +35,7 @@ export function ComponentReportFrame({ report, children }: { report: InsightRepo
               {report.status === "completed" ? <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> : report.status === "failed" ? <XCircle className="h-4 w-4" aria-hidden="true" /> : pending && report.status === "running" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Clock3 className="h-4 w-4" aria-hidden="true" />}
               <span className="font-medium capitalize">{report.status === "pending" ? "Queued" : report.status}</span>
             </span>
-            <span>{new Date(report.period_start).toLocaleDateString()} – {new Date(report.period_end).toLocaleDateString()}</span>
+            <span>{new Date(report.period_start).toLocaleDateString()} to {new Date(report.period_end).toLocaleDateString()}</span>
             <span>{report.component_version ? `Version ${report.component_version}` : "All versions"}</span>
           </div>
         </div>

@@ -73,7 +73,7 @@ def _resolve(parent_lines: list[str], subagent_id: str = SUBAGENT, parent: str =
     return Extractor.resolve_agent(results, calls) if calls is not None else ""
 
 
-# -- the subagent's own link ---------------------------------------------------------------------------
+# the subagent's own link
 
 
 def test_a_subagent_transcript_links_to_its_parent_session_and_a_main_transcript_does_not():
@@ -100,7 +100,7 @@ def test_an_inconsistent_subagent_transcript_has_no_link(change):
     assert (session.parent_session_id, session.subagent_id) == ("", "")
 
 
-# -- the parent's record of the spawn ------------------------------------------------------------------
+# the parent's record of the spawn
 
 
 def test_the_recorded_parent_names_the_subagents_agent():
@@ -168,7 +168,7 @@ def test_two_spawns_of_one_subagent_must_name_the_same_agent():
     assert _resolve([*main, respawn(18, "other-agent"), respawn(19, "other-agent")]) == ""
 
 
-# -- eligibility ---------------------------------------------------------------------------------------
+# eligibility
 
 
 def _candidate(binding: str, component_id: str) -> dict:
@@ -209,7 +209,7 @@ def test_a_gated_hook_in_a_subagent_session_follows_the_resolved_agent(subagent_
     }, "agent-file hooks in a subagent transcript are unchanged"
 
 
-# -- the projector's scoped parent lookup --------------------------------------------------------------
+# the projector's scoped parent lookup
 
 
 class _Store:

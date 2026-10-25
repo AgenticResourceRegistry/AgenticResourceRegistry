@@ -53,7 +53,7 @@ observal ops insights generate NAMESPACE/AGENT_SLUG --period 14 --wait --output 
 observal ops insights generate NAMESPACE/AGENT_SLUG --version 1.2.0 --compare 1.1.0 --period 30 --wait --output json
 ```
 
-Generate a component report (1–90 days; the deterministic block works without a model, but interpretations require a configured model):
+Generate a component report (1 to 90 days; the deterministic block works without a model, but interpretations require a configured model):
 
 ```bash
 observal ops insights generate --component mcp NAMESPACE/SLUG --period 14 --wait --output json
