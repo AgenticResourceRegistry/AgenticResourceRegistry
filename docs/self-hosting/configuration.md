@@ -1,5 +1,4 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Configuration
