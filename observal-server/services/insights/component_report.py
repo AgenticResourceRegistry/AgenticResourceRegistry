@@ -3,7 +3,8 @@
 
 """Component reports pair published activity facts with bounded interpretation.
 
-Interpretation is separately labelled and cannot change observed counts.
+Interpretation (outcomes against sessions without the component, attention items, a model-written reading) is
+separately labelled and cannot change observed counts.
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ from typing import TYPE_CHECKING
 
 from services.component_activity.queries import activity_summary
 
+from .component_analysis import component_analysis
+from .component_attention import attention_items
+from .component_outcomes import component_outcomes
 from .scope import InsightScope
 from .sections import generate_component_sections
 
@@ -19,7 +23,15 @@ if TYPE_CHECKING:
     from models.insight_report import InsightReport
 
 
-async def generate_component_content(report: InsightReport) -> dict:
+async def _interpret(report: InsightReport, db, summary: dict, coverage: dict, metrics: dict, narrative: dict) -> None:
+    """Add what sessions looked like, what to look at, and the model's reading. The counts above are untouched."""
+    outcomes, context = await component_outcomes(report, db)
+    narrative["outcomes"] = outcomes
+    narrative["attention"] = attention_items(report.component_type, summary, coverage, outcomes)
+    narrative["analysis"] = await component_analysis(report, metrics, narrative["attention"], outcomes, context)
+
+
+async def generate_component_content(report: InsightReport, db) -> dict:
     if (
         report.subject_type != "component"
         or report.component_type not in ("mcp", "skill", "hook")
@@ -28,9 +40,9 @@ async def generate_component_content(report: InsightReport) -> dict:
     ):
         raise ValueError("Unsupported report subject")
     if report.component_type == "skill":
-        return await _generate_skill_content(report)
+        return await _generate_skill_content(report, db)
     if report.component_type == "hook":
-        return await _generate_hook_content(report)
+        return await _generate_hook_content(report, db)
     scope = InsightScope(
         subject_type="component",
         project_id=report.project_id,
@@ -51,28 +63,30 @@ async def generate_component_content(report: InsightReport) -> dict:
     from .component_evidence import component_findings
 
     narrative["component_analysis"] = await component_findings(report)
+    metrics = {
+        "present_sessions": summary["present_sessions"],
+        "present_users": summary["present_users"],
+        "observed_sessions": summary["observed_sessions"],
+        "observed_calls": summary["observed_calls"],
+        "result_states": summary["result_states"],
+        "harness_distribution": summary["harness_distribution"],
+        "version_distribution": summary["version_distribution"],
+        # Publication counters describe ALL candidate calls in the present
+        # session cohort, not collisions assigned to this specific MCP.
+        "cohort_collision_calls": coverage["calls"]["collision_calls"],
+        "cohort_unmatched_calls": coverage["calls"]["unmatched_calls"],
+        "activation_actions": summary["activation_actions"],
+    }
+    await _interpret(report, db, summary, coverage, metrics, narrative)
     return {
-        "metrics": {
-            "present_sessions": summary["present_sessions"],
-            "present_users": summary["present_users"],
-            "observed_sessions": summary["observed_sessions"],
-            "observed_calls": summary["observed_calls"],
-            "result_states": summary["result_states"],
-            "harness_distribution": summary["harness_distribution"],
-            "version_distribution": summary["version_distribution"],
-            # Publication counters describe ALL candidate calls in the present
-            # session cohort, not collisions assigned to this specific MCP.
-            "cohort_collision_calls": coverage["calls"]["collision_calls"],
-            "cohort_unmatched_calls": coverage["calls"]["unmatched_calls"],
-            "activation_actions": summary["activation_actions"],
-        },
+        "metrics": metrics,
         "narrative": narrative,
         "coverage": coverage,
         "sessions_analyzed": summary["present_sessions"],
     }
 
 
-async def _generate_skill_content(report: InsightReport) -> dict:
+async def _generate_skill_content(report: InsightReport, db) -> dict:
     """Deterministic skill report: published skill evidence and its coverage only.
 
     No MCP call figures and no model interpretation: a load or invocation shows
@@ -88,24 +102,27 @@ async def _generate_skill_content(report: InsightReport) -> dict:
         component_version=report.component_version,
     )
     coverage = summary["coverage"].model_dump(mode="json")
+    metrics = {
+        key: summary[key]
+        for key in (
+            "present_sessions",
+            "present_users",
+            "available_sessions",
+            "loaded_sessions",
+            "confirmed_loads",
+            "load_attempts",
+            "invoked_sessions",
+            "invocations",
+            "harness_distribution",
+            "version_distribution",
+            "activation_actions",
+        )
+    }
+    narrative = generate_skill_sections(summary, coverage)
+    await _interpret(report, db, summary, coverage, metrics, narrative)
     return {
-        "metrics": {
-            key: summary[key]
-            for key in (
-                "present_sessions",
-                "present_users",
-                "available_sessions",
-                "loaded_sessions",
-                "confirmed_loads",
-                "load_attempts",
-                "invoked_sessions",
-                "invocations",
-                "harness_distribution",
-                "version_distribution",
-                "activation_actions",
-            )
-        },
-        "narrative": generate_skill_sections(summary, coverage),
+        "metrics": metrics,
+        "narrative": narrative,
         "coverage": coverage,
         "sessions_analyzed": summary["present_sessions"],
     }
@@ -150,7 +167,7 @@ def generate_skill_sections(summary: dict, coverage: dict) -> dict:
     }
 
 
-async def _generate_hook_content(report: InsightReport) -> dict:
+async def _generate_hook_content(report: InsightReport, db) -> dict:
     """Deterministic hook report: recorded runs, whether the hook could run, and coverage.
 
     No MCP figures and no model interpretation. A recorded run shows the hook
@@ -166,24 +183,27 @@ async def _generate_hook_content(report: InsightReport) -> dict:
         component_version=report.component_version,
     )
     coverage = summary["coverage"].model_dump(mode="json")
+    metrics = {
+        key: summary[key]
+        for key in (
+            "present_sessions",
+            "present_users",
+            "eligible_sessions",
+            "sessions_with_recorded_run",
+            "runs_with_output",
+            "silent_runs",
+            "failures",
+            "blocks",
+            "harness_distribution",
+            "version_distribution",
+            "activation_actions",
+        )
+    }
+    narrative = generate_hook_sections(summary, coverage)
+    await _interpret(report, db, summary, coverage, metrics, narrative)
     return {
-        "metrics": {
-            key: summary[key]
-            for key in (
-                "present_sessions",
-                "present_users",
-                "eligible_sessions",
-                "sessions_with_recorded_run",
-                "runs_with_output",
-                "silent_runs",
-                "failures",
-                "blocks",
-                "harness_distribution",
-                "version_distribution",
-                "activation_actions",
-            )
-        },
-        "narrative": generate_hook_sections(summary, coverage),
+        "metrics": metrics,
+        "narrative": narrative,
         "coverage": coverage,
         "sessions_analyzed": summary["present_sessions"],
     }

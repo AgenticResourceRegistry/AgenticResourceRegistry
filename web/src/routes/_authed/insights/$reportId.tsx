@@ -4,6 +4,7 @@
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import React from "react";
 import { Loader2 } from "lucide-react";
+import { ComponentInterpretationPanel } from "@/components/insights/component-interpretation";
 import { ComponentReportFrame, CoveragePanel, EvidencePanel } from "@/components/insights/component-report-frame";
 import { SkillEvidenceBreakdown } from "@/components/insights/skill-evidence-breakdown";
 import type {
@@ -61,6 +62,7 @@ function SkillReport({ report }: { report: InsightReport }) {
   ].filter(Boolean);
   return (
     <ComponentReportFrame report={report}>
+        <ComponentInterpretationPanel narrative={narrative} />
         <EvidencePanel summary={narrative?.summary} stats={[
           { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
           { label: "Confirmed loads", value: <SkillCount value={metrics?.loaded_sessions} measured={measured} />, note: "Sessions where instructions entered context" },
@@ -97,6 +99,7 @@ function HookReport({ report }: { report: InsightReport }) {
   const silentRuns = metrics?.silent_runs ?? null;
   return (
     <ComponentReportFrame report={report}>
+        <ComponentInterpretationPanel narrative={narrative} />
         <EvidencePanel summary={narrative?.summary} stats={[
           { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
           { label: "Could run", value: metrics?.eligible_sessions ?? "—", note: "Processed, eligible sessions" },
@@ -128,6 +131,7 @@ function ComponentReport({ report }: { report: InsightReport }) {
   const canMeasureCalls = !!coverage && coverage.usage_rate_denominator_sessions > 0;
   return (
     <ComponentReportFrame report={report}>
+          <ComponentInterpretationPanel narrative={narrative} />
           <EvidencePanel summary={summary} stats={[
             { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
             { label: "Observed calls", value: canMeasureCalls ? metrics?.observed_calls ?? "—" : "Not measured" },

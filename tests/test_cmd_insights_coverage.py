@@ -1005,3 +1005,132 @@ def test_hook_reports_count_silent_runs_where_every_run_is_recorded(cli):
     assert "Sessions with a recorded run: 1" in text
     assert "(a lower bound)" not in text
     assert "0 with output, 4 silent, 1 failed, 0 blocked" in text
+
+
+_ANALYSIS = {
+    "version": 1,
+    "state": "assessed",
+    "at_a_glance": {"health": "needs_attention", "summary": "9 of 10 recorded runs failed."},
+    "what_works": [{"title": "Runs recorded", "detail": "Each run leaves a record."}],
+    "friction": [{"title": "Failures", "detail": "Most runs exit with an error."}],
+    "suggestions": [
+        {
+            "action_type": "edit_component",
+            "title": "Exit cleanly",
+            "detail": "Return 0 when nothing is wrong.",
+            "evidence": ["hook_failing", "friction"],
+            "confidence": "medium",
+        }
+    ],
+}
+_ATTENTION = [
+    {
+        "id": "hook_failing",
+        "severity": "attention",
+        "title": "Most recorded runs failed",
+        "detail": "9 of 10 recorded runs failed.",
+        "evidence": {},
+        "suggestion": "Check that its command exits 0.",
+    },
+    {"id": "note", "severity": "info", "title": "A note", "detail": "Some detail.", "evidence": {}, "suggestion": None},
+]
+_SIDE = {
+    "sessions": 40,
+    "sampled": 30,
+    "analyzed": 20,
+    "achieved": 6,
+    "not_achieved": 14,
+    "friction_types": [["tool_failed", 8]],
+}
+_OUTCOMES = {
+    "version": 1,
+    "state": "assessed",
+    "with": _SIDE,
+    "without": {**_SIDE, "sessions": 90, "analyzed": 30, "achieved": 20, "not_achieved": 10, "friction_types": []},
+    "gap": {"state": "lower"},
+    "comparison": "Sessions in this project in the same period.",
+}
+
+
+def test_interpretation_renders_reading_attention_and_outcomes_in_that_order(cli):
+    insights._render_interpretation({"analysis": _ANALYSIS, "attention": _ATTENTION, "outcomes": _OUTCOMES})
+    text = "\n".join(cli.messages())
+    order = [
+        "needs attention. 9 of 10 recorded runs failed.",
+        "What works",
+        "Failures: Most runs exit with an error.",
+        "Suggestion[/bold] (edit component, medium confidence) Exit cleanly: Return 0 when nothing is wrong.",
+        "Based on: Most recorded runs failed; friction in sessions with it",
+        "What to look at",
+        "Suggestion: Check that its command exits 0.",
+        "Sessions with and without it",
+        "With it:    6 of 20 sessions with a known outcome achieved their goal (30%); 20 analyzed of 40 (30 sampled)",
+        "friction: tool failed 8",
+        "Without it: 20 of 30 sessions with a known outcome achieved their goal (67%)",
+        "Difference: achieved less often with it. These sessions differ in more than the component: an association, not a cause.",
+    ]
+    positions = [text.index(item) for item in order]
+    assert positions == sorted(positions), text
+
+
+@pytest.mark.parametrize(
+    ("analysis", "phrase"),
+    [
+        ({"state": "unavailable"}, "could not run"),
+        ({"state": "insufficient"}, "Too few sessions"),
+        ({"state": "unknown"}, "No reading was kept"),
+    ],
+)
+def test_interpretation_says_why_there_is_no_reading(cli, analysis, phrase):
+    insights._render_interpretation({"analysis": analysis, "attention": [], "outcomes": {"state": "insufficient"}})
+    text = "\n".join(cli.messages())
+    assert phrase in text and "No sessions with this component have outcome data yet" in text
+
+
+def test_interpretation_flags_a_failed_outcome_read_and_old_reports(cli):
+    insights._render_interpretation({"outcomes": {"state": "unavailable"}})
+    assert "Outcomes could not be read" in "\n".join(cli.messages())
+    cli.prints.clear()
+    insights._render_interpretation({"summary": "old report"})
+    assert "predates outcome analysis" in "\n".join(cli.messages())
+
+
+@pytest.mark.parametrize(
+    ("gap", "phrase"),
+    [
+        ({"state": "higher"}, "achieved more often with it"),
+        ({"state": "no_difference"}, "no difference large enough to report"),
+        ({"state": "insufficient", "min_per_side": 10}, "too few sessions to compare (needs 10"),
+    ],
+)
+def test_outcome_verdicts(cli, gap, phrase):
+    insights._render_outcomes({**_OUTCOMES, "gap": gap})
+    assert phrase in "\n".join(cli.messages())
+
+
+@pytest.mark.parametrize("component_type", ["mcp", "skill", "hook"])
+def test_every_component_report_shows_the_interpretation(cli, monkeypatch, component_type):
+    narrative = {"summary": "counts only", "analysis": _ANALYSIS, "attention": _ATTENTION, "outcomes": _OUTCOMES}
+    report = _completed_report(
+        subject_type="component",
+        component_type=component_type,
+        component_name="user/thing",
+        metrics={},
+        coverage={},
+        narrative=narrative,
+    )
+    monkeypatch.setattr(insights, "_resolve_report_for_show", lambda *_args, **_kwargs: report)
+    insights.insights_show("user/thing", "latest", "table", None)
+    text = "\n".join(cli.messages())
+    assert "counts only" in text and "needs attention. 9 of 10 recorded runs failed." in text
+    assert "Most recorded runs failed" in text and "Difference: achieved less often with it" in text
+
+
+def test_component_sections_render_their_own_shapes(cli):
+    insights._render_component_section("attention", _ATTENTION)
+    insights._render_component_section("analysis", _ANALYSIS)
+    insights._render_component_section("outcomes", _OUTCOMES)
+    text = "\n".join(cli.messages())
+    assert (
+        "Most recorded runs failed" in text and "needs attention" in text and "Difference: achieved less often" in text
+    )

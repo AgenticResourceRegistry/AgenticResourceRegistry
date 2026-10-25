@@ -79,6 +79,59 @@ test.describe("Component Insights report", () => {
     });
   }
 
+  test("a component report leads with the reading, what to look at and the session comparison", async ({ page }, testInfo) => {
+    const side = { sessions: 40, sampled: 30, analyzed: 20, achieved: 6, not_achieved: 14, unclear: 0, satisfied: 5, dissatisfied: 9, with_friction: 12, blocking_friction: 3, tool_failed: 8, friction_types: [["tool_failed", 8]] };
+    const narrative = {
+      ...reports.hook.narrative,
+      attention: [
+        { id: "hook_failing", severity: "attention", title: "Most recorded runs failed", detail: "9 of 10 recorded runs failed.", evidence: { failures: 9 }, suggestion: "Check that its command exits 0 when nothing is wrong." },
+        { id: "hook_version_unverified", severity: "info", title: "Some sessions are excluded for an unverified harness version", detail: "4 sessions were recorded by a harness version whose hook records are not verified.", evidence: { unverified_sessions: 4 }, suggestion: null },
+      ],
+      outcomes: { version: 1, state: "assessed", with: side, without: { ...side, sessions: 90, analyzed: 30, achieved: 20, not_achieved: 10, friction_types: [["tool_failed", 2]] }, gap: { state: "lower" }, comparison: "Sessions in this project in the same period." },
+      analysis: {
+        version: 1, state: "assessed",
+        at_a_glance: { health: "needs_attention", summary: "Sessions with this hook achieved their goal less often, and 9 of 10 recorded runs failed." },
+        what_works: [{ title: "Runs are recorded", detail: "Each run leaves a record the owner can read." }],
+        friction: [{ title: "Failing runs", detail: "Most recorded runs exit with an error." }],
+        suggestions: [{ action_type: "edit_component", title: "Make the command exit cleanly", detail: "Return exit code 0 when no problem is found, and print the reason when it fails.", evidence: ["hook_failing", "friction"], confidence: "medium" }],
+      },
+    };
+    await loginToWebUI(page);
+    await page.route("**/api/v1/insights/reports/report-fixture", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ ...base, component_type: "hook", ...reports.hook, narrative }),
+    }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/insights/report-fixture");
+    await expect(page.getByRole("heading", { name: "team/review Insights", level: 2 })).toBeVisible();
+    const sections = await page.locator("main section").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label")));
+    const order = ["At a glance", "What to look at", "Sessions with and without it", "What the sessions show", "Suggested changes", "Evidence", "Attribution coverage"];
+    expect(order.map((name) => sections.indexOf(name))).toEqual(order.map((_, index) => index));
+    await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
+    const attention = page.getByRole("region", { name: "What to look at" });
+    await expect(attention.getByText("Most recorded runs failed")).toBeVisible();
+    await expect(attention.getByText("Look at this")).toHaveCount(1);
+    const comparison = page.getByRole("region", { name: "Sessions with and without it" });
+    await expect(comparison.getByRole("row", { name: /With it 6 of 20 \(30%\)/ })).toBeVisible();
+    await expect(comparison.getByRole("row", { name: /Without it 20 of 30 \(67%\)/ })).toBeVisible();
+    await expect(comparison.getByText("Sessions with it achieved their goal less often.")).toBeVisible();
+    await expect(comparison.getByText("an association, not a cause", { exact: false })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Suggested changes" })).toContainText("Edit the component · medium confidence · based on Most recorded runs failed; friction in sessions with it");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("hook-interpretation-mobile.png"), fullPage: true });
+  });
+
+  test("a report without a reading says why instead of leaving a gap", async ({ page }) => {
+    await loginToWebUI(page);
+    const unavailable = { ...reports.skill.narrative, attention: [], outcomes: { version: 1, state: "unavailable" }, analysis: { version: 1, state: "unavailable" } };
+    await page.route("**/api/v1/insights/reports/report-fixture", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ ...base, component_type: "skill", ...reports.skill, narrative: unavailable }),
+    }));
+    await page.goto("/insights/report-fixture");
+    await expect(page.getByText("The reading could not run because the model failed. Generate the report again.")).toBeVisible();
+    await expect(page.getByText("Outcomes could not be read because a session read or the model failed. Generate the report again.")).toBeVisible();
+    await expect(page.getByText("Nothing in the counts crossed a threshold. That is not proof nothing needs work.")).toBeVisible();
+  });
+
   test("MCP coverage explains historical gaps without attributing them to the listing", async ({ page }, testInfo) => {
     await loginToWebUI(page);
     await page.route("**/api/v1/insights/reports/report-fixture", (route) => route.fulfill({

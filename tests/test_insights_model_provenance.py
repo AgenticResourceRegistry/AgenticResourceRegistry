@@ -134,7 +134,7 @@ async def test_component_report_records_the_model_that_wrote_its_findings(monkey
     from models.insight_report import InsightReportStatus
     from services.insights import _deps
 
-    async def content(_report):
+    async def content(_report, _db):
         _deps.note_model_used("bedrock/us.anthropic.claude-test-v1")
         return CONTENT
 
