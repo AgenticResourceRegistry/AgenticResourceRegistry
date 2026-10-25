@@ -76,7 +76,9 @@ async def _purge_session_orphans(project_id: str, cutoff_str: str) -> dict[str, 
     """
     from services.clickhouse import _query
 
-    tables = ("session_stats_agg", "session_checkpoints", "component_activity", "component_activity_publications")
+    # session_checkpoints stay: they are the sender's resume position. Without one, a resumed session sends
+    # its whole transcript again and brings back the content retention just removed.
+    tables = ("session_stats_agg", "component_activity", "component_activity_publications")
     stats: dict[str, int] = {}
     for table in tables:
         sql = (
