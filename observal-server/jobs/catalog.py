@@ -49,7 +49,7 @@ async def refresh_user_profiles(ctx: dict):
         from sqlalchemy import select
 
         from database import async_session
-        from models.user import User
+        from models.user import User, live_users
         from observal_shared.migration.constants import DEFAULT_PROJECT_ID
         from services.user_profile import get_or_build_profile, users_with_recent_activity
 
@@ -60,7 +60,11 @@ async def refresh_user_profiles(ctx: dict):
         refreshed = 0
         skipped = 0
         async with async_session() as db:
-            users = (await db.execute(select(User).where(User.auth_provider != "deactivated"))).scalars().all()
+            users = (
+                (await db.execute(select(User).where(User.auth_provider != "deactivated", live_users())))
+                .scalars()
+                .all()
+            )
             for user in users:
                 if active is not None and (DEFAULT_PROJECT_ID, str(user.id)) not in active:
                     skipped += 1
