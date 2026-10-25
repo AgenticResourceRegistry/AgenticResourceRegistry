@@ -1,5 +1,4 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 SrihariLegend <sriharilegend23@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Configuration
@@ -115,12 +114,9 @@ Session events older than this are removed from ClickHouse. Set to `0` to disabl
 ```
 JWT_SIGNING_ALGORITHM=ES256        # ES256 (default) or RS256
 JWT_KEY_DIR=/data/keys             # persisted in the apidata volume
-JWT_KEY_READ_ONLY=false            # true only for a pre-provisioned key store
 ```
 
-The server generates asymmetric keys on first boot and stores them in `$JWT_KEY_DIR`. **Back up this directory**, including retired public keys: losing the keys invalidates sessions. Normal managed rotation retains the actual former key for verification across workers; it does not revoke tokens. Changing `JWT_SIGNING_ALGORITHM` requires a coordinated restart so live workers do not retain conflicting signing configurations. See [normal rotation and emergency key compromise](authentication.md#normal-key-rotation-and-algorithm-changes).
-
-Set `JWT_KEY_READ_ONLY=true` only when `signing.pem` already exists and the server must not create, migrate, rotate, or prune key files. On POSIX, the private key must be owner-only (for example, mode `0400` or `0600`): read-only startup rejects broader permissions without changing the file, while managed startup restricts an existing key to `0600` and fails if it cannot confirm that access is restricted. On non-POSIX systems, protect the key with the operating system's native ACLs; POSIX mode bits cannot be verified there.
+The server generates asymmetric keys on first boot and stores them in `$JWT_KEY_DIR`. **Back up this directory**: losing the keys invalidates every session. Changing `JWT_SIGNING_ALGORITHM` and restarting retires the current public key, generates the selected key type, and keeps old tokens verifiable during their normal lifetime.
 
 SAML service-provider material can be mounted independently:
 

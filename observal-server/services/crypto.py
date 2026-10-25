@@ -13,7 +13,7 @@ import hashlib
 import os
 import tempfile
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -143,14 +143,12 @@ class KeyManager:
         key_password: str | None = None,
         algorithm: SigningAlgorithm = "ES256",
         retired_key_retention_days: int = 30,
-        read_only: bool = False,
     ) -> None:
         if algorithm not in SUPPORTED_ALGORITHMS:
             raise ValueError(f"Unsupported JWT signing algorithm: {algorithm}")
         self._key_dir = Path(key_dir).expanduser()
         self._key_password = key_password.encode() if key_password else None
         self._algorithm = algorithm
-        self._read_only = read_only
         self._retired_key_retention_seconds = max(retired_key_retention_days, 1) * 86400
         # Always take the local lock before the filesystem lock. Readers publish
         # snapshots in one step; the key, kid and algorithm can never be mixed.
@@ -171,38 +169,24 @@ class KeyManager:
         optic.debug("initializing JWT key manager")
         signing_path = self._key_dir / "signing.pem"
         with self._state_lock:
-            if self._read_only:
-                if not self._key_dir.is_dir():
-                    raise FileNotFoundError(f"JWT key directory does not exist in read-only mode: {self._key_dir}")
-                try:
-                    signing_path.stat()
-                except FileNotFoundError as exc:
-                    raise FileNotFoundError(
-                        f"JWT signing key does not exist in read-only mode: {signing_path}"
-                    ) from exc
-                self._load_private_key(signing_path, allow_migration=False)
-                if self._require_active().algorithm != self._algorithm:
-                    raise RuntimeError("Configured JWT algorithm does not match the key in the read-only key store")
-                self._load_retired_keys(prune=False)
-            else:
-                self._key_dir.mkdir(parents=True, exist_ok=True)
-                try:
-                    os.chmod(self._key_dir, 0o700)
-                except OSError:
-                    optic.warning("could not restrict JWT key directory permissions")
+            self._key_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self._key_dir, 0o700)
+            except OSError:
+                optic.warning("could not restrict JWT key directory permissions")
 
-                with self._signing_lock(create=True):
-                    try:
-                        signing_path.lstat()
-                    except FileNotFoundError:
+            with self._signing_lock(create=True):
+                try:
+                    signing_path.lstat()
+                except FileNotFoundError:
+                    self._generate_key_pair(signing_path)
+                else:
+                    self._load_private_key(signing_path)
+                    if self._require_active().algorithm != self._algorithm:
+                        optic.info("JWT algorithm changed; retiring current signing key")
+                        self._retire_current_key()
                         self._generate_key_pair(signing_path)
-                    else:
-                        self._load_private_key(signing_path)
-                        if self._require_active().algorithm != self._algorithm:
-                            optic.info("JWT algorithm changed; retiring current signing key")
-                            self._retire_current_key()
-                            self._generate_key_pair(signing_path)
-                    self._load_retired_keys()
+                self._load_retired_keys()
             optic.info("JWT signing key ready (alg={}, kid={})", self._algorithm, self._require_active().kid)
 
     def _require_active(self) -> _ActiveKey:
@@ -214,12 +198,7 @@ class KeyManager:
         """Observe the authoritative private key; never generate or migrate on reads."""
         path = self._key_dir / "signing.pem"
         try:
-            if os.name == "posix":
-                self._ensure_private_key_permissions(path, read_only=True)
             pem = path.read_bytes()
-            # Read-only deployments adopt externally provisioned keys only after restart.
-            if self._read_only and self._active is not None and pem != self._active.pem:
-                raise KeyStoreUnavailableError("JWT signing-key store is unavailable")
             if self._active is None or pem != self._active.pem:
                 self._load_private_key(path, allow_migration=False, pem=pem)
         except KeyStoreUnavailableError:
@@ -233,7 +212,7 @@ class KeyManager:
         with self._state_lock:
             self._require_active()
             try:
-                with nullcontext() if self._read_only else self._signing_lock(shared=True):
+                with self._signing_lock(shared=True):
                     self._refresh_active_key()
                     active = self._require_active()
                     if include_retired or (kid is not None and kid != active.kid):
@@ -271,8 +250,6 @@ class KeyManager:
         return {"keys": keys}
 
     def rotate_key(self) -> str:
-        if self._read_only:
-            raise RuntimeError("Cannot rotate JWT signing key in read-only mode")
         optic.info("rotating JWT signing key")
         new_key = self._generate_private_key()
         with self._state_lock, self._signing_lock():
@@ -439,23 +416,6 @@ class KeyManager:
         pem = self._write_private_key(path, key)
         self._set_active_key(key, pem)
 
-    def _ensure_private_key_permissions(self, path: Path, *, read_only: bool) -> None:
-        if os.name != "posix":
-            if read_only:
-                optic.warning("cannot verify JWT signing key permissions on a non-POSIX platform; restrict its ACL")
-            else:
-                try:
-                    os.chmod(path, 0o600)
-                except OSError:
-                    optic.warning("could not restrict JWT signing key permissions")
-            return
-
-        if not read_only:
-            os.chmod(path, 0o600)
-        permissions = path.stat().st_mode & 0o777
-        if permissions & 0o077:
-            raise PermissionError(f"JWT signing key permissions are too permissive: {path}")
-
     def _load_private_key(self, path: Path, *, allow_migration: bool = True, pem: bytes | None = None) -> None:
         optic.trace("loading JWT signing key from {}", path.name)
         if pem is None:
@@ -471,13 +431,16 @@ class KeyManager:
         if not isinstance(key, (ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey)):
             raise TypeError(f"Unsupported private key type: {type(key).__name__}")
         _algorithm_for_key(key)
-        self._ensure_private_key_permissions(path, read_only=not allow_migration)
         if encrypt_existing_key:
             if not allow_migration:
-                mode = "read-only mode" if self._read_only else "normal operation"
-                raise RuntimeError(f"Cannot encrypt existing JWT signing key during {mode}")
+                raise RuntimeError("Cannot encrypt existing JWT signing key during normal operation")
             pem = self._write_private_key(path, key)
             optic.info("encrypted existing JWT signing key with configured password")
+        elif allow_migration:
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                optic.warning("could not restrict JWT signing key permissions")
         self._set_active_key(key, pem)
 
     def _retire_current_key(self) -> None:
@@ -643,7 +606,6 @@ def init_key_manager(
     key_password: str | None = None,
     algorithm: SigningAlgorithm = "ES256",
     retired_key_retention_days: int = 30,
-    read_only: bool = False,
 ) -> KeyManager:
     global _key_manager
     manager = KeyManager(
@@ -651,7 +613,6 @@ def init_key_manager(
         key_password=key_password,
         algorithm=algorithm,
         retired_key_retention_days=retired_key_retention_days,
-        read_only=read_only,
     )
     manager.initialize()
     _key_manager = manager

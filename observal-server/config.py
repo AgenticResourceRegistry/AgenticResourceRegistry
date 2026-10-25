@@ -42,8 +42,6 @@ class Settings(BaseSettings):
     JWT_SIGNING_ALGORITHM: Literal["ES256", "RS256"] = "ES256"
     JWT_KEY_DIR: str = "~/.observal/keys"
     JWT_KEY_PASSWORD: str | None = None
-    # Load an externally provisioned key store without managing or mutating it.
-    JWT_KEY_READ_ONLY: bool = False
 
     # Outbound Git authentication
     GIT_CLONE_TOKEN: str | None = None

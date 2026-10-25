@@ -54,7 +54,6 @@ File-backed forms such as `OAUTH_CLIENT_SECRET_FILE`, `GOOGLE_OAUTH_CLIENT_SECRE
 | `JWT_SIGNING_ALGORITHM` | `ES256`                                                     | `ES256` or `RS256`                                      |
 | `JWT_KEY_DIR`           | `~/.observal/keys` (outside Docker) / `/data/keys` (Docker) | Directory for generated signing keys. **Back this up.** |
 | `JWT_KEY_PASSWORD`      | unset                                                       | Optional private-key encryption password. Supports `JWT_KEY_PASSWORD_FILE`. |
-| `JWT_KEY_READ_ONLY`     | `false`                                                     | Load a pre-provisioned key store without changing it. On POSIX, the signing key must be owner-only. |
 
 ### AWS (Bedrock)
 

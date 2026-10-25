@@ -63,40 +63,6 @@ def test_unreadable_active_key_fails_operationally_without_replacing(
     assert original_read_bytes(signing_path) == original_pem
 
 
-def test_read_only_key_store_disappearance_fails_operationally(tmp_path: Path) -> None:
-    key_dir = tmp_path / "keys"
-    key_dir.mkdir()
-    writable = KeyManager(key_dir=str(key_dir))
-    writable.initialize()
-    read_only = KeyManager(key_dir=str(key_dir), read_only=True)
-    read_only.initialize()
-    signing_path = key_dir / "signing.pem"
-    signing_path.unlink()
-
-    with pytest.raises(KeyStoreUnavailableError):
-        read_only.sign_token({"sub": "must-not-be-signed"})
-    assert not signing_path.exists()
-
-
-def test_read_only_key_replacement_requires_restart(tmp_path: Path) -> None:
-    key_dir = tmp_path / "keys"
-    key_dir.mkdir()
-    writable = KeyManager(key_dir=str(key_dir))
-    writable.initialize()
-    read_only = KeyManager(key_dir=str(key_dir), read_only=True)
-    read_only.initialize()
-    signing_path = key_dir / "signing.pem"
-    original_pem = signing_path.read_bytes()
-
-    writable.rotate_key()
-    replacement_pem = signing_path.read_bytes()
-
-    assert replacement_pem != original_pem
-    with pytest.raises(KeyStoreUnavailableError):
-        read_only.get_kid()
-    assert signing_path.read_bytes() == replacement_pem
-
-
 def test_corrupt_required_retired_key_fails_operationally(key_manager: KeyManager, tmp_path: Path) -> None:
     token = key_manager.sign_token({"sub": "retired"})
     retired_kid = key_manager.get_kid()

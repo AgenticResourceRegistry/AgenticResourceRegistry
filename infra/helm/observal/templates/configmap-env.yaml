@@ -12,5 +12,4 @@ data:
   LOG_FORMAT: {{ .Values.config.logFormat | quote }}
   JWT_SIGNING_ALGORITHM: {{ .Values.config.jwtSigningAlgorithm | quote }}
   JWT_KEY_DIR: {{ .Values.config.jwtKeyDir | quote }}
-  JWT_KEY_READ_ONLY: {{ .Values.config.jwtKeyReadOnly | quote }}
   SEED_DEMO_ACCOUNTS: {{ .Values.config.seedDemoAccounts | quote }}

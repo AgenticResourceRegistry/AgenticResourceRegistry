@@ -79,7 +79,6 @@ async def run_startup_tasks() -> None:
         key_password=settings.JWT_KEY_PASSWORD,
         algorithm=settings.JWT_SIGNING_ALGORITHM,
         retired_key_retention_days=retired_key_retention_days,
-        read_only=settings.JWT_KEY_READ_ONLY,
     )
 
     from database import async_session as session_factory

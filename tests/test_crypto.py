@@ -235,14 +235,6 @@ def km(tmp_key_dir):
 
 
 class TestKeyGeneration:
-    def test_server_settings_allow_read_only_key_store(self, monkeypatch):
-        from config import Settings
-
-        monkeypatch.delenv("JWT_KEY_READ_ONLY", raising=False)
-        assert Settings(_env_file=None).JWT_KEY_READ_ONLY is False
-        monkeypatch.setenv("JWT_KEY_READ_ONLY", "true")
-        assert Settings(_env_file=None).JWT_KEY_READ_ONLY is True
-
     def test_generates_ec_key_pair(self, km):
         priv = km.get_private_key()
         pub = km.get_public_key()
@@ -332,173 +324,6 @@ class TestKeyPersistence:
 
         assert {kid for _, kid, _, _ in startup_results} == {manager.get_kid()}
         assert all(subjects == ["startup-worker"] * 4 for _, subjects, _ in verified_results)
-
-    def test_read_only_store_loads_without_mutation(self, tmp_key_dir, monkeypatch):
-        import services.crypto as crypto_mod
-
-        monkeypatch.setattr(crypto_mod, "fcntl", None)
-        key_dir = Path(tmp_key_dir)
-        manager = KeyManager(key_dir=tmp_key_dir)
-        manager.initialize()
-        retired_kid = manager.get_kid()
-        manager.rotate_key()
-        token = manager.sign_token({"sub": "read-only"})
-        retired_path = key_dir / f"retired_{retired_kid}.pem"
-        old_time = time.time() - 2 * 86400
-        os.utime(retired_path, (old_time, old_time))
-        (key_dir / ".signing.lock").unlink(missing_ok=True)
-
-        if os.name == "posix":
-            for path in key_dir.iterdir():
-                path.chmod(0o400)
-            key_dir.chmod(0o500)
-
-        def snapshot():
-            return {
-                path.name: (
-                    path.read_bytes(),
-                    path.stat().st_mtime_ns,
-                    path.stat().st_mode & 0o777 if os.name == "posix" else None,
-                )
-                for path in sorted(key_dir.iterdir())
-            }
-
-        before = snapshot()
-        real_unlink = Path.unlink
-
-        def deny_key_store_unlink(path, *args, **kwargs):
-            if path.parent == key_dir:
-                raise AssertionError("read-only key store must not be pruned")
-            return real_unlink(path, *args, **kwargs)
-
-        def deny_key_store_mutation(*args, **kwargs):
-            raise AssertionError("read-only key store must not be changed")
-
-        monkeypatch.setattr(Path, "unlink", deny_key_store_unlink)
-        monkeypatch.setattr(crypto_mod.os, "chmod", deny_key_store_mutation)
-        monkeypatch.setattr(crypto_mod.os, "replace", deny_key_store_mutation)
-        read_only = KeyManager(key_dir=tmp_key_dir, read_only=True)
-        read_only.initialize()
-        assert read_only.verify_token(token)["sub"] == "read-only"
-        read_only.get_jwks()
-        assert retired_path.exists()
-        with pytest.raises(RuntimeError, match="read-only"):
-            read_only.rotate_key()
-
-        assert snapshot() == before
-
-    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are unavailable on this platform")
-    def test_managed_startup_fails_if_signing_key_cannot_be_restricted(self, tmp_key_dir, monkeypatch):
-        import services.crypto as crypto_mod
-
-        manager = KeyManager(key_dir=tmp_key_dir)
-        manager.initialize()
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        signing_path.chmod(0o644)
-        original_pem = signing_path.read_bytes()
-        real_chmod = os.chmod
-
-        def fail_signing_chmod(path, mode):
-            if Path(path) == signing_path:
-                raise PermissionError("simulated signing key permission failure")
-            real_chmod(path, mode)
-
-        monkeypatch.setattr(crypto_mod.os, "chmod", fail_signing_chmod)
-        with pytest.raises(PermissionError, match="simulated signing key permission failure"):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
-        assert signing_path.read_bytes() == original_pem
-        assert signing_path.stat().st_mode & 0o777 == 0o644
-
-    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are unavailable on this platform")
-    def test_managed_startup_rejects_key_if_chmod_does_not_restrict_it(self, tmp_key_dir, monkeypatch):
-        import services.crypto as crypto_mod
-
-        manager = KeyManager(key_dir=tmp_key_dir)
-        manager.initialize()
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        signing_path.chmod(0o644)
-        real_chmod = os.chmod
-
-        def leave_signing_key_unchanged(path, mode):
-            if Path(path) != signing_path:
-                real_chmod(path, mode)
-
-        monkeypatch.setattr(crypto_mod.os, "chmod", leave_signing_key_unchanged)
-        with pytest.raises(PermissionError, match="permissions"):
-            KeyManager(key_dir=tmp_key_dir).initialize()
-
-        assert signing_path.stat().st_mode & 0o777 == 0o644
-
-    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are unavailable on this platform")
-    def test_read_only_manager_rejects_permissive_signing_key_without_mutating_it(self, tmp_key_dir):
-        writable = KeyManager(key_dir=tmp_key_dir)
-        writable.initialize()
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        original_pem = signing_path.read_bytes()
-        signing_path.chmod(0o644)
-
-        read_only = KeyManager(key_dir=tmp_key_dir, read_only=True)
-        with pytest.raises(PermissionError, match="permissions"):
-            read_only.initialize()
-
-        assert signing_path.read_bytes() == original_pem
-        assert signing_path.stat().st_mode & 0o777 == 0o644
-
-    def test_read_only_manager_honors_retention_without_deleting_expired_keys(self, tmp_key_dir):
-        manager = KeyManager(key_dir=tmp_key_dir, retired_key_retention_days=1)
-        manager.initialize()
-        old_kid = manager.get_kid()
-        old_token = manager.sign_token({"sub": "expired"})
-        manager.rotate_key()
-
-        retired_path = Path(tmp_key_dir) / f"retired_{old_kid}.pem"
-        old_time = time.time() - 2 * 86400
-        os.utime(retired_path, (old_time, old_time))
-
-        read_only = KeyManager(key_dir=tmp_key_dir, retired_key_retention_days=1, read_only=True)
-        read_only.initialize()
-
-        assert retired_path.exists()
-        assert read_only.find_public_key(old_kid) is None
-        assert all(key["kid"] != old_kid for key in read_only.get_jwks()["keys"])
-        with pytest.raises(pyjwt.InvalidTokenError, match="Unknown key id"):
-            read_only.verify_token(old_token)
-        assert retired_path.exists()
-
-    def test_read_only_manager_does_not_create_missing_store(self, tmp_path):
-        missing_dir = tmp_path / "not-provisioned"
-        manager = KeyManager(key_dir=str(missing_dir), read_only=True)
-
-        with pytest.raises(FileNotFoundError, match="read-only"):
-            manager.initialize()
-        assert not missing_dir.exists()
-
-    def test_read_only_manager_does_not_generate_missing_key(self, tmp_key_dir):
-        manager = KeyManager(key_dir=tmp_key_dir, read_only=True)
-
-        with pytest.raises(FileNotFoundError, match="read-only"):
-            manager.initialize()
-        assert not (Path(tmp_key_dir) / "signing.pem").exists()
-        assert list(Path(tmp_key_dir).iterdir()) == []
-
-    @pytest.mark.parametrize(
-        "options",
-        [{"algorithm": "RS256"}, {"key_password": "new-password"}],
-        ids=["algorithm-change", "encryption-migration"],
-    )
-    def test_read_only_manager_refuses_key_migrations(self, tmp_key_dir, options):
-        original = KeyManager(key_dir=tmp_key_dir)
-        original.initialize()
-        signing_path = Path(tmp_key_dir) / "signing.pem"
-        original_pem = signing_path.read_bytes()
-
-        read_only = KeyManager(key_dir=tmp_key_dir, read_only=True, **options)
-        with pytest.raises(RuntimeError, match="read-only"):
-            read_only.initialize()
-
-        assert signing_path.read_bytes() == original_pem
-        assert not list(Path(tmp_key_dir).glob("retired_*.pem"))
 
     def test_concurrent_process_startup_serializes_algorithm_migration(self, tmp_key_dir):
         seed = KeyManager(key_dir=tmp_key_dir, algorithm="ES256")
@@ -1257,15 +1082,6 @@ class TestSingleton:
     def test_init_and_get(self, tmp_key_dir):
         km = init_key_manager(key_dir=tmp_key_dir)
         assert get_key_manager() is km
-
-    def test_init_key_manager_supports_read_only_store(self, tmp_key_dir):
-        initial = KeyManager(key_dir=tmp_key_dir)
-        initial.initialize()
-        expected_kid = initial.get_kid()
-
-        manager = init_key_manager(key_dir=tmp_key_dir, read_only=True)
-        assert manager.get_kid() == expected_kid
-        assert get_key_manager() is manager
 
     def test_get_before_init_raises(self, monkeypatch):
         import services.crypto as mod
