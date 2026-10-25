@@ -41,6 +41,8 @@ dependencies = [
     "cryptography>=50.0.0",
     "python3-saml>=1.16.0",
     "slowapi",
+    # >=2.14.0: CVE-2026-102274 (malformed RSA JWK aborts JWKS parsing)
+    # and CVE-2026-101917 (unknown-kid JWKS refresh amplification).
     "PyJWT>=2.15.0",
     "aiosqlite>=0.22.1",
     "tenacity>=8.0.0",

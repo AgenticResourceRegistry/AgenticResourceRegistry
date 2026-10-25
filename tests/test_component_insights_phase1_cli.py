@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import HTTPException
 from typer.testing import CliRunner
 
 from observal_cli import cmd_mcp as mcp
@@ -441,43 +440,6 @@ async def test_agent_install_returns_pinned_mcp_version_and_generator_alias(monk
     assert response.selected_version == "2.0.0"
     assert response.component_pins[0]["version"] == "1.0.0"
     assert response.component_pins[0]["local_name"] == "first-probe"
-
-
-@pytest.mark.asyncio
-async def test_agent_install_rejects_historical_non_mcp_version_before_generation(monkeypatch):
-    from api.routes.agent import install as agent_install
-    from models.agent import AgentStatus
-    from schemas.agent import AgentInstallRequest
-
-    agent_id, skill_id, user_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    component = SimpleNamespace(component_type="skill", component_id=skill_id, resolved_version="1.0.0")
-    agent = SimpleNamespace(
-        id=agent_id,
-        status=AgentStatus.approved,
-        is_private=False,
-        team_id=None,
-        latest_version=SimpleNamespace(components=[component], version="2.0.0"),
-    )
-    monkeypatch.setattr(agent_install, "_load_agent", AsyncMock(return_value=agent))
-    monkeypatch.setattr(agent_install, "get_effective_agent_permission", lambda *_args: "owner")
-    monkeypatch.setattr(agent_install, "apply_publish_scope", lambda query, *_args: query)
-    monkeypatch.setattr(agent_install, "apply_visibility_filter", lambda query, *_args: query)
-    generate = Mock(side_effect=AssertionError("must reject before config generation"))
-    monkeypatch.setattr(agent_install, "generate_agent_config", generate)
-    result = Mock()
-    result.scalars.return_value.all.return_value = [SimpleNamespace(id=skill_id, version="2.0.0")]
-    db = SimpleNamespace(execute=AsyncMock(return_value=result), commit=AsyncMock())
-    with pytest.raises(HTTPException) as rejected:
-        await agent_install.install_agent(
-            str(agent_id),
-            AgentInstallRequest(harness="claude-code"),
-            Mock(),
-            db,
-            SimpleNamespace(id=user_id),
-        )
-    assert rejected.value.status_code == 409
-    db.commit.assert_not_awaited()
-    generate.assert_not_called()
 
 
 def test_user_scope_mcp_drift_and_settings_secrets_stay_out_of_snapshot(monkeypatch, tmp_path):

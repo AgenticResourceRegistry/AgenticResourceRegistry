@@ -346,11 +346,11 @@ def test_an_opt_in_found_in_settings_is_kept_without_a_lockfile_record(env):
 def test_the_lockfile_remembers_only_a_settings_placement(monkeypatch, tmp_path):
     import observal_cli.lockfile as lockfile
 
-    data = {"registries": {}}
     registry = {"harnesses": {}}
+    data = {"registries": {"https://example.test": registry}}
     monkeypatch.setattr(lockfile, "_LOCKFILE_LOCK", tmp_path / "lockfile.lock")
-    monkeypatch.setattr(lockfile, "read_registry_lockfile", lambda **_kwargs: (data, registry))
-    monkeypatch.setattr(lockfile, "write_lockfile", lambda _data: None)
+    monkeypatch.setattr(lockfile, "current_registry_url", lambda: "https://example.test")
+    monkeypatch.setattr(lockfile, "update_lockfile", lambda mutate: mutate(data))
     monkeypatch.setattr(lockfile, "_record_capability_use", lambda **_kwargs: None)
 
     def entry(**placement) -> dict:

@@ -181,8 +181,8 @@ def generate_agent_config(
     hook_listings: dict | None = None,
     prompt_listings: dict | None = None,
     sandbox_listings: dict | None = None,
-    skill_folder_names: dict | None = None,
     component_aliases: dict[str, str] | None = None,
+    skill_folder_names: dict | None = None,
 ) -> dict:
     """Generate harness-specific config for an agent.
 

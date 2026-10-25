@@ -15,7 +15,6 @@ import shlex
 import subprocess
 import sys
 from contextlib import contextmanager
-from pathlib import PurePath
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -351,11 +350,18 @@ class TestPullClaudeCode:
         assert '"python3 -m' not in content
         frontmatter, _, _body = content[4:].partition("\n---")
         hooks = yaml.safe_load(frontmatter)["hooks"]
-        expected_path = PurePath(sys.executable).as_posix()
-        quoted = subprocess.list2cmdline([expected_path]) if sys.platform == "win32" else shlex.quote(expected_path)
+        from observal_cli.shared import launcher
+
+        module = "observal_cli.hooks.session_push"
         for event in ("UserPromptSubmit", "Stop"):
             command = hooks[event][0]["hooks"][0]["command"]
-            assert command == f"{quoted} -m observal_cli.hooks.session_push"
+            if sys.platform == "win32":
+                assert command == launcher.windows_module_command(module)
+                continue
+            # This CLI's interpreter as one shell word, isolated from the project directory.
+            argv = shlex.split(command)
+            assert argv[argv.index(sys.executable) :] == [sys.executable, launcher.isolation_flag(), "-m", module]
+            assert command == launcher.posix_module_command(module)
 
     def test_says_when_agent_reports_sessions(self, tmp_path: Path):
         snippet = _claude_code_snippet()

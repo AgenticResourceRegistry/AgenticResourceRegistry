@@ -172,7 +172,6 @@ def read_lockfile() -> dict:
     return data
 
 
-
 def _write_locked(data: dict) -> None:
     """Replace the lockfile while its cross-process lock is held."""
     data["updated_at"] = datetime.now(UTC).isoformat()
@@ -199,7 +198,7 @@ def _write_locked(data: dict) -> None:
 def write_lockfile(data: dict) -> None:
     """Write the complete lockfile atomically with file locking."""
     LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _exclusive_lock(_LOCKFILE_LOCK):
+    with _exclusive_lock():
         _write_locked(data)
     optic.debug("lockfile written: {}", LOCKFILE_PATH)
 

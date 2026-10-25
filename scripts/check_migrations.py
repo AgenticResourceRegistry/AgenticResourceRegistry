@@ -8,7 +8,9 @@ Checks:
   1. No duplicate revision IDs
   2. No multiple heads (branches that fork and never merge)
   3. Every down_revision references an existing revision
-  4. Linear chain from root to head with no orphans
+  4. Every revision is reachable from the single head through valid parents
+
+Alembic merge revisions may name multiple parents; a joined graph is valid.
 
 Run: python scripts/check_migrations.py
 Exit code 0 = clean, 1 = problems found.
@@ -16,6 +18,7 @@ Exit code 0 = clean, 1 = problems found.
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -31,14 +34,18 @@ def parse_revision(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def parse_down_revision(text: str) -> str | None:
+def parse_down_revision(text: str) -> tuple[str, ...]:
     m = RE_DOWN.search(text)
     if not m:
-        return None
-    raw = m.group(1).strip().rstrip(",")
-    if raw == "None":
-        return None
-    return raw.strip("\"'")
+        return ()
+    value = ast.literal_eval(m.group(1).strip())
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, tuple) and all(isinstance(parent, str) for parent in value):
+        return value
+    raise ValueError(f"Invalid down_revision: {value!r}")
 
 
 def main() -> int:
@@ -47,7 +54,7 @@ def main() -> int:
         return 1
 
     migrations: dict[str, Path] = {}
-    down_map: dict[str, str | None] = {}
+    down_map: dict[str, tuple[str, ...]] = {}
     errors: list[str] = []
 
     for path in sorted(VERSIONS_DIR.glob("*.py")):
@@ -67,33 +74,36 @@ def main() -> int:
             migrations[rev] = path
             down_map[rev] = down
 
-    for rev, down in down_map.items():
-        if down is not None and down not in migrations:
-            errors.append(f"{migrations[rev].name}: down_revision '{down}' not found in any migration file")
+    for rev, parents in down_map.items():
+        for parent in parents:
+            if parent not in migrations:
+                errors.append(f"{migrations[rev].name}: down_revision '{parent}' not found in any migration file")
 
-    # Revisions that nothing else points to as its down_revision = heads
-    all_downs = set(down_map.values()) - {None}
+    # Revisions that nothing else points to as a parent are heads.
+    all_downs = {parent for parents in down_map.values() for parent in parents}
     heads = [rev for rev in migrations if rev not in all_downs]
     if len(heads) > 1:
         head_files = [f"  - {migrations[h].name} (revision='{h}')" for h in heads]
         errors.append("MULTIPLE HEADS detected (parallel branches):\n" + "\n".join(head_files))
 
-    roots = [rev for rev, down in down_map.items() if down is None]
+    roots = [rev for rev, parents in down_map.items() if not parents]
     if len(roots) > 1:
         root_files = [f"  - {migrations[r].name} (revision='{r}')" for r in roots]
         errors.append("MULTIPLE ROOTS detected:\n" + "\n".join(root_files))
 
-    if len(roots) == 1 and len(heads) == 1:
-        visited = set()
-        reverse_map = {down: rev for rev, down in down_map.items() if down is not None}
-        current: str | None = roots[0]
-        while current:
+    if len(heads) == 1:
+        visited: set[str] = set()
+        pending = [heads[0]]
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
             visited.add(current)
-            current = reverse_map.get(current)
-        orphans = set(migrations.keys()) - visited
+            pending.extend(parent for parent in down_map[current] if parent in migrations)
+        orphans = set(migrations) - visited
         if orphans:
-            orphan_files = [f"  - {migrations[o].name} (revision='{o}')" for o in orphans]
-            errors.append("ORPHAN migrations not reachable from root:\n" + "\n".join(orphan_files))
+            orphan_files = [f"  - {migrations[o].name} (revision='{o}')" for o in sorted(orphans)]
+            errors.append("ORPHAN migrations not reachable from head:\n" + "\n".join(orphan_files))
 
     if errors:
         print(f"Migration chain validation FAILED ({len(errors)} issue(s)):\n")
@@ -101,7 +111,7 @@ def main() -> int:
             print(f"  {e}\n")
         return 1
 
-    print(f"Migration chain OK: {len(migrations)} migrations, head='{heads[0]}', linear chain intact.")
+    print(f"Migration graph OK: {len(migrations)} migrations, head='{heads[0]}', all revisions reachable.")
     return 0
 
 

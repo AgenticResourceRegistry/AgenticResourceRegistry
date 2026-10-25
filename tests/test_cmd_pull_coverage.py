@@ -89,10 +89,10 @@ def boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespa
     adapter.rewrite_hooks.side_effect = lambda content, agent_id: content
     adapter.rewrite_agent_profile.side_effect = lambda content, agent_id: content
     adapter.allow_home_agent_profile.return_value = False
-    adapter.reports_sessions_outside_pull.return_value = False
     adapter.prepare_mcp_setup_command.side_effect = lambda command, scope: (
         [*command[:3], "--scope", scope, *command[3:]] if command[:3] == ["claude", "mcp", "add"] else command
     )
+    adapter.reports_sessions_outside_pull.return_value = False
 
     def apply_install_options(options: dict, tools: str | None) -> None:
         if tools:
@@ -2400,8 +2400,8 @@ def test_pull_resets_then_registers_mcp_servers_in_target_without_echoing_values
     assert calls == [
         (["claude", "mcp", "remove", "linear"], target.resolve()),
         (["missing-binary"], target.resolve()),
-        (remote, target.resolve()),
-        (stdio, target.resolve()),
+        ([*remote[:3], "--scope", "project", *remote[3:]], target.resolve()),
+        ([*stdio[:3], "--scope", "project", *stdio[3:]], target.resolve()),
     ]
     shown = [setup["command"] for setup in json.loads(result.output)["setup_commands"]]
     assert shown == [

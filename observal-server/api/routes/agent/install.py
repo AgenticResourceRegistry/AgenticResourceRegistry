@@ -287,12 +287,6 @@ async def install_agent(
         "prompt": prompt_listings_map,
         "sandbox": sandbox_listings_map,
     }
-    for component in install_components:
-        listing = listing_by_type[component.component_type][component.component_id]
-        pinned = component.resolved_version
-        if component.component_type not in {"mcp", "sandbox"} and pinned not in {"latest", listing.version}:
-            raise HTTPException(status_code=409, detail="Selected component version is not supported for this install")
-
     # Generate every component from the exact version this agent release pinned,
     # never from the listing's latest release.
     from services.agent_lock import LOCK_VERSION, load_pinned_listings, stored_lock_digest
@@ -403,8 +397,8 @@ async def install_agent(
             hook_listings=hook_listings_map,
             prompt_listings=prompt_listings_map,
             sandbox_listings=sandbox_listings_map,
-            skill_folder_names=skill_folder_names,
             component_aliases=component_aliases,
+            skill_folder_names=skill_folder_names,
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail="Generated component aliases collide") from error
@@ -413,7 +407,14 @@ async def install_agent(
 
     for kind, listings in (("skill", skill_listings_map), ("hook", hook_listings_map), ("prompt", prompt_listings_map)):
         names = _local_registry_names(listings)
-        mapped = {str(key): _sanitize_name(value) if kind != "hook" else value for key, value in names.items()}
+        mapped = {
+            str(key): skill_folder_names.get(key, _sanitize_name(value))
+            if kind == "skill"
+            else _sanitize_name(value)
+            if kind != "hook"
+            else value
+            for key, value in names.items()
+        }
         if len(set(mapped.values())) != len(mapped):
             raise HTTPException(status_code=409, detail="Generated component aliases collide")
         component_aliases.update(mapped)
