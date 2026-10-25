@@ -39,6 +39,7 @@ from schemas.agent import (
     ValidationResult,
 )
 from services.harness import generate_agent_config
+from services.harness.helpers import AliasCollisionError
 from services.registry_telemetry import emit_registry_event
 from services.skill_bundle import (
     SKILL_EXTRA_FILES_FEATURE,
@@ -400,8 +401,11 @@ async def install_agent(
             component_aliases=component_aliases,
             skill_folder_names=skill_folder_names,
         )
-    except ValueError as error:
+    except AliasCollisionError as error:
         raise HTTPException(status_code=409, detail="Generated component aliases collide") from error
+    except ValueError as error:
+        # The remaining messages are fixed text about the agent's content (an unquotable command, a bad script name).
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     from services.harness.helpers import _local_registry_names, _sanitize_name
 

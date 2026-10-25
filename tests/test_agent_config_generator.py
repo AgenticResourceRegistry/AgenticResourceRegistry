@@ -20,6 +20,7 @@ from services.config_generator import generate_config as generate_mcp_config
 from services.config_generator import versioned_mcp_listing
 from services.harness import generate_agent_config
 from services.harness.helpers import (
+    AliasCollisionError,
     _build_rules_content,
     _inject_agent_id,
     _model_name_to_frontmatter,
@@ -117,7 +118,7 @@ def test_mcp_generator_returns_final_aliases_and_rejects_sanitized_collisions():
     )
     assert aliases == {str(ids[0]): "first-probe", str(ids[1]): "second-probe"}
     assert set(cfg["mcp_config"]) == set(aliases.values())
-    with pytest.raises(ValueError, match="aliases collide"):
+    with pytest.raises(AliasCollisionError, match="aliases collide"):
         generate_agent_config(
             agent,
             "claude-code",
