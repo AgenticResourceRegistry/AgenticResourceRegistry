@@ -73,6 +73,27 @@ class CodexAdapter(BaseAdapter):
     def mcp_manifest_path(self, scope: str) -> str | None:
         return {"user": "user:config.toml", "project": "project:.codex/config.toml"}.get(scope)
 
+    def skill_manifest_path(self, scope: str, alias: str) -> str | None:
+        # Only native project-skill inventory/selection is verified on CLI 0.163.0.
+        return f"project:.agents/skills/{alias}/SKILL.md" if scope == "project" else None
+
+    def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
+        if scope != "project" or not directory:
+            return None
+        return str((Path(directory) / ".agents" / "skills" / alias / "SKILL.md").resolve())
+
+    def skill_shadow_paths(self, scope: str, directory: str | None, alias: str) -> list[Path]:
+        if scope != "project" or not directory:
+            return []
+        # User/home and parent-workspace copies may shadow the pinned project skill.
+        root = Path(directory).resolve()
+        parents = [parent / ".agents" / "skills" / alias / "SKILL.md" for parent in root.parents]
+        return [
+            Path.home() / ".agents" / "skills" / alias / "SKILL.md",
+            Path.home() / ".codex" / "skills" / alias / "SKILL.md",
+            *parents,
+        ]
+
     def configure_tracked_mcp(self, scope: str, directory: str, alias: str, snippet: dict) -> McpConfigUndo:
         from observal_shared.harness_registry import HARNESS_REGISTRY
 

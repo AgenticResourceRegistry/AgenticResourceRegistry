@@ -89,8 +89,8 @@ async def generate_component_content(report: InsightReport, db) -> dict:
 async def _generate_skill_content(report: InsightReport, db) -> dict:
     """Deterministic skill report: published skill evidence and its coverage only.
 
-    No MCP call figures and no model interpretation: a load or invocation shows
-    the skill's instructions entered context, not that the skill helped.
+    No MCP call figures. Codex selection is not a separately confirmed load,
+    and neither selection nor a load establishes that the skill was followed.
     """
     from services.component_activity.skill_queries import skill_activity_summary
 
@@ -131,15 +131,40 @@ async def _generate_skill_content(report: InsightReport, db) -> dict:
 def generate_skill_sections(summary: dict, coverage: dict) -> dict:
     """Plain-language conclusion and evidence breakdown, from counts alone."""
     state = coverage["attribution_state"]
+    codex_only = set(summary["harness_distribution"]) == {"codex"}
     if state == "observed":
-        conclusion = (
-            "The skill's instructions entered context in processed present sessions "
-            "(a confirmed load or an invocation). This does not show the skill was followed or helped."
-        )
+        if codex_only and summary["invocations"]:
+            conclusion = (
+                "A native Codex project-skill selection was recorded in measured sessions. "
+                "This is not a separately confirmed skill load or proof that the skill was followed or helped."
+            )
+        elif summary["invocations"] and not summary["confirmed_loads"]:
+            conclusion = (
+                "A native skill selection or invocation was recorded in measured sessions. "
+                "This does not establish a separately confirmed load or show the skill was followed or helped."
+            )
+        else:
+            conclusion = (
+                "The skill's instructions entered context in processed present sessions "
+                "(a confirmed load or an invocation). This does not show the skill was followed or helped."
+            )
+        if "skill_scope_not_recorded" in coverage["reasons"]:
+            conclusion += " Other installed scopes remain unknown."
     elif state == "no_observed_skill_use":
+        if "skill_scope_not_recorded" in coverage["reasons"]:
+            conclusion = (
+                "No observed selection, invocation or confirmed load in measured skill-scope sessions; "
+                "other installed scopes remain unknown. This does not prove the skill was never used."
+            )
+        else:
+            conclusion = (
+                "No observed selection, invocation or confirmed load in measured present sessions; "
+                "this does not prove the skill was never used."
+            )
+    elif summary["available_sessions"] and coverage["projection"]["projection_complete_sessions"]:
         conclusion = (
-            "No confirmed load or invocation in processed present sessions; this does not prove the skill "
-            "was never used."
+            "The skill was offered in processed, verified-present sessions, but those sessions do not establish "
+            "a selection or separately confirmed load. No use conclusion can be drawn."
         )
     else:
         conclusion = "Skill evidence is unavailable for this cohort; no use conclusion can be drawn."

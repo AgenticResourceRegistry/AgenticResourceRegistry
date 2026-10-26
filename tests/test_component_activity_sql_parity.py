@@ -20,7 +20,7 @@ from services.component_activity import hook_queries, queries, skill_queries
     ("module", "attribute", "expected"),
     [
         (queries, "_SESSIONS", "83cb71d1c38f34e4af7fada363ad36d1ee770d381db98e1a72be8002f95eba9d"),
-        (skill_queries, "_SKILL_SESSIONS", "85abe02b0ca54b686c87fb8a2e17b89d2e662f6fc7fa61082c751dc4094f2071"),
+        (skill_queries, "_SKILL_SESSIONS", "d173a42ad35984bd05537ef5fbcb221eff693a88d6e42ebef5008d088292382c"),
         (hook_queries, "_HOOK_SESSIONS", "c39efbf248d5604c646ad363aa1266076510743823b43fffbd7d168f0cbfb4f6"),
     ],
 )

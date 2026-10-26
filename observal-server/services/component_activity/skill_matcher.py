@@ -22,7 +22,9 @@ if TYPE_CHECKING:
 
     from services.session_parsers.skill_evidence import SkillEvidence
 
-SKILL_MATCHER_VERSION = 2
+# 3: Codex's version- and project-scoped native selection adds an invocation
+# fact; replay old availability-only publications, never turn them into zero use.
+SKILL_MATCHER_VERSION = 3
 
 
 @dataclass(frozen=True)

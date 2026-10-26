@@ -12,10 +12,10 @@ Evidence kinds, none of which shows that a skill achieved anything:
 * ``load``: the model tried to read the installed skill's instructions. It is a
   *confirmed* load only when ``result_state`` is ``success`` (the linked read
   succeeded); ``error`` and ``unknown`` are attempts, not loads.
-* ``invoked``: the user explicitly invoked the skill. Emitted only when the
-  harness records a distinguishable invocation origin. Pi does not: its
-  ``/skill:name`` expansion is stored as an ordinary user message, which
-  pasted text can reproduce, so the Pi extractor never emits ``invoked``.
+* ``invoked``: a harness-native, distinguishable invocation or selection origin.
+  Codex's tagged selected-skill instructions establish a selection, **not** a
+  separately confirmed load; report it as selection for Codex. Pi does not
+  record distinguishable origin: pasted text can reproduce its expansion.
 
 Each extractor declares the kinds its harness can observe at all
 (``observed_kinds``). A kind outside that set is *not recorded* for the
@@ -69,23 +69,32 @@ class SkillEvidenceExtraction:
 
 
 class SkillEvidenceExtractor(Protocol):
-    # The evidence kinds this harness's transcripts can show, tied to a file.
+    # The evidence kinds/scopes this harness's transcripts can show, tied to a file.
     observed_kinds: frozenset[EvidenceKind]
+    observed_scopes: frozenset[str]
 
     def extract(self, rows: Sequence[Mapping[str, object]]) -> SkillEvidenceExtraction: ...
 
 
 def _extractors() -> dict[str, SkillEvidenceExtractor]:
     from .claude_code_skill_evidence import ClaudeCodeSkillEvidenceExtractor
+    from .codex_skill_evidence import CodexSkillEvidenceExtractor
     from .pi_skill_evidence import PiSkillEvidenceExtractor
 
-    return {"pi": PiSkillEvidenceExtractor(), "claude-code": ClaudeCodeSkillEvidenceExtractor()}
+    return {
+        "pi": PiSkillEvidenceExtractor(),
+        "claude-code": ClaudeCodeSkillEvidenceExtractor(),
+        "codex": CodexSkillEvidenceExtractor(),
+    }
 
 
-def kind_recorded(harness: str, kind: EvidenceKind) -> bool:
-    """True only for a supported harness whose extractor can observe this evidence kind."""
+def kind_recorded(harness: str, kind: EvidenceKind, scope: str | None = None) -> bool:
+    """True only for a supported evidence kind in an observed install scope."""
     extractor_id = HARNESS_REGISTRY.get(harness, {}).get("skill_evidence_extractor")
-    return bool(extractor_id) and kind in _extractors()[extractor_id].observed_kinds
+    if not extractor_id:
+        return False
+    extractor = _extractors()[extractor_id]
+    return kind in extractor.observed_kinds and (scope is None or scope in extractor.observed_scopes)
 
 
 def extract_skill_evidence(harness: str, rows: Sequence[Mapping[str, object]]) -> SkillEvidenceExtraction:

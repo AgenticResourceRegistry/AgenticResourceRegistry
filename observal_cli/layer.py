@@ -530,7 +530,7 @@ PI_MCP_VERIFIER = "observal-pi-mcp-verification-v1"
 
 SKILL_VERIFICATION_PATH = "observal:skill-verification"
 # Harnesses whose skill presence (and location) is bound into the layer identity.
-SKILL_VERIFICATION_HARNESSES = frozenset({"pi", "claude-code"})
+SKILL_VERIFICATION_HARNESSES = frozenset({"pi", "claude-code", "codex"})
 
 
 HOOK_VERIFICATION_PATH = "observal:hook-verification"

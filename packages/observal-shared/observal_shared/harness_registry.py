@@ -208,6 +208,9 @@ HARNESS_REGISTRY: dict[str, dict] = {
         # Tested native MCP identities and outcomes on CLI 0.163.0 and 0.164.0.
         # No-result failures, unfamiliar versions and incomplete source are unknown.
         "invocation_extractor": "codex",
+        # Native project-skill inventory/selection checked only on CLI 0.163.0.
+        # No Codex skill loads or user-scope selection are measured.
+        "skill_evidence_extractor": "codex",
         "mcp_native_tested_versions": ("0.163.0", "0.164.0"),
         "scopes": ["project", "user"],
         "default_scope": "project",

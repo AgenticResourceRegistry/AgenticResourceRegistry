@@ -81,6 +81,14 @@ def test_skill_rarely_loaded_and_unknown_availability():
     assert attention_items("skill", _skill(5, 20, 5), _coverage(20), None) == []
 
 
+def test_codex_selection_without_load_signal_never_generates_load_attention():
+    coverage = _coverage(12, "observed") | {"usage_rate_denominator_sessions": 5}
+    assert attention_items("skill", _skill(None, 5, None), coverage, None) == []
+    partial = coverage | {"reasons": ["load_not_recorded_on_some_harnesses"]}
+    assert attention_items("skill", _skill(0, 20, 0), partial, None) == []
+    assert attention_items("skill", _skill(2, 20, 2), partial, None) == []
+
+
 def _hook(failures=0, output=0, blocks=0, silent=None, present=10, eligible=10, recorded_sessions=5):
     return {
         "failures": failures,

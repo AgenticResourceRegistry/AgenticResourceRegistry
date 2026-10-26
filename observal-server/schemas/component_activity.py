@@ -187,8 +187,8 @@ class ActivitySessionsResponse(BaseModel):
 
 
 # ── Skills ─────────────────────────────────────────────────────────────────
-# Skill evidence has its own vocabulary. None of these fields means "the skill
-# helped": a load or invocation shows its instructions entered context.
+# Skill evidence has its own vocabulary. A native Codex selection is not a
+# separately confirmed load; neither signal proves that the skill helped.
 
 SkillAttributionState = Literal["observed", "no_observed_skill_use", "attribution_not_possible"]
 SKILL_INVOCATIONS_LIMITATION = (
@@ -199,9 +199,14 @@ SKILL_AVAILABILITY_LIMITATION = (
     "availability_not_recorded: no harness in this cohort records which skill file it advertised, "
     "so availability is unknown (null), not zero"
 )
+SKILL_LOADS_LIMITATION = (
+    "loads_not_recorded: no harness in this cohort records attributable skill loads, "
+    "so load counts are unknown (null), not zero"
+)
 SKILL_CONTEXT_LIMITATION = (
-    "entered_context_not_helped: a confirmed load or an invocation shows the skill's instructions "
-    "entered the model's context, not that the skill was followed or improved the outcome"
+    "entered_context_not_helped: a confirmed load and a native selection are distinct signals; "
+    "Codex selection is not a separately confirmed load. Neither proves that the skill was followed "
+    "or improved the outcome"
 )
 
 
@@ -220,7 +225,8 @@ class SkillActivityCoverage(BaseModel):
     projection: ProjectionCoverage
     evidence: SkillEvidenceCoverage
     usage_rate_denominator_sessions: int = Field(
-        0, description="Present sessions on a skill-supported harness with a complete current skill projection"
+        0,
+        description="Present, completely projected sessions whose harness and install scope record loads or selections",
     )
     observed_sessions: int = Field(0, description="Sessions with a confirmed load or an invocation")
     usage_rate: float | None = None
@@ -242,10 +248,10 @@ class SkillActivitySummaryResponse(BaseModel):
     available_sessions: int | None = Field(
         description="Sessions where the skill was advertised to the model; null when no harness in the cohort records it"
     )
-    loaded_sessions: int = Field(description="Sessions with at least one confirmed load (a successful read)")
-    confirmed_loads: int
-    load_attempts: int = Field(description="Reads that failed or whose result is unknown; not confirmed loads")
-    invoked_sessions: int | None = Field(description="Null when no harness in the cohort records invocations")
+    loaded_sessions: int | None = Field(description="Sessions with a confirmed load; null when none records loads")
+    confirmed_loads: int | None
+    load_attempts: int | None = Field(description="Unconfirmed reads; null when none records loads")
+    invoked_sessions: int | None = Field(description="Native invocations or selections; null when not recorded")
     invocations: int | None
     harness_distribution: dict[str, int]
     version_distribution: dict[str, int] = Field(default_factory=dict)
@@ -261,9 +267,9 @@ class SkillActivitySession(BaseModel):
     projection_state: SessionProjectionState
     source_state: SourceAvailabilityState
     available: bool | None = Field(description="Null when this harness does not record availability")
-    confirmed_loads: int
-    load_attempts: int
-    invocations: int | None = Field(description="Null when this harness does not record invocations")
+    confirmed_loads: int | None = Field(description="Null when this harness does not record loads")
+    load_attempts: int | None = Field(description="Null when this harness does not record load attempts")
+    invocations: int | None = Field(description="Null when this harness or install scope does not record selection")
 
 
 class SkillActivitySessionsResponse(BaseModel):
