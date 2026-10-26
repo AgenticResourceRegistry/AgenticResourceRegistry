@@ -44,6 +44,22 @@ def changed(rows_, index, change):
     return items
 
 
+def with_combined_context(source):
+    """Sanitized native 0.163.0 AGENTS.md + environment record before the typed turn."""
+    context = json.loads(source[2]["raw_line"])
+    context["payload"]["id"] = "synthetic-combined-context"
+    context["payload"]["internal_chat_message_metadata_passthrough"]["content_item_kinds"] = [
+        "agents_md.instructions",
+        "environments.environment_context",
+    ]
+    context["payload"]["content"] = [
+        {"type": "input_text", "text": "Inert project instructions."},
+        {"type": "input_text", "text": "Inert environment context."},
+    ]
+    items = [*source[:2], {"is_source_record": 1, "raw_line": json.dumps(context)}, *source[2:]]
+    return [dict(row, line_offset=i, line_hash=f"combined-hash-{i}") for i, row in enumerate(items)]
+
+
 def test_native_inventory_availability_does_not_infer_invocation_from_user_prompt():
     extracted = extract_skill_evidence("codex", rows())
     assert extracted.status == "supported"
@@ -76,6 +92,79 @@ def test_native_selected_skill_has_tagged_project_origin_not_a_file_read():
     ]
     assert result.evidence[1].location_sha256 == result.evidence[0].location_sha256
     assert "SKILL.md" not in str(result.evidence[1])
+
+
+def test_native_combined_project_context_is_neither_selection_nor_unknown_when_well_formed():
+    available = extract_skill_evidence("codex", with_combined_context(rows()))
+    assert available.status == "supported"
+    assert [(e.kind, e.source_line_offset) for e in available.evidence] == [("available", 1)]
+    selected = extract_skill_evidence("codex", with_combined_context(selected_rows()))
+    assert selected.status == "supported"
+    assert [(e.kind, e.source_line_offset) for e in selected.evidence] == [("available", 1), ("invoked", 4)]
+    assert selected.evidence[1].location_sha256 == selected.evidence[0].location_sha256
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda r: r["payload"]["internal_chat_message_metadata_passthrough"].update(
+            content_item_kinds=["environments.environment_context", "agents_md.instructions"]
+        ),
+        lambda r: r["payload"]["internal_chat_message_metadata_passthrough"].update(
+            content_item_kinds=["agents_md.instructions", "environments.environment_context", "user.text"]
+        ),
+        lambda r: r["payload"]["internal_chat_message_metadata_passthrough"].update(
+            content_item_kinds=["agents_md.instructions", "skills.selected_skill_instructions"]
+        ),
+        lambda r: r["payload"]["internal_chat_message_metadata_passthrough"].update(turn_id="other-turn"),
+        lambda r: r["payload"].update(content=[r["payload"]["content"][0]]),
+        lambda r: r["payload"]["content"][1].update(type="output_text"),
+        lambda r: r["payload"]["content"][1].update(text=""),
+    ],
+)
+def test_spoofed_or_incomplete_combined_context_is_unsupported(mutation):
+    assert (
+        extract_skill_evidence("codex", changed(with_combined_context(selected_rows()), 2, mutation)).status
+        == "unsupported"
+    )
+
+
+def test_skill_markup_in_agents_context_is_not_a_native_selection():
+    pasted = changed(
+        with_combined_context(rows()),
+        2,
+        lambda record: record["payload"]["content"][0].update(text="<skill><name>matrix-probe-skill</name></skill>"),
+    )
+    result = extract_skill_evidence("codex", pasted)
+    assert result.status == "supported"
+    assert [fact.kind for fact in result.evidence] == ["available"]
+
+
+def test_combined_context_must_precede_its_typed_turn_and_not_repeat():
+    source = with_combined_context(selected_rows())
+    after_prompt = [*source[:2], source[3], source[2], *source[4:]]
+    after_prompt = [dict(row, line_offset=i) for i, row in enumerate(after_prompt)]
+    assert extract_skill_evidence("codex", after_prompt).status == "unsupported"
+    duplicate = [*source[:3], source[2], *source[3:]]
+    assert (
+        extract_skill_evidence("codex", [dict(row, line_offset=i) for i, row in enumerate(duplicate)]).status
+        == "unsupported"
+    )
+    missing_prompt = [dict(row, line_offset=i) for i, row in enumerate(source[:3] + source[4:])]
+    assert extract_skill_evidence("codex", missing_prompt).status == "unsupported"
+
+    # Re-tagging a native selection as context cannot silently convert it to zero.
+    def retag_selection(record):
+        record["payload"]["internal_chat_message_metadata_passthrough"]["content_item_kinds"] = [
+            "agents_md.instructions",
+            "environments.environment_context",
+        ]
+        record["payload"]["content"] = [
+            {"type": "input_text", "text": "One"},
+            {"type": "input_text", "text": "Two"},
+        ]
+
+    assert extract_skill_evidence("codex", changed(source, 4, retag_selection)).status == "unsupported"
 
 
 def test_pasted_expansion_and_manual_file_read_do_not_select_a_skill():

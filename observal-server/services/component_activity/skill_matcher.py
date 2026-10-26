@@ -24,7 +24,9 @@ if TYPE_CHECKING:
 
 # 3: Codex's version- and project-scoped native selection adds an invocation
 # fact; replay old availability-only publications, never turn them into zero use.
-SKILL_MATCHER_VERSION = 3
+# 4: Accept only the observed 0.163.0 combined AGENTS.md/environment context
+# before the typed turn; replay earlier unsupported sessions, not measured zeros.
+SKILL_MATCHER_VERSION = 4
 
 
 @dataclass(frozen=True)

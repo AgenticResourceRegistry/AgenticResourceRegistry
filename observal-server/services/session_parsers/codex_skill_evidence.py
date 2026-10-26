@@ -172,6 +172,7 @@ class CodexSkillEvidenceExtractor:
             return SkillEvidenceExtraction("unsupported", (), malformed)
         evidence = [items[0] for _, items in sorted(candidates.items())]
         prompt_turns: dict[str, int] = {}
+        combined_context_turns: set[str] = set()
         seen_selections: set[tuple[str, str]] = set()
         selected: list[SkillEvidence] = []
         for offset, record, row in records:
@@ -184,7 +185,31 @@ class CodexSkillEvidenceExtractor:
             if not isinstance(metadata, dict):
                 return SkillEvidenceExtraction("unsupported", (), malformed)
             kinds, turn_id = metadata.get("content_item_kinds"), metadata.get("turn_id")
-            if not isinstance(kinds, list) or len(kinds) != 1 or not isinstance(turn_id, str) or not turn_id:
+            if not isinstance(turn_id, str) or not turn_id:
+                return SkillEvidenceExtraction("unsupported", (), malformed)
+            # Codex 0.163.0 can supply AGENTS.md and environment context in
+            # one native user-context record before the typed turn. This exact
+            # pair is not a skill selection. Other multi-kind records remain
+            # unsupported rather than becoming an inferred no-selection.
+            if kinds == ["agents_md.instructions", "environments.environment_context"]:
+                blocks = payload.get("content")
+                if (
+                    turn_id in combined_context_turns
+                    or turn_id in prompt_turns
+                    or not isinstance(blocks, list)
+                    or len(blocks) != 2
+                    or any(
+                        not isinstance(block, dict)
+                        or block.get("type") != "input_text"
+                        or not isinstance(block.get("text"), str)
+                        or not block["text"]
+                        for block in blocks
+                    )
+                ):
+                    return SkillEvidenceExtraction("unsupported", (), malformed)
+                combined_context_turns.add(turn_id)
+                continue
+            if not isinstance(kinds, list) or len(kinds) != 1:
                 return SkillEvidenceExtraction("unsupported", (), malformed)
             kind = kinds[0]
             if kind == "user.text":
@@ -230,6 +255,6 @@ class CodexSkillEvidenceExtractor:
             )
         # Without a typed user turn, an old or truncated transcript cannot
         # prove the absence of a selected-skill message (no zero denominator).
-        if not prompt_turns:
+        if not prompt_turns or not combined_context_turns.issubset(prompt_turns):
             return SkillEvidenceExtraction("unsupported", (), malformed)
         return SkillEvidenceExtraction("supported", tuple((*evidence, *selected)), malformed)
