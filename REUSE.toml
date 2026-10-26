@@ -310,6 +310,11 @@ SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = "docs/img/trace-tool-counts.png"
+SPDX-FileCopyrightText = "2026 Kaushik Kumar <kaushikrjpm10@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "web/public/fonts/albert-sans-latin-variable.woff2"
 SPDX-FileCopyrightText = "2012 Omnibus-Type (www.omnibus-type.com)"
 SPDX-License-Identifier = "OFL-1.1"
