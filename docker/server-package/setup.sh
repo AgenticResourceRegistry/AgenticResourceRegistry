@@ -92,9 +92,10 @@ fi
 info "Observal Server Setup"
 prompt_with_default FRONTEND_URL "Frontend URL" "http://localhost:3000"
 prompt_with_default OBSERVAL_BIND_ADDRESS "HTTP bind address" "${previous_bind:-127.0.0.1}"
-if [ "$OBSERVAL_BIND_ADDRESS" != "127.0.0.1" ] && [ "$OBSERVAL_BIND_ADDRESS" != "::1" ]; then
-    warn "Remote HTTP is enabled. Put this listener behind TLS unless plaintext access is intentional."
-fi
+case "$OBSERVAL_BIND_ADDRESS" in
+    127.0.0.1 | ::1 | \[::1\]) ;;
+    *) warn "Remote HTTP is enabled. Put this listener behind TLS unless plaintext access is intentional." ;;
+esac
 prompt_with_default OBSERVABILITY_STACK "Observability stack (none, prometheus, grafana)" "none"
 case "$OBSERVABILITY_STACK" in
     none | prometheus | grafana) ;;
