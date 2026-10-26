@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -171,6 +172,126 @@ def test_payload_rejection_status_is_permanent(monkeypatch, status_code: int):
 
     with pytest.raises(base.PermanentIngestRejectionError):
         base.post_to_server_ack("http://server", "token", {"session_id": "bad", "lines": []})
+
+
+def test_ingest_422_reports_field_and_limit_without_echoing_input(monkeypatch, tmp_path: Path):
+    import httpx
+
+    secret = "sensitive transcript content"
+    response = httpx.Response(
+        422,
+        json={
+            "detail": [
+                {
+                    "type": "value_error",
+                    "loc": ["body", "lines"],
+                    "msg": "Value error, session lines must be at most 1048576 characters",
+                    "input": [secret],
+                }
+            ]
+        },
+    )
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: Client())
+    with pytest.raises(base.PermanentIngestRejectionError) as rejected:
+        base.post_to_server_ack("http://server", "token", {"session_id": "bad", "lines": [secret]})
+    assert "body.lines: value_error" in str(rejected.value)
+    assert "1048576 characters" in str(rejected.value)
+    assert secret not in str(rejected.value)
+
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "bad", "lines": [secret], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    assert base.drain_outbox(
+        config(),
+        db_path=db,
+        home=tmp_path,
+        post=lambda payload, _config: base.post_to_server_ack("http://server", "token", payload),
+    )
+    reason = json.loads(db.with_suffix(".rejected.jsonl").read_text())["reason"]
+    assert "body.lines: value_error" in reason
+    assert secret not in reason
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        [
+            {
+                "type": "value_error",
+                "loc": ["body", "capabilities_used", 0, "kind"],
+                "msg": "unknown capability kind: secret",
+            }
+        ],
+        [{"type": "value_error", "loc": ["body", "secret\nvalue"], "msg": "secret"}],
+        [{"type": "value_error", "loc": ["body", "customsecret"], "msg": "secret"}],
+        "secret",
+    ],
+)
+def test_ingest_422_detail_never_exposes_untrusted_values(detail):
+    import httpx
+
+    parsed = base._safe_ingest_validation_detail(httpx.Response(422, json={"detail": detail}))
+    assert "secret" not in (parsed or "")
+
+
+def test_ingest_422_skips_oversized_error_body():
+    import httpx
+
+    response = httpx.Response(422, content=b"x" * (32 * 1024 * 1024 + 1))
+    assert base._safe_ingest_validation_detail(response) is None
+
+
+def test_malformed_422_still_quarantines_and_drains_next_session(monkeypatch, tmp_path: Path):
+    import httpx
+
+    db = tmp_path / "outbox.db"
+    for session_id in ("bad", "good"):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": session_id, "lines": ["line"], "start_offset": 0},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    malformed = b'{"detail":' + b"[" * 10_000 + b"0" + b"]" * 10_000 + b"}"
+    posted = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, _url, json, **_kwargs):
+            posted.append(json["session_id"])
+            if json["session_id"] == "bad":
+                return httpx.Response(422, content=malformed)
+            return httpx.Response(200, json={"acknowledged_line": 0, "acknowledged_offset": 4})
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: Client())
+    assert base.drain_outbox(
+        config(),
+        db_path=db,
+        home=tmp_path,
+        post=lambda payload, _config: base.post_to_server_ack("http://server", "token", payload),
+    )
+    assert posted == ["bad", "good"]
+    assert telemetry_buffer.stats(db_path=db)["failed"] == 1
 
 
 def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_path: Path):
