@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -131,6 +132,19 @@ def test_spooled_checkpoint_advances_across_pending_ranges(tmp_path: Path):
         byte_offset=0,
         db_path=db,
     ) == (30, 3)
+
+
+def test_ingest_cooldown_is_persistent_and_scoped_to_user_and_server(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    monkeypatch.setattr("time.time", lambda: 1000.0)
+    outbox.pause_delivery("http://server", "user", 60.0, db_path=db)
+    outbox.pause_delivery("http://server/", "user", 2.0, db_path=db)
+
+    assert outbox.delivery_paused("http://server", "user", db_path=db)
+    assert not outbox.delivery_paused("http://other", "user", db_path=db)
+    assert not outbox.delivery_paused("http://server", "other", db_path=db)
+    monkeypatch.setattr("time.time", lambda: 1061.0)
+    assert not outbox.delivery_paused("http://server", "user", db_path=db)
 
 
 def test_failed_attempts_never_become_terminal(tmp_path: Path):

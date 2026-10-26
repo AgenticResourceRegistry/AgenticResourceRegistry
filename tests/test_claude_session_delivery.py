@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -119,6 +120,19 @@ def test_finalizer_waits_then_finalizes_parent_and_child(tmp_path: Path, monkeyp
 
     assert waited == [parent, child]
     assert drained == [("parent", True), ("child", True)]
+
+
+def test_failed_late_finalization_starts_background_retry(tmp_path: Path, monkeypatch):
+    make_session(tmp_path)
+    write_config(tmp_path)
+    spawned = []
+    monkeypatch.setattr(session_push, "_wait_until_stable", lambda _path: None)
+    monkeypatch.setattr(session_push, "drain_session_source", lambda *_args, **_kw: False)
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *args, harness: spawned.append((args, harness)))
+
+    session_push._finalize_session("claude-code", "parent", "/work/project", home=tmp_path)
+
+    assert spawned == [(("--drain-outbox",), "claude-code")]
 
 
 def test_claude_hook_spec_uses_generic_harness_entrypoint():

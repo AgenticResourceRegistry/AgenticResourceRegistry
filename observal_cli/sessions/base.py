@@ -414,6 +414,25 @@ class PermanentIngestRejectionError(RuntimeError):
         )
 
 
+def _ingest_retry_delay(value: str | None) -> float:
+    """Respect Retry-After when provided, or wait out the ingest window."""
+    import math
+    from datetime import UTC, datetime
+    from email.utils import parsedate_to_datetime
+
+    try:
+        if value is None:
+            return 60.0
+        try:
+            seconds = float(value)
+        except ValueError:
+            retry_at = parsedate_to_datetime(value)
+            seconds = (retry_at.astimezone(UTC) - datetime.now(UTC)).total_seconds()
+        return max(1.0, min(86_400.0, seconds)) if math.isfinite(seconds) else 60.0
+    except (TypeError, ValueError, OverflowError):
+        return 60.0
+
+
 def post_to_server_ack(
     server_url: str,
     access_token: str,
@@ -445,6 +464,8 @@ def post_to_server_ack(
                         response = client.post(url, json=payload, headers=headers)
             if response.status_code >= 300:
                 detail = _safe_ingest_validation_detail(response) if response.status_code == 422 else None
+                if response.status_code == 429 and config is not None:
+                    config["_ingest_retry_after"] = _ingest_retry_delay(response.headers.get("Retry-After"))
                 optic.warning(
                     "ingest POST returned {} for session {}: {}",
                     response.status_code,
@@ -609,7 +630,26 @@ def drain_outbox(
     repairs: list[tuple[str, str]] | None = None,
     rejections: list[tuple[str, str, int]] | None = None,
 ) -> bool:
-    """Drain durable batches for the configured server/user until blocked."""
+    """Drain batches once across all local hooks and background workers."""
+    from observal_cli import telemetry_buffer
+
+    with telemetry_buffer.delivery_lock(db_path=db_path) as acquired:
+        if not acquired:
+            return False
+        return _drain_outbox_locked(
+            config, home=home, db_path=db_path, post=post, repairs=repairs, rejections=rejections
+        )
+
+
+def _drain_outbox_locked(
+    config: dict,
+    *,
+    home: Path | None,
+    db_path: Path | None,
+    post: Callable[[dict, dict], dict | None] | None,
+    repairs: list[tuple[str, str]] | None,
+    rejections: list[tuple[str, str, int]] | None,
+) -> bool:
     from observal_cli import telemetry_buffer
 
     destination = str(config.get("server_url") or "").rstrip("/")
@@ -624,18 +664,43 @@ def drain_outbox(
             config=cfg,
         )
     )
+    if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+        return False
 
+    delivered_count = 0
     while items := telemetry_buffer.pending(
         destination=destination,
         user_id=user_id,
         limit=1,
         db_path=db_path,
     ):
+        if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+            return False
+        # A live hook may send one pending batch per drain; the background worker
+        # finishes the backlog without holding up the interactive harness.
+        if config.get("_hook_delivery") and delivered_count:
+            return False
         item = items[0]
+        pace_delivery = config.get("_pace_recovery_delivery")
+        if callable(pace_delivery):
+            pace_delivery()
+        elif post is None:
+            import time
+
+            remaining = telemetry_buffer.reserve_recovery_slot(
+                destination, user_id, db_path=db_path, allow_wait=not bool(config.get("_hook_delivery"))
+            )
+            if remaining is None:
+                return False
+            if remaining > 0:
+                time.sleep(remaining)
+        if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+            return False
         try:
             acknowledgement = post_batch(item.payload, config)
         except PermanentIngestRejectionError as exc:
             quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+            delivered_count += 1
             if rejections is not None:
                 rejections.append((item.harness, item.session_id, exc.status_code))
             log_error(
@@ -645,6 +710,9 @@ def drain_outbox(
             continue
         if acknowledgement is None:
             telemetry_buffer.record_attempt(item.id, db_path=db_path)
+            delay = config.pop("_ingest_retry_after", None)
+            if isinstance(delay, (float, int)) and delay > 0:
+                telemetry_buffer.pause_delivery(destination, user_id, delay, db_path=db_path)
             return False
         acknowledged_line = int(acknowledgement["acknowledged_line"])
         acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
@@ -679,6 +747,7 @@ def drain_outbox(
                     f"past a checkpoint gap after line {acknowledged_line}",
                     home=home,
                 )
+                delivered_count += 1
                 continue
             return False
         if acknowledged_offset <= 0:
@@ -699,6 +768,7 @@ def drain_outbox(
             include_metadata=item.end_line < item.start_line,
             db_path=db_path,
         )
+        delivered_count += 1
     return True
 
 

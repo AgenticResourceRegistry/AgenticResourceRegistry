@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Generic Python harness hook entry point for durable session delivery."""
@@ -8,9 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger as optic
@@ -25,7 +29,7 @@ from observal_cli.sessions.base import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterator
 
 _FINAL_DELAY_SECONDS = 2.0
 _STABLE_INTERVAL_SECONDS = 0.25
@@ -55,6 +59,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None) -> None:
     if config is None:
         optic.warning("no Observal config found - session source remains local")
         return
+    config["_hook_delivery"] = True
 
     hook_event = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
     is_final = adapter.is_session_final(event)
@@ -93,7 +98,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None) -> None:
         )
     if not delivered:
         log_error(f"session_push: durable records pending for {harness} session {source.session_id}", home=home)
-    if deferred:
+    if deferred or not delivered:
         _spawn_worker("--drain-outbox", harness=harness)
 
     if is_final:
@@ -153,9 +158,10 @@ def _finalize_session(harness: str, session_id: str, cwd: str, home: Path | None
     if source is None or config is None or source.path is None:
         return
     event = {"session_id": session_id, "cwd": cwd, "hook_event_name": "Stop"}
+    delivered = True
     if adapter.should_capture_session(source, home=home):
         _wait_until_stable(source.path)
-        drain_session_source(
+        delivered = drain_session_source(
             source,
             config,
             hook_event="Stop",
@@ -169,34 +175,143 @@ def _finalize_session(harness: str, session_id: str, cwd: str, home: Path | None
             continue
         if related.path is not None:
             _wait_until_stable(related.path)
-        drain_session_source(
-            related,
-            config,
-            hook_event="Stop",
-            final=True,
-            extra_fields=adapter.session_extra_fields(related, event, True, home=home),
-            extra_records=adapter.session_extra_records(related, event, True, home=home),
-            recover_from_server=True,
-            home=home,
+        delivered = (
+            drain_session_source(
+                related,
+                config,
+                hook_event="Stop",
+                final=True,
+                extra_fields=adapter.session_extra_fields(related, event, True, home=home),
+                extra_records=adapter.session_extra_records(related, event, True, home=home),
+                recover_from_server=True,
+                home=home,
+            )
+            and delivered
         )
+    if not delivered:
+        _spawn_worker("--drain-outbox", harness=harness)
 
 
 def _drain_pending(home: Path | None = None) -> None:
+    from observal_cli import telemetry_buffer
+
     config = load_config(home=home)
-    if config is not None:
-        drain_outbox(config, home=home)
+    if config is None:
+        return
+    with _recovery_worker_lock("outbox", home) as acquired:
+        if not acquired:
+            return
+        failures = 0
+        while True:
+            remaining = telemetry_buffer.delivery_pause_remaining(
+                str(config.get("server_url") or ""), str(config.get("user_id") or "")
+            )
+            if remaining > 0:
+                time.sleep(remaining)
+            if drain_outbox(config, home=home):
+                return
+            if telemetry_buffer.delivery_paused(str(config.get("server_url") or ""), str(config.get("user_id") or "")):
+                continue  # Retry after every 429, including on a final hook.
+            failures += 1
+            if failures >= 3:
+                return  # Offline or another drainer owns the queue; records stay durable.
+            time.sleep(1.1)
+
+
+@contextmanager
+def _recovery_worker_lock(harness: str, home: Path | None = None) -> Iterator[bool]:
+    """Only one backfill per harness runs at once; other harnesses still recover."""
+    import re
+
+    directory = (home or Path.home()) / ".observal"
+    directory.mkdir(parents=True, exist_ok=True)
+    safe_harness = re.sub(r"[^a-z0-9-]", "_", harness.lower())[:64]
+    fd = os.open(
+        directory / f"session_recovery_{safe_harness}.lock",
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                locked = True
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+            except OSError:
+                pass
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except BlockingIOError:
+                pass
+        yield locked
+    finally:
+        if locked:
+            if os.name == "nt":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None = None) -> None:
+    with _recovery_worker_lock(harness, home) as acquired:
+        if acquired:
+            _recover_sessions_locked(harness, exclude_session, home)
+
+
+def _recovery_pacer(config: dict):
+    """Space historical batches across all harness workers for this account."""
+    from observal_cli import telemetry_buffer
+
+    def pace_delivery() -> None:
+        remaining = telemetry_buffer.reserve_recovery_slot(str(config["server_url"]), str(config["user_id"]))
+        if remaining is not None and remaining > 0:
+            time.sleep(remaining)
+
+    return pace_delivery
+
+
+def _recover_sessions_locked(harness: str, exclude_session: str, home: Path | None) -> None:
+    from observal_cli import telemetry_buffer
+
     ensure_loaded()
     adapter = get_adapter(harness)
     config = load_config(home=home)
     if config is None:
         return
-    drain_outbox(config, home=home)
-    recovery_final = adapter.aged_recovery_final()
+    config["_pace_recovery_delivery"] = _recovery_pacer(config)
+
+    def drain_after_pause(*, initial: bool = False) -> None:
+        # Keep the background worker alive through a rate-limit window; a user
+        # should not need another prompt just to resume an existing backlog.
+        while True:
+            remaining = telemetry_buffer.delivery_pause_remaining(
+                str(config.get("server_url") or ""), str(config.get("user_id") or "")
+            )
+            if remaining <= 0 and not initial:
+                return
+            if remaining > 0:
+                time.sleep(remaining)
+            drain_outbox(config, home=home)
+            initial = False
+
+    # Capture eligible sources before a large paced outbox takes minutes to drain:
+    # harness discovery can exclude transcripts once they cross an age cutoff.
     now = time.time()
-    for source in adapter.discover_session_sources(home=home):
+    sources = tuple(adapter.discover_session_sources(home=home))
+    recovery_final = adapter.aged_recovery_final()
+    drain_outbox(config, home=home)
+    for source in sources:
         if source.session_id == exclude_session or source.path is None:
             continue
         try:
@@ -219,6 +334,9 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 final=recovery_final,
                 extra_fields=adapter.session_extra_fields(source, event, recovery_final, home=home),
                 recover_from_server=True,
+                spool_only=telemetry_buffer.delivery_paused(
+                    str(config.get("server_url") or ""), str(config.get("user_id") or "")
+                ),
                 home=home,
             )
         # Recover separately stored delegated work alongside the parent.
@@ -233,8 +351,12 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 extra_fields=adapter.session_extra_fields(related, event, recovery_final, home=home),
                 extra_records=adapter.session_extra_records(related, event, recovery_final, home=home),
                 recover_from_server=True,
+                spool_only=telemetry_buffer.delivery_paused(
+                    str(config.get("server_url") or ""), str(config.get("user_id") or "")
+                ),
                 home=home,
             )
+    drain_after_pause()
 
 
 def cli_main() -> None:

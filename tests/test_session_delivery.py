@@ -401,6 +401,95 @@ def test_malformed_422_still_quarantines_and_drains_next_session(monkeypatch, tm
     assert telemetry_buffer.stats(db_path=db)["failed"] == 1
 
 
+def test_429_pauses_durable_outbox_across_repeated_hooks(tmp_path: Path, monkeypatch):
+    import time
+
+    import httpx
+
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "rate-limited", "lines": ["line"], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    posted = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            posted.append(True)
+            if len(posted) == 1:
+                return httpx.Response(429, headers={"Retry-After": "30"})
+            return httpx.Response(200, json={"acknowledged_line": 0, "acknowledged_offset": 4})
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: Client())
+    now = time.time()
+    cfg = config()
+    assert not base.drain_outbox(cfg, home=tmp_path, db_path=db)
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 1
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db)
+    assert len(posted) == 1
+    monkeypatch.setattr("time.time", lambda: now + 31)
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db)
+    assert len(posted) == 2
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
+
+
+def test_retry_after_longer_than_two_minutes_is_honored():
+    assert base._ingest_retry_delay("3600") == 3600.0
+    assert base._ingest_retry_delay("not-a-date") == 60.0
+
+
+def test_existing_drain_stops_when_another_worker_sets_cooldown(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    for start in range(2):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": "session", "lines": [f"line-{start}"], "start_offset": start},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    calls = []
+
+    def post(payload, _cfg):
+        calls.append(payload["start_offset"])
+        telemetry_buffer.pause_delivery("http://server", "user", 30, db_path=db)
+        return {"acknowledged_line": payload["start_offset"], "acknowledged_offset": payload["start_offset"] + 1}
+
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert calls == [0]
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 1
+
+
+def test_recovery_paces_each_pending_batch(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    for start in range(3):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": "old", "lines": [f"line-{start}"], "start_offset": start},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    paced = []
+    cfg = config() | {"_pace_recovery_delivery": lambda: paced.append(True)}
+    assert base.drain_outbox(
+        cfg,
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, _cfg: {
+            "acknowledged_line": payload["start_offset"],
+            "acknowledged_offset": payload["start_offset"] + 1,
+        },
+    )
+    assert len(paced) == 3
+
+
 def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_path: Path):
     db = tmp_path / "outbox.db"
     for session_id, line in (("bad", "invalid"), ("good", "valid")):
