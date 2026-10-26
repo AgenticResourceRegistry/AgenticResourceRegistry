@@ -309,8 +309,30 @@ def _safe_ingest_validation_detail(response) -> str | None:
     error = errors[0]
     kind = error.get("type")
     location = error.get("loc")
-    if not isinstance(kind, str) or not re.fullmatch(r"[a-z_]{1,48}", kind):
+    # Only known Pydantic/FastAPI codes may appear in diagnostics. A remote
+    # response is untrusted even if it claims to be a validation error.
+    known_kinds = {
+        "value_error",
+        "missing",
+        "string_too_long",
+        "list_too_long",
+        "less_than_equal",
+        "greater_than_equal",
+        "int_parsing",
+        "float_parsing",
+        "bool_parsing",
+        "string_type",
+        "list_type",
+        "int_type",
+        "float_type",
+        "bool_type",
+        "model_attributes_type",
+        "model_type",
+        "json_invalid",
+    }
+    if not isinstance(kind, str):
         return None
+    kind = kind if kind in known_kinds else "validation_error"
     if not isinstance(location, list) or not location or len(location) > 5:
         return None
     parts = []
@@ -364,10 +386,21 @@ def _safe_ingest_validation_detail(response) -> str | None:
         return None
     detail = f"{'.'.join(parts)}: {kind}"
     message = error.get("msg")
-    if isinstance(message, str) and re.fullmatch(
-        r"Value error, session lines must be at most [0-9]{1,10} characters", message
-    ):
-        detail += f" ({message})"
+    # Pydantic's model validators all report `body: value_error`; only
+    # recognized constant messages can safely distinguish their causes.
+    if kind == "value_error" and isinstance(message, str):
+        if parts == ["body", "lines"] and message == "Value error, session lines must be at most 1048576 characters":
+            detail += " (session lines must be at most 1048576 characters)"
+        elif parts == ["body"]:
+            model_errors = {
+                "Value error, end_byte_offsets must contain one value per source line": "end_byte_offsets mismatch",
+                "Value error, end_byte_offsets cannot contain negative values": "end_byte_offsets negative",
+                "Value error, end_byte_offsets must be ordered": "end_byte_offsets unordered",
+                "Value error, hashed_line_count is required with session_hash": "hashed_line_count required",
+                "Value error, hashed_line_count cannot exceed total_line_count": "hashed_line_count exceeds total_line_count",
+            }
+            if message in model_errors:
+                detail += f" ({model_errors[message]})"
     return detail
 
 
