@@ -284,6 +284,8 @@ def test_server_package_prints_actual_non_loopback_bind(tmp_path, bind_address, 
 
     assert f"Server URL on this machine: http://{host}:8000" in result.stdout
     assert f"Health check: curl http://{host}:8000/health" in result.stdout
+    if bind_address in ("::1", "[::1]"):
+        assert "Remote HTTP is enabled" not in result.stdout
 
 
 @pytest.mark.parametrize("process_port, expected_port", [(None, "8123"), ("9123", "9123"), ("", "8000")])
