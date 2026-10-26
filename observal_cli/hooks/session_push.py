@@ -273,10 +273,8 @@ def _recovery_pacer(config: dict):
     """Space historical batches across all harness workers for this account."""
     from observal_cli import telemetry_buffer
 
-    def pace_delivery() -> None:
-        remaining = telemetry_buffer.reserve_recovery_slot(str(config["server_url"]), str(config["user_id"]))
-        if remaining is not None and remaining > 0:
-            time.sleep(remaining)
+    def pace_delivery() -> float:
+        return telemetry_buffer.recovery_slot_remaining(str(config["server_url"]), str(config["user_id"]))
 
     return pace_delivery
 

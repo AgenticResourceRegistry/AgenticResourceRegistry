@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Manual recovery for local harness sessions missed by automatic delivery."""
@@ -84,6 +85,9 @@ def reconcile(
     rejections: list[tuple[str, str, int]] = []
     outbox_drained: bool | None = None
     with _capture(output):
+        # Snapshot every target before draining a potentially long historical queue:
+        # discovery filters by mtime, and sources near --since can age out meanwhile.
+        candidates = {target: _discover_candidates(target, since_hours) for target in targets}
         if not dry_run:
             try:
                 outbox_drained = drain_outbox(cfg, rejections=rejections)
@@ -99,7 +103,7 @@ def reconcile(
             if not outbox_drained:
                 rprint("[yellow]The durable session outbox still has pending records.[/yellow]")
 
-        results = [_reconcile_harness(target, cfg, since_hours, dry_run, rejections) for target in targets]
+        results = [_reconcile_harness(target, cfg, dry_run, candidates[target], rejections) for target in targets]
 
         summary_keys = (
             "discovered",
@@ -151,14 +155,8 @@ def reconcile(
         output_json(result)
 
 
-def _reconcile_harness(
-    harness: str,
-    cfg: dict,
-    since_hours: int,
-    dry_run: bool,
-    rejections: list[tuple[str, str, int]] | None = None,
-) -> dict:
-    """Discover and reconcile one harness into an explicit per-session result."""
+def _discover_candidates(harness: str, since_hours: int) -> list:
+    """Capture all eligible transcripts before any slow delivery begins."""
     adapter = get_adapter(harness)
     try:
         sources = adapter.discover_session_sources(since_hours=since_hours)
@@ -174,8 +172,18 @@ def _reconcile_harness(
 
     # Kiro IDE stores delegated work in separate transcripts; reconcile both
     # the parent conversation and its children, as the live hook does.
-    candidates = [candidate for source in sources for candidate in (source, *adapter.related_session_sources(source))]
+    return [candidate for source in sources for candidate in (source, *adapter.related_session_sources(source))]
 
+
+def _reconcile_harness(
+    harness: str,
+    cfg: dict,
+    dry_run: bool,
+    candidates: list,
+    rejections: list[tuple[str, str, int]] | None = None,
+) -> dict:
+    """Reconcile a captured harness source list into per-session results."""
+    adapter = get_adapter(harness)
     result = {
         "harness": harness,
         "discovered": len(candidates),
@@ -190,7 +198,7 @@ def _reconcile_harness(
         "errors": 0,
         "sessions": [],
     }
-    if not sources:
+    if not candidates:
         if not dry_run:
             rprint(f"[dim]No {esc(harness)} sessions found[/dim]")
         return result

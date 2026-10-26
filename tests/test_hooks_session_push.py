@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -33,10 +34,27 @@ def test_recovery_pacer_stays_below_60_batches_per_minute(monkeypatch, tmp_path:
     monkeypatch.setattr(session_push.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
 
+    db = tmp_path / "outbox.db"
+    for index in range(61):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": "old", "lines": [str(index)], "start_offset": index},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
     pace = session_push._recovery_pacer({"server_url": "http://server", "user_id": "user"})
-    for _ in range(61):
-        pace()
-    assert now[0] == pytest.approx(166.0)
+    assert pace() == 0
+    posted = []
+    assert base.drain_outbox(
+        {"server_url": "http://server", "user_id": "user", "_pace_recovery_delivery": pace},
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, _cfg: posted.append(now[0]) or {"acknowledged_line": payload["start_offset"]},
+    )
+    assert len(posted) == 61
+    assert posted[0] == 100.0
+    assert posted[-1] == pytest.approx(166.0)
+    assert all(later - earlier >= 1.1 - 1e-8 for earlier, later in pairwise(posted))
 
 
 def test_recovery_worker_lock_skips_overlapping_workers(tmp_path: Path):

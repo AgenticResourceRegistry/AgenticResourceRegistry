@@ -630,15 +630,69 @@ def drain_outbox(
     repairs: list[tuple[str, str]] | None = None,
     rejections: list[tuple[str, str, int]] | None = None,
 ) -> bool:
-    """Drain batches once across all local hooks and background workers."""
+    """Drain queued batches, releasing the delivery lock between requests."""
     from observal_cli import telemetry_buffer
 
-    with telemetry_buffer.delivery_lock(db_path=db_path) as acquired:
-        if not acquired:
-            return False
-        return _drain_outbox_locked(
-            config, home=home, db_path=db_path, post=post, repairs=repairs, rejections=rejections
-        )
+    destination = str(config.get("server_url") or "").rstrip("/")
+    user_id = str(config.get("user_id") or "")
+    if not destination or not user_id:
+        return False
+    hook = bool(config.get("_hook_delivery"))
+    pace = config.get("_pace_recovery_delivery")
+    paced = post is None or callable(pace)
+    prefer_live = True
+    while True:
+        # Only read the delay while waiting: claiming slots before acquiring the
+        # delivery lock would let contended recovery workers delay live hooks.
+        if (
+            not hook
+            and paced
+            and telemetry_buffer.pending(destination=destination, user_id=user_id, limit=1, db_path=db_path)
+        ):
+            if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+                return False
+            remaining = (
+                pace()
+                if callable(pace)
+                else telemetry_buffer.recovery_slot_remaining(destination, user_id, db_path=db_path)
+            )
+            if remaining > 0:
+                import time
+
+                time.sleep(remaining)
+        wait = 0.0
+        with telemetry_buffer.delivery_lock(db_path=db_path) as acquired:
+            if not acquired:
+                return False
+            # Another worker may have posted while we waited for the lock.
+            # Release it before sleeping so hooks can still post promptly.
+            if (
+                not hook
+                and paced
+                and telemetry_buffer.pending(destination=destination, user_id=user_id, limit=1, db_path=db_path)
+            ):
+                wait = telemetry_buffer.recovery_slot_remaining(destination, user_id, db_path=db_path)
+            if wait <= 0:
+                result = _drain_outbox_locked(
+                    config,
+                    home=home,
+                    db_path=db_path,
+                    post=post,
+                    repairs=repairs,
+                    rejections=rejections,
+                    prefer_live=prefer_live,
+                    paced=paced,
+                )
+        if wait > 0:
+            import time
+
+            time.sleep(wait)
+            continue
+        if result is not None:
+            return result
+        if hook:
+            return not telemetry_buffer.pending(destination=destination, user_id=user_id, limit=1, db_path=db_path)
+        prefer_live = not prefer_live
 
 
 def _drain_outbox_locked(
@@ -649,7 +703,9 @@ def _drain_outbox_locked(
     post: Callable[[dict, dict], dict | None] | None,
     repairs: list[tuple[str, str]] | None,
     rejections: list[tuple[str, str, int]] | None,
-) -> bool:
+    prefer_live: bool,
+    paced: bool,
+) -> bool | None:
     from observal_cli import telemetry_buffer
 
     destination = str(config.get("server_url") or "").rstrip("/")
@@ -667,109 +723,94 @@ def _drain_outbox_locked(
     if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
         return False
 
-    delivered_count = 0
-    while items := telemetry_buffer.pending(
+    items = telemetry_buffer.pending(
         destination=destination,
         user_id=user_id,
         limit=1,
         db_path=db_path,
-    ):
-        if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+        preferred_session=config.get("_preferred_session") if config.get("_hook_delivery") else None,
+        prefer_live=prefer_live,
+    )
+    if not items:
+        return True
+    item = items[0]
+    if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+        return False
+    if paced or config.get("_hook_delivery"):
+        remaining = telemetry_buffer.reserve_recovery_slot(destination, user_id, db_path=db_path, allow_wait=False)
+        if remaining is None:
             return False
-        # A live hook may send one pending batch per drain; the background worker
-        # finishes the backlog without holding up the interactive harness.
-        if config.get("_hook_delivery") and delivered_count:
-            return False
-        item = items[0]
-        pace_delivery = config.get("_pace_recovery_delivery")
-        if callable(pace_delivery):
-            pace_delivery()
-        elif post is None:
-            import time
-
-            remaining = telemetry_buffer.reserve_recovery_slot(
-                destination, user_id, db_path=db_path, allow_wait=not bool(config.get("_hook_delivery"))
-            )
-            if remaining is None:
-                return False
-            if remaining > 0:
-                time.sleep(remaining)
-        if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
-            return False
-        try:
-            acknowledgement = post_batch(item.payload, config)
-        except PermanentIngestRejectionError as exc:
-            quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
-            delivered_count += 1
-            if rejections is not None:
-                rejections.append((item.harness, item.session_id, exc.status_code))
-            log_error(
-                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
-                home=home,
-            )
-            continue
-        if acknowledgement is None:
-            telemetry_buffer.record_attempt(item.id, db_path=db_path)
-            delay = config.pop("_ingest_retry_after", None)
-            if isinstance(delay, (float, int)) and delay > 0:
-                telemetry_buffer.pause_delivery(destination, user_id, delay, db_path=db_path)
-            return False
-        acknowledged_line = int(acknowledgement["acknowledged_line"])
-        acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
-        repair_from_line = acknowledgement.get("repair_from_line")
-        if isinstance(repair_from_line, int):
-            write_cursor(
-                item.checkpoint_key,
-                acknowledged_offset,
-                repair_from_line,
-                home=home,
-                preserve_finalized=False,
-            )
-            telemetry_buffer.accept_item(item.id, db_path=db_path)
-            if repairs is not None:
-                repairs.append((item.harness, item.session_id))
-            return False
-        if acknowledged_line < item.end_line:
-            if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
-                # The lines between the server checkpoint and this batch were quarantined
-                # or lost, so the checkpoint can never reach it. The server stored the
-                # batch; accept it instead of resending it forever ahead of every session.
-                write_cursor(
-                    item.checkpoint_key,
-                    item.end_offset,
-                    item.end_line + 1,
-                    finalized=item.final,
-                    home=home,
-                )
-                telemetry_buffer.accept_item(item.id, db_path=db_path)
-                log_error(
-                    f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
-                    f"past a checkpoint gap after line {acknowledged_line}",
-                    home=home,
-                )
-                delivered_count += 1
-                continue
-            return False
-        if acknowledged_offset <= 0:
-            acknowledged_offset = item.end_offset
+    try:
+        acknowledgement = post_batch(item.payload, config)
+    except PermanentIngestRejectionError as exc:
+        quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+        if rejections is not None:
+            rejections.append((item.harness, item.session_id, exc.status_code))
+        log_error(
+            f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
+            home=home,
+        )
+        return None
+    if acknowledgement is None:
+        telemetry_buffer.record_attempt(item.id, db_path=db_path)
+        delay = config.pop("_ingest_retry_after", None)
+        if isinstance(delay, (float, int)) and delay > 0:
+            telemetry_buffer.pause_delivery(destination, user_id, delay, db_path=db_path)
+        return False
+    acknowledged_line = int(acknowledgement["acknowledged_line"])
+    acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
+    repair_from_line = acknowledgement.get("repair_from_line")
+    if isinstance(repair_from_line, int):
         write_cursor(
             item.checkpoint_key,
             acknowledged_offset,
-            acknowledged_line + 1,
-            finalized=item.final,
+            repair_from_line,
             home=home,
+            preserve_finalized=False,
         )
-        telemetry_buffer.acknowledge(
-            destination=destination,
-            user_id=user_id,
-            harness=item.harness,
-            session_id=item.session_id,
-            acknowledged_line=acknowledged_line,
-            include_metadata=item.end_line < item.start_line,
-            db_path=db_path,
-        )
-        delivered_count += 1
-    return True
+        telemetry_buffer.accept_item(item.id, db_path=db_path)
+        if repairs is not None:
+            repairs.append((item.harness, item.session_id))
+        return False
+    if acknowledged_line < item.end_line:
+        if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
+            # The lines between the server checkpoint and this batch were quarantined
+            # or lost, so the checkpoint can never reach it. The server stored the
+            # batch; accept it instead of resending it forever ahead of every session.
+            write_cursor(
+                item.checkpoint_key,
+                item.end_offset,
+                item.end_line + 1,
+                finalized=item.final,
+                home=home,
+            )
+            telemetry_buffer.accept_item(item.id, db_path=db_path)
+            log_error(
+                f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
+                f"past a checkpoint gap after line {acknowledged_line}",
+                home=home,
+            )
+            return None
+        return False
+    if acknowledged_offset <= 0:
+        acknowledged_offset = item.end_offset
+    write_cursor(
+        item.checkpoint_key,
+        acknowledged_offset,
+        acknowledged_line + 1,
+        finalized=item.final,
+        home=home,
+    )
+    telemetry_buffer.acknowledge(
+        destination=destination,
+        user_id=user_id,
+        harness=item.harness,
+        session_id=item.session_id,
+        acknowledged_line=acknowledged_line,
+        include_metadata=item.end_line < item.start_line,
+        db_path=db_path,
+    )
+    return None
 
 
 def _checkpoint_gap_is_permanent(
@@ -833,7 +874,7 @@ def drain_session_source(
         )
 
     # A transient pre-drain failure never prevents new local records from being spooled.
-    if not spool_only:
+    if not spool_only and not config.get("_hook_delivery"):
         drain_outbox(config, home=home, db_path=db_path, post=post, rejections=rejections)
         if source_was_rejected():
             return False
@@ -899,12 +940,13 @@ def drain_session_source(
                 user_id=user_id,
                 checkpoint_key=source.checkpoint_key,
                 db_path=db_path,
+                live=bool(config.get("_hook_delivery")),
             )
         if spool_only:
             return True
         repairs: list[tuple[str, str]] = []
         delivered = drain_outbox(
-            config,
+            config | {"_preferred_session": (source.harness, source.session_id)},
             home=home,
             db_path=db_path,
             post=post,
@@ -980,13 +1022,14 @@ def drain_session_source(
             user_id=user_id,
             checkpoint_key=source.checkpoint_key,
             db_path=db_path,
+            live=bool(config.get("_hook_delivery")),
         )
 
     if spool_only:
         return True
     repairs = []
     delivered = drain_outbox(
-        config,
+        config | {"_preferred_session": (source.harness, source.session_id)},
         home=home,
         db_path=db_path,
         post=post,

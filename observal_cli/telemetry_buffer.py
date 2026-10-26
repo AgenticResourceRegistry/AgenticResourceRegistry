@@ -120,10 +120,18 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
                 records_hash TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_attempt TEXT,
+                live INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(destination, user_id, harness, session_id, start_line, end_line)
             )
             """
         )
+        if not any(row[1] == "live" for row in conn.execute("PRAGMA table_info(session_outbox)")):
+            try:
+                conn.execute("ALTER TABLE session_outbox ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                # A concurrent hook may have migrated the same existing database.
+                if not any(row[1] == "live" for row in conn.execute("PRAGMA table_info(session_outbox)")):
+                    raise
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_outbox_pending ON session_outbox(destination, user_id, id)"
         )
@@ -177,6 +185,7 @@ def enqueue(
     checkpoint_key: str | None = None,
     db_path: Path | None = None,
     max_bytes: int = MAX_OUTBOX_BYTES,
+    live: bool = False,
 ) -> int:
     """Persist one source batch and return its durable row ID.
 
@@ -221,13 +230,14 @@ def enqueue(
                 """
                 INSERT INTO session_outbox (
                     destination, user_id, harness, session_id, checkpoint_key,
-                    start_line, end_line, end_offset, final, payload, records_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_line, end_line, end_offset, final, payload, records_hash, live
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(destination, user_id, harness, session_id, start_line, end_line)
                 DO UPDATE SET
                     checkpoint_key = excluded.checkpoint_key,
                     end_offset = max(session_outbox.end_offset, excluded.end_offset),
                     final = max(session_outbox.final, excluded.final),
+                    live = max(session_outbox.live, excluded.live),
                     payload = CASE
                         WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
                         ELSE session_outbox.payload
@@ -242,6 +252,7 @@ def enqueue(
                     int(final),
                     serialized,
                     records_hash,
+                    int(live),
                 ),
             )
             conn.commit()
@@ -267,12 +278,14 @@ def pending(
     user_id: str,
     limit: int = BATCH_SIZE,
     db_path: Path | None = None,
+    preferred_session: tuple[str, str] | None = None,
+    prefer_live: bool = False,
 ) -> list[OutboxItem]:
-    """Return durable batches oldest session first, each session in line order.
+    """Return durable batches in session line order, with optional live priority.
 
-    A session's lines can be spooled again after later lines (for example after a
-    server checkpoint rewind), so ordering by row id alone would send a batch the
-    checkpoint cannot reach before the batch that fills the gap, forever.
+    Historical and live sessions can be alternated by the drainer. A hook can
+    select its own session ahead of the backlog. A checkpoint rewind may spool
+    earlier lines after later ones, so row ID alone cannot order a session.
     Attempts never make a row terminal.
     """
     conn = _connect(db_path)
@@ -280,7 +293,7 @@ def pending(
         rows = conn.execute(
             # Group once for each session's first row; a correlated MIN() per row rescans the whole
             # destination for every row, which takes seconds on a few thousand queued batches.
-            "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id FROM session_outbox "
+            "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id, MAX(live) AS live FROM session_outbox "
             "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
             "SELECT item.id, item.destination, item.user_id, item.harness, item.session_id, "
             "item.checkpoint_key, item.start_line, item.end_line, item.end_offset, item.final, "
@@ -288,8 +301,18 @@ def pending(
             "FROM session_outbox AS item JOIN firsts "
             "ON firsts.harness = item.harness AND firsts.session_id = item.session_id "
             "WHERE item.destination = ? AND item.user_id = ? "
-            "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
-            (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
+            "ORDER BY (item.harness = ? AND item.session_id = ?) DESC, "
+            "(CASE WHEN ? = 1 THEN firsts.live ELSE 1 - firsts.live END) DESC, "
+            "(item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
+            (
+                destination.rstrip("/"),
+                user_id,
+                destination.rstrip("/"),
+                user_id,
+                *(preferred_session or ("", "")),
+                int(prefer_live),
+                limit,
+            ),
         ).fetchall()
         return [
             OutboxItem(
@@ -367,6 +390,21 @@ def holds_line(
             (destination.rstrip("/"), user_id, harness, session_id, line, line),
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+def recovery_slot_remaining(destination: str, user_id: str, *, db_path: Path | None = None) -> float:
+    """Read shared pacing delay without claiming a future request slot."""
+    import time
+
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT next_epoch FROM session_recovery_pace WHERE destination = ? AND user_id = ?",
+            (destination.rstrip("/"), user_id),
+        ).fetchone()
+        return max(0.0, float(row[0]) - time.time()) if row else 0.0
     finally:
         conn.close()
 

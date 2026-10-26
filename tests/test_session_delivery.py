@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -441,6 +442,203 @@ def test_429_pauses_durable_outbox_across_repeated_hooks(tmp_path: Path, monkeyp
     assert telemetry_buffer.stats(db_path=db)["pending"] == 0
 
 
+def test_rate_limited_hook_does_not_consume_another_pacing_slot(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    now = [1000.0]
+    monkeypatch.setattr("time.time", lambda: now[0])
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "live", "lines": ["{}"], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    calls = []
+
+    def rate_limited(_payload, cfg):
+        calls.append(now[0])
+        cfg["_ingest_retry_after"] = 30
+        return None
+
+    cfg = config() | {"_hook_delivery": True}
+    assert not base.drain_outbox(cfg, home=tmp_path, db_path=db, post=rate_limited)
+    assert calls == [1000.0]
+    assert telemetry_buffer.recovery_slot_remaining("http://server", "user", db_path=db) == pytest.approx(1.1)
+    now[0] = 1002.0
+    assert not base.drain_outbox(config() | {"_hook_delivery": True}, home=tmp_path, db_path=db, post=rate_limited)
+    assert calls == [1000.0]
+    assert telemetry_buffer.recovery_slot_remaining("http://server", "user", db_path=db) == 0
+    now[0] = 1031.0
+    assert base.drain_outbox(
+        config() | {"_hook_delivery": True},
+        home=tmp_path,
+        db_path=db,
+        post=lambda _payload, _cfg: calls.append(now[0]) or {"acknowledged_line": 0},
+    )
+    assert calls == [1000.0, 1031.0]
+
+
+def test_live_hook_overtakes_large_backlog_and_historical_work_still_drains(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    for index in range(65):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": f"old-{index}", "lines": ["{}"], "start_offset": 0},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    path = tmp_path / "live.jsonl"
+    path.write_text("{}\n")
+    seen = []
+
+    def post(payload, _cfg):
+        seen.append(payload["session_id"])
+        return {"acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1}
+
+    assert not base.drain_session_source(
+        SessionSource("claude-code", "live", path),
+        config() | {"_hook_delivery": True},
+        hook_event="UserPromptSubmit",
+        home=tmp_path,
+        db_path=db,
+        post=post,
+    )
+    assert seen == ["live"]
+    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
+    assert len(seen) == 66
+    assert seen[1:] == [f"old-{index}" for index in range(65)]
+
+
+def test_lock_contention_preserves_live_priority_without_starving_history(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    for index in range(65):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": f"old-{index}", "lines": ["{}"], "start_offset": 0},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    path = tmp_path / "live.jsonl"
+    path.write_text("{}\n")
+    entered, release = threading.Event(), threading.Event()
+    seen = []
+
+    def post(payload, _cfg):
+        seen.append(payload["session_id"])
+        if len(seen) == 1:
+            entered.set()
+            assert release.wait(5)
+        return {"acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1}
+
+    worker = threading.Thread(target=lambda: base.drain_outbox(config(), home=tmp_path, db_path=db, post=post))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        assert not base.drain_session_source(
+            SessionSource("claude-code", "live", path),
+            config() | {"_hook_delivery": True},
+            hook_event="UserPromptSubmit",
+            home=tmp_path,
+            db_path=db,
+            post=post,
+        )
+    finally:
+        release.set()
+        worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert seen[:4] == ["old-0", "old-1", "live", "old-2"]
+    assert len(seen) == 66
+
+
+def test_contended_recovery_workers_do_not_delay_fresh_hook(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "old", "lines": ["{}"], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    now = [1000.0]
+    monkeypatch.setattr("time.time", lambda: now[0])
+    monkeypatch.setattr("time.sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    barrier = threading.Barrier(7)
+    results = []
+
+    def worker():
+        barrier.wait(timeout=5)
+        results.append(base.drain_outbox(config(), home=tmp_path, db_path=db, post=None))
+
+    with telemetry_buffer.delivery_lock(db_path=db) as acquired:
+        assert acquired
+        workers = [threading.Thread(target=worker) for _ in range(6)]
+        for thread in workers:
+            thread.start()
+        barrier.wait(timeout=5)
+        for thread in workers:
+            thread.join(timeout=5)
+        assert all(not thread.is_alive() for thread in workers)
+        assert results == [False] * 6
+        assert telemetry_buffer.recovery_slot_remaining("http://server", "user", db_path=db) == 0
+
+    path = tmp_path / "live.jsonl"
+    path.write_text("{}\n")
+    posted = []
+    assert not base.drain_session_source(
+        SessionSource("claude-code", "live", path),
+        config() | {"_hook_delivery": True},
+        hook_event="UserPromptSubmit",
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, _cfg: posted.append((payload["session_id"], now[0])) or {"acknowledged_line": 0},
+    )
+    assert posted == [("live", 1000.0)]
+    assert telemetry_buffer.recovery_slot_remaining("http://server", "user", db_path=db) == pytest.approx(1.1)
+
+
+def test_live_429_cooldown_and_failed_post_leave_records_durable(tmp_path: Path, monkeypatch):
+    disable_payload_metadata(monkeypatch)
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "old", "lines": ["{}"], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    path = tmp_path / "live.jsonl"
+    path.write_text("{}\n")
+    now = [1000.0]
+    monkeypatch.setattr("time.time", lambda: now[0])
+    calls = []
+
+    def limited(payload, cfg):
+        calls.append(payload["session_id"])
+        cfg["_ingest_retry_after"] = 30.0
+        return None
+
+    assert not base.drain_session_source(
+        SessionSource("claude-code", "live", path),
+        config() | {"_hook_delivery": True},
+        hook_event="UserPromptSubmit",
+        home=tmp_path,
+        db_path=db,
+        post=limited,
+    )
+    assert calls == ["live"]
+    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=limited)
+    assert calls == ["live"]
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 2
+    now[0] += 31
+    assert base.drain_outbox(
+        config(),
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, _cfg: calls.append(payload["session_id"]) or {"acknowledged_line": 0},
+    )
+    assert calls == ["live", "live", "old"]
+
+
 def test_retry_after_longer_than_two_minutes_is_honored():
     assert base._ingest_retry_delay("3600") == 3600.0
     assert base._ingest_retry_delay("not-a-date") == 60.0
@@ -467,7 +665,10 @@ def test_existing_drain_stops_when_another_worker_sets_cooldown(tmp_path: Path):
     assert telemetry_buffer.stats(db_path=db)["pending"] == 1
 
 
-def test_recovery_paces_each_pending_batch(tmp_path: Path):
+def test_recovery_paces_each_pending_batch(tmp_path: Path, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr("time.time", lambda: now[0])
+    monkeypatch.setattr("time.sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     db = tmp_path / "outbox.db"
     for start in range(3):
         telemetry_buffer.enqueue(
@@ -477,7 +678,12 @@ def test_recovery_paces_each_pending_batch(tmp_path: Path):
             db_path=db,
         )
     paced = []
-    cfg = config() | {"_pace_recovery_delivery": lambda: paced.append(True)}
+
+    def pace():
+        paced.append(True)
+        return telemetry_buffer.recovery_slot_remaining("http://server", "user", db_path=db)
+
+    cfg = config() | {"_pace_recovery_delivery": pace}
     assert base.drain_outbox(
         cfg,
         home=tmp_path,
@@ -488,6 +694,7 @@ def test_recovery_paces_each_pending_batch(tmp_path: Path):
         },
     )
     assert len(paced) == 3
+    assert now[0] == pytest.approx(1002.2)
 
 
 def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_path: Path):
