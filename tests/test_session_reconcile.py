@@ -190,7 +190,7 @@ def test_background_recovery_uses_adapter_sources_and_shared_drain(tmp_path: Pat
 
     session_push._recover_sessions("claude-code", home=tmp_path)
 
-    assert calls == ["outbox", "unfinished"]
+    assert calls == ["outbox", "unfinished", "outbox"]
     assert finals == [True]
 
 

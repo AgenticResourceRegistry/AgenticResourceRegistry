@@ -56,10 +56,16 @@ def _path(db_path: Path | None) -> Path:
     return db_path or DB_PATH
 
 
+def delivery_scope(destination: str, user_id: str) -> str:
+    """Stable, opaque lock identity for one normalized destination and user."""
+    identity = json.dumps([destination.rstrip("/"), user_id], separators=(",", ":"))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 @contextmanager
-def delivery_lock(*, db_path: Path | None = None):
-    """Serialize outbox drains across hooks, finalizers and recovery workers."""
-    path = _path(db_path).with_suffix(".delivery.lock")
+def delivery_lock(*, destination: str, user_id: str, db_path: Path | None = None):
+    """Serialize drains for one account across hooks, finalizers and workers."""
+    path = _path(db_path).with_suffix(f".delivery-{delivery_scope(destination, user_id)}.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     locked = False

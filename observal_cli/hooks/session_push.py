@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,6 +35,8 @@ _FINAL_DELAY_SECONDS = 2.0
 _STABLE_INTERVAL_SECONDS = 0.25
 _STABLE_CHECKS = 2
 _RECOVERY_MIN_AGE_SECONDS = 120
+_OUTBOX_LOCK_WAIT_SECONDS = 5.0
+_OUTBOX_LOCK_RETRY_SECONDS = 0.1
 
 
 def main(home: Path | None = None, harness: str = "claude-code") -> None:
@@ -198,9 +200,28 @@ def _drain_pending(home: Path | None = None) -> None:
     config = load_config(home=home)
     if config is None:
         return
-    with _recovery_worker_lock("outbox", home) as acquired:
+    scope = telemetry_buffer.delivery_scope(str(config.get("server_url") or ""), str(config.get("user_id") or ""))
+    outbox_lock = f"outbox-{scope}"
+    waiter_lock = f"outbox-waiter-{scope}"
+    with ExitStack() as held_lock:
+        with ExitStack() as attempt:
+            acquired = attempt.enter_context(_recovery_worker_lock(outbox_lock, home))
+            if acquired:
+                held_lock.enter_context(attempt.pop_all())
         if not acquired:
-            return
+            with _recovery_worker_lock(waiter_lock, home) as waiting:
+                if not waiting:
+                    return
+                deadline = time.monotonic() + _OUTBOX_LOCK_WAIT_SECONDS
+                while time.monotonic() < deadline:
+                    time.sleep(min(_OUTBOX_LOCK_RETRY_SECONDS, deadline - time.monotonic()))
+                    with ExitStack() as attempt:
+                        acquired = attempt.enter_context(_recovery_worker_lock(outbox_lock, home))
+                        if acquired:
+                            held_lock.enter_context(attempt.pop_all())
+                            break
+            if not acquired:
+                return
         failures = 0
         while True:
             remaining = telemetry_buffer.delivery_pause_remaining(
@@ -225,7 +246,7 @@ def _recovery_worker_lock(harness: str, home: Path | None = None) -> Iterator[bo
 
     directory = (home or Path.home()) / ".observal"
     directory.mkdir(parents=True, exist_ok=True)
-    safe_harness = re.sub(r"[^a-z0-9-]", "_", harness.lower())[:64]
+    safe_harness = re.sub(r"[^a-z0-9-]", "_", harness.lower())[:80]
     fd = os.open(
         directory / f"session_recovery_{safe_harness}.lock",
         os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
@@ -354,7 +375,7 @@ def _recover_sessions_locked(harness: str, exclude_session: str, home: Path | No
                 ),
                 home=home,
             )
-    drain_after_pause()
+    drain_after_pause(initial=True)
 
 
 def cli_main() -> None:

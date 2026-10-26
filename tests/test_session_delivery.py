@@ -551,6 +551,21 @@ def test_lock_contention_preserves_live_priority_without_starving_history(tmp_pa
     assert len(seen) == 66
 
 
+def test_delivery_lock_normalizes_destination_and_serializes_only_same_account(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    with telemetry_buffer.delivery_lock(destination="http://server/", user_id="user", db_path=db) as acquired:
+        assert acquired
+        with telemetry_buffer.delivery_lock(destination="http://server", user_id="user", db_path=db) as same:
+            assert not same
+        with telemetry_buffer.delivery_lock(destination="http://server", user_id="other", db_path=db) as other:
+            assert other
+        with telemetry_buffer.delivery_lock(destination="http://other", user_id="user", db_path=db) as server:
+            assert server
+    locks = list(tmp_path.glob("*.delivery-*.lock"))
+    assert len(locks) == 3
+    assert all("server" not in path.name and "user" not in path.name for path in locks)
+
+
 def test_contended_recovery_workers_do_not_delay_fresh_hook(tmp_path: Path, monkeypatch):
     disable_payload_metadata(monkeypatch)
     db = tmp_path / "outbox.db"
@@ -570,7 +585,7 @@ def test_contended_recovery_workers_do_not_delay_fresh_hook(tmp_path: Path, monk
         barrier.wait(timeout=5)
         results.append(base.drain_outbox(config(), home=tmp_path, db_path=db, post=None))
 
-    with telemetry_buffer.delivery_lock(db_path=db) as acquired:
+    with telemetry_buffer.delivery_lock(destination="http://server/", user_id="user", db_path=db) as acquired:
         assert acquired
         workers = [threading.Thread(target=worker) for _ in range(6)]
         for thread in workers:

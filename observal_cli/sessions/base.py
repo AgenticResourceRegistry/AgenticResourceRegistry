@@ -661,7 +661,7 @@ def drain_outbox(
 
                 time.sleep(remaining)
         wait = 0.0
-        with telemetry_buffer.delivery_lock(db_path=db_path) as acquired:
+        with telemetry_buffer.delivery_lock(destination=destination, user_id=user_id, db_path=db_path) as acquired:
             if not acquired:
                 return False
             # Another worker may have posted while we waited for the lock.
