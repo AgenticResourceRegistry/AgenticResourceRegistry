@@ -196,7 +196,7 @@ const FILTER_CATEGORIES: FilterCategory[] = [
 	},
 	{
 		key: "tools",
-		label: "Tools",
+		label: "Tool events",
 		match: (e) =>
 			[
 				"tool_result",
@@ -2304,6 +2304,11 @@ export default function TraceDetailPage() {
 												<button
 													type="button"
 													key={cat.key}
+													title={
+																	cat.key === "tools"
+																		? "Counts pre-use and outcome events separately; Tool Calls counts paired invocations once."
+																		: undefined
+																}
 													onClick={() => toggleFilter(cat.key)}
 									aria-pressed={activeFilters.has(cat.key)}
 													className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-medium border transition-all ${

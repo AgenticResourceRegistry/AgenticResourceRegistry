@@ -85,6 +85,51 @@ test("idless Copilot tool results pair with the preceding named call", () => {
 	);
 });
 
+test("present but mismatched IDs never consume a differently identified pre-use", () => {
+	assert.deepEqual(
+		summarizeToolCalls([
+			event("hook_pretooluse", "Bash", { tool_use_id: "first" }),
+			event("hook_posttooluse", "Bash", { tool_use_id: "other" }),
+		]),
+		{ toolCalls: 2, tools: { Bash: 2 } },
+	);
+	assert.deepEqual(
+		summarizeToolCalls([
+			event("hook_pretooluse", "Bash", { tool_use_id: "first" }),
+			event("hook_toolresult", "", { tool_use_id: "other" }),
+		]),
+		{ toolCalls: 2, tools: { unknown: 1, Bash: 1 } },
+	);
+});
+
+test("idless results match the nearest unmatched preceding call by name", () => {
+	assert.deepEqual(
+		summarizeToolCalls([
+			event("hook_pretooluse", "Bash"),
+			event("hook_pretooluse", "Edit"),
+			event("hook_posttooluse", "Bash"),
+			event("hook_toolresult", ""),
+		]),
+		{ toolCalls: 2, tools: { Bash: 1, Edit: 1 } },
+	);
+});
+
+test("large idless streams pair in linear time", () => {
+	const count = 32_000;
+	const events = Array.from({ length: count }, (_, i) =>
+		event("hook_pretooluse", i % 2 ? "Edit" : "Bash"),
+	);
+	for (let i = 0; i < count; i++) events.push(event("hook_toolresult", ""));
+	const start = performance.now();
+	assert.deepEqual(summarizeToolCalls(events), {
+		toolCalls: count,
+		tools: { Edit: count / 2, Bash: count / 2 },
+	});
+	// The old findLast scan took >15 seconds for this input. Leave ample
+	// headroom for slower CI while still catching quadratic regressions.
+	assert.ok(performance.now() - start < 3000, "idless pairing should scale linearly");
+});
+
 test("special tool names remain numeric and do not change the counter prototype", () => {
 	const stats = summarizeToolCalls([
 		event("hook_posttooluse", "constructor"),

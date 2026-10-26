@@ -12,37 +12,52 @@ export function summarizeToolCalls(events: RawSessionEvent[]) {
 		name === "hook_posttooluse" ||
 		name === "hook_posttoolusefailure" ||
 		name === "hook_toolresult";
-	const preEvents = events
-		.map((event, index) => ({ event, index }))
-		.filter(({ event }) => eventName(event) === "hook_pretooluse");
-	const preById = new Map<string, number>();
-	for (const { event, index } of preEvents) {
-		const id = event.attributes?.tool_use_id;
-		if (id && !preById.has(id)) preById.set(id, index);
-	}
 
+	// Active pre-use calls live in three stacks. Each index is popped at most
+	// once per stack, even when an ID match invalidates an entry in another.
+	const allPre: number[] = [];
+	const preByName = new Map<string, number[]>();
+	const preById = new Map<string, number[]>();
 	const matchedPre = new Set<number>();
+	const takeLatest = (stack?: number[]) => {
+		while (stack?.length) {
+			const index = stack.pop()!;
+			if (!matchedPre.has(index)) return index;
+		}
+		return undefined;
+	};
+
 	for (const [index, event] of events.entries()) {
-		if (!isOutcome(eventName(event))) continue;
+		const name = eventName(event);
+		if (name === "hook_pretooluse") {
+			allPre.push(index);
+			const toolName = event.attributes?.tool_name;
+			if (toolName) {
+				if (!preByName.has(toolName)) preByName.set(toolName, []);
+				preByName.get(toolName)!.push(index);
+			}
+			const id = event.attributes?.tool_use_id;
+			if (id) {
+				if (!preById.has(id)) preById.set(id, []);
+				preById.get(id)!.push(index);
+			}
+			continue;
+		}
+		if (!isOutcome(name)) continue;
+
 		const id = event.attributes?.tool_use_id;
 		const explicitName = event.attributes?.tool_name;
-		let preIndex = id ? preById.get(id) : undefined;
-		if (preIndex === undefined) {
-			// Some parsers omit the ID on results. Pair only with an earlier,
-			// unmatched pre-use of the same name, or the nearest one if unnamed.
-			preIndex = preEvents.findLast(
-				({ event: pre, index: i }) =>
-					i < index &&
-					!matchedPre.has(i) &&
-					(!explicitName || pre.attributes?.tool_name === explicitName),
-			)?.index;
-		}
+		// A present ID is authoritative: never attach an outcome to a pre-use
+		// with another ID, even if its tool name matches.
+		const preIndex = id
+			? takeLatest(preById.get(id))
+			: takeLatest(explicitName ? preByName.get(explicitName) : allPre);
 		if (preIndex !== undefined) matchedPre.add(preIndex);
-		const name = explicitName || (preIndex !== undefined && events[preIndex].attributes?.tool_name) || "unknown";
-		counts.set(name, (counts.get(name) || 0) + 1);
+		const toolName = explicitName || (preIndex !== undefined && events[preIndex].attributes?.tool_name) || "unknown";
+		counts.set(toolName, (counts.get(toolName) || 0) + 1);
 	}
-	for (const { event, index } of preEvents) {
-		if (matchedPre.has(index)) continue;
+	for (const [index, event] of events.entries()) {
+		if (eventName(event) !== "hook_pretooluse" || matchedPre.has(index)) continue;
 		const name = event.attributes?.tool_name || "unknown";
 		counts.set(name, (counts.get(name) || 0) + 1);
 	}
