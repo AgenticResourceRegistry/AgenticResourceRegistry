@@ -6,10 +6,13 @@
 import hashlib
 import json
 import tomllib
+from pathlib import Path
 
 import pytest
+import typer
+from typer.testing import CliRunner
 
-from observal_cli import layer
+from observal_cli import cmd_scan, layer
 from observal_cli.harness import ensure_loaded, get_adapter
 
 
@@ -112,6 +115,78 @@ def test_project_trust_and_unrecorded_runtime_are_fail_closed(tmp_path, monkeypa
     with pytest.raises(ValueError, match="tested"):
         adapter.configure_tracked_mcp("user", str(project), "probe", snippet)
     assert not (home / ".codex/config.toml").exists()
+
+
+@pytest.mark.parametrize("scope", ["project", "user"])
+def test_stdio_env_is_bound_to_new_receipts_and_old_unbound_receipts_are_not_trusted(tmp_path, monkeypatch, scope):
+    home, project, adapter = isolated(tmp_path, monkeypatch)
+    if scope == "project":
+        trusted = home / ".codex/config.toml"
+        trusted.parent.mkdir()
+        trusted.write_text(f'[projects."{project.resolve()}"]\ntrust_level = "trusted"\n')
+    secret = "TEST_ONLY_ENV_VALUE_NEVER_PUBLISH"
+    entry = {"command": "inert", "args": ["fixture"], "env": {"TOKEN": secret}}
+    adapter.configure_tracked_mcp(scope, str(project), "probe", {"mcp_servers": {"probe": entry}})
+    config = project / ".codex/config.toml" if scope == "project" else home / ".codex/config.toml"
+    status, pin = layer.verify_installed_mcp("codex", scope, str(project), "probe")
+    assert status == "verified" and pin and secret not in pin
+    old_unbound_pin = layer.mcp_entry_fingerprint(entry)  # e531ba674 receipt; env was omitted.
+    assert old_unbound_pin != pin
+    assert layer.verify_installed_mcp("codex", scope, str(project), "probe", old_unbound_pin)[0] == "drifted"
+    manifest = layer.build_layer_manifest("codex", str(project), include_content=True, registry_data={"harnesses": {}})
+    assert secret not in json.dumps(manifest)
+    assert next(item for item in manifest if item["path"] == adapter.mcp_manifest_path(scope))["content"] == ""
+    config.write_text(config.read_text().replace(secret, "TEST_ONLY_ENV_VALUE_CHANGED"))
+    assert layer.verify_installed_mcp("codex", scope, str(project), "probe", pin)[0] == "drifted"
+    assert secret not in str(layer.verify_installed_mcp("codex", scope, str(project), "probe", pin))
+
+
+def test_codex_empty_env_and_other_harness_receipts_remain_compatible():
+    entry = {"command": "inert", "args": [], "env": {}}
+    assert layer.mcp_entry_fingerprint(entry, harness="codex") == layer.mcp_entry_fingerprint(entry)
+    entry["env"] = {"TOKEN": "inert"}
+    assert layer.mcp_entry_fingerprint(entry, harness="claude-code") == layer.mcp_entry_fingerprint(entry)
+    assert layer.mcp_entry_fingerprint(entry, harness="codex") != layer.mcp_entry_fingerprint(entry)
+
+
+def test_legacy_only_table_cannot_verify_the_exact_same_old_pin(tmp_path, monkeypatch):
+    home, project, adapter = isolated(tmp_path, monkeypatch)
+    entry = {"command": "inert", "args": [], "env": {}}
+    adapter.configure_tracked_mcp("user", str(project), "probe", {"mcp_servers": {"probe": entry}})
+    config = home / ".codex/config.toml"
+    status, pin = layer.verify_installed_mcp("codex", "user", str(project), "probe")
+    assert status == "verified" and pin
+    config.write_text(config.read_text().replace("[mcp_servers.", "[mcp.servers."))
+    legacy = tomllib.loads(config.read_text())["mcp"]["servers"]["probe"]
+    assert layer.mcp_entry_fingerprint(legacy, harness="codex") == pin
+    assert adapter.read_installed_mcp("user", str(project), "probe")[0] == "unverified"
+    assert layer.verify_installed_mcp("codex", "user", str(project), "probe", pin) == ("unverified", None)
+    with pytest.raises(ValueError, match="alias"):
+        adapter.configure_tracked_mcp("user", str(project), "probe", {"mcp_servers": {"probe": entry}})
+    config.write_text(config.read_text() + '\n[mcp_servers.probe]\ncommand = "inert"\n')
+    assert layer.verify_installed_mcp("codex", "user", str(project), "probe", pin)[0] == "unverified"
+
+
+@pytest.mark.parametrize("scope", ["project", "user"])
+def test_scan_command_discovers_new_canonical_codex_installs(tmp_path, monkeypatch, scope):
+    home, project, adapter = isolated(tmp_path, monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.chdir(project)
+    if scope == "project":
+        trusted = home / ".codex/config.toml"
+        trusted.parent.mkdir()
+        trusted.write_text(f'[projects."{project.resolve()}"]\ntrust_level = "trusted"\n')
+    adapter.configure_tracked_mcp(
+        scope, str(project), "canonical_probe", {"mcp_servers": {"canonical_probe": {"command": "inert"}}}
+    )
+    scan_result = adapter.scan_project(project) if scope == "project" else adapter.scan_home(home)
+    assert [m.name for m in scan_result.mcps] == ["canonical_probe"]
+    app = typer.Typer()
+    cmd_scan.register_scan(app)
+    result = CliRunner().invoke(app, ["--harness", "codex", "--output", "json"])
+    assert result.exit_code == 0, type(result.exception).__name__ if result.exception else result.output
+    matches = [m for m in json.loads(result.stdout)["mcps"] if m["name"] == "canonical_probe"]
+    assert len(matches) == 1 and matches[0]["source"] == f"codex:{scope if scope == 'project' else 'global'}"
 
 
 def test_existing_url_only_receipts_keep_their_historical_fingerprint():

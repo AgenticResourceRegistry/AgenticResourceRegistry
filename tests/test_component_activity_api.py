@@ -386,7 +386,7 @@ async def test_activity_sql_binds_scoped_key_current_version_and_component(monke
     assert "a.component_id = {component_id:String}" in summary_sql
     assert "countIf(status = 'failed') = 0" in summary_sql
     assert captured[0][1]["param_projection_version"] == queries.publication_version()
-    assert captured[0][1]["param_supported"] == "['claude-code','pi']"
+    assert captured[0][1]["param_supported"] == "['claude-code','codex','pi']"  # Codex extractor gates native versions.
     page_sql, page_params = captured[-1]
     # Source availability reads only sizes/flags server-side; raw text is never selected.
     assert "empty(raw_line)" in page_sql

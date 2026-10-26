@@ -101,7 +101,7 @@ class CodexAdapter(BaseAdapter):
     def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
         import tomllib
 
-        from .codex_mcp_binding import codex_http_install_entry, read_toml_mcp
+        from .codex_mcp_binding import codex_http_install_entry, read_toml_mcp, stdio_install_entry
 
         if scope not in {"user", "project"} or not directory:
             return "unverified", None
@@ -116,9 +116,12 @@ class CodexAdapter(BaseAdapter):
         shadow, _ = read_toml_mcp(other, alias)
         if shadow != "missing":
             return "unverified", None
-        if status == "verified" and entry is not None and "url" in entry:
+        if status == "verified" and entry is not None:
             try:
-                codex_http_install_entry({"mcp_servers": {alias: entry}}, alias)
+                if "url" in entry:
+                    codex_http_install_entry({"mcp_servers": {alias: entry}}, alias)
+                else:
+                    stdio_install_entry({"mcp_servers": {alias: entry}}, "mcp_servers", alias)
             except ValueError:
                 return "unverified", None
         if scope == "project":
@@ -245,7 +248,7 @@ class CodexAdapter(BaseAdapter):
             return ScanResult()
         try:
             data = _load_toml(config_file)
-            servers = data.get("mcp", {}).get("servers", {})
+            servers = self.extract_mcp_servers(data)
             mcps = []
             for srv_name, srv_config in servers.items():
                 if isinstance(srv_config, dict):
@@ -269,7 +272,7 @@ class CodexAdapter(BaseAdapter):
             return ScanResult()
         try:
             data = _load_toml(config_file)
-            servers = data.get("mcp", {}).get("servers", {})
+            servers = self.extract_mcp_servers(data)
             mcps = []
             for srv_name, srv_config in servers.items():
                 if isinstance(srv_config, dict):
@@ -379,9 +382,12 @@ class CodexAdapter(BaseAdapter):
         return "missing"
 
     def extract_mcp_servers(self, config: dict) -> dict:
+        canonical = config.get("mcp_servers")
+        if isinstance(canonical, dict):
+            return canonical
         mcp = config.get("mcp", {})
         if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
-            return mcp["servers"]
+            return mcp["servers"]  # Inventory only; never a verified Codex pin.
         return super().extract_mcp_servers(config)
 
     def patch_hooks(self, dry_run: bool) -> bool:

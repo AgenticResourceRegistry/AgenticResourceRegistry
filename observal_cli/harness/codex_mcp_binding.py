@@ -48,9 +48,12 @@ def read_toml_mcp(path: Path, alias: str) -> tuple[str, dict | None]:
         legacy is not None and not isinstance(legacy, dict)
     ):
         return "unverified", None
-    if isinstance(canonical, dict) and alias in canonical and isinstance(legacy, dict) and alias in legacy:
+    # Tracked Codex installs use only native mcp_servers. The legacy table
+    # may be discoverable for inventory, but cannot establish active presence
+    # or a no-call denominator (even when its old fingerprint still matches).
+    if isinstance(legacy, dict) and alias in legacy:
         return "unverified", None
-    servers = canonical if isinstance(canonical, dict) and alias in canonical else legacy or {}
+    servers = canonical if isinstance(canonical, dict) else {}
     if alias not in servers:
         return "missing", None
     entry = servers[alias]

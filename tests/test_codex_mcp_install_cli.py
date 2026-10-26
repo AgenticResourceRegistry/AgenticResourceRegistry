@@ -15,7 +15,7 @@ from observal_cli.errors import CliError, ErrorCategory
 LISTING_ID = "11111111-1111-4111-8111-111111111111"
 
 
-def isolated_install(tmp_path, monkeypatch, *, transport="stdio"):
+def isolated_install(tmp_path, monkeypatch, *, transport="stdio", stdio_env: str | None = None):
     home, project = tmp_path / "home", tmp_path / "project"
     home.mkdir()
     project.mkdir()
@@ -37,7 +37,7 @@ def isolated_install(tmp_path, monkeypatch, *, transport="stdio"):
         "namespace": "first",
         "slug": "probe",
         "version": "0.1.0",
-        "environment_variables": [],
+        "environment_variables": ([{"name": "CONTROL_CHANNEL", "required": True}] if stdio_env else []),
         "headers": [],
     }
     if transport != "stdio":
@@ -50,7 +50,7 @@ def isolated_install(tmp_path, monkeypatch, *, transport="stdio"):
         entry = (
             {"url": "https://example.test/mcp", "http_headers": body["header_values"]}
             if transport != "stdio"
-            else {"command": "inert", "args": [], "env": {}}
+            else {"command": "inert", "args": [], "env": body["env_values"]}
         )
         return {
             "listing_id": LISTING_ID,
@@ -127,6 +127,45 @@ def test_http_version_detail_is_fetched_when_listing_omits_transport(tmp_path, m
         )
     assert fetch.call_args_list[1].args[0] == f"/api/v1/mcps/{LISTING_ID}/versions/0.1.0"
     assert not (home / ".codex/config.toml").exists()
+
+
+@pytest.mark.parametrize("mutation,expected_status", [("env", "drifted"), ("legacy", "unverified")])
+def test_registry_stdio_receipt_loses_presence_after_env_or_active_table_drift(
+    tmp_path, monkeypatch, mutation, expected_status
+):
+    import tomllib
+
+    home, project, outputs = isolated_install(tmp_path, monkeypatch, stdio_env="inert-initial")
+    mcp._install_impl(
+        "first/probe",
+        "codex",
+        False,
+        apply=True,
+        directory=str(project),
+        scope="user",
+        env_overrides={"CONTROL_CHANNEL": "inert-initial"},
+        no_prompt=True,
+        output="json",
+    )
+    receipt = outputs[-1]
+    _, registry = lockfile.read_registry_lockfile()
+    pin = registry["harnesses"]["codex"]["standalone"][0]["mcp_integrity"]
+    assert receipt["layer_hash"] and pin
+    config = home / ".codex/config.toml"
+    before = layer.build_upload_payload(project_dir=str(project))
+    assert before["drift"]["mcp_verifications"][0]["status"] == "verified"
+    if mutation == "env":
+        config.write_text(config.read_text().replace("inert-initial", "inert-changed"))
+    else:
+        config.write_text(config.read_text().replace("[mcp_servers.", "[mcp.servers."))
+        original = tomllib.loads(config.read_text())["mcp"]["servers"]["probe"]
+        assert layer.mcp_entry_fingerprint(original, harness="codex") == pin
+    assert layer.verify_installed_mcp("codex", "user", str(project), "probe", pin)[0] == expected_status
+    after = layer.build_upload_payload(project_dir=str(project))
+    assert after["hash"] != before["hash"]
+    assert after["drift"]["mcp_verifications"][0]["status"] == expected_status
+    assert after["drift"]["is_canonical"] is (False if mutation == "env" else None)
+    assert "inert-initial" not in str(before) + str(after) + str(outputs)
 
 
 def test_registry_http_install_pins_headers_without_exposing_values(tmp_path, monkeypatch):
