@@ -134,19 +134,37 @@ const STORAGE_KEY_USER_AVATAR = "observal_user_avatar";
 // TODO(SEC-025): migrate to HttpOnly cookies set by the API and proxied
 // through nginx to reduce token exfiltration risk. HttpOnly does not prevent
 // authenticated requests from XSS payloads, so retain XSS and CSRF defenses.
+function normalizeToken(token: string | null | undefined): string | null {
+	if (typeof token !== "string") return null;
+	const trimmed = token.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
 function getAccessToken(): string | null {
 	if (typeof window === "undefined") return null;
-	return sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN);
+	return normalizeToken(sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN));
 }
 
 function getRefreshToken(): string | null {
 	if (typeof window === "undefined") return null;
-	return localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
+	return normalizeToken(localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN));
 }
 
 export function setTokens(accessToken: string, refreshToken: string) {
-	sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, accessToken);
-	localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refreshToken);
+	const access = normalizeToken(accessToken);
+	const refresh = normalizeToken(refreshToken);
+
+	if (access) {
+		sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, access);
+	} else {
+		sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+	}
+
+	if (refresh) {
+		localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refresh);
+	} else {
+		localStorage.removeItem(STORAGE_KEY_REFRESH_TOKEN);
+	}
 	window.dispatchEvent(new Event("storage"));
 }
 
