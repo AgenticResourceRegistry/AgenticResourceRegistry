@@ -5,6 +5,7 @@
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,6 +281,10 @@ jobs:
       - name: TypeScript typecheck
         if: needs.changes.outputs.web == 'true'
         run: pnpm run typecheck
+
+      - name: Trace metric regression tests
+        if: needs.changes.outputs.web == 'true'
+        run: node --experimental-strip-types --test tests/trace-tool-usage.test.mjs
 
 # ── Job 4b: Pi extension tests ────────────────────────────────────────────────
   pi-extension:
