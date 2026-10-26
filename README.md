@@ -109,7 +109,8 @@ This downloads a Docker Compose package, generates operator-owned secret files w
 
 Deployment docs are linked directly from this README:
 
-- [Setup guide](SETUP.md): fastest path from zero to a working stack
+- [One-line installation guide](docs/getting-started/installation.md): packaged URLs, generated credentials, and first login
+- [Setup guide](SETUP.md): source Compose setup for development (`http://localhost`, not the one-line install's `:8000`)
 - [Self-hosting overview](docs/self-hosting/index.md): deployment models and operator docs
 - [Production deployment](docs/self-hosting/production-deploy.md): hardened production topology
 - [Databases](docs/self-hosting/databases.md): Postgres, ClickHouse, migrations, retention

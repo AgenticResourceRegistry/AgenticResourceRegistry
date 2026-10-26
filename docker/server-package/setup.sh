@@ -191,12 +191,24 @@ fi
 
 info "Starting Observal services"
 cd "$INSTALL_DIR"
-docker compose "${profile_args[@]}" "${compose_args[@]}" --env-file .env up -d --wait --wait-timeout 300
+# Bash 3.2 (the macOS default) treats an empty "${array[@]}" as unbound under set -u.
+docker compose ${profile_args[@]+"${profile_args[@]}"} "${compose_args[@]}" --env-file .env up -d --wait --wait-timeout 300
 
-docker compose "${profile_args[@]}" "${compose_args[@]}" restart observal-lb
+docker compose ${profile_args[@]+"${profile_args[@]}"} "${compose_args[@]}" restart observal-lb
 
 info "Observal is running"
 info "Dashboard: $FRONTEND_URL"
+API_HOST_PORT=$(env_value API_HOST_PORT)
+API_HOST_PORT="${API_HOST_PORT:-8000}"
+case "$OBSERVAL_BIND_ADDRESS" in
+    127.0.0.1 | 0.0.0.0 | ::1) API_HOST="localhost" ;;
+    *) API_HOST="$OBSERVAL_BIND_ADDRESS" ;;
+esac
+info "Server URL on this machine: http://$API_HOST:$API_HOST_PORT"
+info "Health check: curl http://$API_HOST:$API_HOST_PORT/health"
+if [ "$OBSERVAL_BIND_ADDRESS" = "0.0.0.0" ]; then
+    warn "Remote clients must use this machine's hostname instead of localhost."
+fi
 info "HTTP bind address: $OBSERVAL_BIND_ADDRESS"
 info "Config: $ENV_FILE"
 printf '\nInitial administrator:\n  Email: %s\n  Password: %s\n  Password file: %s\n' \

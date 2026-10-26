@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Installation"
 ---
@@ -21,7 +22,13 @@ The server runs as a Docker Compose stack (API, web UI, PostgreSQL, ClickHouse, 
 curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
 ```
 
-This downloads a config package, runs guided setup (domain, secrets, ports), pulls container images from GHCR, and starts the full stack.
+This downloads a config package, asks for the frontend URL and bind address, generates secret files, pulls container images from GHCR, and starts the stack. With the default answers:
+
+- Open the dashboard at `http://localhost:3000`; set the **Frontend URL** prompt to the address you will actually open in your browser. This configures the frontend/CORS origin, **not** the published port.
+- Use `http://localhost:8000` as the CLI server URL. Check the API with `curl http://localhost:8000/health`.
+- Log in as `super@demo.example` using the generated password printed by setup (also stored in `secrets/demo_super_admin_password` under the install directory: `~/.observal` on macOS, `/opt/observal` on Linux). Change it after logging in.
+
+Self-registration is off by default. To give someone a personal account after logging in as an administrator, run `observal admin create-user alice@example.com 'Alice Smith' --role user`. See [user management](/cli/admin) and [self-registration settings](/self-hosting/authentication) for other options. The [quickstart](/getting-started/quickstart) uses the **source Compose stack**, which instead serves the API at `http://localhost` and uses example passwords from `.env.example`.
 
 **From source** (for contributors):
 
