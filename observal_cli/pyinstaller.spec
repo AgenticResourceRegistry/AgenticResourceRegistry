@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # -*- mode: python ; coding: utf-8 -*-
@@ -28,6 +29,7 @@ a = Analysis(
             str(repo_root / "packages" / "observal-shared" / "observal_shared" / "harness_models"),
             "observal_shared/harness_models",
         ),
+        (str(cli_dir / "skills"), "observal_cli/skills"),
     ],
     hiddenimports=[
         "observal_cli.sandbox_runner",
