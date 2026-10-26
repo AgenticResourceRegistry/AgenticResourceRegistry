@@ -31,7 +31,7 @@ from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_MCP_CATEGORIES
 from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
-from observal_cli.prompts import fuzzy_select, select_one, text_input
+from observal_cli.prompts import fuzzy_select, password_input, select_one, text_input
 from observal_cli.render import (
     OutputMode,
     console,
@@ -1097,6 +1097,146 @@ def _install_input_definitions(listing: dict, field: str, kind: str) -> list[dic
     return definitions
 
 
+def _apply_codex_mcp(
+    *,
+    adapter,
+    directory: str,
+    scope: str,
+    resolved: str,
+    listing: dict,
+    result: dict,
+    local_name: str,
+    version: str | None,
+    output: OutputMode,
+) -> None:
+    """Pin exactly one native Codex entry; never record an unverified receipt."""
+    from observal_cli.layer import ensure_local_snapshot, get_local_snapshot, verify_installed_mcp
+    from observal_cli.lockfile import upsert_standalone
+
+    selected_version, alias = result.get("selected_version"), result.get("local_name")
+    if (
+        not isinstance(selected_version, str)
+        or not selected_version
+        or not isinstance(alias, str)
+        or alias != local_name
+        or (version and version != selected_version)
+        or str(result.get("listing_id") or resolved) != str(resolved)
+    ):
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Server did not return a verifiable MCP configuration, alias and version.",
+            operation="Install MCP server",
+            resource="install configuration",
+            remediation="Update the server and retry; snippet mode remains available.",
+        )
+    target_dir = Path(directory).resolve()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        undo = adapter.configure_tracked_mcp(scope, str(target_dir), alias, result.get("config_snippet", {}))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Native Codex MCP setup could not be verified.",
+            operation="Install MCP server",
+            resource="Codex MCP settings",
+            remediation="Check trust, scope and alias collisions; no registry identity was recorded.",
+            detail=type(error).__name__,
+        )
+
+    def restore_unpinned_config() -> bool:
+        try:
+            return undo.rollback()
+        except (OSError, ValueError):
+            return False  # A concurrent edit must never be overwritten.
+
+    status, integrity = verify_installed_mcp("codex", scope, str(target_dir), alias)
+    if status != "verified" or integrity is None:
+        restored = restore_unpinned_config()
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Installed Codex MCP entry could not be verified.",
+            operation="Install MCP server",
+            resource="Codex MCP settings",
+            remediation=(
+                "Original settings restored; no registry identity was recorded."
+                if restored
+                else "Inspect the native config manually; no registry identity was recorded."
+            ),
+        )
+    receipt_written = False
+    try:
+        upsert_standalone(
+            "codex",
+            component_type="mcp",
+            name=listing["name"],
+            component_id=str(result.get("listing_id") or resolved),
+            version=selected_version,
+            scope=scope,
+            directory=str(target_dir),
+            integrity=None,
+            namespace=listing.get("namespace"),
+            slug=listing.get("slug"),
+            local_name=alias,
+            mcp_integrity=integrity,
+        )
+        receipt_written = True
+        snapshot_hash = ensure_local_snapshot(project_dir=str(target_dir))
+    except (OSError, RuntimeError, ValueError) as error:
+        restored = restore_unpinned_config() if not receipt_written else False
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Codex MCP configuration succeeded but tracking or snapshot failed.",
+            operation="Install MCP server",
+            resource="Observal lockfile or snapshot",
+            remediation=(
+                "Original settings restored; no registry identity was recorded."
+                if restored
+                else "Inspect the native config and lockfile; the snapshot was not verified."
+            ),
+            detail=type(error).__name__,
+        )
+    snapshot = get_local_snapshot()
+    drift = snapshot.get("drift") if isinstance(snapshot, dict) else None
+    checks = drift.get("mcp_verifications", []) if isinstance(drift, dict) else []
+    matching = [
+        check
+        for check in checks
+        if isinstance(check, dict)
+        and check.get("harness") == "codex"
+        and check.get("component_id") == str(resolved)
+        and check.get("alias") == alias
+        and check.get("scope") == scope
+        and not check.get("parent_agent_id")
+    ]
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("hash") != snapshot_hash
+        or len(matching) != 1
+        or matching[0]["status"] != "verified"
+    ):
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Codex MCP registration cannot be verified in its layer snapshot.",
+            operation="Install MCP server",
+            resource="layer snapshot",
+            remediation="Check effective config and snapshot limits before retrying.",
+        )
+    if output == "json":
+        output_json(
+            {
+                "listing_id": str(result.get("listing_id") or resolved),
+                "harness": "codex",
+                "version": selected_version,
+                "local_name": alias,
+                "scope": scope,
+                "target_directory": str(target_dir),
+                "layer_hash": snapshot_hash,
+            }
+        )
+    else:
+        rprint(f"[green]Installed and verified[/green] {esc(alias)} ({esc(scope)}) in {esc(str(target_dir))}")
+
+
 def _install_impl(
     mcp_id,
     harness,
@@ -1113,13 +1253,15 @@ def _install_impl(
     scope: str | None = None,
 ):
     optic.trace("mcp_id={}, harness={}, version={}", mcp_id, harness, version)
-    if apply and (harness != "claude-code" or directory is None or scope not in {"project", "user"} or raw):
+    if apply and (
+        harness not in {"claude-code", "codex"} or directory is None or scope not in {"project", "user"} or raw
+    ):
         fail(
             ErrorCategory.VALIDATION,
-            "Tracked install requires Claude Code, --dir, --scope and no --raw.",
+            "Tracked install requires Claude Code or Codex, --dir, --scope and no --raw.",
             operation="Install MCP server",
             resource="tracked install",
-            remediation="Use --apply --harness claude-code --dir DIR --scope project|user, or omit --apply for a snippet.",
+            remediation="Use --apply --harness claude-code|codex --dir DIR --scope project|user, or omit --apply.",
         )
     import json as _json
 
@@ -1129,10 +1271,22 @@ def _install_impl(
     fetch_context = nullcontext() if machine_output else spinner("Fetching server details...")
     with fetch_context:
         listing = client.get(f"/api/v1/mcps/{resolved}")
-        # Required inputs come from the version that will be installed, not the latest listing.
-        spec = client.get(f"/api/v1/mcps/{resolved}/versions/{version}") if version else listing
+        # The listing summary omits transport. Fetch the selected Codex HTTP
+        # version so SSE and unknown transport cannot be recorded as verified.
+        spec_version = version or (
+            listing.get("version") if apply and harness == "codex" and listing.get("url") else None
+        )
+        spec = client.get(f"/api/v1/mcps/{resolved}/versions/{spec_version}") if spec_version else listing
     env_var_list = _install_input_definitions(spec, "environment_variables", "environment_variable")
     header_list = _install_input_definitions(spec, "headers", "header")
+    if apply and harness == "codex" and spec.get("url") and spec.get("transport") != "streamable-http":
+        fail(
+            ErrorCategory.VALIDATION,
+            "Tracked Codex HTTP installation requires a streamable-http listing.",
+            operation="Install MCP server",
+            resource="Codex HTTP MCP transport",
+            remediation="Check the selected version's transport; SSE/unknown HTTP remains snippet-only.",
+        )
 
     # Build env overrides from --env flags and --env-file
     _env_from_flags: dict[str, str] = dict(env_overrides) if env_overrides else {}
@@ -1212,7 +1366,9 @@ def _install_impl(
             else:
                 env_values[ev["name"]] = f"<{ev['name']}>"
 
-    # Prompt for headers (SSE/HTTP servers with auth)
+    # Tracked Codex HTTP headers may be credentials. Hide interactive input;
+    # --header CLI arguments and --raw snippet output are not secret-safe.
+    secure_http_headers = bool(apply and harness == "codex" and spec.get("url"))
     header_values: dict[str, str] = {}
     if header_list and not skip_prompts:
         required_headers = [h for h in header_list if h.get("required", True)]
@@ -1225,7 +1381,8 @@ def _install_impl(
                     rprint(f"  [green]✓[/green] {h['name']} [dim](from --header)[/dim]")
                 else:
                     desc = f" [dim]({h['description']})[/dim]" if h.get("description") else ""
-                    val = text_input(f"  {h['name']}{desc}")
+                    prompt = f"  {h['name']}{desc}"
+                    val = password_input(prompt) if secure_http_headers else text_input(prompt)
                     header_values[h["name"]] = val
         if optional_headers:
             rprint(f"\n[dim]{len(optional_headers)} optional header(s) available:[/dim]")
@@ -1235,7 +1392,8 @@ def _install_impl(
                     rprint(f"  [green]✓[/green] {h['name']} [dim](from --header)[/dim]")
                 else:
                     desc = f" [dim]({h['description']})[/dim]" if h.get("description") else ""
-                    val = text_input(f"  {h['name']}{desc} (press Enter to skip)", default="")
+                    prompt = f"  {h['name']}{desc} (press Enter to skip)"
+                    val = password_input(prompt) if secure_http_headers else text_input(prompt, default="")
                     if val:
                         header_values[h["name"]] = val
     elif header_list and skip_prompts:
@@ -1284,6 +1442,22 @@ def _install_impl(
         )
 
     snippet = result.get("config_snippet", {})
+    if apply and harness == "codex":
+        from observal_cli.harness import ensure_loaded, get_adapter
+
+        ensure_loaded()
+        assert directory is not None and scope is not None
+        return _apply_codex_mcp(
+            adapter=get_adapter("codex"),
+            directory=directory,
+            scope=scope,
+            resolved=resolved,
+            listing=listing,
+            result=result,
+            local_name=local_name,
+            version=version,
+            output=output,
+        )
     if apply:
         from observal_cli.layer import ensure_local_snapshot, get_local_snapshot, verify_installed_mcp
         from observal_cli.lockfile import upsert_standalone
@@ -1673,14 +1847,19 @@ def install(
     env_file: str | None = typer.Option(None, "--env-file", help="Path to .env file for environment variables"),
     no_prompt: bool = typer.Option(False, "--no-prompt", "-y", help="Skip interactive prompts"),
     apply: bool = typer.Option(
-        False, "--apply", help="Configure and track a Claude Code MCP instead of printing a snippet"
+        False, "--apply", help="Configure and track a tested Claude Code or Codex MCP instead of a snippet"
     ),
     directory: str | None = typer.Option(None, "--dir", "-d", help="Explicit target directory for --apply"),
     scope: str | None = typer.Option(None, "--scope", help="Explicit project or user install scope for --apply"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
-    """Generate a snippet, or with --apply configure and track a Claude Code MCP.
+    """Generate a snippet, or track a scoped Claude Code or Codex MCP.
 
+    --apply needs --dir and --scope project|user; verified installation is not
+    proof of use. Tested Codex CLI runtimes support stdio and guarded
+    streamable HTTP with literal http_headers. Enter credential headers with
+    the hidden interactive prompt, not --header (visible in shell history).
+    Other Codex HTTP auth modes remain unsupported for tracked installation.
     Produces harness-specific configuration that you paste into your editor's
     MCP settings file. Prompts for required environment variables and
     headers interactively (unless --raw or --no-prompt is used).

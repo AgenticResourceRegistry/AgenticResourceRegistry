@@ -28,8 +28,9 @@ class ProjectionRaceError(RuntimeError):
 # 2: activity rows carry evidence_kind and publications evidence_type.
 # 3: hook extraction excludes Observal telemetry hooks from unmatched candidates.
 PROJECTION_VERSION = 3
-# 2: result-link ordering changed. 3: harness-reported server identity (Pi).
-MATCHER_VERSION = 3
+# 2: result-link ordering. 3: Pi server identity. 4: Codex native
+# McpToolCall outcome and timestamp, with unknown lifecycle vetoing a session.
+MATCHER_VERSION = 4
 MAX_SOURCE_RECORDS = 50_000
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 

@@ -76,6 +76,8 @@ def _check_headless(harness_name: str) -> None:
 if TYPE_CHECKING:
     from observal_cli.discovery.models import AdapterDiscoveryResult
 
+    from .codex_mcp_binding import McpConfigUndo
+
 
 def _get_features(harness_name: str) -> set[str]:
     """Look up the feature set for an harness from the registry."""
@@ -123,6 +125,7 @@ class BaseAdapter:
     managed_agent_profiles: tuple[str, ...] = ()
     managed_skills: tuple[str, ...] = ()
     managed_mcp_files: tuple[str, ...] = ()
+    tracked_mcp_scopes: tuple[str, ...] = ()
 
     @property
     def harness_name(self) -> str:
@@ -138,6 +141,11 @@ class BaseAdapter:
     def prepare_mcp_setup_command(self, command: list[str], scope: str) -> list[str]:
         """Return the harness-native setup command with its requested install scope."""
         return command
+
+    def configure_tracked_mcp(self, scope: str, directory: str, alias: str, snippet: dict) -> McpConfigUndo | None:
+        """Write one unambiguous native MCP entry or refuse it before pinning."""
+        _check_feature(self.harness_name, "configure_tracked_mcp")
+        raise NotSupportedError(self.harness_name, "configure_tracked_mcp")
 
     def mcp_manifest_path(self, scope: str) -> str | None:
         """Return the safe file-manifest location needed to verify this MCP scope."""

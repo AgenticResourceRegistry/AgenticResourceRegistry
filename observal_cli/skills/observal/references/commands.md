@@ -178,7 +178,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry mcp sync status`: Show webhook sync settings and the result of the last sync.
   - `observal registry mcp submit`: Submit an MCP server to the registry.
   - `observal registry mcp show`: Show full details of an MCP server.
-  - `observal registry mcp install`: Generate a snippet, or with --apply configure and track a Claude Code MCP.
+  - `observal registry mcp install`: Generate a snippet, or with `--apply --dir DIR --scope project|user` configure and track a verified Claude Code or tested Codex MCP install. Codex supports scoped stdio and guarded streamable HTTP with hidden interactive credential headers; a receipt is not proof of use.
   - `observal registry mcp archive`: Archive this component.
   - `observal registry mcp edit`: Edit an MCP server submission.
   - `observal registry mcp fork`: Fork an approved mcp release into your own editable draft.

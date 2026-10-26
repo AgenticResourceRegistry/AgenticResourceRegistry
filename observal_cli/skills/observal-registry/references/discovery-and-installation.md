@@ -79,6 +79,7 @@ Choose the exact harness and scope before writing files.
 ```bash
 observal registry mcp install NAMESPACE/SLUG --harness claude-code --apply --dir ./project --scope project --no-prompt --output json
 observal registry mcp install NAMESPACE/SLUG --harness claude-code --apply --dir ./project --scope user --version 2.1.0 --no-prompt --output json
+observal registry mcp install NAMESPACE/SLUG --harness codex --apply --dir ./project --scope project --version 2.1.0 --no-prompt --output json
 # Without --apply, MCP install only generates a snippet and does not track a local install.
 observal registry mcp install NAMESPACE/SLUG --harness kiro --no-prompt --output json
 observal registry mcp install NAMESPACE/SLUG --harness cursor --version 2.1.0 --no-prompt --output json
@@ -94,7 +95,7 @@ observal registry hook install NAMESPACE/SLUG --harness claude-code --platform d
 observal registry hook install NAMESPACE/SLUG --harness claude-code --version 1.0.0 --dir . --output json
 ```
 
-Tracked `--apply` MCP installs currently support Claude Code only and require both `--dir` and `--scope`; other harnesses retain snippet-only installs. A snippet does not prove installed identity or observed use. Use raw output only when the user explicitly asks for a config snippet or raw response:
+Tracked `--apply` MCP installs require `--dir` and `--scope project|user`. Claude Code and Codex support them; other harnesses remain snippet-only. Codex tracked installs are gated to tested CLI versions 0.163.0 and 0.164.0, canonical home/project settings and verified stdio or streamable-HTTP entries. Project settings must be trusted. HTTP supports literal native `http_headers`; SSE, unknown transports, bearer-token environment mapping and HTTP environment-variable values cannot be tracked. Supply credential headers via the hidden interactive prompt, **not** `--header` (visible in shell history) or `--raw`; avoid `--no-prompt` for required private headers. A receipt proves verified installation, never a tool call, and an unmeasured session is not zero. Use raw output only when the user explicitly asks for a config snippet or raw response:
 
 ```bash
 observal registry mcp install NAMESPACE/SLUG --harness claude-code --raw
