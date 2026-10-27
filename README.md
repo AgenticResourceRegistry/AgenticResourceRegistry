@@ -156,7 +156,7 @@ uv tool install observal-cli
 
 ```bash
 observal auth login
-observal doctor --patch
+observal doctor patch
 ```
 
 This authenticates with your server, detects your harness, installs telemetry hooks, starts capturing sessions automatically, and prepares it for agent installs and registry commands.
