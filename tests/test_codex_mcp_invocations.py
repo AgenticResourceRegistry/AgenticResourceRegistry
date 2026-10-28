@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Codex 0.163.0 native MCP records: execute vs denial, spoofing and identity."""
+"""Codex 0.163-0.165 native MCP records: execute vs denial, spoofing and identity."""
 
 import hashlib
 import json
@@ -216,11 +216,31 @@ def test_tested_native_version_supports_both_success_and_executed_error(version)
     assert extract_invocations("codex", _rows(meta, success, denied)).status == "unsupported"
 
 
+def test_codex_0165_native_success_omits_is_error_but_denial_is_unknown():
+    meta, success = _fixture()
+    meta["payload"]["cli_version"] = "0.165.0"
+    success["payload"]["item"]["result"] = {"content": [{"type": "text", "text": "PRIVATE_SENTINEL"}]}
+    extracted = extract_invocations("codex", _rows(meta, success))
+    assert extracted.status == "supported" and [call.result_state for call in extracted.invocations] == ["success"]
+    assert "PRIVATE_SENTINEL" not in str(extracted)
+    _unused, error = _error_fixture()
+    assert [call.result_state for call in extract_invocations("codex", _rows(meta, error)).invocations] == ["error"]
+    denied = json.loads(json.dumps(success))
+    denied["payload"]["item"].update({"status": "failed", "result": None})
+    assert extract_invocations("codex", _rows(meta, denied)).status == "unsupported"
+    for result in ({}, {"content": "text"}, {"content": [], "isError": 1}):
+        invalid = json.loads(json.dumps(success))
+        invalid["payload"]["item"]["result"] = result
+        assert extract_invocations("codex", _rows(meta, invalid)).status == "unsupported"
+    meta["payload"]["cli_version"] = "0.164.0"
+    assert extract_invocations("codex", _rows(meta, success)).status == "unsupported"
+
+
 def test_only_native_item_completed_and_exact_tested_version_are_supported():
     meta, event = _fixture()
     extractor = CodexMCPInvocationExtractor()
     for record in (
-        {**meta, "payload": {**meta["payload"], "cli_version": "0.165.0"}},
+        {**meta, "payload": {**meta["payload"], "cli_version": "0.166.0"}},
         {**meta, "payload": {**meta["payload"], "cwd": "relative/path"}},
     ):
         assert extractor.extract(_rows(record, event)).status == "unsupported"

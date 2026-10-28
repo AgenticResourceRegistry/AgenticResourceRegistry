@@ -52,6 +52,21 @@ def changed(rows_, index, change):
     return items
 
 
+def with_0165_inventory(source):
+    """Sanitized native 0.165.0 inventory followed by permissions instructions."""
+    source = changed(source, 0, lambda r: r["payload"].update(cli_version="0.165.0"))
+    return changed(
+        source,
+        1,
+        lambda r: r["payload"].update(
+            internal_chat_message_metadata_passthrough={
+                "content_item_kinds": ["host_skills.instructions", "permissions.instructions"]
+            },
+            content=[*r["payload"]["content"], {"type": "input_text", "text": "Inert permissions."}],
+        ),
+    )
+
+
 def with_combined_context(source):
     """Sanitized native 0.163.0 AGENTS.md + environment record before the typed turn."""
     context = json.loads(source[2]["raw_line"])
@@ -131,6 +146,20 @@ def test_unrelated_user_root_cannot_make_verified_project_pin_a_no_selection():
         "                     OR ifNull(e.available_facts, 0) > 0))\n"
         "            OR (ifNull(scope_map.user_installs, 0) > 0"
     ) in skill_queries._SKILL_SESSIONS
+
+
+@pytest.mark.parametrize("scope", ["project", "user"])
+def test_0165_native_inventory_and_selection_are_distinct_from_loads(scope):
+    source = rows() if scope == "project" else user_rows()
+    available = extract_skill_evidence("codex", with_0165_inventory(source))
+    assert available.status == "supported"
+    assert [(e.kind, e.scope) for e in available.evidence] == [("available", scope)]
+    source = selected_rows() if scope == "project" else user_rows(selected=True)
+    selected = extract_skill_evidence("codex", with_0165_inventory(source))
+    assert selected.status == "supported"
+    assert [(e.kind, e.scope) for e in selected.evidence] == [("available", scope), ("invoked", scope)]
+    assert all(e.kind != "load" for e in selected.evidence)
+    assert selected.evidence[1].location_sha256 == selected.evidence[0].location_sha256
 
 
 def test_native_selected_skill_has_tagged_project_origin_not_a_file_read():

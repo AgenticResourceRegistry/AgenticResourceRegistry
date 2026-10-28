@@ -3,10 +3,12 @@
 
 """Tested Codex CLI MCP calls from native item-completed records only.
 
-Native ``event_msg`` items identify the configured server, tool, completion
-status and explicit MCP result error flag. An executed tool error has status
-``failed`` with a non-null result whose ``isError`` is true. A denied approval
-also has status ``failed`` but no result: decline the entire session rather
+Native ``event_msg`` items identify the configured server, tool and completion
+status. On 0.163.0/0.164.0, successful results explicitly set ``isError: false``;
+on 0.165.0, successful results omit it but contain an MCP ``content`` list.
+An executed tool error has status ``failed`` with a non-null result whose
+``isError`` is true. A denied approval also has status ``failed`` but no
+result: decline the entire session rather
 than reporting it as a use or measured zero. Model-generated function calls,
 code-mode text, prompts, arguments and result bodies are not identity evidence.
 """
@@ -100,6 +102,26 @@ class CodexMCPInvocationExtractor:
             # A declined permission has no result and cannot supply a call or zero.
             server, tool, call_id = item.get("server"), item.get("tool"), item.get("id")
             result = item.get("result")
+            # Codex 0.165.0 omits isError on a successful native result;
+            # its completed status and explicit content list establish success.
+            # An executed error still carries failed status and isError=true.
+            version = metas[0].get("cli_version") if len(metas) == 1 else None
+            outcome = (item.get("status"), result.get("isError")) if isinstance(result, dict) else None
+            valid_result = (
+                isinstance(result, dict)
+                and type(result.get("isError")) is bool
+                and outcome
+                in (
+                    ("completed", False),
+                    ("failed", True),
+                )
+            )
+            valid_result = valid_result or (
+                version == "0.165.0"
+                and outcome == ("completed", None)
+                and "isError" not in result
+                and isinstance(result.get("content"), list)
+            )
             if (
                 not isinstance(server, str)
                 or not _ALIAS.fullmatch(server)
@@ -108,9 +130,7 @@ class CodexMCPInvocationExtractor:
                 or not isinstance(call_id, str)
                 or not _ID.fullmatch(call_id)
                 or call_id in ids
-                or not isinstance(result, dict)
-                or type(result.get("isError")) is not bool
-                or (item.get("status"), result["isError"]) not in (("completed", False), ("failed", True))
+                or not valid_result
             ):
                 ambiguous = True
                 continue
@@ -127,7 +147,7 @@ class CodexMCPInvocationExtractor:
                     tool,
                     call_id,
                     event_time,
-                    "error" if result["isError"] else "success",
+                    "error" if item["status"] == "failed" else "success",
                     mcp_server=server,
                 )
             )

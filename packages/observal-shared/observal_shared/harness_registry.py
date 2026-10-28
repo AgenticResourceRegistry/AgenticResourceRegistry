@@ -205,13 +205,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
         "display_name": "Codex",
         "capabilities": {"mcp_servers", "hooks", "skills"},
         "session_parser": "codex",
-        # Tested native MCP identities and outcomes on CLI 0.163.0 and 0.164.0.
+        # Tested native MCP identities and outcomes on CLI 0.163.0-0.165.0.
         # No-result failures, unfamiliar versions and incomplete source are unknown.
         "invocation_extractor": "codex",
         # Native project/user skill inventory and selection are bounded to CLI
-        # 0.163.0 with an exact verified scope/path. No confirmed skill loads.
+        # 0.163.0 and 0.165.0 with an exact verified scope/path. No confirmed loads.
         "skill_evidence_extractor": "codex",
-        "mcp_native_tested_versions": ("0.163.0", "0.164.0"),
+        "mcp_native_tested_versions": ("0.163.0", "0.164.0", "0.165.0"),
         "scopes": ["project", "user"],
         "default_scope": "project",
         "scope_labels": ("project (.codex/agents/)", "user (~/.codex/agents/)"),

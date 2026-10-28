@@ -111,7 +111,7 @@ def test_project_trust_and_unrecorded_runtime_are_fail_closed(tmp_path, monkeypa
     with pytest.raises(ValueError, match="untrusted"):
         adapter.configure_tracked_mcp("project", str(project), "probe", snippet)
     assert not (project / ".codex/config.toml").exists()
-    monkeypatch.setattr("observal_cli.harness.codex_mcp_binding.native_mcp_version", lambda _: "codex-cli 0.165.0")
+    monkeypatch.setattr("observal_cli.harness.codex_mcp_binding.native_mcp_version", lambda _: "codex-cli 0.166.0")
     with pytest.raises(ValueError, match="tested"):
         adapter.configure_tracked_mcp("user", str(project), "probe", snippet)
     assert not (home / ".codex/config.toml").exists()

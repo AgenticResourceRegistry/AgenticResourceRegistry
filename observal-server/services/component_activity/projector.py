@@ -30,7 +30,8 @@ class ProjectionRaceError(RuntimeError):
 PROJECTION_VERSION = 3
 # 2: result-link ordering. 3: Pi server identity. 4: Codex native
 # McpToolCall outcome and timestamp, with unknown lifecycle vetoing a session.
-MATCHER_VERSION = 4
+# 5: tested Codex 0.165.0 success omits isError but has completed status and content.
+MATCHER_VERSION = 5
 MAX_SOURCE_RECORDS = 50_000
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 

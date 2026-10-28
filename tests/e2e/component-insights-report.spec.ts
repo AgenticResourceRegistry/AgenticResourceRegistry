@@ -79,7 +79,7 @@ test.describe("Component Insights report", () => {
     });
   }
 
-  test("Codex skill selection is not presented as a confirmed load", async ({ page }) => {
+  test("Codex skill selection is not presented as a confirmed load", async ({ page }, testInfo) => {
     const codex = {
       ...base,
       component_type: "skill",
@@ -127,6 +127,12 @@ test.describe("Component Insights report", () => {
     await expect(details.locator("dt").filter({ hasText: "Unknown load results" }).locator("..").getByText("Not recorded")).toBeVisible();
     await expect(page.getByRole("region", { name: "Attribution coverage" })).toContainText("5 of 5 verified-present sessions processed.");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.locator("main.overflow-y-auto").evaluate((main) => { main.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath("codex-skill-mobile.png") });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.locator("main.overflow-y-auto").evaluate((main) => { main.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath("codex-skill-desktop.png") });
   });
 
   test("a component report leads with the reading, what to look at and the session comparison", async ({ page }, testInfo) => {

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Codex 0.163.0 project/user skill inventory and native selection provenance.
+"""Codex 0.163.0/0.165.0 project/user skill inventory and native selection provenance.
 
 Codex writes the skills inventory in a developer ``response_item`` as a
 ``## Skills`` block with a ``### Skill roots`` table and an ``### Available
@@ -36,7 +36,7 @@ from .skill_evidence import SkillEvidence, SkillEvidenceExtraction
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-_TESTED_VERSION = "0.163.0"
+_TESTED_VERSIONS = frozenset({"0.163.0", "0.165.0"})
 _ALIAS = r"[A-Za-z0-9_-]{1,128}"
 _ROOT = re.compile(r"- `(r[0-9]{1,3})` = `(/[^`\r\n]{1,4096})`\Z")
 _ENTRY = re.compile(
@@ -95,7 +95,7 @@ class CodexSkillEvidenceExtractor:
             return SkillEvidenceExtraction("unsupported", (), malformed)
 
         metas = [record.get("payload") for _, record, _ in records if record.get("type") == "session_meta"]
-        if len(metas) != 1 or not isinstance(metas[0], dict) or metas[0].get("cli_version") != _TESTED_VERSION:
+        if len(metas) != 1 or not isinstance(metas[0], dict) or metas[0].get("cli_version") not in _TESTED_VERSIONS:
             return SkillEvidenceExtraction("unsupported", (), malformed)
         cwd = metas[0].get("cwd")
         if not isinstance(cwd, str) or not cwd.startswith("/") or posixpath.normpath(cwd) != cwd:
