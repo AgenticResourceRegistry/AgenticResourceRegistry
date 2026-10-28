@@ -112,7 +112,7 @@ Links default to seven days and cannot exceed thirty. Treat the opaque link as s
 
 ```bash
 observal inbox count --output json
-observal inbox list --state open --action-required --output json
+observal inbox list --state open --action-required/--no-action-required --output json
 observal inbox show ITEM_UUID --output json
 observal inbox read ITEM_UUID --output json
 observal inbox done ITEM_UUID --output json
