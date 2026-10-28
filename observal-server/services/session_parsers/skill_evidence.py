@@ -97,6 +97,12 @@ def kind_recorded(harness: str, kind: EvidenceKind, scope: str | None = None) ->
     return kind in extractor.observed_kinds and (scope is None or scope in extractor.observed_scopes)
 
 
+def requires_verified_skill_scope(harness: str) -> bool:
+    """Whether a harness's use denominator needs a unique verified install scope."""
+    extractor_id = HARNESS_REGISTRY.get(harness, {}).get("skill_evidence_extractor")
+    return bool(extractor_id and getattr(_extractors()[extractor_id], "requires_verified_scope", False))
+
+
 def extract_skill_evidence(harness: str, rows: Sequence[Mapping[str, object]]) -> SkillEvidenceExtraction:
     """Resolve a registered harness's opt-in extractor; never guess a transcript format."""
     extractor_id = HARNESS_REGISTRY[harness].get("skill_evidence_extractor")  # unknown harness: KeyError

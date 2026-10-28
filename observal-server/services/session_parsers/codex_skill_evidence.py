@@ -1,21 +1,24 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Codex 0.163.0 project skill inventory and native selected-skill provenance.
+"""Codex 0.163.0 project/user skill inventory and native selection provenance.
 
 Codex writes the skills inventory in a developer ``response_item`` as a
 ``## Skills`` block with a ``### Skill roots`` table and an ``### Available
 skills`` list. The inventory names a root and SKILL.md for each entry. Only a
-single, exact project ``<cwd>/.agents/skills/<alias>/SKILL.md`` location can
-be a candidate; the verified layer pin and its file/location fingerprint are
-still required by the shared skill matcher. Selection is a separate first-party
+single, exact project ``<cwd>/.agents/skills/<alias>/SKILL.md`` or native
+non-project ``.agents/skills/<alias>/SKILL.md`` location can be a candidate;
+only a verified contemporaneous pin at the exact location and scope can match.
+A non-project inventory root alone does not prove the user's home. For either
+scope, a no-selection denominator additionally needs this listing's attributed
+native offer. Selection is a separate first-party
 ``skills.selected_skill_instructions`` content kind, with one tagged, rooted
 SKILL.md expansion linked to a user-text message in the same turn. Pasted
 markup, an ordinary file read or a ``$name`` user message alone never qualifies.
 No prompt, description, instruction body or path is published.
 
 Other Codex versions and missing/ambiguous inventories are unsupported, not
-measured zero. User-scope and parent-workspace skills are not attributed.
+measured zero. Parent-workspace roots cannot match a different pinned home.
 """
 
 from __future__ import annotations
@@ -67,7 +70,8 @@ def _time(record: dict, row: Mapping[str, object]) -> datetime | None:
 
 class CodexSkillEvidenceExtractor:
     observed_kinds: frozenset = frozenset({"available", "invoked"})
-    observed_scopes: frozenset = frozenset({"project"})
+    observed_scopes: frozenset = frozenset({"project", "user"})
+    requires_verified_scope: bool = True
 
     def extract(self, rows: Sequence[Mapping[str, object]]) -> SkillEvidenceExtraction:
         records: list[tuple[int, dict, Mapping[str, object]]] = []
@@ -100,7 +104,7 @@ class CodexSkillEvidenceExtractor:
         candidates: dict[str, list[SkillEvidence]] = defaultdict(list)
         alias_occurrences: dict[str, int] = defaultdict(int)
         inventories = 0
-        project_root_seen = False
+        supported_root_seen = False
         ambiguous = False
         for offset, record, row in records:
             if record.get("type") != "response_item":
@@ -138,7 +142,7 @@ class CodexSkillEvidenceExtractor:
                             ambiguous = True
                             continue
                         roots[match.group(1)].append(root)
-                        project_root_seen |= _mac_tmp(root) == project_skills
+                        supported_root_seen |= _mac_tmp(root) == project_skills or root.endswith("/.agents/skills")
                 ambiguous |= any(len(locations) != 1 for locations in roots.values())
                 for line in entries_text.splitlines():
                     match = _ENTRY.fullmatch(line)
@@ -151,24 +155,31 @@ class CodexSkillEvidenceExtractor:
                     if len(roots[root_id]) != 1:
                         ambiguous = True
                         continue
-                    if _mac_tmp(roots[root_id][0]) != project_skills:
+                    root = roots[root_id][0]
+                    if _mac_tmp(root) == project_skills:
+                        scope = "project"
+                    elif root.endswith("/.agents/skills"):
+                        # The native inventory cannot identify HOME by itself.
+                        # Match only the verified user pin at this exact path;
+                        # parent workspace roots with another path remain unmatched.
+                        scope = "user"
+                    else:
                         continue
-                    location = f"{roots[root_id][0]}/{alias}/SKILL.md"
+                    location = f"{root}/{alias}/SKILL.md"
                     candidates[alias].append(
                         SkillEvidence(
                             "available",
-                            "project",
+                            scope,
                             alias,
                             offset,
-                            f"skill-available:project:{alias}",
+                            f"skill-available:{scope}:{alias}",
                             _time(record, row),
                             location_sha256=hashlib.sha256(location.encode()).hexdigest(),
                         )
                     )
-        # A missing project root could be a symlinked workspace or changed
-        # inventory layout, not evidence that this project's skill was absent.
-        # Duplicated roots/aliases also make absence and scope ambiguous.
-        if inventories != 1 or not project_root_seen or ambiguous or any(n != 1 for n in alias_occurrences.values()):
+        # An unfamiliar root may be a symlink or changed inventory layout;
+        # duplicated roots/aliases make absence and scope ambiguous.
+        if inventories != 1 or not supported_root_seen or ambiguous or any(n != 1 for n in alias_occurrences.values()):
             return SkillEvidenceExtraction("unsupported", (), malformed)
         evidence = [items[0] for _, items in sorted(candidates.items())]
         prompt_turns: dict[str, int] = {}
@@ -234,8 +245,8 @@ class CodexSkillEvidenceExtractor:
             if (
                 (turn_id, alias) in seen_selections
                 or posixpath.normpath(path) != path
-                or _mac_tmp(path) != f"{project_skills}/{alias}/SKILL.md"
                 or len(candidates.get(alias, ())) != 1
+                or hashlib.sha256(path.encode()).hexdigest() != candidates[alias][0].location_sha256
             ):
                 return SkillEvidenceExtraction("unsupported", (), malformed)
             time = _time(record, row)
@@ -245,10 +256,10 @@ class CodexSkillEvidenceExtractor:
             selected.append(
                 SkillEvidence(
                     "invoked",
-                    "project",
+                    candidates[alias][0].scope,
                     alias,
                     offset,
-                    f"skill-invoked:project:{alias}",
+                    f"skill-invoked:{candidates[alias][0].scope}:{alias}",
                     time,
                     location_sha256=hashlib.sha256(path.encode()).hexdigest(),
                 )

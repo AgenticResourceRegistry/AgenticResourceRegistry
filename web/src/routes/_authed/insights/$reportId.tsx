@@ -69,7 +69,7 @@ function SkillReport({ report }: { report: InsightReport }) {
         <EvidencePanel summary={narrative?.summary} stats={[
           { label: "Present sessions", value: metrics?.present_sessions ?? "—" },
           { label: "Confirmed loads", value: <SkillCount value={metrics?.loaded_sessions} measured={measured} />, note: metrics?.loaded_sessions === null ? "This harness does not measure loads" : "Sessions with a linked successful load" },
-          { label: codexOnly ? "Codex selections" : hasCodex ? "Invocations / selections" : "Invocations", value: <SkillCount value={metrics?.invoked_sessions} measured={measured} partial={coverage?.reasons.includes("invoked_not_recorded_on_some_harnesses")} />, note: hasCodex ? "Native Codex project skill selection; not a separately confirmed load" : undefined },
+          { label: codexOnly ? "Codex selections" : hasCodex ? "Invocations / selections" : "Invocations", value: <SkillCount value={metrics?.invoked_sessions} measured={measured} partial={coverage?.reasons.includes("invoked_not_recorded_on_some_harnesses")} />, note: hasCodex ? "Native Codex skill selection; not a separately confirmed load" : undefined },
           { label: "Offered", value: <SkillCount value={metrics?.available_sessions} measured={measured} partial={coverage?.reasons.includes("available_not_recorded_on_some_harnesses")} /> },
         ]}>
           {measured && !!metrics?.load_attempts && <p className="text-sm text-muted-foreground">{metrics.load_attempts} load {metrics.load_attempts === 1 ? "attempt" : "attempts"} failed or had no confirmed result, and {metrics.load_attempts === 1 ? "is" : "are"} not counted as {metrics.load_attempts === 1 ? "a load" : "loads"}.</p>}
@@ -77,7 +77,7 @@ function SkillReport({ report }: { report: InsightReport }) {
           {!measured && <p>Skill evidence is unavailable for this period; missing measurements do not imply no use.</p>}
         </EvidencePanel>
         <CoveragePanel coverage={coverage}>
-          {coverage && <p>{coverage.observed_sessions} {coverage.observed_sessions === 1 ? "session" : "sessions"} had {codexOnly ? "a native Codex project-skill selection, not a separately confirmed load" : "a confirmed load or a native selection / invocation"}. {coverage.evidence.collision_facts} ambiguous and {coverage.evidence.unmatched_facts} unmatched skill records were not counted.</p>}
+          {coverage && <p>{coverage.observed_sessions} {coverage.observed_sessions === 1 ? "session" : "sessions"} had {codexOnly ? "a native Codex skill selection, not a separately confirmed load" : "a confirmed load or a native selection / invocation"}. {coverage.evidence.collision_facts} ambiguous and {coverage.evidence.unmatched_facts} unmatched skill records were not counted.</p>}
         </CoveragePanel>
         <DistributionSection versions={metrics?.version_distribution} harnesses={metrics?.harness_distribution} />
         <SkillEvidenceBreakdown metrics={metrics} coverage={coverage} />

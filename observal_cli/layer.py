@@ -232,6 +232,7 @@ HARNESS_LAYER_CONFIGS: dict[str, dict[str, list[tuple[str, list[str]]]]] = {
                     "hooks.json",
                 ],
             ),
+            ("~", [".agents/skills/*/SKILL.md"]),
         ],
         "project": [
             (

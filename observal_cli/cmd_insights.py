@@ -846,9 +846,7 @@ def _render_skill_report(data: dict) -> None:
     for label, value in rows:
         rprint(f"  {label}: {esc(value)}")
     if "codex" in (metrics.get("harness_distribution") or {}):
-        rprint(
-            "  [dim]Native Codex project-skill selection is not a separately confirmed load or proof of reliance.[/dim]"
-        )
+        rprint("  [dim]Native Codex skill selection is not a separately confirmed load or proof of reliance.[/dim]")
     if measured and metrics.get("load_attempts"):
         rprint(f"  [dim]{metrics['load_attempts']} load attempts failed or had no confirmed result (not loads).[/dim]")
     for label, values in (

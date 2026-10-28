@@ -135,7 +135,7 @@ def generate_skill_sections(summary: dict, coverage: dict) -> dict:
     if state == "observed":
         if codex_only and summary["invocations"]:
             conclusion = (
-                "A native Codex project-skill selection was recorded in measured sessions. "
+                "A native Codex skill selection was recorded in measured sessions. "
                 "This is not a separately confirmed skill load or proof that the skill was followed or helped."
             )
         elif summary["invocations"] and not summary["confirmed_loads"]:
@@ -148,13 +148,13 @@ def generate_skill_sections(summary: dict, coverage: dict) -> dict:
                 "The skill's instructions entered context in processed present sessions "
                 "(a confirmed load or an invocation). This does not show the skill was followed or helped."
             )
-        if "skill_scope_not_recorded" in coverage["reasons"]:
-            conclusion += " Other installed scopes remain unknown."
+        if "skill_scope_or_offer_not_verified" in coverage["reasons"]:
+            conclusion += " Other installs or unverified offers remain unknown."
     elif state == "no_observed_skill_use":
-        if "skill_scope_not_recorded" in coverage["reasons"]:
+        if "skill_scope_or_offer_not_verified" in coverage["reasons"]:
             conclusion = (
-                "No observed selection, invocation or confirmed load in measured skill-scope sessions; "
-                "other installed scopes remain unknown. This does not prove the skill was never used."
+                "No observed selection, invocation or confirmed load in measured sessions; "
+                "other installs or unverified offers remain unknown. This does not prove the skill was never used."
             )
         else:
             conclusion = (

@@ -79,7 +79,7 @@ test.describe("Component Insights report", () => {
     });
   }
 
-  test("Codex project-skill selection is not presented as a confirmed load", async ({ page }) => {
+  test("Codex skill selection is not presented as a confirmed load", async ({ page }) => {
     const codex = {
       ...base,
       component_type: "skill",
@@ -97,7 +97,7 @@ test.describe("Component Insights report", () => {
         reasons: [],
         limitations: ["loads_not_recorded: Codex does not record attributable skill loads"],
       },
-      narrative: { summary: "A native Codex project-skill selection was recorded, not a separately confirmed skill load." },
+      narrative: { summary: "A native Codex skill selection was recorded, not a separately confirmed skill load." },
     };
     // Keep credentials on loopback, including when a disposable Vite server is used.
     await page.route("**/*", (route) => ["localhost", "127.0.0.1"].includes(new URL(route.request().url()).hostname) ? route.fallback() : route.abort());
@@ -120,7 +120,7 @@ test.describe("Component Insights report", () => {
     const evidence = page.getByRole("region", { name: "Evidence" });
     await expect(evidence.getByText("Codex selections")).toBeVisible();
     await expect(evidence.getByText("Not recorded").first()).toBeVisible();
-    await expect(evidence).toContainText("Native Codex project skill selection; not a separately confirmed load");
+    await expect(evidence).toContainText("Native Codex skill selection; not a separately confirmed load");
     await page.getByText("Detailed skill evidence").click();
     const details = page.locator("details").filter({ hasText: "Detailed skill evidence" });
     await expect(details.getByText("Native Codex selections")).toBeVisible();

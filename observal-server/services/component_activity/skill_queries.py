@@ -47,7 +47,7 @@ from services.layer_components.queries import (
     presence_params,
     presence_version_distribution,
 )
-from services.session_parsers.skill_evidence import kind_recorded
+from services.session_parsers.skill_evidence import kind_recorded, requires_verified_skill_scope
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -77,13 +77,14 @@ _SKILL_EVIDENCE = (
 )
 
 # Presence identifies a listing, not the scope of the install that made it
-# present. A project-only extractor cannot turn a user-scope (or mixed-scope)
-# skill into a measured zero. Select only verified, published mappings for
-# this exact listing/version, with one row per layer/harness.
+# present. A scope-gated extractor cannot turn a different scope (or an
+# unoffered but verified skill) into a measured zero. Select only verified,
+# published mappings for this exact listing/version, one row per layer/harness.
 _SKILL_SCOPES = (
     """SELECT c.user_id, c.harness, c.layer_hash,
            countIf(c.scope = 'project') AS project_installs,
-           countIf(c.scope != 'project') AS other_installs
+           countIf(c.scope = 'user') AS user_installs,
+           countIf(c.scope NOT IN ('project', 'user')) AS other_installs
     FROM layer_components AS c FINAL
     INNER JOIN ("""
     + _LATEST_LAYER_COMPONENTS
@@ -100,8 +101,13 @@ _SKILL_SCOPES = (
 
 _SKILL_SESSIONS = (
     """SELECT c.user_id AS user_id, c.harness AS harness, c.session_id AS session_id,
-           (NOT has({project_only:Array(String)}, c.harness)
-            OR (scope_map.project_installs > 0 AND scope_map.other_installs = 0)) AS scope_measurable,
+           (NOT has({scope_gated:Array(String)}, c.harness)
+            OR (ifNull(scope_map.project_installs, 0) > 0 AND ifNull(scope_map.user_installs, 0) = 0
+                AND ifNull(scope_map.other_installs, 0) = 0
+                AND (NOT has({available_capable:Array(String)}, c.harness)
+                     OR ifNull(e.available_facts, 0) > 0))
+            OR (ifNull(scope_map.user_installs, 0) > 0 AND ifNull(scope_map.project_installs, 0) = 0
+                AND ifNull(scope_map.other_installs, 0) = 0 AND ifNull(e.available_facts, 0) > 0)) AS scope_measurable,
            c.last_event_time AS last_event_time,
            has({supported:Array(String)}, c.harness) AS supported,
            """
@@ -129,7 +135,7 @@ _SKILL_SUMMARY = (
            countIf(projection_state = 'complete') AS projection_complete_sessions,
            countIf(projection_state = 'complete' AND has({use_capable:Array(String)}, harness)
                    AND scope_measurable) AS usage_measurable_sessions,
-           countIf(projection_state = 'complete' AND has({project_only:Array(String)}, harness)
+           countIf(projection_state = 'complete' AND has({scope_gated:Array(String)}, harness)
                    AND NOT scope_measurable) AS scope_unmeasurable_sessions,
            countIf(has({available_capable:Array(String)}, harness) AND scope_measurable)
                AS available_scope_present_sessions,
@@ -195,12 +201,15 @@ def _params(
                 if kind_recorded(name, "load") or kind_recorded(name, "invoked")
             ]
         ),
-        "param_project_only": _clickhouse_array(
+        "param_scope_gated": _clickhouse_array(
             [
                 name
                 for name in skill_supported_harnesses()
-                if any(kind_recorded(name, kind, "project") for kind in ("available", "load", "invoked"))
-                and not any(kind_recorded(name, kind, "user") for kind in ("available", "load", "invoked"))
+                if requires_verified_skill_scope(name)
+                or (
+                    any(kind_recorded(name, kind, "project") for kind in ("available", "load", "invoked"))
+                    and not any(kind_recorded(name, kind, "user") for kind in ("available", "load", "invoked"))
+                )
             ]
         ),
         **{
@@ -254,7 +263,7 @@ def build_skill_coverage(presence: dict, aggregate: dict, version: int) -> Skill
         reasons.append("unconfirmed_load_attempts")
     scope_unmeasurable = _int(aggregate, "scope_unmeasurable_sessions")
     if scope_unmeasurable:
-        reasons.append("skill_scope_not_recorded")
+        reasons.append("skill_scope_or_offer_not_verified")
     if projection.projection_complete_sessions > denominator + scope_unmeasurable:
         reasons.append("availability_only_harness_sessions")
     state = "observed" if observed else "no_observed_skill_use" if denominator else "attribution_not_possible"

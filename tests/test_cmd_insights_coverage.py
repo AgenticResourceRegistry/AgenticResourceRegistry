@@ -958,7 +958,7 @@ def test_codex_skill_cli_labels_selection_and_does_not_convert_unknown_load_to_z
     text = " ".join(cli.messages())
     assert "Sessions with a confirmed load: not recorded" in text
     assert "Sessions with a Codex selection: 1" in text
-    assert "Native Codex project-skill selection is not a separately confirmed load" in text
+    assert "Native Codex skill selection is not a separately confirmed load" in text
     assert "Sessions with a confirmed load: 0" not in text
 
 

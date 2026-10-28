@@ -3,7 +3,7 @@
 
 # Codex project-skill selection: main-based acceptance ledger
 
-**Draft PR #1972 evidence, not release approval.** This is a separate cell from the MCP controls in [the main-port ledger](component-insights-codex-main-port-acceptance.md). Tests used a fresh owner-only Registry draft, a single registry-direct 0.1.0 project-skill install, a disposable Codex home/workspace, an inert loopback Responses provider and the isolated main-based API/worker. Neither ordinary harness profiles nor the original checkout were changed. Tokens, prompts, instructions, transcripts, provider output, draft IDs and desktop/mobile screenshots remain in private local controls **outside Git**.
+**Draft PR #1972 evidence, not release approval.** This is a separate cell from the MCP controls in [the main-port ledger](component-insights-codex-main-port-acceptance.md). A later, separate [user-skill selection cell](component-insights-codex-user-skill-selection.md) has its own gates and does not retroactively change this project-scope result. Tests used a fresh owner-only Registry draft, a single registry-direct 0.1.0 project-skill install, a disposable Codex home/workspace, an inert loopback Responses provider and the isolated main-based API/worker. Neither ordinary harness profiles nor the original checkout were changed. Tokens, prompts, instructions, transcripts, provider output, draft IDs and desktop/mobile screenshots remain in private local controls **outside Git**.
 
 ## Metric and gate
 

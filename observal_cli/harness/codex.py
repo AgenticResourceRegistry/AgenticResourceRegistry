@@ -74,23 +74,36 @@ class CodexAdapter(BaseAdapter):
         return {"user": "user:config.toml", "project": "project:.codex/config.toml"}.get(scope)
 
     def skill_manifest_path(self, scope: str, alias: str) -> str | None:
-        # Only native project-skill inventory/selection is verified on CLI 0.163.0.
-        return f"project:.agents/skills/{alias}/SKILL.md" if scope == "project" else None
+        return {
+            "project": f"project:.agents/skills/{alias}/SKILL.md",
+            "user": f"user:.agents/skills/{alias}/SKILL.md",
+        }.get(scope)
 
     def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
-        if scope != "project" or not directory:
-            return None
-        return str((Path(directory) / ".agents" / "skills" / alias / "SKILL.md").resolve())
+        if scope == "user":
+            return str((Path.home() / ".agents" / "skills" / alias / "SKILL.md").resolve())
+        if scope == "project" and directory:
+            return str((Path(directory) / ".agents" / "skills" / alias / "SKILL.md").resolve())
+        return None
 
     def skill_shadow_paths(self, scope: str, directory: str | None, alias: str) -> list[Path]:
-        if scope != "project" or not directory:
+        if scope not in {"project", "user"}:
             return []
-        # User/home and parent-workspace copies may shadow the pinned project skill.
+        user_file = Path.home().resolve() / ".agents" / "skills" / alias / "SKILL.md"
+        if not directory:
+            # Without a native cwd we cannot rule out a project-root shadow.
+            # Treat even the active user file as ambiguous, not a verified pin.
+            return [user_file] if scope == "user" else []
+        # Another project/home/parent placement with this alias makes the
+        # effective native skill ambiguous even when the file bytes agree.
         root = Path(directory).resolve()
-        parents = [parent / ".agents" / "skills" / alias / "SKILL.md" for parent in root.parents]
+        parents = [
+            path for parent in root.parents if (path := parent / ".agents" / "skills" / alias / "SKILL.md") != user_file
+        ]
         return [
-            Path.home() / ".agents" / "skills" / alias / "SKILL.md",
+            *([user_file] if scope == "project" else []),
             Path.home() / ".codex" / "skills" / alias / "SKILL.md",
+            *([root / ".agents" / "skills" / alias / "SKILL.md"] if scope == "user" else []),
             *parents,
         ]
 

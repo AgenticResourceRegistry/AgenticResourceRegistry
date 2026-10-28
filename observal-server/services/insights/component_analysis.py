@@ -88,7 +88,7 @@ _SNAKE = re.compile(r"\b[a-z]{2,}(?:_[a-z]{2,})+\b")
 
 COMPONENT_NOTES = {
     "skill": (
-        "A verified load and a native skill selection are different signals. Codex project-skill selection "
+        "A verified load and a native skill selection are different signals. Codex skill selection "
         "does not establish a separately confirmed load. Being installed or offered is not use, and null load "
         "counts are unknown, not zero. Neither signal shows that the skill was followed or helped."
     ),

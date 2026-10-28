@@ -26,7 +26,9 @@ if TYPE_CHECKING:
 # fact; replay old availability-only publications, never turn them into zero use.
 # 4: Accept only the observed 0.163.0 combined AGENTS.md/environment context
 # before the typed turn; replay earlier unsupported sessions, not measured zeros.
-SKILL_MATCHER_VERSION = 4
+# 5: User-scope Codex selection requires a verified exact user file and an
+# attributed native offer before a no-selection denominator can be measured.
+SKILL_MATCHER_VERSION = 5
 
 
 @dataclass(frozen=True)
