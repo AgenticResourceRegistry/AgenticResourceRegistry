@@ -159,6 +159,10 @@ def _finalize_session(harness: str, session_id: str, cwd: str, home: Path | None
     config = load_config(home=home)
     if source is None or config is None or source.path is None:
         return
+    # The finalizer is a delayed hook, not a historical recovery worker. Spool
+    # and prioritize its final records before the paced backlog, then leave the
+    # remaining outbox to a background worker.
+    config["_hook_delivery"] = True
     event = {"session_id": session_id, "cwd": cwd, "hook_event_name": "Stop"}
     delivered = True
     if adapter.should_capture_session(source, home=home):
