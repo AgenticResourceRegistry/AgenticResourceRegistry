@@ -441,7 +441,7 @@ def _reporting_boundary(callback):
                     http_status_category(status),
                     f"The server rejected the operation with HTTP {status}.",
                     operation="Pull agent",
-                    resource="Observal server",
+                    resource="Agentic Resource Registry server",
                     remediation="Check the request and server health, then retry.",
                     request_id=_safe_text(error.response.headers["x-request-id"])
                     if "x-request-id" in error.response.headers
@@ -454,7 +454,7 @@ def _reporting_boundary(callback):
                     ErrorCategory.UNAVAILABLE,
                     "The network operation failed.",
                     operation="Pull agent",
-                    resource="Observal service",
+                    resource="Agentic Resource Registry service",
                     remediation="Check network connectivity and service health, then retry.",
                     detail=detail,
                 )

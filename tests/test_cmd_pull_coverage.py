@@ -3290,7 +3290,7 @@ def test_pull_dummy_credential_keeps_real_setup_argv_and_post(pull_app, boundari
         run.assert_not_called()
         assert not target.exists()
     else:
-        assert run.call_args.args[0] == command
+        assert run.call_args.args[0] == ["claude", "mcp", "add", "--scope", "project", *command[3:]]
         assert (target / "agent.md").read_text() == "agent\n"
 
 
