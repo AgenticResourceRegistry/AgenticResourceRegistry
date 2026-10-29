@@ -3,7 +3,7 @@
 
 # Agentic Resource Registry
 
-Agentic Resource Registry is an agent-centric registry and observability platform for AI coding agents. This chart deploys the API, web UI, worker, PostgreSQL, ClickHouse, Redis, and supporting Kubernetes resources for self-hosted installations.
+Agentic Resource Registry is a self-hosted, Apache 2.0 registry for sharing coding agent resources. This chart deploys the API, web UI, worker, PostgreSQL, ClickHouse, Redis, and supporting Kubernetes resources for self-hosted installations.
 
 ## Install
 

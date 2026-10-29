@@ -10,7 +10,7 @@ Internal context for contributors and AI coding agents. Use `README.md` for the 
 
 ## What Agentic Resource Registry is
 
-Agentic Resource Registry is an agent-centric registry and observability platform for AI coding agents. Users interact with it three ways:
+Agentic Resource Registry is a self-hosted, Apache 2.0 registry for sharing coding agent resources. Users interact with it three ways:
 
 1. **CLI** (`observal`): pull agents, sca harnesses, submit components, manage the server
 2. **Web UI** (`web/`): browse the registry, view traces, manage users, admin dashboard
