@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import tempfile
 import time
 import uuid
@@ -120,6 +121,9 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             """
         )
         conn.execute("CREATE TABLE IF NOT EXISTS session_outbox_legacy_import (id INTEGER PRIMARY KEY CHECK (id = 1))")
+        for column in ("device", "inode", "size", "mtime_ns", "ctime_ns"):
+            if column not in {row[1] for row in conn.execute("PRAGMA table_info(session_outbox_legacy_import)")}:
+                conn.execute(f"ALTER TABLE session_outbox_legacy_import ADD COLUMN {column} INTEGER")
         conn.commit()
         page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
         conn.execute(f"PRAGMA max_page_count = {max(1, max_bytes // page_size)}")
@@ -529,24 +533,43 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) -> None:
-    """Index old append-only archives without rewriting the evidence or active queue.
-
-    Negative IDs are derived from the original byte position (zero maps to -1).
-    The marker and imported rows commit together; a failed or interrupted scan
-    rolls back both, and competing connections recheck after taking the lock.
-    """
-    if conn.execute("SELECT 1 FROM session_outbox_legacy_import WHERE id = 1").fetchone():
-        return
+def _legacy_fingerprint(db_path: Path | None) -> tuple[int, int, int, int, int]:
+    """Stat even an absent archive; a later creation must trigger a new scan."""
     try:
+        metadata = _path(db_path).with_suffix(".rejected.jsonl").stat()
+    except FileNotFoundError:
+        return (-1, -1, -1, -1, -1)
+    except OSError as exc:
+        raise OutboxError("cannot stat legacy quarantine archive") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise OutboxError("legacy quarantine archive is not a regular file")
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) -> None:
+    """Index changed legacy archives atomically, preserving negative offset IDs."""
+    columns = "device, inode, size, mtime_ns, ctime_ns"
+    try:
+        fingerprint = _legacy_fingerprint(db_path)  # O(1) on every open, including missing archives.
+        if conn.execute(f"SELECT {columns} FROM session_outbox_legacy_import WHERE id = 1").fetchone() == fingerprint:
+            return
         conn.execute("BEGIN IMMEDIATE")
-        if conn.execute("SELECT 1 FROM session_outbox_legacy_import WHERE id = 1").fetchone():
+        # A competing importer may have won while we waited. Re-stat after the
+        # lock so that an append during the wait cannot be marked imported.
+        fingerprint = _legacy_fingerprint(db_path)
+        if conn.execute(f"SELECT {columns} FROM session_outbox_legacy_import WHERE id = 1").fetchone() == fingerprint:
             conn.commit()
             return
         for record in _legacy_records(db_path):
             item_id = record.get("item_id")
-            if type(item_id) is not int or item_id >= 0:
-                continue
+            if type(item_id) is not int or (
+                item_id >= 0
+                and conn.execute("SELECT 1 FROM session_outbox_rejected WHERE item_id = ?", (item_id,)).fetchone()
+                is None
+            ):
+                # A positive ID is valid only if it already names an indexed
+                # rejection; an unindexed archive must never leave a gap open.
+                raise OutboxError(f"invalid legacy quarantine record at {record['_archive_ref']}")
             identity = tuple(record.get(key) for key in ("destination", "user_id", "harness", "session_id"))
             payload = record.get("payload")
             if (
@@ -563,12 +586,15 @@ def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) ->
                 or not isinstance(payload.get("lines"), list)
                 or record["end_line"] != record["start_line"] + len(payload["lines"]) - 1
             ):
-                continue  # A damaged row must not hide other intact rows.
+                raise OutboxError(f"invalid legacy quarantine record at {record['_archive_ref']}")
             existing = conn.execute(
-                "SELECT destination, user_id, harness, session_id FROM session_outbox_rejected WHERE item_id = ?",
+                "SELECT destination, user_id, harness, session_id, archive_ref "
+                "FROM session_outbox_rejected WHERE item_id = ?",
                 (item_id,),
             ).fetchone()
-            if existing is not None and tuple(existing) != identity:
+            if existing is not None and (
+                tuple(existing[:4]) != identity or (existing[4] is not None and existing[4] != record["_archive_ref"])
+            ):
                 raise OutboxError(f"legacy quarantine ID collision at {item_id}")
             conn.execute(
                 "INSERT OR IGNORE INTO session_outbox_rejected "
@@ -579,7 +605,15 @@ def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) ->
                 "UPDATE session_outbox_rejected SET archive_ref = ? WHERE item_id = ? AND archive_ref IS NULL",
                 (record["_archive_ref"], item_id),
             )
-        conn.execute("INSERT INTO session_outbox_legacy_import (id) VALUES (1)")
+        if _legacy_fingerprint(db_path) != fingerprint:
+            raise OutboxError("legacy quarantine archive changed during import; retry")
+        conn.execute(
+            "INSERT INTO session_outbox_legacy_import (id, device, inode, size, mtime_ns, ctime_ns) "
+            "VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "device = excluded.device, inode = excluded.inode, size = excluded.size, "
+            "mtime_ns = excluded.mtime_ns, ctime_ns = excluded.ctime_ns",
+            fingerprint,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -589,8 +623,6 @@ def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) ->
 
 def _legacy_records(db_path: Path | None):
     legacy = _path(db_path).with_suffix(".rejected.jsonl")
-    if not legacy.exists():
-        return
     try:
         with legacy.open("rb") as archive:
             offset = 0
@@ -607,6 +639,8 @@ def _legacy_records(db_path: Path | None):
                     record["item_id"] = -(row_offset + 1)
                 record["_archive_ref"] = f"legacy:{row_offset}"
                 yield record
+    except FileNotFoundError:
+        return  # The before/after fingerprint check detects a concurrent removal.
     except OSError as exc:
         raise OutboxError("cannot read legacy quarantine archive") from exc
 

@@ -371,6 +371,78 @@ def test_legacy_import_runs_once_per_db_across_repeated_connections(tmp_path: Pa
         assert conn.execute("SELECT id FROM session_outbox_legacy_import").fetchall() == [(1,)]
 
 
+@pytest.mark.parametrize("initial", ["missing", "empty", "imported"])
+def test_old_worker_append_after_marker_blocks_deleted_active_gap(tmp_path: Path, initial: str):
+    db = tmp_path / "outbox.db"
+    legacy = db.with_suffix(".rejected.jsonl")
+    if initial != "missing":
+        legacy.write_text(_legacy_entry("first") if initial == "imported" else "")
+    outbox.enqueue(batch("gap", 1), destination="http://server", user_id="user", db_path=db)
+    assert outbox.stats(db_path=db)["failed"] == (1 if initial == "imported" else 0)
+    with legacy.open("a") as archive:
+        archive.write(_legacy_entry("gap"))
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM session_outbox WHERE session_id = 'gap'")
+    outbox.enqueue(batch("gap", 1), destination="http://server", user_id="user", db_path=db)
+
+    def reopen():
+        return outbox.is_rejected(
+            destination="http://server", user_id="user", harness="claude-code", session_id="gap", db_path=db
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert all(pool.map(lambda _: reopen(), range(4)))
+    assert outbox.pending(destination="http://server", user_id="user", db_path=db) == []
+    assert outbox.stats(db_path=db)["failed"] == (2 if initial == "imported" else 1)
+
+
+def test_id_only_import_marker_rechecks_archive_and_upgrades(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    legacy = db.with_suffix(".rejected.jsonl")
+    outbox.stats(db_path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TABLE session_outbox_legacy_import")
+        conn.execute("CREATE TABLE session_outbox_legacy_import (id INTEGER PRIMARY KEY CHECK (id = 1))")
+        conn.execute("INSERT INTO session_outbox_legacy_import VALUES (1)")
+    legacy.write_text(_legacy_entry("gap"))
+    assert outbox.is_rejected(
+        destination="http://server", user_id="user", harness="claude-code", session_id="gap", db_path=db
+    )
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT size FROM session_outbox_legacy_import").fetchone() == (legacy.stat().st_size,)
+
+
+def test_append_during_scan_rolls_back_marker_and_retries(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    legacy = db.with_suffix(".rejected.jsonl")
+    legacy.write_text(_legacy_entry("first"))
+    records = outbox._legacy_records
+
+    def appending(path):
+        yield from records(path)
+        with legacy.open("a") as archive:
+            archive.write(_legacy_entry("late"))
+
+    monkeypatch.setattr(outbox, "_legacy_records", appending)
+    with pytest.raises(outbox.OutboxError, match="changed during import"):
+        outbox.stats(db_path=db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM session_outbox_rejected").fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM session_outbox_legacy_import").fetchone() == (0,)
+    monkeypatch.setattr(outbox, "_legacy_records", records)
+    assert outbox.stats(db_path=db)["failed"] == 2
+
+
+@pytest.mark.parametrize(("field", "value"), [("end_line", 17), ("item_id", None), ("item_id", 3), ("item_id", "-1")])
+def test_invalid_identifiable_legacy_row_fails_closed(tmp_path: Path, field: str, value: object):
+    db = tmp_path / "outbox.db"
+    record = json.loads(_legacy_entry("s"))
+    record[field] = value
+    db.with_suffix(".rejected.jsonl").write_text(json.dumps(record) + "\n")
+    with pytest.raises(outbox.OutboxError, match="invalid legacy quarantine record"):
+        outbox.pending(destination="http://server", user_id="user", db_path=db)
+
+
 def test_interrupted_legacy_import_rolls_back_rows_and_retries(tmp_path: Path, monkeypatch):
     db = tmp_path / "outbox.db"
     db.with_suffix(".rejected.jsonl").write_text(_legacy_entry("s") + _legacy_entry("later"))
