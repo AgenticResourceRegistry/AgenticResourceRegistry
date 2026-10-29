@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared helpers used by all session JSONL parsers."""
@@ -7,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 # ANSI escape sequence pattern (CSI sequences + OSC + simple escapes)
@@ -50,10 +52,16 @@ def dict_field(parsed: dict, key: str) -> dict:
 
 def token_count(usage: dict, key: str) -> int:
     """Return a non-negative token count, or 0 for malformed transcript values."""
+    value = usage.get(key) or 0
+    if isinstance(value, float) and not math.isfinite(value):
+        return 0
     try:
-        return max(int(usage.get(key) or 0), 0)
+        count = max(int(value), 0)
     except (TypeError, ValueError, OverflowError):
         return 0
+    if count > 2_147_483_647:
+        raise ValueError("token count outside ClickHouse Int32 range")
+    return count
 
 
 def uncached_input_tokens(input_tokens: int, *cache_tokens: int) -> int:

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral coverage for canonical session ingestion."""
@@ -411,6 +412,210 @@ async def test_lone_surrogate_does_not_abort_other_session_lines(external_calls)
     assert rows[0]["raw_line"] == malformed.encode("utf-8", errors="replace").decode("utf-8")
     assert '"event_type":"_parse_error"' in _dumps(rows[0])
     external_calls.refresh.assert_awaited_once()
+
+
+async def test_malformed_normalization_isolated_without_leaking_source(external_calls, caplog, monkeypatch):
+    secret = "PRIVATE_TRANSCRIPT_VALUE"
+    broken = json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": secret}}})
+    result = await _ingest([broken, CLAUDE_USER_PROMPT], end_byte_offsets=[42, 100])
+    assert result == session_ingest.IngestResult(ingested=1, skipped=0, errors=1)
+    rows = external_calls.insert.await_args.args[0]
+    assert rows[0]["event_type"] == "_parse_error"
+    assert rows[0]["rendered"] == 0
+    assert rows[0]["source_end_offset"] == 42
+    assert rows[0]["source_sha256"] == hashlib.sha256(broken.encode()).hexdigest()
+    assert rows[0]["raw_line"] == broken
+    assert rows[1]["line_offset"] == 1
+    assert secret not in caplog.text
+
+    external_calls.insert.reset_mock()
+    external_calls.insert.side_effect = RuntimeError("storage unavailable")
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await _ingest([broken])
+
+
+@pytest.mark.parametrize(
+    ("harness", "bad", "good", "expected_timestamp"),
+    [
+        (
+            "claude-code",
+            {"type": "user", "timestamp": "not-a-date", "message": {"content": "bad"}},
+            {"type": "user", "timestamp": "2026-06-01T12:00:01+02:00", "message": {"content": "ok"}},
+            "2026-06-01 10:00:01.000",
+        ),
+        (
+            "pi",
+            {"type": "message", "timestamp": "2026-99-99", "id": "bad"},
+            {"type": "message", "timestamp": "2026-06-01T10:00:01Z", "id": "good"},
+            "2026-06-01 10:00:01.000",
+        ),
+        (
+            "kiro",
+            {"id": "bad", "timestamp": "garbage", "payload": {"type": "user", "content": "bad"}},
+            {"id": "good", "timestamp": "2026-06-01T10:00:01Z", "payload": {"type": "user", "content": "ok"}},
+            "2026-06-01 10:00:01.000",
+        ),
+    ],
+)
+async def test_bad_timestamp_is_source_error_without_poisoning_neighbor(
+    external_calls, harness, bad, good, expected_timestamp
+):
+    lines = [json.dumps(bad), json.dumps(good)]
+    result = await _ingest(lines, harness=harness, end_byte_offsets=[31, 72])
+    assert result == session_ingest.IngestResult(ingested=1, skipped=0, errors=1)
+    failed, valid = external_calls.insert.await_args.args[0]
+    assert (failed["event_type"], failed["line_offset"], failed["source_end_offset"]) == ("_parse_error", 0, 31)
+    assert failed["line_hash"] == xxhash.xxh128(lines[0].encode()).hexdigest()
+    assert failed["source_sha256"] == hashlib.sha256(lines[0].encode()).hexdigest()
+    assert valid["timestamp"] == expected_timestamp
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("uuid", {"invalid": "object"}), ("parentUuid", 99), ("model", ["not a string"]), ("model", 0)],
+)
+async def test_bad_string_columns_are_isolated(external_calls, field, value):
+    broken = {"type": "assistant", "message": {"content": "ok", "usage": {"input_tokens": 1}}}
+    if field == "model":
+        broken["message"]["model"] = value
+    else:
+        broken[field] = value
+    result = await _ingest([json.dumps(broken), CLAUDE_USER_PROMPT])
+    assert result.errors == 1 and result.ingested == 1
+    rows = external_calls.insert.await_args.args[0]
+    assert rows[0]["event_type"] == "_parse_error"
+    assert rows[1]["event_type"] == "user_prompt"
+
+
+async def test_kiro_bad_model_isolated_from_valid_neighbor(external_calls):
+    bad = {"id": "bad", "timestamp": "2026-06-01T10:00:00Z", "payload": {"type": "assistant", "modelId": []}}
+    result = await _ingest([json.dumps(bad), KIRO_IDE_PROMPT], harness="kiro")
+    assert result.errors == 1 and result.ingested == 1
+    failed, valid = external_calls.insert.await_args.args[0]
+    assert failed["event_type"] == "_parse_error"
+    assert valid["event_type"] == "user_prompt"
+
+
+async def test_non_string_tool_fields_do_not_poison_valid_neighbor(external_calls):
+    bad = {
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": {"invalid": "tool"}, "id": 123}]},
+    }
+    result = await _ingest([json.dumps(bad), CLAUDE_TOOL_CALL], end_byte_offsets=[25, 60])
+    assert result == session_ingest.IngestResult(ingested=1, skipped=0, errors=1)
+    failed, valid = external_calls.insert.await_args.args[0]
+    assert failed["event_type"] == "_parse_error" and failed["source_end_offset"] == 25
+    assert valid["tool_name"] == "read_file"
+
+
+@pytest.mark.parametrize("overrides", [{"start_offset": 2**32}, {"end_byte_offsets": [2**64]}])
+async def test_out_of_range_request_offsets_rejected_before_insert(external_calls, overrides):
+    with pytest.raises(ValueError, match="offset outside ClickHouse"):
+        await _ingest([CLAUDE_USER_PROMPT], **overrides)
+    external_calls.insert.assert_not_awaited()
+
+
+async def test_malformed_source_retains_only_redacted_raw_line(external_calls):
+    secret = "sk-proj-abc123def456ghi789jkl012mno345"
+    line = json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": f"OPENAI_API_KEY={secret}"}}})
+    await _ingest([line])
+    row = external_calls.insert.await_args.args[0][0]
+    assert row["event_type"] == "_parse_error"
+    assert secret not in row["raw_line"]
+    assert REDACTED in row["raw_line"]
+
+
+@pytest.mark.parametrize(
+    ("harness", "record"),
+    [
+        ("claude-code", {"type": "assistant", "message": {"usage": {"input_tokens": 1e308}}}),
+        ("cursor", {"type": "assistant", "message": {"usage": {"output_tokens": 2_147_483_648}}}),
+        ("opencode", {"type": "assistant", "message": {"usage": {"cache_read_input_tokens": 2_147_483_648}}}),
+        ("pi", {"type": "message", "message": {"usage": {"cacheWrite": 1e308}}}),
+        ("codex", {"type": "event_msg", "payload": {"info": {"last_token_usage": {"input_tokens": 1e308}}}}),
+        ("goose", {"type": "message", "metadata": {"usage": {"outputTokens": 1e308}}}),
+        ("copilot-cli", {"type": "assistant.message", "data": {"inputTokens": 1e308}}),
+        ("copilot", {"type": "assistant.message", "data": {"cacheReadTokens": 1e308, "inputTokens": 1}}),
+    ],
+)
+async def test_token_overflow_isolated_from_following_source(external_calls, harness, record):
+    with pytest.raises((ValueError, OverflowError)):
+        session_ingest._extract_usage_tokens(record, harness)
+    result = await _ingest([json.dumps(record), "{}"], harness=harness)
+    rows = external_calls.insert.await_args.args[0]
+    assert result.errors >= 1
+    assert rows[0]["event_type"] == "_parse_error"
+    assert rows[0]["input_tokens"] == rows[0]["output_tokens"] == 0
+    assert len(rows) == 2
+    assert rows[1]["line_offset"] == 1
+
+
+def test_clickhouse_int32_token_boundary_is_accepted():
+    maximum = 2_147_483_647
+    usage = session_ingest._extract_usage_tokens(
+        {
+            "message": {
+                "usage": {
+                    "input_tokens": maximum,
+                    "output_tokens": maximum,
+                    "cache_read_input_tokens": maximum,
+                    "cache_creation_input_tokens": maximum,
+                }
+            }
+        },
+        "claude-code",
+    )
+    assert all(
+        usage[key] == maximum for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+    )
+
+
+async def test_redactor_runtime_failure_does_not_persist_or_acknowledge(external_calls, monkeypatch):
+    def fail(_text):
+        raise RuntimeError("redactor unavailable")
+
+    monkeypatch.setattr(session_ingest, "redact_secrets", fail)
+    with pytest.raises(RuntimeError, match="redactor unavailable"):
+        await _ingest([CLAUDE_USER_PROMPT])
+    external_calls.insert.assert_not_awaited()
+
+
+async def test_lone_surrogate_content_length_uses_hash_encoding(external_calls):
+    line = '{"type":"user","message":{"content":"\ud800"}}'
+    await _ingest([line])
+    row = external_calls.insert.await_args.args[0][0]
+    encoded = line.encode("utf-8", errors="replace")
+    assert row["content_length"] == len(encoded)
+    assert row["source_sha256"] == hashlib.sha256(encoded).hexdigest()
+    assert row["line_hash"] == xxhash.xxh128(encoded).hexdigest()
+
+
+async def test_ingest_api_reports_durable_error_offsets_on_response_lost_retry(monkeypatch):
+    from api.routes import ingest
+    from services import clickhouse
+
+    line = "not json"
+    monkeypatch.setattr(clickhouse, "query_session_error_offsets", AsyncMock(return_value=[4]))
+    monkeypatch.setattr(
+        session_ingest, "ingest_session_lines", AsyncMock(return_value=session_ingest.IngestResult(0, 1, 0))
+    )
+    monkeypatch.setattr(session_ingest, "advance_session_checkpoint", AsyncMock(return_value=(4, 42)))
+    response = await ingest.ingest_session.__wrapped__(
+        ingest.SessionIngestRequest(session_id=SESSION_ID, lines=[line], start_offset=4),
+        SimpleNamespace(),
+        current_user=SimpleNamespace(id=USER_ID),
+    )
+    assert response.errors == 1
+    assert response.error_offsets == [4]
+    assert response.acknowledged_line == 4
+    clickhouse.query_session_error_offsets.assert_awaited_once_with(
+        SESSION_ID,
+        ingest.DEFAULT_PROJECT_ID,
+        USER_ID,
+        "claude-code",
+        4,
+        4,
+    )
 
 
 async def test_identity_metadata_and_source_accounting_survive_redaction(external_calls):
@@ -1098,7 +1303,7 @@ async def test_integrity_reads_checkpoint_and_accepts_matching_line_and_offset(e
     external_calls.manifest.assert_not_awaited()
 
 
-async def test_integrity_hashes_only_requested_lines_and_accepts_zero_offsets(external_calls):
+async def test_integrity_hashes_only_requested_lines_and_accepts_omitted_offset(external_calls):
     hashes = ["source-zero", "source-one"]
     external_calls.manifest.return_value = [(0, 10, hashes[0]), (1, 20, hashes[1]), (2, 30, "not-hashed")]
 
@@ -1108,7 +1313,7 @@ async def test_integrity_hashes_only_requested_lines_and_accepts_zero_offsets(ex
         USER_ID,
         "claude-code",
         expected_line_count=3,
-        expected_offset=0,
+        expected_offset=None,
         acknowledged_line=2,
         acknowledged_offset=999,
         expected_hash=_hash_manifest(hashes),

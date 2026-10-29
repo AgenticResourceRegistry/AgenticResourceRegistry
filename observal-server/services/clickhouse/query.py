@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """ClickHouse query functions for live session telemetry tables."""
 
@@ -115,6 +116,33 @@ async def query_session_source_manifest(
         (int(row["line_offset"]), int(row.get("source_end_offset") or 0), str(row.get("source_sha256") or ""))
         for row in r.json().get("data", [])
     ]
+
+
+async def query_session_error_offsets(
+    session_id: str, project_id: str, user_id: str, harness: str, min_offset: int, max_offset: int
+) -> list[int]:
+    """Read durable source errors for a requested range, including after response-lost retries."""
+    if min_offset > max_offset:
+        return []
+    sql = (
+        "SELECT line_offset FROM session_events FINAL "
+        "WHERE project_id = {pid:String} AND user_id = {uid:String} "
+        "AND harness = {harness:String} AND session_id = {sid:String} AND is_source_record = 1 "
+        "AND event_type = '_parse_error' "
+        "AND line_offset >= {min_off:UInt32} AND line_offset <= {max_off:UInt32} "
+        "ORDER BY line_offset FORMAT JSON"
+    )
+    params = {
+        "param_pid": project_id,
+        "param_uid": user_id,
+        "param_harness": harness,
+        "param_sid": session_id,
+        "param_min_off": str(min_offset),
+        "param_max_off": str(max_offset),
+    }
+    response = await _client._query(sql, params)
+    response.raise_for_status()
+    return [int(row["line_offset"]) for row in response.json().get("data", [])]
 
 
 async def query_existing_for_dedup(

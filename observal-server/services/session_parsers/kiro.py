@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro JSONL session parser.
@@ -481,12 +482,12 @@ def extract_usage(parsed: dict) -> dict:
             if not isinstance(item, dict):
                 continue
             block = item.get("data")
-            if isinstance(block, dict):
-                model = str_field(block, "modelId") or model
+            if isinstance(block, dict) and block.get("modelId") is not None and block["modelId"] != "":
+                model = block["modelId"]
     else:
         payload = parsed.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "assistant":
-            model = str_field(payload, "modelId")
+            model = payload.get("modelId") if payload.get("modelId") is not None else ""
     return {
         "input_tokens": 0,
         "output_tokens": 0,

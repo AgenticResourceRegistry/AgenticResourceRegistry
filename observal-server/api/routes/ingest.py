@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest endpoint."""
@@ -127,6 +128,7 @@ class SessionIngestResponse(BaseModel):
     ingested: int
     skipped: int
     errors: int
+    error_offsets: list[int] = Field(default_factory=list)
     acknowledged_line: int
     acknowledged_offset: int
     integrity_ok: bool | None = None  # Only set when final=True
@@ -194,6 +196,11 @@ async def ingest_session(
             detail={"message": "session source changed at an acknowledged line", "offsets": exc.offsets},
         )
 
+    from services.clickhouse import query_session_error_offsets
+
+    error_offsets = await query_session_error_offsets(
+        req.session_id, project_id, user_id, req.harness, req.start_offset, req.start_offset + len(req.lines) - 1
+    )
     acknowledged_line, acknowledged_offset = await advance_session_checkpoint(
         req.session_id,
         project_id,
@@ -220,18 +227,21 @@ async def ingest_session(
             user_id=user_id,
             harness=req.harness,
             expected_line_count=req.total_line_count,
-            expected_offset=req.total_offset or 0,
+            expected_offset=req.total_offset,
             acknowledged_line=acknowledged_line,
             acknowledged_offset=acknowledged_offset,
             expected_hash=req.session_hash,
             hashed_line_count=req.hashed_line_count,
         )
         integrity_ok = integrity.ok
-        if integrity.repair_from_line is not None:
+        if integrity.repair_from_line is not None or integrity.reconciled_offset:
             from services.clickhouse import insert_session_checkpoint
 
-            acknowledged_line = integrity.repair_from_line - 1
-            acknowledged_offset = integrity.repair_offset
+            if integrity.repair_from_line is not None:
+                acknowledged_line = integrity.repair_from_line - 1
+                acknowledged_offset = integrity.repair_offset
+            else:
+                acknowledged_offset = integrity.expected_offset
             await insert_session_checkpoint(
                 req.session_id,
                 project_id,
@@ -287,7 +297,8 @@ async def ingest_session(
     return SessionIngestResponse(
         ingested=result.ingested,
         skipped=result.skipped,
-        errors=result.errors,
+        errors=len(error_offsets),
+        error_offsets=error_offsets,
         acknowledged_line=acknowledged_line,
         acknowledged_offset=acknowledged_offset,
         integrity_ok=integrity_ok,

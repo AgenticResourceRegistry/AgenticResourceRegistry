@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the Kiro trace-viewer parser, in both the CLI and IDE layouts.
@@ -13,6 +14,8 @@ the attribute payload rather than just the event name.
 from __future__ import annotations
 
 import json
+
+import pytest
 
 from services.session_parsers import parse_raw_events
 
@@ -245,7 +248,7 @@ def test_ide_timestamps_are_normalised_to_utc():
     """The value goes straight into a DateTime64 column.
 
     A non-UTC offset sent verbatim can reject the whole insert batch, and an
-    unparseable value must fall back rather than poison the batch.
+    unparseable value must become a source error rather than poison the batch.
     """
     from services.session_parsers.ingest_classify import extract_timestamp
 
@@ -256,7 +259,8 @@ def test_ide_timestamps_are_normalised_to_utc():
     assert ts("2026-09-25T18:59:14.327+00:00") == "2026-09-25 18:59:14.327"
     assert ts("2026-09-25T18:59:14.327+05:30") == "2026-09-25 13:29:14.327"
     assert ts("2026-09-25T18:59:14.327") == "2026-09-25 18:59:14.327"
-    assert ts("not-a-timestamp") is None
+    with pytest.raises(ValueError, match="invalid Kiro IDE timestamp"):
+        ts("not-a-timestamp")
     assert ts("") is None
 
 
