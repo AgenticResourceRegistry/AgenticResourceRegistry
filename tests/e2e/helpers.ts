@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Page } from "@playwright/test";
@@ -7,17 +6,11 @@ import { Page } from "@playwright/test";
 /** Base URL for the Observal API */
 export const API_BASE = process.env.API_BASE ?? "http://localhost";
 
-type TestLogin = {
-  access_token: string;
-  refresh_token: string;
-  user: { role: string; name: string; email: string; username?: string | null; avatar_url?: string | null };
-};
+let _cachedToken: string | null = null;
 
-let _cachedLogin: TestLogin | null = null;
-
-/** Cache the complete server-issued pair so browser fixtures use real auth state. */
-async function getLogin(): Promise<TestLogin> {
-  if (_cachedLogin) return _cachedLogin;
+/** Get an access token by logging in with demo admin credentials (cached per worker) */
+export async function getAccessToken(): Promise<string> {
+  if (_cachedToken) return _cachedToken;
   const email = process.env.DEMO_ADMIN_EMAIL ?? "admin@demo.example";
   const password = process.env.DEMO_ADMIN_PASSWORD ?? "admin-changeme";
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -32,37 +25,26 @@ async function getLogin(): Promise<TestLogin> {
     }
     if (!res.ok) throw new Error(`Login failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
     const data = await res.json();
-    if (data.access_token && data.refresh_token && data.user) {
-      _cachedLogin = data as TestLogin;
-      return _cachedLogin;
+    if (data.access_token) {
+      _cachedToken = data.access_token;
+      return data.access_token as string;
     }
-    throw new Error(`Login response missing credentials or user (${res.status})`);
+    throw new Error(`Login response missing access token (${res.status})`);
   }
   throw new Error("Login failed after retries");
-}
-
-/** Get the server-issued access token for API-only fixtures. */
-export async function getAccessToken(): Promise<string> {
-  return (await getLogin()).access_token;
 }
 
 /** @deprecated Use getAccessToken */
 export const getApiKey = getAccessToken;
 
-/** Seed a production-built browser with the complete server-issued login pair. */
+/** Login to the web UI by setting localStorage */
 export async function loginToWebUI(page: Page) {
-  const login = await getLogin();
+  const token = await getAccessToken();
   await page.goto("/");
-  await page.evaluate((data) => {
-    const epoch = crypto.randomUUID();
-    localStorage.setItem("observal_auth_epoch", epoch);
-    sessionStorage.setItem("observal_tab_epoch", epoch);
-    sessionStorage.setItem("observal_access_token", data.access_token);
-    localStorage.setItem("observal_refresh_token", data.refresh_token);
-    localStorage.setItem("observal_user_role", data.user.role);
-    localStorage.setItem("observal_user_name", data.user.name);
-    localStorage.setItem("observal_user_email", data.user.email);
-  }, login);
+  await page.evaluate((t) => {
+    sessionStorage.setItem("observal_access_token", t);
+    localStorage.setItem("observal_user_role", "admin");
+  }, token);
   await page.reload();
 }
 

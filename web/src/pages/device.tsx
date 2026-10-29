@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -7,7 +6,7 @@ import { Suspense, useState, useEffect, useCallback } from "react";
 import { useRouter, useSearch } from "@tanstack/react-router";
 import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import { auth, getAccessToken, hasLegacySession, migrateLegacySession, refreshAccessToken } from "@/lib/api";
+import { auth } from "@/lib/api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +19,6 @@ function DeviceContent() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
   const { brandingAppName, brandingLogo, brandingWordmark } = useDeploymentConfig();
 
   const formatCode = useCallback((raw: string): string => {
@@ -32,24 +30,18 @@ function DeviceContent() {
     return limited;
   }, []);
 
-  // Resolve a legacy or refresh-only session before deciding whether to redirect.
+  // Redirect to login if not authenticated
   useEffect(() => {
-    let cancelled = false;
-    async function resolveAuth() {
-      try {
-        if (hasLegacySession()) await migrateLegacySession();
-        if (!getAccessToken()) await refreshAccessToken();
-      } catch { /* unsupported browser or failed refresh: ask for sign-in */ }
-      if (cancelled) return;
-      if (getAccessToken()) { setAuthReady(true); return; }
+    if (typeof window === "undefined") return;
+    const hasToken = !!sessionStorage.getItem("observal_access_token");
+    if (!hasToken) {
+      const code = codeParam;
       const directSso = ssoParam === "1";
-      const returnPath = codeParam
-        ? `/device?code=${encodeURIComponent(codeParam)}${directSso ? "&sso=1" : ""}`
+      const returnPath = code
+        ? `/device?code=${encodeURIComponent(code)}${directSso ? "&sso=1" : ""}`
         : `/device${directSso ? "?sso=1" : ""}`;
       router.navigate({ to: "/login", search: { next: returnPath, ...(directSso ? { sso: "1" } : {}) }, replace: true });
     }
-    void resolveAuth();
-    return () => { cancelled = true; };
   }, [router, codeParam, ssoParam]);
 
   // Pre-fill code from query parameter
@@ -88,7 +80,7 @@ function DeviceContent() {
   }
 
   // Don't render form until we know user is authenticated
-  if (!authReady || !getAccessToken()) {
+  if (typeof window !== "undefined" && !sessionStorage.getItem("observal_access_token")) {
     return null;
   }
 

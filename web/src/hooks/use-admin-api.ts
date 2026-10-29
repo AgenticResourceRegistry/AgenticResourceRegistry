@@ -23,14 +23,13 @@ import {
   config,
   telemetry,
   getUserRole,
-  getAccessToken,
 } from "@/lib/api";
 import { hasMinRole } from "@/hooks/use-role-guard";
 
 // ── Auth ────────────────────────────────────────────────────────────
 
 export function useWhoami(
-  enabled = typeof window !== "undefined" && !!getAccessToken(),
+  enabled = typeof window !== "undefined" && !!sessionStorage.getItem("observal_access_token"),
 ) {
   return useQuery({
     queryKey: ["auth", "whoami"],

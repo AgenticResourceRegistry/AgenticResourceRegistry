@@ -7,7 +7,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter, useLocation } from "@tanstack/react-router";
-import { auth, setUserRole, getUserRole, clearSession, refreshAccessTokenWithReason, authEpoch, canSilentRefresh, isCurrentAuth, updateProfile, getAccessToken, hasLegacySession, migrateLegacySession, abandonLegacySession } from "@/lib/api";
+import { auth, setUserRole, getUserRole, clearSession, refreshAccessTokenWithReason } from "@/lib/api";
 import { currentPathAsNext } from "@/lib/safe-next";
 
 function isNetworkError(err: unknown): boolean {
@@ -21,13 +21,12 @@ function subscribe(cb: () => void) {
 
 function getAuthSnapshot() {
   if (typeof window === "undefined") return "";
-  if (hasLegacySession()) return "migrating";
-  const key = getAccessToken();
+  const key = sessionStorage.getItem("observal_access_token");
   const role = getUserRole();
   if (key) return role || "pending";
   // No access token in sessionStorage, but refresh token may exist (new tab scenario).
   // Mark as "refreshing" so the guard attempts a silent refresh before redirecting.
-  const hasRefresh = canSilentRefresh() && !!localStorage.getItem("observal_refresh_token");
+  const hasRefresh = !!localStorage.getItem("observal_refresh_token");
   return hasRefresh ? "refreshing" : "";
 }
 
@@ -36,14 +35,13 @@ function getServerSnapshot() {
 }
 
 function retryUntilSettled(
-  attemptRequest: () => Promise<"ok" | "rejected" | "network_error" | "superseded" | "reauth_required">,
+  attemptRequest: () => Promise<"ok" | "rejected" | "network_error">,
   { onSuccess, onRejected, onNetworkError }: {
     onSuccess?: () => void;
     onRejected?: () => void;
     onNetworkError?: () => void;
   } = {},
 ) {
-  const epoch = authEpoch();
   let cancelled = false;
   let inFlight = false;
   let retryTimer: number | undefined;
@@ -51,24 +49,17 @@ function retryUntilSettled(
   const attempt = async () => {
     if (cancelled || inFlight) return;
     inFlight = true;
-    let result: Awaited<ReturnType<typeof attemptRequest>>;
-    try {
-      result = await attemptRequest();
-    } catch {
-      // A failed Web Lock cannot leave a guarded route spinning forever.
-      result = "reauth_required";
-    } finally {
-      inFlight = false;
-    }
-    if (cancelled || authEpoch() !== epoch) return;
+    const result = await attemptRequest();
+    inFlight = false;
+    if (cancelled) return;
 
     if (result === "ok") {
       onSuccess?.();
       window.dispatchEvent(new Event("storage"));
-    } else if (result === "rejected" || result === "reauth_required") {
+    } else if (result === "rejected") {
       clearSession();
       onRejected?.();
-    } else if (result === "network_error") {
+    } else {
       onNetworkError?.();
       retryTimer = window.setTimeout(attempt, 5_000);
     }
@@ -104,11 +95,8 @@ function retryWhoamiUntilSettled({
   return retryUntilSettled(
     async () => {
       try {
-        const epoch = authEpoch();
-        const actor = localStorage.getItem("observal_user_email");
         const user = await auth.whoami();
-        if (!isCurrentAuth(epoch, actor) || (actor && user.email !== actor)) return "superseded";
-        if (!await updateProfile(epoch, actor, () => setUserRole(user.role))) return "superseded";
+        setUserRole(user.role);
         return "ok";
       } catch (err) {
         return isNetworkError(err) ? "network_error" : "rejected";
@@ -123,8 +111,7 @@ export function useAuthGuard() {
   const { pathname } = useLocation();
   const snapshot = useSyncExternalStore(subscribe, getAuthSnapshot, getServerSnapshot);
   const isSSR = snapshot === "ssr";
-  const isMigrating = snapshot === "migrating";
-  const hasToken = !isSSR && snapshot !== "" && snapshot !== "refreshing" && !isMigrating;
+  const hasToken = !isSSR && snapshot !== "" && snapshot !== "refreshing";
   const isRefreshing = snapshot === "refreshing";
   const ready = hasToken && snapshot !== "pending";
   const role = ready ? snapshot : null;
@@ -132,10 +119,6 @@ export function useAuthGuard() {
   useEffect(() => {
     if (isSSR) return;
 
-    if (isMigrating) {
-      void migrateLegacySession().then(() => window.dispatchEvent(new Event("storage")), abandonLegacySession);
-      return;
-    }
     // New tab: no access token but refresh token exists. Try silent refresh.
     if (isRefreshing) {
       return retryRefreshUntilSettled(() => {
@@ -156,7 +139,7 @@ export function useAuthGuard() {
         },
       });
     }
-  }, [isSSR, hasToken, isRefreshing, isMigrating, snapshot, pathname, router]);
+  }, [isSSR, hasToken, isRefreshing, snapshot, pathname, router]);
 
   return { ready, role };
 }
@@ -169,27 +152,16 @@ export function useAuthGuard() {
 export function useOptionalAuth() {
   const snapshot = useSyncExternalStore(subscribe, getAuthSnapshot, getServerSnapshot);
   const [networkFallback, setNetworkFallback] = useState(false);
-  const isMigrating = snapshot === "migrating";
   const isRefreshing = snapshot === "refreshing";
-  const hasToken = snapshot !== "" && snapshot !== "ssr" && !isRefreshing && !isMigrating;
-  // A fresh tab cannot retry an indeterminate rotation. Public pages must
-  // settle anonymously even while the shared refresh token remains fenced.
-  const useAnonymousFallback = networkFallback && (snapshot === "pending" || isRefreshing);
-  const ready = useAnonymousFallback || (snapshot !== "pending" && !isRefreshing && !isMigrating);
+  const hasToken = snapshot !== "" && snapshot !== "ssr" && !isRefreshing;
+  const useAnonymousFallback = networkFallback && snapshot === "pending";
+  const ready = useAnonymousFallback || (snapshot !== "pending" && !isRefreshing);
   const role = !useAnonymousFallback && hasToken && snapshot !== "pending" ? snapshot : null;
   const isAuthenticated = !useAnonymousFallback && hasToken && snapshot !== "pending";
 
   useEffect(() => {
-    if (isMigrating) {
-      void migrateLegacySession().then(() => window.dispatchEvent(new Event("storage")), abandonLegacySession);
-      return;
-    }
     if (isRefreshing) {
-      return retryUntilSettled(refreshAccessTokenWithReason, {
-        onSuccess: () => setNetworkFallback(false),
-        onRejected: () => setNetworkFallback(true),
-        onNetworkError: () => setNetworkFallback(true),
-      });
+      return retryRefreshUntilSettled();
     }
 
     if (hasToken && snapshot === "pending") {
@@ -201,7 +173,7 @@ export function useOptionalAuth() {
         },
       });
     }
-  }, [hasToken, isRefreshing, isMigrating, snapshot]);
+  }, [hasToken, isRefreshing, snapshot]);
 
   return { ready, role, isAuthenticated };
 }

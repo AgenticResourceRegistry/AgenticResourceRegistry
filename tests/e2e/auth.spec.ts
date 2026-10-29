@@ -48,6 +48,42 @@ test("logout redirects to /login and blocks protected pages", async ({ page }) =
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
 });
 
+/**
+ * OBS-1495: a refresh that is in flight when the session is cleared must not restore it.
+ */
+test("a refresh that lands after sign-out does not restore the session", async ({ page, context }) => {
+  await page.goto("/login");
+  await page.fill("#email", EMAIL);
+  await page.fill("#password", PASSWORD);
+  await page.click('button[type="submit"]');
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 15_000 });
+
+  // Hold the silent refresh a new tab starts (access token gone, refresh token stored).
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let refreshStarted!: () => void;
+  const started = new Promise<void>((resolve) => (refreshStarted = resolve));
+  await page.route("**/api/v1/auth/token/refresh", async (route) => {
+    const response = await route.fetch();
+    refreshStarted();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.evaluate(() => sessionStorage.removeItem("observal_access_token"));
+  await page.reload();
+  await started;
+
+  // Another tab signs out while the refresh is in flight.
+  const other = await context.newPage();
+  await other.goto("/login");
+  await other.evaluate(() => localStorage.removeItem("observal_refresh_token"));
+
+  release();
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBeNull();
+  await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
+});
+
 test("public registry can be entered as a guest", async ({ page }) => {
   await page.route("**/api/v1/config/public", async (route) => {
     const response = await route.fetch();
