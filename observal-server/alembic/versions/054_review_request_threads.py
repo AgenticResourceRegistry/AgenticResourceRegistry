@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Link change requests to conversations and backfill historical review feedback.
 
-Revision ID: 046_review_request_threads
-Revises: 045_usage_ping_default_on
+Revision ID: 054_review_request_threads
+Revises: 053_mcp_webhook_sync_timestamps
 """
 
 import uuid
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql as pg
 
 from alembic import op
 
-revision = "046_review_request_threads"
-down_revision = "045_usage_ping_default_on"
+revision = "054_review_request_threads"
+down_revision = "053_mcp_webhook_sync_timestamps"
 branch_labels = None
 depends_on = None
 
