@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -45,6 +47,25 @@ def test_outbox_survives_reopen_and_acknowledges_only_contiguous_batches(tmp_pat
         == 1
     )
     assert [item.start_line for item in outbox.pending(destination="http://server", user_id="user", db_path=db)] == [2]
+
+
+def test_live_priority_migrates_existing_database_and_preserves_line_order(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    outbox.enqueue(payload(0, ["zero"]), destination="http://server", user_id="user", db_path=db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("ALTER TABLE session_outbox DROP COLUMN live")
+    old = payload(0, ["old"]) | {"session_id": "historical"}
+    outbox.enqueue(old, destination="http://server", user_id="user", db_path=db)
+    outbox.enqueue(payload(1, ["one"]), destination="http://server", user_id="user", db_path=db, live=True)
+
+    rows = outbox.pending(destination="http://server", user_id="user", db_path=db, prefer_live=True)
+    assert [(item.session_id, item.start_line) for item in rows] == [
+        ("session", 0),
+        ("session", 1),
+        ("historical", 0),
+    ]
+    rows = outbox.pending(destination="http://server", user_id="user", db_path=db, prefer_live=False)
+    assert rows[0].session_id == "historical"
 
 
 def test_requeue_is_idempotent_and_can_promote_final_payload(tmp_path: Path):
@@ -131,6 +152,19 @@ def test_spooled_checkpoint_advances_across_pending_ranges(tmp_path: Path):
         byte_offset=0,
         db_path=db,
     ) == (30, 3)
+
+
+def test_ingest_cooldown_is_persistent_and_scoped_to_user_and_server(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    monkeypatch.setattr("time.time", lambda: 1000.0)
+    outbox.pause_delivery("http://server", "user", 60.0, db_path=db)
+    outbox.pause_delivery("http://server/", "user", 2.0, db_path=db)
+
+    assert outbox.delivery_paused("http://server", "user", db_path=db)
+    assert not outbox.delivery_paused("http://other", "user", db_path=db)
+    assert not outbox.delivery_paused("http://server", "other", db_path=db)
+    monkeypatch.setattr("time.time", lambda: 1061.0)
+    assert not outbox.delivery_paused("http://server", "user", db_path=db)
 
 
 def test_failed_attempts_never_become_terminal(tmp_path: Path):

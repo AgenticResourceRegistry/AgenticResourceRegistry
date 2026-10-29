@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Durable SQLite outbox for acknowledged session delivery.
@@ -13,6 +14,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +56,50 @@ def _path(db_path: Path | None) -> Path:
     return db_path or DB_PATH
 
 
+def delivery_scope(destination: str, user_id: str) -> str:
+    """Stable, opaque lock identity for one normalized destination and user."""
+    identity = json.dumps([destination.rstrip("/"), user_id], separators=(",", ":"))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def delivery_lock(*, destination: str, user_id: str, db_path: Path | None = None):
+    """Serialize drains for one account across hooks, finalizers and workers."""
+    path = _path(db_path).with_suffix(f".delivery-{delivery_scope(destination, user_id)}.lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                locked = True
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+            except OSError:
+                pass
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except BlockingIOError:
+                pass
+        yield locked
+    finally:
+        if locked:
+            if os.name == "nt":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> sqlite3.Connection:
     path = _path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,12 +126,30 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
                 records_hash TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_attempt TEXT,
+                live INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(destination, user_id, harness, session_id, start_line, end_line)
             )
             """
         )
+        if not any(row[1] == "live" for row in conn.execute("PRAGMA table_info(session_outbox)")):
+            try:
+                conn.execute("ALTER TABLE session_outbox ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                # A concurrent hook may have migrated the same existing database.
+                if not any(row[1] == "live" for row in conn.execute("PRAGMA table_info(session_outbox)")):
+                    raise
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session_outbox_pending ON session_outbox(destination, user_id, id)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_outbox_pause ("
+            "destination TEXT NOT NULL, user_id TEXT NOT NULL, until_epoch REAL NOT NULL, "
+            "PRIMARY KEY(destination, user_id))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_recovery_pace ("
+            "destination TEXT NOT NULL, user_id TEXT NOT NULL, next_epoch REAL NOT NULL, "
+            "PRIMARY KEY(destination, user_id))"
         )
         conn.execute(
             """
@@ -127,6 +191,7 @@ def enqueue(
     checkpoint_key: str | None = None,
     db_path: Path | None = None,
     max_bytes: int = MAX_OUTBOX_BYTES,
+    live: bool = False,
 ) -> int:
     """Persist one source batch and return its durable row ID.
 
@@ -171,13 +236,14 @@ def enqueue(
                 """
                 INSERT INTO session_outbox (
                     destination, user_id, harness, session_id, checkpoint_key,
-                    start_line, end_line, end_offset, final, payload, records_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_line, end_line, end_offset, final, payload, records_hash, live
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(destination, user_id, harness, session_id, start_line, end_line)
                 DO UPDATE SET
                     checkpoint_key = excluded.checkpoint_key,
                     end_offset = max(session_outbox.end_offset, excluded.end_offset),
                     final = max(session_outbox.final, excluded.final),
+                    live = max(session_outbox.live, excluded.live),
                     payload = CASE
                         WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
                         ELSE session_outbox.payload
@@ -192,6 +258,7 @@ def enqueue(
                     int(final),
                     serialized,
                     records_hash,
+                    int(live),
                 ),
             )
             conn.commit()
@@ -217,12 +284,14 @@ def pending(
     user_id: str,
     limit: int = BATCH_SIZE,
     db_path: Path | None = None,
+    preferred_session: tuple[str, str] | None = None,
+    prefer_live: bool = False,
 ) -> list[OutboxItem]:
-    """Return durable batches oldest session first, each session in line order.
+    """Return durable batches in session line order, with optional live priority.
 
-    A session's lines can be spooled again after later lines (for example after a
-    server checkpoint rewind), so ordering by row id alone would send a batch the
-    checkpoint cannot reach before the batch that fills the gap, forever.
+    Historical and live sessions can be alternated by the drainer. A hook can
+    select its own session ahead of the backlog. A checkpoint rewind may spool
+    earlier lines after later ones, so row ID alone cannot order a session.
     Attempts never make a row terminal.
     """
     conn = _connect(db_path)
@@ -230,7 +299,7 @@ def pending(
         rows = conn.execute(
             # Group once for each session's first row; a correlated MIN() per row rescans the whole
             # destination for every row, which takes seconds on a few thousand queued batches.
-            "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id FROM session_outbox "
+            "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id, MAX(live) AS live FROM session_outbox "
             "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
             "SELECT item.id, item.destination, item.user_id, item.harness, item.session_id, "
             "item.checkpoint_key, item.start_line, item.end_line, item.end_offset, item.final, "
@@ -238,8 +307,18 @@ def pending(
             "FROM session_outbox AS item JOIN firsts "
             "ON firsts.harness = item.harness AND firsts.session_id = item.session_id "
             "WHERE item.destination = ? AND item.user_id = ? "
-            "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
-            (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
+            "ORDER BY (item.harness = ? AND item.session_id = ?) DESC, "
+            "(CASE WHEN ? = 1 THEN firsts.live ELSE 1 - firsts.live END) DESC, "
+            "(item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
+            (
+                destination.rstrip("/"),
+                user_id,
+                destination.rstrip("/"),
+                user_id,
+                *(preferred_session or ("", "")),
+                int(prefer_live),
+                limit,
+            ),
         ).fetchall()
         return [
             OutboxItem(
@@ -319,6 +398,86 @@ def holds_line(
         return row is not None
     finally:
         conn.close()
+
+
+def recovery_slot_remaining(destination: str, user_id: str, *, db_path: Path | None = None) -> float:
+    """Read shared pacing delay without claiming a future request slot."""
+    import time
+
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT next_epoch FROM session_recovery_pace WHERE destination = ? AND user_id = ?",
+            (destination.rstrip("/"), user_id),
+        ).fetchone()
+        return max(0.0, float(row[0]) - time.time()) if row else 0.0
+    finally:
+        conn.close()
+
+
+def reserve_recovery_slot(
+    destination: str, user_id: str, *, db_path: Path | None = None, allow_wait: bool = True
+) -> float | None:
+    """Reserve a shared request slot; live hooks decline slots that require waiting."""
+    import time
+
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        now = time.time()
+        row = conn.execute(
+            "SELECT next_epoch FROM session_recovery_pace WHERE destination = ? AND user_id = ?",
+            (destination.rstrip("/"), user_id),
+        ).fetchone()
+        send_at = max(now, float(row[0])) if row else now
+        if not allow_wait and send_at > now:
+            conn.rollback()
+            return None
+        conn.execute(
+            "INSERT INTO session_recovery_pace (destination, user_id, next_epoch) VALUES (?, ?, ?) "
+            "ON CONFLICT(destination, user_id) DO UPDATE SET next_epoch = excluded.next_epoch",
+            (destination.rstrip("/"), user_id, send_at + 1.1),
+        )
+        conn.commit()
+        return send_at - now
+    finally:
+        conn.close()
+
+
+def pause_delivery(destination: str, user_id: str, seconds: float, *, db_path: Path | None = None) -> None:
+    """Persist a rate-limit cooldown across hook and recovery processes."""
+    import time
+
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO session_outbox_pause (destination, user_id, until_epoch) VALUES (?, ?, ?) "
+            "ON CONFLICT(destination, user_id) DO UPDATE SET until_epoch = max(until_epoch, excluded.until_epoch)",
+            (destination.rstrip("/"), user_id, time.time() + seconds),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delivery_pause_remaining(destination: str, user_id: str, *, db_path: Path | None = None) -> float:
+    """Remaining rate-limit cooldown shared by all delivery processes."""
+    import time
+
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT until_epoch FROM session_outbox_pause WHERE destination = ? AND user_id = ?",
+            (destination.rstrip("/"), user_id),
+        ).fetchone()
+        return max(0.0, float(row[0]) - time.time()) if row else 0.0
+    finally:
+        conn.close()
+
+
+def delivery_paused(destination: str, user_id: str, *, db_path: Path | None = None) -> bool:
+    """Do not retry a known 429 on every subsequent hook invocation."""
+    return delivery_pause_remaining(destination, user_id, db_path=db_path) > 0
 
 
 def record_attempt(item_id: int, *, db_path: Path | None = None) -> None:

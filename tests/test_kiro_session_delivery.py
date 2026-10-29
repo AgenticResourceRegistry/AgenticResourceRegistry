@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -790,7 +791,9 @@ def test_reconcile_collects_parent_and_sub_execution(tmp_path: Path, monkeypatch
         lambda source, _cfg, **kwargs: drained.append((source, kwargs)) or True,
     )
 
-    result = cmd_reconcile_cli._reconcile_harness("kiro", {"user_id": "user"}, 24, False)
+    result = cmd_reconcile_cli._reconcile_harness(
+        "kiro", {"user_id": "user"}, False, cmd_reconcile_cli._discover_candidates("kiro", 24)
+    )
 
     assert result["pushed"] == 2
     assert [source.session_id for source, _kwargs in drained] == ["sess_ide-1", "sub-1"]

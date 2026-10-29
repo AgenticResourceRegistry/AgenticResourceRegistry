@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Dheirav Prakash <dheirav2005@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the Claude Code session helpers behind the session push hook.
@@ -13,14 +14,389 @@ sessions, and attributing a session to a pulled agent.
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
 
+from observal_cli.hooks import session_push
 from observal_cli.sessions import base
 from observal_cli.sessions.agent_marker import read_agent_marker
 from observal_cli.sessions.claude_code import find_jsonl_file, get_parent_session_id, project_key_from_cwd
+
+
+def test_recovery_pacer_stays_below_60_batches_per_minute(monkeypatch, tmp_path: Path):
+    from observal_cli import telemetry_buffer
+
+    now = [100.0]
+    monkeypatch.setattr(session_push.time, "time", lambda: now[0])
+    monkeypatch.setattr(session_push.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+
+    db = tmp_path / "outbox.db"
+    for index in range(61):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": "old", "lines": [str(index)], "start_offset": index},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    pace = session_push._recovery_pacer({"server_url": "http://server", "user_id": "user"})
+    assert pace() == 0
+    posted = []
+    assert base.drain_outbox(
+        {"server_url": "http://server", "user_id": "user", "_pace_recovery_delivery": pace},
+        home=tmp_path,
+        db_path=db,
+        post=lambda payload, _cfg: posted.append(now[0]) or {"acknowledged_line": payload["start_offset"]},
+    )
+    assert len(posted) == 61
+    assert posted[0] == 100.0
+    assert posted[-1] == pytest.approx(166.0)
+    assert all(later - earlier >= 1.1 - 1e-8 for earlier, later in pairwise(posted))
+
+
+def test_recovery_worker_lock_skips_overlapping_workers(tmp_path: Path):
+    with session_push._recovery_worker_lock("claude-code", tmp_path) as first:
+        assert first
+        with session_push._recovery_worker_lock("claude-code", tmp_path) as second:
+            assert second is False
+        with session_push._recovery_worker_lock("pi", tmp_path) as other_harness:
+            assert other_harness
+    with session_push._recovery_worker_lock("claude-code", tmp_path) as next_worker:
+        assert next_worker
+
+
+def test_background_recovery_retries_after_429_without_another_hook(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    from observal_cli import telemetry_buffer
+
+    now = [1000.0]
+    monkeypatch.setattr(session_push.time, "time", lambda: now[0])
+    monkeypatch.setattr(session_push.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    monkeypatch.setattr(session_push, "ensure_loaded", lambda: None)
+    monkeypatch.setattr(
+        session_push,
+        "get_adapter",
+        lambda _harness: SimpleNamespace(aged_recovery_final=lambda: False, discover_session_sources=lambda **_kw: []),
+    )
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    calls = []
+
+    def post(_config, **_kw):
+        calls.append(now[0])
+        if len(calls) == 1:
+            telemetry_buffer.pause_delivery("http://server", "user", 30)
+        return len(calls) > 1
+
+    monkeypatch.setattr(session_push, "drain_outbox", post)
+    session_push._recover_sessions("claude-code", home=tmp_path)
+    assert calls == [1000.0, 1030.0]
+
+
+def test_recovery_spools_old_sessions_before_waiting_for_rate_limit(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    from observal_cli import telemetry_buffer
+
+    source_file = tmp_path / "old.jsonl"
+    source_file.write_text('"old"\n')
+    source = SimpleNamespace(session_id="old", path=source_file, checkpoint_key="old")
+    adapter = SimpleNamespace(
+        aged_recovery_final=lambda: False,
+        discover_session_sources=lambda **_kw: [source],
+        should_capture_session=lambda _source, **_kw: True,
+        session_extra_fields=lambda *_args, **_kw: {},
+        related_session_sources=lambda *_args, **_kw: [],
+    )
+    now = [session_push.time.time() + 200]
+    monkeypatch.setattr(session_push.time, "time", lambda: now[0])
+    monkeypatch.setattr(session_push.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    monkeypatch.setattr(session_push, "ensure_loaded", lambda: None)
+    monkeypatch.setattr(session_push, "get_adapter", lambda _harness: adapter)
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    monkeypatch.setattr(session_push, "read_cursor_state", lambda *_args, **_kw: (0, 0, False))
+    spooled = []
+    monkeypatch.setattr(
+        session_push, "drain_session_source", lambda _source, _config, **kw: spooled.append(kw["spool_only"]) or True
+    )
+    calls = []
+
+    def post(_config, **_kw):
+        calls.append(now[0])
+        if len(calls) == 1:
+            telemetry_buffer.pause_delivery("http://server", "user", 30)
+        return len(calls) > 1
+
+    monkeypatch.setattr(session_push, "drain_outbox", post)
+    session_push._recover_sessions("claude-code", home=tmp_path)
+    assert spooled == [True]
+    assert len(calls) == 2
+    assert calls[1] - calls[0] == 30
+
+
+def test_recovery_drains_spooled_source_when_pause_expires_during_capture(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    from observal_cli import telemetry_buffer
+
+    source_file = tmp_path / "old.jsonl"
+    source_file.write_text('"old"\n')
+    source = SimpleNamespace(session_id="old", path=source_file, checkpoint_key="old")
+    adapter = SimpleNamespace(
+        aged_recovery_final=lambda: False,
+        discover_session_sources=lambda **_kw: [source],
+        should_capture_session=lambda _source, **_kw: True,
+        session_extra_fields=lambda *_args, **_kw: {},
+        related_session_sources=lambda *_args, **_kw: [],
+    )
+    now = [source_file.stat().st_mtime + 200]
+    monkeypatch.setattr(session_push.time, "time", lambda: now[0])
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    monkeypatch.setattr(session_push, "ensure_loaded", lambda: None)
+    monkeypatch.setattr(session_push, "get_adapter", lambda _harness: adapter)
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    monkeypatch.setattr(session_push, "read_cursor_state", lambda *_args, **_kw: (0, 0, False))
+    calls = []
+
+    def drain(_config, **_kw):
+        calls.append("drain")
+        if len(calls) == 1:
+            telemetry_buffer.pause_delivery("http://server", "user", 30)
+        return True
+
+    def capture(_source, _config, **kw):
+        assert kw["spool_only"] is True
+        calls.append("spool")
+        now[0] += 31
+        return True
+
+    monkeypatch.setattr(session_push, "drain_outbox", drain)
+    monkeypatch.setattr(session_push, "drain_session_source", capture)
+    session_push._recover_sessions("claude-code", home=tmp_path)
+    assert calls == ["drain", "spool", "drain"]
+
+
+def test_recovery_discovers_sources_before_draining_aged_backlog(tmp_path: Path, monkeypatch):
+    from types import SimpleNamespace
+
+    from observal_cli import telemetry_buffer
+
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    source_file = tmp_path / "near-cutoff.jsonl"
+    source_file.write_text('"old"\n')
+    source = SimpleNamespace(session_id="near-cutoff", path=source_file, checkpoint_key="near-cutoff")
+    cutoff = [True]
+    observed = []
+
+    def discover(**_kw):
+        observed.append("discover")
+        return [source] if cutoff[0] else []
+
+    adapter = SimpleNamespace(
+        aged_recovery_final=lambda: False,
+        discover_session_sources=discover,
+        should_capture_session=lambda _source, **_kw: True,
+        session_extra_fields=lambda *_args, **_kw: {},
+        related_session_sources=lambda *_args, **_kw: [],
+    )
+    monkeypatch.setattr(session_push, "ensure_loaded", lambda: None)
+    monkeypatch.setattr(session_push, "get_adapter", lambda _harness: adapter)
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    monkeypatch.setattr(session_push, "read_cursor_state", lambda *_args, **_kw: (0, 0, False))
+    monkeypatch.setattr(session_push.time, "time", lambda: source_file.stat().st_mtime + 200)
+
+    def slow_drain(_config, **_kw):
+        observed.append("drain")
+        cutoff[0] = False
+        return True
+
+    monkeypatch.setattr(session_push, "drain_outbox", slow_drain)
+    monkeypatch.setattr(session_push, "drain_session_source", lambda *_args, **_kw: observed.append("spool") or True)
+    session_push._recover_sessions("claude-code", home=tmp_path)
+    assert observed == ["discover", "drain", "spool", "drain"]
+
+
+def test_two_accounts_drain_while_first_post_exceeds_lock_wait(tmp_path: Path, monkeypatch):
+    import time
+
+    from observal_cli import telemetry_buffer
+
+    db = tmp_path / "outbox.db"
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", db)
+    for user in ("account-a", "account-b"):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": user, "lines": ["{}"], "start_offset": 0},
+            destination="http://server/",
+            user_id=user,
+            db_path=db,
+        )
+
+    entered_a, release_a, posted_b = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+    monkeypatch.setattr(
+        session_push,
+        "load_config",
+        lambda **_kw: {"server_url": "http://server/", "user_id": threading.current_thread().name},
+    )
+
+    def post(_destination, _token, payload, **_kw):
+        if payload["session_id"] == "account-a":
+            entered_a.set()
+            assert release_a.wait(10)
+        else:
+            posted_b.set()
+        return {"acknowledged_line": 0}
+
+    monkeypatch.setattr(base, "post_to_server_ack", post)
+
+    def worker():
+        try:
+            session_push._drain_pending(home=tmp_path)
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=worker, name="account-a")
+    second = threading.Thread(target=worker, name="account-b")
+    first.start()
+    try:
+        assert entered_a.wait(3)
+        started = time.monotonic()
+        second.start()
+        assert posted_b.wait(2), "account B must post before A releases its lock"
+        second.join(2)
+        assert not second.is_alive()
+        time.sleep(max(0, 5.2 - (time.monotonic() - started)))
+        assert not release_a.is_set()
+    finally:
+        release_a.set()
+        first.join(3)
+        if second.ident is not None:
+            second.join(3)
+    assert not first.is_alive() and not second.is_alive()
+    assert not errors
+    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
+
+
+def test_outbox_worker_lock_keeps_distinct_account_hashes(tmp_path: Path):
+    from observal_cli import telemetry_buffer
+
+    scopes = [telemetry_buffer.delivery_scope("http://server", user) for user in ("account-a", "account-b")]
+    assert scopes[0] != scopes[1]
+    for scope in scopes:
+        with session_push._recovery_worker_lock(f"outbox-{scope}", tmp_path) as acquired:
+            assert acquired
+    lock_dir = tmp_path / ".observal"
+    for scope in scopes:
+        assert (lock_dir / f"session_recovery_outbox-{scope}.lock").exists()
+
+
+def test_outbox_worker_retries_lock_after_empty_drainer_exits(tmp_path: Path, monkeypatch):
+    empty = threading.Event()
+    release = threading.Event()
+    contended = threading.Event()
+    calls = []
+    errors = []
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    real_lock = session_push._recovery_worker_lock
+    from observal_cli import telemetry_buffer
+
+    outbox_lock = f"outbox-{telemetry_buffer.delivery_scope('http://server', 'user')}"
+
+    @contextmanager
+    def observed_lock(name, home):
+        with real_lock(name, home) as acquired:
+            if name == outbox_lock and not acquired:
+                contended.set()
+            yield acquired
+
+    monkeypatch.setattr(session_push, "_recovery_worker_lock", observed_lock)
+
+    def drain(_config, **_kw):
+        calls.append(threading.current_thread().name)
+        if len(calls) == 1:
+            empty.set()
+            assert release.wait(3)
+        return True
+
+    monkeypatch.setattr(session_push, "drain_outbox", drain)
+
+    def worker():
+        try:
+            session_push._drain_pending(home=tmp_path)
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=worker, name="first")
+    second = threading.Thread(target=worker, name="second")
+    first.start()
+    try:
+        assert empty.wait(3)
+        second.start()
+        assert contended.wait(3)
+    finally:
+        release.set()
+        first.join(3)
+        if second.ident is not None:
+            second.join(3)
+    assert not first.is_alive() and not second.is_alive()
+    assert not errors
+    assert calls == ["first", "second"]
+
+
+def test_outbox_lock_wait_is_bounded(tmp_path: Path, monkeypatch):
+    from observal_cli import telemetry_buffer
+
+    outbox_lock = f"outbox-{telemetry_buffer.delivery_scope('http://server', 'user')}"
+    waiter_lock = f"outbox-waiter-{telemetry_buffer.delivery_scope('http://server', 'user')}"
+    now = [100.0]
+    monkeypatch.setattr(session_push.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(session_push.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    monkeypatch.setattr(session_push, "drain_outbox", lambda *_args, **_kw: pytest.fail("lock was held"))
+    with session_push._recovery_worker_lock(outbox_lock, tmp_path) as acquired:
+        assert acquired
+        session_push._drain_pending(home=tmp_path)
+        assert now[0] <= 100 + session_push._OUTBOX_LOCK_WAIT_SECONDS + session_push._OUTBOX_LOCK_RETRY_SECONDS
+    assert now[0] >= 100 + session_push._OUTBOX_LOCK_WAIT_SECONDS
+    with session_push._recovery_worker_lock(outbox_lock, tmp_path) as acquired:
+        assert acquired
+        with session_push._recovery_worker_lock(waiter_lock, tmp_path) as waiting:
+            assert waiting
+            before = now[0]
+            session_push._drain_pending(home=tmp_path)
+            assert now[0] == before
+    monkeypatch.setattr(session_push, "drain_outbox", lambda *_args, **_kw: True)
+    session_push._drain_pending(home=tmp_path)
+
+
+def test_final_hook_background_drain_waits_through_repeated_429s(tmp_path: Path, monkeypatch):
+    from observal_cli import telemetry_buffer
+
+    now = [1000.0]
+    monkeypatch.setattr(session_push.time, "time", lambda: now[0])
+    monkeypatch.setattr(session_push.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    monkeypatch.setattr(session_push, "load_config", lambda **_kw: {"server_url": "http://server", "user_id": "user"})
+    calls = []
+
+    def post(_config, **_kw):
+        calls.append(now[0])
+        if len(calls) < 7:
+            telemetry_buffer.pause_delivery("http://server", "user", 30)
+            return False
+        return True
+
+    monkeypatch.setattr(session_push, "drain_outbox", post)
+    session_push._drain_pending(home=tmp_path)
+    assert len(calls) == 7
+    assert calls[-1] == 1180.0
 
 
 def _session_file(home: Path, project_key: str, session_id: str, *subdirs: str) -> Path:
