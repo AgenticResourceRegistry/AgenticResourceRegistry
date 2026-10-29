@@ -990,7 +990,7 @@ export default function SettingsPage() {
 					</SettingRow>
 					<SettingRow settingKey="branding.preview" label="Preview">
 						<div className="inline-flex h-12 items-center gap-[11px] rounded-[9px] border border-border bg-sidebar pr-4 pl-3" aria-live="polite">
-							<img src={logoPreview || "/observal-logo.svg"} alt="" width={22} height={22} className="object-contain" />
+							<img src={logoPreview || "/logo.png"} alt="" width={22} height={22} className="object-contain" />
 							{wordmarkPreview ? (
 								<img src={wordmarkPreview} alt="" width={140} height={16} className="h-4 max-w-35 object-contain object-left" />
 							) : (

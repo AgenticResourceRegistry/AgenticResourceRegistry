@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -45,7 +46,7 @@ def test_chart_has_artifacthub_metadata_for_oci_listing():
 
     assert (
         chart["icon"]
-        == "https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.svg"
+        == "https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.png"
     )
     assert chart["maintainers"][0]["email"] == "harisrini21@gmail.com"
     assert chart["annotations"]["artifacthub.io/category"] == "monitoring-logging"

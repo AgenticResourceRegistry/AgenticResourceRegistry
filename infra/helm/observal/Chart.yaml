@@ -10,7 +10,7 @@ description: >
 type: application
 version: 0.1.0
 appVersion: "latest"
-icon: https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.svg
+icon: https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.png
 keywords:
   - observal
   - ai-agents
