@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared IO primitives for all harness session push scripts.
@@ -291,12 +292,126 @@ def _refresh_access_token(server_url: str, refresh_token: str, config_path: str)
         return None
 
 
+def _safe_ingest_validation_detail(response) -> str | None:
+    """Describe the first invalid field, never echo the submitted transcript."""
+    import re
+
+    # FastAPI includes the invalid `input` in its 422 body, potentially the entire
+    # transcript. Do not dump it to sync.log or the quarantine reason.
+    if len(getattr(response, "content", b"")) > 32 * 1024 * 1024:
+        return None
+    try:
+        errors = response.json().get("detail")
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(errors, list) or not errors or not isinstance(errors[0], dict):
+        return None
+    error = errors[0]
+    kind = error.get("type")
+    location = error.get("loc")
+    # Only known Pydantic/FastAPI codes may appear in diagnostics. A remote
+    # response is untrusted even if it claims to be a validation error.
+    known_kinds = {
+        "value_error",
+        "missing",
+        "string_too_long",
+        "list_too_long",
+        "less_than_equal",
+        "greater_than_equal",
+        "int_parsing",
+        "float_parsing",
+        "bool_parsing",
+        "string_type",
+        "list_type",
+        "int_type",
+        "float_type",
+        "bool_type",
+        "model_attributes_type",
+        "model_type",
+        "json_invalid",
+    }
+    if not isinstance(kind, str):
+        return None
+    kind = kind if kind in known_kinds else "validation_error"
+    if not isinstance(location, list) or not location or len(location) > 5:
+        return None
+    parts = []
+    for segment in location:
+        if isinstance(segment, str) and re.fullmatch(r"[a-z_]{1,64}", segment):
+            parts.append(segment)
+        elif isinstance(segment, int) and 0 <= segment <= 10_000_000:
+            parts.append(str(segment))
+        else:
+            return None
+    # Field names must come from the ingest schema, not arbitrary strings in a
+    # remote response. Numeric list indices above are bounded separately.
+    fields = {
+        "session_id",
+        "harness",
+        "agent_id",
+        "agent_version",
+        "layer_hash",
+        "lines",
+        "start_offset",
+        "end_byte_offsets",
+        "hook_event",
+        "final",
+        "total_line_count",
+        "total_offset",
+        "session_hash",
+        "hashed_line_count",
+        "total_credits",
+        "parent_session_id",
+        "capabilities_used",
+    }
+    capability_fields = {
+        "identifier",
+        "kind",
+        "component_id",
+        "native_ref",
+        "version",
+        "digest",
+        "mode",
+        "source",
+        "used_at",
+        "confidence",
+    }
+    if parts[0] != "body" or (len(parts) > 1 and parts[1] not in fields):
+        return None
+    if len(parts) > 2 and (
+        parts[1] not in {"lines", "end_byte_offsets", "capabilities_used"} or not parts[2].isdigit()
+    ):
+        return None
+    if len(parts) > 3 and (parts[1] != "capabilities_used" or parts[3] not in capability_fields or len(parts) > 4):
+        return None
+    detail = f"{'.'.join(parts)}: {kind}"
+    message = error.get("msg")
+    # Pydantic's model validators all report `body: value_error`; only
+    # recognized constant messages can safely distinguish their causes.
+    if kind == "value_error" and isinstance(message, str):
+        if parts == ["body", "lines"] and message == "Value error, session lines must be at most 1048576 characters":
+            detail += " (session lines must be at most 1048576 characters)"
+        elif parts == ["body"]:
+            model_errors = {
+                "Value error, end_byte_offsets must contain one value per source line": "end_byte_offsets mismatch",
+                "Value error, end_byte_offsets cannot contain negative values": "end_byte_offsets negative",
+                "Value error, end_byte_offsets must be ordered": "end_byte_offsets unordered",
+                "Value error, hashed_line_count is required with session_hash": "hashed_line_count required",
+                "Value error, hashed_line_count cannot exceed total_line_count": "hashed_line_count exceeds total_line_count",
+            }
+            if message in model_errors:
+                detail += f" ({model_errors[message]})"
+    return detail
+
+
 class PermanentIngestRejectionError(RuntimeError):
     """A payload rejection that retrying cannot resolve."""
 
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, detail: str | None = None):
         self.status_code = status_code
-        super().__init__(f"server permanently rejected the payload with status {status_code}")
+        super().__init__(
+            f"server permanently rejected the payload with status {status_code}" + (f": {detail}" if detail else "")
+        )
 
 
 def post_to_server_ack(
@@ -329,13 +444,15 @@ def post_to_server_ack(
                         headers["Authorization"] = f"Bearer {new_token}"
                         response = client.post(url, json=payload, headers=headers)
             if response.status_code >= 300:
+                detail = _safe_ingest_validation_detail(response) if response.status_code == 422 else None
                 optic.warning(
-                    "ingest POST returned {} for session {}: server rejected the payload",
+                    "ingest POST returned {} for session {}: {}",
                     response.status_code,
                     session_id,
+                    detail or "server rejected the payload",
                 )
                 if response.status_code in {400, 409, 413, 415, 422}:
-                    raise PermanentIngestRejectionError(response.status_code)
+                    raise PermanentIngestRejectionError(response.status_code, detail)
                 return None
             data = response.json()
             if not isinstance(data.get("acknowledged_line"), int):
