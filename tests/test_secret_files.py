@@ -334,6 +334,21 @@ def test_installer_selects_tty_or_safe_headless_input():
     assert 'bash "$INSTALL_DIR/setup.sh" </dev/null' in installer
 
 
+def test_server_package_uses_arr_release_and_images_but_keeps_observal_cli():
+    root = Path(__file__).resolve().parent.parent
+    installer = (root / "install-server.sh").read_text()
+    compose = (root / "docker/server-package/docker-compose.yml").read_text()
+    guide = (root / "docs/getting-started/installation.md").read_text()
+
+    repo = "AgenticResourceRegistry/AgenticResourceRegistry"
+    assert f'GITHUB_REPO="{repo}"' in installer
+    assert f"https://raw.githubusercontent.com/{repo}/main/install-server.sh" in guide
+    assert "ghcr.io/agenticresourceregistry/observal-api:" in compose
+    assert "ghcr.io/agenticresourceregistry/observal-web:" in compose
+    assert "observal admin create-user" in guide
+    assert "use the server URL printed by setup" in guide
+
+
 def test_server_package_upgrade_preserves_legacy_public_bind(tmp_path):
     install, env = _package_fixture(tmp_path)
     existing = "SECRET_KEY=existing\nPOSTGRES_PASSWORD=existing\n"
