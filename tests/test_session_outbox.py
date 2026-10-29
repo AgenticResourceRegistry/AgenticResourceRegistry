@@ -163,6 +163,29 @@ def test_source_batches_drain_before_metadata_waiting_on_their_checkpoint(tmp_pa
     assert [(item.start_line, item.end_line) for item in remaining] == [(2, 1)]
 
 
+def test_pending_keeps_line_order_while_excluding_held_and_claimed_sessions(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    for session, start in (("requeued", 2), ("claimed", 0), ("held", 0), ("requeued", 0)):
+        outbox.enqueue(
+            payload(start, [str(start)]) | {"session_id": session},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    items = outbox.pending(destination="http://server", user_id="user", db_path=db)
+    claimed = next(item for item in items if item.session_id == "claimed")
+    held = next(item for item in items if item.session_id == "held")
+    token = outbox.claim_for_delivery(claimed, db_path=db)
+    assert token is not None
+    assert outbox.hold_if_current(held, "identity unverified", db_path=db)
+    try:
+        visible = outbox.pending(destination="http://server", user_id="user", limit=2, db_path=db)
+        assert [(item.session_id, item.start_line) for item in visible] == [("requeued", 0), ("requeued", 2)]
+        assert all(item.provenance is None for item in visible)
+    finally:
+        outbox.release_delivery_claim(claimed, token, db_path=db)
+
+
 def test_requeue_rejects_different_content_for_same_source_range(tmp_path: Path):
     db = tmp_path / "outbox.db"
     outbox.enqueue(payload(0, ["original"]), destination="http://server", user_id="user", db_path=db)
