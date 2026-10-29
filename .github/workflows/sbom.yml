@@ -132,7 +132,8 @@ jobs:
 
       - name: Run ScanCode license scan
         run: |
-          uv tool install "scancode-toolkit>=32.0,<33.0"
+          # pluggy 1.7 rejects plugincode's hook specs ("did not find any 'pre_scan' hooks").
+          uv tool install "scancode-toolkit>=32.0,<33.0" --with "pluggy<1.7"
           scancode \
             --license --package --info \
             --license-policy .reuse/license-policy.yml \
