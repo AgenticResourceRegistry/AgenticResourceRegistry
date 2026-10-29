@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import nullcontext
 from io import StringIO
 from pathlib import Path
@@ -20,6 +21,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from observal_cli import cmd_ops as ops
+from observal_cli.errors import CliError, ErrorCategory
 from observal_cli.install_detector import InstallInfo, InstallMethod
 from observal_cli.main import app as cli_app
 from observal_cli.upgrade_lock import UpgradeLockError
@@ -1452,7 +1454,7 @@ def test_every_remaining_ops_workflow_has_output_and_dead_commands_are_removed()
                 yield name, child
 
     rows = list(leaves(command))
-    assert len(rows) == 13
+    assert len(rows) == 14
     assert all(any(parameter.name == "output" for parameter in leaf.params) for _name, leaf in rows)
     assert "metrics" not in command.commands
     assert "spans" not in command.commands
@@ -1789,3 +1791,355 @@ def _folder_review_api(monkeypatch, version, *, base_files=None, detail=None):
         lambda path, body=None: calls.posts.append((path, body)) or {"version": "1.1.0", "new_status": "x"},
     )
     return calls
+
+
+# ── export-trace ────────────────────────────────────────
+
+
+def _otlp(session_id: str, spans: int = 2) -> dict:
+    return {
+        "resourceSpans": [
+            {
+                "resource": {"attributes": []},
+                "scopeSpans": [{"spans": [{"name": f"{session_id}-{i}"} for i in range(spans)]}],
+            }
+        ]
+    }
+
+
+def _protobuf_body(session_id: str) -> bytes:
+    return f"pb:{session_id}".encode()
+
+
+def _fake_session_api(calls: list, sessions: list[dict] | None = None):
+    def fake_get(path, params=None, **kwargs):
+        calls.append((path, params))
+        return sessions or []
+
+    def fake_get_bytes(path, params=None, **kwargs):
+        calls.append((path, params))
+        session_id = path.removeprefix("/api/v1/sessions/").removesuffix("/otlp")
+        headers = {"x-observal-span-count": "2"}
+        if params["encoding"] == "protobuf":
+            return _protobuf_body(session_id), headers
+        return json.dumps(_otlp(session_id)).encode(), headers
+
+    return fake_get, fake_get_bytes
+
+
+def _install_session_api(monkeypatch, calls, sessions=None):
+    fake_get, fake_get_bytes = _fake_session_api(calls, sessions)
+    monkeypatch.setattr(ops.client, "get", fake_get)
+    monkeypatch.setattr(ops.client, "get_bytes", fake_get_bytes)
+
+
+def _reply(status=200, body=b"", content_type="application/json", text=""):
+    def parse():
+        return json.loads(body)
+
+    return SimpleNamespace(
+        status_code=status, content=body, headers={"content-type": content_type}, json=parse, text=text
+    )
+
+
+def _json_params(include_content: bool = False) -> dict:
+    return {"include_content": "true" if include_content else "false", "encoding": "json"}
+
+
+def test_export_trace_prints_json_lines_and_dedupes_ids(cli, monkeypatch, capsys):
+    calls = []
+    _install_session_api(monkeypatch, calls)
+
+    ops._export_trace_impl(["a", " a ", "b/c"], None, False, None, None, [], "http/protobuf", "table")
+
+    assert calls == [
+        ("/api/v1/sessions/a/otlp", _json_params()),
+        ("/api/v1/sessions/b%2Fc/otlp", _json_params()),
+    ]
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line) for line in lines] == [_otlp("a"), _otlp("b%2Fc")]
+
+
+def test_export_trace_recent_adds_listed_sessions_and_writes_json_lines(cli, monkeypatch, tmp_path):
+    calls = []
+    listed = [{"session_id": "a"}, {"session_id": "z"}, {"session_id": ""}]
+    _install_session_api(monkeypatch, calls, listed)
+    target = tmp_path / "traces.jsonl"
+
+    ops._export_trace_impl(["a"], 3, True, target, None, [], "http/protobuf", "json")
+
+    assert calls == [
+        ("/api/v1/sessions", {"limit": 3}),
+        ("/api/v1/sessions/a/otlp", _json_params(True)),
+        ("/api/v1/sessions/z/otlp", _json_params(True)),
+    ]
+    lines = target.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == [_otlp("a"), _otlp("z")]
+    assert cli.json == [
+        {
+            "sessions": 2,
+            "spans": 4,
+            "skipped": [],
+            "include_content": True,
+            "file": str(target),
+            "endpoint": None,
+            "protocol": None,
+            "results": [{"session_id": "a", "spans": 2}, {"session_id": "z", "spans": 2}],
+        }
+    ]
+
+
+def _unsupported_harness(session_ids: set[str], calls: list):
+    """get_bytes that answers 422, as the server does for harnesses without a projector."""
+
+    def fake_get_bytes(path, params=None, **kwargs):
+        calls.append((path, params))
+        session_id = path.removeprefix("/api/v1/sessions/").removesuffix("/otlp")
+        if session_id in session_ids:
+            raise CliError(ErrorCategory.VALIDATION, "not available", operation="Export traces", http_status=422)
+        return json.dumps(_otlp(session_id)).encode(), {"x-observal-span-count": "2"}
+
+    return fake_get_bytes
+
+
+def test_export_trace_skips_sessions_whose_harness_has_no_projector(cli, monkeypatch, tmp_path):
+    calls = []
+    _install_session_api(monkeypatch, calls, [{"session_id": "cursor-1"}, {"session_id": "claude-1"}])
+    monkeypatch.setattr(ops.client, "get_bytes", _unsupported_harness({"cursor-1"}, calls))
+    warnings = []
+    monkeypatch.setattr(ops, "emit_warning", lambda *args, **kwargs: warnings.append((args, kwargs)))
+    target = tmp_path / "traces.jsonl"
+
+    ops._export_trace_impl([], 2, False, target, None, [], "http/protobuf", "json")
+
+    lines = target.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == [_otlp("claude-1")]
+    [summary] = cli.json
+    assert summary["sessions"] == 1
+    assert summary["skipped"] == ["cursor-1"]
+    [(args, _kwargs)] = warnings
+    assert "cursor-1" in args[1]
+
+
+def test_export_trace_fails_when_no_session_can_be_exported(cli, monkeypatch):
+    calls = []
+    _install_session_api(monkeypatch, calls)
+    monkeypatch.setattr(ops.client, "get_bytes", _unsupported_harness({"cursor-1"}, calls))
+    monkeypatch.setattr(ops, "emit_warning", lambda *args, **kwargs: None)
+
+    with pytest.raises(CliError) as raised:
+        ops._export_trace_impl(["cursor-1"], None, False, None, None, [], "http/protobuf", "table")
+
+    assert raised.value.category == ErrorCategory.VALIDATION
+    assert "Claude Code" in (raised.value.remediation or "")
+
+
+def test_export_trace_does_not_swallow_other_server_errors(cli, monkeypatch):
+    def not_found(path, params=None, **kwargs):
+        raise CliError(ErrorCategory.NOT_FOUND, "Session not found", operation="Export traces", http_status=404)
+
+    monkeypatch.setattr(ops.client, "get_bytes", not_found)
+
+    with pytest.raises(CliError) as raised:
+        ops._export_trace_impl(["missing"], None, False, None, None, [], "http/protobuf", "table")
+
+    assert raised.value.http_status == 404
+
+
+def test_export_trace_streams_each_session_to_stdout(cli, monkeypatch, capsys):
+    _fake_get, fake_get_bytes = _fake_session_api([])
+
+    def fail_on_second(path, params=None, **kwargs):
+        if path.endswith("/b/otlp"):
+            raise CliError(ErrorCategory.UNAVAILABLE, "Server error", operation="Export traces", http_status=500)
+        return fake_get_bytes(path, params)
+
+    monkeypatch.setattr(ops.client, "get_bytes", fail_on_second)
+
+    with pytest.raises(CliError):
+        ops._export_trace_impl(["a", "b"], None, False, None, None, [], "http/protobuf", "table")
+
+    assert [json.loads(line) for line in capsys.readouterr().out.splitlines()] == [_otlp("a")]
+
+
+def test_export_trace_pushes_protobuf_by_default(cli, monkeypatch):
+    calls = []
+    posts = []
+    _install_session_api(monkeypatch, calls)
+
+    def fake_post(url, content=None, headers=None, timeout=None):
+        posts.append((url, content, headers))
+        return _reply(body=b"", content_type="application/x-protobuf")
+
+    monkeypatch.setattr(ops.httpx, "post", fake_post)
+
+    ops._export_trace_impl(
+        ["a", "b"], None, False, None, "http://collector:4318/", ["x-team = obs"], "http/protobuf", "table"
+    )
+
+    assert calls == [
+        ("/api/v1/sessions/a/otlp", {"include_content": "false", "encoding": "protobuf"}),
+        ("/api/v1/sessions/b/otlp", {"include_content": "false", "encoding": "protobuf"}),
+    ]
+    headers = {"x-team": "obs", "Content-Type": "application/x-protobuf"}
+    assert posts == [
+        ("http://collector:4318/v1/traces", _protobuf_body("a"), headers),
+        ("http://collector:4318/v1/traces", _protobuf_body("b"), headers),
+    ]
+    text = cli.text()
+    assert "Exported 2 session(s), 4 spans, to http://collector:4318/v1/traces" in text
+    assert "--include-content" in text
+
+
+def test_export_trace_json_protocol_reuses_the_json_body_and_reports_rejections(cli, monkeypatch):
+    calls = []
+    posts = []
+    _install_session_api(monkeypatch, calls)
+
+    def fake_post(url, content=None, headers=None, timeout=None):
+        posts.append((url, json.loads(content), headers))
+        if json.loads(content) == _otlp("b"):
+            return _reply(body=b'{"partialSuccess": {"rejectedSpans": 1, "errorMessage": "bad span"}}')
+        return _reply(body=b"{}")
+
+    monkeypatch.setattr(ops.httpx, "post", fake_post)
+
+    ops._export_trace_impl(
+        ["a", "b"],
+        None,
+        False,
+        None,
+        "https://otlp.example.test/otel",
+        ["Authorization=Basic cGs6c2s="],
+        "HTTP/JSON",
+        "table",
+    )
+
+    assert calls == [("/api/v1/sessions/a/otlp", _json_params()), ("/api/v1/sessions/b/otlp", _json_params())]
+    headers = {"Authorization": "Basic cGs6c2s=", "Content-Type": "application/json"}
+    assert posts == [
+        ("https://otlp.example.test/otel/v1/traces", _otlp("a"), headers),
+        ("https://otlp.example.test/otel/v1/traces", _otlp("b"), headers),
+    ]
+    text = cli.text()
+    assert "b: endpoint rejected 1 of 2 spans: bad span" in text
+    assert "cGs6c2s" not in text
+
+
+def test_export_trace_with_file_and_protobuf_push_fetches_both_encodings(cli, monkeypatch, tmp_path):
+    calls = []
+    _install_session_api(monkeypatch, calls)
+    monkeypatch.setattr(ops.httpx, "post", lambda *args, **kwargs: _reply(content_type="application/x-protobuf"))
+    target = tmp_path / "out.jsonl"
+
+    ops._export_trace_impl(["a"], None, False, target, "http://c:4318", [], "http/protobuf", "json")
+
+    assert [params["encoding"] for _path, params in calls] == ["json", "protobuf"]
+    assert json.loads(target.read_text(encoding="utf-8")) == _otlp("a")
+    [summary] = cli.json
+    assert summary["protocol"] == "http/protobuf"
+    assert summary["results"] == [{"session_id": "a", "spans": 2, "rejected_spans": 0}]
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        ("https://api.smith.langchain.com/otel", "https://api.smith.langchain.com/otel/v1/traces"),
+        ("http://collector:4318/v1/traces", "http://collector:4318/v1/traces"),
+        (" http://collector:4318/ ", "http://collector:4318/v1/traces"),
+    ],
+)
+def test_otlp_traces_url_follows_exporter_convention(endpoint, expected):
+    assert ops._otlp_traces_url(endpoint) == expected
+
+
+@pytest.mark.parametrize(
+    ("session_ids", "endpoint", "header", "protocol"),
+    [
+        ([], None, [], "http/protobuf"),
+        (["  "], None, [], "http/protobuf"),
+        (["a"], None, ["Authorization=Basic x"], "http/protobuf"),
+        (["a"], "https://x", ["no-separator-secret"], "http/protobuf"),
+        (["a"], "https://x", ["=value"], "http/protobuf"),
+    ],
+)
+def test_export_trace_rejects_bad_arguments_before_fetching(cli, session_ids, endpoint, header, protocol):
+    with pytest.raises(CliError) as raised:
+        ops._export_trace_impl(session_ids, None, False, None, endpoint, header, protocol, "table")
+
+    assert raised.value.category == ErrorCategory.USAGE
+    assert "secret" not in raised.value.message
+
+
+def test_export_trace_rejects_unknown_protocol(cli):
+    with pytest.raises(CliError) as raised:
+        ops._export_trace_impl(["a"], None, False, None, "http://c", [], "grpc", "table")
+
+    assert raised.value.category == ErrorCategory.VALIDATION
+    assert "http/protobuf" in raised.value.remediation
+
+
+@pytest.mark.parametrize(
+    ("status", "category", "hint"),
+    [
+        (401, ErrorCategory.AUTH, "--header"),
+        (403, ErrorCategory.AUTH, "--header"),
+        (415, ErrorCategory.VALIDATION, "--protocol http/json"),
+        (400, ErrorCategory.VALIDATION, "OTLP/HTTP"),
+        (503, ErrorCategory.UNAVAILABLE, "try again"),
+    ],
+)
+def test_post_otlp_maps_http_failures(monkeypatch, status, category, hint):
+    monkeypatch.setattr(ops.httpx, "post", lambda *args, **kwargs: _reply(status, b"nope", text="nope"))
+
+    with pytest.raises(CliError) as raised:
+        ops._post_otlp("https://x/v1/traces", {}, b"", "application/x-protobuf", "http/protobuf")
+
+    assert raised.value.category == category
+    assert raised.value.http_status == status
+    assert hint in raised.value.remediation
+
+
+def test_post_otlp_maps_connection_errors_and_tolerates_odd_replies(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise ops.httpx.ConnectError("refused")
+
+    monkeypatch.setattr(ops.httpx, "post", refuse)
+    with pytest.raises(CliError) as raised:
+        ops._post_otlp("https://x/v1/traces", {}, b"", "application/json", "http/json")
+    assert raised.value.category == ErrorCategory.UNAVAILABLE
+
+    for reply in (
+        _reply(body=b""),
+        _reply(body=b"not json"),
+        _reply(body=b"[1]"),
+        _reply(body=b'{"partialSuccess": 3}'),
+    ):
+        monkeypatch.setattr(ops.httpx, "post", lambda *args, reply=reply, **kwargs: reply)
+        assert ops._post_otlp("https://x/v1/traces", {}, b"", "application/json", "http/json") == (0, "")
+
+
+def test_protobuf_partial_success_is_decoded():
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+        ExportTracePartialSuccess,
+        ExportTraceServiceResponse,
+    )
+
+    body = ExportTraceServiceResponse(
+        partial_success=ExportTracePartialSuccess(rejected_spans=300, error_message="too old")
+    ).SerializeToString()
+    assert ops._protobuf_partial_success(body) == (300, "too old")
+    assert ops._protobuf_partial_success(b"") == (0, "")
+    assert ops._protobuf_partial_success(b"\x0a\x05\x08") == (0, "")
+
+    reply = _reply(body=body, content_type="application/x-protobuf")
+    assert ops._protobuf_partial_success(reply.content) == (300, "too old")
+
+
+def test_export_trace_is_registered_on_ops():
+    result = runner.invoke(cli_app, ["ops", "export-trace", "--help"])
+    assert result.exit_code == 0
+    # Rich colours help output on CI, which splits flags with escape codes.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+    for flag in ("--include-content", "--endpoint", "--protocol"):
+        assert flag in plain

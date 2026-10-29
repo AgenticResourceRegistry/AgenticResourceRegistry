@@ -686,6 +686,25 @@ def get_with_headers(
     return _json_response(response, operation=operation, resource=resource), headers
 
 
+def get_bytes(
+    path: str,
+    params: dict | None = None,
+    *,
+    operation: str | None = None,
+    resource: str | None = None,
+) -> tuple[bytes, dict[str, str]]:
+    """GET a binary or pass-through body; return it with lowercase response headers."""
+    optic.trace("path={}, params={}", path, params)
+    operation, resource = _error_context(
+        operation,
+        resource,
+        default_operation=f"Fetch {path}",
+        default_resource=path,
+    )
+    response = _request("get", path, operation=operation, resource=resource, params=params)
+    return response.content, {key.lower(): value for key, value in response.headers.items()}
+
+
 def post(
     path: str,
     json_data: dict | None = None,
