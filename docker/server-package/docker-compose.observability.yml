@@ -3,7 +3,7 @@
 
 services:
   observal-prometheus:
-    image: prom/prometheus:v3.12.0
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:
