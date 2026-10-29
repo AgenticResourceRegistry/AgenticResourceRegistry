@@ -41,21 +41,7 @@ _Set up once, and let your coding agent use Agentic Resource Registry through ob
 
 ---
 
-## Formerly Observal
-
-Observal is now Agentic Resource Registry. Same code, same maintainers, same Apache 2.0 license.
-
-**What does not change**
-
-- The CLI is still `observal`, installed from the `observal-cli` package on PyPI.
-- `~/.observal`, the `OBSERVAL_*` environment variables, the `observal` Helm chart, and the `observal-api` and `observal-web` image names stay the same.
-
-**What changes**
-
-- The name. Observal becomes Agentic Resource Registry.
-- The repository moves to [`AgenticResourceRegistry/AgenticResourceRegistry`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry). Old `Observal/Observal` links redirect.
-- Container images and the Helm chart are published under `ghcr.io/agenticresourceregistry` starting with the next release.
-- The Pi extension is no longer published to npm. The CLI bundles it.
+> **Formerly Observal.** Same code, same maintainers, same Apache 2.0 license. The CLI is still `observal`, and old `Observal/Observal` links redirect here.
 
 ## What is Agentic Resource Registry and what does it solve?
 
