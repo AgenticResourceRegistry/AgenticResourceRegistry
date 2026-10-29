@@ -4,14 +4,6 @@
 # Centralized CloudWatch log groups. Retention is governed by var.log_retention_days.
 # CMKs can be supplied per-group for stricter compliance; defaults use AWS-managed encryption.
 
-# tfsec:ignore:aws-cloudwatch-log-group-customer-key AWS-managed key by default; supply a CMK via kms_key_id for stricter compliance.
-resource "aws_cloudwatch_log_group" "flow_logs" {
-  name              = "/aws/vpc/${local.name}/flow-logs"
-  retention_in_days = var.log_retention_days
-
-  tags = { Name = "${local.name}-flow-logs" }
-}
-
 # tfsec:ignore:aws-cloudwatch-log-group-customer-key AWS-managed key by default.
 resource "aws_cloudwatch_log_group" "ecs_api" {
   name              = "/aws/ecs/${local.name}/api"
