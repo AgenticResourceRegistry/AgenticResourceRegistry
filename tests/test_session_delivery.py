@@ -1422,7 +1422,8 @@ def test_sessions_rebuilt_from_disk_hash_and_upload_the_recorded_project(tmp_pat
     transcript.write_text(json.dumps({"type": "user", "cwd": str(project), "message": {"content": "hi"}}) + "\n")
     db = tmp_path / "outbox.db"
     source = SessionSource("claude-code", "rebuilt", transcript)  # no cwd, as discovery builds it
-    assert base.drain_session_source(source, config(), hook_event=hook_event, home=tmp_path, db_path=db)
+    # The mocked drain leaves a queued row; it cannot prove delivery without an ACK.
+    assert not base.drain_session_source(source, config(), hook_event=hook_event, home=tmp_path, db_path=db)
     (item,) = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
     assert item.payload["layer_hash"] == f"hash-of:{project}"
     assert uploads == [(f"hash-of:{project}", str(project))], "the snapshot uploaded is the one the payload names"

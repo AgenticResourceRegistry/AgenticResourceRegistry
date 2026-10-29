@@ -112,7 +112,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None) -> None:
 
 def _spawn_worker(*args: str, harness: str) -> None:
     try:
-from observal_cli.shared.launcher import module_subprocess
+        from observal_cli.shared.launcher import module_subprocess
 
         argv, env = module_subprocess("observal_cli.hooks.session_push", "--harness", harness, *args)
         env.update(get_adapter(harness).session_worker_environment())

@@ -186,6 +186,11 @@ def test_detached_codex_workers_drop_stale_parent_markers(tmp_path, monkeypatch)
     monkeypatch.setenv("OBSERVAL_AGENT_ID", "stale-parent")
     monkeypatch.setenv("OBSERVAL_AGENT_NAME", "stale-parent")
     spawned = []
+    # The launcher probes importability with subprocess.run; do not replace its
+    # Popen until that probe has completed.
+    from observal_cli.shared.launcher import importable_in_isolation
+
+    importable_in_isolation()
     monkeypatch.setattr(session_push.subprocess, "Popen", lambda argv, **kw: spawned.append(kw["env"]))
     for args in (("--recover",), ("--drain-outbox",), ("--finalize-session", "child")):
         session_push._spawn_worker(*args, harness="codex")
@@ -343,6 +348,9 @@ def test_public_reconcile_passes_recovery_identity_scope(tmp_path, monkeypatch):
 def test_missing_hook_id_schedules_sanitized_recovery(tmp_path, monkeypatch):
     rollout(tmp_path, "first")
     spawned = []
+    from observal_cli.shared.launcher import importable_in_isolation
+
+    importable_in_isolation()
     monkeypatch.setattr(session_push.subprocess, "Popen", lambda argv, **kw: spawned.append((argv, kw)))
     monkeypatch.setenv("OBSERVAL_AGENT_ID", "active-id")
     monkeypatch.setenv("OBSERVAL_AGENT_NAME", "active-name")
