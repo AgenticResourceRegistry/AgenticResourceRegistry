@@ -19,7 +19,7 @@
       "postcss": "^8.5.18",
       "nanoid": "^3.3.17",
       "katex": "^0.18.2",
-      "seroval": "^1.6.3",
+      "seroval": "^1.6.11",
       "source-map-js": "^1.2.2",
       "zod": "^4.6.6"
     }
