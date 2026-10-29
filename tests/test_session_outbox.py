@@ -48,6 +48,33 @@ def test_outbox_survives_reopen_and_acknowledges_only_contiguous_batches(tmp_pat
     assert [item.start_line for item in outbox.pending(destination="http://server", user_id="user", db_path=db)] == [2]
 
 
+def test_pending_order_is_scoped_to_destination_and_user(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    # Another tenant's first session row must not determine this tenant's order.
+    outbox.enqueue(payload(0, ["foreign"]), destination="http://elsewhere", user_id="other", db_path=db)
+    outbox.enqueue(payload(2, ["later"]), destination="http://server", user_id="user", db_path=db)
+    outbox.enqueue(
+        payload(0, ["other session"]) | {"session_id": "another"},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    outbox.enqueue(payload(0, ["earlier"]), destination="http://server", user_id="user", db_path=db)
+
+    items = outbox.pending(destination="http://server", user_id="user", db_path=db)
+    assert [(item.session_id, item.start_line) for item in items] == [
+        ("session", 0),
+        ("session", 2),
+        ("another", 0),
+    ]
+    assert [
+        (item.session_id, item.start_line)
+        for item in outbox.pending(
+            destination="http://server", user_id="user", exclude_sessions={("claude-code", "session")}, db_path=db
+        )
+    ] == [("another", 0)]
+
+
 def test_requeue_is_idempotent_and_can_promote_final_payload(tmp_path: Path):
     db = tmp_path / "outbox.db"
     first = outbox.enqueue(payload(0, ["zero"]), destination="http://server", user_id="user", db_path=db)

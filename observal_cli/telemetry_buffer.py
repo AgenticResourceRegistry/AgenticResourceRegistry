@@ -264,7 +264,9 @@ def pending(
     conn = _connect(db_path)
     try:
         exclusions = sorted(exclude_sessions or ())
-        predicate = "".join(" AND NOT (harness = ? AND session_id = ?)" for _ in exclusions)
+        predicate = "".join(
+            " AND NOT (session_outbox.harness = ? AND session_outbox.session_id = ?)" for _ in exclusions
+        )
         backoff_predicate = (
             "AND NOT EXISTS (SELECT 1 FROM session_outbox_backoff b JOIN session_outbox s "
             "ON s.id = b.item_id WHERE s.destination = session_outbox.destination "
@@ -281,21 +283,27 @@ def pending(
             else ""
         )
         rows = conn.execute(
-            "SELECT id, destination, user_id, harness, session_id, checkpoint_key, "
+            # Compute session order once; a correlated MIN(id) for every queued row
+            # makes a large destination outbox quadratic.
+            "WITH firsts AS (SELECT harness, session_id, MIN(id) AS first_id FROM session_outbox "
+            "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
+            "SELECT session_outbox.id, session_outbox.destination, session_outbox.user_id, "
+            "session_outbox.harness, session_outbox.session_id, checkpoint_key, "
             "start_line, end_line, end_offset, final, payload, attempts, "
             "(SELECT retry_after FROM session_outbox_backoff WHERE item_id = session_outbox.id) "
-            "FROM session_outbox WHERE destination = ? AND user_id = ? "
+            "FROM session_outbox JOIN firsts ON firsts.harness = session_outbox.harness "
+            "AND firsts.session_id = session_outbox.session_id "
+            "WHERE session_outbox.destination = ? AND session_outbox.user_id = ? "
             "AND NOT EXISTS (SELECT 1 FROM session_outbox_rejected r WHERE "
             "r.destination = session_outbox.destination AND r.user_id = session_outbox.user_id "
             "AND r.harness = session_outbox.harness AND r.session_id = session_outbox.session_id AND r.recovered = 0) "
             + backoff_predicate
             + hold_predicate
             + predicate
-            + " ORDER BY (SELECT min(s.id) FROM session_outbox s WHERE "
-            "s.destination = session_outbox.destination AND s.user_id = session_outbox.user_id "
-            "AND s.harness = session_outbox.harness AND s.session_id = session_outbox.session_id), "
-            "(end_line < start_line), start_line, id LIMIT ?",
+            + " ORDER BY firsts.first_id, (end_line < start_line), start_line, session_outbox.id LIMIT ?",
             (
+                destination.rstrip("/"),
+                user_id,
                 destination.rstrip("/"),
                 user_id,
                 *((time.time(),) if skip_backoff else ()),

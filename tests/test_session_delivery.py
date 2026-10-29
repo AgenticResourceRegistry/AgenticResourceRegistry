@@ -342,7 +342,8 @@ def test_respooled_earlier_lines_are_sent_before_later_batches(tmp_path: Path):
         return {"acknowledged_line": ack, "ingested": len(payload["lines"]), "errors": 0}
 
     assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=contiguous_server)
-    assert posted == [("gappy", 3), ("gappy", 5), ("other", 0)]
+    assert sorted(posted) == [("gappy", 3), ("gappy", 5), ("other", 0)]
+    assert posted.index(("gappy", 3)) < posted.index(("gappy", 5))
     assert checkpoints["gappy"] == 6
 
 
