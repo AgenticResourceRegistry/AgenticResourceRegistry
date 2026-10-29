@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
@@ -14,7 +15,7 @@ export function RegistryMark({ size = 16, className = "" }: { size?: number; cla
 	const { brandingLogo } = useDeploymentConfig();
 	return (
 		<img
-			src={brandingLogo || "/observal-logo.svg"}
+			src={brandingLogo || "/logo.png"}
 			alt=""
 			aria-hidden="true"
 			width={size}

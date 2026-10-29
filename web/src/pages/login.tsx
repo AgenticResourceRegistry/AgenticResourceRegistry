@@ -302,7 +302,7 @@ function LoginContent() {
               {brandingLogo ? (
                 <img loading="lazy" src={brandingLogo} alt="" width={32} height={32} className="object-contain" />
               ) : (
-                <img loading="lazy" src="/observal-logo.svg" alt="" width={32} height={32} className="object-contain" />
+                <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
               )}
               {brandingWordmark ? (
                 <img loading="lazy" src={brandingWordmark} alt={brandingAppName || "Observal"} width={192} height={24} className="h-6 max-w-48 object-contain" />
@@ -391,7 +391,7 @@ function LoginContent() {
             {brandingLogo ? (
               <img loading="lazy" src={brandingLogo} alt="" width={32} height={32} className="object-contain" />
             ) : (
-              <img loading="lazy" src="/observal-logo.svg" alt="" width={32} height={32} className="object-contain" />
+              <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
             )}
             {brandingWordmark ? (
               <img loading="lazy" src={brandingWordmark} alt={brandingAppName || "Observal"} width={192} height={24} className="h-6 max-w-48 object-contain" />

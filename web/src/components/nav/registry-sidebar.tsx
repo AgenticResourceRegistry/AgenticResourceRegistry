@@ -231,7 +231,7 @@ export function RegistrySidebar() {
 										/>
 									) : (
 										<img
-											src="/observal-logo.svg"
+											src="/logo.png"
 											alt=""
 											width={26}
 											height={26}
