@@ -9,7 +9,7 @@
 [project]
 name = "observal-server"
 version = "1.16.0-dev.0"
-description = "Observal API server"
+description = "API server for Agentic Resource Registry, a self-hosted, Apache 2.0 registry for sharing coding agent resources"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [

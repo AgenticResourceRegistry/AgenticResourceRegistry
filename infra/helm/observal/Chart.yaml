@@ -5,8 +5,8 @@
 apiVersion: v2
 name: observal
 description: >
-  Observal, agent-centric registry and observability platform for AI coding agents.
-  Self-hosted Helm chart for Kubernetes deployments.
+  Agentic Resource Registry, a self-hosted, Apache 2.0 registry for sharing coding agent resources.
+  Helm chart for Kubernetes deployments.
 type: application
 version: 0.1.0
 appVersion: "latest"
