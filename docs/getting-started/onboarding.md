@@ -11,14 +11,14 @@ Connect your machine to Observal with two commands. It takes about two minutes a
 **macOS / Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 observal auth login --server https://internal.observal.io
 ```
 
 **Windows** (in PowerShell, not Command Prompt)
 
 ```powershell
-irm https://raw.githubusercontent.com/Observal/Observal/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
 observal auth login --server https://internal.observal.io
 ```
 

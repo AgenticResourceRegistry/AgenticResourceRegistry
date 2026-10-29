@@ -89,7 +89,7 @@ Exactly one target mode is required: `--all-harnesses` or one or more `--harness
 
 Patch is idempotent. It preserves unrelated hooks and configuration. Configuration writes are atomic. Invalid or unreadable harness files fail loudly rather than being replaced.
 
-For Pi, patch installs the bundled TypeScript extension at `~/.pi/agent/extensions/observal.ts` and records the CLI version it came from in an adjacent `.observal-extension.json`. If `npm:observal-pi` is registered in `~/.pi/agent/settings.json`, that registration wins: patch installs nothing locally, and removes a local copy it recognises as its own so Pi does not load the extension twice. A local file Observal did not write is never touched. MCP commands and remote URLs are never wrapped or rewritten.
+For Pi, patch installs the bundled TypeScript extension at `~/.pi/agent/extensions/observal.ts` and records the CLI version it came from in an adjacent `.observal-extension.json`. A local file Observal did not write is never touched. MCP commands and remote URLs are never wrapped or rewritten.
 
 ## Cleanup
 

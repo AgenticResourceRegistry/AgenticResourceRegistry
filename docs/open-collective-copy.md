@@ -6,7 +6,7 @@ title: "Open Collective copy"
 
 Paste-ready text for the Observal Open Collective settings. These can't be set from the repo, so copy each block by hand.
 
-Keep the full policy at `https://github.com/Observal/Observal/blob/main/docs/contributor-payments.md` in sync with block 1.
+Keep the full policy at `https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md` in sync with block 1.
 
 ## 1. Collective expense policy
 
@@ -24,7 +24,7 @@ Expenses are by invitation only. Uninvited expenses are rejected.
 - Paid by international wire every second Friday after approval, one wire per approved expense.
 - Expenses without verifiable evidence are rejected.
 
-Full policy: https://github.com/Observal/Observal/blob/main/docs/contributor-payments.md
+Full policy: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md
 ```
 
 ## 2. About
@@ -38,9 +38,9 @@ Observal is the control plane and system of record for internal AI components. I
 
 This collective is sponsored by Observal Inc. The money funds contributors and project infrastructure. The ledger is public. Paying contributors is by invitation only, see the expense policy. Payments are discretionary recognition for contributions, not a salary, and are not guaranteed.
 
-- Repository: https://github.com/Observal/Observal
+- Repository: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 - Docs: https://docs.observal.io
-- Contributor payments: https://github.com/Observal/Observal/blob/main/docs/contributor-payments.md
+- Contributor payments: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md
 ```
 
 ## 3. Contribution policy

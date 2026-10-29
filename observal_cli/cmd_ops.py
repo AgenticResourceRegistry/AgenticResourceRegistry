@@ -1565,9 +1565,9 @@ self_app = typer.Typer(
         "  observal self upgrade\n"
         "  observal self rollback\n\n"
         "For agents: development builds (X.Y.Z-dev.N) are not on PyPI, so `upgrade --version` builds them "
-        "from `git+https://github.com/Observal/Observal@main`, and a plain `upgrade` against a dev server "
+        "from `git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main`, and a plain `upgrade` against a dev server "
         "targets that server's build. If an upgrade still fails, install straight from "
-        "source: `uv tool install --force git+https://github.com/Observal/Observal@main` (dev) or "
+        "source: `uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` (dev) or "
         "`@v<version>` (release tag), then verify with `observal --version`."
     ),
     no_args_is_help=True,

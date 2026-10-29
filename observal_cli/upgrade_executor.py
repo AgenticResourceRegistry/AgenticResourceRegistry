@@ -26,7 +26,7 @@ from observal_cli import config
 from observal_cli.constants import REDIRECT_ALLOWLIST
 from observal_cli.install_detector import SOURCE_SPEC, InstallInfo, InstallMethod, install_spec, pip_install_prefix
 
-GITHUB_REPO = "Observal/Observal"
+GITHUB_REPO = "AgenticResourceRegistry/AgenticResourceRegistry"
 
 
 def execute(

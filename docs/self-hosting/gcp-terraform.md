@@ -51,7 +51,7 @@ gcloud services enable \
 ## Quickstart
 
 ```bash
-git clone https://github.com/Observal/Observal.git
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd Observal/infra/terraform/gcp
 
 # 1. Authenticate

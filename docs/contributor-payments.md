@@ -41,7 +41,7 @@ For example: `Observal Contributions (March 2026)`.
 Each expense must include:
 
 1. **A link to your merged PRs for the period.** Use a GitHub search filtered by author and dates, for example:
-   `https://github.com/Observal/Observal/pulls?q=is%3Apr+is%3Amerged+author%3AYOUR-USERNAME+merged%3A2026-03-01..2026-03-31`
+   `https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pulls?q=is%3Apr+is%3Amerged+author%3AYOUR-USERNAME+merged%3A2026-03-01..2026-03-31`
 2. **Your GitHub username.**
 3. **Your legal name and address.**
 4. **Your bank details:** IBAN or account number, SWIFT/BIC, and the account holder name exactly as it appears at your bank.

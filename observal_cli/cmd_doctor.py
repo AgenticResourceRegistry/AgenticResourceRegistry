@@ -419,13 +419,10 @@ def _check_kiro(issues: list, warnings: list):
 
 
 def _check_pi(issues: list, warnings: list):
-    """Check whether the Pi telemetry extension (npm or local) is current."""
+    """Check whether the Pi telemetry extension is current."""
     optic.debug("_check_pi")
     try:
         status = pi_extension.check_status()
-    except json.JSONDecodeError:
-        issues.append(f"{pi_extension.settings_path()}: not valid JSON.")
-        return
     except (OSError, ValueError, TypeError) as exc:
         issues.append(f"Pi telemetry extension: {exc}")
         return
@@ -1084,9 +1081,7 @@ def _cleanup_kiro_hook_file(hooks_dir: Path, dry_run: bool) -> bool:
 def _cleanup_pi(dry_run: bool) -> bool:
     """Remove an Observal-managed local Pi extension install.
 
-    Never touches an npm:observal-pi registration (that's the user's own
-    choice, not something Observal installed) and never touches a local
-    file that isn't Observal-managed.
+    Never touches a local file that isn't Observal-managed.
     """
     rprint("[cyan]Pi[/cyan]")
     changed = pi_extension.remove(dry_run=dry_run)
@@ -1602,12 +1597,11 @@ _PI_ACTION_VERBS = {
     "adopt": ("Would record install metadata for", "Recorded install metadata for"),
     "migrate": ("Would migrate", "Migrated"),
     "restore": ("Would restore", "Restored"),
-    "dedupe": ("Would remove the duplicate", "Removed the duplicate"),
 }
 
 
 def _patch_pi(dry_run: bool) -> bool:
-    """Install or refresh the bundled telemetry extension, when npm isn't configured."""
+    """Install or refresh the bundled telemetry extension."""
     optic.trace("dry_run={}", dry_run)
     rprint("[cyan]Pi - session telemetry extension[/cyan]")
 
@@ -1618,10 +1612,6 @@ def _patch_pi(dry_run: bool) -> bool:
     if not result.changed:
         if status.state == pi_extension.NOT_DETECTED:
             rprint("  [dim]No ~/.pi/agent/ directory - skipping[/dim]")
-        elif status.state in (pi_extension.NPM_CURRENT, pi_extension.NPM_UNPINNED, pi_extension.NPM_STALE):
-            rprint("  [dim]npm:observal-pi is configured - Observal does not install a local extension[/dim]")
-            if status.message:
-                rprint(f"  [yellow]{esc(status.message)}[/yellow]")
         elif status.state == pi_extension.UNMANAGED:
             rprint(f"  [yellow]{esc(status.message)}[/yellow]")
         else:
@@ -1636,12 +1626,6 @@ def _patch_pi(dry_run: bool) -> bool:
         rprint(f"  [dim]{kept} the previous file at {esc(backup)}[/dim]")
     if not dry_run and action != "adopt":
         rprint("  [dim]Restart pi or run /reload to activate[/dim]")
-    if action == "dedupe" and not dry_run:
-        # The duplicate warning absorbed any stale-npm reminder. Now that the
-        # local copy is gone, re-read the state so that reminder still lands.
-        remaining = pi_extension.check_status()
-        if remaining.message:
-            rprint(f"  [yellow]{esc(remaining.message)}[/yellow]")
     return True
 
 

@@ -86,7 +86,7 @@ Treat all external input and cross-tenant data as untrusted. Confirm that:
 * Cryptography and security controls use established project mechanisms and secure defaults.
 * New dependencies, actions, container images, and downloaded tools are necessary, integrity-pinned where supported, and from trustworthy sources.
 
-Do not discuss an undisclosed vulnerability in a public pull request. Follow the private process in the [Security Policy](https://github.com/Observal/Observal/blob/main/SECURITY.md).
+Do not discuss an undisclosed vulnerability in a public pull request. Follow the private process in the [Security Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/SECURITY.md).
 
 ### Tests and CI
 
@@ -122,7 +122,7 @@ Confirm that:
 Confirm that:
 
 * New files have the correct SPDX copyright and license headers.
-* The contributor has satisfied the CLA and followed the [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md).
+* The contributor has satisfied the CLA and followed the [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md).
 * Copied or adapted material is compatible with Apache-2.0, properly attributed, and accompanied by any required notices.
 * New dependencies, assets, generated code, and vendored files have acceptable licenses and documented origins.
 
@@ -174,7 +174,7 @@ Reviewers should explain rejection clearly and respectfully. Rejection is a deci
 
 ## Review conduct and disagreements
 
-Follow the [Code of Conduct](https://github.com/Observal/Observal/blob/main/CODE_OF_CONDUCT.md). Be specific, constructive, and proportionate to risk. Authors should not interpret questions as approval, and reviewers should not use approval as leverage for unrelated preferences.
+Follow the [Code of Conduct](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CODE_OF_CONDUCT.md). Be specific, constructive, and proportionate to risk. Authors should not interpret questions as approval, and reviewers should not use approval as leverage for unrelated preferences.
 
 Resolve disagreements using documented requirements, reproducible evidence, and project architecture. If consensus cannot be reached, ask another domain expert or maintainer to decide and record the decision in the pull request. Do not leave a pull request indefinitely blocked by an unstated concern.
 

@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   deploy:
-    if: github.repository == 'Observal/Observal'
+    if: github.repository == 'AgenticResourceRegistry/AgenticResourceRegistry'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production

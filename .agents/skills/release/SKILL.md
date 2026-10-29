@@ -5,7 +5,7 @@ name: release
 description: Cut and maintain Observal release branches, prepare alpha, beta, RC, stable, and patch releases, backport merged main PRs, inspect release status, verify published artifacts, and recover failed release operations. Use for Observal maintainer release tasks and release-process changes, not for installing or upgrading an existing Observal deployment.
 license: Apache-2.0
 metadata:
-  repository: Observal/Observal
+  repository: AgenticResourceRegistry/AgenticResourceRegistry
   policy: docs/self-hosting/releasing.md
 ---
 
@@ -24,7 +24,7 @@ Resolve these links from the skill directory. Run commands from the Observal che
 - Land ordinary fixes on `main` first. Each affected release line gets its own reviewed backport PR with `cherry-pick -x` provenance.
 - Never bypass failed checks, reviews, signing, or checksum verification. Never expose tokens, environment files, GitHub App keys, or OIDC material.
 - Production rulesets, environment restrictions, trusted publishers, deployment changes, and Terraform apply require separate authorization. This skill does not change infrastructure or provision resources.
-- Do not run `npm publish`, `uv publish`, `gh release create`, or `git tag` as a substitute for the release workflow.
+- Do not run `uv publish`, `gh release create`, or `git tag` as a substitute for the release workflow.
 
 ## Inspect first
 
@@ -38,7 +38,7 @@ uv --version
 uv run python tools/release.py --help
 ```
 
-Verify remote destinations without printing embedded credentials. By default, `upstream` is `Observal/Observal` and `origin` is the maintainer fork. For a canonical-only clone, append `--upstream origin --fork origin` where appropriate. Confirm the destination before any write; a sandbox is not the production repository.
+Verify remote destinations without printing embedded credentials. By default, `upstream` is `AgenticResourceRegistry/AgenticResourceRegistry` and `origin` is the maintainer fork. For a canonical-only clone, append `--upstream origin --fork origin` where appropriate. Confirm the destination before any write; a sandbox is not the production repository.
 
 Cutting and backporting require a clean local `main` matching canonical `main`. Preparation requires a clean local `release/X.Y` matching that canonical release branch. Do not stash, reset, discard changes, or switch a dirty worktree automatically.
 
@@ -102,7 +102,7 @@ All code on the release branch ships. The picker curates public notes, not a cod
 
 ## Channels and aliases
 
-| Stage | Version | Shared npm/Docker alias |
+| Stage | Version | Shared Docker alias |
 | --- | --- | --- |
 | Alpha | `1.14.0-alpha.1` | `alpha` |
 | Beta | `1.14.0-beta.1` | `beta` |
@@ -111,7 +111,7 @@ All code on the release branch ships. The picker curates public notes, not a cod
 
 Repeated stages increment their serial. Alpha to beta to RC to stable is forward movement; going backward within the same version core is rejected. After stable, preparation starts the next patch. An RC-to-stable promotion creates a new version, never moves an existing tag.
 
-Older stable lines use `lts-X.Y`. Older prereleases use aliases such as `next-X.Y` or `beta-X.Y` when a newer version exists in the same channel. No old line may move a shared alias backward. PyPI uses PEP 440 versions and has no dist-tags; Helm publishes exact chart versions, not npm-style aliases.
+Older stable lines use `lts-X.Y`. Older prereleases use aliases such as `next-X.Y` or `beta-X.Y` when a newer version exists in the same channel. No old line may move a shared alias backward. PyPI uses PEP 440 versions and has no dist-tags; Helm publishes exact chart versions, not aliases.
 
 For a stable bug: merge the main fix, merge its backport, prepare a patch RC if requested, then prepare stable when approved. For a beta bug: merge the main fix and backport, then prepare another beta. Do not skip straight to stable merely because checks pass.
 
@@ -143,8 +143,8 @@ Merging the preparation PR triggers `release.yml`. It validates the exact commit
 Inspect the run associated with the exact release commit:
 
 ```bash
-gh run list --repo Observal/Observal --workflow release.yml --branch release/1.14 --limit 5
-gh release view v1.14.0 --repo Observal/Observal
+gh run list --repo AgenticResourceRegistry/AgenticResourceRegistry --workflow release.yml --branch release/1.14 --limit 5
+gh release view v1.14.0 --repo AgenticResourceRegistry/AgenticResourceRegistry
 ```
 
 Follow the [verification guide](../../../docs/security/release-verification.md) for downloaded checksums, provenance, and the signed tag. Download into a fresh directory outside the checkout. Verify the expected Python, npm, Docker, and Helm versions, and smoke-test the downloaded or installed artifact when execution is authorized. Never substitute a source-only test for an artifact check.

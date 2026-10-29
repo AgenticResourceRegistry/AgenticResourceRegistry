@@ -68,7 +68,7 @@ import type { Session } from "@/lib/types";
 
 /** Quickstart docs URL shown in the first-time empty state CTA. */
 const DOCS_QUICKSTART_URL =
-	"https://github.com/Observal/Observal/blob/main/docs/getting-started/quickstart.md";
+	"https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/getting-started/quickstart.md";
 
 /**
  * How recent the newest event must be for ingest to read as healthy. The

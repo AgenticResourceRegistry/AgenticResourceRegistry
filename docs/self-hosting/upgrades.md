@@ -47,7 +47,7 @@ Add `-f docker-compose.observability.yml` and `--profile grafana` if those were 
 ## Before a manual upgrade
 
 1. **Back up `pgdata`** and **`apidata`**. See [Backup and restore](/self-hosting/backup-and-restore). Backing up `chdata` is nice-to-have; losing telemetry is painful but not catastrophic.
-2. **Read the [CHANGELOG](https://github.com/Observal/Observal/blob/main/CHANGELOG.md)** for the releases you're jumping across. Note any breaking changes.
+2. **Read the [CHANGELOG](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md)** for the releases you're jumping across. Note any breaking changes.
 3. **Pin the version you're upgrading to**: don't `git pull main` blindly. Check out a release tag or a known-good commit.
 
 ## Standard upgrade

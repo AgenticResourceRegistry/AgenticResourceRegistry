@@ -203,7 +203,7 @@ jobs:
         with:
           files: observal-server/coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: Observal/Observal
+          slug: AgenticResourceRegistry/AgenticResourceRegistry
           disable_search: true
           # Fork pull requests cannot access repository secrets, so Codecov authenticates those tokenlessly.
           fail_ci_if_error: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
@@ -376,9 +376,9 @@ jobs:
           helm template observal "chart-dist/observal-${VERSION}.tgz" \
             --namespace observal > chart-dist/rendered.yaml
 
-          API_IMAGE_COUNT="$(grep -c "image: ghcr.io/observal/observal-api:${VERSION}" chart-dist/rendered.yaml)"
+          API_IMAGE_COUNT="$(grep -c "image: ghcr.io/agenticresourceregistry/observal-api:${VERSION}" chart-dist/rendered.yaml)"
           test "$API_IMAGE_COUNT" -ge 3
-          grep -q "image: ghcr.io/observal/observal-web:${VERSION}" chart-dist/rendered.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-web:${VERSION}" chart-dist/rendered.yaml
 
           helm template observal "chart-dist/observal-${VERSION}.tgz" \
             --namespace observal \
@@ -386,9 +386,9 @@ jobs:
             --set worker.image.tag=custom-worker \
             --set web.image.tag=custom-web > chart-dist/rendered-overrides.yaml
 
-          grep -q "image: ghcr.io/observal/observal-api:custom-api" chart-dist/rendered-overrides.yaml
-          grep -q "image: ghcr.io/observal/observal-api:custom-worker" chart-dist/rendered-overrides.yaml
-          grep -q "image: ghcr.io/observal/observal-web:custom-web" chart-dist/rendered-overrides.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-api:custom-api" chart-dist/rendered-overrides.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-api:custom-worker" chart-dist/rendered-overrides.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-web:custom-web" chart-dist/rendered-overrides.yaml
 
 # ── Job 6: Docker build ───────────────────────────────────────────────────────
   docker-build:

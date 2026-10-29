@@ -82,7 +82,7 @@ class Change:
         if self.pr and self.url:
             return f"[#{self.pr}]({self.url})"
         sha = self.commits[-1]
-        return f"[{sha[:7]}](https://github.com/Observal/Observal/commit/{sha})"
+        return f"[{sha[:7]}](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/commit/{sha})"
 
 
 @dataclass(frozen=True)
@@ -382,12 +382,12 @@ def render_release_notes(
             "## Verify this release",
             "",
             "Verify checksums, artifact provenance, and the signed release tag using the "
-            "[release verification guide](https://github.com/Observal/Observal/blob/main/"
+            "[release verification guide](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/"
             "docs/security/release-verification.md).",
             "",
             "## Full comparison",
             "",
-            f"[{previous_tag}...v{version}](https://github.com/Observal/Observal/compare/{previous_tag}...v{version})",
+            f"[{previous_tag}...v{version}](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/compare/{previous_tag}...v{version})",
             "",
         )
     )

@@ -45,7 +45,7 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 ## Quickstart
 
 ```bash
-git clone https://github.com/Observal/Observal.git
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd Observal/infra/terraform/aws
 
 # 1. Authenticate to AWS (any of these works)
@@ -71,7 +71,7 @@ terraform output app_url
 
 Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Observal login page.
 
-A ready-to-apply call of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/Observal/Observal/blob/main/infra/terraform/aws/examples/minimal/README.md).
+A ready-to-apply call of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/minimal/README.md).
 
 ## Configuration
 
@@ -196,7 +196,7 @@ ecs_security_group_id = "sg-0abc1234def56789b"
 
 The ALB SG must allow inbound TCP 80/443 from your desired CIDRs. The ECS SG must allow inbound TCP 8000 and 3000 from the ALB SG, with outbound to all.
 
-A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/Observal/Observal/blob/main/infra/terraform/aws/examples/byovpc/README.md).
+A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/byovpc/README.md).
 
 ### Git webhooks on a private install
 

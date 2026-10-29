@@ -124,15 +124,11 @@ Each list invocation replaces this cache, including an empty result. Numeric row
 
 | Path | Purpose |
 | --- | --- |
-| `~/.pi/agent/extensions/observal.ts` | Bundled telemetry extension, installed locally when npm isn't configured |
+| `~/.pi/agent/extensions/observal.ts` | Bundled telemetry extension |
 | `~/.pi/agent/extensions/.observal-extension.json` | Manifest recording the CLI version the local extension was installed from |
 | `~/.pi/agent/extensions/observal.ts.bak` | Copy of the previous extension, kept whenever Observal replaces or removes one |
-| `~/.pi/agent/settings.json` | Pi's own config; a `packages` entry of `npm:observal-pi[@version]` here selects the npm installation mode instead |
 
-Two mutually exclusive installation modes are supported:
-
-- **npm**: `npm:observal-pi` is configured in `~/.pi/agent/settings.json` (with or without a pinned version, and whether or not Pi has downloaded it yet). Observal never installs `extensions/observal.ts` in this mode — `observal doctor` only reports when a pinned version is older than the installed CLI, with a `pi update npm:observal-pi` reminder. Pi loads a local `extensions/observal.ts` in addition to the npm package, so if one is left over from local mode every session is sent twice; `observal doctor patch` removes a local copy it recognizes as its own (keeping it as `observal.ts.bak`) and leaves a file Observal did not write alone.
-- **local**: no npm package is configured. `observal auth login` and `observal doctor patch` install the extension bundled with the CLI directly to `extensions/observal.ts`, recording the installed CLI version in the adjacent manifest. A later CLI upgrade rewrites each of those files atomically — the two are written in sequence, not as a single atomic unit — and prints a reminder to restart Pi or run `/reload`; a newer local install than the current CLI is left alone. If the file still carries the current version but its contents have drifted from the bundled source — an edited working copy, say — doctor restores it and keeps the previous contents as `observal.ts.bak`.
+`observal auth login` and `observal doctor patch` install the extension bundled with the CLI directly to `extensions/observal.ts`, recording the installed CLI version in the adjacent manifest. A later CLI upgrade rewrites each of those files atomically (the two are written in sequence, not as a single atomic unit) and prints a reminder to restart Pi or run `/reload`; a newer local install than the current CLI is left alone. If the file still carries the current version but its contents have drifted from the bundled source, such as an edited working copy, doctor restores it and keeps the previous contents as `observal.ts.bak`.
 
 Observal keeps a copy of the file whenever it rewrites or deletes one, named
 `observal.ts.bak` (`.bak.1`, `.bak.2`, … if that name is taken). The copy does

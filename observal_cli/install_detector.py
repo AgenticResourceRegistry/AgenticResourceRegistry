@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-INSTALLER_URL = "https://raw.githubusercontent.com/Observal/Observal/main/install.sh"
+INSTALLER_URL = "https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh"
 # Development builds (X.Y.Z-dev.N) come from main and are never published to PyPI.
-SOURCE_REPO = "git+https://github.com/Observal/Observal"
+SOURCE_REPO = "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
 SOURCE_SPEC = f"{SOURCE_REPO}@main"
 
 

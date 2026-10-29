@@ -49,10 +49,10 @@ classifiers = [
 migrate = ["pyarrow>=15.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/Observal/Observal"
-Repository = "https://github.com/Observal/Observal"
-Changelog = "https://github.com/Observal/Observal/blob/main/CHANGELOG.md"
-Issues = "https://github.com/Observal/Observal/issues"
+Homepage = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
+Repository = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
+Changelog = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md"
+Issues = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues"
 
 [project.scripts]
 observal = "observal_cli.main:app"

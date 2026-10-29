@@ -231,11 +231,13 @@ def test_package_installer_failure_tries_release_tag_then_fails_loudly(
     assert error.value.exit_code == 1
     assert run.call_count == 2
     assert "observal-cli==2.4.1" in " ".join(run.call_args_list[0].args[0])
-    assert "git+https://github.com/Observal/Observal@v2.4.1" in " ".join(run.call_args_list[1].args[0])
+    assert "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@v2.4.1" in " ".join(
+        run.call_args_list[1].args[0]
+    )
     assert messages == [
         f"[red]{direction.capitalize()} failed; the installed CLI was left unchanged.[/red]",
         f"  observal-cli==2.4.1: {expected_stderr}",
-        f"  git+https://github.com/Observal/Observal@v2.4.1: {expected_stderr}",
+        f"  git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@v2.4.1: {expected_stderr}",
     ]
 
 

@@ -13,7 +13,7 @@ body:
     id: contact
     attributes:
       label: Checked for duplicates?
-      description: Quickly search our [issues](https://github.com/Observal/Observal/issues) to see if a similar issue exists
+      description: Quickly search our [issues](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues) to see if a similar issue exists
       options:
         - label: This issue is not a duplicate
           required: true

@@ -117,7 +117,7 @@ docker compose version
 ## Step 3: Clone and configure
 
 ```bash
-git clone https://github.com/Observal/Observal.git
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd Observal
 cp .env.example .env
 ```
@@ -293,7 +293,7 @@ See [Backup and restore](/self-hosting/backup-and-restore) for detailed restore 
 Install the CLI on your local machine:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
 Log in:

@@ -29,7 +29,7 @@ Everything you need to get Observal running locally for development or self-host
 ## 1. Clone and configure
 
 ```bash
-git clone https://github.com/Observal/Observal.git
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd Observal
 cp .env.example .env
 ```
