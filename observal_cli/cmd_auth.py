@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json as _json
+import os
 import re
 import shutil
 import sys
@@ -95,7 +96,7 @@ def _login_server_url(value: str, *, source: str, require_scheme: bool = False) 
         fail(
             ErrorCategory.VALIDATION,
             f"Invalid {source} server URL.",
-            operation="Authenticate with Observal",
+            operation="Authenticate with Agentic Resource Registry",
             resource=source,
             remediation="Use an HTTP or HTTPS URL with a host (or a bare host for --server or the prompt).",
         )
@@ -161,7 +162,7 @@ def _guard_login_override(server_url: str, override: str | None) -> None:
         fail(
             ErrorCategory.VALIDATION,
             "OBSERVAL_SERVER_URL conflicts with the login destination.",
-            operation="Authenticate with Observal",
+            operation="Authenticate with Agentic Resource Registry",
             resource="OBSERVAL_SERVER_URL",
             remediation="Unset OBSERVAL_SERVER_URL or set it to the login server URL before retrying.",
         )
@@ -379,7 +380,7 @@ def login(
         typer.Option("--provider", help="SSO provider: oidc, saml, google or github (implies --sso)"),
     ] = None,
 ):
-    """Connect to Observal.
+    """Connect to Agentic Resource Registry.
 
     Human mode asks for the server URL; blank uses OBSERVAL_SERVER_URL when
     configured, otherwise http://localhost.
