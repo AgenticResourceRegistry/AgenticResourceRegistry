@@ -29,7 +29,8 @@ if TYPE_CHECKING:
 # 5: User-scope Codex selection requires a verified exact user file and an
 # attributed native offer before a no-selection denominator can be measured.
 # 6: opt in tested 0.165.0 native project/user inventory and selections.
-SKILL_MATCHER_VERSION = 6
+# 7: require completed 0.165.0 native turns before attributing an offer or selection.
+SKILL_MATCHER_VERSION = 7
 
 
 @dataclass(frozen=True)

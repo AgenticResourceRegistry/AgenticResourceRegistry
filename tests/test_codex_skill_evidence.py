@@ -53,9 +53,9 @@ def changed(rows_, index, change):
 
 
 def with_0165_inventory(source):
-    """Sanitized native 0.165.0 inventory followed by permissions instructions."""
+    """Sanitized 0.165.0 inventory inside one completed native turn."""
     source = changed(source, 0, lambda r: r["payload"].update(cli_version="0.165.0"))
-    return changed(
+    source = changed(
         source,
         1,
         lambda r: r["payload"].update(
@@ -65,6 +65,17 @@ def with_0165_inventory(source):
             content=[*r["payload"]["content"], {"type": "input_text", "text": "Inert permissions."}],
         ),
     )
+
+    def marker(kind):
+        return {"type": "event_msg", "payload": {"type": kind}}
+
+    records = [
+        source[0],
+        {"raw_line": json.dumps(marker("task_started"))},
+        *source[1:],
+        {"raw_line": json.dumps(marker("task_complete"))},
+    ]
+    return [dict(row, is_source_record=1, line_offset=i, line_hash=f"turn-hash-{i}") for i, row in enumerate(records)]
 
 
 def with_combined_context(source):
@@ -160,6 +171,19 @@ def test_0165_native_inventory_and_selection_are_distinct_from_loads(scope):
     assert [(e.kind, e.scope) for e in selected.evidence] == [("available", scope), ("invoked", scope)]
     assert all(e.kind != "load" for e in selected.evidence)
     assert selected.evidence[1].location_sha256 == selected.evidence[0].location_sha256
+
+
+def test_0165_offer_before_turn_complete_is_unknown_not_no_selection():
+    full = with_0165_inventory(rows())
+    for prefix in (full[:1], full[:2], full[:-1]):
+        assert extract_skill_evidence("codex", prefix).status == "unsupported"
+    selected = with_0165_inventory(selected_rows())
+    assert extract_skill_evidence("codex", selected[:-1]).status == "unsupported"
+    assert extract_skill_evidence("codex", full).status == "supported"
+    # Forged end markers cannot turn an unclosed or duplicated turn into zero.
+    start = full[1]
+    assert extract_skill_evidence("codex", [full[0], *full[2:]]).status == "unsupported"
+    assert extract_skill_evidence("codex", [full[0], start, *full[1:]]).status == "unsupported"
 
 
 def test_native_selected_skill_has_tagged_project_origin_not_a_file_read():

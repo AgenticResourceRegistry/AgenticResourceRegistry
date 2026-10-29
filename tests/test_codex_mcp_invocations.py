@@ -202,6 +202,17 @@ async def test_scoped_codex_projection_publishes_only_executed_verified_calls(mo
     assert (await mcp_projector.project_session_activity("p", "u", "codex", "s3"))["status"] == "unsupported"
     assert not any("INSERT INTO component_activity" in sql for sql, _ in writes)
 
+    # An authenticated 0.165 source prefix can be offset-contiguous and have a
+    # verified pin before Codex finishes its turn. It must not publish zero.
+    writes.clear()
+    meta["payload"]["cli_version"] = "0.165.0"
+    rows[:] = _source(meta)
+    assert (await mcp_projector.project_session_activity("p", "u", "codex", "s-prefix"))["status"] == "unsupported"
+    assert not any("INSERT INTO component_activity_publications" in sql for sql, _ in writes)
+    rows[:] = _source(meta, _turn_event("task_started"), _turn_event("task_complete"))
+    closed_zero = await mcp_projector.project_session_activity("p", "u", "codex", "s-closed-zero")
+    assert closed_zero["status"] == "complete" and closed_zero["candidate_count"] == 0
+
 
 @pytest.mark.parametrize("version", ["0.163.0", "0.164.0"])
 def test_tested_native_version_supports_both_success_and_executed_error(version):
@@ -216,24 +227,54 @@ def test_tested_native_version_supports_both_success_and_executed_error(version)
     assert extract_invocations("codex", _rows(meta, success, denied)).status == "unsupported"
 
 
+def _turn_event(kind: str) -> dict:
+    return {"timestamp": "2026-10-17T18:00:01Z", "type": "event_msg", "payload": {"type": kind}}
+
+
 def test_codex_0165_native_success_omits_is_error_but_denial_is_unknown():
     meta, success = _fixture()
     meta["payload"]["cli_version"] = "0.165.0"
+    start, complete = _turn_event("task_started"), _turn_event("task_complete")
     success["payload"]["item"]["result"] = {"content": [{"type": "text", "text": "PRIVATE_SENTINEL"}]}
-    extracted = extract_invocations("codex", _rows(meta, success))
+    extracted = extract_invocations("codex", _rows(meta, start, success, complete))
     assert extracted.status == "supported" and [call.result_state for call in extracted.invocations] == ["success"]
     assert "PRIVATE_SENTINEL" not in str(extracted)
     _unused, error = _error_fixture()
-    assert [call.result_state for call in extract_invocations("codex", _rows(meta, error)).invocations] == ["error"]
+    assert [
+        call.result_state for call in extract_invocations("codex", _rows(meta, start, error, complete)).invocations
+    ] == ["error"]
     denied = json.loads(json.dumps(success))
     denied["payload"]["item"].update({"status": "failed", "result": None})
-    assert extract_invocations("codex", _rows(meta, denied)).status == "unsupported"
+    assert extract_invocations("codex", _rows(meta, start, denied, complete)).status == "unsupported"
     for result in ({}, {"content": "text"}, {"content": [], "isError": 1}):
         invalid = json.loads(json.dumps(success))
         invalid["payload"]["item"]["result"] = result
-        assert extract_invocations("codex", _rows(meta, invalid)).status == "unsupported"
+        assert extract_invocations("codex", _rows(meta, start, invalid, complete)).status == "unsupported"
     meta["payload"]["cli_version"] = "0.164.0"
     assert extract_invocations("codex", _rows(meta, success)).status == "unsupported"
+
+
+def test_codex_0165_partial_turn_is_unknown_not_a_no_tool_zero():
+    meta, call = _fixture()
+    meta["payload"]["cli_version"] = "0.165.0"
+    start, complete = _turn_event("task_started"), _turn_event("task_complete")
+    extractor = CodexMCPInvocationExtractor()
+    for prefix in (
+        (meta,),
+        (meta, start),
+        (meta, start, call),
+        (meta, start, complete, start),
+        (meta, start, complete, start, call),
+        (meta, complete),
+        (meta, start, complete, complete),
+        (meta, start, start, complete),
+        (meta, start, complete, call),
+    ):
+        assert extractor.extract(_rows(*prefix)).status == "unsupported"
+    no_tool = extractor.extract(_rows(meta, start, complete))
+    assert no_tool.status == "supported" and not no_tool.invocations
+    two_turns = extractor.extract(_rows(meta, start, complete, start, call, complete))
+    assert two_turns.status == "supported" and len(two_turns.invocations) == 1
 
 
 def test_only_native_item_completed_and_exact_tested_version_are_supported():

@@ -8,8 +8,10 @@ status. On 0.163.0/0.164.0, successful results explicitly set ``isError: false``
 on 0.165.0, successful results omit it but contain an MCP ``content`` list.
 An executed tool error has status ``failed`` with a non-null result whose
 ``isError`` is true. A denied approval also has status ``failed`` but no
-result: decline the entire session rather
-than reporting it as a use or measured zero. Model-generated function calls,
+result: decline the entire session rather than reporting it as a use or measured
+zero. For 0.165.0, a contiguous prefix is not a completed native turn: require
+paired task-start/complete events so a session still receiving records cannot
+publish a premature no-tool zero. Model-generated function calls,
 code-mode text, prompts, arguments and result bodies are not identity evidence.
 """
 
@@ -59,6 +61,8 @@ class CodexMCPInvocationExtractor:
         pending: set[str] = set()
         malformed = 0
         ambiguous = False
+        turn_open = False
+        completed_turns = 0
         for row in rows:
             if row.get("is_source_record") != 1:
                 continue
@@ -84,8 +88,23 @@ class CodexMCPInvocationExtractor:
             payload = record.get("payload")
             if not isinstance(payload, dict):
                 continue
+            if payload.get("type") == "task_started":
+                if turn_open:
+                    ambiguous = True
+                turn_open = True
+                continue
+            if payload.get("type") == "task_complete":
+                if not turn_open:
+                    ambiguous = True
+                else:
+                    completed_turns += 1
+                    turn_open = False
+                continue
             item = payload.get("item")
             if not isinstance(item, dict) or item.get("type") != "McpToolCall":
+                continue
+            if len(metas) == 1 and metas[0].get("cli_version") == "0.165.0" and not turn_open:
+                ambiguous = True
                 continue
             if payload.get("type") != "item_completed":
                 if payload.get("type") == "item_started":
@@ -157,6 +176,7 @@ class CodexMCPInvocationExtractor:
             or pending
             or len(metas) != 1
             or metas[0].get("cli_version") not in _TESTED_VERSIONS
+            or (metas[0].get("cli_version") == "0.165.0" and (turn_open or completed_turns == 0))
             or not isinstance(metas[0].get("cwd"), str)
             or not metas[0]["cwd"].startswith("/")
             or posixpath.normpath(metas[0]["cwd"]) != metas[0]["cwd"]

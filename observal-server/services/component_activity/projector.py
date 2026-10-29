@@ -31,7 +31,8 @@ PROJECTION_VERSION = 3
 # 2: result-link ordering. 3: Pi server identity. 4: Codex native
 # McpToolCall outcome and timestamp, with unknown lifecycle vetoing a session.
 # 5: tested Codex 0.165.0 success omits isError but has completed status and content.
-MATCHER_VERSION = 5
+# 6: 0.165.0 MCP evidence requires a closed native turn; a received prefix is not a no-tool zero.
+MATCHER_VERSION = 6
 MAX_SOURCE_RECORDS = 50_000
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 
