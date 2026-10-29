@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # observal-pi
 
-Session telemetry extension for [Pi](https://pi.dev) that pushes conversation traces to your [Observal](https://obs-sync.dev) server.
+Session telemetry extension for [Pi](https://pi.dev) that pushes conversation traces to your [Agentic Resource Registry](https://obs-sync.dev) server.
 
 ## Install
 
@@ -15,7 +15,7 @@ Session telemetry extension for [Pi](https://pi.dev) that pushes conversation tr
 observal doctor patch --harness pi
 ```
 
-Doctor installs the bundled TypeScript extension directly at `~/.pi/agent/extensions/observal.ts` and records the CLI version it came from in `~/.pi/agent/extensions/.observal-extension.json`. `observal auth login` does the same automatically. A local file Observal did not write is always left alone.
+Doctor installs the bundled TypeScript extension directly at `~/.pi/agent/extensions/observal.ts` and records the CLI version it came from in `~/.pi/agent/extensions/.observal-extension.json`. `observal auth login` does the same automatically. A local file Agentic Resource Registry did not write is always left alone.
 
 This package is not published to npm. The CLI wheel is the only distribution channel.
 
@@ -25,12 +25,12 @@ This package is not published to npm. The CLI wheel is the only distribution cha
 
 ## Prerequisites
 
-1. An Observal account (run `observal auth login` to authenticate)
+1. An Agentic Resource Registry account (run `observal auth login` to authenticate)
 2. Pi installed (`>=0.74.0`)
 
 ## What it does
 
-- **Incremental push:** After each user prompt (`agent_end`), durably stages new JSONL lines before sending them to Observal
+- **Incremental push:** After each user prompt (`agent_end`), durably stages new JSONL lines before sending them to Agentic Resource Registry
 - **Acknowledged checkpoints:** Advances byte and line cursors only after a contiguous server acknowledgement
 - **Final push:** On session exit, sends remaining lines and a SHA-256 audit manifest; mismatches replay from the requested range
 - **Crash recovery:** Retries durable pending batches and rebuilds missing/corrupt cursors from the authenticated server checkpoint

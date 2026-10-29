@@ -4,7 +4,7 @@
 title: "observal share"
 ---
 
-Create and consume expiring links for version-pinned Agents installed in a repository. Share links preserve Registry authorization: recipients must sign in to the same Observal deployment and can only see and pull Agents available in their current public or teamspace scope.
+Create and consume expiring links for version-pinned Agents installed in a repository. Share links preserve Registry authorization: recipients must sign in to the same Agentic Resource Registry deployment and can only see and pull Agents available in their current public or teamspace scope.
 
 ## Create a share
 
@@ -45,7 +45,7 @@ Discovery checks every harness section in the lockfile and deduplicates identica
 observal share open 'https://observal.example/shares/agents/<token>'
 ```
 
-Observal validates that the URL belongs to the configured deployment, fetches the manifest using the configured bearer token, and displays its creator and accessible Agents. It does not contact the host contained in the supplied URL. After selection and confirmation, the command asks for a target harness and delegates each installation to `observal agent pull`.
+Agentic Resource Registry validates that the URL belongs to the configured deployment, fetches the manifest using the configured bearer token, and displays its creator and accessible Agents. It does not contact the host contained in the supplied URL. After selection and confirmation, the command asks for a target harness and delegates each installation to `observal agent pull`.
 
 Use `--no-pull` to inspect without installing:
 

@@ -63,7 +63,7 @@ Directory used for cloned repository mirrors during component analysis and sourc
 
 ## Registered Agents Only
 
-Limits telemetry to agents that are registered in the Observal registry.
+Limits telemetry to agents that are registered in the Agentic Resource Registry registry.
 
 | Value | Effect |
 |-------|--------|

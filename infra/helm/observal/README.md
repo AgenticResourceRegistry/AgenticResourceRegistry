@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal
+# Agentic Resource Registry
 
-Observal is an agent-centric registry and observability platform for AI coding agents. This chart deploys the API, web UI, worker, PostgreSQL, ClickHouse, Redis, and supporting Kubernetes resources for self-hosted installations.
+Agentic Resource Registry is an agent-centric registry and observability platform for AI coding agents. This chart deploys the API, web UI, worker, PostgreSQL, ClickHouse, Redis, and supporting Kubernetes resources for self-hosted installations.
 
 ## Install
 

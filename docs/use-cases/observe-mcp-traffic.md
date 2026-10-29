@@ -5,7 +5,7 @@
 title: "Observe MCP activity in sessions"
 ---
 
-Observal identifies MCP and tool activity from the session transcript recorded by each coding harness. It does not intercept MCP transport traffic.
+Agentic Resource Registry identifies MCP and tool activity from the session transcript recorded by each coding harness. It does not intercept MCP transport traffic.
 
 ## What you get
 
@@ -17,7 +17,7 @@ When the harness records the relevant detail, session events can include:
 - Harness, user, agent, and model attribution
 - Token totals and timing derived from the session
 
-Coverage varies by harness because Observal can only index fields present in the local transcript or native message API. Transport-level latency and payload data are not synthesized when the harness does not record them.
+Coverage varies by harness because Agentic Resource Registry can only index fields present in the local transcript or native message API. Transport-level latency and payload data are not synthesized when the harness does not record them.
 
 ## Discover and install session hooks
 
@@ -56,7 +56,7 @@ observal ops traces --turn --limit 10
 ## Caveats
 
 - MCP visibility depends on the harness transcript format.
-- Observal does not modify, proxy, or wrap MCP traffic.
+- Agentic Resource Registry does not modify, proxy, or wrap MCP traffic.
 - Monetary cost and structured transport errors are unavailable unless the harness records equivalent session fields.
 
 ## Next

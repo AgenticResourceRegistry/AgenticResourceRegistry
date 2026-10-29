@@ -7,7 +7,7 @@
 title: "Config files"
 ---
 
-Every file Observal reads or writes on the client (`~/.observal/`) and in each harness's config directory.
+Every file Agentic Resource Registry reads or writes on the client (`~/.observal/`) and in each harness's config directory.
 
 ## Client-side: `~/.observal/`
 
@@ -43,7 +43,7 @@ Authentication and identity fields are managed by `observal auth`. The `config s
 
 ### Durable session outbox
 
-Python session exporters persist each observed batch in `telemetry_buffer.db` before network delivery. OpenCode and Pi use per-session files under their native outbox directories because their TypeScript runtimes cannot call the Python SQLite engine. All follow the same protocol: pending data survives process restarts and failed attempts, and the source line advances only when the server's contiguous checkpoint covers the complete batch. Observal does not silently evict unacknowledged records at capacity.
+Python session exporters persist each observed batch in `telemetry_buffer.db` before network delivery. OpenCode and Pi use per-session files under their native outbox directories because their TypeScript runtimes cannot call the Python SQLite engine. All follow the same protocol: pending data survives process restarts and failed attempts, and the source line advances only when the server's contiguous checkpoint covers the complete batch. Agentic Resource Registry does not silently evict unacknowledged records at capacity.
 
 `sync_state.json` is a cache of acknowledged local positions, not the authority for delivered history. If it is missing, corrupt, or stale, recovery validates and restores positions from the authenticated server checkpoint. Finalized sessions also send a SHA-256 audit manifest; hashing is not performed on ordinary incremental uploads.
 
@@ -126,11 +126,11 @@ Each list invocation replaces this cache, including an empty result. Numeric row
 | --- | --- |
 | `~/.pi/agent/extensions/observal.ts` | Bundled telemetry extension |
 | `~/.pi/agent/extensions/.observal-extension.json` | Manifest recording the CLI version the local extension was installed from |
-| `~/.pi/agent/extensions/observal.ts.bak` | Copy of the previous extension, kept whenever Observal replaces or removes one |
+| `~/.pi/agent/extensions/observal.ts.bak` | Copy of the previous extension, kept whenever Agentic Resource Registry replaces or removes one |
 
 `observal auth login` and `observal doctor patch` install the extension bundled with the CLI directly to `extensions/observal.ts`, recording the installed CLI version in the adjacent manifest. A later CLI upgrade rewrites each of those files atomically (the two are written in sequence, not as a single atomic unit) and prints a reminder to restart Pi or run `/reload`; a newer local install than the current CLI is left alone. If the file still carries the current version but its contents have drifted from the bundled source, such as an edited working copy, doctor restores it and keeps the previous contents as `observal.ts.bak`.
 
-Observal keeps a copy of the file whenever it rewrites or deletes one, named
+Agentic Resource Registry keeps a copy of the file whenever it rewrites or deletes one, named
 `observal.ts.bak` (`.bak.1`, `.bak.2`, … if that name is taken). The copy does
 not end in `.ts`, so Pi does not load it; delete it once you are satisfied with
 the result.
@@ -138,15 +138,15 @@ the result.
 There are two cases where no copy is made, because nothing is lost: adopting a
 file whose contents already match the bundle, where only the manifest is
 written, and `observal doctor cleanup` removing a tracked install that still
-matches what Observal wrote. Every other refresh, restore, migration and
+matches what Agentic Resource Registry wrote. Every other refresh, restore, migration and
 duplicate removal keeps one — a manifest records which CLI version wrote an
 install, not that its bytes are still unedited.
 
 ### Migrating installs from before version tracking
 
-CLI versions before the manifest existed wrote `extensions/observal.ts` with nothing beside it. Those installs are recognized by the doc header every Observal extension carries, and `observal auth login` or `observal doctor patch` migrates them: the existing file is copied to `observal.ts.bak` (`.bak.1`, `.bak.2`, … if that name is taken), the current extension is written in its place, and the manifest is created. The backup does not end in `.ts`, so Pi does not load it; delete it once you're satisfied with the upgrade.
+CLI versions before the manifest existed wrote `extensions/observal.ts` with nothing beside it. Those installs are recognized by the doc header every Agentic Resource Registry extension carries, and `observal auth login` or `observal doctor patch` migrates them: the existing file is copied to `observal.ts.bak` (`.bak.1`, `.bak.2`, … if that name is taken), the current extension is written in its place, and the manifest is created. The backup does not end in `.ts`, so Pi does not load it; delete it once you're satisfied with the upgrade.
 
-If `extensions/observal.ts` exists without a matching manifest, doesn't match the bundled source, and carries no Observal header, Observal treats it as unmanaged and never overwrites or removes it — remove or move the file aside, then re-run `observal doctor patch --harness pi` to let Observal manage it.
+If `extensions/observal.ts` exists without a matching manifest, doesn't match the bundled source, and carries no Observal header (`Observal session telemetry extension for Pi`), Agentic Resource Registry treats it as unmanaged and never overwrites or removes it — remove or move the file aside, then re-run `observal doctor patch --harness pi` to let Agentic Resource Registry manage it.
 
 ## Safe writes
 

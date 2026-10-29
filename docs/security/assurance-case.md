@@ -6,7 +6,7 @@ title: "Security assurance case"
 
 ## Claim
 
-Observal protects registry control, authentication credentials, agent configuration, and telemetry against unauthorized disclosure or modification when operators follow the documented deployment requirements. This case records the threats, boundaries, controls, evidence, and residual risks supporting that claim.
+Agentic Resource Registry protects registry control, authentication credentials, agent configuration, and telemetry against unauthorized disclosure or modification when operators follow the documented deployment requirements. This case records the threats, boundaries, controls, evidence, and residual risks supporting that claim.
 
 ## Assets
 
@@ -94,7 +94,7 @@ Evidence: [Security policy](https://github.com/AgenticResourceRegistry/AgenticRe
 * Loopback HTTP relies on the host boundary. Other privileged processes on a compromised host can observe local traffic and files.
 * File-backed secrets are only as secure as host permissions, mounts, backups, and the operator's rotation process.
 * A compromised administrator, host, identity provider, or canonical GitHub Actions workflow can exercise its trusted authority.
-* Third-party MCP servers, hooks, skills, models, and harnesses may process data outside Observal's boundary. Operators must review and isolate them appropriately.
+* Third-party MCP servers, hooks, skills, models, and harnesses may process data outside Agentic Resource Registry's boundary. Operators must review and isolate them appropriately.
 * Historical releases and tags created before signed-tag enforcement may not have equivalent evidence.
 
 ## Maintenance

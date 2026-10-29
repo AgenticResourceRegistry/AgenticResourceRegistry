@@ -4,7 +4,7 @@
 title: "Claude Code"
 ---
 
-Claude Code is a first-class Observal harness integration. Observal can install Claude Code agents, register MCP servers, add hooks, install skills, and collect session telemetry.
+Claude Code is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install Claude Code agents, register MCP servers, add hooks, install skills, and collect session telemetry.
 
 ---
 
@@ -12,7 +12,7 @@ Claude Code is a first-class Observal harness integration. Observal can install 
 
 Claude Code agent profiles are Markdown files with YAML frontmatter. Project agents live in `.claude/agents/`. User agents live in `~/.claude/agents/`.
 
-Session telemetry is collected through the shared `observal_cli.hooks.session_push --harness claude-code` entry point, which runs on `UserPromptSubmit` and `Stop`. The hook reads Claude Code session JSONL files from `~/.claude/projects/<project>/<session_id>.jsonl`, reads only new lines since the last push, and sends them to Observal. Subagent transcripts under `<session_id>/subagents/` are picked up as related sources.
+Session telemetry is collected through the shared `observal_cli.hooks.session_push --harness claude-code` entry point, which runs on `UserPromptSubmit` and `Stop`. The hook reads Claude Code session JSONL files from `~/.claude/projects/<project>/<session_id>.jsonl`, reads only new lines since the last push, and sends them to Agentic Resource Registry. Subagent transcripts under `<session_id>/subagents/` are picked up as related sources.
 
 There are two ways the hooks get installed:
 
@@ -42,7 +42,7 @@ Custom hook events recognized by the registry: `PreToolUse`, `PostToolUse`, `Not
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -81,7 +81,7 @@ User agents are written to `~/.claude/agents/{name}.md`.
 observal doctor patch
 ```
 
-This reconciles Observal's hooks into `~/.claude/settings.json` without removing hooks you added yourself. Use `observal doctor cleanup` to remove them.
+This reconciles Agentic Resource Registry's hooks into `~/.claude/settings.json` without removing hooks you added yourself. Use `observal doctor cleanup` to remove them.
 
 ---
 
@@ -94,15 +94,15 @@ This reconciles Observal's hooks into `~/.claude/settings.json` without removing
 | Hook config         | `.claude/settings.json`            | `~/.claude/settings.json`          |
 | Custom hook scripts | `.claude/hooks/`                   | `.claude/hooks/`                   |
 | Session JSONL       | `~/.claude/projects/<project>/{session_id}.jsonl` | same                |
-| Observal credentials | `~/.observal/config.json`         | `~/.observal/config.json`          |
+| Agentic Resource Registry credentials | `~/.observal/config.json`         | `~/.observal/config.json`          |
 
-Observal writes hook config to `~/.claude/settings.json` (via `doctor patch`) and to agent frontmatter (via `agent pull`). It writes an agent's hooks to `.claude/settings.json` or `~/.claude/settings.json` only when you opt in with `agent pull --hooks=settings` (see [Agent hooks in headless sessions](#agent-hooks-in-headless-sessions)); otherwise those files are listed because Claude Code reads them.
+Agentic Resource Registry writes hook config to `~/.claude/settings.json` (via `doctor patch`) and to agent frontmatter (via `agent pull`). It writes an agent's hooks to `.claude/settings.json` or `~/.claude/settings.json` only when you opt in with `agent pull --hooks=settings` (see [Agent hooks in headless sessions](#agent-hooks-in-headless-sessions)); otherwise those files are listed because Claude Code reads them.
 
 ---
 
 ## Agent profile format
 
-Observal generates Markdown agent profiles with YAML frontmatter:
+Agentic Resource Registry generates Markdown agent profiles with YAML frontmatter:
 
 ```markdown
 ---
@@ -169,7 +169,7 @@ Agent instructions go here.
 
 ## Agent hooks in headless sessions
 
-Claude Code runs hooks from an agent's frontmatter only in interactive sessions. In headless runs (`claude -p --agent …`, including Observal delegation) they don't run. Pulling with `--hooks=settings` moves the agent's hooks into `.claude/settings.json` (or `~/.claude/settings.json` for user scope), each wrapped by `observal_cli.hook_gate`. The gate runs a hook only while that agent is active, in interactive and headless sessions, and does nothing in other sessions.
+Claude Code runs hooks from an agent's frontmatter only in interactive sessions. In headless runs (`claude -p --agent …`, including Agentic Resource Registry delegation) they don't run. Pulling with `--hooks=settings` moves the agent's hooks into `.claude/settings.json` (or `~/.claude/settings.json` for user scope), each wrapped by `observal_cli.hook_gate`. The gate runs a hook only while that agent is active, in interactive and headless sessions, and does nothing in other sessions.
 
 ```bash
 observal agent pull alice/reviewer --harness claude-code --hooks=settings --dry-run
@@ -231,7 +231,7 @@ Skills from an agent are installed to `.claude/skills/{name}/SKILL.md` (project 
 
 ## Guidance files
 
-Claude Code reads these instruction files. Observal scans them but never overwrites them, and they are separate from Observal-managed agent profiles:
+Claude Code reads these instruction files. Agentic Resource Registry scans them but never overwrites them, and they are separate from Agentic Resource Registry-managed agent profiles:
 
 ```text
 CLAUDE.md
@@ -244,7 +244,7 @@ CLAUDE.local.md
 
 ## OTLP telemetry
 
-Observal does not use Claude Code's OTLP telemetry. Do **not** configure these for Observal's Claude Code integration:
+Agentic Resource Registry does not use Claude Code's OTLP telemetry. Do **not** configure these for Agentic Resource Registry's Claude Code integration:
 
 ```text
 OTEL_*
@@ -258,7 +258,7 @@ Telemetry flows through session push hooks and `observal reconcile` only.
 ## Caveats
 
 - Project scope is the default for `agent pull`. User scope needs `--scope user`.
-- `agent pull` hooks use bare `python3`, so `python3` on `PATH` must be able to import `observal_cli`. `doctor patch` uses the exact interpreter of the Observal install.
+- `agent pull` hooks use bare `python3`, so `python3` on `PATH` must be able to import `observal_cli`. `doctor patch` uses the exact interpreter of the Agentic Resource Registry install.
 - MCP registration depends on the `claude` CLI being installed.
 - `doctor patch` only touches `~/.claude/settings.json`, not project settings.
 - Session delivery depends on Claude Code's local JSONL files under `~/.claude/projects/`.

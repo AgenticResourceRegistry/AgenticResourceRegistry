@@ -4,7 +4,7 @@
 title: "Open Collective copy"
 ---
 
-Paste-ready text for the Observal Open Collective settings. These can't be set from the repo, so copy each block by hand.
+Paste-ready text for the Agentic Resource Registry Open Collective settings. These can't be set from the repo, so copy each block by hand.
 
 Keep the full policy at `https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md` in sync with block 1.
 
@@ -32,7 +32,7 @@ Full policy: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/
 Settings > Info > About.
 
 ```markdown
-Observal is the control plane and system of record for internal AI components. It gives organizations a discovery layer for their Skills, Agents, MCP servers, and other AI components, plus insight into how those components are actually used, so failures turn into feedback.
+Agentic Resource Registry (formerly Observal) is a self-hosted, Apache 2.0 registry for sharing coding agent resources. It gives organizations one place to share and discover their Skills, Agents, MCP servers, and other coding agent resources, plus insight into how those resources are actually used, so failures turn into feedback.
 
 ## How this collective works
 

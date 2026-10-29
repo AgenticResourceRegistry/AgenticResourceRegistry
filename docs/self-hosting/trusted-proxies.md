@@ -42,7 +42,7 @@ Add Cloudflare's published IP ranges (see `https://www.cloudflare.com/ips/`):
 
 ## Verify it works
 
-After saving, check that Observal resolves the correct client IP:
+After saving, check that Agentic Resource Registry resolves the correct client IP:
 
 ```bash
 curl -s https://observal.yourcompany.com/api/health/ip \
@@ -58,7 +58,7 @@ Also check the audit log: **Settings > Audit Log** should show distinct IPs for 
 
 ### Trusted Proxy IPs
 
-A list of IP addresses or CIDR ranges that Observal trusts to set forwarding headers (`X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`).
+A list of IP addresses or CIDR ranges that Agentic Resource Registry trusts to set forwarding headers (`X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`).
 
 **Affects:** IP resolution for rate limiting, audit logs, and access controls. Only IPs in this list are trusted to pass `X-Forwarded-For`. Traffic from unlisted IPs uses the TCP source address directly, ignoring forwarding headers.
 
@@ -83,15 +83,15 @@ A list of IP addresses or CIDR ranges that Observal trusts to set forwarding hea
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| All users show same IP in audit logs | Proxy IP not trusted; Observal records proxy IP as client | Add proxy's IP to trusted list |
+| All users show same IP in audit logs | Proxy IP not trusted; Agentic Resource Registry records proxy IP as client | Add proxy's IP to trusted list |
 | Rate limits trigger for the whole office at once | Same as above — all traffic appears from one IP | Add proxy's IP to trusted list |
 | Rate limits don't work at all | Trusted list is too broad (e.g., `0.0.0.0/0`) | Narrow to actual proxy IPs only |
-| Users get `403 Untrusted proxy` | Client's IP is in a range Observal doesn't recognize | Check if a new proxy/LB was added without updating this list |
+| Users get `403 Untrusted proxy` | Client's IP is in a range Agentic Resource Registry doesn't recognize | Check if a new proxy/LB was added without updating this list |
 
 
 ## SSRF Protection
 
-Server-Side Request Forgery (SSRF) protection prevents Observal from making outbound requests to internal/private networks when processing user-supplied URLs (webhook destinations, IdP metadata URLs, custom API base URLs).
+Server-Side Request Forgery (SSRF) protection prevents Agentic Resource Registry from making outbound requests to internal/private networks when processing user-supplied URLs (webhook destinations, IdP metadata URLs, custom API base URLs).
 
 **Settings:**
 

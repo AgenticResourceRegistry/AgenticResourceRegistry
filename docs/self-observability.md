@@ -4,7 +4,7 @@
 title: "Self-Observability"
 ---
 
-Observal exposes health probes, structured logs, and Prometheus metrics for monitoring itself.
+Agentic Resource Registry exposes health probes, structured logs, and Prometheus metrics for monitoring itself.
 
 ## Health Endpoints
 

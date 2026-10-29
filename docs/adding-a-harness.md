@@ -1,17 +1,17 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Adding a New Harness to Observal"
+title: "Adding a New Harness to Agentic Resource Registry"
 ---
 
-This guide covers everything needed to add full harness support. Observal manages
+This guide covers everything needed to add full harness support. Agentic Resource Registry manages
 four component types per harness: **MCP servers**, **skills**, **hooks**, and
 **sandboxes**. Each harness needs scanning (discovery), config generation (install),
 hook instrumentation (telemetry), and session parsing (reconciliation).
 
 ## Overview: What "Supporting a harness" Means
 
-When a user runs `observal agent pull <agent>`, Observal writes harness-specific files:
+When a user runs `observal agent pull <agent>`, Agentic Resource Registry writes harness-specific files:
 
 | Component | What gets written | Example |
 |-----------|------------------|---------|
@@ -20,7 +20,7 @@ When a user runs `observal agent pull <agent>`, Observal writes harness-specific
 | Hooks | Telemetry hook config that fires on tool use, session start/stop | `settings.json` hooks section |
 | Sandboxes | MCP entry pointing to `observal-sandbox-run` | Added to MCP config |
 
-When a user runs `observal scan`, Observal reads those same locations to discover what's installed.
+When a user runs `observal scan`, Agentic Resource Registry reads those same locations to discover what's installed.
 
 ## File Checklist
 
@@ -58,7 +58,7 @@ Before writing code, document these for the target harness:
 **Hooks:**
 - Does the harness fire lifecycle events? (tool use, session start/stop, errors)
 - How are hooks registered? (JSON config, settings file, plugin system)
-- What events are available? Map them to Observal's canonical events:
+- What events are available? Map them to Agentic Resource Registry's canonical events:
   - `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`, `UserPromptSubmit`, `SubagentStop`
 - Does the harness support command hooks, HTTP hooks, or plugin hooks?
 
@@ -571,7 +571,7 @@ Component Insights count skill and hook evidence only where it is proven for the
 1. **A verified binding.** The CLI adapter verifies the installed component against the file the harness actually loads (`skill_manifest_path`, `skill_shadow_paths`, `skill_location` for skills; `verify_hook_binding` for hooks). Anything it cannot rule out, such as an unreadable config, a duplicate entry or a same-named copy elsewhere, must leave the component unverified. Add the harness to `SKILL_VERIFICATION_HARNESSES` or `HOOK_VERIFICATION_HARNESSES` in `observal_cli/layer.py` so the result is bound into the layer identity.
 2. **An observable identity.** The transcript must name the same identity the verifier recorded: the exact `SKILL.md` location for skills, the exact event and command for hooks. Typed or pasted text must not be able to produce it; rely on harness-written fields.
 3. **Declared limits.** The extractor declares which kinds it can observe (`observed_kinds`). For hooks it also declares whether silent successes are recorded (`records_silent_success`) and whether agent-scoped hooks run headless (`agent_hooks_run_headless`). Unknown is reported as not recorded or not eligible, never as zero.
-4. **When it could run.** For hooks, prove from recordings when an installed hook can run at all (settings versus agent placement, interactive versus headless) before counting a session in the denominator. The verifier reports each agent hook's placement (`hook_placement`, stored as `layer_components.binding_placement`): `frontmatter` hooks follow `agent_hooks_run_headless`, while Claude Code's opt-in `gated_settings` hooks (`agent pull --hooks=settings`) can run whenever their agent is active. If a subagent's own transcript doesn't name its agent, set `HookSession.subagent` and, when every record carries the same harness-written parent session and subagent ids, `parent_session_id` and `subagent_id`. The hook projector then names the agent from the parent session's record of the spawn, but only if the extractor also implements `subagent_results`, `agent_tool_calls` and `resolve_agent` (see `claude_code_hook_evidence.py`). Otherwise those sessions stay `agent_unknown`. Pi has no native command hooks: its registry hooks run inside the Observal extension, whose run receipts are the identity (`pi_hook_evidence.py`). They carry no `hook_agent`, because the verifier only reports them verified while the active profile's hooks file names that agent, so every session that verifies one is eligible.
+4. **When it could run.** For hooks, prove from recordings when an installed hook can run at all (settings versus agent placement, interactive versus headless) before counting a session in the denominator. The verifier reports each agent hook's placement (`hook_placement`, stored as `layer_components.binding_placement`): `frontmatter` hooks follow `agent_hooks_run_headless`, while Claude Code's opt-in `gated_settings` hooks (`agent pull --hooks=settings`) can run whenever their agent is active. If a subagent's own transcript doesn't name its agent, set `HookSession.subagent` and, when every record carries the same harness-written parent session and subagent ids, `parent_session_id` and `subagent_id`. The hook projector then names the agent from the parent session's record of the spawn, but only if the extractor also implements `subagent_results`, `agent_tool_calls` and `resolve_agent` (see `claude_code_hook_evidence.py`). Otherwise those sessions stay `agent_unknown`. Pi has no native command hooks: its registry hooks run inside the Agentic Resource Registry extension, whose run receipts are the identity (`pi_hook_evidence.py`). They carry no `hook_agent`, because the verifier only reports them verified while the active profile's hooks file names that agent, so every session that verifies one is eligible.
 
 Without all four the cell stays `unsupported`.
 

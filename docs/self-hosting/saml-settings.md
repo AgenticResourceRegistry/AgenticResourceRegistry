@@ -10,9 +10,9 @@ Configure SAML-based Single Sign-On to allow users to authenticate via your orga
 
 ## Prerequisites
 
-- An active Observal license with the `saml` feature enabled
+- An active Agentic Resource Registry license with the `saml` feature enabled
 - Admin access to your identity provider
-- The Observal instance must be reachable over HTTPS (SAML assertions are signed and validated)
+- The Agentic Resource Registry instance must be reachable over HTTPS (SAML assertions are signed and validated)
 
 ## Quick Setup
 
@@ -20,7 +20,7 @@ Configure SAML-based Single Sign-On to allow users to authenticate via your orga
 2. Set the ACS URL to: `https://YOUR_DOMAIN/api/v1/sso/saml/acs`
 3. Set the Entity ID to: `https://YOUR_DOMAIN/api/v1/sso/saml/metadata`
 4. Copy the IdP Entity ID, SSO URL, and X.509 certificate from your IdP
-5. Paste them into the Observal Settings > SAML section
+5. Paste them into the Agentic Resource Registry Settings > SAML section
 6. Test with a non-admin user before enabling SSO-only mode
 
 ## Field Reference
@@ -37,7 +37,7 @@ The unique identifier of your identity provider, found in the IdP's SAML metadat
 
 ### IdP SSO URL
 
-The URL where Observal redirects users to authenticate. This is the SingleSignOnService Location with HTTP-Redirect binding from your IdP's metadata.
+The URL where Agentic Resource Registry redirects users to authenticate. This is the SingleSignOnService Location with HTTP-Redirect binding from your IdP's metadata.
 
 **Affects:** The redirect target when a user clicks "Sign in with SSO". If incorrect, users see a 404 or error page at the IdP.
 
@@ -45,7 +45,7 @@ The URL where Observal redirects users to authenticate. This is the SingleSignOn
 
 The URL for SAML Single Logout (optional).
 
-**Affects:** When set, logging out of Observal also triggers a logout at the IdP, ending all SSO sessions. When blank, only the Observal session is terminated.
+**Affects:** When set, logging out of Agentic Resource Registry also triggers a logout at the IdP, ending all SSO sessions. When blank, only the Agentic Resource Registry session is terminated.
 
 **When to set:** Deployments that require centralized session termination, for example when an employee is offboarded and all sessions must end immediately.
 
@@ -53,23 +53,23 @@ The URL for SAML Single Logout (optional).
 
 The IdP's public X.509 certificate in PEM format, used to verify SAML assertion signatures.
 
-**Affects:** Security of the SAML flow. Without a valid certificate, Observal cannot verify that assertions actually came from your IdP. Invalid or expired certificates cause all SSO logins to fail.
+**Affects:** Security of the SAML flow. Without a valid certificate, Agentic Resource Registry cannot verify that assertions actually came from your IdP. Invalid or expired certificates cause all SSO logins to fail.
 
 **Format:** PEM-encoded, including the `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----` markers.
 
-**Certificate rotation:** When your IdP rotates certificates, update this field immediately. Some IdPs publish both old and new certificates during a transition period. Observal validates against the configured certificate only.
+**Certificate rotation:** When your IdP rotates certificates, update this field immediately. Some IdPs publish both old and new certificates during a transition period. Agentic Resource Registry validates against the configured certificate only.
 
 ### IdP Metadata URL
 
 URL to your IdP's SAML metadata XML document (optional).
 
-**Affects:** When provided, Observal can auto-populate the Entity ID, SSO URL, and certificate from the metadata. Useful for IdPs that rotate certificates automatically.
+**Affects:** When provided, Agentic Resource Registry can auto-populate the Entity ID, SSO URL, and certificate from the metadata. Useful for IdPs that rotate certificates automatically.
 
 **When to set:** If your IdP publishes metadata at a stable URL and you want automatic certificate rotation handling.
 
 ### SP Entity ID
 
-The entity ID that identifies Observal to your identity provider.
+The entity ID that identifies Agentic Resource Registry to your identity provider.
 
 **Default:** `https://YOUR_DOMAIN/api/v1/sso/saml/metadata`
 
@@ -85,14 +85,14 @@ The Assertion Consumer Service endpoint where your IdP sends SAML responses afte
 
 ### JIT Provisioning
 
-Automatically create Observal user accounts when someone authenticates via SAML for the first time.
+Automatically create Agentic Resource Registry user accounts when someone authenticates via SAML for the first time.
 
 | Value | Effect |
 |-------|--------|
 | `true` (default) | New users are created on first SSO login with the configured default role |
 | `false` | Users must be pre-created manually before they can log in via SSO |
 
-**When to disable:** Deployments that want explicit control over who can access Observal and prefer manual user creation.
+**When to disable:** Deployments that want explicit control over who can access Agentic Resource Registry and prefer manual user creation.
 
 ### Default Role
 

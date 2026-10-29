@@ -5,7 +5,7 @@ title: "SAML 2.0 Setup Guide"
 ---
 
 This guide walks you through configuring SAML 2.0 Single Sign-On (SSO) for
-Observal. It covers identity provider (IdP) configuration, service
+Agentic Resource Registry. It covers identity provider (IdP) configuration, service
 provider (SP) metadata, and troubleshooting common issues.
 
 ---
@@ -14,11 +14,11 @@ provider (SP) metadata, and troubleshooting common issues.
 
 Before you begin, make sure the following requirements are met:
 
-- **Admin access.** You need a super-admin account in Observal to configure SAML settings.
+- **Admin access.** You need a super-admin account in Agentic Resource Registry to configure SAML settings.
 - **IdP admin access.** You need administrator privileges on your identity
   provider (Okta, Azure AD / Entra ID, Google Workspace, or another
   SAML 2.0-compliant IdP) to create and configure a SAML application.
-- **HTTPS is required.** The Observal instance must be served over HTTPS.
+- **HTTPS is required.** The Agentic Resource Registry instance must be served over HTTPS.
   SAML assertions are security-sensitive, and IdPs will reject ACS URLs that
   use plain HTTP.
 
@@ -40,14 +40,14 @@ Configure SAML in **Admin → SSO → SSO settings**. The table below lists ever
 
 | Setting | Description |
 |---|---|
-| `saml.idp_slo_url` | The IdP's Single Logout URL. If set, Observal will send logout requests to the IdP when users sign out. |
-| `saml.idp_metadata_url` | A URL pointing to the IdP's SAML metadata XML. When provided, Observal will periodically fetch metadata to keep certificates and endpoints up to date. |
+| `saml.idp_slo_url` | The IdP's Single Logout URL. If set, Agentic Resource Registry will send logout requests to the IdP when users sign out. |
+| `saml.idp_metadata_url` | A URL pointing to the IdP's SAML metadata XML. When provided, Agentic Resource Registry will periodically fetch metadata to keep certificates and endpoints up to date. |
 
 ### SP Settings
 
 | Setting | Description | Default |
 |---|---|---|
-| `saml.sp_entity_id` | The entity ID that Observal uses to identify itself to the IdP. | Auto-derived from `FRONTEND_URL` (appends `api/v1/sso/saml/metadata`)|
+| `saml.sp_entity_id` | The entity ID that Agentic Resource Registry uses to identify itself to the IdP. | Auto-derived from `FRONTEND_URL` (appends `api/v1/sso/saml/metadata`)|
 | `saml.sp_acs_url` | The Assertion Consumer Service URL where the IdP posts SAML responses. | Auto-derived from `FRONTEND_URL` (appends `/api/v1/sso/saml/acs`) |
 | `saml.sp_key_encryption_password` | Password protecting the SP's private key, used for encrypted assertions. Only required if your IdP sends encrypted SAML assertions. | (none) |
 
@@ -55,7 +55,7 @@ Configure SAML in **Admin → SSO → SSO settings**. The table below lists ever
 
 | Setting | Description | Default |
 |---|---|---|
-| `saml.jit_provisioning` | Enable Just-In-Time user provisioning. When `true`, users who authenticate via SAML are automatically created in Observal on first login. | `true` |
+| `saml.jit_provisioning` | Enable Just-In-Time user provisioning. When `true`, users who authenticate via SAML are automatically created in Agentic Resource Registry on first login. | `true` |
 | `saml.default_role` | The role assigned to JIT-provisioned users. | `user` |
 
 ### Minimal Example
@@ -74,7 +74,7 @@ With these three settings saved, SAML SSO is ready.
 
 ## 3. Retrieving SP Metadata
 
-Observal exposes its SP metadata as an XML document at:
+Agentic Resource Registry exposes its SP metadata as an XML document at:
 
 ```
 GET /api/v1/sso/saml/metadata
@@ -103,7 +103,7 @@ SP configuration on the IdP side.
 
 1. In the Okta admin console, go to **Applications > Create App Integration**.
 2. Select **SAML 2.0** and click **Next**.
-3. Enter an app name (e.g., "Observal") and click **Next**.
+3. Enter an app name (e.g., "Agentic Resource Registry") and click **Next**.
 4. Fill in the SAML settings:
    - **Single sign-on URL:** Your ACS URL, e.g.,
      `https://observal.example.com/api/v1/sso/saml/acs`
@@ -117,7 +117,7 @@ SP configuration on the IdP side.
    - `lastName` to `user.lastName`
 6. Click **Next**, then **Finish**.
 7. On the application's **Sign On** tab, copy the following values into your
-   Observal environment:
+   Agentic Resource Registry environment:
    - **Identity Provider Issuer** to `saml.idp_entity_id`
    - **Identity Provider Single Sign-On URL** to `saml.idp_sso_url`
    - **X.509 Certificate** to `saml.idp_x509_cert`
@@ -127,7 +127,7 @@ SP configuration on the IdP side.
 
 1. In the Azure portal, go to **Microsoft Entra ID > Enterprise applications**.
 2. Click **New application > Create your own application**.
-3. Name the application (e.g., "Observal"), select **Integrate any other
+3. Name the application (e.g., "Agentic Resource Registry"), select **Integrate any other
    application you don't find in the gallery**, and click **Create**.
 4. Under **Single sign-on**, select **SAML**.
 5. In **Basic SAML Configuration**, set:
@@ -142,7 +142,7 @@ SP configuration on the IdP side.
    - `firstName` mapped to `user.givenname`
    - `lastName` mapped to `user.surname`
 7. In **SAML Certificates**, download the **Certificate (Base64)**.
-8. Copy the following from **Set up Observal**:
+8. Copy the following from **Set up Agentic Resource Registry**:
    - **Microsoft Entra Identifier** to `saml.idp_entity_id`
    - **Login URL** to `saml.idp_sso_url`
    - **Logout URL** to `saml.idp_slo_url`
@@ -150,14 +150,14 @@ SP configuration on the IdP side.
 9. Assign users and groups to the enterprise application.
 
 Alternatively, you can set `saml.idp_metadata_url` to the **App Federation
-Metadata Url** from the SAML Certificates section. Observal will auto-configure
+Metadata Url** from the SAML Certificates section. Agentic Resource Registry will auto-configure
 from metadata.
 
 ### 4.3 Google Workspace
 
 1. In the Google Admin console, go to **Apps > Web and mobile apps**.
 2. Click **Add app > Add custom SAML app**.
-3. Name the application (e.g., "Observal") and click **Continue**.
+3. Name the application (e.g., "Agentic Resource Registry") and click **Continue**.
 4. On the **Google Identity Provider details** page, copy:
    - **SSO URL** to `saml.idp_sso_url`
    - **Entity ID** to `saml.idp_entity_id`
@@ -233,36 +233,36 @@ SAML will need to use password-based login until SAML is reconfigured.
 
 ### SP-Initiated SSO
 
-In SP-initiated SSO, the user starts at Observal and is redirected to the IdP
+In SP-initiated SSO, the user starts at Agentic Resource Registry and is redirected to the IdP
 for authentication.
 
-1. The user visits the Observal login page and clicks **Sign in with SAML SSO**.
-2. Observal redirects the browser to the IdP's SSO URL with a SAML
+1. The user visits the Agentic Resource Registry login page and clicks **Sign in with SAML SSO**.
+2. Agentic Resource Registry redirects the browser to the IdP's SSO URL with a SAML
    `AuthnRequest`:
    ```
    GET /api/v1/sso/saml/login
    ```
 3. The IdP authenticates the user (prompting for credentials if no session
    exists).
-4. The IdP posts a signed SAML response to Observal's ACS endpoint:
+4. The IdP posts a signed SAML response to Agentic Resource Registry's ACS endpoint:
    ```
    POST /api/v1/sso/saml/acs
    ```
-5. Observal validates the SAML assertion, checks for replay attacks, creates or
+5. Agentic Resource Registry validates the SAML assertion, checks for replay attacks, creates or
    updates the user session, and redirects to the application.
 
 ### IdP-Initiated SSO
 
-In IdP-initiated SSO, the user starts at the IdP (e.g., clicks the Observal
+In IdP-initiated SSO, the user starts at the IdP (e.g., clicks the Agentic Resource Registry
 tile in Okta or the Google Workspace app launcher).
 
-1. The user clicks the Observal application in the IdP dashboard.
-2. The IdP posts an unsolicited SAML response directly to Observal's ACS
+1. The user clicks the Agentic Resource Registry application in the IdP dashboard.
+2. The IdP posts an unsolicited SAML response directly to Agentic Resource Registry's ACS
    endpoint:
    ```
    POST /api/v1/sso/saml/acs
    ```
-3. Observal validates the assertion, creates or updates the user session, and
+3. Agentic Resource Registry validates the assertion, creates or updates the user session, and
    redirects to the application.
 
 Both flows use the same ACS endpoint. The difference is that IdP-initiated
@@ -272,7 +272,7 @@ originating `AuthnRequest`.
 ### Single Logout (SLO)
 
 When an IdP SLO URL is configured (via `saml.idp_slo_url` or the admin API),
-Observal supports SP-initiated logout:
+Agentic Resource Registry supports SP-initiated logout:
 
 ```
 GET /api/v1/sso/saml/logout
@@ -281,18 +281,18 @@ GET /api/v1/sso/saml/logout
 This endpoint:
 1. Generates a SAML LogoutRequest
 2. Redirects the user to the IdP's SLO endpoint
-3. The IdP terminates the session and redirects back to Observal's SLS callback:
+3. The IdP terminates the session and redirects back to Agentic Resource Registry's SLS callback:
    ```
    GET /api/v1/sso/saml/sls
    ```
-4. Observal processes the LogoutResponse and redirects to the login page
+4. Agentic Resource Registry processes the LogoutResponse and redirects to the login page
 
 If no SLO URL is configured, the logout endpoint redirects directly to the
 login page (local session only).
 
 ### Assertion Replay Protection
 
-Observal tracks SAML assertion IDs in Redis with a 5-minute TTL. If the same
+Agentic Resource Registry tracks SAML assertion IDs in Redis with a 5-minute TTL. If the same
 assertion is submitted twice (e.g., by an attacker replaying a captured SAML
 response), the second attempt is rejected with a 400 error and a security event
 is logged.
@@ -301,13 +301,13 @@ is logged.
 
 ## 7. Just-In-Time (JIT) Provisioning
 
-When `saml.jit_provisioning` is set to `true` (the default), Observal
+When `saml.jit_provisioning` is set to `true` (the default), Agentic Resource Registry
 automatically creates user accounts on first SAML login. Here is how it works:
 
 1. A user authenticates via their IdP for the first time.
 2. The SAML assertion arrives at the ACS endpoint containing the user's email,
    first name, and last name.
-3. Observal checks whether a user with that email already exists.
+3. Agentic Resource Registry checks whether a user with that email already exists.
    - If the user exists, their session is created and they are logged in.
    - If the user does not exist, a new account is created with the role
      specified by `saml.default_role` (default: `user`), and they are logged in.
@@ -329,18 +329,18 @@ see a 403 Forbidden error.
 
 **Fix:**
 - Confirm the API is healthy and running the same version as the web UI.
-- Restart the Observal API.
+- Restart the Agentic Resource Registry API.
 - Check server logs for SAML route startup errors.
 
 ### 400 Bad Request on ACS
 
-**Symptom:** The IdP redirects back to Observal, but the ACS endpoint returns a
+**Symptom:** The IdP redirects back to Agentic Resource Registry, but the ACS endpoint returns a
 400 error.
 
 **Common causes and fixes:**
 
 - **Mismatched ACS URL.** The ACS URL configured in the IdP must exactly match
-  the value Observal expects. Check `saml.sp_acs_url` or the auto-derived
+  the value Agentic Resource Registry expects. Check `saml.sp_acs_url` or the auto-derived
   value at `/api/v1/sso/saml/metadata`.
 - **Invalid or expired IdP certificate.** If the certificate in
   `saml.idp_x509_cert` does not match the one the IdP used to sign the
@@ -356,18 +356,18 @@ see a 403 Forbidden error.
 ### 403 Forbidden after successful IdP authentication
 
 **Symptom:** The user authenticates at the IdP, the SAML response is valid, but
-Observal returns a 403.
+Agentic Resource Registry returns a 403.
 
 **Common causes and fixes:**
 
 - **JIT provisioning is disabled.** If `saml.jit_provisioning=false` and the
-  user does not have a pre-existing account in Observal, access is denied.
+  user does not have a pre-existing account in Agentic Resource Registry, access is denied.
   Either create the user manually or enable JIT provisioning.
 - **User is deactivated.** If the user's account exists but has been
-  deactivated in Observal, SAML login will be rejected. Reactivate the user
+  deactivated in Agentic Resource Registry, SAML login will be rejected. Reactivate the user
   in the admin panel.
 - **Missing email attribute.** The SAML assertion must include an email
-  attribute. If the IdP is not sending one, Observal cannot identify the user.
+  attribute. If the IdP is not sending one, Agentic Resource Registry cannot identify the user.
   Verify your IdP attribute mappings include `email`.
 
 ### General Debugging Tips

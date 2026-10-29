@@ -2,18 +2,18 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 name: release
-description: Cut and maintain Observal release branches, prepare alpha, beta, RC, stable, and patch releases, backport merged main PRs, inspect release status, verify published artifacts, and recover failed release operations. Use for Observal maintainer release tasks and release-process changes, not for installing or upgrading an existing Observal deployment.
+description: Cut and maintain Agentic Resource Registry release branches, prepare alpha, beta, RC, stable, and patch releases, backport merged main PRs, inspect release status, verify published artifacts, and recover failed release operations. Use for Agentic Resource Registry maintainer release tasks and release-process changes, not for installing or upgrading an existing Agentic Resource Registry deployment.
 license: Apache-2.0
 metadata:
   repository: AgenticResourceRegistry/AgenticResourceRegistry
   policy: docs/self-hosting/releasing.md
 ---
 
-# Observal release operations
+# Agentic Resource Registry release operations
 
 This is a repository-local maintainer skill, not a bundled end-user skill or an `observal` CLI command. Read the [release guide](../../../docs/self-hosting/releasing.md) completely before acting. Use the existing [release tool](../../../tools/release.py); do not implement a second release pipeline.
 
-Resolve these links from the skill directory. Run commands from the Observal checkout root. Examples use `release/1.14` and PR `123`; substitute the explicitly requested line and PR, never treat examples as authorization.
+Resolve these links from the skill directory. Run commands from the Agentic Resource Registry checkout root. Examples use `release/1.14` and PR `123`; substitute the explicitly requested line and PR, never treat examples as authorization.
 
 ## Safety and authority
 

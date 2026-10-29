@@ -4,7 +4,7 @@
 title: "Databases"
 ---
 
-Observal runs two DBs with very different jobs.
+Agentic Resource Registry runs two DBs with very different jobs.
 
 | DB | Role | Access pattern | Schema source of truth |
 | --- | --- | --- | --- |

@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal Product Roadmap
+# Agentic Resource Registry Product Roadmap
 
-Observal is the control plane and system of record for portable AI components. The registry and its governance workflows are the product center; session evidence, insights, installation, and platform operations make those governed components useful and trustworthy in practice.
+Agentic Resource Registry is the control plane and system of record for portable AI components. The registry and its governance workflows are the product center; session evidence, insights, installation, and platform operations make those governed components useful and trustworthy in practice.
 
 This roadmap covers the public planning horizon from August 2026 through August 2027. It documents what the project intends to do and not do during at least the next year, satisfying the [OpenSSF Best Practices roadmap criterion](https://www.bestpractices.dev/en/criteria/1#1.documentation_roadmap) required on the path to Gold.
 
@@ -11,7 +11,7 @@ This roadmap advances three product lanes in parallel:
 
 1. **Observability**: collect the correct session data, attribute it to the exact agent and components in use, and turn it into evidence people can trust.
 2. **AI Components SDLC**: create, validate, publish, review, version, distribute, and improve agents and components with less friction and clear provenance.
-3. **Platform**: make Observal easy and safe to operate through its CLI and skills, teamspaces, hosting paths, administration, CI/CD, and project security controls.
+3. **Platform**: make Agentic Resource Registry easy and safe to operate through its CLI and skills, teamspaces, hosting paths, administration, CI/CD, and project security controls.
 
 ## Status legend
 
@@ -107,17 +107,17 @@ The long-horizon dashboard pilot and Insights feedback loop continue here using 
 
 **Status:** Planned.
 
-Align skill creation, editing, display, and installation with the Agent Skills specification. A standard skill with only required `name` and `description` must be accepted; standard optional fields and resources must survive the full lifecycle; Observal-only registry metadata must be optional or defaulted.
+Align skill creation, editing, display, and installation with the Agent Skills specification. A standard skill with only required `name` and `description` must be accepted; standard optional fields and resources must survive the full lifecycle; Agentic Resource Registry-only registry metadata must be optional or defaulted.
 
-**Complete when:** a conforming external skill can enter through CLI, web, or Git source and install without Observal-specific edits, while malformed standard fields receive the same actionable errors in every path.
+**Complete when:** a conforming external skill can enter through CLI, web, or Git source and install without Agentic Resource Registry-specific edits, while malformed standard fields receive the same actionable errors in every path.
 
 #### Vendored Agent Skills reference validation, P1
 
 **Status:** Planned.
 
-Vendor a pinned and attributed copy of the official `skills-ref` validation and property-reading implementation. Remove Observal's competing frontmatter parser; retain repository fetch and clone and skill-path discovery only as source acquisition before invoking the vendored implementation.
+Vendor a pinned and attributed copy of the official `skills-ref` validation and property-reading implementation. Remove Agentic Resource Registry's competing frontmatter parser; retain repository fetch and clone and skill-path discovery only as source acquisition before invoking the vendored implementation.
 
-**Complete when:** submission, marketplace import, Git sync, and pre-install checks use one conformance implementation, upstream provenance is recorded, and one regression corpus protects Observal-specific integration behavior.
+**Complete when:** submission, marketplace import, Git sync, and pre-install checks use one conformance implementation, upstream provenance is recorded, and one regression corpus protects Agentic Resource Registry-specific integration behavior.
 
 #### Configurable pull-request-style review, P1
 
@@ -149,7 +149,7 @@ Add first-class CLI and web workflows to define, inspect, update, and clear opti
 
 **Status:** Planned.
 
-Let an owner link a GitHub or GitLab repository to an external skill or MCP. A verified push, tag, or release event resolves the source commit and creates a new immutable Observal version in the normal review flow; an approved version is never silently mutated.
+Let an owner link a GitHub or GitLab repository to an external skill or MCP. A verified push, tag, or release event resolves the source commit and creates a new immutable Agentic Resource Registry version in the normal review flow; an approved version is never silently mutated.
 
 **Complete when:** duplicate delivery is idempotent, source commits are immutable and visible in review, failed validation blocks release, and webhook-created versions obey the selected review policy.
 
@@ -183,7 +183,7 @@ Allow a global admin to endorse an agent or component on behalf of the organizat
 
 **Status:** Planned.
 
-Browse skills from Claude Code marketplaces, skills.sh, and AWS, Azure, and GCP catalogs inside Observal. Import a selected skill as an external or unclaimed, provenance-linked draft that passes standard validation and normal review.
+Browse skills from Claude Code marketplaces, skills.sh, and AWS, Azure, and GCP catalogs inside Agentic Resource Registry. Import a selected skill as an external or unclaimed, provenance-linked draft that passes standard validation and normal review.
 
 **Complete when:** source identity and maintenance status are clear, imports cannot grant false publisher ownership or leaderboard credit, duplicate imports can be recognized, and a future verified claim can be represented separately from the importer.
 
@@ -306,7 +306,7 @@ Diagnose the complete stack across supported deployments and local harnesses. Cl
 
 **Status:** Planned.
 
-After an Observal release is installed, show the relevant changelog in both the web frontend and CLI. The CLI presents release notes after a successful update, while the web frontend detects a deployment version change and shows the notes once per user with a permanent way to reopen them. Both surfaces use the same versioned release-note source so their descriptions do not drift.
+After an Agentic Resource Registry release is installed, show the relevant changelog in both the web frontend and CLI. The CLI presents release notes after a successful update, while the web frontend detects a deployment version change and shows the notes once per user with a permanent way to reopen them. Both surfaces use the same versioned release-note source so their descriptions do not drift.
 
 The web frontend also offers an optional guided tour that spotlights where new features are located. Tours are frontend-only, user-initiated or explicitly accepted, skippable, and role-aware so they never point users to controls they cannot access.
 
@@ -318,7 +318,7 @@ The web frontend also offers an optional guided tour that spotlights where new f
 
 **Status:** In progress. [PR #1668](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1668) added local OSS-Fuzz configuration, session parser and redaction fuzzers, corpora, and regression tests. The project is not yet present in the upstream `google/oss-fuzz` repository, and Agent Skills and SCIM filter targets remain.
 
-Register Observal with OSS-Fuzz and run continuous Atheris fuzzing against untrusted session parser dispatch for every harness, the vendored Agent Skills parser and validator, and the SCIM filter parser. Maintain seed corpora and turn each confirmed crash into a small repository regression test.
+Register Agentic Resource Registry with OSS-Fuzz and run continuous Atheris fuzzing against untrusted session parser dispatch for every harness, the vendored Agent Skills parser and validator, and the SCIM filter parser. Maintain seed corpora and turn each confirmed crash into a small repository regression test.
 
 **Complete when:** upstream OSS-Fuzz accepts the project, fuzzers run continuously, findings have an owned response path, and regressions remain in normal CI.
 
@@ -355,7 +355,7 @@ Harden `observal server upgrade` and explicit rollback around a coherent backup 
 The following are explicitly outside this roadmap's intended implementation:
 
 - Update notices never install an agent or component automatically.
-- Notification channels mean terminal notices plus the Observal Inbox, not Slack or email delivery.
+- Notification channels mean terminal notices plus the Agentic Resource Registry Inbox, not Slack or email delivery.
 - Review customization uses Strict, Balanced, and Fast presets, an approval count, and scoped auto-approve toggles, not a general-purpose policy language.
 - Success criteria are server-side evaluation metadata and never ship with installed agents or components.
 - Forking an agent never recursively forks its components.

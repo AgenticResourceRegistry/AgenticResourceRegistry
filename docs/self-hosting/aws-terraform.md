@@ -5,9 +5,9 @@
 title: "AWS deployment with Terraform"
 ---
 
-End state: an Observal install running in your own AWS account, fronted by an Application Load Balancer with HTTPS, with managed Postgres + Redis, ECS Fargate for the stateless app tier, and a single EC2 host for ClickHouse. Prometheus and Grafana are optional through `observability_stack`.
+End state: an Agentic Resource Registry install running in your own AWS account, fronted by an Application Load Balancer with HTTPS, with managed Postgres + Redis, ECS Fargate for the stateless app tier, and a single EC2 host for ClickHouse. Prometheus and Grafana are optional through `observability_stack`.
 
-This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Observal, use [Docker Compose setup](/self-hosting/docker-compose) instead.
+This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Agentic Resource Registry, use [Docker Compose setup](/self-hosting/docker-compose) instead.
 
 ## What gets provisioned
 
@@ -46,7 +46,7 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 
 ```bash
 git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd Observal/infra/terraform/aws
+cd AgenticResourceRegistry/infra/terraform/aws
 
 # 1. Authenticate to AWS (any of these works)
 export AWS_PROFILE=observal-prod
@@ -69,7 +69,7 @@ First-time apply takes 12–15 minutes. RDS provisioning dominates. When it fini
 terraform output app_url
 ```
 
-Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Observal login page.
+Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Agentic Resource Registry login page.
 
 A ready-to-apply call of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/minimal/README.md).
 
@@ -157,14 +157,14 @@ For high-throughput installs (>100 trace events/sec sustained), bump `data_insta
 deployment_mode     = "enterprise"   # SSO-only login
 data_retention_days = 90             # ClickHouse TTL; 0 to disable
 log_retention_days  = 30             # CloudWatch log group retention
-image_tag           = "v1.4.0"       # specific Observal release; "latest" pulls main
+image_tag           = "v1.4.0"       # specific Agentic Resource Registry release; "latest" pulls main
 ```
 
 See [Configuration](/self-hosting/configuration) for the meaning of each application setting.
 
 ### Bring Your Own VPC
 
-Deploy Observal into an existing VPC rather than having Terraform create a new one. Use this when you have Transit Gateway, shared-services VPCs, compliance requirements, or peered networks.
+Deploy Agentic Resource Registry into an existing VPC rather than having Terraform create a new one. Use this when you have Transit Gateway, shared-services VPCs, compliance requirements, or peered networks.
 
 ```hcl
 # Use an existing VPC
@@ -200,7 +200,7 @@ A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://
 
 ### Git webhooks on a private install
 
-[MCP repository sync](/use-cases/mcp-repo-sync) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Observal, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
+[MCP repository sync](/use-cases/mcp-repo-sync) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Agentic Resource Registry, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
 
 ```hcl
 alb_scheme             = "internal"
@@ -299,7 +299,7 @@ aws ssm get-parameter --with-decryption \
 
 The Terraform run generates and stores `DB_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SECRET_KEY`, and `GRAFANA_ADMIN_PASSWORD`, plus pre-built `DATABASE_URL`, `REDIS_URL`, and `CLICKHOUSE_URL` connection strings. ECS injects these into tasks at start; you never paste them in.
 
-### Upgrade to a new Observal release
+### Upgrade to a new Agentic Resource Registry release
 
 ```hcl
 # terraform.tfvars
@@ -383,7 +383,7 @@ The defaults are safe but conservative. Before pointing real traffic at this:
 * [ ] Add CloudWatch alarms on RDS `CPUUtilization`, `FreeableMemory`, ECS service CPU, ALB `HTTPCode_Target_5XX_Count`
 * [ ] Attach AWS WAF to the ALB
 * [ ] Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
-* [ ] Configure Observal SSO. See [Authentication and SSO](/self-hosting/authentication)
+* [ ] Configure Agentic Resource Registry SSO. See [Authentication and SSO](/self-hosting/authentication)
 * [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 * [ ] Replace the GitHub tarball download in `user-data.sh.tftpl` with an artifact URL you control
 

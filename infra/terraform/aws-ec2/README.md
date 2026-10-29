@@ -2,9 +2,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal on AWS EC2 — Single Instance
+# Agentic Resource Registry on AWS EC2 — Single Instance
 
-Deploy Observal on a single EC2 instance with everything running in Docker. Simple, self-contained, no managed services required.
+Deploy Agentic Resource Registry on a single EC2 instance with everything running in Docker. Simple, self-contained, no managed services required.
 
 ## What it creates
 
@@ -14,7 +14,7 @@ Deploy Observal on a single EC2 instance with everything running in Docker. Simp
 - **IAM instance profile** (SSM access for remote management — no SSH keys needed)
 - **Route53 DNS record** (optional)
 
-All Observal components (API, web frontend, worker, PostgreSQL, Redis, ClickHouse, Grafana, nginx) run as Docker containers on the single instance.
+All Agentic Resource Registry components (API, web frontend, worker, PostgreSQL, Redis, ClickHouse, Grafana, nginx) run as Docker containers on the single instance.
 
 ## Architecture
 
@@ -56,11 +56,11 @@ cp terraform.tfvars.example terraform.tfvars
 terraform init
 terraform apply
 
-# 3. Deploy Observal
+# 3. Deploy Agentic Resource Registry
 ./deploy.sh
 ```
 
-That's it. The deploy script clones Observal, configures it, builds Docker images, and starts everything. It takes 8-12 minutes on first run (Docker build from scratch).
+That's it. The deploy script clones Agentic Resource Registry, configures it, builds Docker images, and starts everything. It takes 8-12 minutes on first run (Docker build from scratch).
 
 ## Configuration
 

@@ -4,9 +4,9 @@
 title: "Single-node deployment"
 ---
 
-Run the full Observal stack on a single VM with Docker Compose. Best for teams of up to ~50 users, internal tools, evaluations, and any deployment where simplicity matters more than multi-AZ redundancy.
+Run the full Agentic Resource Registry stack on a single VM with Docker Compose. Best for teams of up to ~50 users, internal tools, evaluations, and any deployment where simplicity matters more than multi-AZ redundancy.
 
-**End state:** Observal running behind TLS on one server, with automated backups to S3-compatible storage, surviving reboots, and upgradable in under a minute.
+**End state:** Agentic Resource Registry running behind TLS on one server, with automated backups to S3-compatible storage, surviving reboots, and upgradable in under a minute.
 
 ## When to use this vs. the Terraform module
 
@@ -118,7 +118,7 @@ docker compose version
 
 ```bash
 git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd Observal
+cd AgenticResourceRegistry
 cp .env.example .env
 ```
 
@@ -191,7 +191,7 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 Set up auto-renewal:
 
 ```bash
-echo "0 3 * * * certbot renew --quiet && docker compose -f /home/ubuntu/Observal/docker/docker-compose.yml -f /home/ubuntu/Observal/docker/docker-compose.production.yml restart observal-lb" | sudo tee -a /etc/crontab
+echo "0 3 * * * certbot renew --quiet && docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.production.yml restart observal-lb" | sudo tee -a /etc/crontab
 ```
 
 ### Option C: Behind a cloud load balancer
@@ -201,7 +201,7 @@ If your VM sits behind an AWS ALB, GCP HTTPS LB, or Cloudflare, terminate TLS th
 ## Step 5: Start the stack
 
 ```bash
-cd ~/Observal
+cd ~/AgenticResourceRegistry
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
@@ -237,7 +237,7 @@ Test it:
 ```bash
 sudo reboot
 # After reconnecting:
-docker compose -f ~/Observal/docker/docker-compose.yml ps
+docker compose -f ~/AgenticResourceRegistry/docker/docker-compose.yml ps
 # All services should be running
 ```
 
@@ -253,7 +253,7 @@ set -euo pipefail
 
 BACKUP_DIR="/opt/observal-backups"
 DATE=$(date +%Y%m%d-%H%M)
-COMPOSE="docker compose -f /home/ubuntu/Observal/docker/docker-compose.yml"
+COMPOSE="docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml"
 
 # Postgres
 $COMPOSE exec -T observal-db pg_dump -U postgres observal | gzip > "$BACKUP_DIR/pg-$DATE.sql.gz"
@@ -283,7 +283,7 @@ echo "0 3 * * * root /opt/observal-backups/backup.sh >> /var/log/observal-backup
 For ClickHouse (weekly, since it's larger):
 
 ```bash
-echo "0 4 * * 0 root docker compose -f /home/ubuntu/Observal/docker/docker-compose.yml exec -T observal-clickhouse clickhouse-client --password \$CLICKHOUSE_PASSWORD --query \"BACKUP DATABASE observal TO Disk('backups', 'weekly-\$(date +\%Y\%m\%d).zip')\" >> /var/log/observal-backup.log 2>&1" | sudo tee /etc/cron.d/observal-ch-backup
+echo "0 4 * * 0 root docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml exec -T observal-clickhouse clickhouse-client --password \$CLICKHOUSE_PASSWORD --query \"BACKUP DATABASE observal TO Disk('backups', 'weekly-\$(date +\%Y\%m\%d).zip')\" >> /var/log/observal-backup.log 2>&1" | sudo tee /etc/cron.d/observal-ch-backup
 ```
 
 See [Backup and restore](/self-hosting/backup-and-restore) for detailed restore procedures.
@@ -314,7 +314,7 @@ observal auth status
 ## Upgrades
 
 ```bash
-cd ~/Observal
+cd ~/AgenticResourceRegistry
 git fetch --tags
 git checkout v1.5.0    # or whatever version
 
@@ -348,7 +348,7 @@ Access Grafana at `http://your-server:3001` when the Grafana profile is enabled.
 For basic alerting without Grafana, add a health check cron:
 
 ```bash
-echo "*/5 * * * * root curl -fsS http://localhost/health > /dev/null || echo 'Observal health check failed' | mail -s 'ALERT: Observal down' ops@yourcompany.com" | sudo tee /etc/cron.d/observal-health
+echo "*/5 * * * * root curl -fsS http://localhost/health > /dev/null || echo 'Agentic Resource Registry health check failed' | mail -s 'ALERT: Agentic Resource Registry down' ops@yourcompany.com" | sudo tee /etc/cron.d/observal-health
 ```
 
 ## Security hardening

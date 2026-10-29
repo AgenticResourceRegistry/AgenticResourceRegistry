@@ -22,7 +22,7 @@ Layer snapshots, their component mappings, and session checkpoints are kept. Sna
 
 It does **not** delete registry agents, versions, skills, hooks, prompts, users, reviews, or audit/security logs.
 
-Use this only when you intentionally need a clean telemetry slate, for example before handing over a demo instance or after importing accidental/private trace data. The action cannot be undone from Observal; take database backups first if you may need the data later.
+Use this only when you intentionally need a clean telemetry slate, for example before handing over a demo instance or after importing accidental/private trace data. The action cannot be undone from Agentic Resource Registry; take database backups first if you may need the data later.
 
 <a id="application-retention"></a>
 

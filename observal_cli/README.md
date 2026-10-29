@@ -2,9 +2,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal CLI
+# Agentic Resource Registry CLI
 
-Command-line interface for the Observal platform. Authenticate with a server, manage registry components, configure harnesses, and collect telemetry.
+Command-line interface for the Agentic Resource Registry platform. Authenticate with a server, manage registry components, configure harnesses, and collect telemetry.
 
 ## Install
 
@@ -25,7 +25,7 @@ This installs three entry points:
 ## Quick Start
 
 ```bash
-observal auth login                  # connect to your Observal server
+observal auth login                  # connect to your Agentic Resource Registry server
 observal scan                        # discover what's installed across your harnesses (read-only)
 observal doctor patch --all-harnesses        # install session telemetry hooks
 observal agent pull my-agent --harness cursor  # fetch agent config for Cursor
@@ -96,7 +96,7 @@ observal scan [--harness <harness>]                          # discover what's i
 observal reconcile --dry-run --output json                    # preview recoverable sessions
 observal doctor patch --all-harnesses --output json         # install hooks for every harness
 observal doctor patch --harness <harness> --output json      # install hooks for a specific harness
-observal doctor --output json                        # diagnose harness/Observal issues
+observal doctor --output json                        # diagnose harness/Agentic Resource Registry issues
 observal doctor support bundle --output json         # create a redacted support archive
 observal config show                                 # show current config
 ```

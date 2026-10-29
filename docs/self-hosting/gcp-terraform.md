@@ -4,7 +4,7 @@
 title: "GCP deployment with Terraform"
 ---
 
-End state: Observal running in your GCP project on Cloud Run, backed by Cloud SQL Postgres, Memorystore Redis, and a GCE instance for ClickHouse — with a Global HTTPS Load Balancer, managed SSL certificate, Secret Manager for credentials, and GCS for backups.
+End state: Agentic Resource Registry running in your GCP project on Cloud Run, backed by Cloud SQL Postgres, Memorystore Redis, and a GCE instance for ClickHouse — with a Global HTTPS Load Balancer, managed SSL certificate, Secret Manager for credentials, and GCS for backups.
 
 For the overall deployment strategy and comparison with AWS, see [Production deployment](/self-hosting/production-deploy). If you want a simpler single-VM setup, see [Single-node deployment](/self-hosting/single-node-deploy).
 
@@ -52,7 +52,7 @@ gcloud services enable \
 
 ```bash
 git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd Observal/infra/terraform/gcp
+cd AgenticResourceRegistry/infra/terraform/gcp
 
 # 1. Authenticate
 gcloud auth application-default login

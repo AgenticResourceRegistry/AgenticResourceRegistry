@@ -152,8 +152,8 @@ You only need to do this once. For every subsequent contribution, just create a 
 2. Clone your fork using SSH:
 
 ```bash
-git clone git@github.com:YOUR-USERNAME/Observal.git
-cd Observal
+git clone git@github.com:YOUR-USERNAME/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
 ```
 
 3. Add the upstream remote so you can pull in changes from the main repo:
@@ -166,8 +166,8 @@ git remote add upstream https://github.com/AgenticResourceRegistry/AgenticResour
 
 ```bash
 git remote -v
-# origin    git@github.com:YOUR-USERNAME/Observal.git (fetch)
-# origin    git@github.com:YOUR-USERNAME/Observal.git (push)
+# origin    git@github.com:YOUR-USERNAME/AgenticResourceRegistry.git (fetch)
+# origin    git@github.com:YOUR-USERNAME/AgenticResourceRegistry.git (push)
 # upstream  https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git (fetch)
 # upstream  https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git (push)
 ```
@@ -285,7 +285,7 @@ make reset         # nuke all volumes and rebuild from scratch (destructive)
 
 ## Architecture Overview
 
-Observal is a monorepo:
+Agentic Resource Registry is a monorepo:
 
 ```
 observal-server/    FastAPI backend (Python)
@@ -373,7 +373,7 @@ git push origin feature/my-feature --force-with-lease
     ```bash
     git push origin feature/my-feature
     ```
-3. GitHub will show a banner on your fork offering to open a PR. Click it, or go to the [Observal repository](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry) directly.
+3. GitHub will show a banner on your fork offering to open a PR. Click it, or go to the [Agentic Resource Registry repository](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry) directly.
 4. Fill in the PR template completely. PRs that do not follow the template will be closed.
 5. Link the related issue if one exists (`Fixes #123` in the PR body closes it automatically on merge).
 

@@ -7,7 +7,7 @@ title: "ADR 0002: Agent-to-agent delegation over ARD and A2A"
 
 **Status:** Accepted
 **Date:** 2026-09-26
-**Deciders:** Observal maintainers
+**Deciders:** Agentic Resource Registry maintainers
 **Amends:** ADR 0001, Decision 7
 
 ## Context
@@ -24,7 +24,7 @@ through `TASK_STATE_*` states and returns Artifacts; `GetTask` and
 `CancelTask` follow it. ARD already lists A2A Agent Cards as a resource type
 (`application/a2a-agent-card+json`).
 
-Two kinds of agent matter to Observal users:
+Two kinds of agent matter to Agentic Resource Registry users:
 
 1. **Registry Agents.** Installable configurations, not services. They run
    inside a harness.
@@ -35,7 +35,7 @@ Two kinds of agent matter to Observal users:
 
 Every delegation is represented as an A2A v1.0 Task (JSON serialisation:
 `ROLE_USER`/`ROLE_AGENT`, parts as `{"text": ...}`, `TASK_STATE_*` states,
-Artifacts for results). Observal's own bookkeeping lives under
+Artifacts for results). Agentic Resource Registry's own bookkeeping lives under
 `metadata.observal`. A local run and a remote call look the same to the
 caller, and the local runner can be exposed over the A2A wire later without
 changing its data model.
@@ -122,7 +122,7 @@ governed record.
 ## Decision 4: No proxy; credentials stay with the caller
 
 The CLI calls a remote agent directly. The server never relays A2A traffic
-(consistent with "remote URLs remain direct" in AGENTS.md). Observal never
+(consistent with "remote URLs remain direct" in AGENTS.md). Agentic Resource Registry never
 stores agent credentials: the client reads a token from
 `OBSERVAL_A2A_TOKEN_<HOST>`, named after the host of the endpoint it is sent to
 (`agents.acme.com` reads `OBSERVAL_A2A_TOKEN_AGENTS_ACME_COM`; `-` becomes
@@ -182,9 +182,9 @@ crash). The user's lockfile is never touched. No OTLP, no new ingestion path.
 
 ## Amendment to ADR 0001, Decision 7
 
-ADR 0001 said an Observal Agent is never emitted as
+ADR 0001 said an Agentic Resource Registry Agent is never emitted as
 `application/a2a-agent-card+json`. That still holds: registry Agents keep
-`application/vnd.observal.agent+json`. What changes is that Observal now
+`application/vnd.observal.agent+json`. What changes is that Agentic Resource Registry now
 *ingests* A2A cards as a governed resource type and can *call* both kinds of
 agent through one A2A-shaped task model.
 

@@ -5,7 +5,7 @@
 title: "Kiro"
 ---
 
-Kiro is a first-class Observal harness integration. Observal can install Kiro agents,
+Kiro is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install Kiro agents,
 configure MCP servers, add hooks, expose skills, and collect Kiro session telemetry.
 
 ---
@@ -15,7 +15,7 @@ configure MCP servers, add hooks, expose skills, and collect Kiro session teleme
 Kiro agent profiles are JSON files. Project agents live in `.kiro/agents/`.
 User agents live in `~/.kiro/agents/`.
 
-When Observal installs a Kiro agent, it writes telemetry hooks into a standalone
+When Agentic Resource Registry installs a Kiro agent, it writes telemetry hooks into a standalone
 hooks file — `~/.kiro/hooks/observal.json` (user scope) or
 `.kiro/hooks/observal.json` (project scope) — in the v1 schema, using the
 `UserPromptSubmit` and `Stop` triggers. Both hooks run the shared
@@ -30,11 +30,11 @@ unattributed.
 Inline hooks do **not** hide an agent from the IDE agent picker. What does is
 `allowedTools` or `toolsSettings` without a `permissions` block: Kiro IDE 1.x
 `ProfileLoader` rejects such a profile outright (`reasonCode cli_only_agent`).
-Observal no longer emits either field and strips them on pull.
+Agentic Resource Registry no longer emits either field and strips them on pull.
 
 ### Legacy Kiro CLI 2.x
 
-Kiro CLI 2.x only understands inline agent hooks. When Observal detects CLI
+Kiro CLI 2.x only understands inline agent hooks. When Agentic Resource Registry detects CLI
 2.x, it additionally writes legacy inline `userPromptSubmit`/`stop` hooks into
 the agent JSON, even when the IDE is installed. Ordinary CLI 2.x sessions do
 not fire these agent-specific hooks; use `observal reconcile --harness kiro`
@@ -70,7 +70,7 @@ separately stored delegated sub-executions.
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -104,7 +104,7 @@ Project agents are written to `.kiro/agents/{name}.json`.
 
 ### 4. Refresh Kiro hooks
 
-Pull the agent again to refresh its Observal hook commands.
+Pull the agent again to refresh its Agentic Resource Registry hook commands.
 
 `doctor patch` does not install generic Kiro hooks: pulling an agent installs
 shared hooks for its scope. These hooks do not carry that agent's UUID and
@@ -124,7 +124,7 @@ capture ordinary sessions too. CLI 2.x still needs per-agent inline hooks.
 | Custom hook scripts | `.kiro/hooks/` | `~/.kiro/hooks/` |
 | Session JSONL | `~/.kiro/sessions/cli/{session_id}.jsonl` | `~/.kiro/sessions/cli/{session_id}.jsonl` |
 | Credit metadata | `~/.kiro/sessions/cli/{session_id}.json` | `~/.kiro/sessions/cli/{session_id}.json` |
-| Observal credentials | `~/.observal/config.json` | `~/.observal/config.json` |
+| Agentic Resource Registry credentials | `~/.observal/config.json` | `~/.observal/config.json` |
 | Last session cache | `~/.observal/.kiro-session` | `~/.observal/.kiro-session` |
 
 Kiro MCP configs use the `mcpServers` key.
@@ -133,7 +133,7 @@ Kiro MCP configs use the `mcpServers` key.
 
 ## Hook spec
 
-Observal writes the telemetry hooks to the standalone v1 hooks file —
+Agentic Resource Registry writes the telemetry hooks to the standalone v1 hooks file —
 `~/.kiro/hooks/observal.json` (user scope) or `.kiro/hooks/observal.json`
 (project scope):
 
@@ -166,13 +166,13 @@ agent, so an id baked into it would attribute every session to whichever agent
 was pulled last. Attribution comes from session metadata instead.
 
 On non-Windows platforms, generated server config may use `python3` instead of
-`python`. During `observal agent pull`, the CLI rewrites Observal hook commands to use
+`python`. During `observal agent pull`, the CLI rewrites Agentic Resource Registry hook commands to use
 the active Python interpreter.
 
 ### Legacy CLI 2.x inline hooks
 
 Kiro CLI 2.x predates the standalone file and reads hooks only from the agent
-JSON. On a machine whose `kiro-cli` reports major version 2, Observal *also*
+JSON. On a machine whose `kiro-cli` reports major version 2, Agentic Resource Registry *also*
 writes inline `userPromptSubmit`/`stop` hooks into each agent profile, carrying
 `OBSERVAL_AGENT_ID` since an agent profile belongs to exactly one agent:
 
@@ -214,7 +214,7 @@ one. Attribution is resolved from the session itself:
 
 ### Event map
 
-| Observal event | Kiro event |
+| Agentic Resource Registry event | Kiro event |
 |---|---|
 | `SessionStart` | `agentSpawn` |
 | `UserPromptSubmit` | `userPromptSubmit` |
@@ -222,7 +222,7 @@ one. Attribution is resolved from the session itself:
 | `PostToolUse` | `postToolUse` |
 | `Stop` | `stop` |
 
-`preToolUse` and `postToolUse` hooks can include a `matcher`. Observal uses `*`
+`preToolUse` and `postToolUse` hooks can include a `matcher`. Agentic Resource Registry uses `*`
 when no matcher is set.
 
 ---
@@ -246,7 +246,7 @@ On `stop`, a delayed stable-file pass captures late records and finalizes the cu
 
 ## Agent profile format
 
-Observal generates Markdown agent profiles like this:
+Agentic Resource Registry generates Markdown agent profiles like this:
 
 ```markdown
 ---
@@ -287,7 +287,7 @@ Run `pytest -q` from the project root.
 
 ## Caveats
 
-**Guidance files are scan-only.** Observal layers Kiro steering files and
+**Guidance files are scan-only.** Agentic Resource Registry layers Kiro steering files and
 `AGENTS.md` as context, but does not overwrite them during pull.
 
 **Hooks are per scope, not per agent.** Pulling an agent refreshes the shared

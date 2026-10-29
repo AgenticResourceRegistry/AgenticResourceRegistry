@@ -5,7 +5,7 @@
 title: "Debug agent failures from session evidence"
 ---
 
-AI failures rarely produce one reliable error code. Observal preserves the session transcript so you can inspect what the user asked, which tools ran, what results the harness recorded, and how the agent responded.
+AI failures rarely produce one reliable error code. Agentic Resource Registry preserves the session transcript so you can inspect what the user asked, which tools ran, what results the harness recorded, and how the agent responded.
 
 ## 1. Find the session
 
@@ -29,7 +29,7 @@ Look for repeated tool calls, error results, missing inputs, unexpected model re
 
 ## 3. Inspect recorded tool detail
 
-The detail available for a tool call depends on the harness transcript. When present, Observal displays the tool name, input, result, and error indicators. Observal does not intercept MCP transport traffic or invent payload fields that the harness did not record.
+The detail available for a tool call depends on the harness transcript. When present, Agentic Resource Registry displays the tool name, input, result, and error indicators. Agentic Resource Registry does not intercept MCP transport traffic or invent payload fields that the harness did not record.
 
 ## 4. Common patterns
 

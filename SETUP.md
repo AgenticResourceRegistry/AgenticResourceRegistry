@@ -6,7 +6,7 @@
 
 # Setup Guide
 
-Everything you need to get Observal running locally for development or self-hosted production.
+Everything you need to get Agentic Resource Registry running locally for development or self-hosted production.
 
 > **Full operator docs** live at [docs.observal.io](https://docs.observal.io/) ([`/docs`](docs/) in this repo). This file covers the fastest path from zero to a working stack.
 >
@@ -30,7 +30,7 @@ Everything you need to get Observal running locally for development or self-host
 
 ```bash
 git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd Observal
+cd AgenticResourceRegistry
 cp .env.example .env
 ```
 

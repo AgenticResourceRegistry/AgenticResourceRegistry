@@ -275,7 +275,7 @@ Skill report counts are deterministic. They count present sessions, sessions wit
 - **Claude Code versions.** Hook records were proven on a tested range of Claude Code versions (currently 2.1.286). A session written by any other version is `version_unverified`: kept out of the denominator unless it recorded a run, and named in the report.
 - A recorded run shows the hook executed. It does not show what it changed or that it helped.
 
-- **Pi runs registry hooks in its Observal extension.** Only command hooks on `PreToolUse` and `PostToolUse` are installed, in user scope; a pull reports every other hook as not installed. A verified Pi hook can run in every session, interactive or headless, so every session that verifies it is in the denominator. Runs are read from receipts the extension writes, which any other extension in the same Pi process could also write. See [Pi: Registry hooks](../integrations/pi.md#registry-hooks).
+- **Pi runs registry hooks in its Agentic Resource Registry extension.** Only command hooks on `PreToolUse` and `PostToolUse` are installed, in user scope; a pull reports every other hook as not installed. A verified Pi hook can run in every session, interactive or headless, so every session that verifies it is in the denominator. Runs are read from receipts the extension writes, which any other extension in the same Pi process could also write. See [Pi: Registry hooks](../integrations/pi.md#registry-hooks).
 
 ## Exit codes
 

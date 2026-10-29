@@ -11,7 +11,7 @@ assignees: ""
 
 ## Background
 
-[Describe the harness, where it runs, and why Observal should support it. Link to the official product page.]
+[Describe the harness, where it runs, and why Agentic Resource Registry should support it. Link to the official product page.]
 
 ## Before you pick this up
 
@@ -25,7 +25,7 @@ Follow [docs/adding-a-harness.md](https://github.com/AgenticResourceRegistry/Age
 
 [Describe the expected harness support, including MCP servers, skills, prompts or guidelines, hooks, custom agents, and session parsing. Call out unknowns that require research.]
 
-> **Note:** PRs without screenshots showing traces and installed Observal components working in the harness will be automatically closed.
+> **Note:** PRs without screenshots showing traces and installed Agentic Resource Registry components working in the harness will be automatically closed.
 
 ## Relevant docs found so far
 

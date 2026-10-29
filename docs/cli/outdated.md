@@ -5,7 +5,7 @@
 title: "observal outdated"
 ---
 
-Compare versions recorded in `~/.observal/lockfile.json` with the latest versions available from the active Observal registry. The command never installs an update.
+Compare versions recorded in `~/.observal/lockfile.json` with the latest versions available from the active Agentic Resource Registry registry. The command never installs an update.
 
 ## Synopsis
 

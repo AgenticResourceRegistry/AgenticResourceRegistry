@@ -4,8 +4,8 @@
 title: "Goose"
 ---
 
-[Goose](https://goose-docs.ai/) is a first-class Observal harness integration.
-Observal can install Goose custom agents, configure MCP extensions, expose
+[Goose](https://goose-docs.ai/) is a first-class Agentic Resource Registry harness integration.
+Agentic Resource Registry can install Goose custom agents, configure MCP extensions, expose
 skills, install a Goose hook plugin, and collect Goose session telemetry.
 
 Supported Goose versions: **1.10.0 and later** (the release that moved session
@@ -21,14 +21,14 @@ Goose custom agents are Markdown files with YAML frontmatter. Project agents
 live in `.agents/agents/`, user agents in `~/.agents/agents/`.
 
 MCP servers are Goose *extensions*. Goose reads them from a single user-level
-`config.yaml`, so Observal merges its extensions into that file and leaves every
+`config.yaml`, so Agentic Resource Registry merges its extensions into that file and leaves every
 other key — providers, models, global settings — untouched.
 
 Session telemetry uses a Goose hook plugin. `observal doctor patch --harness
 goose` writes `~/.agents/plugins/observal/`, containing a `plugin.json` manifest
 and a `hooks/hooks.json` file. The hooks run
 `observal_cli.hooks.session_push --harness goose`, which reads Goose's SQLite
-session store and pushes new records through Observal's shared acknowledged
+session store and pushes new records through Agentic Resource Registry's shared acknowledged
 delivery pipeline.
 
 ---
@@ -52,7 +52,7 @@ delivery pipeline.
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -107,8 +107,8 @@ observal doctor
 | Skill definition | `.agents/skills/{name}/SKILL.md` | `~/.agents/skills/{name}/SKILL.md` |
 | Hook plugin | `.agents/plugins/observal/` | `~/.agents/plugins/observal/` |
 | Session database | — | `~/.local/share/goose/sessions/sessions.db` |
-| Observal credentials | `~/.observal/config.json` | `~/.observal/config.json` |
-| Observal lockfile | `~/.observal/lockfile.json` | `~/.observal/lockfile.json` |
+| Agentic Resource Registry credentials | `~/.observal/config.json` | `~/.observal/config.json` |
+| Agentic Resource Registry lockfile | `~/.observal/lockfile.json` | `~/.observal/lockfile.json` |
 
 User-scope locations follow Goose's own resolution order:
 
@@ -145,7 +145,7 @@ model from the Goose model catalog.
 
 ## Extension format
 
-Observal writes MCP servers as Goose extensions:
+Agentic Resource Registry writes MCP servers as Goose extensions:
 
 ```yaml
 extensions:
@@ -169,7 +169,7 @@ extensions:
     timeout: 300
 ```
 
-Observal writes MCP servers as `stdio` or `streamable_http` extensions and only
+Agentic Resource Registry writes MCP servers as `stdio` or `streamable_http` extensions and only
 ever touches the entries it owns. `observal scan` additionally reports legacy
 `sse` extensions. Goose's `builtin`, `platform` and `frontend` extensions run
 in-process and `inline_python` carries code rather than a command, so none of
@@ -196,14 +196,14 @@ Rules deliberately omit `matcher`: Goose treats `matcher` as a regular
 expression, so a bare `"*"` would be invalid and the rule would be skipped.
 
 Goose runs every hook through `sh -c` on all platforms, passes the event JSON on
-stdin, waits for the command, and enforces the rule's `timeout`. The Observal
+stdin, waits for the command, and enforces the rule's `timeout`. The Agentic Resource Registry
 hook therefore only reads Goose's database and appends to the local outbox; the
-network upload is handed to a detached worker so a slow or unreachable Observal
+network upload is handed to a detached worker so a slow or unreachable Agentic Resource Registry
 server can never stall a Goose turn.
 
 The hook writes nothing to stdout and never exits `2`, so it can never block a
 `PreToolUse` tool call or a `Stop` turn boundary. `doctor patch` preserves any
-non-Observal rules you add to the same plugin.
+non-Agentic Resource Registry rules you add to the same plugin.
 
 Goose records each discovered plugin under a `plugins` map in `config.yaml`
 keyed by its absolute path, so the plugin activates itself on the next session.
@@ -226,7 +226,7 @@ Verified against goose 1.45.0:
 | `Stop` | yes | Fires at the end of **every turn**, not the session |
 | `SessionEnd` | no | Emitted by the goose **CLI** only |
 
-Because most events omit `working_dir`, Observal reads the session's working
+Because most events omit `working_dir`, Agentic Resource Registry reads the session's working
 directory from `sessions.working_dir` instead, which keeps agent attribution and
 layer hashing correct on every event.
 
@@ -242,7 +242,7 @@ SHA-256 audit — is the shared engine used by every other harness.
 
 1. A hook event resolves the Goose session id from the payload.
 2. `sessions.db` is opened through a `file:...?mode=ro` URI with a busy timeout,
-   so Observal never writes to, migrates, or checkpoints Goose's database, and
+   so Agentic Resource Registry never writes to, migrates, or checkpoints Goose's database, and
    never blocks a Goose session that is writing concurrently.
 3. Rows newer than the mirror's cursor are appended as JSONL records. The mirror
    only grows, which keeps previously acknowledged byte offsets valid.
@@ -285,7 +285,7 @@ not by each agent pull.
 **MCP extensions are user scope only.** Goose reads extensions from one
 `config.yaml`, so `--scope project` still writes extensions to the user config.
 Agents and skills honour the requested scope. Goose rewrites that same file when
-it registers plugins, and neither Goose nor Observal preserves YAML comments in
+it registers plugins, and neither Goose nor Agentic Resource Registry preserves YAML comments in
 it.
 
 **Goose Desktop sessions finalize later.** Only the goose CLI emits
@@ -294,7 +294,7 @@ their final integrity audit runs from background recovery or
 `observal reconcile`.
 
 **Legacy JSONL sessions are not imported.** Goose imports pre-1.10 `.jsonl`
-files into `sessions.db` on upgrade, and Observal reads the database, so those
+files into `sessions.db` on upgrade, and Agentic Resource Registry reads the database, so those
 sessions are covered. Leftover `.jsonl` files on disk are ignored.
 
 **Rewritten conversations replay.** `goose session --resume --edit` rewrites a

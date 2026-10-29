@@ -7,7 +7,7 @@
 title: "Run a team-wide agent registry"
 ---
 
-Once two or more people are authoring agents, you need a single source of truth. Observal becomes your team's internal Docker Hub for AI agents, with review, RBAC, and telemetry baked in.
+Once two or more people are authoring agents, you need a single source of truth. Agentic Resource Registry becomes your team's internal Docker Hub for AI agents, with review, RBAC, and telemetry baked in.
 
 ## What changes at team scale
 
@@ -22,7 +22,7 @@ Deploy once, everyone points at it.
 
 ```mermaid
 flowchart TB
-    server["Observal server - API + Web UI"]
+    server["Agentic Resource Registry server - API + Web UI"]
     db[(PostgreSQL)]
     ch[(ClickHouse)]
     redis[(Redis)]
