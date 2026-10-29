@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Harishankar <harishankar0301@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -18,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenuButton } from "@/components/ui/sidebar";
-import { signOut, getUserAvatar } from "@/lib/api";
+import { clearSession, getUserAvatar } from "@/lib/api";
 import { useSyncExternalStore } from "react";
 
 function initials(name: string) {
@@ -93,9 +92,27 @@ export function NavUser({ user }: NavUserProps) {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => {
-            const done = signOut(); // fence is installed before the first await
+            // Clear the local session first so an in-flight refresh cannot restore it, then
+            // revoke on the server with the credentials captured beforehand (best effort).
+            const token = sessionStorage.getItem("observal_access_token");
+            const refreshToken = localStorage.getItem("observal_refresh_token");
+            clearSession();
             router.navigate({ to: "/login" });
-            void done;
+            if (token) {
+              void fetch("/api/v1/auth/logout", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  refresh_token: refreshToken || undefined,
+                }),
+                keepalive: true,
+              }).catch(() => {
+                // Best-effort: the local session is already gone.
+              });
+            }
           }}
         >
           <LogOut className="mr-2 h-4 w-4" />

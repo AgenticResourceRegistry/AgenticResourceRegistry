@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
-// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Suspense, useEffect, useState } from "react";
 import { Link, useRouter, useSearch } from "@tanstack/react-router";
 import { ArrowRight, CheckCircle2, Eye, EyeOff, Loader2, ShieldCheck, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { auth, commitLogin, loginStart, getAccessToken } from "@/lib/api";
+import { auth, setTokens, setUserRole, setUserName, setUserEmail, setUserUsername, setUserAvatar } from "@/lib/api";
 import { safeNext } from "@/lib/safe-next";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
@@ -32,7 +31,7 @@ function RegisterContent() {
   // Signed-in visitors are redirected by the effect below; rendering nothing in
   // the meantime avoids flashing the form at someone who cannot use it.
   const [alreadyAuthed] = useState(
-    () => typeof window !== "undefined" && !!getAccessToken(),
+    () => typeof window !== "undefined" && !!sessionStorage.getItem("observal_access_token"),
   );
   const appName = brandingAppName || "Observal";
   const [name, setName] = useState("");
@@ -49,7 +48,7 @@ function RegisterContent() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const hasToken = !!getAccessToken();
+    const hasToken = !!sessionStorage.getItem("observal_access_token");
     // Already signed in: honor a shared-link `next` instead of always going home.
     if (hasToken) window.location.replace(safeNext(searchParams.next));
   }, [router, searchParams.next]);
@@ -67,14 +66,18 @@ function RegisterContent() {
 
     setLoading(true);
     try {
-      const started = loginStart();
       const res = await auth.register({
         email,
         name,
         username: username.trim() || undefined,
         password,
       });
-      if (!await commitLogin(res, started)) throw new Error("Sign-in was cancelled");
+      setTokens(res.access_token, res.refresh_token);
+      setUserRole(res.user.role);
+      setUserName(res.user.name);
+      setUserEmail(res.user.email);
+      if (res.user.username) setUserUsername(res.user.username);
+      if (res.user.avatar_url) setUserAvatar(res.user.avatar_url);
       toast.success("Account created");
       window.location.replace(safeNext(searchParams.next));
     } catch (e) {
