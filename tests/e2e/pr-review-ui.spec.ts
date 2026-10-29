@@ -414,15 +414,17 @@ for (const subject_type of ["agent", "mcp"] as const) {
     const threadId = "55555555-5555-4555-8555-555555555555";
     const generalId = "77777777-7777-4777-8777-777777777777";
     const commenterId = "88888888-8888-4888-8888-888888888888";
+    const newRevisionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let withdrawn = false;
     const posts: unknown[] = [];
     const detail = { ...summary(42, "Disputed review", "agent"), subject_type, author_id: id,
       state: "changes_requested", body: "Please review", opened_at: now, closed_at: null, closed_reason: null,
-      published_at: null, published_by: null, base_version_id: null, head_revision_id: id, my_subscription: null,
-      self_approval_allowed: false, revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false }],
+      published_at: null, published_by: null, base_version_id: null, head_revision_id: newRevisionId, head_revision: 2, my_subscription: null,
+      self_approval_allowed: false, revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false },
+        { id: newRevisionId, number: 2, message: "Author resubmitted", created_by: id, created_at: now, pruned: false }],
       requested_reviewers: [commenterId], reviewer_names: { [reviewerId]: "reviewer", [commenterId]: "commenter" },
       commented_reviewers: [commenterId],
-      reviewer_decisions: { [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking" }, [secondId]: { verdict: "request_changes", status: "blocking" } },
+      reviewer_decisions: { [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking", revision_id: id }, [secondId]: { verdict: "request_changes", status: "blocking", revision_id: id } },
       threads: { total: 3, unresolved: 3 },
       gate: { ready: false, approvals: 0, required: 1, policy_source: "organization", requirements: ["changes_requested", "required_approvals"], outstanding_requests: 2 },
     };
@@ -458,6 +460,8 @@ for (const subject_type of ["agent", "mcp"] as const) {
       return route.fulfill({ json: data });
     });
     await page.goto("/review/42");
+    // Resubmitting a revision does not clear a still-blocking request.
+    await expect(page.locator("aside").getByText("Changes requested", { exact: true })).toHaveCount(2);
     const request = page.locator(`#thread-${threadId}`);
     await expect(request.getByText("Changes requested · blocks publication")).toBeVisible();
     await expect(request.getByText("I replied to this request")).toBeVisible();

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-"""Opt-in PostgreSQL test against a pre-046-shaped review table.
+"""Opt-in PostgreSQL test against a pre-request-migration-shaped review table.
 
-The full 001-045 Alembic chain is not reproduced here; this verifies 046's
+The full Alembic chain is not reproduced here; this verifies 054's
 constraints, populated backfill, and reversible association on PostgreSQL.
 """
 
@@ -37,7 +37,7 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
     schema = f"review_request_{uuid.uuid4().hex}"
     admin = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": f"{schema},public"}})
-    path = Path(__file__).resolve().parent.parent / "observal-server/alembic/versions/046_review_request_threads.py"
+    path = Path(__file__).resolve().parent.parent / "observal-server/alembic/versions/054_review_request_threads.py"
     spec = importlib.util.spec_from_file_location("request_migration_postgres", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
