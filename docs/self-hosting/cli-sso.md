@@ -4,7 +4,7 @@
 title: "CLI Authentication with SSO"
 ---
 
-This guide covers authenticating the Observal CLI when your deployment uses
+This guide covers authenticating the Agentic Resource Registry CLI when your deployment uses
 SSO (SAML, OIDC, or OAuth) for login. The CLI uses the
 [OAuth 2.0 Device Authorization Grant (RFC 8628)](https://datatracker.ietf.org/doc/html/rfc8628)
 to authenticate through your browser without handling IdP credentials directly.
@@ -35,7 +35,7 @@ CLI                         Server                     Browser
 
 1. The CLI requests a device code from the server.
 2. The server returns a short `user_code` (e.g., `BCDF-GHJK`) and a
-   `verification_uri` pointing to the Observal web UI.
+   `verification_uri` pointing to the Agentic Resource Registry web UI.
 3. The CLI opens the browser automatically and displays the URL + code in
    the terminal as a fallback.
 4. The user logs in via their normal SSO flow (SAML, OIDC, or OAuth) in
@@ -110,7 +110,7 @@ observal agent list
 ```
 
 The CLI checks `OBSERVAL_TOKEN` before reading `~/.observal/config.json`.
-Generate API tokens from the Observal web UI under your user settings.
+Generate API tokens from the Agentic Resource Registry web UI under your user settings.
 
 ---
 
@@ -161,7 +161,7 @@ Run `observal auth login --sso` again to get a fresh code.
 
 If the CLI cannot open a browser (e.g., SSH session, WSL without browser
 forwarding), manually copy the URL from the terminal into a browser on any
-device that can reach the Observal server.
+device that can reach the Agentic Resource Registry server.
 
 ### "SSO (opens browser)" option not shown
 

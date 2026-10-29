@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal - Azure Terraform Module
+# Agentic Resource Registry - Azure Terraform Module
 
-Deploy Observal to Azure using Container Apps, PostgreSQL Flexible Server, Azure Cache for Redis, and a self-hosted ClickHouse VM.
+Deploy Agentic Resource Registry to Azure using Container Apps, PostgreSQL Flexible Server, Azure Cache for Redis, and a self-hosted ClickHouse VM.
 
 ## Architecture
 

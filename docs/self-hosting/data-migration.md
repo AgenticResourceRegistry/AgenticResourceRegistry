@@ -4,7 +4,7 @@
 title: "Data migration"
 ---
 
-Use data migration when you need to move an Observal instance to a new deployment, validate a backup, or copy production data into a controlled recovery environment.
+Use data migration when you need to move an Agentic Resource Registry instance to a new deployment, validate a backup, or copy production data into a controlled recovery environment.
 
 Only super admins can start migration jobs.
 
@@ -16,7 +16,7 @@ Only super admins can start migration jobs.
 
 ## Before you start
 
-1. Confirm both source and target instances are on compatible Observal versions.
+1. Confirm both source and target instances are on compatible Agentic Resource Registry versions.
 2. Schedule a maintenance window if users are actively changing registry data.
 3. Make sure the target deployment has enough disk space for uploaded artifacts.
 4. Decide whether you need registry data only or registry plus telemetry.

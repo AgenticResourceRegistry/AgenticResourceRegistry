@@ -35,7 +35,7 @@ OAUTH_CLIENT_SECRET_FILE=/run/secrets/oauth_client_secret
 INSIGHTS_API_KEY_FILE=/run/secrets/insights_api_key
 ```
 
-The reader accepts files up to 64 KiB and removes one trailing newline. Setting both `NAME` and `NAME_FILE` is an error, so precedence is never ambiguous. Replace a file atomically and restart the affected API or worker processes to rotate the value without rebuilding Observal.
+The reader accepts files up to 64 KiB and removes one trailing newline. Setting both `NAME` and `NAME_FILE` is an error, so precedence is never ambiguous. Replace a file atomically and restart the affected API or worker processes to rotate the value without rebuilding Agentic Resource Registry.
 
 File-backed dynamic settings are marked externally managed in the admin API. Their contents are not imported into PostgreSQL or Redis, and the admin API rejects attempts to overwrite, delete, or revoke them.
 
@@ -142,7 +142,7 @@ GIT_CLONE_TIMEOUT=120              # seconds
 
 `GIT_CLONE_TOKEN_HOSTS` is required for authenticated clones: without it the token is never sent. List exact hostnames separated by commas (for example `github.com,gitlab.example.com`, or `git.example.com:8443` for a nonstandard port); subdomains and lookalikes are not trusted automatically. Authorities match exactly: `github.com:443` requires its own entry and does not match `github.com`. Only HTTPS clones receive credentials, even if HTTP clones are enabled. `GIT_CLONE_TOKEN_USER` varies by provider: `x-access-token` for GitHub, `oauth2` or `private-token` for GitLab.
 
-## Observal CLI (client-side) env vars
+## Agentic Resource Registry CLI (client-side) env vars
 
 Not set in `.env` on the server. These live on the CLI user's machine.
 

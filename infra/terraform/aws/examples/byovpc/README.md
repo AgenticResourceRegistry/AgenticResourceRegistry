@@ -3,7 +3,7 @@
 
 # Bring Your Own VPC Example
 
-Deploy Observal into an existing VPC instead of having Terraform create one.
+Deploy Agentic Resource Registry into an existing VPC instead of having Terraform create one.
 
 ## Prerequisites
 

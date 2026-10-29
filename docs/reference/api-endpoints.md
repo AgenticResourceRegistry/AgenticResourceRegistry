@@ -7,7 +7,7 @@
 title: "API endpoints"
 ---
 
-REST and GraphQL surface of the Observal server. Unless noted, endpoints require authentication via Bearer token or API key (`Authorization: Bearer <token>` or `X-API-Key: <key>`).
+REST and GraphQL surface of the Agentic Resource Registry server. Unless noted, endpoints require authentication via Bearer token or API key (`Authorization: Bearer <token>` or `X-API-Key: <key>`).
 
 Base path: `/api/v1`.
 
@@ -117,7 +117,7 @@ ARD envelope `{"errorCode": "INVALID_ARGUMENT", "message": "..."}`. See
 | `POST` | `/api/v1/ard/search` | ARD Search. `score` is relevance only; `obs:approval`, `obs:availability`, `obs:supportedHarnesses`, `obs:delegable` carry the rest; remote A2A results add `obs:provider` from the card |
 | `GET` | `/api/v1/ard/agents` | ARD List: deterministic browse with `filter`, `orderBy`, `pageSize`, `pageToken` |
 | `POST` | `/api/v1/ard/explore` | ARD Explore: not implemented (`501`) |
-| `GET` | `/api/v1/ard/entries/{identifier}` | One complete entry by `urn:air:` identifier (Observal-specific) |
+| `GET` | `/api/v1/ard/entries/{identifier}` | One complete entry by `urn:air:` identifier (Agentic Resource Registry-specific) |
 | `GET` | `/api/v1/artifacts/{kind}/{uuid}/{version}` | Permanent versioned artifact; `Digest` and `X-Artifact-Digest` headers |
 
 Search request body follows the spec: `{"query": {"text": "...", "filter": {...}}, "federation": "none", "pageSize": 5}`.

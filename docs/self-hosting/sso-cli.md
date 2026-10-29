@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Observal SSO, SCIM, and Audit API Reference"
+title: "Agentic Resource Registry SSO, SCIM, and Audit API Reference"
 ---
 
 For the core CLI reference, see [docs/cli/index.md](/cli). For setup instructions, see [docs/self-hosting/index.md](/self-hosting).
@@ -32,7 +32,7 @@ When `deployment.sso_only=true`, password-based login is disabled. All authentic
 
 ## Audit Log API
 
-Observal logs admin and write operations to ClickHouse. Audit logs are queryable via the API and exportable as CSV.
+Agentic Resource Registry logs admin and write operations to ClickHouse. Audit logs are queryable via the API and exportable as CSV.
 
 ### `GET /api/v1/admin/audit-log`
 

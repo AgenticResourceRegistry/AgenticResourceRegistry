@@ -29,7 +29,7 @@ title: "E2E Test Checklist"
 - [ ] Install the CLI from source:
   ```bash
   git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-  cd Observal
+  cd AgenticResourceRegistry
   uv tool install --editable .
   ```
 - [ ] Verify: `observal --version`

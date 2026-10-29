@@ -8,7 +8,7 @@
 title: "Installation"
 ---
 
-Observal has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
+Agentic Resource Registry has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
 
 ## Install the server
 
@@ -27,7 +27,7 @@ This downloads a config package, runs guided setup (domain, secrets, ports), pul
 **From source** (for contributors):
 
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
 cp .env.example .env
 make up
 ```
@@ -90,7 +90,7 @@ uv tool install 'observal-cli[migrate]'
 
 ```bash
 git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd Observal
+cd AgenticResourceRegistry
 uv tool install --editable .
 ```
 
@@ -101,7 +101,7 @@ The Python package provides three entry points:
 | Command                | Purpose                                                  |
 | ---------------------- | -------------------------------------------------------- |
 | `observal`             | The main CLI                                             |
-| `observal-sandbox-run` | Sandbox runner invoked by Observal sandboxes             |
+| `observal-sandbox-run` | Sandbox runner invoked by Agentic Resource Registry sandboxes             |
 | `observal-sandbox-mcp` | MCP adapter used by sandbox execution                   |
 
 You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.

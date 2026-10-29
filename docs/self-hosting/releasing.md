@@ -4,7 +4,7 @@
 title: "Releasing"
 ---
 
-Observal develops on `main` and publishes only from protected `release/X.Y` branches. Each minor line has one branch for alpha, beta, release candidates, stable, and subsequent patches. There is no `develop` branch, per-channel branch, or SLA database.
+Agentic Resource Registry develops on `main` and publishes only from protected `release/X.Y` branches. Each minor line has one branch for alpha, beta, release candidates, stable, and subsequent patches. There is no `develop` branch, per-channel branch, or SLA database.
 
 ```text
 main          A---B---C---D---E------> next features
@@ -23,7 +23,7 @@ Never merge a release branch into `main`, rebase it onto `main`, force-push it, 
 - A clean local branch that exactly matches its canonical remote branch.
 - Release branch rules and publishing environments configured as described below.
 
-The existing maintainer tool is `tools/release.py`, not a command in the distributed Observal CLI. `make release` invokes it; `make release ARGS="..."` passes options through.
+The existing maintainer tool is `tools/release.py`, not a command in the distributed Agentic Resource Registry CLI. `make release` invokes it; `make release ARGS="..."` passes options through.
 
 ## Cut a minor line
 

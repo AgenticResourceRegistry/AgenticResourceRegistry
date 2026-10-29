@@ -12,7 +12,7 @@ Most deployments don't need to change these. The defaults (60-minute access toke
 sequenceDiagram
     participant User
     participant UI as Web UI / CLI
-    participant API as Observal API
+    participant API as Agentic Resource Registry API
     participant DB as Token Store
 
     User->>UI: Sign in

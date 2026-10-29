@@ -4,11 +4,11 @@
 title: "Authentication and SSO"
 ---
 
-How Observal authenticates users and signs tokens, and how to wire up SSO.
+How Agentic Resource Registry authenticates users and signs tokens, and how to wire up SSO.
 
 ## Authentication modes
 
-Observal supports password auth, API keys, OAuth / OIDC, and SAML. The public login page shows only the methods enabled for the deployment.
+Agentic Resource Registry supports password auth, API keys, OAuth / OIDC, and SAML. The public login page shows only the methods enabled for the deployment.
 
 | Method | How it is enabled | Notes |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ Set it in **Admin → SSO → Access policy**. Confirm OIDC or SAML works with a
 
 ## Self registration
 
-Controls whether visitors can create their own Observal account from the login page.
+Controls whether visitors can create their own Agentic Resource Registry account from the login page.
 
 | Value | Effect |
 |-------|--------|
@@ -81,7 +81,7 @@ Back up the `apidata` volume every time you back up Postgres. See [Backup and re
 
 For a same-algorithm emergency rotation, stop the API, back up and remove `signing.pem`, then restart. New keys are generated and existing sessions must authenticate again.
 
-To move between ES256 and RS256, change `JWT_SIGNING_ALGORITHM` and restart. Observal archives the old public key, generates the selected key type, publishes both in JWKS, and continues verifying old tokens until they expire. New tokens use only the configured algorithm. Unsupported algorithms and token headers that do not match the resolved key type are rejected.
+To move between ES256 and RS256, change `JWT_SIGNING_ALGORITHM` and restart. Agentic Resource Registry archives the old public key, generates the selected key type, publishes both in JWKS, and continues verifying old tokens until they expire. New tokens use only the configured algorithm. Unsupported algorithms and token headers that do not match the resolved key type are rejected.
 
 If the signing key is encrypted, use `JWT_KEY_PASSWORD_FILE` and rotate the password and key together during a planned restart.
 
@@ -108,7 +108,7 @@ Set these three in **Admin → SSO → SSO settings**, then restart the API so t
 | `oauth.client_secret` | Client secret from your IdP |
 | `oauth.server_metadata_url` | OIDC discovery URL, for example `https://accounts.example.com/.well-known/openid-configuration` |
 
-Observal uses [Authlib](https://docs.authlib.org/) and reads the IdP discovery document, so any OIDC-compliant provider works (Auth0, Okta, Azure AD, Google Workspace, Keycloak, Authentik, Dex, etc.).
+Agentic Resource Registry uses [Authlib](https://docs.authlib.org/) and reads the IdP discovery document, so any OIDC-compliant provider works (Auth0, Okta, Azure AD, Google Workspace, Keycloak, Authentik, Dex, etc.).
 
 <a id="oauth-client-id"></a>
 
@@ -148,7 +148,7 @@ The first user who logs in via OAuth is **not** automatically an admin. Bootstra
 
 ### Scope / claims
 
-Observal requests standard `openid profile email` scope. The IdP's `email` claim is the canonical user identifier.
+Agentic Resource Registry requests standard `openid profile email` scope. The IdP's `email` claim is the canonical user identifier.
 
 <a id="google-oauth"></a>
 
@@ -189,7 +189,7 @@ Leave it unset to allow any Google account (including personal `@gmail.com` addr
 
 ### Notes
 
-- Observal additionally requires Google's `email_verified` claim to be `true`. Unverified accounts (rare on Google but possible) are rejected with a 400.
+- Agentic Resource Registry additionally requires Google's `email_verified` claim to be `true`. Unverified accounts (rare on Google but possible) are rejected with a 400.
 - The first Google user is **not** automatically an admin (matches the generic OIDC behavior). Bootstrap a local admin first, then use that account to promote the Google user.
 - The auth provider and Google subject ID are recorded on the user row (`auth_provider="google"`, `sso_subject_id=<google-sub>`) for audit purposes.
 
@@ -197,7 +197,7 @@ Leave it unset to allow any Google account (including personal `@gmail.com` addr
 
 ## GitHub OAuth (first-class provider)
 
-GitHub sign-in runs as its own provider, alongside generic OIDC and Google. Unlike those two, GitHub is plain OAuth 2.0 (not OIDC): there is no discovery URL and no ID token. Observal fetches the profile and email list from the GitHub REST API after the code exchange.
+GitHub sign-in runs as its own provider, alongside generic OIDC and Google. Unlike those two, GitHub is plain OAuth 2.0 (not OIDC): there is no discovery URL and no ID token. Agentic Resource Registry fetches the profile and email list from the GitHub REST API after the code exchange.
 
 Set these in the SSO settings page, or as container env vars for one-time import at startup. The **Sign in with GitHub** button appears after the API restarts:
 
@@ -224,13 +224,13 @@ Set `GITHUB_OAUTH_ALLOWED_ORGS` to a comma-separated list of GitHub organization
 GITHUB_OAUTH_ALLOWED_ORGS=acme-inc,acme-labs
 ```
 
-When an org allowlist is configured, Observal requests the `read:org` scope (in addition to `read:user user:email`) so it can see private org memberships. Members may need to grant/request org approval for the OAuth app if the org restricts third-party access.
+When an org allowlist is configured, Agentic Resource Registry requests the `read:org` scope (in addition to `read:user user:email`) so it can see private org memberships. Members may need to grant/request org approval for the OAuth app if the org restricts third-party access.
 
 Leave it unset to allow any GitHub account to provision itself as `role=user`.
 
 ### Notes
 
-- Observal only accepts **verified** email addresses from `GET /user/emails` (preferring the primary). The profile-level `email` field is never trusted, and accounts with no verified email are rejected with a 400.
+- Agentic Resource Registry only accepts **verified** email addresses from `GET /user/emails` (preferring the primary). The profile-level `email` field is never trusted, and accounts with no verified email are rejected with a 400.
 - Departments are not populated automatically from GitHub (there is no groups claim). Assign them in **Admin → Users**, individually or via bulk upload — same as Google users.
 - The auth provider and the *numeric* GitHub user ID are recorded on the user row (`auth_provider="github"`, `sso_subject_id=<github-id>`). The numeric ID is used instead of the login handle because handles can be renamed and re-registered.
 
@@ -294,7 +294,7 @@ observal admin reset-password <email> --generate
 
 ## Operational controls
 
-Observal includes:
+Agentic Resource Registry includes:
 
 * **Audit logging**: every privileged action lands in ClickHouse's `audit_log`
 * **SSO-only mode** (`deployment.sso_only=true`)

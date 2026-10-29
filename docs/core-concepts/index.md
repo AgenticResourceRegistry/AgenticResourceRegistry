@@ -5,7 +5,7 @@
 title: "Core concepts"
 ---
 
-The vocabulary you need to be productive with Observal.
+The vocabulary you need to be productive with Agentic Resource Registry.
 
 ## The registry
 

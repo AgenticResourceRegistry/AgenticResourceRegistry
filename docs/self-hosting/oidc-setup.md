@@ -5,7 +5,7 @@ title: "OIDC / OAuth 2.0 SSO Setup Guide"
 ---
 
 This guide walks you through configuring OpenID Connect (OIDC) / OAuth 2.0
-Single Sign-On for Observal. It covers environment variable
+Single Sign-On for Agentic Resource Registry. It covers environment variable
 configuration, per-IdP setup instructions, and troubleshooting common issues.
 
 ---
@@ -14,7 +14,7 @@ configuration, per-IdP setup instructions, and troubleshooting common issues.
 
 Before you begin, make sure the following requirements are met:
 
-- **HTTPS is required.** The Observal instance must be served over HTTPS.
+- **HTTPS is required.** The Agentic Resource Registry instance must be served over HTTPS.
   OAuth 2.0 redirect URIs must use HTTPS, and IdPs will reject callback URLs
   that use plain HTTP.
 - **IdP admin access.** You need administrator privileges on your identity
@@ -23,23 +23,23 @@ Before you begin, make sure the following requirements are met:
 
 ---
 
-## 2. Observal Settings
+## 2. Agentic Resource Registry Settings
 
 Configure OIDC SSO in **Admin → SSO → SSO settings**.
 
 | Setting | Description |
 |---|---|
-| `oauth.client_id` | The client ID issued by your IdP when you register the Observal application. |
+| `oauth.client_id` | The client ID issued by your IdP when you register the Agentic Resource Registry application. |
 | `oauth.client_secret` | The client secret issued by your IdP. Treat this as a password and store it securely. |
 | `oauth.server_metadata_url` | The OIDC discovery URL for your IdP. This is the `.well-known/openid-configuration` endpoint. |
 | `deployment.sso_only` | When set to `true`, disables password-based authentication entirely. Only SSO login is allowed. See [SSO-Only Mode](#6-sso-only-mode). |
-| `deployment.frontend_url` | The public URL of your Observal instance. Used to construct the OAuth callback URL registered with your IdP. |
+| `deployment.frontend_url` | The public URL of your Agentic Resource Registry instance. Used to construct the OAuth callback URL registered with your IdP. |
 
 OIDC client changes require an API restart before normal user login uses them. Existing `OAUTH_*` env vars are imported once on startup when the dynamic setting is not already present.
 
 ### Callback URL
 
-When registering Observal with your IdP, use the following redirect URI:
+When registering Agentic Resource Registry with your IdP, use the following redirect URI:
 
 ```
 {FRONTEND_URL}/api/v1/auth/oauth/callback
@@ -68,7 +68,7 @@ With these three settings saved and the API restarted, OIDC SSO is ready.
 2. Select **OIDC - OpenID Connect** and then **Web Application**. Click
    **Next**.
 3. Fill in the application settings:
-   - **App integration name:** "Observal"
+   - **App integration name:** "Agentic Resource Registry"
    - **Sign-in redirect URIs:**
      `https://observal.example.com/api/v1/auth/oauth/callback`
    - **Sign-out redirect URIs:**
@@ -92,7 +92,7 @@ With these three settings saved and the API restarted, OIDC SSO is ready.
 1. In the Azure portal, go to **Microsoft Entra ID > App registrations** and
    click **New registration**.
 2. Fill in the registration details:
-   - **Name:** "Observal"
+   - **Name:** "Agentic Resource Registry"
    - **Supported account types:** Choose the appropriate option for your
      organization (typically "Accounts in this organizational directory only").
    - **Redirect URI:** Select **Web** and enter
@@ -114,7 +114,7 @@ With these three settings saved and the API restarted, OIDC SSO is ready.
    permissions are present. These are included by default for new registrations.
    If missing, click **Add a permission > Microsoft Graph > Delegated
    permissions** and add them.
-8. Under **Enterprise applications**, find the Observal application and go to
+8. Under **Enterprise applications**, find the Agentic Resource Registry application and go to
    **Users and groups** to assign access to specific users or groups.
 
 ### 3.3 Google Workspace
@@ -128,7 +128,7 @@ With these three settings saved and the API restarted, OIDC SSO is ready.
    - Add the `email`, `profile`, and `openid` scopes.
 4. Back on the **Create OAuth client ID** page, set:
    - **Application type:** Web application
-   - **Name:** "Observal"
+   - **Name:** "Agentic Resource Registry"
    - **Authorized redirect URIs:**
      `https://observal.example.com/api/v1/auth/oauth/callback`
 5. Click **Create**. Copy:
@@ -147,10 +147,10 @@ With these three settings saved and the API restarted, OIDC SSO is ready.
 
 ## 4. How the Flow Works
 
-The OIDC authorization code flow used by Observal works as follows:
+The OIDC authorization code flow used by Agentic Resource Registry works as follows:
 
-1. The user visits the Observal login page and clicks **Sign in with SSO**.
-2. Observal redirects the browser to the IdP's authorization endpoint with
+1. The user visits the Agentic Resource Registry login page and clicks **Sign in with SSO**.
+2. Agentic Resource Registry redirects the browser to the IdP's authorization endpoint with
    an OIDC authorization code request.
 3. The IdP authenticates the user (prompting for credentials or MFA if no
    existing session is present).
@@ -159,19 +159,19 @@ The OIDC authorization code flow used by Observal works as follows:
    /api/v1/auth/oauth/callback
    ```
    with an authorization code in the query string.
-5. Observal exchanges the authorization code for an ID token and access token
+5. Agentic Resource Registry exchanges the authorization code for an ID token and access token
    by calling the IdP's token endpoint (server-to-server, not via browser).
-6. Observal extracts the user's email and name from the ID token claims.
+6. Agentic Resource Registry extracts the user's email and name from the ID token claims.
 7. If the user already exists, their session is created and they are logged in.
    If the user is new, an account is created (Just-In-Time provisioning) and
    they are logged in.
-8. Observal issues a JWT and redirects the browser to the Observal dashboard.
+8. Agentic Resource Registry issues a JWT and redirects the browser to the Agentic Resource Registry dashboard.
 
 ---
 
 ## 5. SSO-Only Mode
 
-Setting `deployment.sso_only=true` locks down Observal to IdP authentication exclusively:
+Setting `deployment.sso_only=true` locks down Agentic Resource Registry to IdP authentication exclusively:
 
 - **Password login is disabled** across the web UI, CLI, and API. Users who
   previously had password-based accounts can no longer use them.
@@ -230,9 +230,9 @@ with [SCIM provisioning](/self-hosting/scim-setup) for automated user lifecycle 
 - **Incorrect client secret.** Re-copy the client secret from your IdP and
   update `oauth.client_secret`. Secrets often contain special characters that
   can be truncated by shell escaping.
-- **Metadata URL unreachable.** Observal fetches the discovery document at
+- **Metadata URL unreachable.** Agentic Resource Registry fetches the discovery document at
   startup. If the URL is unreachable from the server (firewall, private IdP),
-  the token exchange will fail. Verify the URL is accessible from the Observal
+  the token exchange will fail. Verify the URL is accessible from the Agentic Resource Registry
   host.
 
 ### "No email in token"
@@ -250,7 +250,7 @@ permissions.
 
 **Fix:**
 
-- Check whether the user's account exists and is active in the Observal admin
+- Check whether the user's account exists and is active in the Agentic Resource Registry admin
   panel.
 
 ### General Debugging Tips
@@ -262,4 +262,4 @@ permissions.
   `authorization_endpoint` and `token_endpoint` fields.
 - **Verify the IdP application assignment.** Some IdPs (Okta, Azure AD) require
   users to be explicitly assigned to the application before they can
-  authenticate. Unassigned users will fail at the IdP before reaching Observal.
+  authenticate. Unassigned users will fail at the IdP before reaching Agentic Resource Registry.

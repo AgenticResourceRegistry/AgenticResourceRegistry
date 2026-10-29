@@ -2,9 +2,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal on AWS - Terraform
+# Agentic Resource Registry on AWS - Terraform
 
-Production-shaped self-hosted Observal in your own AWS account. One `terraform apply` provisions:
+Production-shaped self-hosted Agentic Resource Registry in your own AWS account. One `terraform apply` provisions:
 
 - **VPC**: public + private subnets across 2 AZs, NAT gateway, VPC flow logs
 - **Application Load Balancer**: HTTPS via DNS-validated ACM (when domain supplied), path-based routing
@@ -271,7 +271,7 @@ Set `image_tag` to the previous version and re-apply. RDS / ClickHouse data are 
 ```bash
 terraform destroy
 ```
-The bootstrap module's bucket + table have `prevent_destroy = true`. Destroying the main module won't touch them. To remove them too, edit `bootstrap/main.tf` to drop the lifecycle blocks, then `terraform destroy` in `bootstrap/`. Don't do this until you're sure no Observal install in the account still needs the state.
+The bootstrap module's bucket + table have `prevent_destroy = true`. Destroying the main module won't touch them. To remove them too, edit `bootstrap/main.tf` to drop the lifecycle blocks, then `terraform destroy` in `bootstrap/`. Don't do this until you're sure no Agentic Resource Registry install in the account still needs the state.
 
 ### Disaster recovery
 - **Postgres**: automated daily snapshots (7-day retention on prod). Restore via `aws rds restore-db-instance-from-db-snapshot`.

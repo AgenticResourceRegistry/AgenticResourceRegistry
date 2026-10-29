@@ -4,7 +4,7 @@
 title: "SCIM 2.0 Provisioning Setup Guide"
 ---
 
-This guide covers configuring SCIM 2.0 user provisioning between your identity provider (IdP) and Observal. SCIM automates user creation, updates, and deprovisioning so your Observal user directory stays synchronized with your IdP.
+This guide covers configuring SCIM 2.0 user provisioning between your identity provider (IdP) and Agentic Resource Registry. SCIM automates user creation, updates, and deprovisioning so your Agentic Resource Registry user directory stays synchronized with your IdP.
 
 ---
 
@@ -13,13 +13,13 @@ This guide covers configuring SCIM 2.0 user provisioning between your identity p
 Before configuring SCIM, verify the following:
 
 1. **SAML or OIDC SSO is configured.** Users provisioned via SCIM will authenticate through your IdP. Ensure SSO login works before enabling SCIM.
-2. **Admin database access.** You will need `psql` access to the Observal PostgreSQL database to insert a SCIM bearer token.
+2. **Admin database access.** You will need `psql` access to the Agentic Resource Registry PostgreSQL database to insert a SCIM bearer token.
 
 ---
 
 ## Generating a SCIM Bearer Token
 
-Observal authenticates SCIM requests using a bearer token. The raw token is sent
+Agentic Resource Registry authenticates SCIM requests using a bearer token. The raw token is sent
 by your IdP in the `Authorization` header; only the SHA-256 hash is stored in
 the database.
 
@@ -104,7 +104,7 @@ token hash does not match any active record.
 
 ### Okta
 
-1. In the Okta admin console, go to **Applications > Applications** and select your Observal SAML application.
+1. In the Okta admin console, go to **Applications > Applications** and select your Agentic Resource Registry SAML application.
 2. Navigate to the **Provisioning** tab and click **Configure API Integration**.
 3. Check **Enable API Integration**.
 4. Set the following values:
@@ -121,7 +121,7 @@ token hash does not match any active record.
 
 ### Azure AD (Microsoft Entra ID)
 
-1. In the Azure portal, go to **Microsoft Entra ID > Enterprise applications** and select your Observal application.
+1. In the Azure portal, go to **Microsoft Entra ID > Enterprise applications** and select your Agentic Resource Registry application.
 2. Navigate to **Provisioning** and set **Provisioning Mode** to **Automatic**.
 3. Under **Admin Credentials**, enter:
    - **SCIM URL:** `https://your-observal-instance.example.com/api/v1/scim`
@@ -139,16 +139,16 @@ Azure AD runs provisioning cycles approximately every 40 minutes. You can trigge
 
 ### Google Workspace
 
-Google Workspace does not natively support outbound SCIM provisioning. To synchronize Google Workspace users with Observal, you have two options:
+Google Workspace does not natively support outbound SCIM provisioning. To synchronize Google Workspace users with Agentic Resource Registry, you have two options:
 
 **Option A: Use a third-party bridge.**
-Services such as [SSPM tools](https://workspace.google.com/marketplace) or custom middleware can read the Google Directory API and push changes to Observal's SCIM endpoints. Configure the bridge with the SCIM base URL and bearer token as described above.
+Services such as [SSPM tools](https://workspace.google.com/marketplace) or custom middleware can read the Google Directory API and push changes to Agentic Resource Registry's SCIM endpoints. Configure the bridge with the SCIM base URL and bearer token as described above.
 
 **Option B: Script the Google Directory API.**
 Write a scheduled script (cron job, Cloud Function, or Cloud Scheduler) that:
 
 1. Lists users from the Google Admin SDK Directory API.
-2. Compares against the current Observal user list via `GET /api/v1/scim/Users`.
+2. Compares against the current Agentic Resource Registry user list via `GET /api/v1/scim/Users`.
 3. Calls `POST /api/v1/scim/Users` for new users and `PUT /api/v1/scim/Users/{id}` with `"active": false` for removed users.
 
 Example skeleton using `curl`:
@@ -305,7 +305,7 @@ GET /api/v1/scim/Users/{id}
 
 | Parameter | Type | Description                   |
 |-----------|------|-------------------------------|
-| `id`      | UUID | The Observal user ID (UUID)   |
+| `id`      | UUID | The Agentic Resource Registry user ID (UUID)   |
 
 **Example:**
 
@@ -463,7 +463,7 @@ SCIM and SAML serve complementary purposes. SAML handles authentication (who the
 For the most robust user management, enable both SAML and SCIM:
 
 1. **SAML** authenticates users at login. Configure it first, since users provisioned via SCIM will need SAML to sign in.
-2. **SCIM** pre-provisions user accounts so they exist in Observal before the user's first login. When a user is removed from the IdP, SCIM deactivates or deletes their Observal account.
+2. **SCIM** pre-provisions user accounts so they exist in Agentic Resource Registry before the user's first login. When a user is removed from the IdP, SCIM deactivates or deletes their Agentic Resource Registry account.
 
 Without SCIM, user accounts are only created via SAML JIT (just-in-time) provisioning on first login, and deprovisioned users retain access until an admin manually removes them.
 
@@ -484,7 +484,7 @@ Without SCIM, user accounts are only created via SAML JIT (just-in-time) provisi
   SELECT id, active, created_at FROM scim_tokens;
   ```
 - **Wrong endpoint URL.** Ensure the IdP is pointing to `/api/v1/scim` (not `/scim` or `/api/scim`).
-- **TLS / proxy issues.** If Observal is behind a reverse proxy, verify the `Authorization` header is being forwarded and not stripped.
+- **TLS / proxy issues.** If Agentic Resource Registry is behind a reverse proxy, verify the `Authorization` header is being forwarded and not stripped.
 
 ### 409 Conflict
 
@@ -498,7 +498,7 @@ Without SCIM, user accounts are only created via SAML JIT (just-in-time) provisi
     'https://your-observal-instance.example.com/api/v1/scim/Users?filter=userName%20eq%20%22alice@example.com%22'
   ```
 - **IdP retry.** Some IdPs retry failed requests. If the initial `POST` succeeded but the IdP did not receive the `201` response (due to a timeout), it may retry and receive a `409`. This is safe to ignore. Configure your IdP to treat `409` as a non-fatal error if possible.
-- **Case sensitivity.** Observal normalizes email addresses to lowercase. Ensure your IdP is not sending mixed-case emails that map to the same lowercase value.
+- **Case sensitivity.** Agentic Resource Registry normalizes email addresses to lowercase. Ensure your IdP is not sending mixed-case emails that map to the same lowercase value.
 
 ### 404 Not Found
 

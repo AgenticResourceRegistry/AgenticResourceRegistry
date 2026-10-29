@@ -3,7 +3,7 @@
 
 # Security Policy
 
-Observal's [security assurance case](docs/security/assurance-case.md) documents its threat model, trust boundaries, controls, evidence, and residual risks. See [release verification](docs/security/release-verification.md) before running downloaded artifacts.
+Agentic Resource Registry's [security assurance case](docs/security/assurance-case.md) documents its threat model, trust boundaries, controls, evidence, and residual risks. See [release verification](docs/security/release-verification.md) before running downloaded artifacts.
 
 ## Supported Versions
 
@@ -16,7 +16,7 @@ Observal's [security assurance case](docs/security/assurance-case.md) documents 
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-If you discover a security vulnerability in Observal, please report it responsibly through one of these channels:
+If you discover a security vulnerability in Agentic Resource Registry, please report it responsibly through one of these channels:
 
 1. **GitHub Private Vulnerability Reporting** (preferred): Go to the [Security Advisories](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/security/advisories) page and click "Report a vulnerability".
 2. **Email**: Send details to **contact@observal.io**.
@@ -38,7 +38,7 @@ We will coordinate disclosure with you. We ask that you give us reasonable time 
 
 ## What Qualifies as a Security Issue
 
-Observal handles API keys, authentication tokens, and enterprise telemetry data. The following are examples of issues we consider security-relevant:
+Agentic Resource Registry handles API keys, authentication tokens, and enterprise telemetry data. The following are examples of issues we consider security-relevant:
 
 - Authentication or authorization bypasses
 - API key or token exposure

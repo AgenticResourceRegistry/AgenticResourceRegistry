@@ -10,7 +10,7 @@ title: "Overview"
 
 Complete reference for the `observal` CLI. Every subcommand has its own page; this overview is the index.
 
-> **New to Observal?** Start with [Quickstart](/getting-started/quickstart) and come back here when you need a specific command.
+> **New to Agentic Resource Registry?** Start with [Quickstart](/getting-started/quickstart) and come back here when you need a specific command.
 
 ## Command groups
 

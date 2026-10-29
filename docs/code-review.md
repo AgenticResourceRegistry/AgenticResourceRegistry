@@ -4,7 +4,7 @@
 title: "Code Review Standard"
 ---
 
-Code review protects Observal users, contributors, and maintainers. Its purpose is not merely to make a pull request pass CI. Reviewers are responsible for deciding whether a change is correct, secure, understandable, appropriately tested, and safe to maintain.
+Code review protects Agentic Resource Registry users, contributors, and maintainers. Its purpose is not merely to make a pull request pass CI. Reviewers are responsible for deciding whether a change is correct, secure, understandable, appropriately tested, and safe to maintain.
 
 This standard applies to every pull request merged into a protected branch. The depth of review should match the risk of the change, but the approval and merge requirements apply even to small changes.
 

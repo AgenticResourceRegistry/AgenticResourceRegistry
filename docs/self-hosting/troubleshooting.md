@@ -34,7 +34,7 @@ The server already has users, so bootstrap is disabled. Use `observal auth login
 
 ### `port is already allocated`
 
-Another process is on one of Observal's default ports. Remap host ports:
+Another process is on one of Agentic Resource Registry's default ports. Remap host ports:
 
 ```bash
 POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 \

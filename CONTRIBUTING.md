@@ -9,7 +9,7 @@
 
 # Contributing Guide
 
-Thank you for considering contributing to Observal. Contributions of all kinds are welcome: bug reports, bug fixes, new features, documentation improvements, and tests.
+Thank you for considering contributing to Agentic Resource Registry. Contributions of all kinds are welcome: bug reports, bug fixes, new features, documentation improvements, and tests.
 
 > [!TIP]
 > This page is a quick-start summary. For the full setup walkthrough, architecture notes, and detailed workflows, see the [Development Guide](docs/DEVELOPMENT_GUIDE.md). For new Python tests, follow the [Testing Guide](docs/testing/Testing_Guide.md). Reviewers and maintainers must follow the [Code Review Standard](docs/code-review.md).
@@ -50,8 +50,8 @@ Interested in how contributors are paid? See [Contributor Payments](docs/contrib
 ### Fork and Clone
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/Observal.git
-cd Observal
+git clone https://github.com/YOUR-USERNAME/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
 git remote add upstream https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 ```
 
@@ -220,4 +220,4 @@ All code is licensed under [Apache-2.0](LICENSE).
 
 ## Contributor License Agreement (CLA)
 
-The [CLA-assistant](https://cla-assistant.io) bot will prompt you to sign the [Observal CLA](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CLA.md) on your first PR. You only need to sign once. For corporate contributions, contact harisrini21@gmail.com.
+The [CLA-assistant](https://cla-assistant.io) bot will prompt you to sign the [Agentic Resource Registry CLA](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CLA.md) on your first PR. You only need to sign once. For corporate contributions, contact harisrini21@gmail.com.

@@ -4,7 +4,7 @@
 title: "Resource Tuning"
 ---
 
-Connection pool sizes, query limits, and timeout configuration. These settings control how Observal connects to its backing stores (PostgreSQL, Redis, ClickHouse). Most deployments work fine with defaults. Tune when you see connection timeouts, pool exhaustion, or slow queries under load.
+Connection pool sizes, query limits, and timeout configuration. These settings control how Agentic Resource Registry connects to its backing stores (PostgreSQL, Redis, ClickHouse). Most deployments work fine with defaults. Tune when you see connection timeouts, pool exhaustion, or slow queries under load.
 
 ## When to Tune
 

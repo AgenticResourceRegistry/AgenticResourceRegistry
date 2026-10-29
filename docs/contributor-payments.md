@@ -4,7 +4,7 @@
 title: "Contributor Payments"
 ---
 
-Observal Inc. sets aside a fixed monthly budget to thank people who do sustained, meaningful work on Observal. This page explains how that works. Payments are tracked in public on our [Open Collective](https://opencollective.com/observal).
+Observal Inc. sets aside a fixed monthly budget to thank people who do sustained, meaningful work on Agentic Resource Registry. This page explains how that works. Payments are tracked in public on our [Open Collective](https://opencollective.com/observal).
 
 ## This is not a salary
 

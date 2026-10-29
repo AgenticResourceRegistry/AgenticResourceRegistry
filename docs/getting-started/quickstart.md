@@ -8,12 +8,12 @@
 title: "Quickstart"
 ---
 
-Go from zero to "my first trace in the Observal dashboard" in about five minutes. This assumes you have Docker running.
+Go from zero to "my first trace in the Agentic Resource Registry dashboard" in about five minutes. This assumes you have Docker running.
 
 By the end of this guide you will have:
 
-* The Observal CLI installed
-* An Observal server running locally
+* The Agentic Resource Registry CLI installed
+* An Agentic Resource Registry server running locally
 * The CLI logged in as an admin
 * At least one MCP server instrumented
 * A live trace visible in the web UI
@@ -32,7 +32,7 @@ No Python required. For alternative install methods, see [Installation](/getting
 
 ```bash
 git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd Observal
+cd AgenticResourceRegistry
 cp .env.example .env
 
 docker compose -f docker/docker-compose.yml up --build -d
@@ -153,7 +153,7 @@ flowchart LR
     ch --> ui
 ```
 
-Observal indexes session transcript records into canonical events and aggregates.
+Agentic Resource Registry indexes session transcript records into canonical events and aggregates.
 
 ## Where to next
 

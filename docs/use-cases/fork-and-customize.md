@@ -13,7 +13,7 @@ Fork an **approved release** when you want to build on a registry item without e
 3. On the detail page or in the review queue, select **Diff vs upstream** to compare your version with the approved base. **Unchanged from upstream** means tracked content has not changed. A version number, validation state, or a secret environment/header value alone does not count as an install-content change.
 4. Submit the draft through its normal review workflow. Approval makes a public fork appear in the source's **Forks** tab and count. Drafts and team-private forks never appear there.
 
-If you later lose access to the source, provenance reads **Source unavailable**. The comparison will no longer be available; Observal does not expose a saved source name or base version as a fallback.
+If you later lose access to the source, provenance reads **Source unavailable**. The comparison will no longer be available; Agentic Resource Registry does not expose a saved source name or base version as a fallback.
 
 ## From the CLI
 

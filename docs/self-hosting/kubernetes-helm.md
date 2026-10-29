@@ -5,7 +5,7 @@
 title: "Kubernetes Deployment with Helm"
 ---
 
-Deploy Observal onto a Kubernetes cluster using the official Helm chart.
+Deploy Agentic Resource Registry onto a Kubernetes cluster using the official Helm chart.
 
 > [!WARNING]
 > **Production Notice**: The in-cluster PostgreSQL, ClickHouse, and Redis StatefulSets deployed by this chart are intended for evaluation, development, and small-scale testing. For production workloads, set `postgresql.enabled=false`, `clickhouse.enabled=false`, and `redis.enabled=false`, then provide `postgresql.externalUrl`, `clickhouse.externalUrl`, and `redis.externalUrl` for dedicated external services.
@@ -42,7 +42,7 @@ To test unreleased chart changes directly from a clone:
 1. Clone the repository:
    ```bash
    git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-   cd Observal
+   cd AgenticResourceRegistry
    ```
 
 2. Install the chart into a dedicated namespace:

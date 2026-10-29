@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Chandhini Veerabuthiran <chandhini03@users.noreply.github.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal design system
+# Agentic Resource Registry design system
 
 Shared foundations for the UI revamp. Read this before adding or restyling UI:
 the point of these tokens and primitives is that Registry, Workspace, and

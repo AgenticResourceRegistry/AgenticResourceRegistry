@@ -1,12 +1,12 @@
 ---
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Okta SSO Setup for Observal (Managed Customer Instance)"
+title: "Okta SSO Setup for Agentic Resource Registry (Managed Customer Instance)"
 ---
 
-Step-by-step runbook for Observal operators setting up **Okta OIDC** for a **new Observal instance** deployed for another company (managed solution). Follow every step in order; each step assumes the previous one is complete.
+Step-by-step runbook for Agentic Resource Registry operators setting up **Okta OIDC** for a **new Agentic Resource Registry instance** deployed for another company (managed solution). Follow every step in order; each step assumes the previous one is complete.
 
-This guide matches how Observal’s server is implemented today:
+This guide matches how Agentic Resource Registry’s server is implemented today:
 
 - Protocol: **OIDC / OAuth 2.0** (authorization code flow)
 - Callback path: `{Frontend URL from Settings}/api/v1/auth/oauth/callback`
@@ -22,22 +22,22 @@ Collect this information **before** opening Okta:
 | Item | Example | Where it is used |
 |------|---------|------------------|
 | Customer company name | `Acme Corp` | Okta app name, group naming |
-| Observal public URL (HTTPS) | `https://acme.observal.io` | Okta redirect URIs; **Settings → Frontend URL** in Observal |
+| Agentic Resource Registry public URL (HTTPS) | `https://acme.observal.io` | Okta redirect URIs; **Settings → Frontend URL** in Agentic Resource Registry |
 | Okta admin access | Super admin on customer’s Okta org (or your integrator org) | All Okta steps |
 | List of users (email, name) | `alice@acme.com` | Directory > People |
 | List of teams/departments | `engineering`, `product`, … | Directory > Groups |
-| Who is the first Observal admin | `admin@acme.com` | Promoted in Observal after first SSO login |
+| Who is the first Agentic Resource Registry admin | `admin@acme.com` | Promoted in Agentic Resource Registry after first SSO login |
 
 **URL rules (critical):**
 
-- Use **HTTPS** in production (Okta and Observal both expect it).
+- Use **HTTPS** in production (Okta and Agentic Resource Registry both expect it).
 - **No trailing slash** on the base URL: `https://acme.observal.io` not `https://acme.observal.io/`.
 - The sign-in redirect URI must match **exactly** (scheme, host, path).
 
 **Naming convention (recommended per customer):**
 
 - Okta application: `Observal - Acme Corp`
-- Groups: lowercase team names (`engineering`, `platform`) - these become department filters in Observal
+- Groups: lowercase team names (`engineering`, `platform`) - these become department filters in Agentic Resource Registry
 
 ---
 
@@ -67,12 +67,12 @@ Collect this information **before** opening Okta:
 | Field | Value |
 |-------|-------|
 | **App integration name** | `Observal - <Customer Name>` (e.g. `Observal - Acme Corp`) |
-| **Grant type** | Leave **Authorization Code** checked. Do **not** enable Client Credentials for Observal login. |
+| **Grant type** | Leave **Authorization Code** checked. Do **not** enable Client Credentials for Agentic Resource Registry login. |
 | **Sign-in redirect URIs** | `https://<OBSERVAL_DOMAIN>/api/v1/auth/oauth/callback` |
 | **Sign-out redirect URIs** | `https://<OBSERVAL_DOMAIN>/login` |
 | **Controlled access** | Choose based on your process (see note below) |
 
-Replace `<OBSERVAL_DOMAIN>` with the customer’s Observal hostname only (no path), e.g. `acme.observal.io`.
+Replace `<OBSERVAL_DOMAIN>` with the customer’s Agentic Resource Registry hostname only (no path), e.g. `acme.observal.io`.
 
 **Controlled access note:**
 
@@ -85,7 +85,7 @@ Replace `<OBSERVAL_DOMAIN>` with the customer’s Observal hostname only (no pat
 
 On the application **General** tab, record:
 
-| Okta label | Copy to (Observal SSO setting) |
+| Okta label | Copy to (Agentic Resource Registry SSO setting) |
 |------------|---------------------------|
 | **Client ID** | `oauth.client_id` |
 | **Client secret** (click eye icon) | `oauth.client_secret` |
@@ -105,20 +105,20 @@ Example: `https://acme.okta.com/oauth2/default/.well-known/openid-configuration`
 
 ### Step 3 - Configure application sign-on settings (optional but recommended)
 
-1. Stay on the Observal application.
+1. Stay on the Agentic Resource Registry application.
 2. Open the **Sign On** tab.
 3. Under **OpenID Connect ID Token**, confirm:
    - **Issuer** shows the default authorization server (`/oauth2/default`)
    - **Audience** includes your Client ID (default for OIDC apps)
 4. If your org uses **App sign-on policies** (Okta Identity Engine), attach the policy you want for this app (password only vs MFA). See **Step 8** for global authentication policies.
 
-You do not need to change SAML settings; Observal uses OIDC for this flow.
+You do not need to change SAML settings; Agentic Resource Registry uses OIDC for this flow.
 
 ---
 
 ### Step 4 - Create groups (teams / departments)
 
-Groups control both **who can access Observal** (when assigned to the app) and **department data in the exec dashboard**.
+Groups control both **who can access Agentic Resource Registry** (when assigned to the app) and **department data in the exec dashboard**.
 
 1. Go to **Directory** → **Groups**.
 2. Click **Add Group**.
@@ -133,7 +133,7 @@ Repeat for every department you need (`product`, `design`, `data-science`, `plat
 
 4. Click **Save** after each group.
 
-**Tip:** Use short, lowercase names without spaces; they are stored as-is in Observal’s `user_groups` table.
+**Tip:** Use short, lowercase names without spaces; they are stored as-is in Agentic Resource Registry’s `user_groups` table.
 
 ---
 
@@ -151,7 +151,7 @@ Repeat for every department you need (`product`, `design`, `data-science`, `plat
 | **Password** | **Set by admin** (send securely) or **Set by user** (invitation email) |
 
 4. Click **Save**.
-5. Repeat for every user who needs Observal access.
+5. Repeat for every user who needs Agentic Resource Registry access.
 
 **Activate users:** If the person is **Staged**, open their profile → **More Actions** → **Activate** before they can sign in.
 
@@ -173,15 +173,15 @@ Verify: each user appears under the correct group(s). Users can belong to multip
 
 ---
 
-### Step 7 - Assign groups to the Observal application
+### Step 7 - Assign groups to the Agentic Resource Registry application
 
-This step controls **who is allowed to sign in** to Observal via SSO.
+This step controls **who is allowed to sign in** to Agentic Resource Registry via SSO.
 
 1. Go to **Applications** → **Applications**.
-2. Click your **Observal - &lt;Customer&gt;** application.
+2. Click your **Agentic Resource Registry - &lt;Customer&gt;** application.
 3. Open the **Assignments** tab.
 4. Click **Assign** → **Assign to Groups**.
-5. Select every group that should have Observal access (e.g. `engineering`, `product`, `platform`).
+5. Select every group that should have Agentic Resource Registry access (e.g. `engineering`, `product`, `platform`).
 6. Click **Assign**, then **Done** for each group.
 
 **Optional - assign individual users:** Use **Assign** → **Assign to People** only for one-off access (e.g. executives not in a team group). Prefer group assignment for managed customers.
@@ -192,7 +192,7 @@ This step controls **who is allowed to sign in** to Observal via SSO.
 
 ### Step 8 - Authentication policies (MFA and sign-on rules)
 
-Observal does not configure MFA itself; Okta enforces it here.
+Agentic Resource Registry does not configure MFA itself; Okta enforces it here.
 
 #### Option A - Application-specific rule (recommended)
 
@@ -211,7 +211,7 @@ Observal does not configure MFA itself; Okta enforces it here.
 
 #### Option B - Sign-on policy on the app (Identity Engine)
 
-1. Open the Observal application → **Sign On** tab.
+1. Open the Agentic Resource Registry application → **Sign On** tab.
 2. Under **Sign On Policy**, edit or add a rule for MFA requirements.
 
 **Test implication:** If MFA is required, test users must complete MFA during the first SSO test (Step 14).
@@ -220,7 +220,7 @@ Observal does not configure MFA itself; Okta enforces it here.
 
 ### Step 9 - Authorization server: `groups` scope and claim
 
-Observal requests scope `groups` and reads `userinfo.groups` from the token. Without this, login works but **departments stay empty**.
+Agentic Resource Registry requests scope `groups` and reads `userinfo.groups` from the token. Without this, login works but **departments stay empty**.
 
 #### 9a - Add the `groups` scope (if missing)
 
@@ -245,7 +245,7 @@ Observal requests scope `groups` and reads `userinfo.groups` from the token. Wit
 | **Name** | `groups` |
 | **Include in token type** | **ID Token** → **Always** |
 | **Value type** | **Groups** |
-| **Filter** | Matches regex: `.*` (all groups) - or restrict to your Observal group names |
+| **Filter** | Matches regex: `.*` (all groups) - or restrict to your Agentic Resource Registry group names |
 | **Include in** | **Any scope** |
 
 4. Click **Create**.
@@ -258,28 +258,28 @@ Observal requests scope `groups` and reads `userinfo.groups` from the token. Wit
 4. Ensure:
    - **Grant type** includes **Authorization Code**
    - **Scopes** include at least: `openid`, `profile`, `email`, `groups`
-   - The rule applies to **All clients** or explicitly includes your Observal Client ID
+   - The rule applies to **All clients** or explicitly includes your Agentic Resource Registry Client ID
 5. **Save** the rule.
 
 ---
 
 ### Step 10 - Trust and client authentication (verify defaults)
 
-1. On the Observal application, open the **General** tab.
+1. On the Agentic Resource Registry application, open the **General** tab.
 2. Scroll to **Client Credentials** / **Client authentication**:
    - **Client authentication:** **Client secret** (default for web app)
    - Secret should match what you copied to `oauth.client_secret`
 3. Under **Login**, confirm:
-   - **Login initiated by:** **App Only** (or equivalent) - users start from Observal, not Okta dashboard tile only
-   - **Application visibility:** your choice (hide from Okta dashboard if you only want Observal-initiated login)
+   - **Login initiated by:** **App Only** (or equivalent) - users start from Agentic Resource Registry, not Okta dashboard tile only
+   - **Application visibility:** your choice (hide from Okta dashboard if you only want Agentic Resource Registry-initiated login)
 
-No change needed unless your security team requires PKCE-only public clients (Observal server uses confidential client + secret).
+No change needed unless your security team requires PKCE-only public clients (Agentic Resource Registry server uses confidential client + secret).
 
 ---
 
-## Part B - Observal server configuration
+## Part B - Agentic Resource Registry server configuration
 
-Complete Okta Part A before saving Observal SSO settings, so redirect URIs and secrets are ready.
+Complete Okta Part A before saving Agentic Resource Registry SSO settings, so redirect URIs and secrets are ready.
 
 ### Step 11 - Set OAuth in the SSO tab
 
@@ -305,7 +305,7 @@ make down && make up
 
 The API builds the OAuth redirect from **`deployment.frontend_url`**, which you set in the web UI, not in `.env`.
 
-1. Sign in to Observal as an admin (bootstrap or existing admin account).
+1. Sign in to Agentic Resource Registry as an admin (bootstrap or existing admin account).
 2. Open **Settings** (admin area).
 3. Under **Deployment**, set **Frontend URL** to exactly:
    ```
@@ -345,9 +345,9 @@ If `false`:
 4. You should be redirected to Okta (`/oauth2/default/v1/authorize` in the URL).
 5. Sign in as a user who is:
    - Active in Okta
-   - Assigned to the Observal app (via group or direct assignment)
+   - Assigned to the Agentic Resource Registry app (via group or direct assignment)
 6. Complete MFA if your policy requires it.
-7. You should land back on Observal (`/login?code=...` briefly, then the app home).
+7. You should land back on Agentic Resource Registry (`/login?code=...` briefly, then the app home).
 
 **Expected failures if misconfigured:**
 
@@ -355,7 +355,7 @@ If `false`:
 |---------|----------------|
 | Okta error `redirect_uri` mismatch | Redirect URI in app ≠ `https://<domain>/api/v1/auth/oauth/callback` or Frontend URL wrong |
 | Okta “You are not allowed to access this app” | User/group not assigned in Step 7 |
-| Observal “OAuth authorization failed” | Wrong client secret or metadata URL |
+| Agentic Resource Registry “OAuth authorization failed” | Wrong client secret or metadata URL |
 | Login works, no departments | Missing `groups` claim / scope (Step 9) |
 
 ---
@@ -363,7 +363,7 @@ If `false`:
 ### Step 15 - Verify groups synced
 
 1. Log in as a user who belongs to Okta groups (e.g. `engineering`).
-2. In Observal, open the **exec dashboard** or check admin user tooling.
+2. In Agentic Resource Registry, open the **exec dashboard** or check admin user tooling.
 3. Confirm department/group filters reflect Okta group names.
 
 Groups refresh on **each SSO login**. If you change group membership in Okta, have the user log out and sign in again.
@@ -374,7 +374,7 @@ Groups refresh on **each SSO login**. If you change group membership in Okta, ha
 
 **SSO users are created with role `user` by default.** They are not admins automatically.
 
-1. As an existing Observal admin, go to **Admin** → **Users**.
+1. As an existing Agentic Resource Registry admin, go to **Admin** → **Users**.
 2. Find the customer’s admin user (the email they used for SSO).
 3. Change role to **admin** or **super_admin** as appropriate.
 
@@ -404,7 +404,7 @@ Only after Steps 14–16 succeed:
 | `OAuth authorization failed` | Bad secret, wrong metadata URL, or network block to Okta | Re-copy secret; verify metadata JSON in browser from API host |
 | `Email claim is missing` | ID token missing email | Ensure `email` scope allowed; user has primary email in Okta |
 | `Resource not found: AuthenticatorEnrollment` | Broken MFA enrollment | Okta: **Directory** → user → **More Actions** → **Reset Multifactor** |
-| User logs in but no admin pages | Default SSO role is `user` | Step 16 - promote role in Observal |
+| User logs in but no admin pages | Default SSO role is `user` | Step 16 - promote role in Agentic Resource Registry |
 | Groups empty in dashboard | No `groups` in ID token | Repeat Step 9; user must log in again |
 | `sso_enabled` is false | OIDC settings missing or API not restarted | Step 11, set all three settings and restart API |
 

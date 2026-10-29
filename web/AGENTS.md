@@ -8,7 +8,7 @@ Vite 8 / React 19 / TypeScript 6 / TanStack Router / Tailwind CSS 4 / Playwright
 
 ## How users interact with it
 
-The web UI is one of three ways to interact with Observal, alongside the CLI and the bundled observal skill. It covers:
+The web UI is one of three ways to interact with Agentic Resource Registry, alongside the CLI and the bundled observal skill. It covers:
 
 - **Browsing and installing agents and components** from the registry (Agentic Resources)
 - **Viewing session traces** with conversation replay, span tree, and token counts

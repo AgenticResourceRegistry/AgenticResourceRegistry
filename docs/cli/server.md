@@ -4,9 +4,9 @@
 title: "observal server"
 ---
 
-Manage local Observal deployments. The lifecycle commands operate the embedded PostgreSQL, ClickHouse, Redis, and API processes. Upgrade, rollback, and version commands operate a local Docker Compose deployment.
+Manage local Agentic Resource Registry deployments. The lifecycle commands operate the embedded PostgreSQL, ClickHouse, Redis, and API processes. Upgrade, rollback, and version commands operate a local Docker Compose deployment.
 
-Local filesystem, process, Docker, and database access are the authorization boundary. These commands do not require a reachable Observal API or an API role.
+Local filesystem, process, Docker, and database access are the authorization boundary. These commands do not require a reachable Agentic Resource Registry API or an API role.
 
 ## Command summary
 
