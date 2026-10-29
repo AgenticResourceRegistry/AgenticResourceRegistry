@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { createClient, type Client, type SubscribePayload } from "graphql-ws";
-import { clearTabSession, getTabActor, isAccountChanged, quarantineTab, tokenSubject } from "@/lib/api";
+import { createClient, type Client } from "graphql-ws";
+import { clearSession } from "@/lib/api";
 import { sessionExpiredLoginUrl } from "@/lib/safe-next";
 
 function getWsUrl(): string {
@@ -19,11 +19,8 @@ function getToken(): string | null {
 }
 
 let client: Client | null = null;
-let clientToken: string | null = null;
 
-function handleSubscriptionAuthError(err: unknown, token: string | null, actor: string | null) {
-  if (isAccountChanged()) { quarantineTab(); return; }
-  if (!actor || tokenSubject(token) !== actor || getTabActor() !== actor || getToken() !== token) return;
+function handleSubscriptionAuthError(err: unknown) {
   const msg = String(err ?? "").toLowerCase();
   if (
     msg.includes("not authenticated") ||
@@ -31,7 +28,7 @@ function handleSubscriptionAuthError(err: unknown, token: string | null, actor: 
     msg.includes("invalid token") ||
     msg.includes("token expired")
   ) {
-    clearTabSession();
+    clearSession();
     if (typeof window !== "undefined") {
       window.location.href = sessionExpiredLoginUrl();
     }
@@ -39,13 +36,7 @@ function handleSubscriptionAuthError(err: unknown, token: string | null, actor: 
 }
 
 function getClient(): Client {
-  const token = getToken();
-  if (client && clientToken !== token) {
-    void client.dispose();
-    client = null;
-  }
   if (!client) {
-    clientToken = token;
     client = createClient({
       url: getWsUrl(),
       connectionParams: () => {
@@ -59,55 +50,10 @@ function getClient(): Client {
   return client;
 }
 
-// Mounted subscriptions must follow same-actor token rotation. A subscription
-// opened by A must never reconnect under B, even when its component stays mounted.
-function subscribeForActor(payload: SubscribePayload, onData: (value: Record<string, unknown>) => void): () => void {
-  const actor = getTabActor();
-  let token = getToken();
-  let unsubscribe: (() => void) | undefined;
-  let stopped = false;
-
-  const start = () => {
-    if (!token || !actor || tokenSubject(token) !== actor || isAccountChanged()) return;
-    const subscriptionToken = token;
-    unsubscribe = getClient().subscribe(payload, {
-      next: (value) => {
-        if (getTabActor() === actor && getToken() === subscriptionToken && !isAccountChanged()) {
-          onData((value.data ?? {}) as Record<string, unknown>);
-        }
-      },
-      error: (err) => handleSubscriptionAuthError(err, subscriptionToken, actor),
-      complete: () => {},
-    });
-  };
-  const onStorage = () => {
-    if (stopped) return;
-    const current = getToken();
-    if (getTabActor() !== actor || isAccountChanged()) {
-      unsubscribe?.();
-      unsubscribe = undefined;
-      window.removeEventListener("storage", onStorage);
-      return;
-    }
-    if (current === token) return;
-    unsubscribe?.();
-    unsubscribe = undefined;
-    token = current;
-    start();
-  };
-  window.addEventListener("storage", onStorage);
-  start();
-  return () => {
-    stopped = true;
-    window.removeEventListener("storage", onStorage);
-    unsubscribe?.();
-  };
-}
-
 export function subscribeToSessionUpdates(
   onEvent: (sessionId: string, eventName: string) => void,
 ): () => void {
-  return subscribeForActor(
+  return getClient().subscribe(
     {
       query: `subscription SessionUpdated($sessionId: String) {
         sessionUpdated(sessionId: $sessionId) {
@@ -116,9 +62,16 @@ export function subscribeToSessionUpdates(
         }
       }`,
     },
-    (value) => {
-      const data = value.sessionUpdated as { sessionId: string; eventName: string } | undefined;
-      if (data) onEvent(data.sessionId, data.eventName);
+    {
+      next: (value) => {
+        const data = (value.data as { sessionUpdated?: { sessionId: string; eventName: string } })
+          ?.sessionUpdated;
+        if (data) {
+          onEvent(data.sessionId, data.eventName);
+        }
+      },
+      error: (err) => handleSubscriptionAuthError(err),
+      complete: () => {},
     },
   );
 }
@@ -127,16 +80,20 @@ export function subscribeToReviewId(
   reviewId: string,
   onEvent: (event: { number: number | null; state: string | null; action: string }) => void,
 ): () => void {
-  return subscribeForActor(
+  return getClient().subscribe(
     {
       query: `subscription ReviewUpdated($reviewId: String) {
         reviewUpdated(reviewId: $reviewId) { number state action }
       }`,
       variables: { reviewId },
     },
-    (value) => {
-      const data = value.reviewUpdated as { number: number | null; state: string | null; action: string } | undefined;
-      if (data) onEvent(data);
+    {
+      next: (value) => {
+        const data = (value.data as { reviewUpdated?: { number: number | null; state: string | null; action: string } })?.reviewUpdated;
+        if (data) onEvent(data);
+      },
+      error: (err) => handleSubscriptionAuthError(err),
+      complete: () => {},
     },
   );
 }
@@ -144,7 +101,7 @@ export function subscribeToReviewId(
 export function subscribeToReviewUpdates(
   onEvent: (listingId: string, action: string) => void,
 ): () => void {
-  return subscribeForActor(
+  return getClient().subscribe(
     {
       query: `subscription ReviewUpdated($listingId: String) {
         reviewUpdated(listingId: $listingId) {
@@ -153,9 +110,16 @@ export function subscribeToReviewUpdates(
         }
       }`,
     },
-    (value) => {
-      const data = value.reviewUpdated as { listingId: string; action: string } | undefined;
-      if (data) onEvent(data.listingId, data.action);
+    {
+      next: (value) => {
+        const data = (value.data as { reviewUpdated?: { listingId: string; action: string } })
+          ?.reviewUpdated;
+        if (data) {
+          onEvent(data.listingId, data.action);
+        }
+      },
+      error: (err) => handleSubscriptionAuthError(err),
+      complete: () => {},
     },
   );
 }

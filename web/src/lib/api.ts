@@ -123,107 +123,14 @@ const API = "/api/v1";
 
 const STORAGE_KEY_ACCESS_TOKEN = "observal_access_token";
 const STORAGE_KEY_REFRESH_TOKEN = "observal_refresh_token";
-const STORAGE_KEY_TAB_ACTOR = "observal_tab_actor";
-
-// Payload claims are continuity hints only; server authorization always verifies signatures.
-export function tokenSubject(token: string | null): string | null {
-	if (!token) return null;
-	const parts = token.split(".");
-	if (parts.length !== 3) return null;
-	try {
-		const bytes = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
-		const payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
-			Uint8Array.from(bytes, (char) => char.charCodeAt(0)),
-		));
-		return typeof payload?.sub === "string" && payload.sub.trim() && payload.sub === payload.sub.trim()
-			? payload.sub : null;
-	} catch {
-		return null;
-	}
-}
-
-export class AuthContextChanged extends Error {
-	constructor() {
-		super("Account changed. Sign in again to continue.");
-		this.name = "AuthContextChanged";
-	}
-}
-
-export function getTabActor(): string | null {
-	if (typeof window === "undefined") return null;
-	const pinned = sessionStorage.getItem(STORAGE_KEY_TAB_ACTOR);
-	if (pinned) return pinned;
-	const access = sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN);
-	const actor = tokenSubject(access);
-	if (access) sessionStorage.setItem(STORAGE_KEY_TAB_ACTOR, actor ?? "\u0000invalid");
-	return access ? actor ?? "\u0000invalid" : null;
-}
-
-export function isAccountChanged(): boolean {
-	const actor = getTabActor();
-	if (!actor) return !!getAccessToken(); // malformed access cannot establish an actor
-	const refresh = getRefreshToken();
-	return (refresh !== null && tokenSubject(refresh) !== actor) ||
-		(!!getAccessToken() && tokenSubject(getAccessToken()) !== actor);
-}
-
-export function quarantineTab() {
-	if (typeof window === "undefined") return;
-	if (!sessionStorage.getItem(STORAGE_KEY_ACCESS_TOKEN)) return;
-	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
-	window.dispatchEvent(new Event("observal:session-cleared"));
-	window.dispatchEvent(new Event("storage"));
-}
-
-// Capture the identity and bearer for direct calls which bypass request().
-// Check before sending and after every await before using the response.
-function captureAuthenticatedContext(): { token: string; check: () => void } {
-	const actor = getTabActor();
-	const token = getAccessToken();
-	const check = () => {
-		const current = getAccessToken();
-		if (!actor || !token || tokenSubject(token) !== actor || isAccountChanged() ||
-			getTabActor() !== actor || !current || tokenSubject(current) !== actor) {
-			if (isAccountChanged()) quarantineTab();
-			throw new AuthContextChanged();
-		}
-	};
-	check();
-	return { token: token!, check };
-}
-
-// Completed direct requests belong to the pinned actor, not to one bearer string.
-export function authenticatedRequestContext(): { token: string; check: () => void } {
-	return captureAuthenticatedContext();
-}
-
-export function authenticatedReadContext(): { token: string; check: () => void } {
-	return captureAuthenticatedContext();
-}
-
-export function authenticatedContextGuard(): () => void {
-	return authenticatedRequestContext().check;
-}
-
-export function quarantineIfChanged(): boolean {
-	if (!isAccountChanged()) return false;
-	quarantineTab();
-	return true;
-}
-
-export function clearTabSession() {
-	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
-	// A rejected refresh expires this tab, not its identity. Only explicit
-	// logout or authentication may release the actor pin.
-	window.dispatchEvent(new Event("observal:session-cleared"));
-	window.dispatchEvent(new Event("storage"));
-}
-
 const STORAGE_KEY_USER_ROLE = "observal_user_role";
 const STORAGE_KEY_USER_NAME = "observal_user_name";
 const STORAGE_KEY_USER_EMAIL = "observal_user_email";
 const STORAGE_KEY_USER_USERNAME = "observal_user_username";
 const STORAGE_KEY_USER_AVATAR = "observal_user_avatar";
+// The account this tab signed in as. localStorage is shared between tabs, so another tab can
+// sign in as someone else underneath this one; refresh must never silently follow it.
+const STORAGE_KEY_TAB_ACTOR = "observal_tab_actor";
 
 // Access token is stored in sessionStorage (clears on tab close) to reduce
 // the XSS exposure window. Refresh token stays in localStorage so silent
@@ -241,15 +148,24 @@ function getRefreshToken(): string | null {
 	return localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
 }
 
+function tokenSubject(token: string | null): string | null {
+	try {
+		const payload = JSON.parse(atob(token!.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+		return typeof payload.sub === "string" ? payload.sub : null;
+	} catch {
+		return null;
+	}
+}
+
+/** True when the shared refresh token belongs to a different account than this tab signed in as. */
+export function refreshIsForAnotherAccount(): boolean {
+	const actor = sessionStorage.getItem(STORAGE_KEY_TAB_ACTOR) ?? tokenSubject(getAccessToken());
+	return !!actor && tokenSubject(getRefreshToken()) !== actor;
+}
+
 export function setTokens(accessToken: string, refreshToken: string) {
 	const actor = tokenSubject(accessToken);
-	if (!actor || actor !== tokenSubject(refreshToken)) throw new AuthContextChanged();
-	// Only explicit authentication calls setTokens. Silent refresh uses its own guarded commit.
-	if (getTabActor() !== actor) {
-		localStorage.removeItem(STORAGE_KEY_USER_ROLE);
-		window.dispatchEvent(new Event("observal:session-cleared"));
-	}
-	sessionStorage.setItem(STORAGE_KEY_TAB_ACTOR, actor);
+	if (actor) sessionStorage.setItem(STORAGE_KEY_TAB_ACTOR, actor);
 	sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, accessToken);
 	localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refreshToken);
 	window.dispatchEvent(new Event("storage"));
@@ -319,20 +235,22 @@ export function getUserAvatar(): string | null {
 	return localStorage.getItem(STORAGE_KEY_USER_AVATAR);
 }
 
-let _refreshPromise: Promise<RefreshOutcome> | null = null;
+let _refreshPromise: Promise<RefreshResult> | null = null;
 
-type RefreshResult = "ok" | "rejected" | "network_error" | "account_changed" | "superseded";
-type RefreshOutcome = { result: RefreshResult; token?: string };
+type RefreshResult = "ok" | "rejected" | "network_error" | "account_changed";
 
-async function _tryRefreshToken(): Promise<RefreshOutcome> {
+async function _tryRefreshToken(): Promise<RefreshResult> {
 	const refreshToken = getRefreshToken();
-	const actor = getTabActor();
-	const subject = tokenSubject(refreshToken);
-	if (isAccountChanged() || (refreshToken && !subject)) {
-		quarantineTab();
-		return { result: "account_changed" };
+	if (!refreshToken) return "rejected";
+
+	if (refreshIsForAnotherAccount()) {
+		// Another tab signed in as a different account. Drop only this tab's bearer: the shared
+		// refresh token belongs to that account, and this tab must not replay as them.
+		sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+		window.dispatchEvent(new Event("observal:session-cleared"));
+		window.dispatchEvent(new Event("storage"));
+		return "account_changed";
 	}
-	if (!refreshToken) return { result: "rejected" };
 
 	try {
 		const res = await fetch(`${API}/auth/token/refresh`, {
@@ -340,30 +258,18 @@ async function _tryRefreshToken(): Promise<RefreshOutcome> {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ refresh_token: refreshToken }),
 		});
-		// A competing rotation or login owns shared storage now. Never clear its credentials.
-		if (getRefreshToken() !== refreshToken) {
-			if (quarantineIfChanged()) return { result: "account_changed" };
-			return { result: "superseded" };
-		}
-		if (getTabActor() !== actor) return { result: "account_changed" };
-		if (!res.ok) return { result: res.status === 401 || res.status === 403 ? "rejected" : "network_error" };
+
+		if (!res.ok) return "rejected";
 
 		const data = await res.json();
-		if (!subject || tokenSubject(data.access_token) !== subject ||
-			tokenSubject(data.refresh_token) !== subject || (actor && getTabActor() !== subject)) {
-			quarantineTab();
-			return { result: "account_changed" };
-		}
-		// A logout or another tab's rotation while decoding the response wins.
-		if (getRefreshToken() !== refreshToken) return { result: "superseded" };
-		if (!actor) sessionStorage.setItem(STORAGE_KEY_TAB_ACTOR, subject);
-		sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, data.access_token);
-		localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, data.refresh_token);
-		window.dispatchEvent(new Event("storage"));
-		return { result: "ok", token: data.access_token };
+		// Sign-out here or in another tab clears the stored refresh token while this request is in
+		// flight. Writing the response back would restore the session, so drop it. "network_error"
+		// makes the caller retry with whatever token is stored now, if any.
+		if (getRefreshToken() !== refreshToken) return "network_error";
+		setTokens(data.access_token, data.refresh_token);
+		return "ok";
 	} catch {
-		if (getRefreshToken() !== refreshToken) return { result: "superseded" };
-		return { result: "network_error" };
+		return "network_error";
 	}
 }
 
@@ -373,11 +279,11 @@ async function _tryRefreshToken(): Promise<RefreshOutcome> {
  */
 export async function refreshAccessToken(): Promise<boolean> {
 	const result = await _tryRefreshToken();
-	return result.result === "ok";
+	return result === "ok";
 }
 
 export async function refreshAccessTokenWithReason(): Promise<RefreshResult> {
-	return (await _tryRefreshToken()).result;
+	return _tryRefreshToken();
 }
 
 async function decodeResponse<T>(response: Response, fileResponse: boolean): Promise<T> {
@@ -393,42 +299,14 @@ async function request<T = unknown>(
 	body?: unknown,
 	fileResponse = false,
 ): Promise<T> {
-	// These calls establish a new identity; a quarantined tab must be able to
-	// sign in, but must never attach its previous bearer or replay credentials.
-	const explicitAuth = method === "POST" &&
-		["/auth/login", "/auth/exchange", "/auth/register", "/auth/init"].includes(path);
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
-	const token = explicitAuth ? null : getAccessToken();
-	const originalActor = explicitAuth ? null : getTabActor();
-	// A completed response belongs to the actor, not to one access-token string.
-	// Same-actor refreshes may rotate the bearer while a successful POST is in flight.
-	const contextChanged = () => !explicitAuth && (
-		isAccountChanged() || getTabActor() !== originalActor ||
-		(token !== null && (!getAccessToken() || tokenSubject(getAccessToken()) !== originalActor))
-	);
-	const currentActorToken = () => {
-		if (contextChanged()) {
-			if (isAccountChanged()) quarantineTab();
-			throw new AuthContextChanged();
-		}
-		const current = getAccessToken();
-		if (!originalActor || !current || tokenSubject(current) !== originalActor) throw new AuthContextChanged();
-		return current;
-	};
-	if (contextChanged() || (token && (!originalActor || tokenSubject(token) !== originalActor))) {
-		quarantineTab();
-		throw new AuthContextChanged();
-	}
+	const token = getAccessToken();
 	if (token) headers["Authorization"] = `Bearer ${token}`;
 
 	let res: Response | undefined;
-	for (let attempt = 0; attempt < (explicitAuth ? 1 : 2); attempt++) {
-		if (contextChanged()) {
-			if (isAccountChanged()) quarantineTab();
-			throw new AuthContextChanged();
-		}
+	for (let attempt = 0; attempt < 2; attempt++) {
 		res = await fetch(`${API}${path}`, {
 			method,
 			headers,
@@ -437,83 +315,53 @@ async function request<T = unknown>(
 		});
 		if (res.status < 500) break;
 		// Brief pause before retry on 5xx
-		if (attempt === 0 && !explicitAuth) await new Promise((r) => setTimeout(r, 500));
+		if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
 	}
 	const response = res!;
-	if (contextChanged()) {
-		if (isAccountChanged()) quarantineTab();
-		throw new AuthContextChanged();
-	}
 
 	if (!response.ok) {
-		// Retry only a confirmed 401, never a completed write. A competing
-		// same-actor rotation can supply a new bearer without another refresh.
+		// Auto-refresh on 401 (except for auth endpoints where 401 means bad credentials)
 		if (response.status === 401 && !path.startsWith("/auth/")) {
-			let retryToken = getAccessToken() !== token ? currentActorToken() : null;
-			if (!retryToken) {
-				// A second tab may rotate the shared refresh while our access bearer stays
-				// stale. Try that same actor's new refresh once, using the single-flight.
-				for (let refreshAttempt = 0; refreshAttempt < 2 && !retryToken; refreshAttempt++) {
-					currentActorToken();
-					if (!_refreshPromise) {
-						_refreshPromise = _tryRefreshToken().finally(() => {
-							_refreshPromise = null;
-						});
-					}
-					const refreshResult = await _refreshPromise;
-					if (refreshResult.result === "ok" || refreshResult.result === "superseded") {
-						const current = currentActorToken();
-						if (current !== token || refreshResult.result === "ok") retryToken = current;
-						else if (refreshAttempt === 1) throw new AuthContextChanged(); // no safe bearer to replay with
-						continue;
-					}
-					if (refreshResult.result === "account_changed" || contextChanged()) {
-						if (isAccountChanged()) quarantineTab();
-						throw new AuthContextChanged();
-					}
-					if (refreshResult.result === "network_error") throw new Error("Network unavailable");
-					if (refreshResult.result === "rejected") {
-						// Only a confirmed rejection of the still-selected token can expire this tab.
-						if (getRefreshToken() && tokenSubject(getRefreshToken()) !== originalActor) {
-							quarantineTab();
-							throw new AuthContextChanged();
-						}
-						clearTabSession();
-						if (typeof window !== "undefined") {
-							window.location.href = sessionExpiredLoginUrl();
-							return new Promise<T>(() => {});
-						}
-						throw new Error("Session expired");
-					}
+			// Deduplicate concurrent refresh attempts
+			if (!_refreshPromise) {
+				_refreshPromise = _tryRefreshToken().finally(() => {
+					_refreshPromise = null;
+				});
+			}
+			const refreshResult = await _refreshPromise;
+
+			if (refreshResult === "ok") {
+				// Retry the original request with new token
+				const newToken = getAccessToken();
+				if (newToken) headers["Authorization"] = `Bearer ${newToken}`;
+				const retryRes = await fetch(`${API}${path}`, {
+					method,
+					headers,
+					body: body !== undefined ? JSON.stringify(body) : undefined,
+					cache: "no-store",
+				});
+				if (retryRes.ok) {
+					if (retryRes.status === 204) return undefined as T;
+					return decodeResponse<T>(retryRes, fileResponse);
 				}
+				const retryText = await retryRes.text().catch(() => "Request failed");
+				const retryErr = new Error(retryText);
+				(retryErr as Error & { status: number }).status = retryRes.status;
+				throw retryErr;
 			}
-			headers["Authorization"] = `Bearer ${currentActorToken()}`;
-			const retryRes = await fetch(`${API}${path}`, {
-				method,
-				headers,
-				body: body !== undefined ? JSON.stringify(body) : undefined,
-				cache: "no-store",
-			});
-			if (contextChanged()) {
-				if (isAccountChanged()) quarantineTab();
-				throw new AuthContextChanged();
+
+			if (refreshResult === "network_error") {
+				throw new Error("Network unavailable");
 			}
-			if (retryRes.ok) {
-				const data = retryRes.status === 204 ? undefined as T : await decodeResponse<T>(retryRes, fileResponse);
-				if (contextChanged()) {
-					if (isAccountChanged()) quarantineTab();
-					throw new AuthContextChanged();
-				}
-				return data;
+
+			// Real rejection: session is truly expired. An account switch in another tab leaves
+			// the shared login alone.
+			if (refreshResult !== "account_changed") clearSession();
+			if (typeof window !== "undefined") {
+				window.location.href = sessionExpiredLoginUrl();
+				return new Promise<T>(() => {});
 			}
-			const retryText = await retryRes.text().catch(() => "Request failed");
-			if (contextChanged()) {
-				if (isAccountChanged()) quarantineTab();
-				throw new AuthContextChanged();
-			}
-			const retryErr = new Error(retryText);
-			(retryErr as Error & { status: number }).status = retryRes.status;
-			throw retryErr;
+			throw new Error("Session expired");
 		}
 
 		const text = await response.text().catch(() => response.statusText);
@@ -559,28 +407,9 @@ async function request<T = unknown>(
 		throw err;
 	}
 
-	if (response.status === 204) {
-		if (contextChanged()) {
-			if (isAccountChanged()) quarantineTab();
-			throw new AuthContextChanged();
-		}
-		return undefined as T;
-	}
+	if (response.status === 204) return undefined as T;
 
-	const data = await decodeResponse<T>(response, fileResponse);
-	if (contextChanged()) {
-		if (isAccountChanged()) quarantineTab();
-		throw new AuthContextChanged();
-	}
-	return data;
-}
-
-// Public reads must not attach an old tab's bearer or silently adopt the
-// shared refresh token after another account signs in.
-async function anonymousGet<T>(path: string): Promise<T> {
-	const response = await fetch(`${API}${path}`, { cache: "no-store" });
-	if (!response.ok) throw new Error(`Public request failed (${response.status})`);
-	return response.json() as Promise<T>;
+	return decodeResponse<T>(response, fileResponse);
 }
 
 function get<T = unknown>(path: string) {
@@ -680,21 +509,12 @@ const SINGULAR_REGISTRY_TYPE: Record<RegistryType, string> = {
 	sandboxes: "sandbox",
 };
 
-function publicRegistryGet<T>(path: string): Promise<T> {
-	return quarantineIfChanged() || (getTabActor() && !getAccessToken())
-		? anonymousGet<T>(path) : get<T>(path);
-}
-
 export const registry = {
 	list: (type: RegistryType, params?: Record<string, string>) => {
 		const qs = params ? `?${new URLSearchParams(params)}` : "";
-		const path = `/${type}${qs}`;
-		return publicRegistryGet<RegistryItem[]>(path);
+		return get<RegistryItem[]>(`/${type}${qs}`);
 	},
-	get: (type: RegistryType, id: string) => {
-		const path = `/${type}/${id}`;
-		return publicRegistryGet<RegistryItem>(path);
-	},
+	get: (type: RegistryType, id: string) => get<RegistryItem>(`/${type}/${id}`),
 	forkDiff: (type: RegistryType, id: string, version: string) =>
 		get<ForkDiff>(`/${type}/${id}/fork-diff?${new URLSearchParams({ version })}`),
 	fork: (type: RegistryType, id: string, body: ForkRequest) =>
@@ -713,7 +533,7 @@ export const registry = {
 	resolve: (id: string) => get<unknown>(`/agents/${id}/resolve`),
 	// Canonical `namespace/slug` (or UUID) → registry identity, for shareable URLs.
 	resolveIdentifier: (type: RegistryType, identifier: string) =>
-		publicRegistryGet<RegistryResolution>(
+		get<RegistryResolution>(
 			`/registry/resolve?type=${SINGULAR_REGISTRY_TYPE[type]}&identifier=${encodeURIComponent(identifier)}`,
 		),
 	manifest: (id: string) =>
@@ -1140,16 +960,12 @@ export const admin = {
 	},
 	auditLogExport: async (params?: Record<string, string>) => {
 		const qs = params ? `?${new URLSearchParams(params)}` : "";
-		const checkContext = authenticatedContextGuard();
 		const token = getAccessToken();
-		const res = await fetch(`${API}/admin/audit-log/export${qs}`, {
-			headers: { Authorization: `Bearer ${token}` },
-		});
-		checkContext();
+		const headers: Record<string, string> = {};
+		if (token) headers["Authorization"] = `Bearer ${token}`;
+		const res = await fetch(`${API}/admin/audit-log/export${qs}`, { headers });
 		if (!res.ok) throw new Error("Export failed");
-		const csv = await res.text();
-		checkContext();
-		return csv;
+		return res.text();
 	},
 	securityEvents: (params?: Record<string, string>) => {
 		const qs = params ? `?${new URLSearchParams(params)}` : "";
@@ -1412,10 +1228,7 @@ export type E2eStatusResult = {
 };
 
 export const config = {
-	public: () => {
-		quarantineIfChanged();
-		return anonymousGet<PublicConfig>("/config/public");
-	},
+	public: () => get<PublicConfig>("/config/public"),
 	version: () => get<VersionConfig>("/config/version"),
 	harnesses: () => get<HarnessesResponse>("/config/harnesses"),
 	ssoHealth: () => get<SsoHealthResult>("/config/sso-health"),
@@ -1540,44 +1353,27 @@ export const insights = {
 			selection ?? {},
 		),
 	exportHtml: async (agentId: string, reportId: string): Promise<void> => {
-		const { token, check } = authenticatedReadContext();
-		const path = `${API}/agents/${agentId}/insights/reports/${reportId}/export/html`;
-		const fetchExport = (bearer: string) => fetch(path, {
-			headers: { Authorization: `Bearer ${bearer}` },
+		let token = getAccessToken();
+		let res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
 		});
-		let res = await fetchExport(token);
-		check();
 		if (res.status === 401) {
-			let retryToken = getAccessToken();
-			if (retryToken === token) {
-				const refreshed = await _tryRefreshToken();
-				check();
-				if (refreshed.result !== "ok" && refreshed.result !== "superseded") {
-					if (refreshed.result === "account_changed") throw new AuthContextChanged();
-					throw new Error("Export failed");
-				}
-				retryToken = getAccessToken();
-				// A superseded refresh is only safe to retry if the winner supplied
-				// a new bearer. Never replay the rejected bearer (or another actor's).
-				if (refreshed.result === "superseded" && retryToken === token) throw new AuthContextChanged();
+			const refreshed = await _tryRefreshToken();
+			if (refreshed) {
+				token = getAccessToken();
+				res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {
+					headers: token ? { Authorization: `Bearer ${token}` } : {},
+				});
 			}
-			check();
-			res = await fetchExport(retryToken!);
-			check();
 		}
 		if (!res.ok) throw new Error("Export failed");
 		const blob = await res.blob();
-		check();
 		const url = URL.createObjectURL(blob);
-		try {
-			check();
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = `insight-report-${reportId.slice(0, 8)}.html`;
-			a.click();
-		} finally {
-			URL.revokeObjectURL(url);
-		}
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `insight-report-${reportId.slice(0, 8)}.html`;
+		a.click();
+		URL.revokeObjectURL(url);
 	},
 };
 

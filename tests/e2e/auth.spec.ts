@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const EMAIL = process.env.DEMO_ADMIN_EMAIL ?? "admin@demo.example";
 const PASSWORD = process.env.DEMO_ADMIN_PASSWORD ?? "admin-changeme";
@@ -82,6 +82,46 @@ test("a refresh that lands after sign-out does not restore the session", async (
   await page.waitForTimeout(500);
   expect(await page.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBeNull();
   await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
+});
+
+/**
+ * OBS-1494: a stale tab must not silently become the account another tab signed in as.
+ */
+test("a stale tab does not adopt the account another tab signed in as", async ({ context }) => {
+  const signIn = async (page: Page, email: string, password: string) => {
+    await page.goto("/login");
+    await page.fill("#email", email);
+    await page.fill("#password", password);
+    await page.click('button[type="submit"]');
+    await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 15_000 });
+  };
+  const subject = (token: string | null) => (token ? JSON.parse(atob(token.split(".")[1])).sub : null);
+
+  const tabA = await context.newPage();
+  await signIn(tabA, EMAIL, PASSWORD);
+  const actorA = subject(await tabA.evaluate(() => sessionStorage.getItem("observal_access_token")));
+
+  const tabB = await context.newPage();
+  await signIn(tabB, process.env.DEMO_USER_EMAIL ?? "user@demo.example", process.env.DEMO_USER_PASSWORD ?? "user-changeme");
+  const refreshB = await tabB.evaluate(() => localStorage.getItem("observal_refresh_token"));
+  expect(subject(refreshB)).not.toBe(actorA);
+
+  // Tab A's bearer expires; its refresh would now use the other account's shared refresh token.
+  await tabA.evaluate(() => sessionStorage.setItem("observal_access_token", "stale.token.value"));
+  await tabA.reload();
+
+  await expect(tabA).toHaveURL(/\/login/, { timeout: 15_000 });
+  expect(await tabA.evaluate(() => sessionStorage.getItem("observal_access_token"))).toBeNull();
+  expect(await tabA.evaluate(() => localStorage.getItem("observal_refresh_token"))).toBe(refreshB);
+
+  // A public page must still render for the signed-out tab instead of waiting on a refresh.
+  await tabA.route("**/api/v1/config/public", async (route) => {
+    const response = await route.fetch();
+    const config = await response.json();
+    await route.fulfill({ response, json: { ...config, public_registry_enabled: true } });
+  });
+  await tabA.goto("/wiki");
+  await expect(tabA.getByRole("heading", { name: "Wiki" })).toBeVisible({ timeout: 15_000 });
 });
 
 test("public registry can be entered as a guest", async ({ page }) => {

@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-// SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { createRootRoute, Outlet } from "@tanstack/react-router";
@@ -11,7 +10,6 @@ import { DynamicTitle } from "@/components/dynamic-title";
 import { ErrorBoundary } from "@/components/shared/error-boundary";
 import { VersionMismatchBanner } from "@/components/shared/version-mismatch-banner";
 import "@/app.css";
-import { getTabActor, isAccountChanged, quarantineIfChanged } from "@/lib/api";
 
 function subscribeToAuthChanges(callback: () => void) {
   window.addEventListener("storage", callback);
@@ -21,7 +19,7 @@ function subscribeToAuthChanges(callback: () => void) {
 function getAuthTokenSnapshot() {
   return typeof window === "undefined"
     ? ""
-    : `${sessionStorage.getItem("observal_access_token") ?? ""}:${getTabActor() ?? ""}:${isAccountChanged() ? "quarantined" : ""}`;
+    : sessionStorage.getItem("observal_access_token") ?? "";
 }
 
 function RootComponent() {
@@ -37,17 +35,9 @@ function RootComponent() {
   }, [authToken, queryClient]);
 
   useEffect(() => {
-    const clearAccountData = () => { void queryClient.cancelQueries(); queryClient.clear(); };
-    const onStorage = () => {
-      if (quarantineIfChanged()) clearAccountData();
-    };
+    const clearAccountData = () => queryClient.clear();
     window.addEventListener("observal:session-cleared", clearAccountData);
-    window.addEventListener("storage", onStorage);
-    onStorage(); // storage events can be missed while away from this origin
-    return () => {
-      window.removeEventListener("observal:session-cleared", clearAccountData);
-      window.removeEventListener("storage", onStorage);
-    };
+    return () => window.removeEventListener("observal:session-cleared", clearAccountData);
   }, [queryClient]);
 
   return (
