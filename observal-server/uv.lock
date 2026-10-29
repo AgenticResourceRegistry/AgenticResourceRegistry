@@ -8,10 +8,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [
-    { name = "filelock", specifier = ">=4.2.1" },
-    { name = "starlette", specifier = ">=1.3.1" },
-]
+overrides = [{ name = "filelock", specifier = ">=4.2.1" }]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -2218,7 +2215,7 @@ requires-dist = [
     { name = "observal-shared", directory = "../packages/observal-shared" },
     { name = "orjson", specifier = ">=3.10.0" },
     { name = "packaging", specifier = ">=21.0" },
-    { name = "prometheus-fastapi-instrumentator", specifier = ">=7.0.0" },
+    { name = "prometheus-fastapi-instrumentator", specifier = ">=8.1.0,<9.0.0" },
     { name = "pyarrow", specifier = ">=15.0.0" },
     { name = "pydantic" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
@@ -2445,15 +2442,15 @@ wheels = [
 
 [[package]]
 name = "prometheus-fastapi-instrumentator"
-version = "7.1.0"
+version = "8.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "prometheus-client" },
     { name = "starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/6d/24d53033cf93826aa7857699a4450c1c67e5b9c710e925b1ed2b320c04df/prometheus_fastapi_instrumentator-7.1.0.tar.gz", hash = "sha256:be7cd61eeea4e5912aeccb4261c6631b3f227d8924542d79eaf5af3f439cbe5e", size = 20220, upload-time = "2025-03-19T19:35:05.351Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/f4/cdcebf7094b03b99fba71ac8f56bd6f227973642662f49d272332d8419b3/prometheus_fastapi_instrumentator-8.1.0.tar.gz", hash = "sha256:b77f3043665e8d28e2bbd21017506195a43d9adf1d402d01bf95b494b7e560e1", size = 20492, upload-time = "2026-07-26T11:12:44.202Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/72/0824c18f3bc75810f55dacc2dd933f6ec829771180245ae3cc976195dec0/prometheus_fastapi_instrumentator-7.1.0-py3-none-any.whl", hash = "sha256:978130f3c0bb7b8ebcc90d35516a6fe13e02d2eb358c8f83887cdef7020c31e9", size = 19296, upload-time = "2025-03-19T19:35:04.323Z" },
+    { url = "https://files.pythonhosted.org/packages/44/b9/91a2246e6cf01b7ccb14479803c8a50f9c258ae5c6a0f16ba3294820632b/prometheus_fastapi_instrumentator-8.1.0-py3-none-any.whl", hash = "sha256:b9f40b2cff3f7891ca0610b3ae4fc6ec723fd326b04bb659819aaeb821a0fc7d", size = 19649, upload-time = "2026-07-26T11:12:45.168Z" },
 ]
 
 [[package]]
