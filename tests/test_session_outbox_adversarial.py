@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
 from typing import TYPE_CHECKING
 
 import pytest
@@ -327,6 +329,94 @@ def test_legacy_archive_without_id_blocks_gap_and_recovers(tmp_path: Path):
     with pytest.raises(outbox.OutboxError, match="already recovered"):
         outbox.recover_quarantined(-1, db_path=db)
     assert legacy.read_bytes() == original
+
+
+def _legacy_entry(session: str) -> str:
+    return (
+        json.dumps(
+            {
+                "destination": "http://server",
+                "user_id": "user",
+                "harness": "claude-code",
+                "session_id": session,
+                "checkpoint_key": session,
+                "start_line": 0,
+                "end_line": 0,
+                "payload": batch(session, 0),
+            }
+        )
+        + "\n"
+    )
+
+
+def test_legacy_import_runs_once_per_db_across_repeated_connections(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    db.with_suffix(".rejected.jsonl").write_text(_legacy_entry("s"))
+    records = outbox._legacy_records
+    scans = 0
+
+    def counting(path):
+        nonlocal scans
+        scans += 1
+        yield from records(path)
+
+    monkeypatch.setattr(outbox, "_legacy_records", counting)
+    for _ in range(4):
+        assert outbox.stats(db_path=db)["failed"] == 1
+        assert outbox.is_rejected(
+            destination="http://server", user_id="user", harness="claude-code", session_id="s", db_path=db
+        )
+    assert scans == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT id FROM session_outbox_legacy_import").fetchall() == [(1,)]
+
+
+def test_interrupted_legacy_import_rolls_back_rows_and_retries(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    db.with_suffix(".rejected.jsonl").write_text(_legacy_entry("s") + _legacy_entry("later"))
+    records = outbox._legacy_records
+
+    def interrupted(path):
+        for record in records(path):
+            yield record
+            raise OSError("interrupted scan")
+
+    monkeypatch.setattr(outbox, "_legacy_records", interrupted)
+    with pytest.raises(OSError, match="interrupted scan"):
+        outbox.stats(db_path=db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM session_outbox_rejected").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM session_outbox_legacy_import").fetchone()[0] == 0
+    monkeypatch.setattr(outbox, "_legacy_records", records)
+    assert outbox.stats(db_path=db)["failed"] == 2
+    assert outbox.stats(db_path=db)["failed"] == 2
+    assert outbox.recover_quarantined(-1, db_path=db) > 0
+
+
+def test_concurrent_legacy_import_scans_once(tmp_path: Path, monkeypatch):
+    db = tmp_path / "outbox.db"
+    db.with_suffix(".rejected.jsonl").write_text(_legacy_entry("s"))
+    records = outbox._legacy_records
+    barrier = Barrier(2)
+    lock = Lock()
+    scans = 0
+
+    def counting(path):
+        nonlocal scans
+        with lock:
+            scans += 1
+        yield from records(path)
+
+    monkeypatch.setattr(outbox, "_legacy_records", counting)
+
+    def open_db():
+        barrier.wait(timeout=5)
+        return outbox.stats(db_path=db)["failed"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(open_db) for _ in range(2)]
+        assert [future.result(timeout=10) for future in futures] == [1, 1]
+    assert scans == 1
 
 
 def test_ack_started_before_repair_cannot_overwrite_rewind(tmp_path: Path):

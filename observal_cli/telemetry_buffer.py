@@ -119,6 +119,7 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             )
             """
         )
+        conn.execute("CREATE TABLE IF NOT EXISTS session_outbox_legacy_import (id INTEGER PRIMARY KEY CHECK (id = 1))")
         conn.commit()
         page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
         conn.execute(f"PRAGMA max_page_count = {max(1, max_bytes // page_size)}")
@@ -531,10 +532,17 @@ def _sync_directory(path: Path) -> None:
 def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) -> None:
     """Index old append-only archives without rewriting the evidence or active queue.
 
-    Negative IDs are derived from the original byte position (zero maps to -1),
-    so repeated opens and concurrent SQLite imports name the same rejected batch.
+    Negative IDs are derived from the original byte position (zero maps to -1).
+    The marker and imported rows commit together; a failed or interrupted scan
+    rolls back both, and competing connections recheck after taking the lock.
     """
+    if conn.execute("SELECT 1 FROM session_outbox_legacy_import WHERE id = 1").fetchone():
+        return
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM session_outbox_legacy_import WHERE id = 1").fetchone():
+            conn.commit()
+            return
         for record in _legacy_records(db_path):
             item_id = record.get("item_id")
             if type(item_id) is not int or item_id >= 0:
@@ -571,6 +579,7 @@ def _import_legacy_rejections(conn: sqlite3.Connection, db_path: Path | None) ->
                 "UPDATE session_outbox_rejected SET archive_ref = ? WHERE item_id = ? AND archive_ref IS NULL",
                 (record["_archive_ref"], item_id),
             )
+        conn.execute("INSERT INTO session_outbox_legacy_import (id) VALUES (1)")
         conn.commit()
     except Exception:
         conn.rollback()

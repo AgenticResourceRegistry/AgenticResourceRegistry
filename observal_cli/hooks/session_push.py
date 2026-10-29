@@ -199,6 +199,18 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
     drain_outbox(config, home=home)
     recovery_final = adapter.aged_recovery_final()
     now = time.time()
+    destination = str(config.get("server_url") or "")
+    user_id = str(config.get("user_id") or "")
+
+    def is_held(source) -> bool:
+        return bool(
+            destination
+            and user_id
+            and telemetry_buffer.replay_held(
+                destination=destination, user_id=user_id, harness=source.harness, session_id=source.session_id
+            )
+        )
+
     for source in adapter.discover_session_sources(home=home):
         if source.session_id == exclude_session or source.path is None:
             continue
@@ -206,26 +218,25 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
             stat = source.path.stat()
         except OSError:
             continue
-        held = (
-            telemetry_buffer.replay_held(
-                destination=str(config["server_url"]),
-                user_id=str(config["user_id"]),
-                harness=source.harness,
-                session_id=source.session_id,
-            )
-            if config.get("server_url") and config.get("user_id")
-            else False
-        )
+        held = is_held(source)
         shrunk = cursor_source_shrunk(source.checkpoint_key, home=home)
         offset, _line_count, finalized = read_cursor_state(source.checkpoint_key, home=home)
-        if not held and not shrunk and offset <= stat.st_size and now - stat.st_mtime < _RECOVERY_MIN_AGE_SECONDS:
-            continue
-        if offset == stat.st_size and (finalized or not recovery_final) and not held and not shrunk:
-            continue
+        recover_parent = not (
+            (not held and not shrunk and offset <= stat.st_size and now - stat.st_mtime < _RECOVERY_MIN_AGE_SECONDS)
+            or (offset == stat.st_size and (finalized or not recovery_final) and not held and not shrunk)
+        )
+        # A child can hold an unaudited final even when its parent is current.
+        # Inspect related sources before skipping the parent, but only replay
+        # held children when the parent itself did not need recovery.
+        related = adapter.related_session_sources(source, home=home)
+        if not recover_parent:
+            related = [child for child in related if is_held(child)]
+            if not related:
+                continue
         event = {"session_id": source.session_id, "hook_event_name": "Stop"}
         # Scope is checked after the cheap cursor and age filters: deciding it
         # reads the transcript, and this scan walks every session on disk.
-        if adapter.should_capture_session(source, home=home):
+        if recover_parent and adapter.should_capture_session(source, home=home):
             drain_session_source(
                 source,
                 config,
@@ -236,16 +247,17 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 home=home,
             )
         # Recover separately stored delegated work alongside the parent.
-        for related in adapter.related_session_sources(source, home=home):
-            if not adapter.should_capture_session(related, home=home):
+        for child in related:
+            if not adapter.should_capture_session(child, home=home):
                 continue
+            child_final = recovery_final or is_held(child)
             drain_session_source(
-                related,
+                child,
                 config,
                 hook_event="CrashRecovery",
-                final=recovery_final,
-                extra_fields=adapter.session_extra_fields(related, event, recovery_final, home=home),
-                extra_records=adapter.session_extra_records(related, event, recovery_final, home=home),
+                final=child_final,
+                extra_fields=adapter.session_extra_fields(child, event, child_final, home=home),
+                extra_records=adapter.session_extra_records(child, event, child_final, home=home),
                 recover_from_server=True,
                 home=home,
             )
