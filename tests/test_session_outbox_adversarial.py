@@ -491,6 +491,24 @@ def test_concurrent_legacy_import_scans_once(tmp_path: Path, monkeypatch):
     assert scans == 1
 
 
+def test_concurrent_legacy_schema_upgrade_is_serialized(tmp_path: Path):
+    db = tmp_path / "outbox.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE session_outbox_legacy_import (id INTEGER PRIMARY KEY)")
+    barrier = Barrier(4)
+
+    def open_db():
+        barrier.wait(timeout=5)
+        return outbox.stats(db_path=db)["failed"]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(open_db) for _ in range(4)]
+        assert [future.result(timeout=10) for future in futures] == [0] * 4
+    with sqlite3.connect(db) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(session_outbox_legacy_import)")}
+        assert {"device", "inode", "size", "mtime_ns", "ctime_ns"} <= columns
+
+
 def test_ack_started_before_repair_cannot_overwrite_rewind(tmp_path: Path):
     db = tmp_path / "outbox.db"
     outbox.enqueue(batch("s", 0), destination="http://server", user_id="user", db_path=db)

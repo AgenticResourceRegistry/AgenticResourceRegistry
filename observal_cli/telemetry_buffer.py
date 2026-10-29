@@ -67,9 +67,21 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         conn = sqlite3.connect(str(path), timeout=5)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA busy_timeout=3000")
+        # SQLite may report BUSY immediately while another opener changes the
+        # journal mode, even with a busy timeout. Retry that startup-only race.
+        for attempt in range(10):
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if "database is locked" not in str(exc) or attempt == 9:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        conn.execute("PRAGMA synchronous=FULL")
+        # Serialize table creation and column upgrades: otherwise two openers can
+        # both observe a missing column before either ALTER TABLE commits.
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS session_outbox (
