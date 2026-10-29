@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Claude Code and Codex sessions are credited to an agent only when the agent ran."""
@@ -12,9 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from observal_cli import telemetry_buffer
 from observal_cli.harness import ensure_loaded, get_adapter
-from observal_cli.sessions import base
 from observal_cli.sessions.base import _resolve_agent
 
 if TYPE_CHECKING:
@@ -86,51 +83,6 @@ def test_codex_subagent_rollout_is_credited_to_its_agent(tmp_path: Path):
     )
 
     assert _resolve(tmp_path, "codex", rollout, cwd="") == ("agent-uuid", "1.0.0")
-
-
-def test_codex_role_only_matches_codex_pull_and_revalidates(tmp_path: Path):
-    sessions = tmp_path / ".codex" / "sessions"
-    sessions.mkdir(parents=True)
-    rollout = _codex_rollout(
-        sessions / "thread.jsonl", cwd=str(tmp_path), thread_source="subagent", agent_role="quick-fixer"
-    )
-    cursor = {"name": "quick-fixer", "id": "cursor-id", "version": "1", "scope": "project", "directory": str(tmp_path)}
-    codex = dict(cursor, id="codex-id", version="2")
-    ensure_loaded()
-    adapter = get_adapter("codex")
-    with (
-        patch.dict("os.environ", {}, clear=True),
-        patch("observal_cli.delegation.tasks.delegated_agent", return_value=None),
-        patch(
-            "observal_cli.lockfile.read_registry_lockfile",
-            return_value=({}, {"harnesses": {"cursor": {"agents": [cursor]}}}),
-        ) as lock,
-    ):
-        assert _resolve_agent(str(tmp_path), [], rollout, harness="codex") == (None, None)
-        assert adapter.resolve_session_agent_identity(rollout, str(tmp_path)) == (None, None)
-        lock.return_value = ({}, {"harnesses": {"cursor": {"agents": [cursor]}, "codex": {"agents": [codex]}}})
-        assert _resolve_agent(str(tmp_path), [], rollout, harness="codex") == ("codex-id", "2")
-        assert adapter.resolve_session_agent_identity(rollout, str(tmp_path)) == ("codex-id", "2")
-        source = adapter.resolve_session_source({"session_id": "thread"}, home=tmp_path)
-        payload = base.build_payload(
-            "thread",
-            [rollout.read_text().strip()],
-            0,
-            "Stop",
-            0,
-            cwd=source.cwd,
-            session_jsonl=rollout,
-            harness="codex",
-        )
-        payload["harness"] = "codex"
-        payload["end_byte_offsets"] = [rollout.stat().st_size]
-        proof = adapter.outbox_provenance(source, payload)
-        db = tmp_path / "outbox.db"
-        telemetry_buffer.enqueue(payload, destination="http://server", user_id="user", db_path=db, provenance=proof)
-        item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
-        assert adapter.validate_outbox_provenance(item)
-        lock.return_value = ({}, {"harnesses": {"cursor": {"agents": [cursor]}}})
-        assert not adapter.validate_outbox_provenance(item)
 
 
 def test_codex_sources_link_subagent_rollouts_to_their_parent(tmp_path: Path):

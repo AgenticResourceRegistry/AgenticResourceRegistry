@@ -1,7 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 name: observal-advanced
 command: observal
@@ -29,7 +28,6 @@ Read [Recovery workflows](references/recovery-workflows.md) completely before ex
 
 - Healthy telemetry does not need routine reconciliation.
 - Reconcile repairs missed local session delivery. It does not replace hook or extension installation.
-- Never release a held Codex session without an independently verifiable original rollout. If missing or truncated, ask the user before terminal quarantine; use `--quarantine-held SESSION_ID --yes` only with explicit authorization and report archived row count (not payload).
 - Upgrade, downgrade, and rollback are distinct requests. Do not substitute one for another.
 - Local fallback is allowed only after JSON reports `error.category: unavailable` with exit code `9`, or `error.category: authentication` with operation `Load authenticated CLI configuration` and exit code `3`. The user must still request local files.
 - Local fallback creates harness-native Agent files. It does not publish Registry state and must be reported as local-only.

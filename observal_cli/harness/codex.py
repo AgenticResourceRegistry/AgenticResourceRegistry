@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Codex CLI harness adapter."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -83,8 +81,7 @@ class CodexAdapter(BaseAdapter):
             if home is not None
             else Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
         )
-        # Preserve the lexical .codex segment even when CODEX_HOME is symlinked.
-        return Path(os.path.abspath(codex_home / "sessions"))
+        return (codex_home / "sessions").resolve()
 
     @staticmethod
     def _session_meta(path: Path) -> dict:
@@ -118,55 +115,45 @@ class CodexAdapter(BaseAdapter):
             return None
         return role
 
-    def resolve_session_agent_identity(
-        self, session_jsonl: Path | None, cwd: str
-    ) -> tuple[str | None, str | None] | None:
-        """Credit only a rollout's actual pulled subagent role, not its folder."""
+    def resolve_session_agent_identity(self, session_jsonl: Path | None, cwd: str) -> tuple[str | None, str | None]:
+        """Credit only the rollout's own pulled subagent role.
+
+        Always answers, so recovery never falls back to the caller's
+        OBSERVAL_AGENT_* env, the hook's cwd, or another harness's agents.
+        """
         from observal_cli.sessions.base import _lookup_lockfile_agent
 
         role = self.session_subagent_name(session_jsonl)
         if not role:
-            return None
-        entry = _lookup_lockfile_agent(cwd, agent_name=role, harness="codex")
-        if not entry or (cwd and entry.get("scope") == "project" and entry.get("directory") != cwd):
+            return None, None
+        rollout_cwd = self._session_meta(session_jsonl).get("cwd")
+        rollout_cwd = rollout_cwd if isinstance(rollout_cwd, str) else ""
+        entry = _lookup_lockfile_agent(rollout_cwd, agent_name=role, harness="codex")
+        if not entry:
             return None, None
         return entry.get("id") or entry.get("name"), entry.get("version")
 
-    def _source(self, path: Path, root: Path | None = None) -> SessionSource:
-        """Use only metadata recorded by this rollout, never the hook process cwd."""
-        meta = self._session_meta(path)
-        return SessionSource(
-            self.harness_name,
-            self._session_id(path),
-            path,
-            cwd=meta.get("cwd") if isinstance(meta.get("cwd"), str) else "",
-            parent_session_id=self._parent_thread_id(path),
-            sessions_root=root,
-        )
-
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
-        return self._resolve_from_root(event, self._sessions_root(home))
-
-    def _resolve_from_root(self, event: dict, root: Path) -> SessionSource | None:
-        """Resolve a rollout only from this lexical sessions directory."""
+        root = self._sessions_root(home)
         if not root.is_dir():
             return None
         session_id = str(event.get("session_id") or event.get("thread_id") or "")
-        transcript = event.get("transcript_path") or event.get("transcriptPath")
-        if not session_id and not transcript:
-            return None
         candidates = list(root.rglob("*.jsonl"))
         if session_id:
             candidates = [path for path in candidates if self._session_id(path) == session_id]
-        if transcript:
-            candidates = [path for path in candidates if str(path.resolve()) == str(Path(transcript).resolve())]
         if not candidates:
             return None
         try:
             path = max(candidates, key=lambda item: item.stat().st_mtime)
         except OSError:
             return None
-        return self._source(path, root)
+        return SessionSource(
+            self.harness_name,
+            self._session_id(path),
+            path,
+            cwd=str(event.get("cwd") or ""),
+            parent_session_id=self._parent_thread_id(path),
+        )
 
     def discover_session_sources(
         self,
@@ -182,184 +169,17 @@ class CodexAdapter(BaseAdapter):
             try:
                 modified_at = path.stat().st_mtime
                 if modified_at >= cutoff:
-                    sources.append(self._source(path, root))
+                    sources.append(
+                        SessionSource(
+                            self.harness_name,
+                            self._session_id(path),
+                            path,
+                            parent_session_id=self._parent_thread_id(path),
+                        )
+                    )
             except OSError:
                 continue
         return sorted(sources, key=lambda source: source.path.stat().st_mtime if source.path else 0, reverse=True)
-
-    def outbox_provenance(self, source: SessionSource, payload: dict) -> dict | None:
-        """Record only rollout-bound or delegated identity, never a hook marker."""
-        from observal_cli.delegation.tasks import delegated_agent
-
-        delegated = delegated_agent("", (source.session_id,))
-        identity = "unattributed"
-        if payload.get("agent_id"):
-            if delegated == (payload.get("agent_id"), payload.get("agent_version")):
-                identity = "delegation"
-            else:
-                if self.resolve_session_agent_identity(source.path, source.cwd) != (
-                    payload.get("agent_id"),
-                    payload.get("agent_version"),
-                ):
-                    return None
-                identity = "rollout-subagent"
-        # Bind the original bytes as well as the fitted payload. Oversized
-        # strings can differ in raw source while producing identical fit_line text.
-        try:
-            end_offset = (payload.get("end_byte_offsets") or [payload.get("total_offset", 0)])[-1]
-            with source.path.open("rb") as transcript:
-                prefix = transcript.read(end_offset)
-            raw_hash = hashlib.sha256(prefix).hexdigest() if len(prefix) == end_offset else None
-        except (OSError, TypeError, ValueError, AttributeError):
-            raw_hash = None
-        return {
-            "session_id": source.session_id,
-            "path": os.path.abspath(source.path) if source.path else "",
-            "sessions_root": str(source.sessions_root) if source.sessions_root else None,
-            "raw_prefix_hash": raw_hash,
-            "source_kind": "codex-rollout",
-            "identity": identity,
-            "agent_id": payload.get("agent_id"),
-            "agent_version": payload.get("agent_version"),
-        }
-
-    def allows_ambient_agent_identity(self) -> bool:
-        return False
-
-    def validate_outbox_provenance(self, item) -> bool:
-        """Only a session-bound delegated identity can authorize attributed replay."""
-        from observal_cli.sessions.base import fit_line
-
-        proof = item.provenance
-        if proof is None:
-            return not item.payload.get("agent_id") and not item.payload.get("agent_version")
-        if not isinstance(proof, dict) or proof.get("session_id") != item.session_id:
-            return False
-        path = proof.get("path")
-        if proof.get("source_kind") != "codex-rollout" or not isinstance(path, str) or not path.endswith(".jsonl"):
-            return False
-        # Use the root discovered when queued, not the current CODEX_HOME.
-        # Older proofs have no root and are valid only in this user's default tree.
-        source_path = Path(path)
-        recorded_root = proof.get("sessions_root")
-        if recorded_root is None:
-            root = Path(os.path.abspath(Path.home() / ".codex" / "sessions"))
-        elif isinstance(recorded_root, str):
-            root = Path(recorded_root)
-            if root.name != "sessions" or not root.is_absolute() or os.path.abspath(recorded_root) != recorded_root:
-                return False
-        else:
-            return False
-        if (
-            self._session_id(source_path) != item.session_id
-            or not source_path.is_absolute()
-            or os.path.abspath(path) != path
-            or item.payload.get("session_id") != item.session_id
-            or item.payload.get("harness") != item.harness
-        ):
-            return False
-        try:
-            if not source_path.is_relative_to(root) or not source_path.resolve().is_relative_to(root.resolve()):
-                return False
-            # Neither a different user's tree nor a symlink into it may supply a rollout.
-            if hasattr(os, "getuid") and (
-                root.stat().st_uid != os.getuid() or source_path.stat().st_uid != os.getuid()
-            ):
-                return False
-            if item.end_offset < 0 or item.end_offset > source_path.stat().st_size:
-                return False
-            # The claimed rollout must be discoverable from exactly the stored root.
-            discovered = self._resolve_from_root({"session_id": item.session_id, "transcript_path": path}, root)
-            if discovered is None or discovered.path != source_path:
-                return False
-            # Read only the queued byte prefix. Later appends cannot invalidate
-            # a final batch, and the proof need not scan a growing rollout.
-            with source_path.open("rb") as transcript:
-                prefix = transcript.read(item.end_offset)
-            if len(prefix) != item.end_offset:
-                return False
-            raw_hash = proof.get("raw_prefix_hash")
-            if raw_hash is not None and (
-                not isinstance(raw_hash, str) or raw_hash != hashlib.sha256(prefix).hexdigest()
-            ):
-                return False
-            consumed = prefix
-            lines = []
-            offsets = []
-            position = 0
-            for encoded in consumed.splitlines(keepends=True):
-                position += len(encoded)
-                line = encoded.rstrip(b"\r\n").decode("utf-8", errors="replace")
-                if line.strip():
-                    lines.append(line)
-                    offsets.append(position)
-            start = item.start_line
-            posted = item.payload.get("lines") or []
-            posted_offsets = item.payload.get("end_byte_offsets") or []
-            if (
-                start < 0
-                or start > len(lines)
-                or not isinstance(posted, list)
-                or not all(isinstance(line, str) for line in posted)
-                or [fit_line(line) for line in lines[start : start + len(posted)]] != posted
-                or (raw_hash is None and any(fit_line(line) != line for line in lines))
-                or len(posted_offsets) != len(posted)
-                or any(offset != offsets[start + index] for index, offset in enumerate(posted_offsets[:-1]))
-                or (posted and posted_offsets[-1] != item.end_offset)
-                or (posted and item.end_offset < offsets[start + len(posted) - 1])
-                or (posted and start + len(posted) < len(offsets) and item.end_offset >= offsets[start + len(posted)])
-                or (posted and not consumed.endswith(b"\n"))
-            ):
-                return False
-            if item.payload.get("session_hash") is not None:
-                count = item.payload.get("hashed_line_count")
-                if not isinstance(count, int) or count != len(lines):
-                    return False
-                hasher = hashlib.sha256()
-                for line in lines[:count]:
-                    hasher.update(hashlib.sha256(fit_line(line).encode("utf-8", errors="replace")).hexdigest().encode())
-                    hasher.update(b"\n")
-                if item.payload["session_hash"] != hasher.hexdigest():
-                    return False
-            # A rollout's own metadata must not contradict the path identity.
-            first = json.loads(lines[0]) if lines else {}
-            meta = first.get("payload") if first.get("type") == "session_meta" else None
-            if isinstance(meta, dict) and meta.get("id") and meta["id"] != item.session_id:
-                return False
-        except (OSError, ValueError, IndexError, TypeError, AttributeError, RuntimeError, StopIteration):
-            return False
-        identity = proof.get("identity")
-        if identity == "unattributed":
-            return (
-                not item.payload.get("agent_id")
-                and not item.payload.get("agent_version")
-                and not proof.get("agent_id")
-                and not proof.get("agent_version")
-            )
-        if not item.payload.get("agent_id") or (proof.get("agent_id"), proof.get("agent_version")) != (
-            item.payload.get("agent_id"),
-            item.payload.get("agent_version"),
-        ):
-            return False
-        if identity == "delegation":
-            from observal_cli.delegation.tasks import delegated_agent
-
-            return delegated_agent("", (item.session_id,)) == (
-                item.payload.get("agent_id"),
-                item.payload.get("agent_version"),
-            )
-        if identity == "rollout-subagent":
-            # A queued role is not proof: re-read this exact rollout and match
-            # the pulled agent, including its pinned version, at delivery time.
-            return (
-                isinstance(meta, dict)
-                and meta.get("id") == item.session_id
-                and (
-                    self.resolve_session_agent_identity(source_path, discovered.cwd)
-                    == (item.payload.get("agent_id"), item.payload.get("agent_version"))
-                )
-            )
-        return False
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         home = home or Path.home()

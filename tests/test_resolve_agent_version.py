@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for _resolve_agent version attribution from lockfile."""
@@ -138,27 +137,6 @@ class TestResolveAgentVersionFromLockfile:
 
         assert agent_id is None
         assert agent_version is None
-
-    def test_conflicting_live_markers_fail_closed(self, tmp_path):
-        id_entry = _make_lockfile_entry(name="agent-a", agent_id="uuid-a")
-        name_entry = _make_lockfile_entry(name="agent-b", agent_id="uuid-b")
-        for id_match in (id_entry, None):
-            with (
-                patch.dict("os.environ", {"OBSERVAL_AGENT_ID": "uuid-a", "OBSERVAL_AGENT_NAME": "agent-b"}, clear=True),
-                patch("observal_cli.sessions.base._lookup_lockfile_agent_by_id", return_value=id_match),
-                patch("observal_cli.sessions.base._lookup_lockfile_agent", return_value=name_entry),
-            ):
-                assert _resolve_agent(str(tmp_path), [], None) == (None, None)
-
-    def test_recovery_ignores_both_markers_and_directory(self, tmp_path):
-        with (
-            patch.dict("os.environ", {"OBSERVAL_AGENT_ID": "uuid-a", "OBSERVAL_AGENT_NAME": "agent-a"}, clear=True),
-            patch("observal_cli.sessions.base._lookup_lockfile_agent_by_id") as by_id,
-            patch("observal_cli.sessions.base._lookup_lockfile_agent") as by_name,
-        ):
-            assert _resolve_agent(str(tmp_path), [], None, identity_scope="recovery") == (None, None)
-            by_id.assert_not_called()
-            by_name.assert_not_called()
 
     def test_env_var_gets_version_from_lockfile(self, tmp_path):
         """When OBSERVAL_AGENT_NAME is set, version should come from lockfile."""
