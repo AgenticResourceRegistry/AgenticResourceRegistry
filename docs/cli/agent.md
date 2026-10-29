@@ -233,7 +233,7 @@ observal agent build --dir ./reviewer --output json
 observal agent build --dir ./reviewer --team platform --visibility team --output json
 ```
 
-Build verifies every component, checks that any pinned component `version` exists, and validates whether private components are visible to the target owner. A successful JSON result contains `valid`, `agent`, `components`, and `issues`. Invalid composition exits with code 7 and leaves JSON stdout empty; the stderr error includes the same repairable data under `error.result`.
+Build verifies every component, checks that any pinned component `version` exists, and validates whether private components are visible to the target owner. A successful JSON result contains `valid`, `agent`, `components`, `issues`, and `supported_harnesses`. Build also checks the declared `supported_harnesses` against what the components need: a harness that cannot run them (for example Cursor for a skill folder) is a warning in `issues` and is left out of `supported_harnesses`, and if none can run them the build fails with exit code 7. Invalid composition exits with code 7 and leaves JSON stdout empty; the stderr error includes the same repairable data under `error.result`.
 
 ### Publish
 
@@ -248,7 +248,7 @@ observal agent publish --dir ./reviewer --update --bump minor --output json
 
 `--update` edits the latest version in place, so it only works while that version is a draft, pending, or rejected. An approved version is immutable: installs and locks depend on it. The server answers conflict exit code 6 and points to `observal agent release`, which publishes a new version for review.
 
-JSON returns the direct created, saved, submitted, or updated Agent object.
+JSON returns the direct created, saved, submitted, or updated Agent object. Publish stores only the declared harnesses that can run the components and lists each dropped one in `warnings`. If none can, it fails with a 422 that names the harnesses to declare instead.
 
 ## Release and versions
 

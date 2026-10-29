@@ -327,6 +327,7 @@ export interface ValidationIssue {
 export interface ValidationResult {
 	valid: boolean;
 	issues: ValidationIssue[];
+	supported_harnesses?: string[];
 }
 
 // ── Version Diff ────────────────────────────────────────────────────

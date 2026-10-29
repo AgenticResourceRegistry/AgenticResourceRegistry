@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import uuid
+from types import SimpleNamespace
+
 from fastapi import APIRouter, Depends
 from loguru import logger as optic
 from sqlalchemy import select
@@ -10,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, registry_identity, require_role
 from models.agent import Agent, AgentStatus, AgentVersion
+from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.bulk import BulkAgentItem, BulkAgentRequest, BulkResult, BulkResultItem
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_telemetry import emit_registry_event
 from services.review.cutover import submit_for_review
 
@@ -74,6 +79,21 @@ async def _create_single_agent(
         version.id,
         [{**comp, "component_type": comp.get("component_type", "mcp")} for comp in item.components],
         current_user=user,
+    )
+
+    refs = [
+        SimpleNamespace(
+            component_type=comp.get("component_type", "mcp"), component_id=uuid.UUID(str(comp["component_id"]))
+        )
+        for comp in item.components
+    ]
+    skill_ids = [ref.component_id for ref in refs if ref.component_type == "skill"]
+    skill_listings: dict = {}
+    if skill_ids:
+        rows = (await db.execute(select(SkillListing).where(SkillListing.id.in_(skill_ids)))).scalars().all()
+        skill_listings = {row.id: row for row in rows}
+    apply_harness_inference(
+        version, SimpleNamespace(components=refs, external_mcps=item.external_mcps), skill_listings=skill_listings
     )
     await lock_agent_version(db, agent, version)
 
@@ -170,6 +190,9 @@ async def bulk_create_agents(
                 BulkResultItem(name=item.name, status="created", agent_id=agent.id, review_number=review_number)
             )
             created += 1
+        except NoCompatibleHarnessError as exc:
+            results.append(BulkResultItem(name=item.name, status="error", error=str(exc)))
+            errors += 1
         except Exception as exc:
             optic.warning("bulk create failed for agent '{}': error_type={}", item.name, type(exc).__name__)
             results.append(BulkResultItem(name=item.name, status="error", error="Agent could not be created"))

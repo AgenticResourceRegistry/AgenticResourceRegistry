@@ -629,9 +629,6 @@ async def validate_agent_composition(
 ):
     """Validate a set of components for compatibility before publishing an agent."""
     optic.trace("req={}", req)
-    if not req.components:
-        return ValidationResult(valid=True, issues=[], supported_harnesses=req.supported_harnesses)
-
     from services.agent_resolver import validate_component_ids
 
     errors = await validate_component_ids(

@@ -129,3 +129,57 @@ async def test_validate_fails_when_no_declared_harness_can_run_the_agent(monkeyp
     assert result.valid is False
     assert result.supported_harnesses == []
     assert [issue.severity for issue in result.issues] == ["error"]
+
+
+@pytest.mark.asyncio
+async def test_validate_checks_declared_harnesses_when_there_are_no_components(monkeypatch):
+    monkeypatch.setattr(agent_resolver, "validate_component_ids", AsyncMock(return_value=[]))
+    req = AgentValidateRequest(components=[], supported_harnesses=["bogus"])
+
+    result = await install.validate_agent_composition(req, db=_validate_db([]), current_user=SimpleNamespace())
+
+    assert result.valid is False
+    assert result.supported_harnesses == []
+
+
+def _bulk_db(listings):
+    return SimpleNamespace(add=MagicMock(), flush=AsyncMock(), execute=_validate_db(listings).execute)
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_leaves_cursor_out_of_a_skill_folder_agent(monkeypatch):
+    from api.routes import bulk
+    from models.agent import AgentVersion
+    from schemas.bulk import BulkAgentItem
+
+    monkeypatch.setattr("services.agent_lock.attach_pinned_components", AsyncMock())
+    monkeypatch.setattr("services.agent_lock.lock_agent_version", AsyncMock())
+    monkeypatch.setattr(bulk, "submit_for_review", AsyncMock(return_value=SimpleNamespace(number=1)))
+    item = BulkAgentItem(
+        name="bulk-skill",
+        components=[{"component_type": "skill", "component_id": str(SKILL_ID)}],
+        supported_harnesses=["cursor", "kiro"],
+    )
+    db = _bulk_db(list(_skill("registry_direct").values()))
+
+    await bulk._create_single_agent(
+        item, SimpleNamespace(id=uuid.uuid4(), email="u@example.com", username="bulk-user"), db
+    )
+
+    version = next(c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], AgentVersion))
+    assert version.supported_harnesses == ["kiro"]
+    assert version.required_capabilities == ["skills"]
+
+
+@pytest.mark.asyncio
+async def test_self_learn_fails_when_no_declared_harness_can_run_the_version():
+    from services.insights.self_learn import _refresh_capability_inference
+
+    component = SimpleNamespace(component_type="skill", component_id=SKILL_ID)
+    rows = [MagicMock(), MagicMock()]
+    rows[0].scalars.return_value.all.return_value = [component]
+    rows[1].scalars.return_value.all.return_value = list(_skill("registry_direct").values())
+    version = SimpleNamespace(id=uuid.uuid4(), version="1.0.1", external_mcps=[], supported_harnesses=["cursor"])
+
+    with pytest.raises(NoCompatibleHarnessError):
+        await _refresh_capability_inference(version, SimpleNamespace(execute=AsyncMock(side_effect=rows)))

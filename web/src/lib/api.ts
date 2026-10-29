@@ -509,6 +509,7 @@ export const registry = {
 		),
 	validate: (body: {
 		components: { component_type: string; component_id: string }[];
+		supported_harnesses?: string[];
 		team_id?: string;
 		visibility?: "public" | "team";
 	}) => post<ValidationResult>("/agents/validate", body),

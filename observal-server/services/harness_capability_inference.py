@@ -64,8 +64,6 @@ def unsupported_harness_reason(harness: str, required_features: list[str]) -> st
     if harness not in HARNESS_CAPABILITIES:
         return f"{harness} is not a known harness"
     missing = sorted(set(required_features) - HARNESS_CAPABILITIES[harness])
-    if not missing:
-        return f"{harness} cannot run this agent's components"
     return f"{harness} has no {', '.join(missing)} support"
 
 
