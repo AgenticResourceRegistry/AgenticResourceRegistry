@@ -15,7 +15,7 @@ The direct and explicit list forms are equivalent:
 
 ```bash
 observal inbox --output json
-observal inbox list --state open --action-required --output json
+observal inbox list --state open --action-required/--no-action-required --output json
 observal inbox list --subject-type mcp --search postgres --sort oldest --output json
 ```
 
