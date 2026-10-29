@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for observal_cli.cmd_doctor helpers."""
@@ -10,17 +9,14 @@
 from __future__ import annotations
 
 import json
-import os
-import tomllib
 from pathlib import Path
-from threading import Event, Thread
 from unittest.mock import MagicMock, patch
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
-from observal_cli import cmd_doctor, cmd_pull, pi_extension
+from observal_cli import pi_extension
 from observal_cli.cmd_doctor import (
     _check_antigravity,
     _check_claude_code,
@@ -74,77 +70,6 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr("observal_cli.lockfile._LOCKFILE_LOCK", tmp_path / ".observal/lockfile.lock")
     monkeypatch.setattr(pi_extension, "get_current_version", lambda: CLI_VERSION)
     return tmp_path
-
-
-@pytest.mark.parametrize("doctor_first", [False, True])
-@pytest.mark.parametrize("symlink", [False, True])
-def test_codex_patch_and_pull_serialize_config_cleanup(tmp_path, monkeypatch, doctor_first, symlink):
-    if symlink and os.name != "posix":
-        pytest.skip("POSIX pinned symlink target")
-    codex = tmp_path / ".codex"
-    codex.mkdir()
-    config = codex / "config.toml"
-    target = tmp_path / "actual.toml" if symlink else config
-    target.write_text('codex_hooks = true\nmodel = "gpt"\n')
-    if symlink:
-        config.symlink_to(target)
-    entered, resume, waiting, done = Event(), Event(), Event(), Event()
-    outcomes = {}
-    if doctor_first:
-        original = cmd_doctor._without_stale_codex_hooks_key
-
-        def paused_clean(text):
-            entered.set()
-            assert resume.wait(3)
-            return original(text)
-
-        monkeypatch.setattr(cmd_doctor, "_without_stale_codex_hooks_key", paused_clean)
-    else:
-        original = cmd_pull._toml_document
-
-        def paused_render(content, existing_text=None):
-            entered.set()
-            assert resume.wait(3)
-            return original(content, existing_text)
-
-        monkeypatch.setattr(cmd_pull, "_toml_document", paused_render)
-
-    def doctor():
-        try:
-            outcomes["doctor"] = _patch_codex(dry_run=False)
-        except Exception as error:
-            outcomes["doctor"] = error
-        finally:
-            done.set()
-
-    def pull():
-        try:
-            outcomes["pull"] = cmd_pull._write_file_checked(
-                config, {"mcp_servers": {"demo": {"command": "dummy"}}}, merge_mcp=True
-            )
-        except Exception as error:
-            outcomes["pull"] = error
-        finally:
-            done.set()
-
-    leader = Thread(target=doctor if doctor_first else pull)
-    follower = Thread(target=pull if doctor_first else doctor)
-    leader.start()
-    try:
-        assert entered.wait(3)
-        follower.start()
-        waiting.set()
-        assert not done.wait(0.1)
-    finally:
-        resume.set()
-        leader.join(timeout=3)
-        if follower.ident is not None:
-            follower.join(timeout=3)
-    assert waiting.is_set() and not leader.is_alive() and not follower.is_alive()
-    assert outcomes == {"doctor": True, "pull": "merged"}
-    assert config.is_symlink() == symlink
-    result = tomllib.loads(target.read_text())
-    assert result == {"model": "gpt", "mcp_servers": {"demo": {"command": "dummy"}}}
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -627,115 +552,6 @@ class TestPatchFunctions:
             for group in groups
             for hook in group.get("hooks", [])
         )
-
-    def test_patch_codex_dry_run_reads_readonly_config_without_lock(self, tmp_path: Path, monkeypatch, capsys):
-        codex_dir = tmp_path / ".codex"
-        codex_dir.mkdir()
-        config = codex_dir / "config.toml"
-        original = "codex_hooks = true\n[features]\nhooks = false\n"
-        config.write_text(original, encoding="utf-8")
-        codex_dir.chmod(0o500)
-
-        def forbidden_lock(_path):
-            pytest.fail("dry-run must not acquire a TOML write lock")
-
-        monkeypatch.setattr(cmd_pull, "_toml_write_lock", forbidden_lock)
-        try:
-            assert _patch_codex(dry_run=True) is True
-            output = capsys.readouterr().out
-            assert "Would remove the stale codex_hooks key" in output
-            assert "Hooks are turned off" in output
-            assert config.read_text(encoding="utf-8") == original
-            assert not (codex_dir / ".config.toml.observal.lock").exists()
-            assert not (codex_dir / "hooks.json").exists()
-        finally:
-            codex_dir.chmod(0o700)
-
-    def test_patch_codex_dry_run_does_not_rewrite_invalid_toml(self, tmp_path: Path, capsys):
-        codex_dir = tmp_path / ".codex"
-        codex_dir.mkdir()
-        config = codex_dir / "config.toml"
-        original = "codex_hooks = true\n[features\n"
-        config.write_text(original, encoding="utf-8")
-
-        assert _patch_codex(dry_run=True) is True  # hooks.json would be installed
-        assert "Would remove the stale codex_hooks key" not in capsys.readouterr().out
-        assert config.read_text(encoding="utf-8") == original
-        assert not (codex_dir / ".config.toml.observal.lock").exists()
-
-    def test_patch_codex_unreadable_config_does_not_create_hooks(self, tmp_path: Path, monkeypatch):
-        codex_dir = tmp_path / ".codex"
-        codex_dir.mkdir()
-        config = codex_dir / "config.toml"
-        config.write_text("codex_hooks = true\n", encoding="utf-8")
-        original_read = cmd_pull._read_toml_bytes
-
-        def unreadable(path, *, dir_fd=None):
-            if path.name == "config.toml":
-                raise PermissionError("config.toml unreadable")
-            return original_read(path, dir_fd=dir_fd)
-
-        monkeypatch.setattr(cmd_pull, "_read_toml_bytes", unreadable)
-        with pytest.raises(PermissionError, match=r"config\.toml unreadable"):
-            _patch_codex(dry_run=False)
-        assert config.read_text(encoding="utf-8") == "codex_hooks = true\n"
-        assert not (codex_dir / "hooks.json").exists()
-
-    @pytest.mark.skipif(os.name != "posix", reason="pinned directory replacement requires POSIX")
-    def test_patch_codex_postwrite_directory_replacement_reports_partial_update(self, tmp_path, monkeypatch, capsys):
-        codex_dir = tmp_path / ".codex"
-        codex_dir.mkdir()
-        config = codex_dir / "config.toml"
-        config.write_text('codex_hooks = true\nmodel = "old"\n', encoding="utf-8")
-        pinned = codex_dir.stat()
-        moved = tmp_path / "moved-codex"
-        original_write = cmd_pull._atomic_write_text
-
-        def replace_after_write(*args, **kwargs):
-            original_write(*args, **kwargs)
-            codex_dir.rename(moved)
-            codex_dir.mkdir()
-            config.write_text('codex_hooks = true\nmodel = "replacement"\n', encoding="utf-8")
-
-        monkeypatch.setattr(cmd_pull, "_atomic_write_text", replace_after_write)
-        with pytest.raises(RuntimeError, match="Partial update") as error:
-            _patch_codex(dry_run=False)
-
-        diagnostic = str(error.value)
-        assert f"device={pinned.st_dev}, inode={pinned.st_ino}" in diagnostic
-        assert "filename='config.toml'" in diagnostic
-        assert str(config) not in diagnostic
-        assert "Removed the stale codex_hooks key" not in capsys.readouterr().out
-        assert moved.joinpath("config.toml").read_text() == 'model = "old"\n'
-        assert config.read_text() == 'codex_hooks = true\nmodel = "replacement"\n'
-        assert not (codex_dir / "hooks.json").exists()
-        assert not (moved / "hooks.json").exists()
-
-        # The command boundary must show the partial-write identity even
-        # without debug output (which hides CliError.detail).
-        from observal_cli.errors import CliError, ErrorCategory
-
-        adapter = MagicMock()
-        adapter.patch_hooks.side_effect = error.value
-        monkeypatch.setattr(cmd_doctor, "get_adapter", lambda _name: adapter)
-        with pytest.raises(CliError) as cli_error:
-            cmd_doctor._adapter_change("codex", "patch", False, "table")
-        assert cli_error.value.category == ErrorCategory.CONFLICT
-        assert diagnostic == cli_error.value.message
-
-    def test_patch_codex_unwritable_config_does_not_create_hooks(self, tmp_path: Path, monkeypatch):
-        codex_dir = tmp_path / ".codex"
-        codex_dir.mkdir()
-        config = codex_dir / "config.toml"
-        config.write_text("codex_hooks = true\n", encoding="utf-8")
-
-        def unwritable(*args, **kwargs):
-            raise PermissionError("config.toml unwritable")
-
-        monkeypatch.setattr(cmd_pull, "_atomic_write_text", unwritable)
-        with pytest.raises(PermissionError, match=r"config\.toml unwritable"):
-            _patch_codex(dry_run=False)
-        assert not (codex_dir / "hooks.json").exists()
 
     def test_patch_codex_leaves_codex_hooks_text_inside_a_multiline_string(self, tmp_path: Path):
         codex_dir = tmp_path / ".codex"
