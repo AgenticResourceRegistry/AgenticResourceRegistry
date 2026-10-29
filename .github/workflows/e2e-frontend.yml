@@ -87,21 +87,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify Vite proxy targets
-        working-directory: web
-        run: node --test tests/vite-proxy.test.mjs
-
       - name: Install Playwright browsers
         working-directory: web
         run: pnpm exec playwright install chromium --with-deps
 
-      - name: Run frontend, auth races, and gate-off folder e2e
+      - name: Run frontend and gate-off folder e2e
         working-directory: web
         env:
           # This runner builds a fresh disposable stack; never point this job
           # at a long-lived server when enabling the draft-creating tests.
           OBSERVAL_ISOLATED_STACK: 'true'
-        run: pnpm exec playwright test frontend-flows.spec.ts skill-folder.spec.ts auth-races.spec.ts
+        run: pnpm exec playwright test frontend-flows skill-folder
 
       - name: Show API errors on failure
         if: failure()

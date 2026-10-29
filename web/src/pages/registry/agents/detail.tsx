@@ -98,7 +98,6 @@ import { ErrorState } from "@/components/shared/error-state";
 import { EmptyState } from "@/components/shared/empty-state";
 import { AgentEditForm, type AgentEditFormProps } from "@/components/registry/agent-edit-form";
 import { CoAuthorInput, type CoAuthor } from "@/components/registry/co-author-input";
-import { authenticatedReadContext } from "@/lib/api";
 import { compactNumber } from "@/lib/utils";
 import { DIMENSION_META } from "@/components/dashboard/score-overview";
 
@@ -727,30 +726,20 @@ export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) 
     [pinReport],
   );
 
-  // Co-authors are private and bypass TanStack Query's actor-scoped cache.
+  // Co-authors
   const [coAuthors, setCoAuthors] = useState<CoAuthor[]>([]);
   useEffect(() => {
     if (!isAuthenticated) {
       setCoAuthors([]);
       return;
     }
-    const controller = new AbortController();
-    setCoAuthors([]);
-    try {
-      const { token, check } = authenticatedReadContext();
-      fetch(`/api/v1/agents/${id}/co-authors`, {
-        headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
-      })
-        .then(async (r) => {
-          check();
-          const data = r.ok ? await r.json() : [];
-          check();
-          return data;
-        })
-        .then((data) => { if (!controller.signal.aborted) { check(); setCoAuthors(data); } })
-        .catch(() => {});
-    } catch { /* Account switched before the request; keep private data empty. */ }
-    return () => controller.abort();
+    const token = sessionStorage.getItem("observal_access_token");
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    fetch(`/api/v1/agents/${id}/co-authors`, { headers })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setCoAuthors(data))
+      .catch(() => {});
   }, [id, isAuthenticated]);
 
   const isAdmin = isAuthenticated && hasMinRole(role, "admin");
