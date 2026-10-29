@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral tests for :mod:`observal_cli.cmd_auth`."""
@@ -302,8 +303,244 @@ def _prepare_login(
     monkeypatch.setattr(auth.httpx, "get", get)
     monkeypatch.setattr(auth, "_ensure_cli_matches_server", ensure_version)
     monkeypatch.setattr(auth.config, "load", lambda: {"server_url": previous_server})
+    monkeypatch.setattr(auth.config, "load_persisted", lambda: {"server_url": previous_server})
     monkeypatch.setattr(lockfile, "migrate_lockfile_v1", migrate)
     return get, ensure_version, migrate
+
+
+@pytest.mark.parametrize(
+    ("provided", "expected"),
+    [
+        ("dev.observal.io", "https://dev.observal.io"),
+        ("host:8443", "https://host:8443"),
+        (" https://DEV.example:443/ ", "https://DEV.example:443"),
+        ("http://remote.example/base/", "http://remote.example/base"),
+        ("localhost", "https://localhost"),
+        ("http://localhost", "http://localhost"),
+    ],
+)
+def test_login_selected_server_is_used_for_health_and_auth(
+    provided: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    get, _, migrate = _prepare_login(monkeypatch)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+
+    auth.login(provided, "ada", VALID_PASSWORD, None, False, False)
+
+    assert get.call_args_list[0] == call(f"{expected}/health", timeout=10)
+    password_login.assert_called_once_with(
+        expected, "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+    migrate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "provided",
+    [
+        "",
+        "   ",
+        "//evil.example",
+        "ftp://evil.example",
+        "https://",
+        "https://localhost@evil.example",
+        "https://user:secret@evil.example",
+        "host:bad",
+        "host:",
+        "host:65536",
+        "host:0",
+        "host:8443/path?secret=1",
+        "https://host/#fragment",
+        "https://ho st",
+        "https://[::1",
+        "::1",
+        "https://[bad]",
+    ],
+)
+def test_login_rejects_invalid_url_without_network_or_migration(provided: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import observal_cli.lockfile as lockfile
+
+    get = MagicMock()
+    migrate = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    monkeypatch.setattr(lockfile, "migrate_lockfile_v1", migrate)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(provided, "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    if provided.strip():
+        assert provided not in str(exc_info.value)
+    get.assert_not_called()
+    migrate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("source", "codepoint"),
+    [("explicit", point) for point in [*range(0x20), *range(0x7F, 0xA0), 0x200B, 0x2028]]
+    + [("environment", point) for point in [*range(1, 0x20), *range(0x7F, 0xA0), 0x200B, 0x2028]],
+)
+def test_login_rejects_nonprintable_url_before_migration_or_network(
+    codepoint: int, source: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import observal_cli.lockfile as lockfile
+
+    bad_url = f"https://registry.example.test/path{chr(codepoint)}secret"
+    get = MagicMock()
+    migrate = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    monkeypatch.setattr(lockfile, "migrate_lockfile_v1", migrate)
+    monkeypatch.setattr(auth.config, "load_persisted", lambda: {"server_url": SERVER_URL})
+    if source == "environment":
+        monkeypatch.setenv("OBSERVAL_SERVER_URL", bad_url)
+        selected = None
+    else:
+        selected = bad_url
+
+    with pytest.raises(CliError) as exc_info:
+        auth.login(selected, "ada", VALID_PASSWORD, None, False, False, output=auth.OutputMode.json)
+
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    assert "secret" not in str(exc_info.value)
+    assert SERVER_URL not in str(exc_info.value)
+    get.assert_not_called()
+    migrate.assert_not_called()
+
+
+@pytest.mark.parametrize("override", ["https://other.example", "https://user:secret@evil.example", "bare.example"])
+def test_login_rejects_conflicting_or_invalid_override_before_health(
+    override: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import observal_cli.lockfile as lockfile
+
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get = MagicMock()
+    migrate = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    monkeypatch.setattr(lockfile, "migrate_lockfile_v1", migrate)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(SERVER_URL, "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    assert "secret" not in str(exc_info.value)
+    get.assert_not_called()
+    migrate.assert_not_called()
+
+
+def test_login_accepts_canonical_equivalent_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://REGISTRY.example.test:443/")
+    get, _, _ = _prepare_login(monkeypatch)
+    monkeypatch.setattr(auth, "_do_password_login", MagicMock())
+    auth.login(SERVER_URL, "ada", VALID_PASSWORD, None, False, False)
+    assert get.call_args_list[0] == call(f"{SERVER_URL}/health", timeout=10)
+
+
+def test_login_accepts_internationalized_host_and_equivalent_punycode_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://xn--mnchen-3ya.example")
+    get, _, _ = _prepare_login(monkeypatch)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+
+    auth.login("münchen.example", "ada", VALID_PASSWORD, None, False, False)
+
+    assert get.call_args_list[0] == call("https://münchen.example/health", timeout=10)
+    password_login.assert_called_once_with(
+        "https://münchen.example", "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
+def test_login_rejects_idna2003_lookalike_override_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Python's IDNA codec maps ß to ss, but HTTPX sends faß.de to xn--fa-hia.de.
+    # Treating those as the same destination would expose the newly saved token
+    # on a later request to the unrelated fass.de override.
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://fass.de")
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login("https://faß.de", "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    get.assert_not_called()
+
+
+def test_login_accepts_actual_idna2008_wire_host_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://xn--fa-hia.de")
+    get, _, _ = _prepare_login(monkeypatch)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+    auth.login("https://faß.de", "ada", VALID_PASSWORD, None, False, False)
+    assert get.call_args_list[0] == call("https://faß.de/health", timeout=10)
+    password_login.assert_called_once_with(
+        "https://faß.de", "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
+def test_human_prompt_bare_host_uses_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    get, _, _ = _prepare_login(monkeypatch)
+    monkeypatch.setattr(auth, "text_input", MagicMock(return_value="  dev.observal.io/  "))
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+
+    auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+
+    assert get.call_args_list[0] == call("https://dev.observal.io/health", timeout=10)
+    password_login.assert_called_once_with(
+        "https://dev.observal.io", "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
+@pytest.mark.parametrize("override", ["https://dev.example.com", "http://localhost:8080", "https://faß.de"])
+def test_human_blank_prompt_selects_environment_server(override: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get, _, _ = _prepare_login(monkeypatch)
+    prompt = MagicMock(return_value="")
+    monkeypatch.setattr(auth, "text_input", prompt)
+    password_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_password_login", password_login)
+
+    auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+
+    prompt.assert_called_once_with("Server URL (leave blank to use OBSERVAL_SERVER_URL)", default="")
+    assert get.call_args_list[0] == call(f"{override}/health", timeout=10)
+    password_login.assert_called_once_with(
+        override, "ada", VALID_PASSWORD, output=auth.OutputMode.table, run_setup=True
+    )
+
+
+def test_human_prompt_override_rejects_different_server_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://dev.example.com")
+    monkeypatch.setattr(auth, "text_input", MagicMock(return_value="https://other.example.com"))
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize("override", ["bare.example", "https://user:secret@evil.example"])
+def test_human_blank_prompt_rejects_invalid_override_without_echo(
+    override: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    prompt = MagicMock(return_value="")
+    monkeypatch.setattr(auth, "text_input", prompt)
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(None, "ada", VALID_PASSWORD, None, False, False)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    assert override not in str(exc_info.value) and "secret" not in str(exc_info.value)
+    assert override not in prompt.call_args.args[0]
+    get.assert_not_called()
+
+
+def test_json_login_rejects_bare_environment_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "bare.example")
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+    with pytest.raises(CliError) as exc_info:
+        auth.login(None, "ada", VALID_PASSWORD, None, False, False, output=auth.OutputMode.json)
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    get.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -327,6 +564,288 @@ def test_login_stops_when_health_check_fails(
 
     assert exc_info.value.category is category
     assert message in exc_info.value.message
+
+
+@pytest.fixture
+def login_file_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    import observal_cli.lockfile as lockfile
+    import observal_cli.main as main
+
+    config_file = tmp_path / "config.json"
+    lock_path = tmp_path / "lockfile.json"
+    monkeypatch.setattr(auth.config, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(auth.config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(lockfile, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(lockfile, "LOCKFILE_PATH", lock_path)
+    monkeypatch.setattr(lockfile, "_LOCKFILE_LOCK", tmp_path / "lockfile.lock")
+    monkeypatch.setattr(main, "_try_lockfile_migration", lambda: None)
+    monkeypatch.setattr(auth, "_ensure_cli_matches_server", lambda _url: None)
+    monkeypatch.delenv("OBSERVAL_SERVER_URL", raising=False)
+    return config_file, lock_path
+
+
+def _mock_login_http(monkeypatch: pytest.MonkeyPatch, *, stale_port: bool = False) -> tuple[MagicMock, MagicMock]:
+    def get(url: str, **_kwargs: object) -> httpx.Response:
+        if stale_port and url == "http://localhost:8000/health":
+            raise httpx.ConnectError("stale port")
+        if url.endswith("/health"):
+            return _response(200, {"initialized": True})
+        if url.endswith("/config/public"):
+            return _response(200, {})
+        if url.endswith("/config/endpoints"):
+            return _response(200, {})
+        raise AssertionError(f"unexpected GET: {url}")
+
+    get_mock = MagicMock(side_effect=get)
+    post_mock = MagicMock(return_value=_response(200, _login_payload()))
+    monkeypatch.setattr(auth.httpx, "get", get_mock)
+    monkeypatch.setattr(auth.httpx, "post", post_mock)
+    return get_mock, post_mock
+
+
+def _run_json_login(server: str | None = None) -> object:
+    from observal_cli.main import app
+
+    args = ["auth", "login", "--email", "ada@example.test", "--password", VALID_PASSWORD, "--output", "json"]
+    if server is not None:
+        args.extend(["--server", server])
+    return CliRunner().invoke(app, args)
+
+
+def test_real_file_login_persists_normalized_destination_and_tokens(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    config_file.write_text(
+        json.dumps(
+            {"server_url": "https://old.example", "api_key": "old-hook", "timeout": 42, "access_token": "old-token"}
+        )
+    )
+    get, post = _mock_login_http(monkeypatch)
+
+    result = _run_json_login("dev.observal.io")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["server_url"] == "https://dev.observal.io"
+    assert ACCESS_TOKEN not in result.output and VALID_PASSWORD not in result.output
+    assert get.call_args_list[0] == call("https://dev.observal.io/health", timeout=10)
+    post.assert_called_once_with(
+        "https://dev.observal.io/api/v1/auth/login",
+        json={"email": "ada@example.test", "password": VALID_PASSWORD},
+        timeout=30,
+    )
+    saved = json.loads(config_file.read_text())
+    assert saved["server_url"] == "https://dev.observal.io"
+    assert saved["access_token"] == ACCESS_TOKEN and saved["refresh_token"] == REFRESH_TOKEN
+    assert saved["timeout"] == 42 and "api_key" not in saved
+    assert config_file.stat().st_mode & 0o777 == 0o600
+    assert auth.config.load_persisted() == saved
+    assert auth.config.load()["server_url"] == saved["server_url"]
+    request = MagicMock(return_value=_response(200, {"ok": True}))
+    monkeypatch.setattr(auth.client, "_request_with_retry", request)
+    auth.client.get("/api/v1/auth/me")
+    assert request.call_args.args[:2] == ("get", "https://dev.observal.io/api/v1/auth/me")
+
+
+def test_human_blank_override_persists_actual_login_server(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    config_file.write_text(json.dumps({"server_url": "http://localhost", "access_token": "old-token"}))
+    override = "https://dev.example.com"
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get, post = _mock_login_http(monkeypatch)
+    from observal_cli.main import app
+
+    result = CliRunner().invoke(
+        app, ["auth", "login", "--email", "ada@example.test", "--password", VALID_PASSWORD, "--no-setup"], input="\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "leave blank to use OBSERVAL_SERVER_URL" in result.output
+    assert get.call_args_list[0] == call(f"{override}/health", timeout=10)
+    assert post.call_args.args[0] == f"{override}/api/v1/auth/login"
+    saved = auth.config.load_persisted()
+    assert saved["server_url"] == override
+    assert saved["access_token"] == ACCESS_TOKEN
+
+
+def test_json_no_server_selects_override_instead_of_persisted_url(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    config_file.write_text(json.dumps({"server_url": "http://localhost"}))
+    override = "https://dev.example.com"
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", override)
+    get, post = _mock_login_http(monkeypatch)
+
+    result = _run_json_login()
+
+    assert result.exit_code == 0, result.output
+    assert get.call_args_list[0] == call(f"{override}/health", timeout=10)
+    assert post.call_args.args[0] == f"{override}/api/v1/auth/login"
+    assert auth.config.load_persisted()["server_url"] == override
+
+
+def test_json_invalid_server_is_redacted_and_preserves_file(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    original = {"server_url": "https://old.example", "access_token": "old-token"}
+    config_file.write_text(json.dumps(original))
+    get = MagicMock()
+    monkeypatch.setattr(auth.httpx, "get", get)
+
+    result = _run_json_login("https://localhost@evil.example")
+
+    assert result.exit_code == 7
+    assert result.stdout == ""
+    assert json.loads(result.stderr)["error"]["category"] == "validation"
+    assert "evil.example" not in result.output and VALID_PASSWORD not in result.output
+    get.assert_not_called()
+    assert auth.config.load_persisted() == original
+
+
+@pytest.mark.parametrize("source", ["explicit", "environment"])
+def test_json_login_rejects_control_path_without_echo_or_migration(
+    source: str, login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import observal_cli.lockfile as lockfile
+
+    config_file, lock_path = login_file_runtime
+    original = {"server_url": SERVER_URL, "access_token": "old-token"}
+    config_file.write_text(json.dumps(original))
+    lock_contents = json.dumps({"lock_version": 1, "harnesses": {"pi": {"agents": {"old": {}}}}})
+    lock_path.write_text(lock_contents)
+    # OS environment values cannot contain NUL; use DEL for the environment case.
+    control = chr(0x7F if source == "environment" else 0)
+    bad_url = f"https://registry.example.test/path{control}secret"
+    if source == "environment":
+        monkeypatch.setenv("OBSERVAL_SERVER_URL", bad_url)
+    get = MagicMock()
+    migrate = MagicMock(wraps=lockfile.migrate_lockfile_v1)
+    monkeypatch.setattr(lockfile, "migrate_lockfile_v1", migrate)
+    monkeypatch.setattr(auth.httpx, "get", get)
+
+    result = _run_json_login(bad_url if source == "explicit" else None)
+
+    assert result.exit_code == 7, result.output
+    assert result.stdout == ""
+    assert json.loads(result.stderr)["error"]["category"] == "validation"
+    assert "secret" not in result.output and "registry.example.test" not in result.output
+    assert "\\u0000" not in result.output
+    get.assert_not_called()
+    migrate.assert_not_called()
+    assert config_file.read_text() == json.dumps(original)
+    assert lock_path.read_text() == lock_contents
+
+
+def test_real_file_fallback_saves_successful_candidate(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    config_file.write_text(json.dumps({"server_url": "http://localhost:8000", "access_token": "old-token"}))
+    get, post = _mock_login_http(monkeypatch, stale_port=True)
+
+    result = _run_json_login()
+
+    assert result.exit_code == 0, result.output
+    assert get.call_args_list[:2] == [
+        call("http://localhost:8000/health", timeout=10),
+        call("http://localhost/health", timeout=10),
+    ]
+    assert post.call_args.args[0] == "http://localhost/api/v1/auth/login"
+    assert json.loads(result.stdout)["server_url"] == "http://localhost"
+    assert auth.config.load_persisted()["server_url"] == "http://localhost"
+
+
+def test_explicit_localhost_port_never_falls_back(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    original = {"server_url": "http://localhost:8000", "access_token": "old-token"}
+    config_file.write_text(json.dumps(original))
+    get, post = _mock_login_http(monkeypatch, stale_port=True)
+
+    result = _run_json_login("http://localhost:8000")
+
+    assert result.exit_code != 0
+    assert get.call_args_list == [call("http://localhost:8000/health", timeout=10)]
+    post.assert_not_called()
+    assert auth.config.load_persisted() == original
+
+
+def test_fallback_conflicting_override_preserves_previous_credentials(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    original = {"server_url": "http://localhost:8000", "access_token": "old-token"}
+    config_file.write_text(json.dumps(original))
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "http://localhost:8000")
+    get, post = _mock_login_http(monkeypatch, stale_port=True)
+
+    result = _run_json_login()
+
+    assert result.exit_code == 7, result.output
+    assert get.call_args_list[:2] == [
+        call("http://localhost:8000/health", timeout=10),
+        call("http://localhost/health", timeout=10),
+    ]
+    post.assert_not_called()
+    assert json.loads(result.stderr)["error"]["category"] == "validation"
+    assert auth.config.load_persisted() == original
+
+
+@pytest.mark.parametrize("failure", ["health", "password", "device"])
+def test_failed_login_preserves_saved_credentials(
+    failure: str, login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, _ = login_file_runtime
+    original = {"server_url": "https://old.example", "access_token": "old-token", "refresh_token": "old-refresh"}
+    config_file.write_text(json.dumps(original))
+    get, _ = _mock_login_http(monkeypatch)
+    if failure == "health":
+        get.side_effect = httpx.ConnectError("unreachable")
+    elif failure == "password":
+        monkeypatch.setattr(auth.httpx, "post", MagicMock(return_value=_response(401, {"detail": "invalid"})))
+    else:
+        monkeypatch.setattr(
+            auth,
+            "_do_device_flow_login",
+            MagicMock(
+                side_effect=CliError(
+                    ErrorCategory.AUTH, "Device authorization failed.", operation="Complete device authorization"
+                )
+            ),
+        )
+    from observal_cli.main import app
+
+    args = ["auth", "login", "--server", "dev.observal.io", "--output", "json"]
+    if failure == "device":
+        args.append("--sso")
+    else:
+        args.extend(["--email", "ada@example.test", "--password", VALID_PASSWORD])
+    result = CliRunner().invoke(app, args)
+
+    assert result.exit_code != 0
+    assert auth.config.load_persisted() == original
+
+
+def test_v1_login_migration_uses_persisted_url_not_override(
+    login_file_runtime: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, lock_path = login_file_runtime
+    config_file.write_text(json.dumps({"server_url": "https://old.example"}))
+    lock_path.write_text(json.dumps({"lock_version": 1, "harnesses": {"pi": {"agents": {"old": {}}}}}))
+    monkeypatch.setenv("OBSERVAL_SERVER_URL", "https://new.example")
+    _mock_login_http(monkeypatch)
+
+    result = _run_json_login()
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["server_url"] == "https://new.example"
+    assert list(json.loads(lock_path.read_text())["registries"]) == ["https://old.example"]
+    assert auth.config.load_persisted()["server_url"] == "https://new.example"
 
 
 def test_login_initializes_fresh_server_and_persists_only_returned_tokens(
