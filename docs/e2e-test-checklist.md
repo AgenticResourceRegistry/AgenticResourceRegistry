@@ -28,7 +28,7 @@ title: "E2E Test Checklist"
 - [ ] `make rebuild-clean`
 - [ ] Install the CLI from source:
   ```bash
-  git clone https://github.com/Observal/Observal.git
+  git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
   cd Observal
   uv tool install --editable .
   ```

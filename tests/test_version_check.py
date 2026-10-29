@@ -481,7 +481,7 @@ def test_fetch_from_server_swallows_transport_and_decode_failures(
 
 GITHUB_RELEASE = {
     "tag_name": "v2.4.1",
-    "html_url": "https://github.com/Observal/Observal/releases/tag/v2.4.1",
+    "html_url": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/releases/tag/v2.4.1",
     "published_at": "2026-07-08T08:00:00Z",
     "prerelease": False,
 }
@@ -651,7 +651,7 @@ def test_fetch_available_server_images_authenticates_filters_and_sorts(
     assert version_check.fetch_available_server_images() == ["2.0.0", "2.0.0rc1", "1.10.0", "1.2.0"]
     assert get.call_args_list == [
         call(
-            "https://ghcr.io/token?scope=repository:observal/observal-api:pull",
+            "https://ghcr.io/token?scope=repository:agenticresourceregistry/observal-api:pull",
             timeout=10,
             headers={"User-Agent": f"observal-cli/{current_version}"},
         ),
@@ -733,7 +733,7 @@ def test_verify_server_image_exists_uses_exact_manifest_request(
 
     assert version_check.verify_server_image_exists("2.4.1") is True
     get.assert_called_once_with(
-        "https://ghcr.io/token?scope=repository:observal/observal-api:pull",
+        "https://ghcr.io/token?scope=repository:agenticresourceregistry/observal-api:pull",
         timeout=10,
         headers={"User-Agent": f"observal-cli/{current_version}"},
     )
@@ -1337,7 +1337,10 @@ def test_check_version_compatibility_dev_server_prints_source_install(
         version_check.check_version_compatibility("https://registry.example.test")
 
     assert error.value.exit_code == 1
-    assert "uv tool install --force git+https://github.com/Observal/Observal@main" in messages[0]
+    assert (
+        "uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"
+        in messages[0]
+    )
     assert "observal-cli==" not in messages[0]
 
 

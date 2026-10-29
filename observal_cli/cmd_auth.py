@@ -1287,7 +1287,7 @@ def _normalize_config_value(key: str, value: str) -> object:
                 "update_check_repo must use owner/repository format.",
                 operation="Update CLI configuration",
                 resource=key,
-                remediation="Provide a value such as Observal/Observal or an empty string.",
+                remediation="Provide a value such as AgenticResourceRegistry/AgenticResourceRegistry or an empty string.",
             )
         return normalized
     return normalized
@@ -1599,9 +1599,8 @@ def _install_observal_skill():
 def _install_or_check_pi_extension():
     """Install or refresh the bundled Pi telemetry extension when Pi is detected.
 
-    Runs unconditionally (no prompt), mirroring skill install. An npm-configured
-    install is left untouched (only reported if stale). Never blocks login -
-    failures are printed and swallowed.
+    Runs unconditionally (no prompt), mirroring skill install. Never blocks
+    login - failures are printed and swallowed.
     """
     try:
         from observal_cli import pi_extension
@@ -1609,10 +1608,7 @@ def _install_or_check_pi_extension():
         status = pi_extension.check_status()
         if status.state == pi_extension.NOT_DETECTED:
             return
-        if status.action == "dedupe":
-            # Deleting a file mid-login is too surprising; doctor patch does it.
-            rprint(f"[yellow]{esc(status.message)}[/yellow]")
-        elif status.action in ("install", "refresh", "migrate", "restore"):
+        if status.action in ("install", "refresh", "migrate", "restore"):
             result = pi_extension.install_or_refresh(dry_run=False, status=status)
             verb = {"install": "Installed", "refresh": "Updated", "migrate": "Migrated", "restore": "Restored"}[
                 status.action

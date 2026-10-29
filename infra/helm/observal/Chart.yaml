@@ -10,26 +10,26 @@ description: >
 type: application
 version: 0.1.0
 appVersion: "latest"
-icon: https://raw.githubusercontent.com/Observal/Observal/main/docs/logo.svg
+icon: https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.svg
 keywords:
   - observal
   - ai-agents
   - observability
   - registry
-home: https://github.com/Observal/Observal
+home: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 sources:
-  - https://github.com/Observal/Observal
+  - https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 maintainers:
   - name: Observal Contributors
     email: harisrini21@gmail.com
-    url: https://github.com/Observal/Observal
+    url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Documentation
-      url: https://github.com/Observal/Observal/tree/main/docs/self-hosting
+      url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/tree/main/docs/self-hosting
     - name: Source
-      url: https://github.com/Observal/Observal
+      url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
     - name: Support
-      url: https://github.com/Observal/Observal/issues
+      url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues

@@ -47,7 +47,7 @@ Stages express dependency order, not release commitments. The three lanes can ad
 
 #### Trustworthy session and component attribution, P1
 
-**Status:** In progress. [PR #1671](https://github.com/Observal/Observal/pull/1671) corrected Kiro agent attribution, but the completion signal covers every supported harness and component.
+**Status:** In progress. [PR #1671](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1671) corrected Kiro agent attribution, but the completion signal covers every supported harness and component.
 
 Resolve each attributable session to the exact installed agent version and component IDs and versions, including standalone components. Reuse the lockfile and layer snapshot as installation evidence, preserve explicit `unknown` and dirty-install states, and never infer attribution from a display name alone.
 
@@ -55,7 +55,7 @@ Resolve each attributable session to the exact installed agent version and compo
 
 #### Harness and session-data correctness gate, P1
 
-**Status:** In progress. [PR #1667](https://github.com/Observal/Observal/pull/1667) added Goose coverage and [PR #1671](https://github.com/Observal/Observal/pull/1671) strengthened Kiro attribution, but the cross-harness interruption and repair gate is not complete.
+**Status:** In progress. [PR #1667](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1667) added Goose coverage and [PR #1671](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1671) strengthened Kiro attribution, but the cross-harness interruption and repair gate is not complete.
 
 Exercise source discovery, complete-record handling, durable outbox delivery, contiguous checkpoints, finalization repair, parsing, and reconciliation for every supported harness. Recovery and normal hooks must continue to use the same ingest contract.
 
@@ -65,13 +65,13 @@ Exercise source discovery, complete-record handling, durable outbox delivery, co
 
 **Status:** Planned.
 
-Test the current management dashboard with real leadership users and realistic multi-month, high-agent-count data. Establish the questions leaders need answered, the source-of-truth formula for each KPI, a recurring feedback cadence, and whether users trust each result. Use the evidence to iterate toward [issue #1592](https://github.com/Observal/Observal/issues/1592): one clearer effectiveness view, per-agent drilldowns, and contextual URL-backed filters. Treat its proposed layouts and charts as hypotheses until testing supports them.
+Test the current management dashboard with real leadership users and realistic multi-month, high-agent-count data. Establish the questions leaders need answered, the source-of-truth formula for each KPI, a recurring feedback cadence, and whether users trust each result. Use the evidence to iterate toward [issue #1592](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues/1592): one clearer effectiveness view, per-agent drilldowns, and contextual URL-backed filters. Treat its proposed layouts and charts as hypotheses until testing supports them.
 
 **Complete when:** adoption, effectiveness, cost, success, and per-agent questions have validated formulas and source attribution; feedback rounds produce tracked decisions; and users can explain both a metric and the evidence behind it. This pilot continues across all three stages.
 
 #### Insights and dashboard feedback loop, P0
 
-**Status:** In progress. [PR #1638](https://github.com/Observal/Observal/pull/1638) added evidence-backed registry recommendations, and [PR #1669](https://github.com/Observal/Observal/pull/1669) is adding completed insight reports to Inbox. Component and success-criteria findings remain.
+**Status:** In progress. [PR #1638](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1638) added evidence-backed registry recommendations, and [PR #1669](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1669) is adding completed insight reports to Inbox. Component and success-criteria findings remain.
 
 Start with current agent reports and dashboard data, then extend the same evidence model to component and success-criteria findings. Route completed reports and actionable findings through Inbox rather than building another notification or analytics system.
 
@@ -89,7 +89,7 @@ Provide component-level analysis comparable to agent insights: attributed sessio
 
 #### Success-criteria evaluation in Insights, P1
 
-**Status:** Planned. [PR #1623](https://github.com/Observal/Observal/pull/1623) added agent success-criteria metadata, but version-correct evaluation and component criteria are not implemented.
+**Status:** Planned. [PR #1623](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1623) added agent success-criteria metadata, but version-correct evaluation and component criteria are not implemented.
 
 Load server-side criteria for the session-attributed agent and component versions. Evaluate each metric as `met`, `not_met`, or `insufficient_evidence`, with trace-backed reasoning, and use those results throughout the report without fabricating measurements.
 
@@ -121,7 +121,7 @@ Vendor a pinned and attributed copy of the official `skills-ref` validation and 
 
 #### Configurable pull-request-style review, P1
 
-**Status:** In progress. Existing version and review routes provide the base, and [PR #1669](https://github.com/Observal/Observal/pull/1669) adds review assignments and decisions to Inbox. Conversations, approval counts, and policy presets remain.
+**Status:** In progress. Existing version and review routes provide the base, and [PR #1669](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1669) adds review assignments and decisions to Inbox. Conversations, approval counts, and policy presets remain.
 
 Replace binary review friction with a GitHub/GitLab-style, version-scoped workflow: full diffs, line- and field-anchored threads, general discussion, blocking and non-blocking feedback, change requests, resolved conversations, activity history, reviewer state, and configurable approval counts.
 
@@ -137,7 +137,7 @@ Ownership, visibility, source, failed validation, and new or expanded executable
 
 #### Server-side success criteria for agents and components, P1
 
-**Status:** In progress. [PR #1623](https://github.com/Observal/Observal/pull/1623) added agent success criteria, but it stores them in local manifests and snapshots and does not cover every component type, so the completion signal is not met.
+**Status:** In progress. [PR #1623](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1623) added agent success criteria, but it stores them in local manifests and snapshots and does not cover every component type, so the completion signal is not met.
 
 Add first-class CLI and web workflows to define, inspect, update, and clear optional criteria for agents and every component type. Criteria are server-side version metadata only: exclude them from local agent manifests, lockfiles, generated harness configuration, component packages, and install responses. Any criteria change requires an explicit semantic-version bump and follows the configured review policy.
 
@@ -155,7 +155,7 @@ Let an owner link a GitHub or GitLab repository to an external skill or MCP. A v
 
 #### Independent fork drafts, P1
 
-**Status:** In progress. Implemented in [PR #1799](https://github.com/Observal/Observal/pull/1799) (Phases 0–5), pending review and merge.
+**Status:** In progress. Implemented in [PR #1799](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1799) (Phases 0–5), pending review and merge.
 
 Fork a selected agent or component version into a provenance-linked draft in a personal or team namespace. Agent forks retain existing component references and never recursively fork components; each component fork is a separate explicit action.
 
@@ -163,7 +163,7 @@ Fork a selected agent or component version into a provenance-linked draft in a p
 
 #### Transfer ownership to a teamspace, P1
 
-**Status:** In progress. [PR #1619](https://github.com/Observal/Observal/pull/1619) added teamspace identity and membership, and [PR #1640](https://github.com/Observal/Observal/pull/1640) added team publishing and visibility. Accepted, audited transfer into a teamspace remains.
+**Status:** In progress. [PR #1619](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1619) added teamspace identity and membership, and [PR #1640](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1640) added team publishing and visibility. Accepted, audited transfer into a teamspace remains.
 
 Extend ownership transfer so an agent or component can move from a user namespace into a teamspace. Require acceptance by a team owner, preserve version, review, and provenance history, update its canonical namespace route, and apply the destination team's visibility and review policy.
 
@@ -171,7 +171,7 @@ Extend ownership transfer so an agent or component can move from a user namespac
 
 #### Organization recommendation badge, P1
 
-**Status:** Planned. [PR #1638](https://github.com/Observal/Observal/pull/1638) added personalized recommendations, not organization endorsements.
+**Status:** Planned. [PR #1638](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1638) added personalized recommendations, not organization endorsements.
 
 Allow a global admin to endorse an agent or component on behalf of the organization, for example, “Recommended by Appian,” with organization branding on cards and detail pages and a deliberate recommendation and search boost.
 
@@ -189,7 +189,7 @@ Browse skills from Claude Code marketplaces, skills.sh, and AWS, Azure, and GCP 
 
 #### SDLC refinement from usage, P1
 
-**Status:** In progress. [PR #1638](https://github.com/Observal/Observal/pull/1638) added recommendations based on session evidence and registry reuse, but criteria evaluation and review-history signals remain.
+**Status:** In progress. [PR #1638](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1638) added recommendations based on session evidence and registry reuse, but criteria evaluation and review-history signals remain.
 
 Use component insights, criteria evaluations, review history, and source provenance to improve search, ranking, and owner workflows without creating a second analytics system.
 
@@ -201,7 +201,7 @@ Use component insights, criteria evaluations, review history, and source provena
 
 #### Agent-ready CLI contract, P1
 
-**Status:** In progress. [PR #1687](https://github.com/Observal/Observal/pull/1687) established shared table and JSON output modes. [PR #1690](https://github.com/Observal/Observal/pull/1690) adds validated examples to every help screen, removes duplicate example options, and adds the categorized error contract across the command tree. The help and error slices are complete; universal command-by-command output, empty-state, prompt and progress behavior, and bundled-skill JSON use still require verification before the completion signal is met.
+**Status:** In progress. [PR #1687](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1687) established shared table and JSON output modes. [PR #1690](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1690) adds validated examples to every help screen, removes duplicate example options, and adds the categorized error contract across the command tree. The help and error slices are complete; universal command-by-command output, empty-state, prompt and progress behavior, and bundled-skill JSON use still require verification before the completion signal is met.
 
 Treat the CLI as an agent-facing API while preserving a clear human default:
 
@@ -214,7 +214,7 @@ Treat the CLI as an agent-facing API while preserving a clear human default:
 
 #### Agent-readiness audit for every CLI command, P1
 
-**Status:** In progress in [PR #1690](https://github.com/Observal/Observal/pull/1690), which adds the CLI authoring contract and whole-tree help and error-boundary checks. The command-by-command bundled-skill matrix and supported-harness workflow trials remain.
+**Status:** In progress in [PR #1690](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1690), which adds the CLI authoring contract and whole-tree help and error-boundary checks. The command-by-command bundled-skill matrix and supported-harness workflow trials remain.
 
 Exercise each command through its relevant bundled skill. Verify stable schemas and exit codes, complete non-interactive inputs, confirmation and dry-run safety, idempotence, bounded pagination and output, secret safety, realistic help examples, and exact next actions. Maintain a runnable command-by-command contract and smoke matrix and trial workflows through supported harness agents.
 
@@ -222,7 +222,7 @@ Exercise each command through its relevant bundled skill. Verify stable schemas 
 
 #### Cross-product actionable Inbox, P1
 
-**Status:** In progress in [PR #1669](https://github.com/Observal/Observal/pull/1669). That pull request adds the durable inbox foundation, review assignments and decisions, requested insight completion, and manually reported update notices. Review conversations, teamspace request events, and relevant system actions remain.
+**Status:** In progress in [PR #1669](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1669). That pull request adds the durable inbox foundation, review assignments and decisions, requested insight completion, and manually reported update notices. Review conversations, teamspace request events, and relevant system actions remain.
 
 Create a durable per-user work and event feed, not only a notification bell. Cover installed-item updates, review assignments and conversations, change requests and decisions, teamspace requests, completed insights and reports, and relevant admin and system actions. Web and `observal inbox` support filters, unread and action-required state, history, and exact links or commands for taking action.
 
@@ -238,7 +238,7 @@ Replace user-facing UUID links with `/agents/{namespace}/{slug}`, `/components/{
 
 #### Installed-item update notices, P0
 
-**Status:** In progress in [PR #1669](https://github.com/Observal/Observal/pull/1669), which persists explicit `observal outdated` findings in Inbox. Periodic non-blocking checks and verified exact upgrade commands remain.
+**Status:** In progress in [PR #1669](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1669), which persists explicit `observal outdated` findings in Inbox. Periodic non-blocking checks and verified exact upgrade commands remain.
 
 Reuse the installed lockfile inventory and outdated comparison to show a periodic, non-blocking “update available” notice for installed agents and components in the terminal and create the corresponding Inbox item. Do not update automatically.
 
@@ -246,7 +246,7 @@ Reuse the installed lockfile inventory and outdated comparison to show a periodi
 
 #### Teamspace creation and membership approvals, P0
 
-**Status:** In progress. [PR #1619](https://github.com/Observal/Observal/pull/1619) added teamspaces and direct membership management, and [PR #1640](https://github.com/Observal/Observal/pull/1640) added team publishing. Membership request and approval workflows remain.
+**Status:** In progress. [PR #1619](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1619) added teamspaces and direct membership management, and [PR #1640](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1640) added team publishing. Membership request and approval workflows remain.
 
 Any signed-in user can create a teamspace and becomes its initial owner. Teamspace creation is immediate and audited; it does not require admin approval. Team owners approve or reject membership requests, with requester, reviewer, decision, reason, and timestamps persisted in Inbox and history. Keep owner-driven direct member addition.
 
@@ -254,7 +254,7 @@ Any signed-in user can create a teamspace and becomes its initial owner. Teamspa
 
 #### Teamspace share-to-join, P0
 
-**Status:** Planned. Teamspace pages and membership exist from [PR #1619](https://github.com/Observal/Observal/pull/1619), but shared request-to-join links do not.
+**Status:** Planned. Teamspace pages and membership exist from [PR #1619](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1619), but shared request-to-join links do not.
 
 Add a Share button that copies the canonical `/teamspaces/{handle}` page. An anonymous recipient is prompted to sign in and redirected back to that page, where they explicitly select **Request to join**. The request asks only for member access and enters the owner approval flow; the shared link never grants access directly.
 
@@ -262,7 +262,7 @@ Add a Share button that copies the canonical `/teamspaces/{handle}` page. An ano
 
 #### Audited logging for agent-led debugging, P1
 
-**Status:** In progress. [PR #1666](https://github.com/Observal/Observal/pull/1666) fixed dropped security audit records and missing exception tracebacks. The end-to-end seeded failure audit remains.
+**Status:** In progress. [PR #1666](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1666) fixed dropped security audit records and missing exception tracebacks. The end-to-end seeded failure audit remains.
 
 Audit server and CLI logging for useful structured fields and levels, request and job correlation, retention and availability, failure-path coverage, and secret and PII redaction. Trial logging against seeded failures across deployment and harness paths before Debug-as-a-skill depends on it.
 
@@ -270,15 +270,15 @@ Audit server and CLI logging for useful structured fields and levels, request an
 
 #### Protected canonical release branches and tags, P1
 
-**Status:** In progress. [PR #1642](https://github.com/Observal/Observal/pull/1642), [PR #1644](https://github.com/Observal/Observal/pull/1644), [PR #1648](https://github.com/Observal/Observal/pull/1648), [PR #1651](https://github.com/Observal/Observal/pull/1651), [PR #1655](https://github.com/Observal/Observal/pull/1655), and [PR #1656](https://github.com/Observal/Observal/pull/1656) hardened release generation, merge-queue operation, provenance, and recovery. Canonical release branches and every stated repository control are not yet complete.
+**Status:** In progress. [PR #1642](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1642), [PR #1644](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1644), [PR #1648](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1648), [PR #1651](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1651), [PR #1655](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1655), and [PR #1656](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1656) hardened release generation, merge-queue operation, provenance, and recovery. Canonical release branches and every stated repository control are not yet complete.
 
-Move `release/v*` branches from maintainer forks into `Observal/Observal`. Protect `main`, `release/v*`, and `v*` tags with pull requests, two approvals, CODEOWNERS, stale-review dismissal, last-push approval, required CI and security checks, merge queue, and no force-push, deletion, or admin bypass. Restrict release-tag creation and publishing to the release app without changing the current curated cutoff semantics.
+Move `release/v*` branches from maintainer forks into `AgenticResourceRegistry/AgenticResourceRegistry`. Protect `main`, `release/v*`, and `v*` tags with pull requests, two approvals, CODEOWNERS, stale-review dismissal, last-push approval, required CI and security checks, merge queue, and no force-push, deletion, or admin bypass. Restrict release-tag creation and publishing to the release app without changing the current curated cutoff semantics.
 
 **Complete when:** repository rulesets enforce these controls, release recovery still works, and the public Scorecard observes the protected branches and tags.
 
 #### Official OpenSSF Best Practices Gold, P0
 
-**Status:** In progress. Recent foundations include Scorecard in [PR #1643](https://github.com/Observal/Observal/pull/1643), dependency and permission hardening in [PR #1645](https://github.com/Observal/Observal/pull/1645), pinned dependencies and signed provenance in [PR #1648](https://github.com/Observal/Observal/pull/1648), parallel test execution in [PR #1652](https://github.com/Observal/Observal/pull/1652), and local OSS-Fuzz integration in [PR #1668](https://github.com/Observal/Observal/pull/1668). This document supplies the required public one-year roadmap. The official Gold record has not yet been awarded.
+**Status:** In progress. Recent foundations include Scorecard in [PR #1643](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1643), dependency and permission hardening in [PR #1645](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1645), pinned dependencies and signed provenance in [PR #1648](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1648), parallel test execution in [PR #1652](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1652), and local OSS-Fuzz integration in [PR #1668](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1668). This document supplies the required public one-year roadmap. The official Gold record has not yet been awarded.
 
 Drive the project from Passing through Silver to the official Gold badge. Required evidence includes reproducible builds, at least 90% statement and 80% branch coverage, two-person review, qualifying independent contributors, hardened project and download sites and modern TLS, and a documented security review.
 
@@ -316,7 +316,7 @@ The web frontend also offers an optional guided tour that spotlights where new f
 
 #### Google OSS-Fuzz integration, P1
 
-**Status:** In progress. [PR #1668](https://github.com/Observal/Observal/pull/1668) added local OSS-Fuzz configuration, session parser and redaction fuzzers, corpora, and regression tests. The project is not yet present in the upstream `google/oss-fuzz` repository, and Agent Skills and SCIM filter targets remain.
+**Status:** In progress. [PR #1668](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1668) added local OSS-Fuzz configuration, session parser and redaction fuzzers, corpora, and regression tests. The project is not yet present in the upstream `google/oss-fuzz` repository, and Agent Skills and SCIM filter targets remain.
 
 Register Observal with OSS-Fuzz and run continuous Atheris fuzzing against untrusted session parser dispatch for every harness, the vendored Agent Skills parser and validator, and the SCIM filter parser. Maintain seed corpora and turn each confirmed crash into a small repository regression test.
 
@@ -324,7 +324,7 @@ Register Observal with OSS-Fuzz and run continuous Atheris fuzzing against untru
 
 #### Sustained OpenSSF Scorecard 9+, P1
 
-**Status:** In progress. [PR #1643](https://github.com/Observal/Observal/pull/1643) added Scorecard, [PR #1645](https://github.com/Observal/Observal/pull/1645) tightened dependencies and permissions, [PR #1648](https://github.com/Observal/Observal/pull/1648) added pinned dependencies and signed provenance, and [PR #1668](https://github.com/Observal/Observal/pull/1668) added local fuzzing integration. A recurring public score of at least 9.0 has not yet been sustained.
+**Status:** In progress. [PR #1643](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1643) added Scorecard, [PR #1645](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1645) tightened dependencies and permissions, [PR #1648](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1648) added pinned dependencies and signed provenance, and [PR #1668](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1668) added local fuzzing integration. A recurring public score of at least 9.0 has not yet been sustained.
 
 Raise the public score from 7.9 at roadmap creation to at least 9.0 and keep it there across recurring scans. Maintain underlying controls: human review, branch protection, Gold evidence, continuous fuzzing, complete SAST, and consistently signed and provenance-bearing releases.
 
@@ -332,7 +332,7 @@ Raise the public score from 7.9 at roadmap creation to at least 9.0 and keep it 
 
 #### Transactional local server upgrade and rollback, P2
 
-**Status:** In progress. [PR #1662](https://github.com/Observal/Observal/pull/1662) made migration failures fail safely instead of stamping a broken database as current. Coherent backup, health verification, and automatic full rollback remain.
+**Status:** In progress. [PR #1662](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/1662) made migration failures fail safely instead of stamping a broken database as current. Coherent backup, health verification, and automatic full rollback remain.
 
 Harden `observal server upgrade` and explicit rollback around a coherent backup of PostgreSQL, API and JWT keys, ClickHouse data, and image and config state. Pull and recreate target containers, apply migrations, run health and smoke checks, and restore all previous state automatically on any failure. Do not add a remote arbitrary-execution control plane.
 
@@ -373,7 +373,7 @@ Future epics should extend these committed contracts instead of creating paralle
 - **Session delivery and repair contract:** [`docs/core-concepts/session-tracking.md`](docs/core-concepts/session-tracking.md), [`observal-server/api/routes/ingest.py`](observal-server/api/routes/ingest.py), and [`observal-server/services/session_ingest.py`](observal-server/services/session_ingest.py)
 - **Installed state and layer evidence:** [`observal_cli/lockfile.py`](observal_cli/lockfile.py), [`observal_cli/layer.py`](observal_cli/layer.py), and [`observal-server/api/routes/layer_snapshot.py`](observal-server/api/routes/layer_snapshot.py)
 - **Harness parsers and extension guide:** [`observal-server/services/session_parsers/`](observal-server/services/session_parsers/) and [`docs/adding-a-harness.md`](docs/adding-a-harness.md)
-- **Management dashboard:** [`observal-server/api/routes/exec_dashboard.py`](observal-server/api/routes/exec_dashboard.py), [`web/src/pages/admin/dashboard/`](web/src/pages/admin/dashboard/), and [issue #1592](https://github.com/Observal/Observal/issues/1592)
+- **Management dashboard:** [`observal-server/api/routes/exec_dashboard.py`](observal-server/api/routes/exec_dashboard.py), [`web/src/pages/admin/dashboard/`](web/src/pages/admin/dashboard/), and [issue #1592](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues/1592)
 - **Agent and component versions and review:** [`observal-server/api/routes/agent_versions.py`](observal-server/api/routes/agent_versions.py), [`observal-server/api/routes/component_versions.py`](observal-server/api/routes/component_versions.py), [`observal-server/api/routes/review.py`](observal-server/api/routes/review.py), and [`web/src/components/review/`](web/src/components/review/)
 - **Skills:** [`observal-server/schemas/skill.py`](observal-server/schemas/skill.py), [`observal-server/services/skill_validator.py`](observal-server/services/skill_validator.py), and [`docs/cli/skill.md`](docs/cli/skill.md)
 - **CLI and bundled skills:** [`observal_cli/main.py`](observal_cli/main.py), [`observal_cli/client.py`](observal_cli/client.py), [`observal_cli/render.py`](observal_cli/render.py), and [`observal_cli/skills/`](observal_cli/skills/)

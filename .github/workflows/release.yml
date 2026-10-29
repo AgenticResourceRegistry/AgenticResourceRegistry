@@ -26,13 +26,13 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/observal/observal
+  IMAGE_PREFIX: ghcr.io/agenticresourceregistry/observal
 
 jobs:
   # ── Preflight: detect and validate the release commit ─────
   preflight:
     name: Preflight checks
-    if: github.repository == 'Observal/Observal'
+    if: github.repository == 'AgenticResourceRegistry/AgenticResourceRegistry'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -434,61 +434,7 @@ jobs:
         if: steps.published.outputs.already_published != 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
-  # ── Job 5: npm publish (after approval) ────────────────────
-  npm:
-    name: Publish to npm
-    needs: [preflight, tag]
-    if: needs.tag.result == 'success'
-    runs-on: ubuntu-latest
-    environment: npm
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.preflight.outputs.target }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Sync version from release
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          cd packages/pi-extension
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-      - name: Check if already published
-        id: published
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/observal-pi/$VERSION")
-          if [ "$STATUS" = "200" ]; then
-            echo "already_published=true" >> "$GITHUB_OUTPUT"
-          elif [ "$STATUS" = "404" ]; then
-            echo "already_published=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::npm version lookup failed: HTTP $STATUS"
-            exit 1
-          fi
-
-      - name: Publish observal-pi
-        if: steps.published.outputs.already_published != 'true'
-        env:
-          CHANNEL: ${{ needs.preflight.outputs.channel }}
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          DIST_TAG=$(python3 -c 'import os; from tools.release import distribution_tag, version_tags; print(distribution_tag(os.environ["VERSION"], os.environ["CHANNEL"], version_tags()))')
-          cd packages/pi-extension
-          npm publish --access public --tag "$DIST_TAG"
-
-  # ── Job 6: Helm chart to GHCR (after approval) ────────────
+  # ── Job 5: Helm chart to GHCR (after approval) ────────────
   helm-chart:
     name: Publish Helm chart
     needs: [preflight, approve, tag]
@@ -529,8 +475,8 @@ jobs:
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
-          HELM_OCI_REPO="oci://ghcr.io/observal/charts"
-          HELM_OCI_REF="ghcr.io/observal/charts/observal"
+          HELM_OCI_REPO="oci://ghcr.io/agenticresourceregistry/charts"
+          HELM_OCI_REF="ghcr.io/agenticresourceregistry/charts/observal"
 
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
             --username "${{ github.actor }}" \
@@ -554,7 +500,7 @@ jobs:
   # ── Final: Create GitHub Release with all artifacts ────────
   release:
     name: GitHub Release
-    needs: [preflight, cli-binaries, docker-merge, server-package, pypi, npm, helm-chart, tag]
+    needs: [preflight, cli-binaries, docker-merge, server-package, pypi, helm-chart, tag]
     if: needs.tag.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -701,18 +647,17 @@ jobs:
             done
             return 1
           }
-          gh release view "v$VERSION" --repo Observal/Observal --json isDraft --jq '.isDraft' | grep -qx false
+          gh release view "v$VERSION" --repo AgenticResourceRegistry/AgenticResourceRegistry --json isDraft --jq '.isDraft' | grep -qx false
           mkdir downloaded
-          gh release download "v$VERSION" --repo Observal/Observal --dir downloaded
+          gh release download "v$VERSION" --repo AgenticResourceRegistry/AgenticResourceRegistry --dir downloaded
           (cd downloaded && sha256sum --check checksums.txt)
           chmod +x downloaded/observal-linux-x64
           ./downloaded/observal-linux-x64 --version | grep -F "$PYTHON_VERSION"
           retry curl --fail --silent --show-error "https://pypi.org/pypi/observal-cli/$PYTHON_VERSION/json" -o /dev/null
-          retry sh -c "npm view 'observal-pi@$VERSION' version | grep -qx '$VERSION'"
           echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           retry docker buildx imagetools inspect "${{ env.IMAGE_PREFIX }}-api:$VERSION"
           retry docker buildx imagetools inspect "${{ env.IMAGE_PREFIX }}-web:$VERSION"
-          retry helm pull oci://ghcr.io/observal/charts/observal --version "$VERSION" --destination /tmp
+          retry helm pull oci://ghcr.io/agenticresourceregistry/charts/observal --version "$VERSION" --destination /tmp
           retry sh -c "uvx --refresh --from 'observal-cli==$PYTHON_VERSION' observal --version | grep -F '$PYTHON_VERSION'"
 
   promote:

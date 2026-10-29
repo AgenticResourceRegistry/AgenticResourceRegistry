@@ -37,7 +37,7 @@ class PiAdapter(BaseAdapter):
 
     Pi is harness-centric: the entirety of pi IS one agent.
     MCP servers are managed via pi-mcp-adapter (reads ~/.pi/agent/mcp.json).
-    Hooks are delivered as the observal-pi package.
+    Hooks are delivered as the bundled observal.ts extension.
     """
 
     home_markers = (".pi",)
@@ -212,7 +212,7 @@ class PiAdapter(BaseAdapter):
                     if not isinstance(value, str):
                         continue
                     extension_name = Path(value.removeprefix("+").removeprefix("-")).stem
-                    if extension_name in {"observal", "observal-pi"} or "observal-pi" in value:
+                    if extension_name == "observal":
                         continue
                     safe_value = redact_text(Path(value.removeprefix("+").removeprefix("-")).name)
                     scanner.add_component(
@@ -234,14 +234,12 @@ class PiAdapter(BaseAdapter):
         return HookSpec(
             events=[],
             format="extension",
-            markers=["observal-pi"],
+            markers=["observal"],
         )
 
     def detect_hooks(self, config_dir: Path) -> str:
-        """Check for the local Observal extension file or a configured npm:observal-pi package."""
-        from observal_cli.pi_extension import is_npm_configured
-
-        if (config_dir / "extensions" / "observal.ts").is_file() or is_npm_configured(config_dir):
+        """Check for the local Observal extension file."""
+        if (config_dir / "extensions" / "observal.ts").is_file():
             return "installed"
         return "missing"
 

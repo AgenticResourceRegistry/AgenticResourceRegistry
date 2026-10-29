@@ -73,14 +73,14 @@ We are a small, active community and we take the quality of interactions serious
 >
 > * Pinging contributors, maintainers, or reviewers unnecessarily (outside of a direct reply on your own open PR or issue)
 > * Submitting low-effort or unreviewed PRs (slop), including unreviewed AI output or autonomous agent submissions
-> * Violating the [Code of Conduct](https://github.com/Observal/Observal/blob/main/CODE_OF_CONDUCT.md) in any channel
+> * Violating the [Code of Conduct](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CODE_OF_CONDUCT.md) in any channel
 > * Harassing reviewers over merge timelines
 
 Maintainers volunteer their time. Treat them accordingly.
 
 ### A note on autonomous coding agents
 
-**Autonomous coding agents (Devin, SWE-agent, OpenHands, etc.) are not permitted to submit PRs.** This is a legal constraint, not a quality judgment. The US Copyright Office's 2025 guidance confirms that purely AI-generated code has no copyright owner, which breaks our CLA and our ability to license and enforce the project. See the [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md) for the full explanation.
+**Autonomous coding agents (Devin, SWE-agent, OpenHands, etc.) are not permitted to submit PRs.** This is a legal constraint, not a quality judgment. The US Copyright Office's 2025 guidance confirms that purely AI-generated code has no copyright owner, which breaks our CLA and our ability to license and enforce the project. See the [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md) for the full explanation.
 
 ***
 
@@ -159,7 +159,7 @@ cd Observal
 3. Add the upstream remote so you can pull in changes from the main repo:
 
 ```bash
-git remote add upstream https://github.com/Observal/Observal.git
+git remote add upstream https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 ```
 
 4. Verify your remotes:
@@ -168,8 +168,8 @@ git remote add upstream https://github.com/Observal/Observal.git
 git remote -v
 # origin    git@github.com:YOUR-USERNAME/Observal.git (fetch)
 # origin    git@github.com:YOUR-USERNAME/Observal.git (push)
-# upstream  https://github.com/Observal/Observal.git (fetch)
-# upstream  https://github.com/Observal/Observal.git (push)
+# upstream  https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git (fetch)
+# upstream  https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git (push)
 ```
 
 ***
@@ -306,7 +306,7 @@ They are not interchangeable. Never write telemetry to Postgres or relational da
 
 **Supporting services:** Redis (pub/sub + arq job queue), arq worker, nginx reverse proxy. Prometheus and Grafana are optional.
 
-See [AGENTS.md](https://github.com/Observal/Observal/blob/main/AGENTS.md) for a complete map of every important file and service.
+See [AGENTS.md](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AGENTS.md) for a complete map of every important file and service.
 
 ***
 
@@ -373,7 +373,7 @@ git push origin feature/my-feature --force-with-lease
     ```bash
     git push origin feature/my-feature
     ```
-3. GitHub will show a banner on your fork offering to open a PR. Click it, or go to the [Observal repository](https://github.com/Observal/Observal) directly.
+3. GitHub will show a banner on your fork offering to open a PR. Click it, or go to the [Observal repository](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry) directly.
 4. Fill in the PR template completely. PRs that do not follow the template will be closed.
 5. Link the related issue if one exists (`Fixes #123` in the PR body closes it automatically on merge).
 
@@ -648,8 +648,8 @@ Before opening a PR:
 * [ ] PR template is filled in completely and reviewed by the accountable human contributor
 * [ ] CHANGELOG.md updated under `[Unreleased]` for user-facing changes
 * [ ] Frontend changes include screenshots in the PR body
-* [ ] AI-assisted contributions labelled with tool name and version (see [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md))
-* [ ] No unattended agent submissions without meaningful human direction and review (see [AI Policy](https://github.com/Observal/Observal/blob/main/AI_POLICY.md))
+* [ ] AI-assisted contributions labelled with tool name and version (see [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md))
+* [ ] No unattended agent submissions without meaningful human direction and review (see [AI Policy](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md))
 
 ***
 

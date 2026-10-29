@@ -18,7 +18,7 @@ Observal's [security assurance case](docs/security/assurance-case.md) documents 
 
 If you discover a security vulnerability in Observal, please report it responsibly through one of these channels:
 
-1. **GitHub Private Vulnerability Reporting** (preferred): Go to the [Security Advisories](https://github.com/Observal/Observal/security/advisories) page and click "Report a vulnerability".
+1. **GitHub Private Vulnerability Reporting** (preferred): Go to the [Security Advisories](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/security/advisories) page and click "Report a vulnerability".
 2. **Email**: Send details to **contact@observal.io**.
 
 ### What to Include

@@ -5,7 +5,7 @@
 title: "Troubleshooting"
 ---
 
-Common failure modes and their fixes. If none of these match, open a [GitHub Discussion](https://github.com/Observal/Observal/discussions) with the output of `observal auth status` and relevant logs from `docker compose logs`.
+Common failure modes and their fixes. If none of these match, open a [GitHub Discussion](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/discussions) with the output of `observal auth status` and relevant logs from `docker compose logs`.
 
 ## Install and CLI
 
@@ -162,5 +162,5 @@ Browser cookies aren't being set. Usually one of:
 * Logs: `docker compose -f docker/docker-compose.yml logs -f`
 * Health: `curl http://localhost/health`
 * Status: `observal auth status`
-* Community: [GitHub Discussions](https://github.com/Observal/Observal/discussions)
-* Bugs: [GitHub Issues](https://github.com/Observal/Observal/issues). Please use Discussions for questions, Issues only for confirmed bugs
+* Community: [GitHub Discussions](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/discussions)
+* Bugs: [GitHub Issues](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues). Please use Discussions for questions, Issues only for confirmed bugs

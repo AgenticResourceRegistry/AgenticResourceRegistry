@@ -33,14 +33,14 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <a href="https://pypi.org/project/observal-cli/"><img src="https://img.shields.io/pypi/v/observal-cli?style=flat-square&logo=pypi&logoColor=white&label=pypi" alt="PyPI version"></a>
-  <a href="https://github.com/Observal/Observal/graphs/contributors"><img src="https://img.shields.io/github/contributors/Observal/Observal?style=flat-square&logo=github" alt="Contributors"></a>
+  <a href="https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/graphs/contributors"><img src="https://img.shields.io/github/contributors/AgenticResourceRegistry/AgenticResourceRegistry?style=flat-square&logo=github" alt="Contributors"></a>
   <a href="https://discord.gg/SFPjnTWddk"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FSFPjnTWddk%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=Discord&logo=discord&color=5865F2&style=flat-square" alt="Discord Server"></a>
-  <a href="https://github.com/orgs/Observal/packages?repo_name=Observal"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Haz3-jolt/b28aba6d0efebb0b430d43c8068feb91/raw/ghcr-pulls.json&style=flat-square" alt="GHCR pulls"></a>
+  <a href="https://github.com/orgs/AgenticResourceRegistry/packages?repo_name=AgenticResourceRegistry"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Haz3-jolt/b28aba6d0efebb0b430d43c8068feb91/raw/ghcr-pulls.json&style=flat-square" alt="GHCR pulls"></a>
   <a href="https://artifacthub.io/packages/search?repo=observal"><img src="https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/observal" alt="Artifact Hub"></a>
-  <a href="https://cla-assistant.io/Observal/Observal"><img src="https://cla-assistant.io/readme/badge/Observal/Observal" alt="CLA assistant" /></a>
-  <a href="https://scorecard.dev/viewer/?uri=github.com/Observal/Observal"><img src="https://api.scorecard.dev/projects/github.com/Observal/Observal/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://cla-assistant.io/AgenticResourceRegistry/AgenticResourceRegistry"><img src="https://cla-assistant.io/readme/badge/AgenticResourceRegistry/AgenticResourceRegistry" alt="CLA assistant" /></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/AgenticResourceRegistry/AgenticResourceRegistry"><img src="https://api.scorecard.dev/projects/github.com/AgenticResourceRegistry/AgenticResourceRegistry/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://www.bestpractices.dev/projects/13472"><img src="https://www.bestpractices.dev/projects/13472/badge" alt="OpenSSF Best Practices"></a>
-  <a href="https://codecov.io/gh/Observal/Observal"><img src="https://codecov.io/gh/Observal/Observal/graph/badge.svg?branch=main" alt="Codecov"></a>
+  <a href="https://codecov.io/gh/AgenticResourceRegistry/AgenticResourceRegistry"><img src="https://codecov.io/gh/AgenticResourceRegistry/AgenticResourceRegistry/graph/badge.svg?branch=main" alt="Codecov"></a>
 </p>
 
 > If you find Observal useful, please consider giving it a star. It helps others discover the project and keeps development going.
@@ -106,7 +106,7 @@ Observal has two parts: a **server** (API + web UI + databases) you self-host, a
 **One-line install** (requires Docker Engine ≥ 24.0 with Compose v2):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install-server.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
 ```
 
 This downloads a Docker Compose package, generates operator-owned secret files with restricted container-group access, binds published ports to loopback by default, pulls container images from GHCR, and starts the stack. With a terminal it runs guided setup; without a terminal the same command applies safe defaults automatically.
@@ -124,7 +124,7 @@ Deployment docs are linked directly from this README:
 **From source** (for contributors):
 
 ```bash
-git clone https://github.com/Observal/Observal.git && cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd Observal
 cp .env.example .env
 make up
 ```
@@ -135,12 +135,12 @@ make up
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/Observal/Observal/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
 ```
 
 Connecting to an existing server? See the [Setup guide](docs/getting-started/onboarding.md).
@@ -342,7 +342,7 @@ See [AGENTS.md](AGENTS.md) for internal codebase context.
 
 ## Community
 
-[GitHub Discussions](https://github.com/Observal/Observal/discussions) for questions and ideas. [Discord](https://discord.observal.io) for chat. Open Issues for confirmed bugs.
+[GitHub Discussions](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/discussions) for questions and ideas. [Discord](https://discord.observal.io) for chat. Open Issues for confirmed bugs.
 
 ## Reporting Issues
 
@@ -362,7 +362,7 @@ Logs are written to `~/.observal/logs/dev.log` and include structured context fo
 
 ## Security
 
-Report vulnerabilities via [GitHub Private Vulnerability Reporting](https://github.com/Observal/Observal/security/advisories) or email contact@observal.io. Do not open a public issue. See [SECURITY.md](SECURITY.md).
+Report vulnerabilities via [GitHub Private Vulnerability Reporting](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/security/advisories) or email contact@observal.io. Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 ## License
 

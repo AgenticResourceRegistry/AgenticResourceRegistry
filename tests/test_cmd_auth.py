@@ -276,7 +276,9 @@ def test_version_check_dev_server_gives_source_install_command(monkeypatch: pyte
         auth._ensure_cli_matches_server(SERVER_URL)
 
     assert exc_info.value.category is ErrorCategory.VERSION
-    assert "git+https://github.com/Observal/Observal@main" in (exc_info.value.remediation or "")
+    assert "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main" in (
+        exc_info.value.remediation or ""
+    )
     assert "observal-cli==1.15.0-dev.0" not in (exc_info.value.remediation or "")
 
 
@@ -1697,7 +1699,11 @@ def test_config_show_defaults_to_table(
         ("update_check", "off", False),
         ("timeout", "60", 60),
         ("update_check_interval", "120", 120),
-        ("update_check_repo", "Observal/Observal", "Observal/Observal"),
+        (
+            "update_check_repo",
+            "AgenticResourceRegistry/AgenticResourceRegistry",
+            "AgenticResourceRegistry/AgenticResourceRegistry",
+        ),
     ],
 )
 def test_config_set_normalizes_supported_values(
@@ -2132,38 +2138,6 @@ def test_pi_extension_setup_migrates_pre_manifest_install(monkeypatch: pytest.Mo
     assert "Migrated the Pi telemetry extension" in output
     assert "observal.ts.bak" in output
     assert "reload" in output.lower()
-
-
-def test_pi_extension_setup_warns_about_a_duplicate_without_deleting(
-    monkeypatch: pytest.MonkeyPatch, printed: list[str]
-) -> None:
-    import observal_cli.pi_extension as pi_extension
-
-    status = pi_extension.PiExtensionStatus(pi_extension.NPM_DUPLICATE, "each session is sent twice", action="dedupe")
-    monkeypatch.setattr(pi_extension, "check_status", lambda: status)
-    install_or_refresh = MagicMock(return_value=pi_extension.PiExtensionResult(True))
-    monkeypatch.setattr(pi_extension, "install_or_refresh", install_or_refresh)
-
-    auth._install_or_check_pi_extension()
-
-    install_or_refresh.assert_not_called()
-    assert any("sent twice" in message for message in printed)
-
-
-def test_pi_extension_setup_reports_stale_npm_without_installing_locally(
-    monkeypatch: pytest.MonkeyPatch, printed: list[str]
-) -> None:
-    import observal_cli.pi_extension as pi_extension
-
-    status = pi_extension.PiExtensionStatus(pi_extension.NPM_STALE, "pi update npm:observal-pi")
-    monkeypatch.setattr(pi_extension, "check_status", lambda: status)
-    install_or_refresh = MagicMock(return_value=pi_extension.PiExtensionResult(True))
-    monkeypatch.setattr(pi_extension, "install_or_refresh", install_or_refresh)
-
-    auth._install_or_check_pi_extension()
-
-    install_or_refresh.assert_not_called()
-    assert any("pi update npm:observal-pi" in message for message in printed)
 
 
 def test_pi_extension_setup_never_blocks_login_on_failure(monkeypatch: pytest.MonkeyPatch, printed: list[str]) -> None:

@@ -3,22 +3,12 @@
 
 """Install/version-check logic for the bundled Pi telemetry extension.
 
-Two installation modes coexist:
-  - npm: the user has `npm:observal-pi[@version]` configured in
-    ~/.pi/agent/settings.json. Observal never writes to this path; it only
-    reports when a pinned version is older than the installed CLI.
-  - local: Observal writes the canonical extension straight to
-    ~/.pi/agent/extensions/observal.ts, tracked by an adjacent
-    .observal-extension.json manifest recording the CLI version it was
-    installed from. A file at that path with no matching manifest is
-    either migrated (if it carries Observal's own header, i.e. it was
-    installed by a CLI predating this tracking) or treated as unmanaged
-    and never overwritten.
-
-npm takes priority: if it's configured (even if not yet downloaded by Pi),
-Observal never installs locally. It does still look at the local path, because
-a leftover observal.ts there is loaded by Pi alongside the npm package and
-sends every session twice.
+Observal writes the canonical extension straight to
+~/.pi/agent/extensions/observal.ts, tracked by an adjacent
+.observal-extension.json manifest recording the CLI version it was installed
+from. A file at that path with no matching manifest is either migrated (if it
+carries Observal's own header, i.e. it was installed by a CLI predating this
+tracking) or treated as unmanaged and never overwritten.
 
 Shared by `observal doctor` (interactive check/patch/cleanup) and the
 automatic post-login install in cmd_auth.py.
@@ -34,10 +24,8 @@ from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
 
-from observal_cli.shared.utils import atomic_write, load_jsonc
+from observal_cli.shared.utils import atomic_write
 from observal_cli.version_check import get_current_version
-
-_NPM_SOURCE = "npm:observal-pi"
 
 NOT_DETECTED = "not_detected"
 NOT_INSTALLED = "not_installed"
@@ -47,10 +35,6 @@ NEWER = "newer"
 UNMANAGED = "unmanaged"
 MIGRATABLE = "migratable"
 DRIFTED = "drifted"
-NPM_DUPLICATE = "npm_duplicate"
-NPM_CURRENT = "npm_current"
-NPM_STALE = "npm_stale"
-NPM_UNPINNED = "npm_unpinned"
 
 # Present in every observal.ts this project has ever shipped. Used only to
 # recognize a pre-manifest install as ours; see _is_observal_authored.
@@ -60,7 +44,7 @@ _SIGNATURE = "Observal session telemetry extension for Pi"
 # prior file and "adopt" has already matched the bundle byte for byte, so only
 # those two can skip the copy: a manifest proves which version we wrote, never
 # that the bytes are still unedited.
-_BACKS_UP = frozenset({"refresh", "restore", "migrate", "dedupe"})
+_BACKS_UP = frozenset({"refresh", "restore", "migrate"})
 
 
 @dataclass(frozen=True)
@@ -76,7 +60,7 @@ class PiExtensionResult:
 class PiExtensionStatus:
     state: str
     message: str | None = None
-    action: str | None = None  # install | refresh | restore | adopt | migrate | dedupe
+    action: str | None = None  # install | refresh | restore | adopt | migrate
 
 
 def pi_agent_dir(home: Path | None = None) -> Path:
@@ -89,10 +73,6 @@ def extension_path(home: Path | None = None) -> Path:
 
 def manifest_path(home: Path | None = None) -> Path:
     return pi_agent_dir(home) / "extensions" / ".observal-extension.json"
-
-
-def settings_path(home: Path | None = None) -> Path:
-    return pi_agent_dir(home) / "settings.json"
 
 
 def _reserve_backup(home: Path | None = None) -> Path:
@@ -164,64 +144,11 @@ def _is_observal_authored(content: str) -> bool:
     return _SIGNATURE in content
 
 
-def _npm_entry(settings: dict) -> str | None:
-    for package in settings.get("packages", []):
-        if isinstance(package, str):
-            source = package
-        elif isinstance(package, dict):
-            source = package.get("source", "")
-        else:
-            continue
-        if source == _NPM_SOURCE or source.startswith(f"{_NPM_SOURCE}@"):
-            return source
-    return None
-
-
-def is_npm_configured(pi_dir: Path) -> bool:
-    """Whether npm:observal-pi is registered in this Pi agent dir's settings.json.
-
-    Swallows unreadable/invalid settings rather than raising: used by hook
-    detection, where a best-effort boolean is all that's needed.
-    """
-    settings_file = pi_dir / "settings.json"
-    if not settings_file.exists():
-        return False
-    try:
-        settings = load_jsonc(settings_file)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return False
-    return isinstance(settings, dict) and _npm_entry(settings) is not None
-
-
-def _npm_pinned_version(source: str) -> str | None:
-    _, _, version = source.partition(f"{_NPM_SOURCE}@")
-    return version or None
-
-
 def _parse_version(value: str) -> Version | None:
     try:
         return Version(value)
     except InvalidVersion:
         return None
-
-
-def _is_observal_local_install(home: Path | None = None) -> bool:
-    """Whether the local extension file exists and is Observal's to remove.
-
-    True for a tracked install and for one an older CLI left untracked. False
-    for a foreign file, an unreadable one, or no file at all - anything we are
-    not certain we own stays where it is.
-    """
-    path = extension_path(home)
-    if not path.is_file():
-        return False
-    manifest = _read_manifest(home)
-    if manifest is not None and manifest.get("managed") is True:
-        return True
-    try:
-        return _is_observal_authored(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return False
 
 
 def _read_manifest(home: Path | None = None) -> dict | None:
@@ -238,48 +165,12 @@ def _read_manifest(home: Path | None = None) -> dict | None:
 def check_status(home: Path | None = None) -> PiExtensionStatus:
     """Determine the current install state.
 
-    Raises OSError/ValueError if settings.json or the installed extension
-    file exist but can't be read/parsed — callers decide how to surface that.
+    Raises OSError if the installed extension file exists but can't be read;
+    callers decide how to surface that.
     """
     pi_dir = pi_agent_dir(home)
     if not pi_dir.exists():
         return PiExtensionStatus(NOT_DETECTED)
-
-    settings_file = settings_path(home)
-    settings: dict = {}
-    if settings_file.exists():
-        settings = load_jsonc(settings_file)
-        if not isinstance(settings, dict):
-            raise ValueError(f"{settings_file}: must contain a JSON object")
-
-    npm_source = _npm_entry(settings)
-    if npm_source is not None:
-        pinned = _npm_pinned_version(npm_source)
-        pinned_version = _parse_version(pinned) if pinned else None
-        current_version = _parse_version(get_current_version())
-        if pinned_version is not None and current_version is not None and pinned_version < current_version:
-            npm_status = PiExtensionStatus(
-                NPM_STALE,
-                f"Configured {npm_source} is older than the installed Observal CLI "
-                f"({get_current_version()}). Run `pi update npm:observal-pi` to refresh the extension.",
-            )
-        else:
-            npm_status = PiExtensionStatus(NPM_CURRENT if pinned_version is not None else NPM_UNPINNED)
-
-        # Pi loads extensions/observal.ts as well as the npm package, so a local
-        # file left over from before npm was configured sends every session
-        # twice. Report ours; leave a file we did not write alone.
-        if _is_observal_local_install(home):
-            duplicate = (
-                f"{extension_path(home)} is loaded by Pi in addition to the configured "
-                f"{npm_source}, so each session is sent twice. Run "
-                f"`observal doctor patch --harness pi` to remove the local copy "
-                f"(kept as {backup_path(home).name})."
-            )
-            if npm_status.message:
-                duplicate = f"{duplicate} {npm_status.message}"
-            return PiExtensionStatus(NPM_DUPLICATE, duplicate, action="dedupe")
-        return npm_status
 
     # Read the bundled source eagerly (not just when we're about to install)
     # so a broken/missing package bundle is surfaced by `doctor check`, not
@@ -375,10 +266,6 @@ def install_or_refresh(
     backup = _reserve_backup(home) if status.action in _BACKS_UP else None
     if backup is not None:
         shutil.copy2(extension_path(home), backup)
-    if status.action == "dedupe":
-        extension_path(home).unlink()
-        manifest_path(home).unlink(missing_ok=True)
-        return PiExtensionResult(True, status.action, backup)
     if status.action != "adopt":
         atomic_write(extension_path(home), extension_source())
     atomic_write(
@@ -389,9 +276,9 @@ def install_or_refresh(
 
 
 def remove(*, dry_run: bool, home: Path | None = None) -> bool:
-    """Remove an Observal-managed local install. Never touches npm config or unmanaged files."""
+    """Remove an Observal-managed local install. Never touches unmanaged files."""
     status = check_status(home)
-    if status.state not in (CURRENT, STALE, NEWER, DRIFTED, MIGRATABLE, NPM_DUPLICATE):
+    if status.state not in (CURRENT, STALE, NEWER, DRIFTED, MIGRATABLE):
         return False
     # CURRENT is the only state that proves the bytes match what we shipped;
     # every other one may be carrying someone's edits, so keep a copy.

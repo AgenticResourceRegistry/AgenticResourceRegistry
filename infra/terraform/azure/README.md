@@ -45,8 +45,8 @@ terraform apply -var-file=staging.tfvars
 # 3. Push images to ACR (after first apply creates the registry)
 ACR=$(terraform output -raw acr_login_server)
 az acr login --name $ACR
-docker tag ghcr.io/observal/observal-api:latest $ACR/observal-api:latest
-docker tag ghcr.io/observal/observal-web:latest $ACR/observal-web:latest
+docker tag ghcr.io/agenticresourceregistry/observal-api:latest $ACR/observal-api:latest
+docker tag ghcr.io/agenticresourceregistry/observal-web:latest $ACR/observal-web:latest
 docker push $ACR/observal-api:latest
 docker push $ACR/observal-web:latest
 

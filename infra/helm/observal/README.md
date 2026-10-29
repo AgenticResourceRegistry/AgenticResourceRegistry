@@ -11,7 +11,7 @@ After the hosted OCI chart has been published:
 
 ```bash
 kubectl create namespace observal
-helm install observal oci://ghcr.io/observal/charts/observal \
+helm install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
   --version <version> \
   --namespace observal
 ```
@@ -20,4 +20,4 @@ For production deployments, use managed PostgreSQL, ClickHouse, and Redis servic
 
 See the Kubernetes deployment guide for the full values reference and operational notes:
 
-https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md
+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md

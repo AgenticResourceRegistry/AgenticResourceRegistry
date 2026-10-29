@@ -158,33 +158,6 @@ class TestChecks:
 
         assert any("extensions/observal.ts" in warning for warning in warnings)
 
-    def test_pi_is_silent_when_npm_package_is_current(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": [f"npm:observal-pi@{CLI_VERSION}"]})
-        warnings: list[str] = []
-
-        _check_pi([], warnings)
-
-        assert warnings == []
-        assert not (tmp_path / ".pi/agent/extensions/observal.ts").exists()
-
-    def test_pi_is_silent_when_npm_package_is_unpinned(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        warnings: list[str] = []
-
-        _check_pi([], warnings)
-
-        assert warnings == []
-        assert not (tmp_path / ".pi/agent/extensions/observal.ts").exists()
-
-    def test_pi_warns_when_pinned_npm_package_is_stale(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi@0.0.1"]})
-        warnings: list[str] = []
-
-        _check_pi([], warnings)
-
-        assert any("pi update npm:observal-pi" in warning for warning in warnings)
-        assert not (tmp_path / ".pi/agent/extensions/observal.ts").exists()
-
     def test_pi_is_silent_when_local_install_is_current(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
         extension.parent.mkdir(parents=True)
@@ -235,26 +208,6 @@ class TestChecks:
         _check_pi([], warnings)
 
         assert any("older Observal CLI" in warning for warning in warnings)
-
-    def test_pi_warns_when_a_local_copy_duplicates_the_npm_package(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        legacy_extension(tmp_path)
-        warnings: list[str] = []
-
-        _check_pi([], warnings)
-
-        assert any("sent twice" in warning for warning in warnings)
-
-    def test_pi_is_silent_about_a_foreign_file_in_npm_mode(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = tmp_path / ".pi/agent/extensions/observal.ts"
-        extension.parent.mkdir(parents=True)
-        extension.write_text("hand-written extension", encoding="utf-8")
-        warnings: list[str] = []
-
-        _check_pi([], warnings)
-
-        assert warnings == []
 
     def test_pi_warns_of_conflict_with_unmanaged_local_file(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
@@ -521,15 +474,6 @@ class TestPatchFunctions:
         assert read_json(manifest) == {"managed": True, "version": CLI_VERSION}
         assert _patch_pi(dry_run=False) is False
 
-    def test_patch_pi_skips_local_install_when_npm_is_configured(self, tmp_path: Path):
-        settings = tmp_path / ".pi/agent/settings.json"
-        write_json(settings, {"packages": ["npm:@observal/pi-insights", "npm:observal-pi"]})
-
-        assert _patch_pi(dry_run=False) is False
-
-        assert not (tmp_path / ".pi/agent/extensions/observal.ts").exists()
-        assert read_json(settings)["packages"] == ["npm:@observal/pi-insights", "npm:observal-pi"]
-
     def test_patch_pi_refreshes_a_stale_managed_install(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
         extension.parent.mkdir(parents=True)
@@ -565,38 +509,6 @@ class TestPatchFunctions:
 
         assert extension.read_text(encoding="utf-8") == previous
         assert not extension.with_name("observal.ts.bak").exists()
-
-    def test_patch_pi_removes_a_local_copy_that_duplicates_npm(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = legacy_extension(tmp_path)
-        previous = extension.read_text(encoding="utf-8")
-
-        assert _patch_pi(dry_run=False) is True
-
-        assert not extension.exists()
-        assert extension.with_name("observal.ts.bak").read_text(encoding="utf-8") == previous
-        assert _patch_pi(dry_run=False) is False
-
-    def test_patch_pi_still_reports_a_stale_npm_package_after_deduping(self, capsys, tmp_path: Path):
-        # The duplicate warning absorbs the stale-npm reminder, so removing the
-        # local copy must not be the thing that hides it.
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi@0.0.1"]})
-        legacy_extension(tmp_path)
-
-        assert _patch_pi(dry_run=False) is True
-
-        output = capsys.readouterr().out
-        assert "pi update npm:observal-pi" in output
-
-    def test_patch_pi_leaves_a_foreign_file_alone_in_npm_mode(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = tmp_path / ".pi/agent/extensions/observal.ts"
-        extension.parent.mkdir(parents=True)
-        extension.write_text("hand-written extension", encoding="utf-8")
-
-        assert _patch_pi(dry_run=False) is False
-
-        assert extension.read_text(encoding="utf-8") == "hand-written extension"
 
     def test_patch_pi_never_overwrites_an_unmanaged_file(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
@@ -788,13 +700,6 @@ class TestCleanupFunctions:
         assert _cleanup_pi(dry_run=False) is True
 
         assert not extension.exists()
-
-    def test_cleanup_pi_leaves_npm_registration_untouched(self, tmp_path: Path):
-        settings = tmp_path / ".pi/agent/settings.json"
-        write_json(settings, {"packages": ["npm:observal-pi", "npm:@observal/pi-insights"]})
-
-        assert _cleanup_pi(dry_run=False) is False
-        assert read_json(settings)["packages"] == ["npm:observal-pi", "npm:@observal/pi-insights"]
 
     def test_cleanup_pi_leaves_an_unmanaged_file_untouched(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"

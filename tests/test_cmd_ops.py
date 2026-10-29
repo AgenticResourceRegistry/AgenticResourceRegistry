@@ -1109,7 +1109,7 @@ def test_upgrade_targets_dev_server_build_instead_of_latest_release(cli, upgrade
     assert seen == [("https://obs.test", "tok")]
     assert upgrade_env.installs == ["1.16.0.dev0"]
     assert "unreleased v1.16.0.dev0" in cli.text()
-    assert "git+https://github.com/Observal/Observal@main" in cli.text()
+    assert "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main" in cli.text()
 
 
 def test_upgrade_uses_github_when_server_runs_a_release(cli, upgrade_env, monkeypatch):

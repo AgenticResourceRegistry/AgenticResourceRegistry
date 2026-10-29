@@ -21,7 +21,7 @@ By the end of this guide you will have:
 ## 1. Install the CLI
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
 No Python required. For alternative install methods, see [Installation](/getting-started/installation).
@@ -31,7 +31,7 @@ No Python required. For alternative install methods, see [Installation](/getting
 ## 2. Start the server
 
 ```bash
-git clone https://github.com/Observal/Observal.git
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd Observal
 cp .env.example .env
 

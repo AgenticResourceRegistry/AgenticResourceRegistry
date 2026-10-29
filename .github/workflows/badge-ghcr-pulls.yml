@@ -27,7 +27,7 @@ permissions: {}
 jobs:
   update:
     name: Fetch counts and update Gist
-    if: github.repository == 'Observal/Observal'
+    if: github.repository == 'AgenticResourceRegistry/AgenticResourceRegistry'
     runs-on: ubuntu-latest
 
     steps:
@@ -38,7 +38,7 @@ jobs:
           import os, re, urllib.request
 
           def scrape_count(package):
-              url = f"https://github.com/orgs/Observal/packages/container/package/{package}"
+              url = f"https://github.com/orgs/AgenticResourceRegistry/packages/container/package/{package}"
               req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
               with urllib.request.urlopen(req) as resp:
                   html = resp.read().decode()

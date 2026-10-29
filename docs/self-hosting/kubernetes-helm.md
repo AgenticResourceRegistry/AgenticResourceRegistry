@@ -25,7 +25,7 @@ Use the hosted OCI chart after the first release that includes Helm chart publis
 1. Install the chart into a dedicated namespace:
    ```bash
    kubectl create namespace observal
-   helm install observal oci://ghcr.io/observal/charts/observal \
+   helm install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
      --version <version> \
      --namespace observal
    ```
@@ -41,7 +41,7 @@ To test unreleased chart changes directly from a clone:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/Observal/Observal.git
+   git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
    cd Observal
    ```
 
@@ -61,7 +61,7 @@ To test unreleased chart changes directly from a clone:
 You can customize the deployment by passing a custom values file (`-f values.yaml`) or setting flags via `--set`.
 
 ```bash
-helm install observal oci://ghcr.io/observal/charts/observal \
+helm install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
   --version <version> \
   --namespace observal \
   -f custom-values.yaml
@@ -73,14 +73,14 @@ helm install observal oci://ghcr.io/observal/charts/observal \
 | --- | --- | --- |
 | `global.imageRegistry` | Global image registry prefix | `""` |
 | `global.imagePullSecrets` | Global image pull secrets list | `[]` |
-| `api.image.repository` | API container image repository | `ghcr.io/observal/observal-api` |
+| `api.image.repository` | API container image repository | `ghcr.io/agenticresourceregistry/observal-api` |
 | `api.image.tag` | API container image tag. Defaults to the chart app version when empty. | `""` |
 | `api.replicas` | Replicas for API deployment | `1` |
 | `api.workers` | Uvicorn worker count per API pod | `2` |
-| `worker.image.repository` | Worker container image repository | `ghcr.io/observal/observal-api` |
+| `worker.image.repository` | Worker container image repository | `ghcr.io/agenticresourceregistry/observal-api` |
 | `worker.image.tag` | Worker container image tag. Defaults to the chart app version when empty. | `""` |
 | `worker.replicas` | Replicas for background job worker | `1` |
-| `web.image.repository` | Web UI container image repository | `ghcr.io/observal/observal-web` |
+| `web.image.repository` | Web UI container image repository | `ghcr.io/agenticresourceregistry/observal-web` |
 | `web.image.tag` | Web UI container image tag. Defaults to the chart app version when empty. | `""` |
 | `web.replicas` | Replicas for Web UI deployment | `1` |
 | `postgresql.enabled` | Deploy embedded PostgreSQL StatefulSet | `true` |
@@ -118,7 +118,7 @@ Open `http://localhost:3000` in your browser.
 Enable ingress and configure TLS termination using `cert-manager`:
 
 ```bash
-helm upgrade --install observal oci://ghcr.io/observal/charts/observal \
+helm upgrade --install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
   --version <version> \
   --namespace observal \
   --set ingress.enabled=true \
@@ -136,7 +136,7 @@ helm upgrade --install observal oci://ghcr.io/observal/charts/observal \
 To apply configuration changes or update to a newer chart version:
 
 ```bash
-helm upgrade observal oci://ghcr.io/observal/charts/observal \
+helm upgrade observal oci://ghcr.io/agenticresourceregistry/charts/observal \
   --version <version> \
   --namespace observal \
   -f custom-values.yaml
@@ -170,7 +170,7 @@ helm uninstall observal --namespace observal
 Official releases publish the Helm chart as an OCI artifact to GitHub Container Registry:
 
 ```text
-oci://ghcr.io/observal/charts/observal
+oci://ghcr.io/agenticresourceregistry/charts/observal
 ```
 
 Helm OCI registries do not use `helm repo add`; install and upgrade commands reference the `oci://` chart URL directly.

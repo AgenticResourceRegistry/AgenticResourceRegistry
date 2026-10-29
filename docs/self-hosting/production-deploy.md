@@ -76,7 +76,7 @@ flowchart TB
 **Quick start:**
 
 ```bash
-git clone https://github.com/Observal/Observal.git
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd Observal/infra/terraform/aws
 
 # Configure

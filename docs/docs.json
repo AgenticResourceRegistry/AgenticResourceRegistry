@@ -19,7 +19,7 @@
         {
           "anchor": "GitHub",
           "icon": "github",
-          "href": "https://github.com/Observal/Observal"
+          "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
         },
         {
           "anchor": "observal.io",
@@ -29,17 +29,17 @@
         {
           "anchor": "Contributing Guide",
           "icon": "arrow-up-right-from-square",
-          "href": "https://github.com/Observal/Observal/blob/main/CONTRIBUTING.md"
+          "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CONTRIBUTING.md"
         },
         {
           "anchor": "Fuzzing Guide",
           "icon": "arrow-up-right-from-square",
-          "href": "https://github.com/Observal/Observal/blob/main/fuzz/README.md"
+          "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/fuzz/README.md"
         },
         {
           "anchor": "AI Policy",
           "icon": "arrow-up-right-from-square",
-          "href": "https://github.com/Observal/Observal/blob/main/AI_POLICY.md"
+          "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md"
         }
       ]
     },
@@ -187,12 +187,12 @@
   "navbar": {
     "primary": {
       "type": "github",
-      "href": "https://github.com/Observal/Observal"
+      "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
     }
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/Observal/Observal",
+      "github": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry",
       "website": "https://observal.io"
     }
   },
@@ -331,7 +331,7 @@
     },
     {
       "source": "/contributing/contributing",
-      "destination": "https://github.com/Observal/Observal/blob/main/CONTRIBUTING.md"
+      "destination": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CONTRIBUTING.md"
     },
     {
       "source": "/contributing/code-review",
@@ -347,11 +347,11 @@
     },
     {
       "source": "/contributing/fuzz",
-      "destination": "https://github.com/Observal/Observal/blob/main/fuzz/README.md"
+      "destination": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/fuzz/README.md"
     },
     {
       "source": "/contributing/ai_policy",
-      "destination": "https://github.com/Observal/Observal/blob/main/AI_POLICY.md"
+      "destination": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md"
     }
   ]
 }

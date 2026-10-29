@@ -19,7 +19,7 @@ Only take this issue if you are willing to use the harness as a daily driver for
 
 ## Implementation guide
 
-Follow [docs/adding-a-harness.md](https://github.com/Observal/Observal/blob/main/docs/adding-a-harness.md) for the full file checklist and step-by-step process. Start with Step 1, Research the harness, using the official documentation to determine config paths, MCP format, hook support, and session log locations.
+Follow [docs/adding-a-harness.md](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/adding-a-harness.md) for the full file checklist and step-by-step process. Start with Step 1, Research the harness, using the official documentation to determine config paths, MCP format, hook support, and session log locations.
 
 ## Scope
 
@@ -47,7 +47,7 @@ Follow [docs/adding-a-harness.md](https://github.com/Observal/Observal/blob/main
 
 ## File checklist
 
-See [docs/adding-a-harness.md, File Checklist](https://github.com/Observal/Observal/blob/main/docs/adding-a-harness.md#file-checklist) for the full list.
+See [docs/adding-a-harness.md, File Checklist](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/adding-a-harness.md#file-checklist) for the full list.
 
 [List any harness-specific files or changes discovered during research.]
 
@@ -67,7 +67,7 @@ See [docs/adding-a-harness.md, File Checklist](https://github.com/Observal/Obser
 
 ## Reference
 
-- Implementation guide: [docs/adding-a-harness.md](https://github.com/Observal/Observal/blob/main/docs/adding-a-harness.md)
+- Implementation guide: [docs/adding-a-harness.md](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/adding-a-harness.md)
 - Official documentation: [Link]
 - Source repository: [Link]
 - First-class adapters for reference: `observal_cli/harness/claude_code.py`, `observal_cli/harness/kiro.py`

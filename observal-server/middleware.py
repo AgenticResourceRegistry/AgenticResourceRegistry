@@ -282,7 +282,9 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
         unpublished = False
     if unpublished:
         # Development builds are not on PyPI; they are built from main.
-        install_command = 'uv tool install --force "git+https://github.com/Observal/Observal@main"'
+        install_command = (
+            'uv tool install --force "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"'
+        )
     else:
         install_command = f"observal self {direction} --version {server_ver}"
     guidance = f"Run: {install_command}"

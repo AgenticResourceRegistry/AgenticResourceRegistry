@@ -748,14 +748,14 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 ErrorCategory.NOT_FOUND,
                 "The target server image was not found.",
                 operation="Upgrade Docker server",
-                resource=f"ghcr.io/observal/observal-api:{target}",
+                resource=f"ghcr.io/agenticresourceregistry/observal-api:{target}",
                 remediation="Run observal server versions and choose an available version.",
             )
 
     if dry_run:
         console.print(f"[dim]Dry run: would upgrade v{current} → v{target}[/dim]")
-        console.print(f"[dim]  Pull: ghcr.io/observal/observal-api:{target}[/dim]")
-        console.print(f"[dim]  Pull: ghcr.io/observal/observal-web:{target}[/dim]")
+        console.print(f"[dim]  Pull: ghcr.io/agenticresourceregistry/observal-api:{target}[/dim]")
+        console.print(f"[dim]  Pull: ghcr.io/agenticresourceregistry/observal-web:{target}[/dim]")
         console.print(f"[dim]  Compose dir: {escape(str(compose_dir))}[/dim]")
         return {
             "status": "planned",
@@ -769,7 +769,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
     if not force:
         console.print(f"  Current: [dim]v{current}[/dim]")
         console.print(f"  Target:  [green]v{target}[/green]")
-        console.print(f"  Images:  [dim]ghcr.io/observal/observal-{{api,web}}:{target}[/dim]")
+        console.print(f"  Images:  [dim]ghcr.io/agenticresourceregistry/observal-{{api,web}}:{target}[/dim]")
         if not typer.confirm("\nProceed with server upgrade?"):
             raise typer.Abort()
 
@@ -1155,7 +1155,7 @@ def server_versions(
         )
     payload = {
         "current_version": None if current == "unknown" else current,
-        "image_repository": "ghcr.io/observal/observal-{api,web}",
+        "image_repository": "ghcr.io/agenticresourceregistry/observal-{api,web}",
         "versions": versions,
     }
     if _is_json(output):

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Observal CLI Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash -s -- [OPTIONS]
+# Usage: curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash -s -- [OPTIONS]
 #
 # Options:
 #   --version VERSION          Version to install (default: latest)
@@ -16,7 +16,7 @@ set -euo pipefail
 #   OBSERVAL_VERSION=latest    Version to install
 #   OBSERVAL_BIN_DIR=/path     Install directory
 
-GITHUB_REPO="Observal/Observal"
+GITHUB_REPO="AgenticResourceRegistry/AgenticResourceRegistry"
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -65,7 +65,7 @@ while [ $# -gt 0 ]; do
     -h | --help)
         cat <<'HELP'
 Observal CLI Installer
-Usage: curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash -s -- [OPTIONS]
+Usage: curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash -s -- [OPTIONS]
 
 Options:
   --version VERSION   Version to install (default: latest)

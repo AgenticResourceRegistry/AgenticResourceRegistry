@@ -53,7 +53,7 @@ All services run on a private `observal-net` bridge network. Named volumes (`pgd
 
 Choose the deployment model that fits your team:
 
-|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
+|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
 | ------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | **How**            | Docker Compose on one VM             | Official Helm chart                                                                                 | Terraform on AWS or GCP               |
 | **Best for**       | ≤50 users, internal tools, POCs      | Cloud-native teams, existing K8s infra                                                              | Enterprise, SLA-bound, 50+ users      |
@@ -66,7 +66,7 @@ Choose the deployment model that fits your team:
 | If you want to...                | Read                                                                                                                     |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Deploy on a single VM (simplest) | [Single-node deployment](/self-hosting/single-node-deploy)                                                                          |
-| Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) |
+| Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) |
 | Deploy a production HA stack     | [Production deployment](/self-hosting/production-deploy)                                                                            |
 | Deploy on AWS specifically       | [AWS deployment with Terraform](/self-hosting/aws-terraform)                                                                        |
 | Deploy on GCP specifically       | [GCP deployment with Terraform](/self-hosting/gcp-terraform)                                                                        |

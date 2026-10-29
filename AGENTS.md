@@ -66,7 +66,7 @@ observal-server/       FastAPI server
 
 
 web/                   Vite 8 SPA / React 19 / TanStack Router (see web/AGENTS.md)
-packages/pi-extension/ Pi telemetry extension (npm: observal-pi)
+packages/pi-extension/ Pi telemetry extension (bundled into the CLI)
 docker/                Docker Compose stack (10 services)
 fuzz/                  Atheris fuzz targets + OSS-Fuzz project config mirror
 tests/                 pytest (174 files)
