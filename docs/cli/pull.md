@@ -45,10 +45,13 @@ observal agent pull alice/reviewer --harness claude-code --hooks=settings --dry-
 | `--version`, `-V` | Install this exact Agent version and lock it |
 | `--upgrade` | Install the latest approved Agent version instead of the locked one, and lock it |
 | `--strict` / `--no-strict` | Refuse an install that does not match its lock; defaults to `OBSERVAL_STRICT` |
+| `--allow-unsupported-harness` | Install even when the Agent version does not list `--harness` as supported; the install warns that components may be missing or not loaded |
 | `--hooks` | Claude Code only: `frontmatter` (default) or `settings`. See [Agent hooks in headless sessions](#agent-hooks-in-headless-sessions) |
 | `--on-unknown` | With `--hooks=settings`: `skip` (default) or `run` when Claude Code's hook input is unrecognized |
 | `--force-hooks` | Replace or remove Agentic Resource Registry-owned agent hooks in `settings.json` that were edited locally |
 | `--output`, `-o` | Table or JSON output |
+
+A harness the Agent version does not list in `supported_harnesses` is refused (exit code 7 from the CLI, 409 from the server) before any prompt. An empty list allows every harness. Pass `--allow-unsupported-harness` to override.
 
 Unknown harnesses, unsupported scopes, malformed assignments, unused harness model overrides, unsupported model or tool options, invalid versions, and `--upgrade` combined with `--version` fail locally with validation exit code 7. A project-scope pull of an Agent with MCP servers also fails this way for Goose, which only reads a user-level MCP config: pull with `--scope user` instead.
 

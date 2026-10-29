@@ -46,7 +46,7 @@ observal agent pull NAMESPACE/AGENT_SLUG --harness kiro --no-prompt --dir . --ou
 observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --scope project --dry-run --no-prompt --output json
 ```
 
-Pull only for a harness in the agent version's `supported_harnesses` (from `observal agent show`). For any other harness the pull fails and lists the supported ones; tell the user instead of retrying. Add `--allow-unsupported-harness` only when the user explicitly accepts a partial install, and report its warning.
+Pull only for a harness in `supported_harnesses` of the version being pulled (the project pin if there is one, else the latest; `observal agent show` lists a version's harnesses). An empty list allows any harness. For any other harness the pull fails and lists the supported ones; tell the user instead of retrying. Add `--allow-unsupported-harness` only when the user explicitly accepts a partial install, and report its warning.
 
 JSON pull requires `--no-prompt` and is appropriate only when no secret values are required. If required values are missing, it exits nonzero with `error.result.needs_input: true` before installing anything. The `--env` and `--header` options expose values in shell history and process arguments, so use them only for non-secret configuration.
 
