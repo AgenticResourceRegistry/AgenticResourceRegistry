@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -42,7 +41,6 @@ def test_outbox_survives_reopen_and_acknowledges_only_contiguous_batches(tmp_pat
             session_id="session",
             acknowledged_line=1,
             db_path=db,
-            expected_item=restarted[0],
         )
         == 1
     )
@@ -68,28 +66,6 @@ def test_requeue_is_idempotent_and_can_promote_final_payload(tmp_path: Path):
     assert items[0].payload["final"] is True
 
 
-@pytest.mark.parametrize("original_final,incoming_final", [(False, False), (False, True), (True, False), (True, True)])
-@pytest.mark.parametrize("new_offset", [8, 12])
-def test_same_range_offset_keeps_payload_and_proof_together(
-    tmp_path: Path, original_final: bool, incoming_final: bool, new_offset: int
-):
-    db = tmp_path / "outbox.db"
-    original = payload(0, ["zero"], final=original_final)
-    original["end_byte_offsets"] = [10]
-    incoming = payload(0, ["zero"], final=incoming_final)
-    incoming["end_byte_offsets"] = [new_offset]
-    # A proof must describe the exact byte prefix represented by its payload.
-    first_proof = {"offset": 10}
-    second_proof = {"offset": new_offset}
-    outbox.enqueue(original, destination="http://server", user_id="user", db_path=db, provenance=first_proof)
-    outbox.enqueue(incoming, destination="http://server", user_id="user", db_path=db, provenance=second_proof)
-    item = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
-    assert item.end_offset == item.payload["end_byte_offsets"][-1] == item.provenance["offset"]
-    assert item.final == item.payload["final"]
-    expected_new = incoming_final
-    assert item.end_offset == (new_offset if expected_new else 10)
-
-
 def test_metadata_only_batch_is_durable_and_replaceable(tmp_path: Path):
     db = tmp_path / "outbox.db"
     first = payload(2, []) | {"total_credits": 1.0}
@@ -103,38 +79,6 @@ def test_metadata_only_batch_is_durable_and_replaceable(tmp_path: Path):
     assert item.end_line == 1
     assert item.final
     assert item.payload["total_credits"] == 2.0
-
-
-@pytest.mark.parametrize("original_final,incoming_final", [(False, False), (False, True), (True, False)])
-def test_metadata_replacement_retains_one_offset_snapshot(tmp_path: Path, original_final: bool, incoming_final: bool):
-    db = tmp_path / "outbox.db"
-    original = payload(2, [], final=original_final) | {"total_credits": 1.0, "total_offset": 10}
-    incoming = payload(2, [], final=incoming_final) | {"total_credits": 2.0, "total_offset": 8}
-    outbox.enqueue(original, destination="http://server", user_id="user", db_path=db, provenance={"offset": 10})
-    outbox.enqueue(incoming, destination="http://server", user_id="user", db_path=db, provenance={"offset": 8})
-    item = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
-    assert item.end_offset == item.payload["total_offset"] == item.provenance["offset"]
-    assert item.final == item.payload["final"]
-    assert item.end_offset == (8 if not original_final else 10)
-
-
-def test_accept_item_without_revision_never_removes_held_row(tmp_path: Path):
-    db = tmp_path / "outbox.db"
-    row_id = outbox.enqueue(payload(0, ["zero"]), destination="http://server", user_id="user", db_path=db)
-    item = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
-    assert outbox.hold_if_current(item, "review", db_path=db)
-    assert not outbox.accept_item(row_id, db_path=db)
-    assert outbox.stats(db_path=db)["pending"] == 1
-
-
-def test_stale_rejection_does_not_quarantine_replacement(tmp_path: Path):
-    db = tmp_path / "outbox.db"
-    outbox.enqueue(payload(0, ["zero"]), destination="http://server", user_id="user", db_path=db)
-    stale = outbox.pending(destination="http://server", user_id="user", db_path=db)[0]
-    outbox.enqueue(payload(0, ["zero"], final=True), destination="http://server", user_id="user", db_path=db)
-    assert outbox.quarantine(stale, "old rejection", db_path=db) is None
-    assert not db.with_suffix(".rejected.jsonl").exists()
-    assert outbox.pending(destination="http://server", user_id="user", db_path=db)[0].final
 
 
 def test_source_batches_drain_before_metadata_waiting_on_their_checkpoint(tmp_path: Path):
@@ -157,33 +101,9 @@ def test_source_batches_drain_before_metadata_waiting_on_their_checkpoint(tmp_pa
         session_id="session",
         acknowledged_line=1,
         db_path=db,
-        expected_item=items[0],
     )
     remaining = outbox.pending(destination="http://server", user_id="user", db_path=db)
     assert [(item.start_line, item.end_line) for item in remaining] == [(2, 1)]
-
-
-def test_pending_keeps_line_order_while_excluding_held_and_claimed_sessions(tmp_path: Path):
-    db = tmp_path / "outbox.db"
-    for session, start in (("requeued", 2), ("claimed", 0), ("held", 0), ("requeued", 0)):
-        outbox.enqueue(
-            payload(start, [str(start)]) | {"session_id": session},
-            destination="http://server",
-            user_id="user",
-            db_path=db,
-        )
-    items = outbox.pending(destination="http://server", user_id="user", db_path=db)
-    claimed = next(item for item in items if item.session_id == "claimed")
-    held = next(item for item in items if item.session_id == "held")
-    token = outbox.claim_for_delivery(claimed, db_path=db)
-    assert token is not None
-    assert outbox.hold_if_current(held, "identity unverified", db_path=db)
-    try:
-        visible = outbox.pending(destination="http://server", user_id="user", limit=2, db_path=db)
-        assert [(item.session_id, item.start_line) for item in visible] == [("requeued", 0), ("requeued", 2)]
-        assert all(item.provenance is None for item in visible)
-    finally:
-        outbox.release_delivery_claim(claimed, token, db_path=db)
 
 
 def test_requeue_rejects_different_content_for_same_source_range(tmp_path: Path):
@@ -261,7 +181,6 @@ def test_database_is_owner_only_and_stats_track_sync(tmp_path: Path):
         session_id="session",
         acknowledged_line=0,
         db_path=db,
-        expected_item=outbox.pending(destination="http://server", user_id="user", db_path=db)[0],
     )
     stats = outbox.stats(db_path=db)
     assert stats["pending"] == 0

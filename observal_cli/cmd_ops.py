@@ -179,17 +179,13 @@ def telemetry_status(
         rprint(f"  [yellow]Unavailable:[/yellow] {esc(outbox['error'])}")
         return
     rprint(f"  Pending:      {outbox['pending']} batches")
-    rprint(f"  Terminal:     {outbox['terminal_sessions']} quarantined sessions ({outbox['archived_rows']} rows)")
-    rprint(f"  In-flight:    {outbox['inflight_sessions']} sessions (persistent claims require review if stranded)")
-    if outbox["archive_path"]:
-        rprint(f"  Private archive: {esc(outbox['archive_path'])} (sensitive; never replayed)")
     rprint(f"  Disk:         {outbox['bytes'] / 1024:.1f} KiB")
     if outbox["oldest_pending"]:
         rprint(f"  Oldest:       {esc(outbox['oldest_pending'])} UTC")
     if outbox["last_sync"]:
         rprint(f"  Last sync:    {esc(outbox['last_sync'])} UTC")
     if outbox["total"] == 0:
-        rprint("  [dim]No pending or quarantined records[/dim]")
+        rprint("  [dim]Outbox is empty (all observed records acknowledged)[/dim]")
 
 
 @ops_app.command(name="top")

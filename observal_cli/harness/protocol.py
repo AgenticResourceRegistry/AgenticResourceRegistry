@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """harness adapter protocol definition.
@@ -149,7 +148,6 @@ class SessionSource:
     cwd: str = ""
     cursor_key: str | None = None
     parent_session_id: str | None = None
-    sessions_root: Path | None = None
 
     @property
     def checkpoint_key(self) -> str:

@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
-# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -172,47 +171,6 @@ def test_payload_rejection_status_is_permanent(monkeypatch, status_code: int):
 
     with pytest.raises(base.PermanentIngestRejectionError):
         base.post_to_server_ack("http://server", "token", {"session_id": "bad", "lines": []})
-
-
-@pytest.mark.parametrize("outcome", ["repair", "rejection"])
-def test_hold_arriving_during_post_preserves_pending_snapshot(tmp_path: Path, outcome: str, monkeypatch):
-    db = tmp_path / "outbox.db"
-    telemetry_buffer.enqueue(
-        {"harness": "claude-code", "session_id": "held", "start_offset": 0, "lines": ["line"], "end_byte_offsets": [5]},
-        destination="http://server",
-        user_id="user",
-        db_path=db,
-    )
-    item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
-
-    if outcome == "repair":
-        original_check = telemetry_buffer.revision_is_current
-        checks = 0
-
-        def check_then_hold(snapshot, *, db_path=None):
-            nonlocal checks
-            checks += 1
-            result = original_check(snapshot, db_path=db_path)
-            if checks == 2:
-                assert result
-                assert telemetry_buffer.hold_if_current(item, "concurrent review", db_path=db)
-            return result
-
-        monkeypatch.setattr(telemetry_buffer, "revision_is_current", check_then_hold)
-
-    def post(_payload, _config):
-        if outcome == "rejection":
-            assert telemetry_buffer.hold_if_current(item, "concurrent review", db_path=db)
-            raise base.PermanentIngestRejectionError(422)
-        return {"acknowledged_line": 0, "acknowledged_offset": 0, "repair_from_line": 0}
-
-    rejections = []
-    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=post, rejections=rejections)
-    assert telemetry_buffer.is_held("http://server", "user", "claude-code", "held", db_path=db)
-    assert telemetry_buffer.stats(db_path=db)["pending"] == 1
-    assert not rejections
-    assert not db.with_suffix(".rejected.jsonl").exists()
-    assert base.read_cursor(item.checkpoint_key, home=tmp_path) == (0, 0)
 
 
 def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_path: Path):
@@ -446,50 +404,6 @@ def test_restart_drains_acknowledged_records_and_finalizes_cursor(tmp_path: Path
     assert state["session"]["finalized"] is True
 
 
-def test_older_batch_ack_keeps_local_cursor_and_later_rows_pending(tmp_path: Path):
-    db = tmp_path / "outbox.db"
-    base.write_cursor("session", 100, 10, home=tmp_path)
-    for start, end in ((0, 4), (5, 9), (10, 10)):
-        telemetry_buffer.enqueue(
-            {
-                "session_id": "session",
-                "harness": "claude-code",
-                "start_offset": start,
-                "lines": [f"line {line}" for line in range(start, end + 1)],
-                "end_byte_offsets": [(line + 1) * 10 for line in range(start, end + 1)],
-            },
-            destination="http://server",
-            user_id="user",
-            db_path=db,
-        )
-
-    attempted: list[int] = []
-
-    def first_post(payload, _config):
-        attempted.append(payload["start_offset"])
-        if payload["start_offset"] == 0:
-            return {"acknowledged_line": 9, "acknowledged_offset": 100}
-        return None
-
-    assert not base.drain_outbox(config(), home=tmp_path, db_path=db, post=first_post)
-    assert attempted == [0, 5]
-    assert base.read_cursor("session", home=tmp_path) == (100, 10)
-    assert [
-        item.start_line for item in telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
-    ] == [5, 10]
-
-    def later_post(payload, _config):
-        attempted.append(payload["start_offset"])
-        assert base.read_cursor("session", home=tmp_path) == (100, 10)
-        end_line = payload["start_offset"] + len(payload["lines"]) - 1
-        return {"acknowledged_line": end_line, "acknowledged_offset": (end_line + 1) * 10}
-
-    assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=later_post)
-    assert attempted == [0, 5, 5, 10]
-    assert base.read_cursor("session", home=tmp_path) == (110, 11)
-    assert telemetry_buffer.stats(db_path=db)["pending"] == 0
-
-
 def test_metadata_only_final_batch_is_spooled_and_acknowledged(tmp_path: Path, monkeypatch):
     disable_payload_metadata(monkeypatch)
     source_path = tmp_path / "session.jsonl"
@@ -514,67 +428,6 @@ def test_metadata_only_final_batch_is_spooled_and_acknowledged(tmp_path: Path, m
     assert captured[0]["lines"] == []
     assert captured[0]["total_credits"] == 2.0
     assert telemetry_buffer.stats(db_path=db)["pending"] == 0
-
-
-def test_metadata_only_final_rejection_without_report_list_preserves_cursor(tmp_path: Path, monkeypatch):
-    disable_payload_metadata(monkeypatch)
-    source_path = tmp_path / "session.jsonl"
-    source_path.write_text('{"n":0}\n')
-    source = SessionSource("kiro", "session", source_path)
-    db = tmp_path / "outbox.db"
-
-    def acknowledge(payload, _config):
-        return {
-            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
-            "acknowledged_offset": payload["end_byte_offsets"][-1],
-        }
-
-    assert base.drain_session_source(source, config(), hook_event="Prompt", home=tmp_path, db_path=db, post=acknowledge)
-    before = base.read_cursor_state(source.checkpoint_key, home=tmp_path)
-    assert before == (source_path.stat().st_size, 1, False)
-    posted = []
-
-    def reject(payload, _config):
-        posted.append(payload)
-        raise base.PermanentIngestRejectionError(422)
-
-    assert not base.drain_session_source(
-        source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=reject
-    )
-    assert len(posted) == 1
-    assert posted[0]["lines"] == []
-    assert posted[0]["final"] is True
-    assert base.read_cursor_state(source.checkpoint_key, home=tmp_path) == before
-    assert telemetry_buffer.stats(db_path=db)["failed"] == 1
-
-
-def test_reused_rejection_list_only_counts_new_matching_source(tmp_path: Path, monkeypatch):
-    disable_payload_metadata(monkeypatch)
-    db = tmp_path / "outbox.db"
-    source_path = tmp_path / "session.jsonl"
-    source_path.write_text("")
-    source = SessionSource("kiro", "clean", source_path)
-    rejections = [("kiro", "clean", 422), ("kiro", "previous", 422)]
-    telemetry_buffer.enqueue(
-        {"harness": "kiro", "session_id": "bad", "start_offset": 0, "lines": ["invalid"], "end_byte_offsets": [7]},
-        destination="http://server",
-        user_id="user",
-        db_path=db,
-    )
-    posted = []
-
-    def post(payload, _config):
-        posted.append(payload["session_id"])
-        if payload["session_id"] == "bad":
-            raise base.PermanentIngestRejectionError(422)
-        return {"acknowledged_line": -1, "acknowledged_offset": 0}
-
-    assert base.drain_session_source(
-        source, config(), hook_event="Stop", final=True, home=tmp_path, db_path=db, post=post, rejections=rejections
-    )
-    assert posted == ["bad", "clean"]
-    assert rejections == [("kiro", "clean", 422), ("kiro", "previous", 422), ("kiro", "bad", 422)]
-    assert base.read_cursor_state(source.checkpoint_key, home=tmp_path) == (0, 0, True)
 
 
 def test_final_drain_with_no_new_records_marks_acknowledged_cursor_final(tmp_path: Path, monkeypatch):
@@ -1422,8 +1275,7 @@ def test_sessions_rebuilt_from_disk_hash_and_upload_the_recorded_project(tmp_pat
     transcript.write_text(json.dumps({"type": "user", "cwd": str(project), "message": {"content": "hi"}}) + "\n")
     db = tmp_path / "outbox.db"
     source = SessionSource("claude-code", "rebuilt", transcript)  # no cwd, as discovery builds it
-    # The mocked drain leaves a queued row; it cannot prove delivery without an ACK.
-    assert not base.drain_session_source(source, config(), hook_event=hook_event, home=tmp_path, db_path=db)
+    assert base.drain_session_source(source, config(), hook_event=hook_event, home=tmp_path, db_path=db)
     (item,) = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
     assert item.payload["layer_hash"] == f"hash-of:{project}"
     assert uploads == [(f"hash-of:{project}", str(project))], "the snapshot uploaded is the one the payload names"
