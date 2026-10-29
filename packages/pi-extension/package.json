@@ -1,7 +1,7 @@
 {
   "name": "observal-pi",
   "private": true,
-  "version": "1.16.0-dev.0",
+  "version": "1.17.0-dev.0",
   "type": "module",
   "description": "Observal session telemetry for Pi \u2014 zero-dependency extension that pushes session traces to your Observal server",
   "keywords": [
