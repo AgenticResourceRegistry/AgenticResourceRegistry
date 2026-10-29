@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from loguru import logger as optic
 
@@ -65,15 +65,15 @@ def parse_clickhouse_url(url: str) -> tuple[str, str, str, str]:
         default_port = 8123
     else:
         raw = url
-        default_port = 8123
+        default_port = 8443 if url.startswith("https://") else 8123
     parsed = urlparse(raw)
     if not parsed.hostname:
         raise ValueError("ClickHouse URL requires a hostname")
     scheme = "https" if raw.startswith("https") else "http"
     http_url = f"{scheme}://{parsed.hostname}:{parsed.port or default_port}"
     db = (parsed.path or "/").strip("/") or "default"
-    user = parsed.username or "default"
-    password = parsed.password or ""
+    user = unquote(parsed.username) if parsed.username else "default"
+    password = unquote(parsed.password) if parsed.password else ""
     return http_url, db, user, password
 
 

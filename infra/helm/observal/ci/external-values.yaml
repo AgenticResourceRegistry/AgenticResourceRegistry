@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 SK Akram <skakram00zz@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+externalPostgres:
+  enabled: true
+  host: db.example.internal
+  database: observal
+  username: observal
+  password: "p@ss+w/ord"
+  sslMode: require
+externalClickhouse:
+  enabled: true
+  host: abc.clickhouse.cloud
+  port: 8443
+  username: default
+  password: "ch:secret"
+  secure: true
+externalRedis:
+  enabled: true
+  host: cache.example.internal
+  port: 6379
+  password: "redis-token"
+  tls: true

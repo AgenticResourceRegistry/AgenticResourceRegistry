@@ -90,6 +90,8 @@ spec:
                   else:
                       print(f'Secret {secret_name} already exists.')
               "
+          env:
+            {{- include "observal.connectionEnv" . | trim | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "observal.configMapName" . }}

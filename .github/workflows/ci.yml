@@ -350,6 +350,10 @@ jobs:
         run: |
           mkdir -p chart-dist
           helm template observal infra/helm/observal --namespace observal > chart-dist/rendered.yaml
+          for values in infra/helm/observal/ci/*.yaml; do
+            helm lint infra/helm/observal -f "$values"
+            helm template observal infra/helm/observal --namespace observal -f "$values" >> chart-dist/rendered.yaml
+          done
 
       - name: Validate rendered manifests
         if: needs.changes.outputs.helm == 'true'

@@ -52,7 +52,6 @@ web:
 
 postgresql:
   enabled: true
-  externalUrl: ""
   image:
     repository: postgres
     tag: "16"
@@ -69,7 +68,6 @@ postgresql:
 
 clickhouse:
   enabled: true
-  externalUrl: ""
   image:
     repository: clickhouse/clickhouse-server
     tag: "26.3"
@@ -86,7 +84,6 @@ clickhouse:
 
 redis:
   enabled: true
-  externalUrl: ""
   image:
     repository: redis
     tag: "7-alpine"
@@ -102,6 +99,42 @@ redis:
     size: 2Gi
     storageClassName: ""
 
+# External services: when enabled, the matching embedded StatefulSet is not deployed.
+# existingSecret holds the full connection URL under existingSecretKey; otherwise the
+# URL is built from host/port/database/username/password.
+externalPostgres:
+  enabled: false
+  existingSecret: ""
+  existingSecretKey: connection-uri
+  host: ""
+  port: 5432
+  database: observal
+  username: postgres
+  password: ""
+  sslMode: ""
+
+externalClickhouse:
+  enabled: false
+  existingSecret: ""
+  existingSecretKey: connection-uri
+  host: ""
+  port: 8123
+  database: observal
+  username: default
+  password: ""
+  secure: false
+
+externalRedis:
+  enabled: false
+  existingSecret: ""
+  existingSecretKey: connection-uri
+  host: ""
+  port: 6379
+  database: 0
+  username: ""
+  password: ""
+  tls: false
+
 ingress:
   enabled: true
   className: nginx
@@ -116,9 +149,10 @@ ingress:
   annotations: {}
 
 secrets:
-  # Use a pre-existing Secret instead of creating one. Secret must contain all
-  # keys: SECRET_KEY, POSTGRES_PASSWORD, CLICKHOUSE_PASSWORD, DATABASE_URL,
-  # CLICKHOUSE_URL, REDIS_URL
+  # Use a pre-existing Secret instead of creating one. It must contain SECRET_KEY
+  # plus, for each embedded service: POSTGRES_PASSWORD + DATABASE_URL,
+  # CLICKHOUSE_PASSWORD + CLICKHOUSE_URL, REDIS_URL. External services take their
+  # URL from externalX.existingSecret or externalX.host instead.
   existingSecret: ""
   secretKey: ""
   postgresPassword: ""

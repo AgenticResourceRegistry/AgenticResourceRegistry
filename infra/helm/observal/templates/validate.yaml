@@ -1,0 +1,3 @@
+# SPDX-FileCopyrightText: 2026 SK Akram <skakram00zz@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+{{- include "observal.validate" . -}}
