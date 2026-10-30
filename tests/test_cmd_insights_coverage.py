@@ -939,6 +939,29 @@ def test_skill_component_reports_use_skill_routes_and_never_mcp_wording(cli):
     cli.client_post.assert_called_once_with("/api/v1/insights/components/skill/skill-id/generate", {"period_days": 14})
 
 
+def test_codex_skill_cli_labels_selection_and_does_not_convert_unknown_load_to_zero(cli):
+    _returns(cli.resolve, "skill-id")
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        _skill_report(
+            harness_distribution={"codex": 5},
+            available_sessions=5,
+            loaded_sessions=None,
+            confirmed_loads=None,
+            load_attempts=None,
+            invoked_sessions=1,
+            invocations=1,
+        ),
+    ]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "skill", "team/review"])
+    assert shown.exit_code == 0, shown.output
+    text = " ".join(cli.messages())
+    assert "Sessions with a confirmed load: not recorded" in text
+    assert "Sessions with a Codex selection: 1" in text
+    assert "Native Codex skill selection is not a separately confirmed load" in text
+    assert "Sessions with a confirmed load: 0" not in text
+
+
 def test_unsupported_component_reports_are_refused_before_any_request(cli):
     result = runner.invoke(insights.insights_app, ["list", "--component", "prompt", "team/p"])
     assert result.exit_code != 0

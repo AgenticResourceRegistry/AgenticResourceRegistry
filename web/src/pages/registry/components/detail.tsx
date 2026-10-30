@@ -204,7 +204,7 @@ export default function ComponentDetailPage({
   const [draftEditOpen, setDraftEditOpen] = useState(false);
   const { data: publicForks, isLoading: forksLoading, error: forksError } = useComponentForks(type, id, forkPage, activeTab === "forks");
   const canEdit = isAuthenticated && (item?.user_permission === "owner");
-  // Component Insights exist for MCPs (observed calls), skills (loads and invocations) and hooks (recorded runs).
+  // Component Insights separate MCP calls, skill selections/loads, and recorded hook runs.
   const insightType = type === "mcps" ? "mcp" : type === "skills" ? "skill" : type === "hooks" ? "hook" : null;
   const showInsights = insightType !== null && canEdit;
   // A shared /components/...?tab=insights link opens the tab for those who may see it (owners and admins).
@@ -622,7 +622,7 @@ export default function ComponentDetailPage({
                   <div className="space-y-1">
                     <h2 className="text-lg font-semibold">Component Insights</h2>
                     <p className="max-w-[65ch] text-sm text-muted-foreground">{insightType === "skill"
-                      ? "Confirmed loads and invocations of this verified skill, and their coverage. A load shows the instructions entered context, not that they helped."
+                      ? "Native skill selections or invocations and separately confirmed loads, where recorded. Installation alone is not use; neither signal proves the skill helped."
                       : insightType === "hook"
                         ? "Recorded runs of this verified hook in sessions where it could run. Silent successes leave no record, so runs are a lower bound."
                         : "Observed MCP calls and attribution coverage across verified present sessions. Partial activity never proves no use."}</p>

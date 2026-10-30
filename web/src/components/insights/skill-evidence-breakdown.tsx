@@ -27,13 +27,15 @@ export function SkillEvidenceBreakdown({ metrics, coverage }: {
   coverage: SkillInsightCoverage | null | undefined;
 }) {
   if (!metrics || !coverage) return null;
+  const hasCodex = "codex" in metrics.harness_distribution;
+  const codexOnly = Object.keys(metrics.harness_distribution).length === 1 && hasCodex;
   return (
     <details className="rounded-lg border border-border bg-card p-5">
       <summary className="cursor-pointer rounded-sm text-lg font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
         Detailed skill evidence
       </summary>
       <p className="mt-3 max-w-[70ch] text-sm text-muted-foreground">
-        Presence, projection and recorded skill facts are different stages. Legacy sessions without a verified install are not counted as present; a load means instructions entered context, not that they helped.
+        Presence, projection and recorded skill facts are different stages. Legacy sessions without a verified install are not counted as present; a confirmed load is not proof that the skill helped.{hasCodex && " Native Codex selection is not a separately confirmed load."}
       </p>
       <div className="mt-6 grid gap-x-10 gap-y-8 md:grid-cols-2">
         <FactGroup title="Presence" facts={[
@@ -58,10 +60,10 @@ export function SkillEvidenceBreakdown({ metrics, coverage }: {
           { label: "Attributed records", value: coverage.evidence.attributed_facts },
           { label: "Unmatched records", value: coverage.evidence.unmatched_facts, description: "Not assigned to this verified skill" },
           { label: "Ambiguous records", value: coverage.evidence.collision_facts },
-          { label: "Unknown load results", value: coverage.evidence.unknown_load_results, description: "Not confirmed loads" },
+          { label: "Unknown load results", value: metrics.load_attempts === null ? null : coverage.evidence.unknown_load_results, description: "Not confirmed loads" },
           { label: "Confirmed loads", value: metrics.confirmed_loads },
           { label: "Unconfirmed load attempts", value: metrics.load_attempts },
-          { label: "Explicit invocations", value: metrics.invocations },
+          { label: codexOnly ? "Native Codex selections" : hasCodex ? "Invocations / selections" : "Explicit invocations", value: metrics.invocations, description: hasCodex ? "Not separately confirmed loads" : undefined },
         ]} />
         <div className="space-y-3">
           <FactGroup title="Activation actions" facts={[

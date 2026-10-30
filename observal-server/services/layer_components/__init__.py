@@ -3,4 +3,5 @@
 
 """User-scoped, published layer component projection."""
 
-CURRENT_EXTRACTOR_VERSION = 2
+# 3: ambiguous MCP aliases spanning user/project scopes cannot be verified.
+CURRENT_EXTRACTOR_VERSION = 3

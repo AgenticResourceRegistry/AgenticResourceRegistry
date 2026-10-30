@@ -81,14 +81,16 @@ _CAUSAL = re.compile(
     re.I,
 )
 _ABSENCE = re.compile(r"\b(?:unused|never used|never called|not used|no use)\b", re.I)
+_UNMEASURED_LOAD = re.compile(r"\bload(?:ed|ing|s)?\b", re.I)
 _IDENTIFIER = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-|\b[0-9a-f]{12,}\b|\S+@\S+\.\S+", re.I)
 _NUMBER = re.compile(r"(?<![\w.-])\d+(?:\.\d+)?(?![\w-])")
 _SNAKE = re.compile(r"\b[a-z]{2,}(?:_[a-z]{2,})+\b")
 
 COMPONENT_NOTES = {
     "skill": (
-        "A skill is loaded when the model decides its description matches a request; its description and body are "
-        "what an owner can edit. A load shows its instructions entered context, not that they were followed."
+        "A verified load and a native skill selection are different signals. Codex skill selection "
+        "does not establish a separately confirmed load. Being installed or offered is not use, and null load "
+        "counts are unknown, not zero. Neither signal shows that the skill was followed or helped."
     ),
     "hook": (
         "A hook runs on a harness event. A recorded run shows it executed, not what it changed. Hooks kept in an "
@@ -132,6 +134,7 @@ def validate_analysis(
     allowed_evidence: set[str],
     friction_text: list[str],
     has_attention: bool,
+    skill_load_unmeasured: bool = False,
 ) -> Analysis:
     """Parse and check one model reply. Raises ``ValueError`` with a fixed message naming the broken rule."""
     analysis = Analysis.model_validate(raw)
@@ -147,6 +150,8 @@ def validate_analysis(
             )
         if _ABSENCE.search(text):
             raise ValueError("Cannot claim a component was unused")
+        if skill_load_unmeasured and _UNMEASURED_LOAD.search(text):
+            raise ValueError("Skill loads are unmeasured; do not discuss loads")
         if _IDENTIFIER.search(text):
             raise ValueError("Identifiers do not belong in the text")
         if match := _SNAKE.search(text):
@@ -274,6 +279,7 @@ def build_prompt(
         "allowed_evidence": allowed_evidence,
         "friction_text": [note["description"] for note in notes],
         "has_attention": any(item["severity"] == "attention" for item in attention),
+        "skill_load_unmeasured": report.component_type == "skill" and metrics.get("confirmed_loads") is None,
     }
     return prompt, constraints
 

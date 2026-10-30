@@ -19,8 +19,8 @@ from services.component_activity import hook_queries, queries, skill_queries
 @pytest.mark.parametrize(
     ("module", "attribute", "expected"),
     [
-        (queries, "_SESSIONS", "83cb71d1c38f34e4af7fada363ad36d1ee770d381db98e1a72be8002f95eba9d"),
-        (skill_queries, "_SKILL_SESSIONS", "85abe02b0ca54b686c87fb8a2e17b89d2e662f6fc7fa61082c751dc4094f2071"),
+        (queries, "_SESSIONS", "d9e7a04796de15d69f2bae6b0964361ba5a4ea3abd7b52953f09184b187daf4c"),
+        (skill_queries, "_SKILL_SESSIONS", "ba98982852aff0e016328f9aebc944c5727f27e3df95d204f9525922b66a2911"),
         (hook_queries, "_HOOK_SESSIONS", "c39efbf248d5604c646ad363aa1266076510743823b43fffbd7d168f0cbfb4f6"),
     ],
 )
