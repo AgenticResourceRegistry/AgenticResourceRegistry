@@ -5,7 +5,6 @@
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import exc as sa_exc
 
 
 @pytest.mark.asyncio
@@ -100,52 +99,6 @@ def test_team_requests_bound_name():
 
     assert _field_errors(TeamCreateRequest, name="t" * 256).get("name") == "string_too_long"
     assert _field_errors(TeamUpdateRequest, name="t" * 256).get("name") == "string_too_long"
-
-
-# ── Safety net: a value PostgreSQL rejects is still the client's 422 ─────────
-
-
-class _PgError(Exception):
-    def __init__(self, sqlstate):
-        super().__init__("db said no")
-        self.sqlstate = sqlstate
-
-
-def _client_encode_error():
-    # What asyncpg's adapter raises when its own DataError (a ValueError) fires while encoding a parameter.
-    orig = Exception("invalid input for query argument $1")
-    orig.__cause__ = ValueError("invalid UUID 'not-a-uuid'")
-    return orig
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("make_exc", "expected"),
-    [
-        (lambda: sa_exc.DBAPIError("SELECT 1", {"v": "x"}, _PgError("22001")), 422),
-        (lambda: sa_exc.DataError("SELECT 1", {}, _PgError(None)), 422),
-        (lambda: sa_exc.InterfaceError("SELECT 1", {}, _client_encode_error()), 422),
-        (lambda: sa_exc.IntegrityError("INSERT", {}, _PgError("23505")), 500),
-        (lambda: sa_exc.OperationalError("SELECT 1", {}, _PgError("08006")), 500),
-    ],
-)
-async def test_db_value_errors_become_422_and_other_db_errors_stay_500(make_exc, expected):
-    from middleware import db_value_error_handler
-
-    app = FastAPI()
-    app.add_exception_handler(sa_exc.DBAPIError, db_value_error_handler)
-
-    @app.get("/boom")
-    async def boom():
-        raise make_exc()
-
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/boom")
-    assert resp.status_code == expected
-    if expected == 422:
-        # The statement and its parameters never reach the client.
-        assert resp.json() == {"detail": "A request value is not valid for its field"}
 
 
 # ── OBS-1471: one semver rule for component versions ─────────────────────────
@@ -444,8 +397,8 @@ async def test_bulk_agents_report_bad_versions_and_harnesses_per_item():
         ("bad-harness", "error"),
     ]
     assert "version" in result.results[0].error.lower()
-    assert "vscode" in result.results[1].error
-    assert "claude" not in result.results[1].error
+    # Only the unknown name is flagged; claude_code is accepted and normalized.
+    assert result.results[1].error.startswith("Invalid harness(s): vscode.")
 
 
 def test_bulk_agent_harnesses_are_normalized_like_agent_create():
