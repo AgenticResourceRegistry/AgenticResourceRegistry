@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """CLI commands for managing the embedded Observal server.
@@ -10,7 +11,10 @@ ClickHouse, and Redis.
 
 from __future__ import annotations
 
+import ipaddress
+import json
 import os
+import re
 import subprocess
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
@@ -25,7 +29,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from observal_cli.errors import ErrorCategory, fail
+from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.render import OutputMode, output_json, output_json_line
 from observal_cli.server.constants import API_PORT, CONFIG_DIR, LOG_DIR, OBSERVAL_HOME
 
@@ -621,8 +625,8 @@ def _find_env_file(compose_dir: Path) -> Path:
 def _get_health_url(compose_dir: Path) -> str:
     """Get the health check URL from .env or defaults.
 
-    Reads LB_HOST_PORT (preferred) or API_HOST_PORT from .env to determine
-    the correct port. Falls back to 8000 (standard API port) if neither is set.
+    Server packages publish API_HOST_PORT; source Compose uses LB_HOST_PORT.
+    Falls back to 8000 (standard package API port) if neither is set.
     Every shipped nginx.conf routes /health to the API's readiness check;
     /readyz falls through to the web app there and would pass without the API.
     """
@@ -630,6 +634,7 @@ def _get_health_url(compose_dir: Path) -> str:
     env_file = _find_env_file(compose_dir)
     lb_port = None
     api_port = None
+    bind_address = None
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             line = line.strip()
@@ -637,8 +642,25 @@ def _get_health_url(compose_dir: Path) -> str:
                 lb_port = line.split("=", 1)[1].strip().strip('"') or None
             elif line.startswith("API_HOST_PORT="):
                 api_port = line.split("=", 1)[1].strip().strip('"') or None
-    port = lb_port or api_port or "8000"
-    return f"http://localhost:{port}/health"
+            elif line.startswith("OBSERVAL_BIND_ADDRESS="):
+                bind_address = line.split("=", 1)[1].strip().strip('"') or None
+    port = (api_port if (compose_dir / "setup.sh").is_file() else lb_port or api_port) or "8000"
+    if not bind_address or bind_address == "0.0.0.0":
+        return f"http://localhost:{port}/health"
+    if bind_address == "::":
+        return f"http://[::1]:{port}/health"
+    try:
+        address = ipaddress.ip_address(bind_address)
+    except ValueError:
+        fail(
+            ErrorCategory.VALIDATION,
+            "The configured Docker bind address is not an IP address.",
+            operation="Verify Docker server health",
+            resource="OBSERVAL_BIND_ADDRESS",
+            remediation="Correct the bind address in .env before upgrading or restoring.",
+        )
+    host = f"[{address}]" if address.version == 6 else str(address)
+    return f"http://{host}:{port}/health"
 
 
 def _refresh_load_balancer(compose_dir: Path) -> None:
@@ -691,12 +713,118 @@ def _update_env_version(compose_dir: Path, version: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _require_unambiguous_version_env(compose_dir: Path, *, rollback: bool = False) -> None:
+    """Reject duplicate or noncanonical Compose version assignments before mutation."""
+    operation = "Rollback Docker server" if rollback else "Upgrade Docker server"
+    env_file = _find_env_file(compose_dir)
+    version_lines = [
+        line
+        for line in env_file.read_text().splitlines()
+        if re.match(r"^\s*(?:export\s+)?OBSERVAL_VERSION\s*[:=]", line)
+    ]
+    if env_file.is_symlink() or len(version_lines) != 1 or not version_lines[0].startswith("OBSERVAL_VERSION="):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Installed .env has an ambiguous server version.",
+            operation=operation,
+            resource=str(env_file),
+            remediation="Ensure .env is a regular file with exactly one OBSERVAL_VERSION= entry.",
+        )
+
+
+def _check_compose_images(compose_dir: Path, version: str, *, rollback: bool = False) -> None:
+    """Validate the images Compose will actually use with the requested version."""
+    operation = "Rollback Docker server" if rollback else "Upgrade Docker server"
+    # Resolve health before stopping writers: a non-local bind is not reachable
+    # through localhost, and an invalid address must not fail after init runs.
+    _get_health_url(compose_dir)
+    overrides = (
+        "COMPOSE_FILE",
+        "COMPOSE_ENV_FILES",
+        "COMPOSE_DISABLE_ENV_FILE",
+        "API_HOST_PORT",
+        "LB_HOST_PORT",
+        "OBSERVAL_BIND_ADDRESS",
+    )
+    if any(name in os.environ for name in overrides):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Exported Compose settings could bypass installed images or the health listener.",
+            operation=operation,
+            resource="Compose environment",
+            remediation="Unset conflicting Compose file, env-file, bind address and host port variables before retrying.",
+        )
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        cwd=compose_dir,
+        env={**os.environ, "OBSERVAL_VERSION": version},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    try:
+        services = json.loads(result.stdout)["services"] if result.returncode == 0 else None
+    except (ValueError, KeyError, TypeError):
+        services = None
+    owners = ("agenticresourceregistry", "observal") if rollback else ("agenticresourceregistry",)
+    valid = isinstance(services, dict) and any(
+        all(
+            isinstance(services.get(service), dict) and services[service].get("image") == image
+            for service, image in {
+                "observal-api": f"ghcr.io/{owner}/observal-api:{version}",
+                "observal-init": f"ghcr.io/{owner}/observal-api:{version}",
+                "observal-worker": f"ghcr.io/{owner}/observal-api:{version}",
+                "observal-web": f"ghcr.io/{owner}/observal-web:{version}",
+            }.items()
+        )
+        for owner in owners
+    )
+    if not valid:
+        fail(
+            ErrorCategory.VALIDATION if result.returncode == 0 else ErrorCategory.UNAVAILABLE,
+            (
+                "Docker Compose images do not match the requested server version."
+                if result.returncode == 0
+                else "Docker Compose configuration could not be resolved."
+            ),
+            operation=operation,
+            resource="Compose service images",
+            remediation="Inspect docker compose config; stage a package with matching GHCR API and web repositories before upgrading or restoring.",
+        )
+
+
+def _stop_writers(compose_dir: Path) -> bool:
+    """Stop database writers without restarting containers on a possibly migrated schema."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "stop", "observal-api", "observal-worker", "observal-init"],
+            cwd=compose_dir,
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            return False
+        running = subprocess.run(
+            ["docker", "compose", "ps", "--status", "running", "--services"],
+            cwd=compose_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return running.returncode == 0 and not {"observal-api", "observal-worker", "observal-init"}.intersection(
+            running.stdout.splitlines()
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force: bool) -> dict:
     """Apply a Docker server upgrade and return its structured result."""
     from observal_cli import version_check
     from observal_cli.upgrade_lock import UpgradeLockError, acquire_lock, release_lock
 
     compose_dir = _require_compose_dir()
+    _require_unambiguous_version_env(compose_dir)
     current = _get_current_server_version(compose_dir)
     try:
         Version(current)
@@ -737,9 +865,20 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
             detail=repr(error),
         )
 
+    if os.environ.get("OBSERVAL_VERSION") not in (None, target):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Exported OBSERVAL_VERSION conflicts with the target server version.",
+            operation="Upgrade Docker server",
+            resource="OBSERVAL_VERSION",
+            remediation="Unset OBSERVAL_VERSION or set it to the target version before retrying.",
+        )
+
     if target == current:
         console.print(f"[green]Already on v{escape(current)}.[/green]")
         return {"status": "current", "current_version": current, "target_version": target, "changed": False}
+
+    _check_compose_images(compose_dir, target)
 
     # Verify image exists on GHCR before any state changes
     with console.status("Verifying image on GHCR..."):
@@ -787,15 +926,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
 
     backup_path = None
     try:
-        # Backup
-        if not skip_backup:
-            from observal_cli.server.backup import create_backup
-
-            console.print("[blue]==>[/blue] Creating backup...")
-            backup_path = create_backup(compose_dir, current)
-            console.print(f"  Backup: {escape(str(backup_path))}")
-
-        # Pull new images
+        # Pull new images before creating a potentially unnecessary backup.
         console.print(f"[blue]==>[/blue] Pulling images for v{target}...")
         env = {**os.environ, "OBSERVAL_VERSION": target}
         result = subprocess.run(
@@ -816,26 +947,54 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 detail=f"docker_returncode={result.returncode}",
             )
 
+        if not skip_backup:
+            from observal_cli.server.backup import create_backup
+
+            console.print("[blue]==>[/blue] Creating backup...")
+            backup_path = create_backup(compose_dir, current)
+            console.print(f"  Backup: {escape(str(backup_path))}")
+
+        if not _stop_writers(compose_dir):
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "Database writers could not be stopped; upgrade was not started.",
+                operation="Upgrade Docker server",
+                resource="Compose writers",
+                remediation="Stop API, worker and init manually before retrying.",
+            )
+
         # Update .env
         _update_env_version(compose_dir, target)
 
         # Recreate containers
         console.print("[blue]==>[/blue] Recreating containers...")
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d"],
-            cwd=compose_dir,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            _update_env_version(compose_dir, current)
+        try:
+            result = subprocess.run(
+                ["docker", "compose", "up", "-d", "--pull", "never", "--no-build"],
+                cwd=compose_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.SubprocessError):
+            stopped = _stop_writers(compose_dir)
             fail(
                 ErrorCategory.UNAVAILABLE,
-                "Docker container recreation failed.",
+                "Docker container recreation could not be verified; no automatic rollback was attempted.",
                 operation="Upgrade Docker server",
                 resource=str(compose_dir),
-                remediation="Inspect Docker Compose logs and retry.",
+                remediation=("Writers stopped. " if stopped else "Writer shutdown could not be verified. ")
+                + "Perform manual recovery before restarting services.",
+            )
+        if result.returncode != 0:
+            stopped = _stop_writers(compose_dir)
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "Docker container recreation failed; no automatic rollback was attempted.",
+                operation="Upgrade Docker server",
+                resource=str(compose_dir),
+                remediation=("Writers stopped. " if stopped else "Writer shutdown could not be verified. ")
+                + "Inspect Compose logs and perform manual recovery before restarting services.",
                 detail=f"docker_returncode={result.returncode}",
             )
         _refresh_load_balancer(compose_dir)
@@ -850,7 +1009,9 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
         for _ in range(24):  # 120s total
             time.sleep(5)
             try:
-                resp = httpx.get(_get_health_url(compose_dir), timeout=5)
+                resp = httpx.get(
+                    _get_health_url(compose_dir), timeout=5, trust_env=False, headers={"Host": "localhost"}
+                )
                 if resp.status_code == 200:
                     healthy = True
                     break
@@ -858,28 +1019,20 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 continue
 
         if not healthy:
-            console.print("[red]Health check failed! Rolling back...[/red]")
-            _update_env_version(compose_dir, current)
-            rollback = subprocess.run(
-                ["docker", "compose", "up", "-d"],
-                cwd=compose_dir,
-                capture_output=True,
-                timeout=300,
-            )
-            _refresh_load_balancer(compose_dir)
+            stopped = _stop_writers(compose_dir)
             fail(
                 ErrorCategory.UNAVAILABLE,
-                "The upgraded server failed its health check.",
+                "The upgraded server failed its health check; no automatic rollback was attempted.",
                 operation="Upgrade Docker server",
                 resource=_get_health_url(compose_dir),
-                remediation="Inspect Docker Compose logs; the previous version was requested again.",
-                detail=f"rollback_returncode={rollback.returncode}",
+                remediation=("Writers stopped. " if stopped else "Writer shutdown could not be verified. ")
+                + "Inspect Compose logs and perform manual recovery before restarting services.",
             )
 
         console.print(f"[green]✓ Upgraded to v{target}[/green]")
         if backup_path:
             console.print(f"  Backup: {escape(str(backup_path))}")
-        console.print("  Rollback: [dim]observal server rollback[/dim]")
+        console.print("  Rollback: [dim]observal server rollback --from-backup <backup-path>[/dim]")
         return {
             "status": "upgraded",
             "current_version": current,
@@ -922,7 +1075,9 @@ def server_upgrade(
     try:
         with _quiet_output(output):
             result = _server_upgrade(version, skip_backup, dry_run, force)
-    except (RuntimeError, subprocess.SubprocessError) as error:
+    except CliError:
+        raise
+    except (RuntimeError, subprocess.SubprocessError, OSError) as error:
         fail(
             ErrorCategory.UNAVAILABLE,
             "The Docker server upgrade could not complete.",
@@ -937,23 +1092,22 @@ def server_upgrade(
 
 def _server_rollback(from_backup: str | None, force: bool) -> dict:
     """Restore PostgreSQL and Docker image version from one managed backup."""
-    from observal_cli.server.backup import BACKUPS_DIR, list_backups, restore_backup
+    from observal_cli.server.backup import BACKUPS_DIR, restore_backup
     from observal_cli.upgrade_lock import UpgradeLockError, acquire_lock, release_lock
 
+    if not from_backup:
+        fail(
+            ErrorCategory.VALIDATION,
+            "Rollback requires an explicitly selected PostgreSQL backup.",
+            operation="Rollback Docker server",
+            resource="managed PostgreSQL backup",
+            remediation="Run observal server versions, then pass --from-backup with the chosen backup path.",
+        )
     compose_dir = _require_compose_dir()
+    _require_unambiguous_version_env(compose_dir, rollback=True)
     current = _get_current_server_version(compose_dir)
 
-    backups = list_backups()
-    if not backups and not from_backup:
-        fail(
-            ErrorCategory.NOT_FOUND,
-            "No managed server backups were found.",
-            operation="Rollback Docker server",
-            resource=str(BACKUPS_DIR),
-            remediation="Upgrade with backups enabled before attempting rollback.",
-        )
-
-    backup_dir = (Path(from_backup).expanduser() if from_backup else Path(backups[0]["path"])).resolve()
+    backup_dir = Path(from_backup).expanduser().resolve()
     managed_root = BACKUPS_DIR.resolve()
     if not backup_dir.is_relative_to(managed_root):
         fail(
@@ -1005,6 +1159,38 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
         )
 
     try:
+        if os.environ.get("OBSERVAL_VERSION") not in (None, prev_version):
+            fail(
+                ErrorCategory.VALIDATION,
+                "Exported OBSERVAL_VERSION conflicts with the rollback version.",
+                operation="Rollback Docker server",
+                resource="OBSERVAL_VERSION",
+                remediation="Unset OBSERVAL_VERSION or set it to the backup version before retrying.",
+            )
+        _check_compose_images(compose_dir, prev_version, rollback=True)
+        pulled = subprocess.run(
+            ["docker", "compose", "pull", "observal-api", "observal-web", "observal-init", "observal-worker"],
+            cwd=compose_dir,
+            env={**os.environ, "OBSERVAL_VERSION": prev_version},
+            capture_output=True,
+            timeout=600,
+        )
+        if pulled.returncode != 0:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "Rollback images could not be downloaded; database was not touched.",
+                operation="Rollback Docker server",
+                resource="server images",
+                remediation="Check Docker and registry access before retrying.",
+            )
+        if not _stop_writers(compose_dir):
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "Database writers could not be stopped; database was not touched.",
+                operation="Rollback Docker server",
+                resource="Compose writers",
+                remediation="Stop API, worker and init manually before retrying.",
+            )
         # Restore database
         console.print("[blue]==>[/blue] Restoring database...")
         restore_backup(backup_dir, compose_dir)
@@ -1014,20 +1200,25 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
 
         # Recreate containers with previous images
         console.print("[blue]==>[/blue] Recreating containers...")
-        recreate = subprocess.run(
-            ["docker", "compose", "up", "-d"],
-            cwd=compose_dir,
-            capture_output=True,
-            timeout=300,
-        )
-        if recreate.returncode != 0:
+        try:
+            recreate = subprocess.run(
+                ["docker", "compose", "up", "-d", "--pull", "never", "--no-build"],
+                cwd=compose_dir,
+                capture_output=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.SubprocessError):
+            recreate = None
+        if recreate is None or recreate.returncode != 0:
+            stopped = _stop_writers(compose_dir)
             fail(
                 ErrorCategory.UNAVAILABLE,
                 "Docker container recreation failed after restoring PostgreSQL.",
                 operation="Rollback Docker server",
                 resource=str(compose_dir),
-                remediation="Inspect Docker Compose logs before retrying.",
-                detail=f"docker_returncode={recreate.returncode}",
+                remediation=("Writers stopped. " if stopped else "Writer shutdown could not be verified. ")
+                + "Inspect Docker Compose logs before manual recovery.",
+                detail=f"docker_returncode={recreate.returncode if recreate is not None else 'unknown'}",
             )
         _refresh_load_balancer(compose_dir)
 
@@ -1041,7 +1232,9 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
         for _ in range(24):
             time.sleep(5)
             try:
-                resp = httpx.get(_get_health_url(compose_dir), timeout=5)
+                resp = httpx.get(
+                    _get_health_url(compose_dir), timeout=5, trust_env=False, headers={"Host": "localhost"}
+                )
                 if resp.status_code == 200:
                     healthy = True
                     break
@@ -1049,12 +1242,14 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
                 continue
 
         if not healthy:
+            stopped = _stop_writers(compose_dir)
             fail(
                 ErrorCategory.UNAVAILABLE,
                 "Rollback completed but the server is unhealthy.",
                 operation="Rollback Docker server",
                 resource=_get_health_url(compose_dir),
-                remediation="Inspect Docker Compose logs before taking further action.",
+                remediation=("Writers stopped. " if stopped else "Writer shutdown could not be verified. ")
+                + "Inspect Docker Compose logs before manual recovery.",
             )
         console.print(f"[green]✓ Rolled back to v{prev_version}[/green]")
         console.print("[yellow]ClickHouse telemetry was not restored.[/yellow]")
@@ -1073,18 +1268,18 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
 
 @server_app.command(name="rollback")
 def server_rollback(
-    from_backup: str | None = typer.Option(None, "--from-backup", help="Managed backup directory to restore"),
+    from_backup: str | None = typer.Option(None, "--from-backup", help="Required: managed backup directory to restore"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip interactive confirmation"),
     output: Annotated[
         OutputMode, typer.Option("--output", "-o", help="Output format: table or json")
     ] = OutputMode.table,
 ) -> None:
-    """Restore PostgreSQL and the Docker image version from backup.
+    """Restore PostgreSQL and Docker images from an explicitly selected managed backup.
 
     ClickHouse telemetry is left unchanged. JSON mode requires explicit confirmation.
 
     Examples:
-        observal server rollback --force --output json
+        observal server rollback --from-backup ~/.observal/backups/v1.2.2-20260521T120000 --force --output json
         observal server rollback --from-backup ~/.observal/backups/v1.2.2-20260521T120000 --force
     """
     if _is_json(output) and not force:
@@ -1098,14 +1293,16 @@ def server_rollback(
     try:
         with _quiet_output(output):
             result = _server_rollback(from_backup, force)
-    except (RuntimeError, subprocess.SubprocessError) as error:
+    except CliError:
+        raise
+    except (RuntimeError, subprocess.SubprocessError, OSError) as error:
         fail(
             ErrorCategory.UNAVAILABLE,
             "The Docker server rollback could not complete.",
             operation="Rollback Docker server",
             resource="local Docker deployment",
-            remediation="Check Docker and the managed backup, then retry.",
-            detail=repr(error),
+            remediation="PostgreSQL may be partially restored. Keep writers stopped; inspect the database and backup before any retry or restart.",
+            detail=type(error).__name__,
         )
     if _is_json(output):
         output_json(result)
