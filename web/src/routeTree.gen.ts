@@ -14,7 +14,6 @@ import { Route as AuthedIndexRouteImport } from './routes/_authed/index'
 import { Route as AuthedTeamspacesRouteImport } from './routes/_authed/teamspaces'
 import { Route as AuthedReviewRouteImport } from './routes/_authed/review'
 import { Route as AuthedLeaderboardRouteImport } from './routes/_authed/leaderboard'
-import { Route as AuthedDiscoverRouteImport } from './routes/_authed/discover'
 import { Route as AuthedUserRouteImport } from './routes/_authed/_user'
 import { Route as AuthedAdminRouteImport } from './routes/_authed/_admin'
 import { Route as authRegisterRouteImport } from './routes/(auth)/register'
@@ -70,11 +69,6 @@ const AuthedReviewRoute = AuthedReviewRouteImport.update({
 const AuthedLeaderboardRoute = AuthedLeaderboardRouteImport.update({
   id: '/leaderboard',
   path: '/leaderboard',
-  getParentRoute: () => AuthedRoute,
-} as any)
-const AuthedDiscoverRoute = AuthedDiscoverRouteImport.update({
-  id: '/discover',
-  path: '/discover',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedUserRoute = AuthedUserRouteImport.update({
@@ -247,7 +241,6 @@ export interface FileRoutesByFullPath {
   '/device': typeof authDeviceRoute
   '/login': typeof authLoginRoute
   '/register': typeof authRegisterRoute
-  '/discover': typeof AuthedDiscoverRoute
   '/leaderboard': typeof AuthedLeaderboardRoute
   '/review': typeof AuthedReviewRoute
   '/teamspaces': typeof AuthedTeamspacesRouteWithChildren
@@ -284,7 +277,6 @@ export interface FileRoutesByTo {
   '/login': typeof authLoginRoute
   '/register': typeof authRegisterRoute
   '/': typeof AuthedIndexRoute
-  '/discover': typeof AuthedDiscoverRoute
   '/leaderboard': typeof AuthedLeaderboardRoute
   '/review': typeof AuthedReviewRoute
   '/teamspaces': typeof AuthedTeamspacesRouteWithChildren
@@ -324,7 +316,6 @@ export interface FileRoutesById {
   '/(auth)/register': typeof authRegisterRoute
   '/_authed/_admin': typeof AuthedAdminRouteWithChildren
   '/_authed/_user': typeof AuthedUserRouteWithChildren
-  '/_authed/discover': typeof AuthedDiscoverRoute
   '/_authed/leaderboard': typeof AuthedLeaderboardRoute
   '/_authed/review': typeof AuthedReviewRoute
   '/_authed/teamspaces': typeof AuthedTeamspacesRouteWithChildren
@@ -364,7 +355,6 @@ export interface FileRouteTypes {
     | '/device'
     | '/login'
     | '/register'
-    | '/discover'
     | '/leaderboard'
     | '/review'
     | '/teamspaces'
@@ -401,7 +391,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/'
-    | '/discover'
     | '/leaderboard'
     | '/review'
     | '/teamspaces'
@@ -440,7 +429,6 @@ export interface FileRouteTypes {
     | '/(auth)/register'
     | '/_authed/_admin'
     | '/_authed/_user'
-    | '/_authed/discover'
     | '/_authed/leaderboard'
     | '/_authed/review'
     | '/_authed/teamspaces'
@@ -516,13 +504,6 @@ declare module '@tanstack/react-router' {
       path: '/leaderboard'
       fullPath: '/leaderboard'
       preLoaderRoute: typeof AuthedLeaderboardRouteImport
-      parentRoute: typeof AuthedRoute
-    }
-    '/_authed/discover': {
-      id: '/_authed/discover'
-      path: '/discover'
-      fullPath: '/discover'
-      preLoaderRoute: typeof AuthedDiscoverRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/_user': {
@@ -822,7 +803,6 @@ const AuthedAgentsAgentIdRouteWithChildren =
 interface AuthedRouteChildren {
   AuthedAdminRoute: typeof AuthedAdminRouteWithChildren
   AuthedUserRoute: typeof AuthedUserRouteWithChildren
-  AuthedDiscoverRoute: typeof AuthedDiscoverRoute
   AuthedLeaderboardRoute: typeof AuthedLeaderboardRoute
   AuthedReviewRoute: typeof AuthedReviewRoute
   AuthedTeamspacesRoute: typeof AuthedTeamspacesRouteWithChildren
@@ -845,7 +825,6 @@ interface AuthedRouteChildren {
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminRoute: AuthedAdminRouteWithChildren,
   AuthedUserRoute: AuthedUserRouteWithChildren,
-  AuthedDiscoverRoute: AuthedDiscoverRoute,
   AuthedLeaderboardRoute: AuthedLeaderboardRoute,
   AuthedReviewRoute: AuthedReviewRoute,
   AuthedTeamspacesRoute: AuthedTeamspacesRouteWithChildren,
