@@ -229,9 +229,7 @@ flowchart LR
 
 Every agent you pull gets an `observal-agents` MCP server with four tools, `find_agents`, `delegate`, `get_task` and `cancel_task`, so it can do this without being told how. Delegation is limited to approved agents, stops after two levels, lets a delegated agent start at most three tasks of its own, and refuses loops. Each delegation is recorded against the calling session, so traces show which agents a session relied on.
 
-**Discover shows registry agents that can take a task and remote A2A agents side by side:**
-
-![Discover page showing a delegable registry agent and a remote A2A agent](docs/img/discover-a2a.png)
+**The Agents view in Agentic Resources marks registry agents that can take a task as Delegable and lists remote A2A agents next to them, each with its `observal delegate run` command.**
 
 **Delegate from any terminal or script.** Here a remote A2A agent answers directly; a registry agent also hands back its file changes as a patch for you to review:
 

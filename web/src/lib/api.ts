@@ -50,6 +50,7 @@ import type {
 	ReviewPolicy,
 	CheckSettings,
 	RegistryItem,
+	RemoteAgentList,
 	ForkRequest,
 	ForkDiff,
 	ForksResponse,
@@ -1161,6 +1162,8 @@ export interface HarnessRuntimeFacts {
 	dynamic_tools: boolean;
 	prompt_context_injection: boolean;
 	guidance_file_write: boolean;
+	/** The harness CLI can run one prompt non-interactively, so agents can delegate tasks to it. */
+	headless_run: boolean;
 }
 
 export interface HarnessEntry {
@@ -1236,6 +1239,11 @@ export const config = {
 	version: () => get<VersionConfig>("/config/version"),
 	harnesses: () => get<HarnessesResponse>("/config/harnesses"),
 	ssoHealth: () => get<SsoHealthResult>("/config/sso-health"),
+};
+
+// ── Remote A2A agents ──────────────────────────────────────────────
+export const remoteAgents = {
+	list: () => get<RemoteAgentList>("/ard/imports"),
 };
 
 // ── Bulk ───────────────────────────────────────────────────────────

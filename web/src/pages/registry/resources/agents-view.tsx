@@ -8,7 +8,7 @@ import { Link, useRouter } from "@tanstack/react-router";
 import { useState, useMemo, useCallback, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bot, Trash2, ArchiveRestore, FileEdit, Send } from "lucide-react";
+import { Bot, Trash2, ArchiveRestore, FileEdit, Send, Network, Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   useRegistryList,
@@ -17,6 +17,7 @@ import {
   useDeletedAgents,
   useRestoreDeletedAgent,
   useSubmitDraft,
+  useRemoteAgents,
 } from "@/hooks/use-api";
 import { registry, getUserRole } from "@/lib/api";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -26,8 +27,9 @@ import { HarnessBadges } from "@/components/registry/harness-badges";
 import { canonicalRouteParts } from "@/lib/registry-name";
 import { useHarnesses } from "@/hooks/use-harnesses";
 import { compactNumber } from "@/lib/utils";
+import { StatusBadge } from "@/components/registry/status-badge";
 import { StatusStrip, RegistryNote, CatalogGrid } from "@/components/registry/registry-primitives";
-import type { RegistryItem } from "@/lib/types";
+import type { RegistryItem, RemoteAgent } from "@/lib/types";
 import type { FilterField } from "@/components/registry/filter-bar";
 import {
   CardFooter,
@@ -85,10 +87,76 @@ function RestoreDeletedAgentButton({ agent }: { agent: RegistryItem }) {
   );
 }
 
+/** Running agents can hand a delegable agent a task through the observal-agents MCP server. */
+function DelegableBadge() {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-light-blue px-2 py-0.5 text-2xs font-medium text-dark-blue"
+      title="Running agents can hand this agent a task through the observal-agents MCP server."
+    >
+      Delegable
+    </span>
+  );
+}
+
+/** Mirrors the server's `delegable()`: approved, and a supported harness (none listed means all) can run headless. */
+function useIsDelegable(agent: RegistryItem) {
+  const { data: harnessList = [] } = useHarnesses();
+  if ((agent.status ?? "approved") !== "approved") return false;
+  const headless = harnessList.filter((h) => h.runtime.headless_run).map((h) => h.name);
+  const supported = (agent.supported_harnesses as string[] | undefined) ?? [];
+  return supported.length ? supported.some((h) => headless.includes(h)) : headless.length > 0;
+}
+
+function RemoteAgentCard({ agent }: { agent: RemoteAgent }) {
+  const [copied, setCopied] = useState(false);
+  const command = `observal delegate run ${agent.identifier} "<task>"`;
+  const lifecycle = agent["obs:lifecycle"];
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Could not copy to the clipboard.");
+    }
+  }
+  return (
+    <div className="flex min-h-[160px] flex-col rounded-xl bg-card p-[18px] shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <span className="inline-flex items-center gap-1.5 text-2xs font-medium text-primary">
+          <Network className="h-4 w-4" />
+          Remote A2A agent
+        </span>
+        <div className="flex items-center gap-1.5">
+          {agent["obs:delegable"] && <DelegableBadge />}
+          <StatusBadge status={lifecycle} />
+        </div>
+      </div>
+      <div className="mt-3 text-sm font-medium">{agent.displayName}</div>
+      <div className="mt-[3px] font-mono text-[10px] text-muted-foreground">
+        {agent.identifier}
+        {agent.version ? ` · ${agent.version}` : ""}
+      </div>
+      <div className="flex-1" />
+      <button
+        type="button"
+        onClick={copy}
+        title="Copy command"
+        className="group mt-3 flex w-full items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted"
+      >
+        <span className="truncate">{command}</span>
+        {copied ? <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-success" /> : <Copy className="ml-auto h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-100" />}
+      </button>
+    </div>
+  );
+}
+
 function AgentCatalogCard({ agent, className }: { agent: RegistryItem; className?: string }) {
   const canonical = canonicalRouteParts(agent.namespace, agent.slug);
   const downloads = agent.download_count as number | undefined;
   const rating = agent.average_rating as number | null | undefined;
+  const delegable = useIsDelegable(agent);
 
   return (
     <ResourceCard
@@ -110,6 +178,11 @@ function AgentCatalogCard({ agent, className }: { agent: RegistryItem; className
         max={3}
         className="mt-2.5"
       />
+      {delegable && (
+        <div className="mt-2">
+          <DelegableBadge />
+        </div>
+      )}
       <CardFooter>
         {downloads != null && <span>{compactNumber(downloads)} pulls</span>}
         {rating != null && <span>★ {rating.toFixed(1)}</span>}
@@ -131,7 +204,8 @@ function AgentListRow({ agent, onClick }: { agent: RegistryItem; onClick: () => 
         : `${harnesses.length} supported`;
   const componentCount = agent.component_count as number | undefined;
   const handle = agent.namespace && agent.slug ? `${agent.namespace}/${agent.slug}` : agent.qualified_name || agent.name;
-  const subtitle = [handle, harnessText, componentCount != null ? `${componentCount} components` : ""]
+  const delegable = useIsDelegable(agent);
+  const subtitle = [handle, harnessText, componentCount != null ? `${componentCount} components` : "", delegable ? "Delegable" : ""]
     .filter(Boolean)
     .join(" · ");
 
@@ -163,6 +237,7 @@ export default function AgentsView() {
     ...(harness ? { harness } : {}),
   });
 
+  const { data: remoteAgents = { items: [], total: 0 } } = useRemoteAgents(f.isAuthenticated);
   const { data: myAgents } = useMyAgents(f.isAuthenticated);
   const isAdmin = useSyncExternalStore(
     roleSub,
@@ -194,6 +269,15 @@ export default function AgentsView() {
     );
     return { filtered: [...pending, ...active], pendingCount: pending.length };
   }, [agents, scopedMyAgents]);
+
+  // Remote A2A agents carry no namespace, team, category or harness, so those filters hide them.
+  const visibleRemote = useMemo(() => {
+    if (tab !== "discover" || namespace || team || category || harness) return [];
+    const q = f.debouncedSearch.trim().toLowerCase();
+    return remoteAgents.items.filter(
+      (r) => !q || r.displayName.toLowerCase().includes(q) || r.identifier.toLowerCase().includes(q),
+    );
+  }, [tab, namespace, team, category, harness, f.debouncedSearch, remoteAgents]);
 
   const fields: FilterField[] = [
     ...commonFields(f, [
@@ -267,7 +351,7 @@ export default function AgentsView() {
         <ListSkeleton view={layout} />
       ) : tab === "discover" && isError ? (
         <ErrorState message={error?.message} onRetry={() => refetch()} />
-      ) : visibleAgents.length === 0 ? (
+      ) : visibleAgents.length === 0 && visibleRemote.length === 0 ? (
         <EmptyState
           icon={Bot}
           title={{ discover: "No Agent Files published yet", my: "No Agent Files yet", pending: "No pending reviews", archived: "No archived Agent Files" }[tab]}
@@ -281,7 +365,7 @@ export default function AgentsView() {
           actionLabel={tab === "discover" ? "Back to Registry" : undefined}
           actionHref={tab === "discover" ? "/" : undefined}
         />
-      ) : layout === "grid" ? (
+      ) : visibleAgents.length === 0 ? null : layout === "grid" ? (
         <CatalogGrid className="animate-in">
           {visibleAgents.map((agent, i) => (
             <AgentCatalogCard key={agent.id} agent={agent} className={`animate-in stagger-${Math.min(i + 1, 5)}`} />
@@ -299,6 +383,19 @@ export default function AgentsView() {
             <AgentListRow key={agent.id} agent={agent} onClick={() => handleRowClick(agent.id)} />
           ))}
         </ResourceList>
+      )}
+
+      {visibleRemote.length > 0 && (
+        <section className="mt-6" aria-label="Remote A2A agents">
+          <h2 className="mb-2.5 text-xs font-medium text-muted-foreground">
+            Remote A2A agents · {visibleRemote.length}
+          </h2>
+          <CatalogGrid>
+            {visibleRemote.map((r) => (
+              <RemoteAgentCard key={r.identifier} agent={r} />
+            ))}
+          </CatalogGrid>
+        </section>
       )}
 
       {tab === "archived" && archivedAgents.length > 0 && layout === "list" && (
