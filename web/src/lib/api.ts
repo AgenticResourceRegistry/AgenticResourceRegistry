@@ -109,8 +109,6 @@ import type {
 	RecommendationsResponse,
 	SetRecommendedRequest,
 	SetRecommendedResponse,
-	DiscoverySearchFilter,
-	DiscoverySearchResponse,
 	InboxItem,
 	InboxItemDetail,
 	InboxListResponse,
@@ -1258,36 +1256,6 @@ export const recommendations = {
 			component_id: componentId,
 			action,
 		}),
-};
-
-// ── Discovery (ARD) ─────────────────────────────────────────────────
-const DISCOVERY_MEDIA_TYPES: Record<string, string> = {
-	skill: "application/ai-skill+md",
-	mcp: "application/mcp-server-card+json",
-	prompt: "application/vnd.observal.prompt+json",
-	sandbox: "application/vnd.observal.sandbox+json",
-	hook: "application/vnd.observal.hook+json",
-	agent: "application/vnd.observal.agent+json",
-	external: "application/a2a-agent-card+json",
-};
-
-export const discovery = {
-	/** ARD Search. Omitting federation means the spec's `auto`, bounded by the admin allowlist. */
-	search: (text: string, filter: DiscoverySearchFilter = {}, pageSize = 10, pageToken?: string) => {
-		const ardFilter: Record<string, string[]> = {};
-		if (filter.kind) ardFilter.type = [DISCOVERY_MEDIA_TYPES[filter.kind]];
-		if (filter.harness) ardFilter["obs:supportedHarnesses"] = [filter.harness];
-		if (!filter.includeUnapproved) ardFilter["obs:lifecycle"] = ["approved"];
-		const body: Record<string, unknown> = {
-			query: { text, filter: ardFilter },
-			federation: "none",
-			pageSize,
-		};
-		if (pageToken) body.pageToken = pageToken;
-		return post<DiscoverySearchResponse>("/ard/search", body);
-	},
-	entry: (identifier: string) =>
-		get<Record<string, unknown>>(`/ard/entries/${encodeURIComponent(identifier)}`),
 };
 
 // ── Inbox ──────────────────────────────────────────────────────────
