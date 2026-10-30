@@ -28,7 +28,7 @@ dependencies = [
     "httpx",
     "gitpython>=3.1.59",
     "boto3",
-    "litellm>=1.104.0,<1.105.0",  # >=1.104.0: GHSA-g5ff-637f-6q2m and CVE-2026-114612
+    "litellm>=1.100.4,<1.101.0",  # main's patched release line; Codex measurement does not depend on LiteLLM
     # Required by LiteLLM for the `vertex_ai/*` models the insights settings
     # page offers. Without it every Vertex call fails with "Google Cloud SDK
     # not found", including Express Mode keys that need no GCP project.
@@ -66,15 +66,6 @@ dependencies = [
 
 [tool.uv.sources]
 observal-shared = { path = "../packages/observal-shared" }
-
-[tool.uv]
-# LiteLLM 1.104.x caps filelock below 4, but CVE-2026-112940,
-# CVE-2026-112913 and CVE-2026-112907 require filelock >=4.2.1.
-# The insights LiteLLM call path is exercised against a loopback provider; drop
-# this override when LiteLLM permits patched filelock releases directly.
-override-dependencies = [
-    "filelock>=4.2.1",
-]
 
 [dependency-groups]
 dev = [
