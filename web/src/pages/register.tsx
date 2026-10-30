@@ -132,7 +132,7 @@ function RegisterContent() {
               {brandingLogo ? (
                 <img loading="lazy" src={brandingLogo} alt="" width={32} height={32} className="object-contain" />
               ) : (
-                <img loading="lazy" src="/observal-logo.svg" alt="" width={32} height={32} className="object-contain" />
+                <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
               )}
               <span className="text-lg font-semibold tracking-tight">{appName}</span>
             </div>

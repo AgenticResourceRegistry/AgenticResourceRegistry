@@ -224,6 +224,24 @@ class CodexAdapter(BaseAdapter):
             return None
         return role
 
+    def resolve_session_agent_identity(self, session_jsonl: Path | None, cwd: str) -> tuple[str | None, str | None]:
+        """Credit only the rollout's own pulled subagent role.
+
+        Always answers, so recovery never falls back to the caller's
+        OBSERVAL_AGENT_* env, the hook's cwd, or another harness's agents.
+        """
+        from observal_cli.sessions.base import _lookup_lockfile_agent
+
+        role = self.session_subagent_name(session_jsonl)
+        if not role:
+            return None, None
+        rollout_cwd = self._session_meta(session_jsonl).get("cwd")
+        rollout_cwd = rollout_cwd if isinstance(rollout_cwd, str) else ""
+        entry = _lookup_lockfile_agent(rollout_cwd, agent_name=role, harness="codex")
+        if not entry:
+            return None, None
+        return entry.get("id") or entry.get("name"), entry.get("version")
+
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
         root = self._sessions_root(home)
         if not root.is_dir():

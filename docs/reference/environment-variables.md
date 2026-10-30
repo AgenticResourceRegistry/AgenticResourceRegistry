@@ -59,7 +59,7 @@ File-backed forms such as `OAUTH_CLIENT_SECRET_FILE`, `GOOGLE_OAUTH_CLIENT_SECRE
 
 ### AWS (Bedrock)
 
-> **Note:** Bedrock now supports [API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html) — generate one from the AWS console and use it like any other provider. See [Insights LLM Setup](https://github.com/Observal/Observal/blob/main/docs/insights-setup.md).
+> **Note:** Bedrock now supports [API keys](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html) — generate one from the AWS console and use it like any other provider. See [Insights LLM Setup](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/insights-setup.md).
 
 These environment variables are **not required** if you use Bedrock API keys (recommended). They exist only for legacy setups using instance roles or ECS task roles where LiteLLM auto-discovers credentials from the environment.
 
@@ -79,7 +79,7 @@ These environment variables are **not required** if you use Bedrock API keys (re
 | `GIT_CLONE_TOKEN_HOSTS` | - | Comma-separated exact HTTPS Git hosts allowed to receive `GIT_CLONE_TOKEN` (e.g. `github.com,gitlab.example.com`). Required for authenticated clones; add `:port` for nonstandard ports. |
 | `GIT_CLONE_TOKEN_USER` | `x-access-token` | Token username: `x-access-token` (GitHub), `oauth2` or `private-token` (GitLab) |
 | `GIT_CLONE_TIMEOUT`    | `120`            | Clone timeout, seconds                                                          |
-| `WEBHOOK_PUBLIC_URL`   | -                | Public base URL GitHub and GitLab use for webhook deliveries when the rest of Observal is private. Shown as the webhook URL in the MCP **Sync** tab. Unset means the deployment's normal public URL. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync#private-deployments) |
+| `WEBHOOK_PUBLIC_URL`   | -                | Public base URL GitHub and GitLab use for webhook deliveries when the rest of Agentic Resource Registry is private. Shown as the webhook URL in the MCP **Sync** tab. Unset means the deployment's normal public URL. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync#private-deployments) |
 
 ### Demo accounts (seeded on first startup if no users exist)
 

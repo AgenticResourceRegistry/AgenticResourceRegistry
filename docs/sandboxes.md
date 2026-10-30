@@ -4,7 +4,7 @@
 title: "Sandboxes"
 ---
 
-Sandboxes are versioned execution environments registered in Observal. When an agent has a sandbox component, Observal installs an `observal-sandbox` MCP server that exposes one callable tool per sandbox.
+Sandboxes are versioned execution environments registered in Agentic Resource Registry. When an agent has a sandbox component, Agentic Resource Registry installs an `observal-sandbox` MCP server that exposes one callable tool per sandbox.
 
 ## Runtime support
 
@@ -15,7 +15,7 @@ Sandboxes are versioned execution environments registered in Observal. When an a
 | `firecracker` | `runtime_config` | local `firecracker` binary | Requires `runtime_config.config_path` or `kernel_image_path` + `rootfs_path`. |
 | `wasm` | `image` or `runtime_config.module` | local `wasmtime` or configured WASI runtime | Runs a WASI module, not a container image. |
 
-Docker is the common path. The other runtimes are local-runtime dispatchers: Observal stores and installs the metadata, but the developer machine must have the corresponding runtime and artifact already available.
+Docker is the common path. The other runtimes are local-runtime dispatchers: Agentic Resource Registry stores and installs the metadata, but the developer machine must have the corresponding runtime and artifact already available.
 
 ## Versioned fields
 
@@ -31,7 +31,7 @@ A sandbox version stores:
 | `runtime_config` | Runtime-specific JSON for Firecracker/WASM/LXC extras |
 | `source_url`, `source_ref`, `sandbox_path` | Source metadata for humans/reviewers |
 
-`source_url` + `source_ref` + `sandbox_path` can point at a Dockerfile or sandbox source tree, but Observal does not build or publish images from that path today. Publish a built image/artifact ref in `image`.
+`source_url` + `source_ref` + `sandbox_path` can point at a Dockerfile or sandbox source tree, but Agentic Resource Registry does not build or publish images from that path today. Publish a built image/artifact ref in `image`.
 
 Local OCI setup example:
 

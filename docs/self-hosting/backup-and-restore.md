@@ -4,7 +4,7 @@
 title: "Backup and restore"
 ---
 
-What to back up, how often, and how to restore. Observal has three persistent stores with very different loss profiles.
+What to back up, how often, and how to restore. Agentic Resource Registry has three persistent stores with very different loss profiles.
 
 ## What matters, in order
 
@@ -132,16 +132,16 @@ A minimal cron setup (on the Docker host):
 
 ```cron
 # Daily at 03:00 - Postgres + JWT keys
-0 3 * * * cd /opt/Observal && \
+0 3 * * * cd /opt/AgenticResourceRegistry && \
   docker compose -f docker/docker-compose.yml exec -T observal-db \
   pg_dump -U postgres observal | gzip > /backups/pg-$(date +\%Y\%m\%d).sql.gz
 
-0 3 * * * cd /opt/Observal && \
+0 3 * * * cd /opt/AgenticResourceRegistry && \
   docker compose -f docker/docker-compose.yml exec -T observal-api \
   tar czf - -C /data keys > /backups/keys-$(date +\%Y\%m\%d).tar.gz
 
 # Weekly Sunday at 04:00 - ClickHouse
-0 4 * * 0 cd /opt/Observal && \
+0 4 * * 0 cd /opt/AgenticResourceRegistry && \
   docker compose -f docker/docker-compose.yml stop observal-clickhouse && \
   docker run --rm -v observal_chdata:/data -v /backups:/backup alpine \
     tar czf /backup/ch-$(date +\%Y\%m\%d).tar.gz -C /data . && \

@@ -8,13 +8,13 @@
 
 Internal context for contributors and AI coding agents. Use `README.md` for the public API reference, `SETUP.md` for environment setup, and `docs/adding-a-harness.md` for harness integration.
 
-## What Observal is
+## What Agentic Resource Registry is
 
-Observal is an agent-centric registry and observability platform for AI coding agents. Users interact with it three ways:
+Agentic Resource Registry is a self-hosted, Apache 2.0 registry for sharing coding agent resources. Users interact with it three ways:
 
 1. **CLI** (`observal`): pull agents, sca harnesses, submit components, manage the server
 2. **Web UI** (`web/`): browse the registry, view traces, manage users, admin dashboard
-3. **Observal skill** (bundled, auto-installed on login): lets the LLM inside any harness drive Observal commands directly (e.g. "create an agent that uses the github MCP")
+3. **Agentic Resource Registry skill** (bundled, auto-installed on login): lets the LLM inside any harness drive Agentic Resource Registry commands directly (e.g. "create an agent that uses the github MCP")
 
 Agents are the primary entity. Each agent bundles 5 component types: MCP servers, skills, hooks, prompts, and sandboxes. When a user runs `observal agent pull <agent>`, the platform resolves all components and writes harness-specific config files.
 
@@ -66,7 +66,7 @@ observal-server/       FastAPI server
 
 
 web/                   Vite 8 SPA / React 19 / TanStack Router (see web/AGENTS.md)
-packages/pi-extension/ Pi telemetry extension (npm: observal-pi)
+packages/pi-extension/ Pi telemetry extension (bundled into the CLI)
 docker/                Docker Compose stack (10 services)
 fuzz/                  Atheris fuzz targets + OSS-Fuzz project config mirror
 tests/                 pytest (174 files)

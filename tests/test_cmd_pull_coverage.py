@@ -27,6 +27,7 @@ from typer.testing import CliRunner
 import observal_cli.cmd_pull as cmd_pull
 from observal_cli import project_lock
 from observal_cli.errors import ErrorHandlingGroup
+from observal_cli.lockfile import upsert_agent as real_upsert_agent
 
 RUNNER = CliRunner()
 
@@ -778,6 +779,47 @@ def test_dict_to_toml_serializes_every_supported_value_shape() -> None:
         'label = "quoted \\"value\\""\n'
         "retries = 3\n"
     )
+
+
+def test_toml_merge_replaces_a_server_with_its_nested_tables(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "# mine\n"
+        'model = "gpt-5"\n\n'
+        '[mcp_servers.srv]\ncommand = "old"\n\n'
+        '[mcp_servers.srv.env]\nMY_VAR = "1"\n\n'
+        '[mcp_servers.other]\ncommand = "keep"\n'
+    )
+
+    content = {"mcp_servers": {"srv": {"command": "new", "env": {"TOKEN": "t"}}}}
+    assert cmd_pull._write_file(path, content, merge_mcp=True) == "merged"
+
+    text = path.read_text()
+    assert text.startswith("# mine\n")
+    assert tomllib.loads(text) == {
+        "model": "gpt-5",
+        "mcp_servers": {"srv": {"command": "new", "env": {"TOKEN": "t"}}, "other": {"command": "keep"}},
+    }
+
+
+def test_toml_merge_replaces_a_server_defined_only_by_a_sub_table(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[mcp_servers.srv.env]\nMY_VAR = "1"\n')
+
+    cmd_pull._write_file(path, {"mcp_servers": {"srv": {"command": "new", "env": {"A": "b"}}}}, merge_mcp=True)
+
+    assert tomllib.loads(path.read_text()) == {"mcp_servers": {"srv": {"command": "new", "env": {"A": "b"}}}}
+
+
+def test_toml_merge_refuses_to_write_invalid_toml_and_leaves_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = '[mcp_servers]\nsrv = { command = "old" }\n'
+    path.write_text(original)
+
+    with pytest.raises(tomllib.TOMLDecodeError):
+        cmd_pull._write_file(path, {"mcp_servers": {"srv": {"command": "new"}}}, merge_mcp=True)
+
+    assert path.read_text() == original
 
 
 def test_write_file_handles_toml_json_strings_and_empty_content(tmp_path: Path) -> None:
@@ -3075,3 +3117,1132 @@ def test_kiro_agent_pull_installs_skill_folder(pull_app_boundary, registry, tmp_
     pulled = _invoke(pull_app_boundary, target, "--output", "json", harness="kiro")
     assert pulled.exit_code == 0, pulled.output
     assert (target / ".kiro/skills/demo/SKILL.md").read_text() == "---\nname: demo\n---\n"
+
+
+def test_pull_refuses_an_unsupported_harness_before_prompting_or_installing(
+    pull_app_boundary: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path
+) -> None:
+    # OBS-1421: the pull used to install for any harness and leave a partial install.
+    boundaries.get.return_value = _agent_detail(supported_harnesses=["claude-code", "kiro"])
+    result = _invoke(pull_app_boundary, tmp_path, "--output", "json", harness="pi")
+    assert result.exit_code != 0 and result.stdout == ""
+    error = json.loads(result.stderr)["error"]
+    assert error["message"] == "Agent acme/reviewer 1.4.0 does not support pi; it supports claude-code, kiro."
+    assert "--allow-unsupported-harness" in error["remediation"]
+    boundaries.post.assert_not_called()
+
+
+def test_pull_allow_unsupported_harness_asks_the_server_to_install_anyway(
+    pull_app: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path
+) -> None:
+    boundaries.get.return_value = _agent_detail(supported_harnesses=["claude-code"])
+    result = _invoke(pull_app, tmp_path, "--output", "json", "--allow-unsupported-harness", harness="pi")
+    assert result.exit_code == 0, result.output
+    assert boundaries.post.call_args.args[1]["allow_unsupported_harness"] is True
+
+
+@pytest.mark.parametrize("supported", [["claude-code"], []])
+def test_pull_for_a_supported_or_unrestricted_harness_sends_no_override(
+    pull_app: typer.Typer, boundaries: SimpleNamespace, tmp_path: Path, supported: list[str]
+) -> None:
+    boundaries.get.return_value = _agent_detail(supported_harnesses=supported)
+    result = _invoke(pull_app, tmp_path, "--output", "json")
+    assert result.exit_code == 0, result.output
+    assert "allow_unsupported_harness" not in boundaries.post.call_args.args[1]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (
+            ["-e", "TOKEN=DUMMY_SECRET_FOR_TEST", "--", "srv", "--token=DUMMY_SECRET_FOR_TEST"],
+            ["-e", "TOKEN=<secret>", "--", "srv", "<secret>"],
+        ),
+        (["--", "srv", "DUMMY_SECRET_FOR_TEST/DUMMY_SECRET_FOR_TEST"], ["--", "srv", "<secret>"]),
+        (["https://host.test/DUMMY_SECRET_FOR_TEST?key=x"], ["<secret>"]),
+        (["-H", "Auth: DUMMY_SECRET_FOR_TEST", "Bearer DUMMY_SECRET_FOR_TEST"], ["-H", "Auth: <secret>", "<secret>"]),
+        (["https://user:password@host.test/mcp?token=x"], ["https://host.test/mcp?<redacted>"]),
+        (
+            ["--", "x", "--token=DUMMY_LITERAL_FOR_TEST", "--password", "DUMMY_LITERAL_FOR_TEST"],
+            ["--", "x", "--token=<secret>", "--password", "<secret>"],
+        ),
+    ],
+)
+def test_display_setup_command_dummy_matrix(argv, expected):
+    original = list(argv)
+    assert cmd_pull._display_setup_command(argv, secret_values={"DUMMY_SECRET_FOR_TEST"}) == expected
+    assert argv == original
+
+
+def test_reporting_preserves_rich_tags_and_masks_escaped_dummy_labels():
+    secret = "DUMMY_SECRET_FOR_TEST"
+    token = cmd_pull._pull_secrets.set({secret, "e"})
+    try:
+        shown = cmd_pull._safe_markup(f"[green]\\[{secret}][/green]")
+        assert secret not in shown
+        assert "<secret>" in shown
+        # A short secret in an authored tag requires unstyled escaped output.
+        assert "\\[" in shown
+        assert cmd_pull._safe_text(cmd_pull._safe_text(f"x-{secret}")) == "x-<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_rich_bracketed_warning_does_not_bypass_masking():
+    secret = "DUMMY_SECRET_FOR_TEST"
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        assert secret not in cmd_pull._safe_markup(f"[yellow]warning [{secret}][/yellow]")
+        assert "[yellow]" in cmd_pull._safe_markup(f"[yellow]warning [{secret}][/yellow]")
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+@pytest.mark.parametrize("secret", ["a", "lock", "name"])
+def test_short_secret_preserves_json_field_names_and_masks_dynamic_keys(secret):
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        result = cmd_pull._safe_data(
+            {
+                "lock": {"status": secret, "components": [{"name": secret}]},
+                "agent": {"qualified_name": secret},
+                "warnings": [{f"dynamic-{secret}": secret}],
+            },
+            "output",
+        )
+        assert set(result) == {"lock", "agent", "warnings"}
+        assert set(result["lock"]) == {"status", "components"}
+        assert result["lock"]["components"][0] == {"name": "<secret>"}
+        assert result["agent"] == {"qualified_name": "<secret>"}
+        assert result["warnings"] == [{cmd_pull._safe_text(f"dynamic-{secret}"): "<secret>"}]
+        error_result = cmd_pull._safe_data(
+            {"inputs": [{"kind": secret, "name": secret, "component": secret}], f"dynamic-{secret}": secret},
+            "result",
+        )
+        assert error_result["inputs"] == [{"kind": "<secret>", "name": "<secret>", "component": "<secret>"}]
+        assert error_result[cmd_pull._safe_text(f"dynamic-{secret}")] == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_display_setup_command_masks_flag_key_containing_supplied_value():
+    command = ["claude", "-e", "a=a", "-H", "Header-a: a", "--", "server"]
+    assert cmd_pull._display_setup_command(command, secret_values={"a"}) == [
+        "<secret>",
+        "-e",
+        "<secret>=<secret>",
+        "-H",
+        "He<secret>der-<secret>: <secret>",
+        "--",
+        "server",
+    ]
+    assert command[2] == "a=a"
+
+
+def test_display_setup_command_short_and_overlapping_values():
+    argv = ["executable", "--", "prefix-DUMMY", "DUMMY-DUMMY", "one-a-char"]
+    assert cmd_pull._display_setup_command(argv, secret_values={"DUMMY", "a"}) == [
+        "<secret>",
+        "--",
+        "<secret>",
+        "<secret>",
+        "<secret>",
+    ]
+
+
+@pytest.mark.parametrize("mode", ["table", "json", "dry-table", "dry-json"])
+def test_pull_dummy_credential_keeps_real_setup_argv_and_post(pull_app, boundaries, tmp_path, monkeypatch, mode):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    target = tmp_path / "project"
+    command = ["claude", "mcp", "add", "srv", "-e", f"TOKEN={secret}", "--", "srv", f"--token={secret}"]
+    boundaries.get.return_value = _agent_detail(mcp_links=[{"mcp_listing_id": "mcp-id", "mcp_name": "srv"}])
+    boundaries.get.side_effect = lambda path: (
+        {
+            "name": "srv",
+            "environment_variables": [{"name": "TOKEN", "required": True}],
+            "headers": [{"name": "Authorization", "required": True}],
+        }
+        if path.endswith("/mcps/mcp-id")
+        else boundaries.get.return_value
+    )
+    boundaries.post.return_value = {
+        "config_snippet": {
+            "agent_profile": {"path": "agent.md", "content": "agent\n"},
+            "mcp_setup_commands": [command],
+        },
+        "warnings": [f"warning {secret}"],
+        "lock": {"problems": [f"problem {secret}"], "status": "partial"},
+    }
+    run = MagicMock(return_value=subprocess.CompletedProcess(command, 0, "", ""))
+    monkeypatch.setattr(cmd_pull.subprocess, "run", run)
+    options = ["--env", f"TOKEN={secret}", "--header", f"Authorization={secret}"]
+    if "json" in mode:
+        options += ["--output", "json"]
+    if "dry" in mode:
+        options += ["--dry-run"]
+    result = _invoke(pull_app, target, *options)
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "<secret>" in result.output
+    assert boundaries.post.call_args.args[1]["env_values"] == {"mcp-id": {"TOKEN": secret}}
+    assert boundaries.post.call_args.args[1]["header_values"] == {"mcp-id": {"Authorization": secret}}
+    if "dry" in mode:
+        run.assert_not_called()
+        assert not target.exists()
+    else:
+        assert run.call_args.args[0] == ["claude", "mcp", "add", "--scope", "project", *command[3:]]
+        assert (target / "agent.md").read_text() == "agent\n"
+
+
+@pytest.mark.parametrize("failure", ["post", "path", "setup", "timeout", "missing"])
+def test_pull_dummy_errors_are_sanitized_at_boundary(pull_app_boundary, boundaries, tmp_path, monkeypatch, failure):
+    from observal_cli.errors import CliError, ErrorCategory
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    target = tmp_path / "project"
+    command = [f"binary-{secret}", "--", f"--token={secret}"]
+    if failure == "post":
+        monkeypatch.setattr(
+            cmd_pull.client,
+            "post_public",
+            MagicMock(
+                side_effect=CliError(
+                    ErrorCategory.VALIDATION,
+                    f"invalid {secret}",
+                    f"operation {secret}",
+                    resource=f"resource {secret}",
+                    remediation=f"retry {secret}",
+                    request_id=f"id-{secret}",
+                    http_status=422,
+                    detail=f"detail {secret}",
+                    result={"nested": [secret]},
+                )
+            ),
+        )
+    else:
+        boundaries.post.return_value = {
+            "config_snippet": {
+                "agent_profile": {
+                    "path": f"../{secret}/agent.md" if failure == "path" else "agent.md",
+                    "content": "agent\n",
+                },
+                "mcp_setup_commands": [command],
+            }
+        }
+        if failure == "setup":
+            outcome = subprocess.CompletedProcess(command, 2, secret, secret)
+        elif failure == "timeout":
+            outcome = subprocess.TimeoutExpired(command, 60, stderr=secret)
+        else:
+            outcome = FileNotFoundError(secret)
+        monkeypatch.setattr(
+            cmd_pull.subprocess,
+            "run",
+            MagicMock(
+                return_value=outcome if failure == "setup" else None,
+                side_effect=outcome if failure in ("timeout", "missing") else None,
+            ),
+        )
+    result = _invoke(pull_app_boundary, target, "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code != 0
+    assert secret not in result.output
+    error = json.loads(result.stderr)["error"]
+    if failure == "post":
+        assert error["http_status"] == 422
+        assert error["request_id"] == "id-<secret>"
+        assert error["result"] == {"nested": ["<secret>"]}
+    if failure in ("setup", "timeout", "missing"):
+        assert error["result"]["setup_commands"][0]["executable"] == "<secret>"
+
+
+@pytest.mark.parametrize("kind", ["request", "status", "unexpected"])
+def test_pull_transport_and_unexpected_errors_mask_debug_after_scope(pull_app_boundary, boundaries, tmp_path, kind):
+    import httpx
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    request = httpx.Request("POST", f"https://example.test/{secret}")
+    if kind == "request":
+        failure = httpx.ConnectError(f"reflected {secret}", request=request)
+        category = "unavailable"
+    elif kind == "status":
+        response = httpx.Response(422, request=request, headers={"x-request-id": secret})
+        failure = httpx.HTTPStatusError(f"reflected {secret}", request=request, response=response)
+        category = "validation"
+    else:
+        failure = RuntimeError(f"reflected {secret}")
+        category = "unexpected"
+    boundaries.post.side_effect = failure
+    # The minimal test app has no root --debug option; enable the same renderer branch.
+    from observal_cli import errors
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(errors, "debug_requested", lambda *_args: True)
+        result = _invoke(pull_app_boundary, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert secret not in result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["category"] == category
+    assert error["detail"] == type(failure).__name__
+    if kind == "status":
+        assert error["http_status"] == 422
+        assert error["request_id"] == "<secret>"
+    assert cmd_pull._pull_secrets.get() is None
+
+
+@pytest.mark.parametrize("kind", ["request", "status", "unexpected"])
+@pytest.mark.parametrize(
+    ("secret", "reflected"),
+    [
+        ("DUMMY/path/to", r"DUMMY\/path\/to"),
+        ("DUMMY/ñ\\path/to", r"DUMMY\/\u00f1\\path\/to"),
+    ],
+)
+def test_pull_repr_doubled_json_escapes_mask_debug_json(
+    pull_app_boundary, boundaries, tmp_path, kind, secret, reflected
+):
+    import httpx
+
+    from observal_cli import errors
+
+    request = httpx.Request("POST", "https://example.test/agent")
+    if kind == "request":
+        failure = httpx.ConnectError(f"reflected {reflected}", request=request)
+        category = "unavailable"
+    elif kind == "status":
+        response = httpx.Response(422, request=request)
+        failure = httpx.HTTPStatusError(f"reflected {reflected}", request=request, response=response)
+        category = "validation"
+    else:
+        failure = ValueError(f"reflected {reflected}")
+        category = "unexpected"
+    boundaries.post.side_effect = failure
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(errors, "debug_requested", lambda *_args: True)
+        result = _invoke(pull_app_boundary, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code != 0
+    detail = json.loads(result.stderr)["error"]
+    assert detail["category"] == category
+    assert detail["detail"] == type(failure).__name__
+    assert cmd_pull._pull_secrets.get() is None
+
+
+@pytest.mark.parametrize("kind", ["request", "status", "unexpected", "usage"])
+@pytest.mark.parametrize("output", ["json", "table"])
+def test_pull_actual_debug_cli_fails_closed_on_repr_credentials(boundaries, tmp_path, kind, output):
+    import click
+    import httpx
+
+    secret = "DUMMY'\"token"
+    root = typer.Typer(cls=ErrorHandlingGroup)
+    agent = typer.Typer()
+    cmd_pull.register_pull(agent)
+    root.add_typer(agent, name="agent")
+
+    @root.callback()
+    def debug_root(debug: bool = typer.Option(False, "--debug")):
+        assert debug
+
+    request = httpx.Request("POST", "https://example.test/agent")
+    if kind == "request":
+        failure = httpx.ConnectError(f"reflected {secret}", request=request)
+        category = "unavailable"
+    elif kind == "status":
+        response = httpx.Response(422, request=request, headers={"x-request-id": f"id-{secret}"})
+        failure = httpx.HTTPStatusError(f"reflected {secret}", request=request, response=response)
+        category = "validation"
+    elif kind == "usage":
+        failure = click.UsageError(f"invalid {secret!r}")
+        category = "usage"
+    else:
+        failure = ValueError(f"reflected {secret}")
+        category = "unexpected"
+    boundaries.post.side_effect = failure
+    result = RUNNER.invoke(
+        root,
+        [
+            "--debug",
+            "agent",
+            "pull",
+            "acme/reviewer",
+            "--harness",
+            "claude-code",
+            "--dir",
+            str(tmp_path / "project"),
+            "--no-prompt",
+            "--env",
+            f"TOKEN={secret}",
+            "--output",
+            output,
+        ],
+    )
+    assert result.exit_code != 0
+    assert secret not in result.output
+    assert repr(secret)[1:-1] not in result.output
+    assert "DUMMY" not in result.output
+    if output == "json":
+        error = json.loads(result.stderr)["error"]
+        assert error["category"] == category
+        assert error["detail"] == type(failure).__name__
+        if kind == "status":
+            assert error["http_status"] == 422
+            assert error["request_id"] == "id-<secret>"
+        if kind == "usage":
+            assert error["message"] == "Invalid pull arguments."
+    else:
+        assert type(failure).__name__ in result.stderr
+
+
+def test_pull_dummy_delegated_skill_stdout_is_sanitized(pull_app, boundaries, tmp_path):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    target = tmp_path / "project"
+    boundaries.post.return_value = {
+        "config_snippet": {
+            "agent_profile": {"path": "agent.md", "content": "agent\n"},
+            "skill_components": [
+                {"name": "safe-skill", "path": f"skills/{secret}/SKILL.md", "skill_md_content": "skill\n"}
+            ],
+        }
+    }
+    real_install = boundaries.direct_install.side_effect
+
+    def reflected_install(**kwargs):
+        installed = real_install(**kwargs)
+        print(f"Wrote skill file: {installed / 'SKILL.md'}")
+        return installed
+
+    boundaries.direct_install.side_effect = reflected_install
+    result = _invoke(pull_app, target, "--env", f"TOKEN={secret}")
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "Wrote skill file:" in result.output
+    assert (target / "skills" / secret / "SKILL.md").exists()
+    boundaries.direct_install.assert_called_once()
+
+
+def test_pull_dummy_skill_failure_prints_safe_name_and_url(pull_app_boundary, boundaries, tmp_path):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    boundaries.post.return_value = {
+        "config_snippet": {
+            "agent_profile": {"path": "agent.md", "content": "agent\n"},
+            "skill_components": [{"name": f"skill-{secret}", "git_url": f"https://example.test/{secret}"}],
+        }
+    }
+    boundaries.git_install.return_value = None
+    boundaries.git_install.side_effect = None
+    result = _invoke(pull_app_boundary, tmp_path / "project", "--env", f"TOKEN={secret}")
+    assert result.exit_code == 9
+    assert secret not in result.output
+    assert "<secret>" in result.output
+
+
+def test_pull_dummy_prompt_then_reflected_metadata_and_header_label(pull_app, boundaries, tmp_path, monkeypatch):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    target = tmp_path / "project"
+    detail = _agent_detail(
+        mcp_links=[
+            {"mcp_listing_id": "first", "mcp_name": "first"},
+            {"mcp_listing_id": "second", "mcp_name": f"next-{secret}"},
+        ]
+    )
+    boundaries.get.return_value = detail
+    boundaries.get.side_effect = lambda path: (
+        {"environment_variables": [{"name": "TOKEN", "required": True}]}
+        if path.endswith("/mcps/first")
+        else {"headers": [{"name": "Authorization", "description": f"use {secret}", "required": True}]}
+        if path.endswith("/mcps/second")
+        else detail
+    )
+    boundaries.post.return_value = {"config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}}}
+    labels = []
+
+    def prompt(label):
+        labels.append(label)
+        return secret if len(labels) == 1 else "DUMMY_SECOND_VALUE"
+
+    monkeypatch.setattr(cmd_pull, "password_input", prompt)
+    result = _invoke(pull_app, target, no_prompt=False)
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert secret not in labels[1]
+    assert boundaries.post.call_args.args[1]["env_values"]["first"] == {"TOKEN": secret}
+    assert boundaries.post.call_args.args[1]["header_values"]["second"] == {"Authorization": "DUMMY_SECOND_VALUE"}
+
+
+def test_pull_dummy_override_redacts_early_saved_model_and_first_prompt(pull_app, boundaries, tmp_path, monkeypatch):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    detail = _agent_detail(mcp_links=[{"mcp_listing_id": "first", "mcp_name": f"name-{secret}"}])
+    boundaries.get.return_value = detail
+    boundaries.get.side_effect = lambda path: (
+        {"environment_variables": [{"name": f"ASK-{secret}", "required": True}]}
+        if path.endswith("/mcps/first")
+        else detail
+    )
+    boundaries.adapter.saved_model.return_value = f"model-{secret}"
+    boundaries.post.return_value = {"config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}}}
+    labels = []
+    monkeypatch.setattr(cmd_pull, "password_input", lambda label: labels.append(label) or "DUMMY_OTHER_VALUE")
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"UNUSED={secret}", no_prompt=False)
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert labels and secret not in labels[0]
+    assert boundaries.post.call_args.args[1]["options"]["model"] == f"model-{secret}"
+
+
+@pytest.mark.parametrize("secret", ["a", "lock", "name"])
+def test_pull_short_secret_json_keeps_schema(pull_app, boundaries, tmp_path, secret):
+    boundaries.post.return_value = {
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+        "warnings": [secret],
+    }
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert "status" in data["files"][0]
+    assert "agent" in data and "qualified_name" in data["agent"]
+    assert "lock" in data and "status" in data["lock"]
+    assert "warnings" in data
+    assert data["warnings"] == ["<secret>"]
+
+
+def test_pull_json_redacts_reflected_server_fields_and_keeps_report_shape(pull_app, boundaries, tmp_path):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    boundaries.get.return_value = _agent_detail(qualified_name=f"acme/{secret}")
+    boundaries.post.return_value = {
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+        "warnings": [f"server echoed {secret}"],
+    }
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    data = json.loads(result.stdout)
+    assert data["agent"]["qualified_name"] == "acme/<secret>"
+    assert data["warnings"] == ["server echoed <secret>"]
+    assert "status" in data["lock"]
+    assert data["files"][0]["status"]
+
+
+def test_pull_json_masks_numeric_credential_before_serialization(capsys):
+    token = cmd_pull._pull_secrets.set({"424242"})
+    try:
+        cmd_pull.output_json({"number": 424242, "ordinary": 7})
+        assert json.loads(capsys.readouterr().out) == {"number": "<secret>", "ordinary": 7}
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_json_masks_unknown_object_before_serialization(capsys):
+    class ReflectedValue:
+        def __str__(self):
+            return "DUMMY_SECRET_FOR_TEST"
+
+    token = cmd_pull._pull_secrets.set({"DUMMY_SECRET_FOR_TEST"})
+    try:
+        cmd_pull.output_json({"warnings": [ReflectedValue()]})
+        assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret>"]
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_setup_flag_keys_are_masked_without_changing_execution(pull_app, boundaries, tmp_path, monkeypatch):
+    command = ["claude", "-e", "a=a", "-H", "Header-a: a", "--", "server"]
+    boundaries.post.return_value = {
+        "config_snippet": {
+            "agent_profile": {"path": "agent.md", "content": "agent\n"},
+            "mcp_setup_commands": [command],
+        }
+    }
+    run = MagicMock(return_value=subprocess.CompletedProcess(command, 0, "", ""))
+    monkeypatch.setattr(cmd_pull.subprocess, "run", run)
+    result = _invoke(pull_app, tmp_path / "project", "--env", "TOKEN=a", "--output", "json")
+    assert result.exit_code == 0, result.output
+    assert run.call_args.args[0] == command
+    shown = json.loads(result.stdout)["setup_commands"][0]["command"]
+    assert shown[2] == "<secret>=<secret>"
+    assert shown[4] == "He<secret>der-<secret>: <secret>"
+    assert command[2] == "a=a"
+
+
+def test_pull_spinner_masks_reflected_version(pull_app, boundaries, tmp_path, monkeypatch):
+    secret = "DUMMY_SECRET_FOR_TEST"
+    messages = []
+    monkeypatch.setattr(cmd_pull, "spinner", lambda message: messages.append(message) or nullcontext())
+    monkeypatch.setattr(cmd_pull, "_target_version", lambda **_kwargs: (f"1.0-{secret}", "requested"))
+    monkeypatch.setattr(cmd_pull, "_locked_version_detail", lambda *_args, **_kwargs: {"components": []})
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}")
+    assert result.exit_code == 0, result.output
+    assert any("Fetching agent version" in message for message in messages)
+    assert all(secret not in message for message in messages)
+
+
+def test_httpx_logger_does_not_log_reflected_url_during_pull(monkeypatch):
+    import logging
+
+    import httpx
+
+    from observal_cli import client
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    url = f"https://registry.example.test/api/agents/{secret}/versions/1.0"
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+    http = httpx.Client(transport=transport)
+    monkeypatch.setattr(client.httpx, "get", http.get)
+    monkeypatch.setattr(client.config, "get_timeout", lambda: 30)
+    records = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    handler = Capture()
+    httpx_logger = logging.getLogger("httpx")
+    old_level = httpx_logger.level
+    httpx_logger.setLevel(logging.INFO)
+    httpx_logger.addHandler(handler)
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        client._request_with_retry("get", url, {})
+        assert secret not in "\n".join(records)
+        assert not records
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+        client._request_with_retry("get", url, {})
+        httpx_logger.removeHandler(handler)
+        httpx_logger.setLevel(old_level)
+        http.close()
+    assert secret in "\n".join(records)
+
+
+def test_client_debug_log_hides_reflected_dummy_path_only_during_pull(monkeypatch):
+    from io import StringIO
+
+    from loguru import logger
+
+    from observal_cli import client
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    url = f"https://registry.example.test/api/agents/{secret}/versions/1.0"
+    response = MagicMock(status_code=200, headers={})
+    monkeypatch.setattr(client.config, "get_timeout", lambda: 30)
+    monkeypatch.setattr(client.httpx, "get", lambda *_args, **_kwargs: response)
+    stream = StringIO()
+    sink = logger.add(stream, level="DEBUG")
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        client._request_with_retry("get", url, {})
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+        logger.remove(sink)
+    assert secret not in stream.getvalue()
+    assert stream.getvalue()  # The request was logged without its secret-bearing path.
+
+
+@pytest.fixture
+def reflected_http_server():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from urllib.parse import unquote
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            secret = unquote(self.path.split("/", 2)[-1])
+            body = json.dumps({"detail": f"Invalid path {self.path}"}).encode()
+            self.send_response(422 if "error" in self.path else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("X-Reflected-Name", secret)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_pull_audit_thread_keeps_http_filters_after_parent_scope_exits(monkeypatch, caplog):
+    import logging
+    import threading
+
+    import httpx
+
+    from observal_cli import audit
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    canary = "harmless-httpcore-canary"
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    monkeypatch.setattr(audit, "optic", MagicMock())
+    monkeypatch.setattr(
+        "observal_cli.config.load", lambda: {"access_token": "test", "server_url": "https://example.test"}
+    )
+
+    def send(*_args, **_kwargs):
+        started.set()
+        assert release.wait(5)
+        logging.getLogger("httpcore.http11").debug("diagnostic: %s", canary)
+        finished.set()
+        raise httpx.ConnectError(f"reflected {secret}")
+
+    monkeypatch.setattr(httpx, "post", send)
+    caplog.set_level(logging.DEBUG, logger="httpcore.http11")
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        audit.emit_cli_audit("agent.pull", resource_name=secret)
+        assert started.wait(5)
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+        release.set()
+    assert finished.wait(5)
+    # Wait for the worker's exception handler as well as the transport call.
+    from time import sleep
+
+    for _ in range(100):
+        if audit.optic.debug.called:
+            break
+        sleep(0.01)
+    assert secret not in caplog.text
+    assert canary not in caplog.text
+    audit.optic.debug.assert_called_once_with("cli audit POST error: {}", "ConnectError")
+    logging.getLogger("httpcore.http11").debug("diagnostic: %s", canary)
+    assert canary in caplog.text
+    assert secret not in caplog.text
+
+
+def test_pull_real_httpcore_logs_hide_reflected_response_header(reflected_http_server, monkeypatch, caplog):
+    import logging
+
+    from observal_cli import client
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    url = f"{reflected_http_server}/agent/{secret}"
+    monkeypatch.setattr(client.config, "get_timeout", lambda: 5)
+    caplog.set_level(logging.DEBUG, logger="httpcore.http11")
+    caplog.set_level(logging.INFO, logger="httpx")
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        client._request_with_retry("get", url, {})
+        assert secret not in caplog.text
+        assert not any(record.name == "httpcore.http11" for record in caplog.records)
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+    caplog.clear()
+    client._request_with_retry("get", url, {})
+    assert secret in caplog.text
+
+
+def test_pull_encoded_http_error_detail_is_masked(reflected_http_server, monkeypatch):
+    from urllib.parse import quote
+
+    import httpx
+
+    from observal_cli import client
+    from observal_cli.errors import CliError
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    encoded = "".join(f"%{ord(char):02x}" for char in secret)
+    monkeypatch.setattr(client.config, "get_timeout", lambda: 5)
+    token = cmd_pull._pull_secrets.set({secret})
+    try:
+        with pytest.raises(httpx.HTTPStatusError) as raised:
+            client._request_with_retry("get", f"{reflected_http_server}/error/{encoded}", {})
+        with pytest.raises(CliError) as failure:
+            client._handle_error(raised.value, f"/error/{encoded}")
+        safe = cmd_pull._safe_error(failure.value)
+        assert encoded not in safe.message
+        assert encoded not in safe.detail
+        assert encoded not in safe.resource
+        assert "<secret>" in safe.message
+        assert cmd_pull._safe_text(f"mixed {quote('DUMMY', safe='')}%5fSECRET_FOR_TEST") == "mixed <secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_live_encoded_http_error_json_is_sanitized(
+    pull_app_boundary, boundaries, reflected_http_server, tmp_path, monkeypatch
+):
+    import httpx
+
+    from observal_cli import client
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    encoded = "".join(f"%{ord(char):02X}" for char in secret)
+    monkeypatch.setattr(client.config, "get_timeout", lambda: 5)
+
+    def failed_install(*_args, **_kwargs):
+        with pytest.raises(httpx.HTTPStatusError) as raised:
+            client._request_with_retry("get", f"{reflected_http_server}/error/{encoded}", {})
+        client._handle_error(raised.value, f"/error/{encoded}")
+
+    boundaries.post.side_effect = failed_install
+    result = _invoke(pull_app_boundary, tmp_path / "project", "--env", f"TOKEN={secret}", "--output", "json")
+    assert result.exit_code != 0
+    assert secret not in result.output
+    assert encoded not in result.output
+    error = json.loads(result.stderr)["error"]
+    assert "<secret>" in error["message"]
+    assert "<secret>" in error["resource"]
+
+
+def test_pull_bracket_spanning_secret_is_masked_before_rich_parsing(pull_app, boundaries, tmp_path):
+    secret = "DUMMY[SECRET]FOR_TEST"
+    boundaries.post.return_value = {
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+        "warnings": [f"reflected {secret}"],
+    }
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}")
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "<secret>" in result.output
+    assert "SECRET" not in result.output
+
+
+def test_pull_rich_escaped_bracket_secret_and_literal_tag(pull_app, boundaries, tmp_path):
+    from observal_cli.render import esc
+
+    secret = "ab[cd]ef"  # Dummy credential; lowercase brackets are Rich markup candidates.
+    boundaries.post.return_value = {
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+        "warnings": [f"reflected {esc(secret)} and {esc('[foo]')}"],
+    }
+    result = _invoke(pull_app, tmp_path / "project", "--env", f"TOKEN={secret}")
+    assert result.exit_code == 0, result.output
+    assert secret.encode() not in result.output.encode()
+    assert b"ab\\[cd]ef" not in result.output.encode()
+    assert b"<secret>" in result.output.encode()
+    assert b"[foo]" in result.output.encode()  # No extra slash from escaping twice.
+    assert b"\\[foo]" not in result.output.encode()
+
+
+def test_pull_escaped_warning_keeps_rich_style_without_literal_slashes():
+    from rich.text import Text
+
+    token = cmd_pull._pull_secrets.set({"ab[cd]ef"})
+    try:
+        markup = cmd_pull._safe_markup(f"[yellow]{cmd_pull.esc('ab[cd]ef')} and {cmd_pull.esc('[foo]')}[/yellow]")
+        shown = Text.from_markup(markup)
+        assert shown.plain == "<secret> and [foo]"
+        assert any(span.style == "yellow" for span in shown.spans)
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_preescaped_literal_stays_literal_when_secret_overlaps_style(capsys):
+    token = cmd_pull._pull_secrets.set({"e"})
+    try:
+        literal = r"\[foo]"
+        cmd_pull.rprint(f"[green]{cmd_pull.esc(literal)}[/green]")
+        output = capsys.readouterr().out
+        assert "[foo]" in output
+        assert "\\" not in output
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_json_serialized_and_double_encoded_reflections_are_masked(capsys):
+    from urllib.parse import quote
+
+    from observal_cli.errors import CliError, ErrorCategory
+
+    sample_value = 'DUMMY"\\TOKEN'
+    serialized = json.dumps(sample_value)[1:-1]
+    twice_encoded = quote(quote(sample_value, safe=""), safe="")
+    token = cmd_pull._pull_secrets.set({sample_value})
+    try:
+        cmd_pull.output_json({"warnings": [f"reflected {serialized} {twice_encoded}"]})
+        warning = json.loads(capsys.readouterr().out)["warnings"][0]
+        assert warning == "reflected <secret> <secret>"
+        error = CliError(
+            ErrorCategory.VALIDATION, f"rejected {serialized}", operation="Pull agent", detail=twice_encoded
+        )
+        safe = cmd_pull._safe_error(error)
+        assert safe.message == "rejected <secret>"
+        assert safe.detail == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_json_escaped_slash_reflections_mask_warnings_and_errors(capsys):
+    from observal_cli.errors import CliError, ErrorCategory
+
+    probe = "DUMMY/path/to"
+    forms = [probe, r"DUMMY\/path\/to", r"DUMMY\/path/to", r"DUMMY%252fpath\/to"]
+    token = cmd_pull._pull_secrets.set({probe})
+    try:
+        cmd_pull.output_json({"warnings": forms})
+        assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret>"] * len(forms)
+        for form in forms:
+            failure = CliError(ErrorCategory.VALIDATION, form, operation="Pull agent", detail=form)
+            assert cmd_pull._safe_error(failure).message == "<secret>"
+            assert cmd_pull._safe_error(failure).detail == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_form_encoded_space_reflections_in_json_markup_and_errors(capsys):
+    from urllib.parse import quote_plus
+
+    from rich.text import Text
+
+    from observal_cli.errors import CliError, ErrorCategory
+
+    sample_value = "DUMMY alpha+beta gamma"
+    form = quote_plus(sample_value, safe="")
+    double = quote_plus(form, safe="")
+    mixed = "DUMMY+alpha%252Bbeta%20gamma"
+    serialized = json.dumps(sample_value)[1:-1]
+    assert (
+        cmd_pull._mask_values(f"{form} {double} {mixed} {serialized}", {sample_value}) == "<secret> " * 3 + "<secret>"
+    )
+    # Literal pluses at space positions are ambiguous with quote_plus: fail closed.
+    assert cmd_pull._mask_values("DUMMY+alpha+beta+gamma", {sample_value}) == "<secret>"
+    # A plus in untrusted text is never globally decoded or rewritten.
+    assert cmd_pull._mask_values("unrelated+value DUMMY%2Balpha+beta", {sample_value}) == (
+        "unrelated+value DUMMY%2Balpha+beta"
+    )
+    token = cmd_pull._pull_secrets.set({sample_value})
+    try:
+        cmd_pull.output_json({"warnings": [f"{form} {double} {mixed} unrelated+value"]})
+        assert json.loads(capsys.readouterr().out)["warnings"] == ["<secret> <secret> <secret> unrelated+value"]
+        markup = cmd_pull._safe_markup(f"[yellow]{form} {double} {mixed} unrelated+value[/yellow]")
+        assert Text.from_markup(markup).plain == "<secret> <secret> <secret> unrelated+value"
+        error = CliError(ErrorCategory.VALIDATION, f"rejected {mixed}", operation="Pull agent", detail=double)
+        safe = cmd_pull._safe_error(error)
+        assert safe.message == "rejected <secret>"
+        assert safe.detail == "<secret>"
+    finally:
+        cmd_pull._pull_secrets.reset(token)
+
+
+def test_pull_unicode_json_and_mixed_percent_reflections_are_masked():
+    from urllib.parse import quote
+
+    secret = "DUMMY_ñ[ok]"
+    serialized = json.dumps(secret, ensure_ascii=True)[1:-1]
+    twice_encoded = quote(quote(secret, safe=""), safe="")
+    mixed = "DUMMY%255f" + quote("ñ", safe="") + r"\[ok]"
+    assert cmd_pull._mask_values(f"{serialized} {twice_encoded} {mixed}", {secret}) == "<secret> <secret> <secret>"
+
+
+def test_pull_repr_escaped_json_choices_mix_with_raw_and_url_encodings():
+    secret = "DUMMY/ñ\\path/to"
+    # repr doubles each JSON backslash, but other pieces can remain raw or URL encoded.
+    forms = (r"DUMMY\\/\\u00f1\\\\path\\/to", r"DUMMY\\/ñ\\\\path%2fto", r"DUMMY\/\\u00f1\\\\path/to")
+    assert cmd_pull._mask_values(" | ".join(forms), {secret}) == " | ".join(["<secret>"] * len(forms))
+    assert cmd_pull._mask_values(r"DUMMY\\/\\u00f1\\\\path\\/tx", {secret}) != "<secret>"
+
+
+def test_pull_repr_quote_choices_in_mixed_warnings():
+    secret = "DUMMY'\"token"
+    forms = (r"DUMMY\'\"token", r"DUMMY\'\\\"token", r"DUMMY%27\"token", r"DUMMY\'%22token")
+    assert cmd_pull._mask_values(" | ".join(forms), {secret}) == " | ".join(["<secret>"] * len(forms))
+    assert cmd_pull._mask_values(r"DUMMY\'\"tokex", {secret}) == r"DUMMY\'\"tokex"
+
+
+def test_pull_reverse_bitset_accepts_mixed_url_json_and_raw_choices():
+    # A bit can advance across different-length alternatives at successive
+    # offsets; the encoded prefix index must never reject those transitions.
+    secret = "ñ[é]ñ"
+    forms = (
+        r"\u00F1%5B%C3%A9\u005Dñ",
+        r"%25c3%25B1[\u00e9%5d%c3%b1",
+        r"%c3%b1\[é%255d\u00f1",
+    )
+    assert cmd_pull._mask_values("!" + " | ".join(forms), {secret}) == "!" + " | ".join(["<secret>"] * 3)
+    near_miss = forms[0][:-1] + "Q"
+    assert cmd_pull._mask_values(near_miss, {secret}) == near_miss
+
+
+def test_pull_literal_marker_is_not_trusted_but_generated_marker_is_preserved():
+    marker = "<secret>"
+    secret = "DUMMY" + marker
+    assert cmd_pull._mask_values(f"server reflected {secret}", {secret}) == "server reflected <secret>"
+    assert cmd_pull._mask_values("server reflected <secret>", {marker}) == "server reflected <secret>"
+    # A short second credential inside the replacement must not corrupt it,
+    # while the same text supplied by the server must still be scanned.
+    first = cmd_pull._mask_values(f"{secret} untrusted {marker} end", {secret})
+    assert cmd_pull._mask_values(first, {"e"}) == "<secret> untrust<secret>d <s<secret>cr<secret>t> <secret>nd"
+
+
+def test_pull_unicode_json_hex_case_and_mixed_reflections():
+    secret = "DUMMYñTOKEN"
+    text = r"DUMMY\u00F1TOKEN DUMMY\u00f1TOKEN DUMMY%C3%B1TOKEN DUMMY%25c3%25B1TOKEN"
+    assert cmd_pull._mask_values(text, {secret}) == "<secret> <secret> <secret> <secret>"
+    # Raw matching is still case sensitive; only hex digits in encodings fold.
+    assert cmd_pull._mask_values("dummyñTOKEN", {secret}) == "dummyñTOKEN"
+
+
+def test_pull_short_overlapping_values_and_mixed_encodings():
+    assert cmd_pull._mask_values("DUMMYX DUMMY%58 DUMMY", {"DUMMY", "DUMMYX"}) == ("<secret> <secret> <secret>")
+    assert cmd_pull._mask_values(r"a\\b a%5Cb a%255cb", {r"a\b"}) == "<secret> <secret> <secret>"
+
+
+def test_pull_first_character_prefilter_keeps_encoded_starts():
+    # None of these warnings contains the secret's raw first character.
+    assert cmd_pull._mask_values(r"\[ok]", {"[ok]"}) == "<secret>"
+    assert cmd_pull._mask_values(r"\"TOKEN", {'"TOKEN'}) == "<secret>"
+    assert cmd_pull._mask_values(r"\u00F1TOKEN", {"ñTOKEN"}) == "<secret>"
+    assert cmd_pull._mask_values("%C3%B1TOKEN %25c3%25B1TOKEN", {"ñTOKEN"}) == "<secret> <secret>"
+    assert cmd_pull._mask_values("+TOKEN %2bTOKEN %252BTOKEN %20TOKEN", {" TOKEN"}) == (
+        "<secret> <secret> <secret> <secret>"
+    )
+    assert cmd_pull._mask_values("qtOKEN", {"QtOKEN"}) == "qtOKEN"  # raw remains case-sensitive
+
+
+def test_pull_many_impossible_secrets_skip_reverse_scans():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "text = 'Q' * 100_000\n"
+        "for count in (100, 300):\n"
+        "    secrets = {f'DUMMY_{i:03d}_secret' for i in range(count)}\n"
+        "    start = monotonic()\n"
+        "    assert _mask_values(text, secrets) == text\n"
+        "    assert monotonic() - start < 3.0, count\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_pull_common_prefix_impossible_suffix_skips_reverse_scans():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "text = 'a' * 100_000\n"
+        "secrets = {f'a{i:04d}' for i in range(100)}\n"
+        "start = monotonic()\n"
+        "assert _mask_values(text, secrets) == text\n"
+        "assert monotonic() - start < 3.0\n"
+        "assert _mask_values('a' * 100_000 + 'a00%39%39', secrets) == 'a' * 100_000 + '<secret>'\n"
+        "assert _mask_values('a' * 100_000 + 'a0099', secrets) == 'a' * 100_000 + '<secret>'\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_pull_ambiguous_backslashes_finish_with_bounded_resources():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "if sys.platform == 'linux':\n"
+        "    import resource\n"
+        "    baseline_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "secret = '\\\\' * 32 + 'Z'\n"
+        "text = '\\\\' * 100_000 + 'Q'\n"
+        "assert _mask_values(text, {secret}) == text\n"
+        "# An attainable lowercase-hex ending must not be rejected by the fast path.\n"
+        "assert _mask_values('\\\\' * 100_000 + '%5a', {secret}) == '\\\\' * 99_872 + '<secret>'\n"
+        "assert _mask_values('\\\\' * 80 + 'Q', {'\\\\' * 32 + 'Q'}) == '<secret>'\n"
+        "if sys.platform == 'linux':\n"
+        "    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - baseline_rss < 96 * 1024\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_pull_long_near_matches_have_bounded_runtime():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "secret = 'a' * 1600 + 'Z'\n"
+        "text = 'a' * 1600 + 'Q%5a'\n"
+        "start = monotonic()\n"
+        "assert _mask_values(text, {secret}) == text\n"
+        "assert monotonic() - start < 1.0\n"
+        "assert _mask_values('a' * 1600 + '%5a', {secret}) == '<secret>'\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+def test_pull_distinct_unicode_masks_skip_unrelated_warning_positions():
+    script = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from time import monotonic\n"
+        "from observal_cli.cmd_pull import _mask_values\n"
+        "secret = ''.join(chr(0x400 + i) for i in range(6400))\n"
+        "for text in ('Q' * 6400, (secret[:80] + 'Q') * 80, '%GG' * 6400):\n"
+        "    start = monotonic()\n"
+        "    assert _mask_values(text, {secret}) == text\n"
+        "    assert monotonic() - start < 5.0\n"
+        "assert _mask_values('Q' + secret, {secret}) == 'Q<secret>'\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=15)
+
+
+def test_model_override_trace_does_not_log_raw_values():
+    from io import StringIO
+
+    from loguru import logger
+
+    stream = StringIO()
+    sink = logger.add(stream, level="TRACE")
+    try:
+        assert cmd_pull._parse_model_overrides(["DUMMY_MODEL_OVERRIDE"]) == ("DUMMY_MODEL_OVERRIDE", {})
+    finally:
+        logger.remove(sink)
+    assert "DUMMY_MODEL_OVERRIDE" not in stream.getvalue()
+
+
+def test_pull_dummy_server_metadata_does_not_enter_debug_log(boundaries, tmp_path):
+    from io import StringIO
+
+    from loguru import logger
+
+    root = typer.Typer(cls=ErrorHandlingGroup)
+    agent = typer.Typer()
+    cmd_pull.register_pull(agent)
+    root.add_typer(agent, name="agent")
+
+    @root.callback()
+    def debug_root(debug: bool = typer.Option(False, "--debug")):
+        assert debug
+
+    secret = "DUMMY_SECRET_FOR_TEST"
+    boundaries.get.return_value = _agent_detail(name=f"name-{secret}", version=f"v-{secret}")
+    boundaries.post.return_value = {
+        "version": f"v-{secret}",
+        "config_snippet": {"agent_profile": {"path": "agent.md", "content": "agent\n"}},
+    }
+    boundaries.upsert.side_effect = real_upsert_agent
+    stream = StringIO()
+    log_path = tmp_path / "cli.log"
+    sink = logger.add(stream, level="DEBUG")
+    file_sink = logger.add(log_path, level="DEBUG")
+    try:
+        result = RUNNER.invoke(
+            root,
+            [
+                "--debug",
+                "agent",
+                "pull",
+                "acme/reviewer",
+                "--harness",
+                "claude-code",
+                "--dir",
+                str(tmp_path / "project"),
+                "--no-prompt",
+                "--env",
+                f"TOKEN={secret}",
+            ],
+        )
+    finally:
+        logger.remove(sink)
+        logger.remove(file_sink)
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert secret not in stream.getvalue()
+    assert secret not in log_path.read_text()
+    assert boundaries.upsert.call_args.kwargs["name"] == f"name-{secret}"
+    from observal_cli.lockfile import LOCKFILE_PATH
+
+    assert secret in LOCKFILE_PATH.read_text()

@@ -6,6 +6,8 @@
 
 """Agent install, download stats, traces, resolve, manifest, and validate routes."""
 
+from types import SimpleNamespace
+
 from fastapi import Depends, HTTPException, Query, Request
 from loguru import logger as optic
 from sqlalchemy import select
@@ -40,6 +42,12 @@ from schemas.agent import (
 )
 from services.harness import generate_agent_config
 from services.harness.helpers import AliasCollisionError
+from services.harness_capability_inference import (
+    compute_supported_harnesses,
+    infer_required_features,
+    split_supported_harnesses,
+    unsupported_harness_reason,
+)
 from services.registry_telemetry import emit_registry_event
 from services.skill_bundle import (
     SKILL_EXTRA_FILES_FEATURE,
@@ -51,6 +59,42 @@ from services.skill_validator import SkillValidationError
 
 from ._router import router
 from .helpers import _load_agent, _resolve_component_names
+
+_CAPABILITY_FOR_COMPONENT = {"mcp": "mcp_servers", "hook": "hooks", "skill": "skills"}
+
+
+def _unsupported_harness_warnings(name: str, version, harness: str, *, allowed: bool) -> list[str]:
+    """Refuse a harness the agent version does not list as supported, unless the caller allows it.
+
+    The author's ``supported_harnesses`` is authoritative; an empty list puts no limit on
+    harnesses. Generating config for any other harness used to succeed silently and leave a
+    partial install: components the harness has no place for, or puts where it never loads them.
+    """
+    supported = list(version.supported_harnesses or [])
+    if not supported or harness in supported:
+        return []
+    label = f"{name} {version.version}"
+    if not allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Agent {label} does not support {harness}; it supports {', '.join(supported)}. "
+                "Install it for one of those, or set allow_unsupported_harness (observal agent pull "
+                "--allow-unsupported-harness) to install it anyway; some components may be missing or not loaded."
+            ),
+        )
+    from schemas.constants import HARNESS_CAPABILITIES
+
+    capabilities = HARNESS_CAPABILITIES.get(harness, set())
+    types = {c.component_type for c in version.components or []}
+    lost = sorted(
+        t for t, capability in _CAPABILITY_FOR_COMPONENT.items() if t in types and capability not in capabilities
+    )
+    return [
+        f"Agent {label} does not list {harness} as supported (it supports {', '.join(supported)}). "
+        + (f"{harness} cannot install its {', '.join(lost)} components. " if lost else "")
+        + "Components may be missing or not loaded; check the install before relying on it."
+    ]
 
 
 @router.post("/{agent_id}/install", response_model=AgentInstallResponse)
@@ -104,6 +148,9 @@ async def install_agent(
     else:
         install_version = agent.latest_version
 
+    harness_warnings = _unsupported_harness_warnings(
+        agent.name, install_version, req.harness, allowed=req.allow_unsupported_harness
+    )
     install_components = list(install_version.components or [])
     component_target_team_id = agent.team_id if agent.is_private else None
 
@@ -483,7 +530,7 @@ async def install_agent(
             },
         )
 
-    warnings = pins.warnings + archived_warnings + setup_warnings + snippet.pop("_warnings", [])
+    warnings = harness_warnings + pins.warnings + archived_warnings + setup_warnings + snippet.pop("_warnings", [])
     lock = {
         "lock_version": LOCK_VERSION,
         "status": pins.status,
@@ -621,9 +668,6 @@ async def validate_agent_composition(
 ):
     """Validate a set of components for compatibility before publishing an agent."""
     optic.trace("req={}", req)
-    if not req.components:
-        return ValidationResult(valid=True, issues=[])
-
     from services.agent_resolver import validate_component_ids
 
     errors = await validate_component_ids(
@@ -643,4 +687,23 @@ async def validate_agent_composition(
         )
         for e in errors
     ]
-    return ValidationResult(valid=len(issues) == 0, issues=issues)
+
+    # The same harness check publish applies: declared harnesses that can't run the components are left out.
+    skill_ids = [c.component_id for c in req.components if c.component_type == "skill"]
+    skill_listings: dict = {}
+    if skill_ids:
+        rows = (await db.execute(select(SkillListing).where(SkillListing.id.in_(skill_ids)))).scalars().all()
+        skill_listings = {row.id: row for row in rows}
+    required = infer_required_features(SimpleNamespace(components=req.components), skill_listings=skill_listings)
+    kept, dropped = split_supported_harnesses(req.supported_harnesses, compute_supported_harnesses(required))
+    if dropped:
+        outcome = "so publish leaves it out of supported harnesses" if kept else "and no declared harness can run them"
+        issues.extend(
+            ValidationIssue(
+                severity="warning" if kept else "error",
+                message=f"{unsupported_harness_reason(harness, required)}, which the components need, {outcome}.",
+            )
+            for harness in dropped
+        )
+    valid = not any(issue.severity == "error" for issue in issues)
+    return ValidationResult(valid=valid, issues=issues, supported_harnesses=kept)

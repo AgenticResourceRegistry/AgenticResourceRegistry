@@ -5,31 +5,31 @@
 apiVersion: v2
 name: observal
 description: >
-  Observal, agent-centric registry and observability platform for AI coding agents.
-  Self-hosted Helm chart for Kubernetes deployments.
+  Agentic Resource Registry, a self-hosted, Apache 2.0 registry for sharing coding agent resources.
+  Helm chart for Kubernetes deployments.
 type: application
 version: 0.1.0
 appVersion: "latest"
-icon: https://raw.githubusercontent.com/Observal/Observal/main/docs/logo.svg
+icon: https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.png
 keywords:
   - observal
   - ai-agents
   - observability
   - registry
-home: https://github.com/Observal/Observal
+home: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 sources:
-  - https://github.com/Observal/Observal
+  - https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 maintainers:
   - name: Observal Contributors
     email: harisrini21@gmail.com
-    url: https://github.com/Observal/Observal
+    url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Documentation
-      url: https://github.com/Observal/Observal/tree/main/docs/self-hosting
+      url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/tree/main/docs/self-hosting
     - name: Source
-      url: https://github.com/Observal/Observal
+      url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
     - name: Support
-      url: https://github.com/Observal/Observal/issues
+      url: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues

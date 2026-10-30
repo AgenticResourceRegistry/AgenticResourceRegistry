@@ -7,7 +7,7 @@
 title: "observal doctor"
 ---
 
-Diagnose local Observal state, repair managed telemetry instrumentation, remove managed instrumentation, and work with redacted support bundles.
+Diagnose local Agentic Resource Registry state, repair managed telemetry instrumentation, remove managed instrumentation, and work with redacted support bundles.
 
 All five workflows support `--output table|json`. JSON mode never prompts or emits human banners.
 
@@ -16,8 +16,8 @@ All five workflows support `--output table|json`. JSON mode never prompts or emi
 | Command | Purpose |
 | --- | --- |
 | `doctor` | Diagnose configuration, Registry metadata, skills, and harness telemetry |
-| `doctor patch` | Install or update Observal-managed telemetry instrumentation |
-| `doctor cleanup` | Remove Observal-managed telemetry instrumentation |
+| `doctor patch` | Install or update Agentic Resource Registry-managed telemetry instrumentation |
+| `doctor cleanup` | Remove Agentic Resource Registry-managed telemetry instrumentation |
 | `doctor support bundle` | Generate a redacted diagnostic archive |
 | `doctor support inspect` | Inspect a diagnostic archive without extracting it |
 
@@ -34,7 +34,7 @@ Doctor checks:
 * Managed hooks, plugins, or extensions for all registered harnesses
 * UUID-attributed Kiro Agent hooks
 * Claude Code Agents pulled with `--hooks=settings`: a warning when Claude Code is outside the tested version range, or when the Python interpreter their gated hooks name no longer exists (pull those Agents again)
-* Bundled Observal skill installation
+* Bundled Agentic Resource Registry skill installation
 
 JSON diagnosis exits zero when the checks ran successfully. Health is reported through `healthy`, `issues`, and `warnings`:
 
@@ -58,7 +58,7 @@ Apply fixable warnings and canonical lockfile metadata without prompting:
 observal doctor --yes --output json
 ```
 
-Installed version pins are not changed. Only Observal-managed telemetry entries are updated.
+Installed version pins are not changed. Only Agentic Resource Registry-managed telemetry entries are updated.
 
 ## Patch
 
@@ -89,7 +89,7 @@ Exactly one target mode is required: `--all-harnesses` or one or more `--harness
 
 Patch is idempotent. It preserves unrelated hooks and configuration. Configuration writes are atomic. Invalid or unreadable harness files fail loudly rather than being replaced.
 
-For Pi, patch installs the bundled TypeScript extension at `~/.pi/agent/extensions/observal.ts` and records the CLI version it came from in an adjacent `.observal-extension.json`. If `npm:observal-pi` is registered in `~/.pi/agent/settings.json`, that registration wins: patch installs nothing locally, and removes a local copy it recognises as its own so Pi does not load the extension twice. A local file Observal did not write is never touched. MCP commands and remote URLs are never wrapped or rewritten.
+For Pi, patch installs the bundled TypeScript extension at `~/.pi/agent/extensions/observal.ts` and records the CLI version it came from in an adjacent `.observal-extension.json`. A local file Agentic Resource Registry did not write is never touched. MCP commands and remote URLs are never wrapped or rewritten.
 
 ## Cleanup
 
@@ -111,7 +111,7 @@ Remove instrumentation from all registered harnesses except selected entries:
 observal doctor cleanup --exclude kiro --yes --output json
 ```
 
-Cleanup removes only Observal-managed hooks, plugins, extensions, and legacy telemetry settings. User-owned hooks remain, and so do an Agent's gated hooks placed by `agent pull --hooks=settings` (move those back with `--hooks=frontmatter`). Human mode confirms before writing unless `--yes` is present. JSON cleanup requires `--yes` unless it is a dry run.
+Cleanup removes only Agentic Resource Registry-managed hooks, plugins, extensions, and legacy telemetry settings. User-owned hooks remain, and so do an Agent's gated hooks placed by `agent pull --hooks=settings` (move those back with `--hooks=frontmatter`). Human mode confirms before writing unless `--yes` is present. JSON cleanup requires `--yes` unless it is a dry run.
 
 Unknown harnesses, conflicting selections, malformed configuration, and write failures are surfaced before success is reported.
 

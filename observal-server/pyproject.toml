@@ -8,8 +8,8 @@
 
 [project]
 name = "observal-server"
-version = "1.16.0-dev.0"
-description = "Observal API server"
+version = "1.17.0-dev.0"
+description = "API server for Agentic Resource Registry, a self-hosted, Apache 2.0 registry for sharing coding agent resources"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
@@ -28,7 +28,7 @@ dependencies = [
     "httpx",
     "gitpython>=3.1.59",
     "boto3",
-    "litellm>=1.100.4,<1.101.0",  # main's patched release line; Codex measurement does not depend on LiteLLM
+    "litellm>=1.100.4,<1.101.0",  # >=1.100.4: GHSA-g5ff-637f-6q2m, GHSA-7hp6-4w63-5g45
     # Required by LiteLLM for the `vertex_ai/*` models the insights settings
     # page offers. Without it every Vertex call fails with "Google Cloud SDK
     # not found", including Express Mode keys that need no GCP project.
@@ -36,7 +36,7 @@ dependencies = [
     "redis[hiredis]>=5.0",
     "arq",
     "strawberry-graphql[fastapi]>=0.327.2",
-    "authlib>=1.9.1",  # >=1.9.1: fixes the audited JOSE/OIDC advisories
+    "authlib>=1.9.1",
     "itsdangerous",
     # >=50.0.0: PYSEC-2026-3552 (PKCS#7 decrypt Bleichenbacher oracle).
     "cryptography>=50.0.0",

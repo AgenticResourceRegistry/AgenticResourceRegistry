@@ -351,21 +351,7 @@ class TestHarnessDiagnosisState:
 
         assert warnings == []
 
-    def test_pi_recognizes_dict_form_npm_entry_and_ignores_malformed_entries(self, tmp_path: Path):
-        _write_json(
-            tmp_path / ".pi" / "agent" / "settings.json",
-            {"packages": [{"source": f"npm:observal-pi@{CLI_VERSION}"}, 7]},
-        )
-        issues: list[str] = []
-        warnings: list[str] = []
-
-        doctor_module._check_pi(issues, warnings)
-
-        assert issues == []
-        assert warnings == []  # npm configured and current: no local install, nothing to report
-        assert not (tmp_path / ".pi" / "agent" / "extensions" / "observal.ts").exists()
-
-    def test_pi_source_and_settings_failures_are_issues(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_pi_source_failure_is_an_issue(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / ".pi" / "agent").mkdir(parents=True)
         monkeypatch.setattr(pi_extension, "extension_source", MagicMock(side_effect=OSError("source missing")))
         issues: list[str] = []
@@ -373,15 +359,6 @@ class TestHarnessDiagnosisState:
         doctor_module._check_pi(issues, [])
 
         assert issues == ["Pi telemetry extension: source missing"]
-
-        monkeypatch.setattr(pi_extension, "extension_source", lambda: "source")
-        settings = tmp_path / ".pi" / "agent" / "settings.json"
-        settings.write_text("invalid", encoding="utf-8")
-        issues = []
-
-        doctor_module._check_pi(issues, [])
-
-        assert issues == [f"{settings}: not valid JSON."]
 
     def test_pi_extension_source_fails_when_no_bundled_or_source_file_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -776,7 +753,6 @@ class TestCleanupStateEdges:
         ("relative_path", "cleanup"),
         [
             (".claude/settings.json", doctor_module._cleanup_claude_code),
-            (".pi/agent/settings.json", doctor_module._cleanup_pi),
             (".cursor/hooks.json", doctor_module._cleanup_cursor),
             (".codex/hooks.json", doctor_module._cleanup_codex),
         ],
@@ -879,33 +855,9 @@ class TestPatchStateEdges:
             doctor_module._patch_antigravity(dry_run=True)
         assert hooks.read_text(encoding="utf-8") == "invalid"
 
-    def test_pi_missing_detection_and_invalid_settings_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ):
+    def test_pi_missing_detection_skips(self, capsys: pytest.CaptureFixture[str]):
         assert doctor_module._patch_pi(dry_run=False) is False
         assert "skipping" in _plain(capsys.readouterr().out)
-
-        pi_dir = tmp_path / ".pi" / "agent"
-        pi_dir.mkdir(parents=True)
-        settings = pi_dir / "settings.json"
-        settings.write_text("invalid", encoding="utf-8")
-
-        with pytest.raises(json.JSONDecodeError):
-            doctor_module._patch_pi(dry_run=False)
-        assert not (pi_dir / "extensions" / "observal.ts").exists()
-
-    def test_pi_dry_run_leaves_npm_configured_settings_untouched(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ):
-        settings = tmp_path / ".pi" / "agent" / "settings.json"
-        _write_json(settings, {"packages": ["npm:observal-pi"]})
-        before = settings.read_text(encoding="utf-8")
-
-        assert doctor_module._patch_pi(dry_run=True) is False
-        assert settings.read_text(encoding="utf-8") == before
-        assert not (tmp_path / ".pi" / "agent" / "extensions" / "observal.ts").exists()
-        output = _plain(capsys.readouterr().out)
-        assert "npm:observal-pi is configured" in output
 
     def test_pi_dry_run_previews_local_install_without_writing(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

@@ -19,7 +19,7 @@ from models.user import User, UserRole
 from schemas.agent import AgentCreateRequest, AgentResponse, AgentUpdateRequest
 from services.config_generator import validate_mcp_command
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_fork import provenance_for
 from services.registry_telemetry import emit_registry_event
 from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
@@ -192,8 +192,10 @@ async def save_draft(
         components = all_crefs_draft
         external_mcps = version.external_mcps
 
-    version.required_capabilities = infer_required_features(_DraftProxy(), skill_listings=skill_listings_map_draft)
-    version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(version, _DraftProxy(), skill_listings=skill_listings_map_draft)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     await db.flush()
     from services.agent_lock import lock_agent_version
@@ -209,6 +211,7 @@ async def save_draft(
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
+        warnings=harness_warnings,
     )
 
 
@@ -345,8 +348,9 @@ async def update_draft(
         # Components already on this draft keep their pins unless a version is named.
         await attach_pinned_components(db, version_id, req.components, previous=old_comps, current_user=current_user)
 
-    # Re-infer harness features only when components or external_mcps changed
-    if req.components is not None or req.external_mcps is not None:
+    # Re-infer harness features when components, external_mcps or the declared harnesses changed
+    harness_warnings: list[str] = []
+    if req.components is not None or req.external_mcps is not None or req.supported_harnesses is not None:
         if not agent.latest_version:
             raise HTTPException(status_code=400, detail="Agent has no version to update features on")
         current_comps_draft = (
@@ -364,10 +368,12 @@ async def update_draft(
             components = current_comps_draft
             external_mcps = version.external_mcps
 
-        version.required_capabilities = infer_required_features(
-            _DraftUpdateProxy(), skill_listings=skill_listings_map_draft_update
-        )
-        version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+        try:
+            harness_warnings = apply_harness_inference(
+                version, _DraftUpdateProxy(), skill_listings=skill_listings_map_draft_update
+            )
+        except NoCompatibleHarnessError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     # Don't allow saving over another user's active lock
     if version.is_editing and version.editing_by != current_user.id and not _is_lock_expired(version.editing_since):
@@ -400,6 +406,7 @@ async def update_draft(
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
+        warnings=harness_warnings,
     )
     return response.model_copy(update=pushed) if pushed else response
 

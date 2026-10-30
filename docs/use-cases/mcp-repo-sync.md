@@ -4,14 +4,14 @@
 title: "Sync an MCP server from GitHub or GitLab"
 ---
 
-An MCP server listed with a git repository can publish new versions on its own. Add a webhook to the repository on GitHub or GitLab, and Observal re-reads the repository and publishes a new version whenever you push or publish a release. You no longer have to run `observal registry mcp edit` after every change.
+An MCP server listed with a git repository can publish new versions on its own. Add a webhook to the repository on GitHub or GitLab, and Agentic Resource Registry re-reads the repository and publishes a new version whenever you push or publish a release. You no longer have to run `observal registry mcp edit` after every change.
 
 GitHub (github.com and GitHub Enterprise) and GitLab (gitlab.com and self-managed GitLab) are supported.
 
 ## What a sync does
 
-1. GitHub or GitLab sends a webhook to Observal.
-2. Observal authenticates it and checks the repository. Then it queues the sync and replies right away.
+1. GitHub or GitLab sends a webhook to Agentic Resource Registry.
+2. Agentic Resource Registry authenticates it and checks the repository. Then it queues the sync and replies right away.
 3. A background worker fetches the repository, runs the same analysis as `observal registry mcp submit --git`, and publishes a new version.
 
 Each sync creates a new version and leaves earlier versions alone. Agents pinned to an earlier version keep installing it, because agent lockfiles pin version content by digest.
@@ -62,9 +62,9 @@ observal registry mcp sync enable alice/weather-mcp --provider gitlab  # self-ho
 
 Or open the MCP server in the web app and use the **Sync** tab.
 
-Observal picks the provider from the repository URL: a hostname containing `gitlab` means GitLab, anything else means GitHub. For a self-managed GitLab on another hostname, such as `code.acme.com`, choose GitLab with `--provider gitlab` or the **Repository host** setting in the Sync tab.
+Agentic Resource Registry picks the provider from the repository URL: a hostname containing `gitlab` means GitLab, anything else means GitHub. For a self-managed GitLab on another hostname, such as `code.acme.com`, choose GitLab with `--provider gitlab` or the **Repository host** setting in the Sync tab.
 
-Observal returns a webhook URL and a secret. The secret is shown only once. If you lose it, rotate it with `observal registry mcp sync rotate-secret`.
+Agentic Resource Registry returns a webhook URL and a secret. The secret is shown only once. If you lose it, rotate it with `observal registry mcp sync rotate-secret`.
 
 ### 2. Add the webhook
 
@@ -89,12 +89,12 @@ In the project, open **Settings > Webhooks > Add new webhook** and enter:
 | --- | --- |
 | URL | The webhook URL from step 1 |
 | Secret token | The secret from step 1 |
-| Trigger | **Push events** for push sync, **Releases events** for release sync, or both. You can limit push events to the tracked branch, though Observal ignores other branches anyway |
+| Trigger | **Push events** for push sync, **Releases events** for release sync, or both. You can limit push events to the tracked branch, though Agentic Resource Registry ignores other branches anyway |
 | SSL verification | Keep it on |
 
 GitLab has no ping event. Use **Test > Push events** on the saved webhook to send a sample push. It syncs the tracked branch, or is skipped if that commit is already published.
 
-The provider must be able to reach your Observal server. Set `deployment.public_url` so the webhook URL uses your public address. If Observal runs on a private network, see [Private deployments](#private-deployments).
+The provider must be able to reach your Agentic Resource Registry server. Set `deployment.public_url` so the webhook URL uses your public address. If Agentic Resource Registry runs on a private network, see [Private deployments](#private-deployments).
 
 ### 3. Check the result
 
@@ -107,14 +107,14 @@ Deliveries that are ignored, such as a push to another branch, do not change the
 
 ## Private deployments
 
-github.com and gitlab.com deliver webhooks over the public internet, so an Observal install inside a private network needs one public path for them. Expose only the webhook receivers, `POST /api/v1/webhooks/github/mcp/<id>` and `POST /api/v1/webhooks/gitlab/mcp/<id>`, through a public gateway, load balancer or reverse proxy that answers `404` to every other path. Each delivery is authenticated by its signature or secret token, so a source IP allowlist is optional. Then set `WEBHOOK_PUBLIC_URL` on the API to that public address, for example `https://hooks.observal.example.com`. The **Sync** tab shows webhook URLs under it, while everything else keeps using the private address.
+github.com and gitlab.com deliver webhooks over the public internet, so an Agentic Resource Registry install inside a private network needs one public path for them. Expose only the webhook receivers, `POST /api/v1/webhooks/github/mcp/<id>` and `POST /api/v1/webhooks/gitlab/mcp/<id>`, through a public gateway, load balancer or reverse proxy that answers `404` to every other path. Each delivery is authenticated by its signature or secret token, so a source IP allowlist is optional. Then set `WEBHOOK_PUBLIC_URL` on the API to that public address, for example `https://hooks.observal.example.com`. The **Sync** tab shows webhook URLs under it, while everything else keeps using the private address.
 
 * **AWS Terraform:** set `enable_webhook_ingress = true` and list your providers in `webhook_providers` to add an API Gateway endpoint that does this. See [Git webhooks on a private install](/self-hosting/aws-terraform#git-webhooks-on-a-private-install).
-* **GitHub Enterprise Server or self-managed GitLab** on the same network can reach Observal directly and needs none of this. Self-managed GitLab blocks webhooks to private addresses by default; an administrator allows them under **Admin > Settings > Network > Outbound requests**. If GitLab reports `URL is blocked: Host cannot be resolved or invalid`, the GitLab server cannot resolve Observal's hostname.
+* **GitHub Enterprise Server or self-managed GitLab** on the same network can reach Agentic Resource Registry directly and needs none of this. Self-managed GitLab blocks webhooks to private addresses by default; an administrator allows them under **Admin > Settings > Network > Outbound requests**. If GitLab reports `URL is blocked: Host cannot be resolved or invalid`, the GitLab server cannot resolve Agentic Resource Registry's hostname.
 
 ## Private repositories
 
-Observal fetches the repository with the server's `GIT_CLONE_TOKEN`, the same token used to analyze git submissions. The token needs read access to the repository. Set `GIT_CLONE_TOKEN_HOSTS` to the exact HTTPS hostname of your Git provider (`github.com` or your GitLab host); without it, the token is never sent. For GitLab, set `GIT_CLONE_TOKEN_USER=oauth2`. A git server on a private network also needs `ALLOW_INTERNAL_GIT_URLS=true`.
+Agentic Resource Registry fetches the repository with the server's `GIT_CLONE_TOKEN`, the same token used to analyze git submissions. The token needs read access to the repository. Set `GIT_CLONE_TOKEN_HOSTS` to the exact HTTPS hostname of your Git provider (`github.com` or your GitLab host); without it, the token is never sent. For GitLab, set `GIT_CLONE_TOKEN_USER=oauth2`. A git server on a private network also needs `ALLOW_INTERNAL_GIT_URLS=true`.
 
 ## Security
 
@@ -126,7 +126,7 @@ Observal fetches the repository with the server's `GIT_CLONE_TOKEN`, the same to
 
 ## Why sync is one way
 
-Sync only reads from the repository; editing the listing in Observal never writes back to GitHub or GitLab. The repository is the source of truth for the server's code, and the fields Observal derives from it (tools, environment variables, version) are a read of that code. Writing back would need a token that can push to every synced repository, could loop (a push syncs, the sync pushes), and would race with the repository's own history. What you edit in Observal, such as the description or environment variable descriptions, is listing metadata and is kept across syncs.
+Sync only reads from the repository; editing the listing in Agentic Resource Registry never writes back to GitHub or GitLab. The repository is the source of truth for the server's code, and the fields Agentic Resource Registry derives from it (tools, environment variables, version) are a read of that code. Writing back would need a token that can push to every synced repository, could loop (a push syncs, the sync pushes), and would race with the repository's own history. What you edit in Agentic Resource Registry, such as the description or environment variable descriptions, is listing metadata and is kept across syncs.
 
 ## Turn it off
 

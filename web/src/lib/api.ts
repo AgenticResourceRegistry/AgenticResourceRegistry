@@ -128,6 +128,9 @@ const STORAGE_KEY_USER_NAME = "observal_user_name";
 const STORAGE_KEY_USER_EMAIL = "observal_user_email";
 const STORAGE_KEY_USER_USERNAME = "observal_user_username";
 const STORAGE_KEY_USER_AVATAR = "observal_user_avatar";
+// The account this tab signed in as. localStorage is shared between tabs, so another tab can
+// sign in as someone else underneath this one; refresh must never silently follow it.
+const STORAGE_KEY_TAB_ACTOR = "observal_tab_actor";
 
 // Access token is stored in sessionStorage (clears on tab close) to reduce
 // the XSS exposure window. Refresh token stays in localStorage so silent
@@ -145,7 +148,24 @@ function getRefreshToken(): string | null {
 	return localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
 }
 
+function tokenSubject(token: string | null): string | null {
+	try {
+		const payload = JSON.parse(atob(token!.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+		return typeof payload.sub === "string" ? payload.sub : null;
+	} catch {
+		return null;
+	}
+}
+
+/** True when the shared refresh token belongs to a different account than this tab signed in as. */
+export function refreshIsForAnotherAccount(): boolean {
+	const actor = sessionStorage.getItem(STORAGE_KEY_TAB_ACTOR) ?? tokenSubject(getAccessToken());
+	return !!actor && tokenSubject(getRefreshToken()) !== actor;
+}
+
 export function setTokens(accessToken: string, refreshToken: string) {
+	const actor = tokenSubject(accessToken);
+	if (actor) sessionStorage.setItem(STORAGE_KEY_TAB_ACTOR, actor);
 	sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, accessToken);
 	localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refreshToken);
 	window.dispatchEvent(new Event("storage"));
@@ -153,6 +173,7 @@ export function setTokens(accessToken: string, refreshToken: string) {
 
 export function clearSession() {
 	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+	sessionStorage.removeItem(STORAGE_KEY_TAB_ACTOR);
 	localStorage.removeItem(STORAGE_KEY_REFRESH_TOKEN);
 	localStorage.removeItem("observal_api_key"); // clean up legacy
 	localStorage.removeItem(STORAGE_KEY_USER_ROLE);
@@ -216,11 +237,20 @@ export function getUserAvatar(): string | null {
 
 let _refreshPromise: Promise<RefreshResult> | null = null;
 
-type RefreshResult = "ok" | "rejected" | "network_error";
+type RefreshResult = "ok" | "rejected" | "network_error" | "account_changed";
 
 async function _tryRefreshToken(): Promise<RefreshResult> {
 	const refreshToken = getRefreshToken();
 	if (!refreshToken) return "rejected";
+
+	if (refreshIsForAnotherAccount()) {
+		// Another tab signed in as a different account. Drop only this tab's bearer: the shared
+		// refresh token belongs to that account, and this tab must not replay as them.
+		sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+		window.dispatchEvent(new Event("observal:session-cleared"));
+		window.dispatchEvent(new Event("storage"));
+		return "account_changed";
+	}
 
 	try {
 		const res = await fetch(`${API}/auth/token/refresh`, {
@@ -232,6 +262,10 @@ async function _tryRefreshToken(): Promise<RefreshResult> {
 		if (!res.ok) return "rejected";
 
 		const data = await res.json();
+		// Sign-out here or in another tab clears the stored refresh token while this request is in
+		// flight. Writing the response back would restore the session, so drop it. "network_error"
+		// makes the caller retry with whatever token is stored now, if any.
+		if (getRefreshToken() !== refreshToken) return "network_error";
 		setTokens(data.access_token, data.refresh_token);
 		return "ok";
 	} catch {
@@ -320,8 +354,9 @@ async function request<T = unknown>(
 				throw new Error("Network unavailable");
 			}
 
-			// Real rejection: session is truly expired
-			clearSession();
+			// Real rejection: session is truly expired. An account switch in another tab leaves
+			// the shared login alone.
+			if (refreshResult !== "account_changed") clearSession();
 			if (typeof window !== "undefined") {
 				window.location.href = sessionExpiredLoginUrl();
 				return new Promise<T>(() => {});
@@ -509,6 +544,7 @@ export const registry = {
 		),
 	validate: (body: {
 		components: { component_type: string; component_id: string }[];
+		supported_harnesses?: string[];
 		team_id?: string;
 		visibility?: "public" | "team";
 	}) => post<ValidationResult>("/agents/validate", body),

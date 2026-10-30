@@ -11,7 +11,10 @@ def test_dev_version_response_gives_source_install_command():
     body = json.loads(response.body)
 
     assert response.status_code == 426
-    assert body["install_command"] == 'uv tool install --force "git+https://github.com/Observal/Observal@main"'
+    assert (
+        body["install_command"]
+        == 'uv tool install --force "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"'
+    )
     assert body["install_command"] in body["detail"]
 
 

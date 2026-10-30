@@ -20,16 +20,21 @@ import subprocess
 import sys
 import tomllib
 from contextlib import nullcontext, redirect_stdout
+from dataclasses import replace
+from functools import wraps
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlsplit, urlunsplit
 
+import click
+import httpx
 import typer
 import yaml
 from loguru import logger as optic
 from packaging.version import InvalidVersion, Version
-from rich import print as rprint
+from rich import print as rich_print
+from rich.markup import escape as escape_markup
 
 from observal_cli import client, config
 from observal_cli.constants import VALID_HARNESSES
@@ -37,12 +42,459 @@ from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
-from observal_cli.render import OutputMode, esc, output_json, spinner
+from observal_cli.render import OutputMode, spinner
+from observal_cli.render import esc as render_esc
 from observal_shared.harness_registry import HARNESS_REGISTRY, get_scope_aware_harnesses
 
 # Hook script names used as placeholders in server-generated agent configs.
 # Resolved to absolute paths client-side before writing to disk.
 _HOOK_SCRIPT_NAMES = ("observal-hook.sh", "observal-stop-hook.sh")
+
+# Reporting only: never apply this to install inputs, generated files or subprocess argv.
+_pull_secrets = client._pull_reporting_secrets
+
+
+class _MaskedText(str):
+    """Tracks only placeholders created by this reporting pass, not source text."""
+
+    def __new__(cls, value: str, protected: tuple[tuple[int, int], ...]):
+        instance = super().__new__(cls, value)
+        instance.protected = protected
+        return instance
+
+
+def _mask_values(value: str, secrets: set[str] | None) -> str:
+    ordered = sorted((secret for secret in (secrets or ()) if secret), key=len, reverse=True)
+    if not ordered:
+        return value
+
+    # Each source character can be literal, Rich/JSON escaped, or URL encoded
+    # (including double encoding). Memoize (character, input offset) states:
+    # overlapping backslash alternatives otherwise make a regex exponential.
+    def alternatives(secret: str) -> list[tuple[tuple[str, bool], ...]]:
+        result = []
+        for char in secret:
+            choices = {(char, False)}
+            json_choice = json.dumps(char, ensure_ascii=True)[1:-1]
+            if json_choice != char:
+                choices.add((json_choice, json_choice.startswith(r"\u")))
+            if char in {"'", '"'}:
+                # Python repr escapes the quote used to delimit a message.
+                choices.add(("\\" + char, False))
+                # repr of a JSON-escaped quote has three backslashes.
+                choices.add(("\\" * 3 + char, False))
+            if char == "[":
+                choices.add((r"\[", False))
+            if char == "/":
+                # JSON permits escaping slashes even though json.dumps does not.
+                choices.add((r"\/", False))
+            if char == " ":
+                # quote_plus encodes a space as +; another encoding pass
+                # turns that + into %2B. A literal + in the same position is
+                # indistinguishable from a form-encoded space: fail closed and
+                # mask the whole matching credential rather than leak it.
+                # Never decode the whole source: unrelated pluses stay intact.
+                choices.update({("+", False), ("%2b", True), ("%252b", True)})
+            if ord(char) < 128:
+                choices.update({(f"%{ord(char):02x}", True), (f"%25{ord(char):02x}", True)})
+                choices.add((f"\\u{ord(char):04x}", True))
+            else:
+                encoded = "".join(f"%{byte:02x}" for byte in char.encode("utf-8"))
+                choices.update({(encoded, True), (encoded.replace("%", "%25"), True)})
+            # repr(error) doubles backslashes already present in reflected JSON
+            # escapes. Include those spellings per character so mixed raw, URL,
+            # JSON, and repr-escaped fragments still share the bounded matcher.
+            choices.update(
+                (choice.replace("\\", "\\\\"), fold_hex)
+                for choice, fold_hex in tuple(choices)
+                if choice.startswith("\\") and len(choice) > 1
+            )
+            result.append(tuple(sorted(choices, key=lambda choice: len(choice[0]), reverse=True)))
+        return result
+
+    patterns = [alternatives(secret) for secret in ordered]
+    size = len(value)
+
+    def match(parts: list[tuple[tuple[str, bool], ...]], start: int, cache: dict[tuple[int, int], int]) -> int:
+        # Explicit postorder traversal avoids both backtracking and recursion
+        # limits for long credentials. -1 means no full match from this state.
+        root = (0, start)
+        stack = [(root, False)]
+        while stack:
+            state, ready = stack.pop()
+            if state in cache:
+                continue
+            index, offset = state
+            if index == len(parts):
+                cache[state] = offset
+                continue
+            following = []
+            for choice, fold_hex in parts[index]:
+                end = offset + len(choice)
+                if end <= size and (
+                    value[offset:end].casefold() == choice.casefold() if fold_hex else value.startswith(choice, offset)
+                ):
+                    following.append((index + 1, end))
+            if ready:
+                cache[state] = max((cache[child] for child in following), default=-1)
+            else:
+                stack.append((state, True))
+                stack.extend((child, False) for child in following if child not in cache)
+        return cache[root]
+
+    # Reverse bit-parallel DP: bit i means i secret characters can be matched
+    # from this offset. A ring retains only the offsets needed by the longest
+    # single-character encoding. This proves which starts can match before the
+    # (more expensive) forward walk, even for long overlapping near-misses.
+    # Group identical alternatives into bit masks so repeated characters do
+    # not turn each input position into a walk over the whole credential.
+    # A match must begin with an alternative for the first secret character.
+    # Build the warning's character set once; most supplied credentials cannot
+    # even start in an unrelated warning, so they need no full reverse scan.
+    input_chars = set(value)
+    folded_input_starts = {char.casefold()[0] for char in input_chars}
+    folded_value: str | None = None
+    possible = []
+    for parts in patterns:
+        if not any(
+            (choice.casefold()[0] in folded_input_starts if fold_hex else choice[0] in input_chars)
+            for choice, fold_hex in parts[0]
+        ):
+            continue
+        # A full match must contain a spelling of its final two characters.
+        # Test this necessary condition before scanning every warning position
+        # for each credential with a common first character. Only a bounded
+        # pair of alternatives is materialized; never decode the warning.
+        tail = parts[-2:]
+        tail_choices = (
+            ((a + b, fold_a or fold_b) for a, fold_a in tail[0] for b, fold_b in tail[1])
+            if len(tail) == 2
+            else iter(tail[0])
+        )
+        attainable = False
+        for spelling, folded in tail_choices:
+            if folded:
+                if folded_value is None:
+                    folded_value = value.casefold()
+                if spelling.casefold() in folded_value:
+                    attainable = True
+                    break
+            elif spelling in value:
+                attainable = True
+                break
+        if not attainable:
+            continue
+        masks: dict[tuple[str, bool], int] = {}
+        max_width = 1
+        for index, choices in enumerate(reversed(parts)):
+            for choice, fold_hex in choices:
+                masks[choice, fold_hex] = masks.get((choice, fold_hex), 0) | (1 << index)
+                max_width = max(max_width, len(choice))
+        # Raw alternatives include literal characters and escaped brackets.
+        # Index encoded alternatives
+        # by their full folded spelling rather than their shared '%' / '\\'
+        # prefix. Even four-byte Unicode codepoints sharing the first two bytes
+        # then need only one hash lookup per encoding width at each offset.
+        literal: dict[str, list[tuple[str, int]]] = {}
+        folded: dict[int, dict[str, int]] = {}
+        for (choice, fold_hex), mask in masks.items():
+            if fold_hex:
+                by_width = folded.setdefault(len(choice), {})
+                key = choice.casefold()
+                by_width[key] = by_width.get(key, 0) | mask
+            else:
+                literal.setdefault(choice[0], []).append((choice, mask))
+        states = [0] * (max_width + 1)
+        states[size % len(states)] = 1  # Empty suffix at end of input.
+        starts = bytearray(size)
+        full = 1 << len(parts)
+        for offset in range(size - 1, -1, -1):
+            bits = 1  # The empty suffix can start at every offset.
+            char = value[offset]
+            for choice, mask in literal.get(char, ()):
+                end = offset + len(choice)
+                if end <= size and value.startswith(choice, offset):
+                    bits |= (states[end % len(states)] & mask) << 1
+            for width, by_spelling in folded.items():
+                end = offset + width
+                if end <= size:
+                    mask = by_spelling.get(value[offset:end].casefold(), 0)
+                    if mask:
+                        bits |= (states[end % len(states)] & mask) << 1
+            states[offset % len(states)] = bits
+            if bits & full:
+                starts[offset] = 1
+        possible.append((parts, starts))
+    output = []
+    protected = []
+    source_protected = iter(value.protected if isinstance(value, _MaskedText) else ())
+    next_protected = next(source_protected, None)
+    output_size = 0
+    cursor = 0
+    while cursor < size:
+        if next_protected is not None and cursor == next_protected[0]:
+            output.append(value[cursor : next_protected[1]])
+            protected.append((output_size, output_size + next_protected[1] - cursor))
+            output_size += next_protected[1] - cursor
+            cursor = next_protected[1]
+            next_protected = next(source_protected, None)
+            continue
+        end = -1
+        for parts, starts in possible:
+            if starts[cursor]:
+                # Only attainable starts need the forward walk to select the
+                # longest encoding; no per-start graph is kept in memory.
+                end = match(parts, cursor, {})
+                if end != -1:
+                    break
+        if end == -1:
+            output.append(value[cursor])
+            output_size += 1
+            cursor += 1
+        else:
+            # A match must not consume an internally generated placeholder.
+            if next_protected is not None and end > next_protected[0]:
+                output.append(value[cursor])
+                output_size += 1
+                cursor += 1
+                continue
+            output.append("<secret>")
+            protected.append((output_size, output_size + len("<secret>")))
+            output_size += len("<secret>")
+            cursor = end
+    return _MaskedText("".join(output), tuple(protected))
+
+
+def _safe_text(value: str) -> str:
+    return _mask_values(value, _pull_secrets.get())
+
+
+def esc(value) -> str:
+    """Escape labels for Rich; rprint masks the assembled text before parsing it."""
+    return _escape_preescaped("" if value is None else str(value))
+
+
+def _escape_preescaped(value: str) -> str:
+    return "".join(
+        part if part.startswith(r"\[") else render_esc(part) for part in re.split(r"((?<!\\)\\\[[^\]]+\])", value)
+    )
+
+
+# Only CLI-owned schema paths are exempt from key masking. Unknown nested maps
+# can have server-provided keys and must be treated as data, even for short secrets.
+_REPORT_KEYS = {
+    "output": frozenset(
+        {
+            "agent",
+            "project_lock",
+            "lock",
+            "harness",
+            "scope",
+            "dry_run",
+            "target_directory",
+            "files",
+            "warnings",
+            "setup_commands",
+            "reports_sessions",
+        }
+    ),
+    "agent": frozenset({"id", "qualified_name", "version", "latest_version", "resolved_from", "local_name"}),
+    "lock": frozenset({"status", "digest", "components", "problems"}),
+    "components": frozenset({"type", "name", "id", "version", "version_id", "digest", "qualified_name", "source"}),
+    "files": frozenset({"path", "status"}),
+    "inputs": frozenset({"kind", "name", "component"}),
+    "setup_commands": frozenset({"command", "executable", "status", "return_code"}),
+    "result": frozenset(
+        {
+            "invalid_input_kind",
+            "component",
+            "needs_input",
+            "inputs",
+            "partial",
+            "stage",
+            "files",
+            "setup_commands",
+            "failed_path",
+            "failed_skills",
+            "folder_recovery_errors",
+            "installation_tracked",
+            "committed_folders",
+            "non_folder_writes_may_remain",
+            "reports_sessions",
+            "dry_run",
+            "active_agent_persisted",
+        }
+    ),
+}
+_REPORT_CHILDREN = {
+    "files": "files",
+    "inputs": "inputs",
+    "setup_commands": "setup_commands",
+    "agent": "agent",
+    "lock": "lock",
+    "components": "components",
+}
+
+
+def _safe_data(value, schema: str | None = None):
+    if isinstance(value, str):
+        return _safe_text(value)
+    if isinstance(value, dict):
+        return {
+            key
+            if key in _REPORT_KEYS.get(schema, ())
+            else _safe_text(key)
+            if isinstance(key, str)
+            else key: _safe_data(item, _REPORT_CHILDREN.get(key) if key in _REPORT_KEYS.get(schema, ()) else None)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_data(item, schema) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        # A server may reflect a numeric credential as a JSON number. Preserve
+        # its type unless its serialized spelling contains a tracked secret.
+        serialized = json.dumps(value)
+        return "<secret>" if _safe_text(serialized) != serialized else value
+    # JSON's default=str would stringify unknown objects *after* sanitization.
+    return _safe_text(str(value))
+
+
+_RICH_TAGS = frozenset(
+    f"[{tag}]"
+    for tag in (
+        "bold",
+        "cyan",
+        "dim",
+        "green",
+        "red",
+        "yellow",
+        "bold green",
+        "bold yellow",
+        "/bold",
+        "/cyan",
+        "/dim",
+        "/green",
+        "/red",
+        "/yellow",
+        "/bold green",
+        "/bold yellow",
+    )
+)
+
+
+def _safe_markup(text: str) -> str:
+    # Mask the entire string before looking for markup: secrets can span '[' or ']'.
+    # If a short secret also occurs in an authored tag, render escaped plain text.
+    secrets = _pull_secrets.get() or ()
+    masked = _safe_text(text)
+    if any(secret and any(secret in tag for tag in _RICH_TAGS) for secret in secrets):
+        return _escape_preescaped(masked)
+    return "".join(
+        part if part in _RICH_TAGS or part.startswith(r"\[") else escape_markup(part)
+        for part in re.split(r"((?<!\\)\[[^\]]+\]|(?<!\\)\\\[[^\]]+\])", masked)
+    )
+
+
+def rprint(*values, **kwargs):
+    rich_print(*(_safe_markup(value) if isinstance(value, str) else value for value in values), **kwargs)
+
+
+def output_json(value):
+    """Render pull's schema-aware, redacted report without the generic JSON sink."""
+    # Sanitize individual values before serialization, including unknown server
+    # fields and objects that would otherwise be stringified by default=str.
+    print(json.dumps(_safe_data(value, "output"), ensure_ascii=False, indent=2))
+
+
+def _safe_error(error: CliError) -> CliError:
+    return replace(
+        error,
+        message=_safe_text(error.message),
+        operation=_safe_text(error.operation),
+        resource=_safe_text(error.resource) if error.resource is not None else None,
+        remediation=_safe_text(error.remediation) if error.remediation is not None else None,
+        request_id=_safe_text(error.request_id) if error.request_id is not None else None,
+        detail=_safe_text(error.detail) if error.detail is not None else None,
+        result=_safe_data(error.result, "result"),
+    )
+
+
+def _reporting_boundary(callback):
+    @wraps(callback)
+    def wrapped(*args, **kwargs):
+        token = _pull_secrets.set(set())
+        try:
+            return callback(*args, **kwargs)
+        except CliError as error:
+            raise _safe_error(error) from None
+        except Exception as error:
+            # Exception messages may transform supplied values in ways the
+            # bounded reporting matcher cannot anticipate. Never render their
+            # text (including repr) in debug mode when secrets were supplied.
+            has_secrets = bool(_pull_secrets.get())
+            detail = type(error).__name__ if has_secrets else _safe_text(repr(error))
+            if isinstance(error, httpx.HTTPStatusError):
+                from observal_cli.errors import http_status_category
+
+                status = error.response.status_code
+                failure = CliError(
+                    http_status_category(status),
+                    f"The server rejected the operation with HTTP {status}.",
+                    operation="Pull agent",
+                    resource="Agentic Resource Registry server",
+                    remediation="Check the request and server health, then retry.",
+                    request_id=_safe_text(error.response.headers["x-request-id"])
+                    if "x-request-id" in error.response.headers
+                    else None,
+                    http_status=status,
+                    detail=detail,
+                )
+            elif isinstance(error, httpx.RequestError):
+                failure = CliError(
+                    ErrorCategory.UNAVAILABLE,
+                    "The network operation failed.",
+                    operation="Pull agent",
+                    resource="Agentic Resource Registry service",
+                    remediation="Check network connectivity and service health, then retry.",
+                    detail=detail,
+                )
+            elif isinstance(error, click.UsageError):
+                failure = CliError(
+                    ErrorCategory.USAGE,
+                    "Invalid pull arguments.",
+                    operation="Pull agent",
+                    remediation="Check the command arguments and retry.",
+                    detail=type(error).__name__,
+                )
+            else:
+                category = (
+                    ErrorCategory.PERMISSION
+                    if isinstance(error, PermissionError)
+                    else ErrorCategory.NOT_FOUND
+                    if isinstance(error, FileNotFoundError)
+                    else ErrorCategory.UNAVAILABLE
+                    if isinstance(error, TimeoutError)
+                    else ErrorCategory.UNEXPECTED
+                )
+                failure = CliError(
+                    category,
+                    "The agent pull could not complete.",
+                    operation="Pull agent",
+                    remediation="Retry with --debug for additional diagnostics.",
+                    detail=detail,
+                )
+            raise failure from None
+        finally:
+            _pull_secrets.reset(token)
+
+    return wrapped
+
+
+def _secret_password_input(label: str) -> str:
+    value = password_input(_safe_markup(label))
+    if value and (secrets := _pull_secrets.get()) is not None:
+        secrets.add(value)
+    return value
 
 
 def _component_conflicts(harness: str, agent_name: str, components: list[dict]) -> list[str]:
@@ -342,7 +794,7 @@ def _collect_mcp_env_vars(
                         rprint(f"  [green]\u2713[/green] {esc(ev['name'])} [dim](from --env)[/dim]")
                     else:
                         desc = f" [dim]({esc(ev['description'])})[/dim]" if ev.get("description") else ""
-                        val = password_input(f"  {esc(ev['name'])}{desc}")
+                        val = _secret_password_input(f"  {esc(ev['name'])}{desc}")
                         mcp_env[ev["name"]] = val
 
             if optional:
@@ -353,7 +805,7 @@ def _collect_mcp_env_vars(
                         rprint(f"  [green]\u2713[/green] {esc(ev['name'])} [dim](from --env)[/dim]")
                     else:
                         desc = f" [dim]({esc(ev['description'])})[/dim]" if ev.get("description") else ""
-                        val = password_input(f"  {esc(ev['name'])}{desc} (press Enter to skip)")
+                        val = _secret_password_input(f"  {esc(ev['name'])}{desc} (press Enter to skip)")
                         if val:
                             mcp_env[ev["name"]] = val
 
@@ -413,7 +865,7 @@ def _collect_mcp_headers(
                         rprint(f"  [green]\u2713[/green] {esc(h['name'])} [dim](from --header)[/dim]")
                     else:
                         desc = f" [dim]({esc(h['description'])})[/dim]" if h.get("description") else ""
-                        val = password_input(f"  {esc(h['name'])}{desc}")
+                        val = _secret_password_input(f"  {esc(h['name'])}{desc}")
                         mcp_hdrs[h["name"]] = val
 
             if optional:
@@ -424,7 +876,7 @@ def _collect_mcp_headers(
                         rprint(f"  [green]\u2713[/green] {esc(h['name'])} [dim](from --header)[/dim]")
                     else:
                         desc = f" [dim]({esc(h['description'])})[/dim]" if h.get("description") else ""
-                        val = password_input(f"  {esc(h['name'])}{desc} (press Enter to skip)")
+                        val = _secret_password_input(f"  {esc(h['name'])}{desc} (press Enter to skip)")
                         if val:
                             mcp_hdrs[h["name"]] = val
 
@@ -478,20 +930,24 @@ def _merge_toml_text(existing_text: str, content: dict, root_key: str) -> str:
     if not isinstance(incoming, dict) or not isinstance(existing_section, dict):
         raise ValueError(f"TOML section {root_key} must be a mapping")
 
-    lines = existing_text.splitlines(keepends=True)
-    for name in set(incoming).intersection(existing_section):
-        header = f"[{root_key}.{name}]"
-        start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
-        if start is None:
-            raise ValueError(f"cannot safely update existing TOML table {header}")
-        end = start + 1
-        while end < len(lines) and not lines[end].lstrip().startswith("["):
-            end += 1
-        del lines[start:end]
+    # Drop each replaced server's table and every sub-table under it ([root.name.env] and so on),
+    # or the dotted keys written below would redefine them and produce invalid TOML.
+    replaced = tuple(f"{root_key}.{name}" for name in set(incoming).intersection(existing_section))
+    lines = []
+    skipping = False
+    for line in existing_text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            header = stripped.lstrip("[").split("]", 1)[0].strip()
+            skipping = any(header == name or header.startswith(f"{name}.") for name in replaced)
+        if not skipping:
+            lines.append(line)
 
     existing = "".join(lines).rstrip()
     rendered = _dict_to_toml(content).rstrip()
-    return f"{existing}\n\n{rendered}\n" if existing else f"{rendered}\n"
+    merged = f"{existing}\n\n{rendered}\n" if existing else f"{rendered}\n"
+    tomllib.loads(merged)  # never write a file Codex cannot parse
+    return merged
 
 
 def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: bool, merge: bool) -> str:
@@ -542,7 +998,7 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
 
     Returns a human-readable status string ("created", "updated", "merged").
     """
-    optic.trace("path={}, len={}", path, len(str(content)))
+    optic.trace("writing generated file (bytes={})", len(str(content)))
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
 
@@ -831,7 +1287,7 @@ def _resolve_path(raw_path: str, target_dir: Path, *, allow_home: bool = False) 
     Raises typer.Exit if the resolved path escapes *target_dir* (and home
     expansion is not permitted).
     """
-    optic.trace("raw_path={}, target_dir={}", raw_path, target_dir)
+    optic.trace("resolving generated file path")
     if raw_path.startswith("~/") or raw_path.startswith("~\\"):
         if allow_home:
             return Path(raw_path).expanduser().resolve()
@@ -930,6 +1386,26 @@ def _locked_version_detail(
             request_id=error.request_id,
             http_status=error.http_status,
         )
+
+
+def _require_supported_harness(harness: str, supported: list[str], *, allow: bool, label: str) -> None:
+    """Refuse, before any prompt, a harness the agent version does not list as supported.
+
+    The server refuses too; checking here first keeps the user from typing MCP secrets for an
+    install that will not happen. An empty list puts no limit on harnesses.
+    """
+    if allow or not supported or harness in supported:
+        return
+    fail(
+        ErrorCategory.VALIDATION,
+        f"Agent {label} does not support {harness}; it supports {', '.join(supported)}.",
+        operation="Pull agent",
+        resource="harness",
+        remediation=(
+            f"Pull it for a supported harness (--harness {supported[0]}), or add --allow-unsupported-harness "
+            "to install it anyway; some components may be missing or not loaded."
+        ),
+    )
 
 
 def _target_version(
@@ -1086,7 +1562,7 @@ def _fingerprint_written_skills(
 
 
 def _progress(output: OutputMode | str, message: str | None = None):
-    return nullcontext() if output == "json" else spinner(message)
+    return nullcontext() if output == "json" else spinner(_safe_text(message) if message is not None else message)
 
 
 def _pull_failure_result(
@@ -1121,6 +1597,7 @@ def _valid_setup_command(command: object) -> bool:
 
 # Setup-command flags whose value carries an MCP header or environment value.
 _MASKED_SETUP_FLAGS = {"-H": ": ", "--header": ": ", "-e": "=", "--env": "="}
+_SENSITIVE_SETUP_FLAGS = {"--token", "--password", "--api-key"}
 
 
 def _redact_url(argument: str) -> str:
@@ -1132,18 +1609,35 @@ def _redact_url(argument: str) -> str:
     return urlunsplit((parts.scheme, host, parts.path, "<redacted>" if parts.query else "", ""))
 
 
-def _display_setup_command(command: list[str]) -> list[str]:
-    """Return a setup command with header, environment and URL credentials masked for output."""
+def _display_setup_command(command: list[str], *, secret_values: set[str] | None = None) -> list[str]:
+    """Return a separate reporting argv; never alter the executable command."""
     shown: list[str] = []
     separator = None
+    mask_next = False
     for argument in command:
-        if argument == "--":
+        contains_supplied_value = any(value and value in argument for value in (secret_values or ()))
+        structural_value = False
+        if mask_next:
+            argument = "<secret>"
+            mask_next = False
+        elif argument == "--":
             separator = None
         elif separator is not None and separator in argument:
+            structural_value = True
             argument = f"{argument.split(separator, 1)[0]}{separator}<secret>"
         else:
             separator = _MASKED_SETUP_FLAGS.get(argument)
-            argument = _redact_url(argument)
+            mask_next = argument.lower() in _SENSITIVE_SETUP_FLAGS
+            if argument.lower().startswith(tuple(flag + "=" for flag in _SENSITIVE_SETUP_FLAGS)):
+                argument = argument.split("=", 1)[0] + "=<secret>"
+            elif argument.lower().startswith("bearer "):
+                argument = "Bearer <secret>"
+            else:
+                argument = _redact_url(argument)
+        if structural_value:
+            argument = _mask_values(argument, secret_values)
+        elif contains_supplied_value:
+            argument = "<secret>"
         shown.append(argument)
     return shown
 
@@ -1231,7 +1725,6 @@ def _parse_model_overrides(values: list[str]) -> tuple[str | None, dict[str, str
 
     Returns ``(default_value, per_harness_overrides)``.
     """
-    optic.trace("values={}", values)
     default: str | None = None
     overrides: dict[str, str] = {}
     for raw in values or []:
@@ -2009,6 +2502,7 @@ def write_install_snippet(
     is_user_scope: bool,
     dry_run: bool = False,
     quiet: bool = False,
+    secret_values: set[str] | None = None,
     skill_bundles: list[dict] | None = None,
     lock: dict | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
@@ -2040,8 +2534,12 @@ def write_install_snippet(
 
     def tracked_skill_install(skill_name: str, installer, **kwargs):
         try:
-            with redirect_stdout(StringIO()) if quiet else nullcontext():
-                return installer(**kwargs)
+            captured = StringIO()
+            with redirect_stdout(captured):
+                installed = installer(**kwargs)
+            if not quiet:
+                print(_mask_values(captured.getvalue(), secret_values), end="")
+            return installed
         except CliError as error:
             if error.result is None:
                 error.result = _pull_failure_result(
@@ -2809,6 +3307,7 @@ def _install_skill_bundle(
 
 def register_pull(app: typer.Typer):
     @app.command("pull")
+    @_reporting_boundary
     def pull(
         agent_id: str = typer.Argument(..., help="Agent ID, name, row number, or @alias"),
         harness: str = typer.Option(
@@ -2879,6 +3378,11 @@ def register_pull(app: typer.Typer):
             "--force-hooks",
             help="Replace or remove Observal-owned agent hooks in settings.json that were edited locally.",
         ),
+        allow_unsupported_harness: bool = typer.Option(
+            False,
+            "--allow-unsupported-harness",
+            help="Install even when the agent version does not list --harness as supported (warns)",
+        ),
         output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
     ):
         """Fetch agent config and write harness files to disk.
@@ -2897,6 +3401,9 @@ def register_pull(app: typer.Typer):
         pinned. Components without a lock (agents released before pinning) fall
         back to their latest version with a warning; use --strict, or set
         OBSERVAL_STRICT=1, to refuse instead. The flag wins over the variable.
+
+        The harness must be one the agent version lists as supported; pass
+        --allow-unsupported-harness to install for another one anyway.
 
         Use --env KEY=VALUE and --header Header-Name=value only for non-secret
         settings because command arguments are visible to other processes. For
@@ -2936,6 +3443,9 @@ def register_pull(app: typer.Typer):
             )
         env_overrides = _parse_assignments(env, "environment variable")
         header_overrides = _parse_assignments(header, "header")
+        secrets = _pull_secrets.get()
+        assert secrets is not None
+        secrets.update(value for value in (*env_overrides.values(), *header_overrides.values()) if value)
         model_default, model_overrides = _parse_model_overrides(model or [])
         unused_model_harnesses = set(model_overrides) - {harness}
         if unused_model_harnesses:
@@ -3023,11 +3533,13 @@ def register_pull(app: typer.Typer):
 
         # MCP env vars and headers come from the versions that will be installed
         plan = agent_detail
+        supported = agent_detail.get("supported_harnesses") or []
         if version:
             with _progress(output, f"Fetching agent version {version}..."):
                 version_detail = _locked_version_detail(
                     resolved, version, resolved_from, qualified_name=qualified_name, directory=target_dir
                 )
+            supported = version_detail.get("supported_harnesses", supported) or []
             plan = {
                 "component_links": [
                     {
@@ -3040,6 +3552,13 @@ def register_pull(app: typer.Typer):
                 ]
             }
 
+        _require_supported_harness(
+            harness,
+            list(supported),
+            allow=allow_unsupported_harness,
+            label=f"{qualified_name} {version or agent_detail.get('version', '')}".strip(),
+        )
+
         spec_cache: dict = {}
         missing_inputs: list[dict[str, str]] = []
         env_values = _collect_mcp_env_vars(
@@ -3049,6 +3568,7 @@ def register_pull(app: typer.Typer):
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
         )
+        secrets.update(value for values in env_values.values() for value in values.values() if value)
         header_values = _collect_mcp_headers(
             plan,
             no_prompt=no_prompt,
@@ -3056,6 +3576,7 @@ def register_pull(app: typer.Typer):
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
         )
+        secrets.update(value for values in header_values.values() for value in values.values() if value)
         if missing_inputs:
             fail(
                 ErrorCategory.VALIDATION,
@@ -3135,6 +3656,8 @@ def register_pull(app: typer.Typer):
                 install_body["version"] = version
             if strict:
                 install_body["strict"] = True
+            if allow_unsupported_harness:
+                install_body["allow_unsupported_harness"] = True
             result = client.post_public(
                 f"/api/v1/agents/{resolved}/install",
                 install_body,
@@ -3414,6 +3937,7 @@ def register_pull(app: typer.Typer):
                 is_user_scope=is_user_scope,
                 dry_run=dry_run,
                 quiet=output == "json",
+                secret_values=secrets,
                 lock=lock,
             )
             if not dry_run:
@@ -3556,26 +4080,27 @@ def register_pull(app: typer.Typer):
                     setup_results.append({"command": [], "status": "failed", "return_code": None})
                     setup_failures.append("invalid setup command")
                     continue
-                shown = _display_setup_command(command)
+                shown = _display_setup_command(command, secret_values=secrets)
+                executable = shown[0] if shown[0] != "<secret>" else "setup executable"
                 try:
                     setup_command = adapter.prepare_mcp_setup_command(command, options.get("scope", "project"))
                     process = subprocess.run(setup_command, capture_output=True, text=True, timeout=60, cwd=setup_cwd)
                 except FileNotFoundError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} not found")
+                    setup_failures.append(f"{executable} not found")
                     continue
                 except subprocess.TimeoutExpired:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} timed out")
+                    setup_failures.append(f"{executable} timed out")
                     continue
                 except OSError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} could not start")
+                    setup_failures.append(f"{executable} could not start")
                     continue
                 status = "completed" if process.returncode == 0 else "failed"
                 setup_results.append({"command": shown, "status": status, "return_code": process.returncode})
                 if process.returncode != 0:
-                    setup_failures.append(f"{command[0]} exited with code {process.returncode}")
+                    setup_failures.append(f"{executable} exited with code {process.returncode}")
         elif setup_cmds:
             for command in setup_cmds:
                 if not _valid_setup_command(command):
@@ -3583,7 +4108,11 @@ def register_pull(app: typer.Typer):
                     setup_failures.append("invalid setup command")
                 else:
                     setup_results.append(
-                        {"command": _display_setup_command(command), "status": "would_run", "return_code": None}
+                        {
+                            "command": _display_setup_command(command, secret_values=secrets),
+                            "status": "would_run",
+                            "return_code": None,
+                        }
                     )
 
         if setup_failures:

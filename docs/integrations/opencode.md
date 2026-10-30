@@ -4,7 +4,7 @@
 title: "OpenCode"
 ---
 
-OpenCode is a first-class Observal harness integration. Observal can install
+OpenCode is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install
 OpenCode agents, configure MCP servers, expose skills, install hook plugins, and
 collect OpenCode session telemetry.
 
@@ -17,12 +17,12 @@ OpenCode agent profiles are Markdown files. Project agents live in
 
 OpenCode session telemetry uses an in-process TypeScript plugin. The plugin is
 installed by `observal auth login` or `observal doctor patch`. Agent pulls write
-agent profiles and update the Observal lockfile, but they do not embed the
+agent profiles and update the Agentic Resource Registry lockfile, but they do not embed the
 telemetry plugin in each agent file.
 
 The plugin listens to OpenCode session and message events, reads message data
-through the OpenCode client API, converts new messages into Observal session
-lines, and sends them to Observal.
+through the OpenCode client API, converts new messages into Agentic Resource Registry session
+lines, and sends them to Agentic Resource Registry.
 
 ---
 
@@ -44,7 +44,7 @@ lines, and sends them to Observal.
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -58,7 +58,7 @@ observal auth login
 ```
 
 This writes credentials to `~/.observal/config.json`. If OpenCode is detected,
-login can install the Observal plugin.
+login can install the Agentic Resource Registry plugin.
 
 ### 3. Pull an agent into OpenCode
 
@@ -96,9 +96,9 @@ or different from the bundled source.
 | MCP config | `opencode.json` | `~/.config/opencode/opencode.json` |
 | Skill definition | `.opencode/skills/{name}/SKILL.md` | `~/.config/opencode/skills/{name}/SKILL.md` |
 | Plugin hooks | `.opencode/plugins/{name}.ts` | `~/.config/opencode/plugins/{name}.ts` |
-| Observal plugin | `.opencode/plugins/observal-plugin.ts` | `~/.config/opencode/plugins/observal-plugin.ts` |
-| Observal credentials | `~/.observal/config.json` | `~/.observal/config.json` |
-| Observal lockfile | `~/.observal/lockfile.json` | `~/.observal/lockfile.json` |
+| Agentic Resource Registry plugin | `.opencode/plugins/observal-plugin.ts` | `~/.config/opencode/plugins/observal-plugin.ts` |
+| Agentic Resource Registry credentials | `~/.observal/config.json` | `~/.observal/config.json` |
+| Agentic Resource Registry lockfile | `~/.observal/lockfile.json` | `~/.observal/lockfile.json` |
 
 OpenCode MCP configs use the `mcp` key.
 
@@ -106,14 +106,14 @@ OpenCode MCP configs use the `mcp` key.
 
 ## Plugin spec
 
-Observal installs a TypeScript plugin named `observal-plugin.ts`. The plugin
+Agentic Resource Registry installs a TypeScript plugin named `observal-plugin.ts`. The plugin
 subscribes to OpenCode runtime events:
 
-| OpenCode event | Observal use |
+| OpenCode event | Agentic Resource Registry use |
 |---|---|
 | `session.created` | Capture the active OpenCode agent name for the session |
 | `message.updated` | Mark the session as having new data to push |
-| `session.idle` | Fetch new messages and send them to Observal |
+| `session.idle` | Fetch new messages and send them to Agentic Resource Registry |
 | `session.updated` | Refresh active agent tracking when emitted by OpenCode |
 | `session.next.agent.switched` | Refresh active agent tracking when the active agent changes |
 
@@ -124,8 +124,8 @@ content hash, so stale local copies are replaced.
 
 ## Attribution
 
-OpenCode exposes the active agent name in session events, not an Observal UUID.
-The Observal lockfile maps that OpenCode agent name back to the registry agent
+OpenCode exposes the active agent name in session events, not an Agentic Resource Registry UUID.
+The Agentic Resource Registry lockfile maps that OpenCode agent name back to the registry agent
 id and installed version.
 
 1. `observal agent pull` writes the OpenCode agent profile and records the
@@ -164,7 +164,7 @@ Acknowledged state is retained for seven days to avoid unnecessary replay. Capac
 
 ## Agent profile format
 
-OpenCode agents are Markdown files. Observal writes the agent prompt into the
+OpenCode agents are Markdown files. Agentic Resource Registry writes the agent prompt into the
 profile selected by scope:
 
 ```markdown
@@ -184,7 +184,7 @@ You are an OpenCode agent with the following specialization...
 
 **Attribution depends on the lockfile.** If an agent profile is copied by hand
 without running `observal agent pull`, the plugin may see the OpenCode agent
-name but have no Observal id or version to send.
+name but have no Agentic Resource Registry id or version to send.
 
 **Built-in OpenCode agents are ignored.** Sessions for built-in agents are not
 attributed to registry agents.

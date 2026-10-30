@@ -38,7 +38,7 @@ def _change(**overrides):
         "author_name": "Hari",
         "author_email": "hari@example.com",
         "pr": 42,
-        "url": "https://github.com/Observal/Observal/pull/42",
+        "url": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/42",
         "category": "Features",
     }
     values.update(overrides)
@@ -151,7 +151,7 @@ def test_release_discovery_skips_prior_release_metadata(monkeypatch):
         ),
     )
 
-    changes = discover_changes("Observal/Observal", "c" * 40, "upstream/main")
+    changes = discover_changes("AgenticResourceRegistry/AgenticResourceRegistry", "c" * 40, "upstream/main")
 
     assert [change.title for change in changes] == ["feat: next change"]
 
@@ -381,7 +381,7 @@ def test_publishing_jobs_recheck_tags_on_failed_job_reruns():
     import yaml
 
     jobs = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]
-    for name in ("docker-merge", "npm", "promote"):
+    for name in ("docker-merge", "promote"):
         runs = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
         assert "distribution_tag" in runs and "version_tags()" in runs
         assert jobs[name]["steps"][0]["with"]["fetch-depth"] == 0

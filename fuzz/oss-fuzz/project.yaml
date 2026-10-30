@@ -17,8 +17,8 @@
 #
 ################################################################################
 
-homepage: "https://github.com/Observal/Observal"
-main_repo: "https://github.com/Observal/Observal.git"
+homepage: "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
+main_repo: "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git"
 language: python
 primary_contact: "rawx18.dev@gmail.com"
 auto_ccs:

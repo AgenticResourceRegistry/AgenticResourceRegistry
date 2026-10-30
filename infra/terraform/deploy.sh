@@ -234,13 +234,13 @@ validate_standard() {
   # is piped into an interpreter (Scorecard supply-chain check).
   token=$(python3 -c 'import json,urllib.request
 try:
-    with urllib.request.urlopen("https://ghcr.io/token?scope=repository:observal/observal-api:pull", timeout=10) as r:
+    with urllib.request.urlopen("https://ghcr.io/token?scope=repository:agenticresourceregistry/observal-api:pull", timeout=10) as r:
         print(json.load(r).get("token",""))
 except Exception:
     pass
 ' 2>/dev/null || echo "")
   if [ -n "$token" ]; then
-    status=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" "https://ghcr.io/v2/observal/observal-api/manifests/$tag" 2>/dev/null || echo "000")
+    status=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" "https://ghcr.io/v2/agenticresourceregistry/observal-api/manifests/$tag" 2>/dev/null || echo "000")
   else
     status="000"
   fi

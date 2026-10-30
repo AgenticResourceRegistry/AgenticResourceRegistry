@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-HELM_OCI_REF = "oci://ghcr.io/observal/charts/observal"
+HELM_OCI_REF = "oci://ghcr.io/agenticresourceregistry/charts/observal"
 
 
 def _load_yaml(path: str):
@@ -22,8 +23,8 @@ def test_release_workflow_publishes_helm_chart_to_ghcr_oci():
 
     step_runs = "\n".join(step.get("run", "") for step in job["steps"])
 
-    assert 'HELM_OCI_REPO="oci://ghcr.io/observal/charts"' in step_runs
-    assert 'HELM_OCI_REF="ghcr.io/observal/charts/observal"' in step_runs
+    assert 'HELM_OCI_REPO="oci://ghcr.io/agenticresourceregistry/charts"' in step_runs
+    assert 'HELM_OCI_REF="ghcr.io/agenticresourceregistry/charts/observal"' in step_runs
     assert "helm registry login ghcr.io" in step_runs
     assert "oras login ghcr.io" in step_runs
     assert 'helm push "chart-dist/observal-${VERSION}.tgz" "$HELM_OCI_REPO"' in step_runs
@@ -43,7 +44,10 @@ def test_release_workflow_does_not_publish_helm_chart_to_github_pages():
 def test_chart_has_artifacthub_metadata_for_oci_listing():
     chart = _load_yaml("infra/helm/observal/Chart.yaml")
 
-    assert chart["icon"] == "https://raw.githubusercontent.com/Observal/Observal/main/docs/logo.svg"
+    assert (
+        chart["icon"]
+        == "https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/docs/logo.png"
+    )
     assert chart["maintainers"][0]["email"] == "harisrini21@gmail.com"
     assert chart["annotations"]["artifacthub.io/category"] == "monitoring-logging"
     assert chart["annotations"]["artifacthub.io/license"] == "Apache-2.0"
@@ -85,15 +89,17 @@ def test_ci_asserts_packaged_chart_uses_app_version_image_tags():
     assert "helm package infra/helm/observal" in workflow_text
     assert '--app-version "$VERSION"' in workflow_text
     assert 'helm template observal "chart-dist/observal-${VERSION}.tgz"' in workflow_text
-    assert 'API_IMAGE_COUNT="$(grep -c "image: ghcr.io/observal/observal-api:${VERSION}"' in workflow_text
+    assert (
+        'API_IMAGE_COUNT="$(grep -c "image: ghcr.io/agenticresourceregistry/observal-api:${VERSION}"' in workflow_text
+    )
     assert 'test "$API_IMAGE_COUNT" -ge 3' in workflow_text
-    assert 'grep -q "image: ghcr.io/observal/observal-web:${VERSION}"' in workflow_text
+    assert 'grep -q "image: ghcr.io/agenticresourceregistry/observal-web:${VERSION}"' in workflow_text
     assert "--set api.image.tag=custom-api" in workflow_text
     assert "--set worker.image.tag=custom-worker" in workflow_text
     assert "--set web.image.tag=custom-web" in workflow_text
-    assert 'grep -q "image: ghcr.io/observal/observal-api:custom-api"' in workflow_text
-    assert 'grep -q "image: ghcr.io/observal/observal-api:custom-worker"' in workflow_text
-    assert 'grep -q "image: ghcr.io/observal/observal-web:custom-web"' in workflow_text
+    assert 'grep -q "image: ghcr.io/agenticresourceregistry/observal-api:custom-api"' in workflow_text
+    assert 'grep -q "image: ghcr.io/agenticresourceregistry/observal-api:custom-worker"' in workflow_text
+    assert 'grep -q "image: ghcr.io/agenticresourceregistry/observal-web:custom-web"' in workflow_text
 
 
 def test_helm_docs_use_oci_install_instead_of_repo_add():

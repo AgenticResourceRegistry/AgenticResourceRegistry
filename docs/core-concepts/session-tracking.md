@@ -4,13 +4,13 @@
 title: "Session tracking and reconciliation"
 ---
 
-Observal turns local harness conversations into indexed session events. This page explains the complete path from a harness source through durable delivery, server parsing, reconciliation, and recovery.
+Agentic Resource Registry turns local harness conversations into indexed session events. This page explains the complete path from a harness source through durable delivery, server parsing, reconciliation, and recovery.
 
 ## Data model
 
 ### Session
 
-A session is one harness conversation or task identified by `session_id`. Observal records the harness, authenticated user, project, agent attribution, and source position with each record.
+A session is one harness conversation or task identified by `session_id`. Agentic Resource Registry records the harness, authenticated user, project, agent attribution, and source position with each record.
 
 ### Source record
 
@@ -63,7 +63,7 @@ Hooks and reconciliation use the same source adapters and acknowledgement protoc
 
 ## JSONL sources
 
-JSON Lines stores one JSON value per line. Observal treats a line as ready only after its terminating newline is present. An incomplete final line remains local until the harness finishes writing it. Blank lines are ignored.
+JSON Lines stores one JSON value per line. Agentic Resource Registry treats a line as ready only after its terminating newline is present. An incomplete final line remains local until the harness finishes writing it. Blank lines are ignored.
 
 The exporter retains three pieces of source position:
 
@@ -128,7 +128,7 @@ The ingest endpoint validates batch size, line size, ordered byte offsets, final
 
 Session records include agent ID, agent version, and layer hash when attribution is available. Claude Code subagent records can also include a parent session ID. Kiro can report total session credits as durable metadata.
 
-After ingestion, session-level aggregates are available through `session_stats_agg`. PostgreSQL remains responsible for relational registry, user, review, and configuration data. MCP commands and remote URLs remain direct; Observal does not proxy MCP transport traffic.
+After ingestion, session-level aggregates are available through `session_stats_agg`. PostgreSQL remains responsible for relational registry, user, review, and configuration data. MCP commands and remote URLs remain direct; Agentic Resource Registry does not proxy MCP transport traffic.
 
 ## Reconciliation
 

@@ -5,9 +5,9 @@
 title: "observal server migrate"
 ---
 
-Move PostgreSQL registry data and ClickHouse telemetry between Observal deployments.
+Move PostgreSQL registry data and ClickHouse telemetry between Agentic Resource Registry deployments.
 
-Migration uses the supplied database connections directly. Local shell and database access are the authorization boundary; the command does not authenticate against a configured Observal API.
+Migration uses the supplied database connections directly. Local shell and database access are the authorization boundary; the command does not authenticate against a configured Agentic Resource Registry API.
 
 Install the optional dependency first:
 

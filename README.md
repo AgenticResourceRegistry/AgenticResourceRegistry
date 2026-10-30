@@ -13,43 +13,39 @@
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-<pre>
- ██████╗ ██████╗ ███████╗███████╗██████╗ ██╗   ██╗ █████╗ ██╗
-██╔═══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗██║   ██║██╔══██╗██║
-██║   ██║██████╔╝███████╗█████╗  ██████╔╝██║   ██║███████║██║
-██║   ██║██╔══██╗╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══██║██║
-╚██████╔╝██████╔╝███████║███████╗██║  ██║ ╚████╔╝ ██║  ██║███████╗
- ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚══════╝
-</pre>
+<p align="center">
+  <img src="docs/logo.png" alt="Agentic Resource Registry" width="128">
+</p>
 
-**Observal is the control plane and system of record for internal coding agent resources**
-  ---
+# Agentic Resource Registry
 
-  _Set up once, and let your coding agent use Observal through observal-cli._
+**A self-hosted, Apache 2.0 registry for sharing coding agent resources.** Formerly *Observal*.
 
-  ---
+_Set up once, and let your coding agent use Agentic Resource Registry through observal-cli._
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <a href="https://pypi.org/project/observal-cli/"><img src="https://img.shields.io/pypi/v/observal-cli?style=flat-square&logo=pypi&logoColor=white&label=pypi" alt="PyPI version"></a>
-  <a href="https://github.com/Observal/Observal/graphs/contributors"><img src="https://img.shields.io/github/contributors/Observal/Observal?style=flat-square&logo=github" alt="Contributors"></a>
+  <a href="https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/graphs/contributors"><img src="https://img.shields.io/github/contributors/AgenticResourceRegistry/AgenticResourceRegistry?style=flat-square&logo=github" alt="Contributors"></a>
   <a href="https://discord.gg/SFPjnTWddk"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FSFPjnTWddk%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&label=Discord&logo=discord&color=5865F2&style=flat-square" alt="Discord Server"></a>
-  <a href="https://github.com/orgs/Observal/packages?repo_name=Observal"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Haz3-jolt/b28aba6d0efebb0b430d43c8068feb91/raw/ghcr-pulls.json&style=flat-square" alt="GHCR pulls"></a>
+  <a href="https://github.com/orgs/AgenticResourceRegistry/packages?repo_name=AgenticResourceRegistry"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Haz3-jolt/b28aba6d0efebb0b430d43c8068feb91/raw/ghcr-pulls.json&style=flat-square" alt="GHCR pulls"></a>
   <a href="https://artifacthub.io/packages/search?repo=observal"><img src="https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/observal" alt="Artifact Hub"></a>
-  <a href="https://cla-assistant.io/Observal/Observal"><img src="https://cla-assistant.io/readme/badge/Observal/Observal" alt="CLA assistant" /></a>
-  <a href="https://scorecard.dev/viewer/?uri=github.com/Observal/Observal"><img src="https://api.scorecard.dev/projects/github.com/Observal/Observal/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://cla-assistant.io/AgenticResourceRegistry/AgenticResourceRegistry"><img src="https://cla-assistant.io/readme/badge/AgenticResourceRegistry/AgenticResourceRegistry" alt="CLA assistant" /></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/AgenticResourceRegistry/AgenticResourceRegistry"><img src="https://api.scorecard.dev/projects/github.com/AgenticResourceRegistry/AgenticResourceRegistry/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://www.bestpractices.dev/projects/13472"><img src="https://www.bestpractices.dev/projects/13472/badge" alt="OpenSSF Best Practices"></a>
-  <a href="https://codecov.io/gh/Observal/Observal"><img src="https://codecov.io/gh/Observal/Observal/graph/badge.svg?branch=main" alt="Codecov"></a>
+  <a href="https://codecov.io/gh/AgenticResourceRegistry/AgenticResourceRegistry"><img src="https://codecov.io/gh/AgenticResourceRegistry/AgenticResourceRegistry/graph/badge.svg?branch=main" alt="Codecov"></a>
 </p>
 
-> If you find Observal useful, please consider giving it a star. It helps others discover the project and keeps development going.
+> If you find Agentic Resource Registry useful, please consider giving it a star. It helps others discover the project and keeps development going.
 
 ---
 
-## What is Observal and what does it solve?
+> **Formerly Observal.** Same code, same maintainers, same Apache 2.0 license. The CLI is still `observal`, and old `Observal/Observal` links redirect here.
 
-Observal is the control plane and system of record for internal internal coding agent resources. Every tech-forward organization today creates internal Skills, Agents files, MCP clients. Though the creation of these coding agent resources has been prolific, peer adoption and usage is sparse. Coding agent users today end up creating their own version of such resouces without reusing existing packages.
+## What is Agentic Resource Registry and what does it solve?
+
+Agentic Resource Registry is a self-hosted, Apache 2.0 registry for sharing coding agent resources across your organization. Every tech-forward organization today creates internal Skills, Agents files, MCP clients. Though the creation of these coding agent resources has been prolific, peer adoption and usage is sparse. Coding agent users today end up creating their own version of such resouces without reusing existing packages.
 
 The cause is largely due to two problems:
 
@@ -61,11 +57,11 @@ The cause is largely due to two problems:
 
    Any software where usage patterns are not understood and the principle of user-centric development is violated tends to fade out. Such is the problem with development of MCP clients, Skills and Agent files. Authors publish and maintain these resources with little visibility into how they're actually used. Additionally, Coding agent failures don't trigger static error codes: they hallucinate or provide subtly incorrect answers. This leaves users clueless about what went wrong compounding the feedback problem.
 
-Observal solves this by providing a centralized discovery layer for coding agent resources alongside useful insights into usage patterns. It turns silent failures into actionable feedback, ensuring internal resources are continuously optimized for the people using them.
+Agentic Resource Registry solves this by providing a centralized discovery layer for coding agent resources alongside useful insights into usage patterns. It turns silent failures into actionable feedback, ensuring internal resources are continuously optimized for the people using them.
 
-Observal supports Claude Code, Cursor, Kiro, Pi, Copilot, Codex, OpenCode, and other tools.
+Agentic Resource Registry supports Claude Code, Cursor, Kiro, Pi, Copilot, Codex, OpenCode, and other tools.
 
-### Why teams use Observal
+### Why teams use Agentic Resource Registry
 
 - **Centralize resources into one platform:** Store Skills, MCP clients, hooks, prompts, agent files and sandboxes in one registry.
 - **Run a governed registry:** Review submissions, approve internal agents, inspect version diffs, and give developers one trusted place to install from.
@@ -93,20 +89,20 @@ One command to install any agent into any supported harness. The config files ar
 ---
 ### Where does observal fit in your modern enterprise infrastructure?
 
-<img width="1920" height="1080" alt="Observal (3)" src="https://github.com/user-attachments/assets/008f8a68-1269-46de-a9cf-ddfad37b0caa" />
+<img width="1920" height="1080" alt="Agentic Resource Registry in an enterprise stack: registry, insights, traces, review and version control beside the agent gateway, runtime, LLM gateway and MCP gateway" src="docs/img/enterprise-architecture.png" />
 
 
 ---
 ## Quick Start
 
-Observal has two parts: a **server** (API + web UI + databases) you self-host, and a **CLI** you install on each developer machine.
+Agentic Resource Registry has two parts: a **server** (API + web UI + databases) you self-host, and a **CLI** you install on each developer machine.
 
 ### 1. Deploy the server
 
 **One-line install** (requires Docker Engine ≥ 24.0 with Compose v2):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install-server.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
 ```
 
 This downloads a Docker Compose package, generates operator-owned secret files with restricted container-group access, binds published ports to loopback by default, pulls container images from GHCR, and starts the stack. With a terminal it runs guided setup; without a terminal the same command applies safe defaults automatically.
@@ -124,7 +120,7 @@ Deployment docs are linked directly from this README:
 **From source** (for contributors):
 
 ```bash
-git clone https://github.com/Observal/Observal.git && cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
 cp .env.example .env
 make up
 ```
@@ -135,12 +131,12 @@ make up
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/Observal/Observal/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
 ```
 
 Connecting to an existing server? See the [Setup guide](docs/getting-started/onboarding.md).
@@ -173,7 +169,7 @@ Or just tell your agent what you want and it figures out the right commands.
 
 ---
 
-## How Observal works
+## How Agentic Resource Registry works
 
 ### The registry is the distribution layer
 
@@ -214,16 +210,16 @@ Fork an agent or component into an independent draft in your personal namespace 
 
 ## Discovery and Delegation (ARD + A2A)
 
-**ARD: one search across everything approved.** Observal implements [Agentic Resource Discovery](https://github.com/ards-project/ard-spec) (v0.91). Every approved agent, MCP server, skill, hook, prompt and sandbox is published as an ARD entry with a permanent `urn:air:` identifier, a public manifest at `/.well-known/ard.json`, and the spec's search API at `/api/v1/ard/search`. Results are ranked by relevance only; approval, visibility, harness support and whether the resource can be used right now are separate fields. The same visibility rules as the registry apply, so a team-private agent is only found by that team.
+**ARD: one search across everything approved.** Agentic Resource Registry implements [Agentic Resource Discovery](https://github.com/ards-project/ard-spec) (v0.91). Every approved agent, MCP server, skill, hook, prompt and sandbox is published as an ARD entry with a permanent `urn:air:` identifier, a public manifest at `/.well-known/ard.json`, and the spec's search API at `/api/v1/ard/search`. Results are ranked by relevance only; approval, visibility, harness support and whether the resource can be used right now are separate fields. The same visibility rules as the registry apply, so a team-private agent is only found by that team.
 
-**A2A: agents hand tasks to agents.** Observal speaks the [Agent2Agent protocol](https://a2a-protocol.org) (v1.0, with v0.3 compatibility). Every delegation is an A2A Task, whoever runs it:
+**A2A: agents hand tasks to agents.** Agentic Resource Registry speaks the [Agent2Agent protocol](https://a2a-protocol.org) (v1.0, with v0.3 compatibility). Every delegation is an A2A Task, whoever runs it:
 
 - **Registry agents** run headless in a harness that supports it (Claude Code, Kiro, Cursor, Codex, OpenCode, Copilot CLI, Antigravity, Pi) inside a throwaway copy of your repository. Their answer comes back as a result, and any file changes come back as a patch that is never applied for you.
-- **Remote A2A agents** (a service another team runs, built with any framework) are registered by their Agent Card URL, reviewed like any submission, and then called directly with the card the reviewer approved. Observal never proxies the traffic or stores their credentials.
+- **Remote A2A agents** (a service another team runs, built with any framework) are registered by their Agent Card URL, reviewed like any submission, and then called directly with the card the reviewer approved. Agentic Resource Registry never proxies the traffic or stores their credentials.
 
 ```mermaid
 flowchart LR
-    A["Agent in your harness"] -- "find_agents" --> R["Observal registry<br/>(ARD search)"]
+    A["Agent in your harness"] -- "find_agents" --> R["Agentic Resource Registry<br/>(ARD search)"]
     A -- "delegate" --> T{"A2A Task"}
     T -- "registry agent" --> H["Headless harness<br/>in a throwaway copy"]
     T -- "remote agent" --> S["A2A service<br/>(approved Agent Card)"]
@@ -342,7 +338,7 @@ See [AGENTS.md](AGENTS.md) for internal codebase context.
 
 ## Community
 
-[GitHub Discussions](https://github.com/Observal/Observal/discussions) for questions and ideas. [Discord](https://discord.observal.io) for chat. Open Issues for confirmed bugs.
+[GitHub Discussions](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/discussions) for questions and ideas. [Discord](https://discord.observal.io) for chat. Open Issues for confirmed bugs.
 
 ## Reporting Issues
 
@@ -352,7 +348,7 @@ observal doctor support bundle
 
 Produces a redacted diagnostic archive. Review before sharing: `observal doctor support inspect observal-support-*.tar.gz`
 
-For live debugging, Observal uses loguru-based dev logging (internally called "optic"). Stream logs with:
+For live debugging, Agentic Resource Registry uses loguru-based dev logging (internally called "optic"). Stream logs with:
 
 ```bash
 observal ops logs
@@ -362,8 +358,8 @@ Logs are written to `~/.observal/logs/dev.log` and include structured context fo
 
 ## Security
 
-Report vulnerabilities via [GitHub Private Vulnerability Reporting](https://github.com/Observal/Observal/security/advisories) or email contact@observal.io. Do not open a public issue. See [SECURITY.md](SECURITY.md).
+Report vulnerabilities via [GitHub Private Vulnerability Reporting](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/security/advisories) or email contact@observal.io. Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Observal is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+Agentic Resource Registry is licensed under the Apache License 2.0. See [LICENSE](LICENSE).

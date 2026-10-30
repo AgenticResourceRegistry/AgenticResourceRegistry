@@ -11,6 +11,11 @@ SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = "docs/img/enterprise-architecture.png"
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "docs/img/discover-a2a.png"
 SPDX-FileCopyrightText = "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
@@ -344,19 +349,6 @@ SPDX-FileCopyrightText = "2026 Observal"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "web/public/favicon.ico"
-SPDX-FileCopyrightText = [
-  "2026 Hari Srinivasan <harisrini21@gmail.com>",
-  "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
-]
-SPDX-License-Identifier = "Apache-2.0"
-
-[[annotations]]
-path = "web/public/icon.png"
-SPDX-FileCopyrightText = "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
-SPDX-License-Identifier = "Apache-2.0"
-
-[[annotations]]
 path = "web/src/routeTree.gen.ts"
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
@@ -409,4 +401,17 @@ SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
 path = ["docs/docs.json", "docs/images/**"]
 SPDX-FileCopyrightText = "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+  "docs/logo.png",
+  "docs/images/favicon.png",
+  "docs/images/logo-dark.png",
+  "docs/images/logo-light.png",
+  "web/public/favicon.ico",
+  "web/public/icon.png",
+  "web/public/logo.png",
+]
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"

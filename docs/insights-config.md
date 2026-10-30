@@ -4,13 +4,13 @@
 title: "Agent Insights Configuration"
 ---
 
-Configure a LiteLLM-compatible provider so Observal can generate trace summaries, detect anomalies, and explain agent behavior in natural language.
+Configure a LiteLLM-compatible provider so Agentic Resource Registry can generate trace summaries, detect anomalies, and explain agent behavior in natural language.
 
 ## Get Insights running in 5 minutes
 
 1. Get an API key from any provider supported by LiteLLM.
-2. Go to **Settings > Agent Insights** in the Observal admin panel.
-3. Pick the provider. Observal loads model options from the LiteLLM catalog.
+2. Go to **Settings > Agent Insights** in the Agentic Resource Registry admin panel.
+3. Pick the provider. Agentic Resource Registry loads model options from the LiteLLM catalog.
 4. Paste the key into the **API Key** field.
 5. Set the **Sections Model**. Synthesis and Facets fall back to it if left empty.
 6. Save.

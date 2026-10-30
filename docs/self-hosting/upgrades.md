@@ -6,14 +6,14 @@
 title: "Upgrades"
 ---
 
-Safe upgrade flow for the Observal server stack.
+Safe upgrade flow for the Agentic Resource Registry server stack.
 
 > [!IMPORTANT]
 > When upgrading into the release that introduces complete-folder skill delivery, follow the [skill-folder rollout procedure](/skill-folder-rollout) instead of using the quick, standard, or blue/green instructions below unchanged. Those paths do not guarantee that old API and worker processes have stopped before the new init container runs PostgreSQL migrations. Keep folder delivery off, back up and rehearse the historical upgrade, and schedule a maintenance window to drain old processes **before** migration; enable delivery only after a homogeneous rollout and separate approval.
 
 ## Quick upgrade (recommended)
 
-If you installed Observal via `observal server start` (the embedded stack), the CLI handles upgrades automatically:
+If you installed Agentic Resource Registry via `observal server start` (the embedded stack), the CLI handles upgrades automatically:
 
 ```bash
 observal server upgrade --dry-run --output json
@@ -47,13 +47,13 @@ Add `-f docker-compose.observability.yml` and `--profile grafana` if those were 
 ## Before a manual upgrade
 
 1. **Back up `pgdata`** and **`apidata`**. See [Backup and restore](/self-hosting/backup-and-restore). Backing up `chdata` is nice-to-have; losing telemetry is painful but not catastrophic.
-2. **Read the [CHANGELOG](https://github.com/Observal/Observal/blob/main/CHANGELOG.md)** for the releases you're jumping across. Note any breaking changes.
+2. **Read the [CHANGELOG](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md)** for the releases you're jumping across. Note any breaking changes.
 3. **Pin the version you're upgrading to**: don't `git pull main` blindly. Check out a release tag or a known-good commit.
 
 ## Standard upgrade
 
 ```bash
-cd Observal
+cd AgenticResourceRegistry
 
 # Fetch and check out the target version
 git fetch --tags

@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/Observal/Observal/blob/main/.github/vex/observal.vex.json",
+  "@id": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/.github/vex/observal.vex.json",
   "author": "Observal Security <harisrini21@gmail.com>",
   "timestamp": "2026-05-31T00:00:00Z",
   "version": 1,

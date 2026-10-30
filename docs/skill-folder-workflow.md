@@ -70,7 +70,7 @@ observal registry skill import-folder NAMESPACE/SLUG --from-dir ./my-skill \
 ```
 
 The browser's **Import folder as next version** uses the same atomic endpoint.
-Supply the *entire* directory yourself. Observal does **not** fetch private Git
+Supply the *entire* directory yourself. Agentic Resource Registry does **not** fetch private Git
 contents for a purported file-by-file diff: reviewers see old Git source
 metadata and the complete new candidate. The old Git release remains installable
 until its successor passes review.

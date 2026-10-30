@@ -4,9 +4,9 @@
 title: "Open Collective copy"
 ---
 
-Paste-ready text for the Observal Open Collective settings. These can't be set from the repo, so copy each block by hand.
+Paste-ready text for the Agentic Resource Registry Open Collective settings. These can't be set from the repo, so copy each block by hand.
 
-Keep the full policy at `https://github.com/Observal/Observal/blob/main/docs/contributor-payments.md` in sync with block 1.
+Keep the full policy at `https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md` in sync with block 1.
 
 ## 1. Collective expense policy
 
@@ -24,7 +24,7 @@ Expenses are by invitation only. Uninvited expenses are rejected.
 - Paid by international wire every second Friday after approval, one wire per approved expense.
 - Expenses without verifiable evidence are rejected.
 
-Full policy: https://github.com/Observal/Observal/blob/main/docs/contributor-payments.md
+Full policy: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md
 ```
 
 ## 2. About
@@ -32,15 +32,15 @@ Full policy: https://github.com/Observal/Observal/blob/main/docs/contributor-pay
 Settings > Info > About.
 
 ```markdown
-Observal is the control plane and system of record for internal AI components. It gives organizations a discovery layer for their Skills, Agents, MCP servers, and other AI components, plus insight into how those components are actually used, so failures turn into feedback.
+Agentic Resource Registry (formerly Observal) is a self-hosted, Apache 2.0 registry for sharing coding agent resources. It gives organizations one place to share and discover their Skills, Agents, MCP servers, and other coding agent resources, plus insight into how those resources are actually used, so failures turn into feedback.
 
 ## How this collective works
 
 This collective is sponsored by Observal Inc. The money funds contributors and project infrastructure. The ledger is public. Paying contributors is by invitation only, see the expense policy. Payments are discretionary recognition for contributions, not a salary, and are not guaranteed.
 
-- Repository: https://github.com/Observal/Observal
+- Repository: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry
 - Docs: https://docs.observal.io
-- Contributor payments: https://github.com/Observal/Observal/blob/main/docs/contributor-payments.md
+- Contributor payments: https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/contributor-payments.md
 ```
 
 ## 3. Contribution policy

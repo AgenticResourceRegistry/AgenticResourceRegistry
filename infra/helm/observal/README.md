@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal
+# Agentic Resource Registry
 
-Observal is an agent-centric registry and observability platform for AI coding agents. This chart deploys the API, web UI, worker, PostgreSQL, ClickHouse, Redis, and supporting Kubernetes resources for self-hosted installations.
+Agentic Resource Registry is a self-hosted, Apache 2.0 registry for sharing coding agent resources. This chart deploys the API, web UI, worker, PostgreSQL, ClickHouse, Redis, and supporting Kubernetes resources for self-hosted installations.
 
 ## Install
 
@@ -11,7 +11,7 @@ After the hosted OCI chart has been published:
 
 ```bash
 kubectl create namespace observal
-helm install observal oci://ghcr.io/observal/charts/observal \
+helm install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
   --version <version> \
   --namespace observal
 ```
@@ -20,4 +20,4 @@ For production deployments, use managed PostgreSQL, ClickHouse, and Redis servic
 
 See the Kubernetes deployment guide for the full values reference and operational notes:
 
-https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md
+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md

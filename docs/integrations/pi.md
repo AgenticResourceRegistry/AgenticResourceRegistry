@@ -5,7 +5,7 @@
 title: "Pi"
 ---
 
-Pi is a first-class Observal harness integration. Observal can install Pi agent
+Pi is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install Pi agent
 profiles, configure MCP servers, expose skills, install the telemetry extension,
 and collect Pi session telemetry.
 
@@ -14,13 +14,13 @@ and collect Pi session telemetry.
 ## Overview
 
 Pi is harness-centric: the whole of Pi is one agent. There is no per-agent
-profile file the way Kiro or OpenCode have one. Instead, Observal writes the
+profile file the way Kiro or OpenCode have one. Instead, Agentic Resource Registry writes the
 agent's rules into `AGENTS.md`, which becomes Pi's system prompt, and writes
 MCP servers and skills next to it.
 
 To let several registry agents coexist, a user-scope `observal agent pull`
 writes each agent into its own profile directory under
-`~/.pi/agent/agents/{agent}/`. The Observal extension's `/agent` command swaps a
+`~/.pi/agent/agents/{agent}/`. The Agentic Resource Registry extension's `/agent` command swaps a
 profile into the live `~/.pi/agent/` location. A project-scope pull writes the
 rules straight to the project's `AGENTS.md`, which Pi reads directly.
 
@@ -43,7 +43,7 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 | Skills | `.pi/skills/{name}/SKILL.md` and `~/.pi/agent/skills/{name}/SKILL.md` |
 | Session parsing | Pi JSONL parser, including result-linked MCP invocation extraction |
 | MCP component insights | Observed calls for verified, uniquely matched MCP servers with `pi-mcp-adapter`; otherwise coverage reports unavailable attribution, not zero use |
-| Registry hooks | Command hooks on `PreToolUse` / `PostToolUse`, user scope, run by the Observal extension (see [Registry hooks](#registry-hooks)) |
+| Registry hooks | Command hooks on `PreToolUse` / `PostToolUse`, user scope, run by the Agentic Resource Registry extension (see [Registry hooks](#registry-hooks)) |
 | Hook component insights | Every run (with output, silent, failed, blocked), from the extension's receipts, for verified, uniquely matched hooks |
 | Telemetry | Pi session transcripts delivered through the extension; `observal reconcile --harness pi` re-pushes recent sessions found under the Pi agent directory's `sessions/` folder |
 | Model selection | Registry-backed Pi model catalog (`observal registry models list --harness pi`) |
@@ -52,7 +52,7 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -68,7 +68,7 @@ observal auth login
 ```
 
 This writes credentials to `~/.observal/config.json`. Unless you pass
-`--no-setup` or `--output json`, login then installs the bundled Observal skills
+`--no-setup` or `--output json`, login then installs the bundled Agentic Resource Registry skills
 into every detected harness (Pi counts once `~/.pi/` exists) and runs
 `observal doctor`, which warns if the Pi telemetry extension is missing or
 stale. A healthy install prints no Pi warning.
@@ -111,16 +111,10 @@ observal doctor patch --harness pi
 ```
 
 This writes the bundled extension to `~/.pi/agent/extensions/observal.ts` when
-it is missing, and refreshes a copy Observal recognises as its own when that
+it is missing, and refreshes a copy Agentic Resource Registry recognises as its own when that
 copy has fallen behind or been edited, recording the CLI version it came from
-in an adjacent `.observal-extension.json`. A file Observal did not write is
-reported and left alone.
-
-If `npm:observal-pi` is registered in `~/.pi/agent/settings.json`, that takes
-precedence: nothing is installed locally, and a local copy Observal recognises
-as its own is removed (kept as `observal.ts.bak`) so Pi does not load the
-extension twice. A local file Observal did not write is left alone. Restart Pi
-or run `/reload` afterwards.
+in an adjacent `.observal-extension.json`. A file Agentic Resource Registry did not write is
+reported and left alone. Restart Pi or run `/reload` afterwards.
 
 `doctor patch` refuses to run until `observal auth login` has written a server
 URL, although it does not contact the server.
@@ -152,8 +146,8 @@ observal doctor
 | Guidance files | `AGENTS.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` | `~/.pi/agent/AGENTS.md` |
 | Telemetry extension | – | `~/.pi/agent/extensions/observal.ts` |
 | Pi settings | – | `~/.pi/agent/settings.json` |
-| Observal credentials | `~/.observal/config.json` | `~/.observal/config.json` |
-| Observal lockfile | `~/.observal/lockfile.json` | `~/.observal/lockfile.json` |
+| Agentic Resource Registry credentials | `~/.observal/config.json` | `~/.observal/config.json` |
+| Agentic Resource Registry lockfile | `~/.observal/lockfile.json` | `~/.observal/lockfile.json` |
 | Acknowledged cursors | `~/.observal/sync_state.json` | `~/.observal/sync_state.json` |
 | Pending batches | `~/.observal/pi_session_outbox/` | `~/.observal/pi_session_outbox/` |
 
@@ -167,7 +161,7 @@ its 2.x releases read active `mcp.json` and its 3.x to 6.x releases read active
 `mcp-adapter.json`. Pulling an agent records an MCP-entry
 fingerprint from the generated profile, but **does not activate that profile**:
 use `/agent` or activate the project config before starting the session. Refresh
-the Observal extension with `observal doctor patch --harness pi` and restart Pi.
+the Agentic Resource Registry extension with `observal doctor patch --harness pi` and restart Pi.
 
 The extension fingerprints the active MCP entries, checks for conflicting
 definitions and unresolved imports, and sends verification status per pinned
@@ -215,7 +209,7 @@ Counts cover only verified-present skills. Pi and Claude Code record different e
 
 Pi has no native command-hook settings: its extension event handlers are the
 only way code runs around a tool call. Registry hooks therefore run inside the
-Observal extension, which reads one Observal-owned file per agent profile.
+Agentic Resource Registry extension, which reads one Agentic Resource Registry-owned file per agent profile.
 
 **Supported matrix.** Anything outside it is reported at pull time as not
 installed, never dropped silently, and is never counted.
@@ -271,11 +265,11 @@ output, stderr, the command and its arguments are never written to the
 transcript or uploaded. If the extension is loaded twice in one Pi process,
 only one copy runs each hook for a given call.
 
-**Trust boundary.** A receipt is written by Observal's extension through
+**Trust boundary.** A receipt is written by Agentic Resource Registry's extension through
 `pi.appendEntry()`. Model output and user text cannot create a custom entry,
 so typed or pasted text cannot produce hook evidence. Any other extension in
 the same Pi process can, however, call the same API and write a receipt that
-looks identical. Observal does not claim stronger attestation than that:
+looks identical. Agentic Resource Registry does not claim stronger attestation than that:
 hook runs on Pi are as trustworthy as the extensions you load. The server
 further requires that the receipt's tool-call id is a tool call in the same
 transcript and that its digest names exactly one verified hook in the
@@ -306,7 +300,7 @@ eligible. A session without a verified layer (for example the one in which
 ## Agent profiles and swapping
 
 Because Pi reads one active `AGENTS.md` and `skills/` directory, and the MCP
-adapter reads one active profile config, only one Observal agent can be active
+adapter reads one active profile config, only one Agentic Resource Registry agent can be active
 at a time. In user scope,
 `observal agent pull` does not touch the active files. It writes into the
 per-agent profile directory, and the extension's `/agent` command makes a
@@ -330,7 +324,7 @@ profile active:
    After reload, the new runtime checks the active-file hash and uploads its
    snapshot before recording `active_agent`. If reload fails, it attempts to
    restore the old files and keeps attribution unverified until recovery.
-   If Observal is unavailable or the user is logged out, local profile
+   If Agentic Resource Registry is unavailable or the user is logged out, local profile
    switching still works; an offline marker blocks attribution until a later
    session verifies the active files, uploads the snapshot, and records the
    agent binding. Other local profile switches remain available while offline.
@@ -358,12 +352,12 @@ profiles under `~/.pi/agent/agents/`.
 
 ## Extension spec
 
-Observal installs a TypeScript extension named `observal.ts`. It has no
+Agentic Resource Registry installs a TypeScript extension named `observal.ts`. It has no
 runtime dependencies beyond `node:*` built-ins and is fail-open: telemetry
 failures never interrupt Pi. Ingest and checkpoint calls time out after five
 seconds, and the layer-snapshot upload after ten.
 
-| Pi event | Observal use |
+| Pi event | Agentic Resource Registry use |
 |---|---|
 | `session_start` | Load config and cursors, load the active registry hooks, upload the layer snapshot, recover stale sessions on startup, show `● observal` in the footer |
 | `tool_call` | Run registry `PreToolUse` hooks; exit `2` blocks the call |
@@ -375,7 +369,7 @@ The extension also registers two commands, `/agent` and `/obs-sync`:
 
 | Command | Description |
 |---|---|
-| `/agent [name]` | Swap the active Observal agent profile |
+| `/agent [name]` | Swap the active Agentic Resource Registry agent profile |
 | `/obs-sync` | Show lines pushed and the server URL |
 | `/obs-sync flush` | Push pending lines now |
 | `/obs-sync config` | Show the config file path and server URL |
@@ -387,8 +381,8 @@ stale copies.
 
 ## Attribution
 
-Pi does not expose an Observal agent id in its session file. The extension
-resolves attribution from Observal's own state:
+Pi does not expose an Agentic Resource Registry agent id in its session file. The extension
+resolves attribution from Agentic Resource Registry's own state:
 
 1. `observal agent pull` records the agent name, id, version, scope, pull
    time, and directory under the `pi` harness in `~/.observal/lockfile.json`.
@@ -436,7 +430,7 @@ exporters' outbox; it does not count this directory.
 
 ## Agent profile format
 
-Observal writes the agent's rules as plain Markdown into `AGENTS.md`. Pi loads
+Agentic Resource Registry writes the agent's rules as plain Markdown into `AGENTS.md`. Pi loads
 that file as the system prompt, so the whole file is the agent:
 
 ```markdown
@@ -471,7 +465,7 @@ description: "Runs the project test suite"
 Run `pytest -q` from the project root.
 ```
 
-When Codex is also installed, the bundled Observal skills are written once to
+When Codex is also installed, the bundled Agentic Resource Registry skills are written once to
 the shared `~/.agents/skills/{name}/SKILL.md` location, which both harnesses
 read, instead of being duplicated under `~/.pi/agent/skills/`.
 
@@ -503,7 +497,7 @@ actually loaded by Pi; an installed package alone is not proof it was enabled.
 **The extension is shared per Pi install.** It is installed by `doctor patch`,
 not by each agent pull, and lives only in user scope.
 
-**Guidance files are scanned, with two exceptions.** Observal layers
+**Guidance files are scanned, with two exceptions.** Agentic Resource Registry layers
 `AGENTS.md`, `.pi/SYSTEM.md`, and `.pi/APPEND_SYSTEM.md` as context. Scanning
 and `observal agent pull` never rewrite the project's `.pi/SYSTEM.md` or
 `.pi/APPEND_SYSTEM.md`. A project-scope pull does write the project's

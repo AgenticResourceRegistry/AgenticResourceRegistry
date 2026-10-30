@@ -46,7 +46,7 @@ from schemas.agent import (  # noqa: TC001
 from services.agent_resolver import validate_component_ids
 from services.harness import generate_agent_config
 from services.harness.proxy import AgentVersionConfigProxy
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.review.cutover import submit_for_review
 from services.versioning import validate_semver
 
@@ -353,8 +353,10 @@ async def _create_agent_version(
         components = req.components
         external_mcps = ver.external_mcps
 
-    ver.required_capabilities = infer_required_features(_VersionProxy(), skill_listings=skill_listings_map)
-    ver.inferred_supported_harnesses = compute_supported_harnesses(ver.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(ver, _VersionProxy(), skill_listings=skill_listings_map)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     # Always build the snapshot from structured fields so caller-provided text
     # cannot drift from the version stored in the database.
@@ -379,9 +381,8 @@ async def _create_agent_version(
             row.id: PinnedListing(row, pinned[("mcp", row.id)]) if ("mcp", row.id) in pinned else row for row in rows
         }
 
-    # Pre-generate harness configs for supported_harnesses (the user-declared list).
-    # inferred_supported_harnesses is a compatibility analysis result used for display/filtering,
-    # but supported_harnesses is authoritative for which configs to generate.
+    # Pre-generate harness configs for supported_harnesses: the declared list, already narrowed
+    # to the harnesses that can run these components.
     harness_configs: dict = {}
     failed_harnesses: list[str] = []
     from services.model_resolver import resolve_model_for_harness
@@ -415,7 +416,7 @@ async def _create_agent_version(
     # Do NOT update latest_version_id - that happens on publication
     await db.commit()
 
-    warnings: list[str] = []
+    warnings: list[str] = list(harness_warnings)
     if pending_count > 0:
         warnings.append(f"This agent already has {pending_count} pending version(s)")
     if failed_harnesses:

@@ -5,7 +5,7 @@
 title: "Cursor"
 ---
 
-Cursor is a first-class Observal harness integration. Observal can install Cursor agents,
+Cursor is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install Cursor agents,
 configure MCP servers, and collect Cursor session telemetry.
 
 ---
@@ -34,7 +34,7 @@ and agent profiles are managed under the `.cursor` configuration directory.
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -85,7 +85,7 @@ Cursor MCP configs use the `mcpServers` key.
 
 ### Event map
 
-| Observal event     | Cursor event         |
+| Agentic Resource Registry event     | Cursor event         |
 | ------------------ | -------------------- |
 | `PreToolUse`       | `preToolUse`         |
 | `PostToolUse`      | `postToolUse`        |

@@ -6,7 +6,7 @@
 title: "Hooks specification"
 ---
 
-The schema Observal uses for hook definitions -- both the registry hook type (`observal registry hook`) and hooks wired into harness configs by `observal agent pull` / `observal doctor patch`.
+The schema Agentic Resource Registry uses for hook definitions -- both the registry hook type (`observal registry hook`) and hooks wired into harness configs by `observal agent pull` / `observal doctor patch`.
 
 Claude Code session hooks currently use `HOOKS_SPEC_VERSION = "13"` in `observal_cli/harness_specs/claude_code_hooks_spec.py`. Other harnesses have their own hook specs.
 
@@ -14,7 +14,7 @@ Claude Code session hooks currently use `HOOKS_SPEC_VERSION = "13"` in `observal
 
 Two distinct things share the name "hook":
 
-1. **Registry hooks**: packaged, versioned hook definitions in the Observal registry. Install them via `observal registry hook install`.
+1. **Registry hooks**: packaged, versioned hook definitions in the Agentic Resource Registry registry. Install them via `observal registry hook install`.
 2. **harness hooks**: entries in `~/.claude/settings.json`, `.kiro/agents/<name>.json`, etc. These are written by `observal agent pull` and `observal doctor patch`.
 
 Both use the same event vocabulary.
@@ -62,7 +62,7 @@ Source: `observal_cli/constants.py:VALID_HOOK_EXECUTION_MODES`.
 
 Telemetry is delivered by the session push hook, which reads the local harness transcript and sends session records to `/api/v1/ingest/session`. It uses the CLI configuration in `~/.observal/config.json`; it does not require a `curl` wrapper, a telemetry environment variable, or an API key header.
 
-For Claude Code, `observal doctor patch --harness claude-code` writes **two** Observal-managed command hooks into `~/.claude/settings.json`: `UserPromptSubmit` and `Stop`. Each runs the installed Python interpreter with `-m observal_cli.hooks.session_push --harness claude-code`. Later patches recognize Observal's own hooks by their command, so user-authored hooks are left alone.
+For Claude Code, `observal doctor patch --harness claude-code` writes **two** Agentic Resource Registry-managed command hooks into `~/.claude/settings.json`: `UserPromptSubmit` and `Stop`. Each runs the installed Python interpreter with `-m observal_cli.hooks.session_push --harness claude-code`. Later patches recognize Agentic Resource Registry's own hooks by their command, so user-authored hooks are left alone.
 
 For Kiro, the current IDE/CLI reads `.kiro/hooks/observal.json` with `UserPromptSubmit` and `Stop` triggers. Legacy CLI 2.x (without the IDE) uses inline `userPromptSubmit` and `stop` hooks on its agent profile. Both use `-m observal_cli.hooks.session_push --harness kiro`, not `curl`. See `observal_cli/harness_specs/kiro_hooks_spec.py` for the exact formats.
 
@@ -70,7 +70,7 @@ Other harnesses have their own capability-specific specs. Use `observal doctor` 
 
 ## Event name mapping (Claude Code ↔ Kiro)
 
-Legacy Kiro CLI 2.x inline hooks use camelCase / lowercase event names; current standalone Kiro hooks use PascalCase triggers, like Claude Code. Observal maps the legacy names as follows:
+Legacy Kiro CLI 2.x inline hooks use camelCase / lowercase event names; current standalone Kiro hooks use PascalCase triggers, like Claude Code. Agentic Resource Registry maps the legacy names as follows:
 
 | Claude Code | Kiro |
 | --- | --- |

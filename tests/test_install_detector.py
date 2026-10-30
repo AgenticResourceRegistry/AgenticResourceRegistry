@@ -240,7 +240,7 @@ class TestUpgradeCommand:
     def test_curl_command_uses_installer(self):
         info = InstallInfo(InstallMethod.BINARY, Path("/fake/observal"), True, "curl")
         assert upgrade_command("1.2.0", info) == (
-            "curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh "
+            "curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh "
             "| bash -s -- --version v1.2.0"
         )
 

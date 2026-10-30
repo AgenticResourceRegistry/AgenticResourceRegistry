@@ -370,7 +370,7 @@ async def test_agent_install_returns_pinned_mcp_version_and_generator_alias(monk
         team_id=None,
         name="Agent",
         model_name="",
-        latest_version=SimpleNamespace(components=[component], version="2.0.0"),
+        latest_version=SimpleNamespace(components=[component], version="2.0.0", supported_harnesses=[]),
     )
     listing = SimpleNamespace(
         id=mcp_id,

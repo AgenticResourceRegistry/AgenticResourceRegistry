@@ -920,9 +920,61 @@ def test_agent_build_validates_every_component_resource(tmp_path, monkeypatch):
         call("/api/v1/prompts/prompt-1"),
         call("/api/v1/sandboxes/sandbox-1"),
     ]
-    scope_payload = {"components": components, "visibility": "team", "team_id": "team-1"}
+    scope_payload = {
+        "components": components,
+        "supported_harnesses": ["kiro"],
+        "visibility": "team",
+        "team_id": "team-1",
+    }
     target.assert_called_once_with(scope_payload, "platform", "team")
     post.assert_called_once_with("/api/v1/agents/validate", scope_payload)
+
+
+def test_agent_build_warns_about_harnesses_publish_leaves_out(tmp_path, monkeypatch):
+    _write_agent_yaml(tmp_path, supported_harnesses=["cursor", "kiro"])
+    warning = (
+        "cursor has no skills support, which the components need, so publish leaves it out of supported harnesses."
+    )
+    monkeypatch.setattr(agent.client, "get", Mock(return_value={"id": "found"}))
+    monkeypatch.setattr(
+        agent.client,
+        "post",
+        Mock(
+            return_value={
+                "valid": True,
+                "issues": [{"severity": "warning", "message": warning}],
+                "supported_harnesses": ["kiro"],
+            }
+        ),
+    )
+    monkeypatch.setattr(agent.client, "add_publish_target", Mock(side_effect=_publish_target))
+
+    shown = _invoke("build", "--dir", str(tmp_path))
+    built = _invoke("build", "--dir", str(tmp_path), "--output", "json")
+
+    assert shown.exit_code == 0, shown.output
+    assert "cursor has no skills support" in shown.output
+    assert "All components valid" in shown.output
+    result = json.loads(built.output)
+    assert result["valid"] is True
+    assert result["supported_harnesses"] == ["kiro"]
+
+
+def test_agent_build_fails_when_no_declared_harness_can_run_the_agent(tmp_path, monkeypatch):
+    _write_agent_yaml(tmp_path, supported_harnesses=["cursor"])
+    error = "cursor has no skills support, which the components need, and no declared harness can run them."
+    monkeypatch.setattr(agent.client, "get", Mock(return_value={"id": "found"}))
+    monkeypatch.setattr(
+        agent.client,
+        "post",
+        Mock(return_value={"valid": False, "issues": [{"severity": "error", "message": error}]}),
+    )
+    monkeypatch.setattr(agent.client, "add_publish_target", Mock(side_effect=_publish_target))
+
+    result = _invoke("build", "--dir", str(tmp_path))
+
+    assert result.exit_code == 7
+    assert "cursor has no skills support" in result.output
 
 
 def test_agent_publish_rejects_incompatible_draft_modes(monkeypatch):

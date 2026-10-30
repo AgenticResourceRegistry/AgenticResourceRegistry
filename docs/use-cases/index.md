@@ -4,7 +4,7 @@
 title: "Use Cases"
 ---
 
-Observal solves five concrete problems in the AI-agent lifecycle. Each page below is written as a playbook: what the problem is, how Observal addresses it, and the exact commands to run.
+Agentic Resource Registry solves five concrete problems in the AI-agent lifecycle. Each page below is written as a playbook: what the problem is, how Agentic Resource Registry addresses it, and the exact commands to run.
 
 | If you need to... | Read |
 | --- | --- |
@@ -28,4 +28,4 @@ flowchart LR
     share -->|governance + reuse| registry
 ```
 
-You typically adopt Observal in that order: **observe** first (low-risk, instant value), then **debug**, then **share**, and finally **run a team registry** once you have enough published agents to justify governance.
+You typically adopt Agentic Resource Registry in that order: **observe** first (low-risk, instant value), then **debug**, then **share**, and finally **run a team registry** once you have enough published agents to justify governance.

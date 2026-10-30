@@ -3,7 +3,7 @@
 
 # Terraform state bootstrap
 
-One-time setup that creates the S3 bucket and DynamoDB lock table the main Observal module uses for remote state. Run this **once per AWS account**, before the first `terraform init` in `infra/terraform/aws/`.
+One-time setup that creates the S3 bucket and DynamoDB lock table the main Agentic Resource Registry module uses for remote state. Run this **once per AWS account**, before the first `terraform init` in `infra/terraform/aws/`.
 
 ## What it creates
 

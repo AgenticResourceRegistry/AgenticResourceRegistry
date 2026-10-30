@@ -6,7 +6,7 @@
 title: "Requirements"
 ---
 
-Minimum and recommended specs for running the Observal stack.
+Minimum and recommended specs for running the Agentic Resource Registry stack.
 
 ## Hardware
 

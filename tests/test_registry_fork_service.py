@@ -19,6 +19,7 @@ from models.base import Base
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.user import UserRole
+from services import harness_capability_inference as inference
 from services import registry_fork as forks
 
 
@@ -305,8 +306,8 @@ async def test_fork_agent_creates_independent_draft_and_rebuilds_snapshot(monkey
     monkeypatch.setattr(forks, "attach_pinned_components", pinned)
     monkeypatch.setattr(forks, "lock_agent_version", AsyncMock())
     monkeypatch.setattr(forks, "build_yaml_snapshot", AsyncMock(return_value="snapshot"))
-    monkeypatch.setattr(forks, "infer_required_features", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(forks, "compute_supported_harnesses", lambda *_args: ["kiro"])
+    monkeypatch.setattr(inference, "infer_required_features", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(inference, "compute_supported_harnesses", lambda *_args: ["kiro"])
     db = MagicMock()
     db.add = MagicMock()
 
@@ -377,8 +378,8 @@ async def test_unapproved_source_pin_is_replaced_with_approved_release(monkeypat
     monkeypatch.setattr(forks, "attach_pinned_components", pin)
     monkeypatch.setattr(forks, "lock_agent_version", AsyncMock())
     monkeypatch.setattr(forks, "build_yaml_snapshot", AsyncMock(return_value="yaml"))
-    monkeypatch.setattr(forks, "infer_required_features", lambda *_a, **_kw: [])
-    monkeypatch.setattr(forks, "compute_supported_harnesses", lambda *_a: [])
+    monkeypatch.setattr(inference, "infer_required_features", lambda *_a, **_kw: [])
+    monkeypatch.setattr(inference, "compute_supported_harnesses", lambda *_a: ["kiro"])
     db = MagicMock()
     db.flush = AsyncMock(
         side_effect=lambda: [setattr(c.args[0], "id", c.args[0].id or uuid.uuid4()) for c in db.add.call_args_list]

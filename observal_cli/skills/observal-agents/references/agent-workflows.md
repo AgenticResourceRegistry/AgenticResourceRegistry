@@ -46,6 +46,8 @@ observal agent pull NAMESPACE/AGENT_SLUG --harness kiro --no-prompt --dir . --ou
 observal agent pull NAMESPACE/AGENT_SLUG --harness claude-code --scope project --dry-run --no-prompt --output json
 ```
 
+Pull only for a harness in `supported_harnesses` of the version being pulled (the project pin if there is one, else the latest; `observal agent show` lists a version's harnesses). An empty list allows any harness. For any other harness the pull fails and lists the supported ones; tell the user instead of retrying. Add `--allow-unsupported-harness` only when the user explicitly accepts a partial install, and report its warning.
+
 JSON pull requires `--no-prompt` and is appropriate only when no secret values are required. If required values are missing, it exits nonzero with `error.result.needs_input: true` before installing anything. The `--env` and `--header` options expose values in shell history and process arguments, so use them only for non-secret configuration.
 
 For credentials or tokens, omit `--no-prompt` and JSON output, then enter values through the interactive prompts. This keeps values out of process arguments. Treat generated harness configuration as sensitive because the harness may store those values.
@@ -123,6 +125,8 @@ observal agent add skill COMPONENT_UUID --dir ./my-agent --output json
 observal agent build --dir ./my-agent --output json
 observal agent publish --dir ./my-agent --output json
 ```
+
+`agent build` also checks `supported_harnesses` against what the components need. A declared harness that cannot run them, such as Cursor for an Agent with a skill folder (Cursor has no skills support), comes back as a warning, and publish leaves it out. JSON output lists the harnesses that will be stored in `supported_harnesses`. If no declared harness can run the components, build and publish fail; declare one the error names. Report dropped harnesses to the user.
 
 Use `--draft` to save without review and `--submit AGENT_UUID --message 'Address feedback'` to submit an existing draft or push a revision. The response contains `review_number` and `review_url`: open `observal review show N`, read `observal review threads N`, address feedback and resubmit; approval and publication are separate decisions. Team publication uses an explicit target:
 

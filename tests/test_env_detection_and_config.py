@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for env var detection (analyzer + validator), config generation with docker,
@@ -522,6 +523,28 @@ class TestGenerateConfigDocker:
         cmd = cfg["command"]
         assert "docker" in cmd
         assert "ghcr.io/github/github-mcp-server" in cmd
+
+    def test_claude_stdio_substitution_keeps_dummy_credential_after_separator(self):
+        from services.config_generator import generate_config
+
+        secret = "DUMMY_SECRET_FOR_TEST"
+        listing = self._make_listing(
+            command="npx", args=["srv", "--token=$TOKEN"], environment_variables=[{"name": "TOKEN", "required": True}]
+        )
+        command = generate_config(listing, "claude-code", env_values={"TOKEN": secret})["command"]
+        assert command[command.index("--") + 1 :] == ["npx", "srv", f"--token={secret}"]
+        assert ["-e", f"TOKEN={secret}"] == command[command.index("-e") : command.index("-e") + 2]
+
+    def test_claude_remote_header_keeps_dummy_credential(self):
+        from services.config_generator import generate_config
+
+        secret = "DUMMY_SECRET_FOR_TEST"
+        listing = self._make_listing(
+            command=None, url="https://example.test/mcp", transport="sse", environment_variables=[]
+        )
+        listing.headers = [{"name": "Authorization", "required": True}]
+        command = generate_config(listing, "claude-code", header_values={"Authorization": secret})["command"]
+        assert ["-H", f"Authorization: {secret}"] == command[command.index("-H") : command.index("-H") + 2]
 
 
 # ═══════════════════════════════════════════════════════════

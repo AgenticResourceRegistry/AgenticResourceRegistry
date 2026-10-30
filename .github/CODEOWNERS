@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Default ownership. Haz3-jolt remains an owner for every repository path.
-* @Haz3-jolt @Observal/core
+* @Haz3-jolt @AgenticResourceRegistry/core
 
 # Repository policy, automation, and deployment require an administrator.
-/.github/ @Haz3-jolt @Observal/admin
-/docker/ @Haz3-jolt @Observal/admin
-/infra/ @Haz3-jolt @Observal/admin
-/grafana/ @Haz3-jolt @Observal/admin
-/prometheus.yml @Haz3-jolt @Observal/admin
-/SECURITY.md @Haz3-jolt @Observal/admin
+/.github/ @Haz3-jolt @AgenticResourceRegistry/admin
+/docker/ @Haz3-jolt @AgenticResourceRegistry/admin
+/infra/ @Haz3-jolt @AgenticResourceRegistry/admin
+/grafana/ @Haz3-jolt @AgenticResourceRegistry/admin
+/prometheus.yml @Haz3-jolt @AgenticResourceRegistry/admin
+/SECURITY.md @Haz3-jolt @AgenticResourceRegistry/admin

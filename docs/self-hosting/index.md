@@ -6,7 +6,7 @@
 title: "Overview"
 ---
 
-Run Observal entirely on your own infrastructure. No SaaS, no egress, every byte of telemetry stays inside your network.
+Run Agentic Resource Registry entirely on your own infrastructure. No SaaS, no egress, every byte of telemetry stays inside your network.
 
 For a packaged single-node install, `install-server.sh` generates restricted credential files under `secrets/`, records their `NAME_FILE` paths in `.env`, and binds host ports to loopback. It prompts when a terminal is available and applies the same safe defaults automatically in headless CI or agent environments. The source Compose path remains available for development and accepts direct `.env` values.
 
@@ -53,7 +53,7 @@ All services run on a private `observal-net` bridge network. Named volumes (`pgd
 
 Choose the deployment model that fits your team:
 
-|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
+|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
 | ------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | **How**            | Docker Compose on one VM             | Official Helm chart                                                                                 | Terraform on AWS or GCP               |
 | **Best for**       | ≤50 users, internal tools, POCs      | Cloud-native teams, existing K8s infra                                                              | Enterprise, SLA-bound, 50+ users      |
@@ -66,7 +66,7 @@ Choose the deployment model that fits your team:
 | If you want to...                | Read                                                                                                                     |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Deploy on a single VM (simplest) | [Single-node deployment](/self-hosting/single-node-deploy)                                                                          |
-| Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/Observal/Observal/blob/main/docs/self-hosting/kubernetes-helm.md) |
+| Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) |
 | Deploy a production HA stack     | [Production deployment](/self-hosting/production-deploy)                                                                            |
 | Deploy on AWS specifically       | [AWS deployment with Terraform](/self-hosting/aws-terraform)                                                                        |
 | Deploy on GCP specifically       | [GCP deployment with Terraform](/self-hosting/gcp-terraform)                                                                        |
@@ -75,7 +75,7 @@ Choose the deployment model that fits your team:
 
 | If you want to...                     | Read                                        |
 | ------------------------------------- | ------------------------------------------- |
-| Confirm your machine can run Observal | [Requirements](/self-hosting/requirements)             |
+| Confirm your machine can run Agentic Resource Registry | [Requirements](/self-hosting/requirements)             |
 | Get the stack running locally for dev | [Docker Compose setup](/self-hosting/docker-compose)   |
 | Know every env var that matters       | [Configuration](/self-hosting/configuration)           |
 | See every port and volume at a glance | [Ports and volumes](/self-hosting/ports-and-volumes)   |
@@ -88,7 +88,7 @@ Choose the deployment model that fits your team:
 
 ## Production checklist
 
-Before putting Observal in front of real users:
+Before putting Agentic Resource Registry in front of real users:
 
 1. **Protect `SECRET_KEY`**: server-package setup generates it in `secrets/`; source deployments must set a strong direct value or `SECRET_KEY_FILE`.
 2. **Protect database passwords**: server-package setup generates restricted PostgreSQL and ClickHouse credential files; source deployments must replace the `.env.example` defaults.

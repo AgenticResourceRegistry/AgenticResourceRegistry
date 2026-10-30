@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Stable error contract for CLI users, scripts, and agents."""
@@ -326,6 +327,27 @@ class _BoundaryPartialExitError(Exception):
         self.error = error
 
 
+def http_status_category(status: int) -> ErrorCategory:
+    """Map HTTP failures to the stable CLI error category."""
+    return (
+        ErrorCategory.AUTH
+        if status == 401
+        else ErrorCategory.PERMISSION
+        if status == 403
+        else ErrorCategory.NOT_FOUND
+        if status == 404
+        else ErrorCategory.CONFLICT
+        if status == 409
+        else ErrorCategory.VERSION
+        if status == 426
+        else ErrorCategory.RATE_LIMIT
+        if status == 429
+        else ErrorCategory.UNAVAILABLE
+        if status >= 500
+        else ErrorCategory.VALIDATION
+    )
+
+
 class ErrorHandlingGroup(TyperGroup):
     """Root command group that enforces the CLI error contract."""
 
@@ -401,23 +423,7 @@ class ErrorHandlingGroup(TyperGroup):
             raise
         except httpx.HTTPStatusError as error:
             status = error.response.status_code
-            category = (
-                ErrorCategory.AUTH
-                if status == 401
-                else ErrorCategory.PERMISSION
-                if status == 403
-                else ErrorCategory.NOT_FOUND
-                if status == 404
-                else ErrorCategory.CONFLICT
-                if status == 409
-                else ErrorCategory.VERSION
-                if status == 426
-                else ErrorCategory.RATE_LIMIT
-                if status == 429
-                else ErrorCategory.UNAVAILABLE
-                if status >= 500
-                else ErrorCategory.VALIDATION
-            )
+            category = http_status_category(status)
             failure = CliError(
                 category,
                 f"The server rejected the operation with HTTP {status}.",

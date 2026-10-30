@@ -1,6 +1,7 @@
 {
   "name": "observal-pi",
-  "version": "1.16.0-dev.0",
+  "private": true,
+  "version": "1.17.0-dev.0",
   "type": "module",
   "description": "Observal session telemetry for Pi \u2014 zero-dependency extension that pushes session traces to your Observal server",
   "keywords": [
@@ -13,7 +14,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Observal/Observal.git",
+    "url": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git",
     "directory": "packages/pi-extension"
   },
   "pi": {

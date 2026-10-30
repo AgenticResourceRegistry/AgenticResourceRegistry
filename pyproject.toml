@@ -10,8 +10,8 @@
 
 [project]
 name = "observal-cli"
-version = "1.16.0-dev.0"
-description = "Observal MCP Server Registry & Agent Registry CLI"
+version = "1.17.0-dev.0"
+description = "CLI for Agentic Resource Registry, a self-hosted, Apache 2.0 registry for sharing coding agent resources"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -49,10 +49,10 @@ classifiers = [
 migrate = ["pyarrow>=15.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/Observal/Observal"
-Repository = "https://github.com/Observal/Observal"
-Changelog = "https://github.com/Observal/Observal/blob/main/CHANGELOG.md"
-Issues = "https://github.com/Observal/Observal/issues"
+Homepage = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
+Repository = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
+Changelog = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md"
+Issues = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues"
 
 [project.scripts]
 observal = "observal_cli.main:app"

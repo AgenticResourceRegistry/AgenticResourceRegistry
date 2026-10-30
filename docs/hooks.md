@@ -206,7 +206,7 @@ observal agent pull safe-coder --harness claude-code
 
 The registry maps canonical event names to each harness's format:
 
-| Observal Event | Claude Code | Cursor | Kiro | Codex CLI |
+| Agentic Resource Registry Event | Claude Code | Cursor | Kiro | Codex CLI |
 |----------------|-------------|--------|------|-----------|
 | `PreToolUse` | `PreToolUse` | `preToolUse` | `preToolUse` | `pre_tool_use` |
 | `PostToolUse` | `PostToolUse` | `postToolUse` | `postToolUse` | `post_tool_use` |

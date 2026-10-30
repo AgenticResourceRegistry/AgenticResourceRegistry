@@ -4,21 +4,21 @@
 title: "Setup guide"
 ---
 
-Connect your machine to Observal with two commands. It takes about two minutes and does not need Python or Docker.
+Connect your machine to Agentic Resource Registry with two commands. It takes about two minutes and does not need Python or Docker.
 
 ## 1. Run the two commands for your OS
 
 **macOS / Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 observal auth login --server https://internal.observal.io
 ```
 
 **Windows** (in PowerShell, not Command Prompt)
 
 ```powershell
-irm https://raw.githubusercontent.com/Observal/Observal/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
 observal auth login --server https://internal.observal.io
 ```
 
@@ -29,7 +29,7 @@ The first command installs the `observal` CLI. The second connects it to the ser
 1. **Login method**: pick the one your team uses. If unsure, choose **Web sign-in** and approve the code in your browser.
 2. **`Fix all warnings? (configures telemetry and installs AI skills for detected harnesses) [Y/n]`**: answer **Y** (or press Enter).
 
-   Login installs the bundled Observal skills, and the Pi extension when Pi is detected, before this prompt. Answering **Y** also applies the supported telemetry hooks for your detected coding tools. If you answer **n**, other harnesses may still need instrumentation before sessions appear. Run `observal doctor` to check, then `observal doctor patch --all-harnesses` to install missing hooks.
+   Login installs the bundled Agentic Resource Registry skills, and the Pi extension when Pi is detected, before this prompt. Answering **Y** also applies the supported telemetry hooks for your detected coding tools. If you answer **n**, other harnesses may still need instrumentation before sessions appear. Run `observal doctor` to check, then `observal doctor patch --all-harnesses` to install missing hooks.
 
 3. Restart any coding tool that was open during setup so it picks up the changes.
 

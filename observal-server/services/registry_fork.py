@@ -28,7 +28,7 @@ from services import dynamic_settings
 from services.agent_lock import _pinned_row, _versions_for, attach_pinned_components, lock_agent_version
 from services.agent_resolver import validate_component_ids
 from services.agent_snapshot import build_yaml_snapshot
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.redis import get_redis
 from services.registry_namespace import identity_exists
 from services.skill_bundle import needs_bundle_delivery
@@ -350,8 +350,10 @@ async def fork_agent(db: AsyncSession, source: Agent, spec: ForkRequestSpec, *, 
             ]
             external_mcps = version.external_mcps
 
-        version.required_capabilities = infer_required_features(_Proxy(), skill_listings=skills)
-        version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+        try:
+            warnings.extend(apply_harness_inference(version, _Proxy(), skill_listings=skills))
+        except NoCompatibleHarnessError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         await db.flush()
         await lock_agent_version(db, agent, version)
         version.yaml_snapshot = await build_yaml_snapshot(version, db)

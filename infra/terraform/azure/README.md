@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal - Azure Terraform Module
+# Agentic Resource Registry - Azure Terraform Module
 
-Deploy Observal to Azure using Container Apps, PostgreSQL Flexible Server, Azure Cache for Redis, and a self-hosted ClickHouse VM.
+Deploy Agentic Resource Registry to Azure using Container Apps, PostgreSQL Flexible Server, Azure Cache for Redis, and a self-hosted ClickHouse VM.
 
 ## Architecture
 
@@ -45,8 +45,8 @@ terraform apply -var-file=staging.tfvars
 # 3. Push images to ACR (after first apply creates the registry)
 ACR=$(terraform output -raw acr_login_server)
 az acr login --name $ACR
-docker tag ghcr.io/observal/observal-api:latest $ACR/observal-api:latest
-docker tag ghcr.io/observal/observal-web:latest $ACR/observal-web:latest
+docker tag ghcr.io/agenticresourceregistry/observal-api:latest $ACR/observal-api:latest
+docker tag ghcr.io/agenticresourceregistry/observal-web:latest $ACR/observal-web:latest
 docker push $ACR/observal-api:latest
 docker push $ACR/observal-web:latest
 

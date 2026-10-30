@@ -155,7 +155,7 @@ check_ghcr_image() {
   local image="$1"
   local tag="$2"
   # Use the GitHub container registry API (anonymous, no auth needed for public images)
-  local url="https://ghcr.io/v2/observal/$image/manifests/$tag"
+  local url="https://ghcr.io/v2/agenticresourceregistry/$image/manifests/$tag"
   local status
   status=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
@@ -166,13 +166,13 @@ check_ghcr_image() {
 TAG="${IMAGE_TAG:-latest}"
 for img in observal-api observal-web; do
   if check_ghcr_image "$img" "$TAG"; then
-    pass "ghcr.io/observal/$img:$TAG exists"
+    pass "ghcr.io/agenticresourceregistry/$img:$TAG exists"
   else
     # Try with token auth. Python performs the HTTP fetch + JSON parse directly
     # so no remote content is piped into an interpreter (Scorecard supply-chain check).
     TOKEN=$(GHCR_IMG="$img" python3 -c 'import json,os,urllib.request
 try:
-    url = "https://ghcr.io/token?scope=repository:observal/" + os.environ["GHCR_IMG"] + ":pull"
+    url = "https://ghcr.io/token?scope=repository:agenticresourceregistry/" + os.environ["GHCR_IMG"] + ":pull"
     with urllib.request.urlopen(url, timeout=10) as r:
         print(json.load(r).get("token", ""))
 except Exception:
@@ -182,15 +182,15 @@ except Exception:
       status=$(curl -s -o /dev/null -w "%{http_code}" \
         -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         -H "Authorization: Bearer $TOKEN" \
-        "https://ghcr.io/v2/observal/$img/manifests/$TAG" 2>/dev/null)
+        "https://ghcr.io/v2/agenticresourceregistry/$img/manifests/$TAG" 2>/dev/null)
       if [ "$status" = "200" ]; then
-        pass "ghcr.io/observal/$img:$TAG exists"
+        pass "ghcr.io/agenticresourceregistry/$img:$TAG exists"
       else
-        fail "ghcr.io/observal/$img:$TAG not found (HTTP $status)"
+        fail "ghcr.io/agenticresourceregistry/$img:$TAG not found (HTTP $status)"
         info "Check that a release with this tag exists, or use 'latest'"
       fi
     else
-      warn "Cannot verify ghcr.io/observal/$img:$TAG (auth required or network issue)"
+      warn "Cannot verify ghcr.io/agenticresourceregistry/$img:$TAG (auth required or network issue)"
     fi
   fi
 done
@@ -201,7 +201,7 @@ section "5. Release Tarball"
 if [ "$TAG" = "latest" ]; then
   pass "image_tag=latest: embedded configs used (no tarball needed)"
 else
-  TARBALL_URL="https://github.com/Observal/Observal/releases/download/v${TAG}/observal-server-v${TAG}.tar.gz"
+  TARBALL_URL="https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/releases/download/v${TAG}/observal-server-v${TAG}.tar.gz"
   HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L "$TARBALL_URL" 2>/dev/null)
   if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "302" ]; then
     pass "Release tarball v$TAG exists"

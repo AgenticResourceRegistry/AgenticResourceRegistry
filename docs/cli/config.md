@@ -34,7 +34,7 @@ observal config set server_url https://observal.example.com
 observal config set timeout 60 --output json
 observal config set update_check false
 observal config set update_check_interval 86400
-observal config set update_check_repo Observal/Observal
+observal config set update_check_repo AgenticResourceRegistry/AgenticResourceRegistry
 ```
 
 Only these user-managed keys are accepted:

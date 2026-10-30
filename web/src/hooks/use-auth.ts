@@ -7,7 +7,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter, useLocation } from "@tanstack/react-router";
-import { auth, setUserRole, getUserRole, clearSession, refreshAccessTokenWithReason } from "@/lib/api";
+import { auth, setUserRole, getUserRole, clearSession, refreshAccessTokenWithReason, refreshIsForAnotherAccount } from "@/lib/api";
 import { currentPathAsNext } from "@/lib/safe-next";
 
 function isNetworkError(err: unknown): boolean {
@@ -26,7 +26,8 @@ function getAuthSnapshot() {
   if (key) return role || "pending";
   // No access token in sessionStorage, but refresh token may exist (new tab scenario).
   // Mark as "refreshing" so the guard attempts a silent refresh before redirecting.
-  const hasRefresh = !!localStorage.getItem("observal_refresh_token");
+  // A refresh token for another account is not this tab's to use: treat the tab as signed out.
+  const hasRefresh = !!localStorage.getItem("observal_refresh_token") && !refreshIsForAnotherAccount();
   return hasRefresh ? "refreshing" : "";
 }
 
@@ -35,7 +36,7 @@ function getServerSnapshot() {
 }
 
 function retryUntilSettled(
-  attemptRequest: () => Promise<"ok" | "rejected" | "network_error">,
+  attemptRequest: () => Promise<"ok" | "rejected" | "network_error" | "account_changed">,
   { onSuccess, onRejected, onNetworkError }: {
     onSuccess?: () => void;
     onRejected?: () => void;
@@ -58,6 +59,8 @@ function retryUntilSettled(
       window.dispatchEvent(new Event("storage"));
     } else if (result === "rejected") {
       clearSession();
+      onRejected?.();
+    } else if (result === "account_changed") {
       onRejected?.();
     } else {
       onNetworkError?.();

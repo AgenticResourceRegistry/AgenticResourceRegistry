@@ -8,7 +8,7 @@
 title: "Installation"
 ---
 
-Observal has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
+Agentic Resource Registry has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
 
 ## Install the server
 
@@ -19,7 +19,7 @@ The server runs as a Docker Compose stack (API, web UI, PostgreSQL, ClickHouse, 
 **One-line install:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install-server.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
 ```
 
 This downloads a config package, runs guided setup (domain, secrets, ports), pulls container images from GHCR, and starts the full stack.
@@ -27,7 +27,7 @@ This downloads a config package, runs guided setup (domain, secrets, ports), pul
 **From source** (for contributors):
 
 ```bash
-git clone https://github.com/Observal/Observal.git && cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
 cp .env.example .env
 make up
 ```
@@ -43,7 +43,7 @@ The CLI is what you use to log in, instrument harness configs, pull agents, and 
 The standalone binary is the simplest way to install. No Python required.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
 This downloads the latest release binary for your platform and places it on your `PATH`.
@@ -89,8 +89,8 @@ uv tool install 'observal-cli[migrate]'
 ## Install from source (for contributors)
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
 uv tool install --editable .
 ```
 
@@ -101,7 +101,7 @@ The Python package provides three entry points:
 | Command                | Purpose                                                  |
 | ---------------------- | -------------------------------------------------------- |
 | `observal`             | The main CLI                                             |
-| `observal-sandbox-run` | Sandbox runner invoked by Observal sandboxes             |
+| `observal-sandbox-run` | Sandbox runner invoked by Agentic Resource Registry sandboxes             |
 | `observal-sandbox-mcp` | MCP adapter used by sandbox execution                   |
 
 You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.

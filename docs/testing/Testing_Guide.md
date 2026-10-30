@@ -5,7 +5,7 @@
 title: "Testing Guide"
 ---
 
-This guide defines the pattern for new Python tests in Observal. The current test suite has several styles because it grew over time. Do not rewrite old tests only for style. New tests and touched files should move toward this pattern when it keeps the diff focused.
+This guide defines the pattern for new Python tests in Agentic Resource Registry. The current test suite has several styles because it grew over time. Do not rewrite old tests only for style. New tests and touched files should move toward this pattern when it keeps the diff focused.
 
 ## Goals
 

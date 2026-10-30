@@ -335,7 +335,7 @@ def _record_capability_use(
             version=version,
         )
     except Exception as exc:
-        optic.debug("capability lock not updated for {} {}: {}", kind, component_id, exc)
+        optic.debug("capability lock not updated (type={})", type(exc).__name__)
 
 
 @_locked_mutation
@@ -367,7 +367,7 @@ def upsert_agent(
     ``hook_on_unknown`` and ``hook_gate_agent`` (the agent name its settings
     groups are owned under) are remembered so a later pull keeps the choice.
     """
-    optic.debug("upsert_agent: harness={}, name={}, version={}", harness, name, version)
+    optic.debug("upsert_agent: recording agent installation")
     entry = {
         "name": name,
         "id": agent_id,

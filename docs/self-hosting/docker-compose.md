@@ -6,13 +6,13 @@
 title: "Docker Compose setup"
 ---
 
-Step-by-step bring-up of the Observal stack. End state: the core services are healthy, API responding at `http://localhost/health`, web UI at `http://localhost`. Prometheus and Grafana are optional.
+Step-by-step bring-up of the Agentic Resource Registry stack. End state: the core services are healthy, API responding at `http://localhost/health`, web UI at `http://localhost`. Prometheus and Grafana are optional.
 
 ## 1. Clone and configure
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
 cp .env.example .env
 ```
 
@@ -78,7 +78,7 @@ For local dev, `http://localhost` is fine. For production, put a TLS-terminating
 Log in with the CLI:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash   # if you haven't already
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash   # if you haven't already
 observal auth login              # Email: super@demo.example, Password: super-changeme
 ```
 

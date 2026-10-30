@@ -4,7 +4,7 @@
 title: "Releasing"
 ---
 
-Observal develops on `main` and publishes only from protected `release/X.Y` branches. Each minor line has one branch for alpha, beta, release candidates, stable, and subsequent patches. There is no `develop` branch, per-channel branch, or SLA database.
+Agentic Resource Registry develops on `main` and publishes only from protected `release/X.Y` branches. Each minor line has one branch for alpha, beta, release candidates, stable, and subsequent patches. There is no `develop` branch, per-channel branch, or SLA database.
 
 ```text
 main          A---B---C---D---E------> next features
@@ -23,7 +23,7 @@ Never merge a release branch into `main`, rebase it onto `main`, force-push it, 
 - A clean local branch that exactly matches its canonical remote branch.
 - Release branch rules and publishing environments configured as described below.
 
-The existing maintainer tool is `tools/release.py`, not a command in the distributed Observal CLI. `make release` invokes it; `make release ARGS="..."` passes options through.
+The existing maintainer tool is `tools/release.py`, not a command in the distributed Agentic Resource Registry CLI. `make release` invokes it; `make release ARGS="..."` passes options through.
 
 ## Cut a minor line
 
@@ -69,7 +69,7 @@ Rebase-merge the single metadata commit after CI passes. If the destination bran
 
 ## Channels and versions
 
-| Stage | Example | npm / Docker alias | GitHub |
+| Stage | Example | Docker alias | GitHub |
 | --- | --- | --- | --- |
 | Alpha | `1.14.0-alpha.1` | `alpha` | Prerelease |
 | Beta | `1.14.0-beta.1` | `beta` | Prerelease |
@@ -79,11 +79,11 @@ Rebase-merge the single metadata commit after CI passes. If the destination bran
 
 Versions advance within their branch's minor line. Repeating a channel increments its serial. Alpha to beta to RC to stable is allowed, as is skipping a stage; going backward within the same version core is rejected. After stable, preparation starts the next patch. `--version` accepts an explicit version subject to the same checks. Starting a new minor requires a new branch.
 
-Python distributes the equivalent PEP 440 versions (`1.14.0a1`, `1.14.0b1`, `1.14.0rc1`). PyPI has no npm-style dist-tags. Exact-version pins are the mechanism for maintenance consumers. Helm publishes exact OCI chart versions and uses the matching application image version; it has no npm-style `latest` or `lts` alias.
+Python distributes the equivalent PEP 440 versions (`1.14.0a1`, `1.14.0b1`, `1.14.0rc1`). PyPI has no dist-tags. Exact-version pins are the mechanism for maintenance consumers. Helm publishes exact OCI chart versions and uses the matching application image version; it has no `latest` or `lts` alias.
 
 Older prereleases use line-specific aliases such as `next-1.13` or `beta-1.13` when a newer release exists in the same channel. They cannot move the shared prerelease alias backward.
 
-Only the numerically newest stable version across all lines can take over stable discovery. Patching an older line must not change Docker/npm `latest`, GitHub latest, or the hosted deployment. Consumers selecting a prerelease or maintenance line should pin an exact version when reproducibility matters.
+Only the numerically newest stable version across all lines can take over stable discovery. Patching an older line must not change Docker `latest`, GitHub latest, or the hosted deployment. Consumers selecting a prerelease or maintenance line should pin an exact version when reproducibility matters.
 
 ## Backport a fix
 
@@ -110,7 +110,7 @@ A release-branch push is inspected for a single release metadata commit. Branch 
 1. Validate branch ancestry, parent, version progression, allowed metadata files, package versions, notes, and tag identity.
 2. Build CLI binaries, container digests, and the server archive.
 3. Require the production environment approval.
-4. Create a keyless signed tag tied to the exact release branch, then publish PyPI, npm, Docker, and Helm artifacts.
+4. Create a keyless signed tag tied to the exact release branch, then publish PyPI, Docker, and Helm artifacts.
 5. Publish GitHub assets and verify the registries and installed CLI.
 6. For the newest stable release only, promote GitHub latest and invoke the EC2 workflow. EC2 checks out the validated tagged commit, not `main`.
 
@@ -125,8 +125,8 @@ These are production administration actions. Do not perform them implicitly duri
 1. Merge the rewritten tooling and workflows into `main` before cutting a line. The first new line should be a future minor, for example `release/1.14`; do not fabricate history for old detached release tags.
 2. Install `.github/release-ruleset.json` through the GitHub repository rulesets API or UI. It requires PRs, rebase-only merging, linear history, reviews, and existing main CI checks plus `release-policy`, and blocks deletion and force-push. Adjust the external CLA check only if the actual integration has changed. Required checks must run on the chosen event; path-filtered Terraform/E2E checks are intentionally not unconditional required contexts.
 3. Keep existing `main` protection and immutable tag rules. The release GitHub App must retain permission to create signed tags under the existing tag rules. Do not grant ordinary contributors a release bypass.
-4. Add the `release/*` **branch** pattern to the `production` environment. Its pre-migration policy permits only `main` and `v*` tags, which would block this pipeline. Restrict `pypi` and `npm` publishing environments to release branches as appropriate. Preserve reviewers and existing approval requirements.
-5. Check PyPI/npm trusted-publisher configuration for the repository, workflow filename, and environment. Any provider policy explicitly tied to `main` must be updated to allow the intended release branches, without broadening unrelated credentials.
+4. Add the `release/*` **branch** pattern to the `production` environment. Its pre-migration policy permits only `main` and `v*` tags, which would block this pipeline. Restrict the `pypi` publishing environment to release branches as appropriate. Preserve reviewers and existing approval requirements.
+5. Check PyPI trusted-publisher configuration for the repository, workflow filename, and environment. Any provider policy explicitly tied to `main` must be updated to allow the intended release branches, without broadening unrelated credentials.
 6. Review the first release's notes carefully. Historical curated-cutoff tags are not ancestors of `main`; discovery now uses the latest reachable tag, not their old manifest cutoff. This can include previously shipped changes in the first new-line comparison. Curate those public notes once rather than keeping a legacy resolver.
 7. Rehearse beta, RC, stable, and a maintenance patch in the disposable sandbox. Verify protections, signing, packaged tooling, and latest selection there. Then authorize a real prerelease to validate production registry credentials and all build platforms.
 

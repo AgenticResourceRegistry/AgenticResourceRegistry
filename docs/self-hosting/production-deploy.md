@@ -4,9 +4,9 @@
 title: "Production deployment"
 ---
 
-Deploy Observal as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
+Deploy Agentic Resource Registry as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
 
-**End state:** a fully managed Observal install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
+**End state:** a fully managed Agentic Resource Registry install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
 
 ## When to use this vs. single-node
 
@@ -25,7 +25,7 @@ Deploy Observal as a distributed, highly available stack on AWS or GCP using Ter
 
 ## Choose your cloud
 
-Observal ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
+Agentic Resource Registry ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
 
 ### AWS
 
@@ -76,8 +76,8 @@ flowchart TB
 **Quick start:**
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal/infra/terraform/aws
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry/infra/terraform/aws
 
 # Configure
 cp terraform.tfvars.example terraform.tfvars
@@ -148,7 +148,7 @@ flowchart TB
 **Quick start:**
 
 ```bash
-cd Observal/infra/terraform/gcp
+cd AgenticResourceRegistry/infra/terraform/gcp
 
 # Enable required APIs
 gcloud services enable \

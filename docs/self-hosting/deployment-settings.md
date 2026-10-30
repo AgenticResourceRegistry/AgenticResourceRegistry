@@ -5,7 +5,7 @@
 title: "Deployment Settings"
 ---
 
-Core deployment configuration that affects how Observal is reachable, how authentication redirects work, and which origins are allowed to make requests.
+Core deployment configuration that affects how Agentic Resource Registry is reachable, how authentication redirects work, and which origins are allowed to make requests.
 
 ## SSO Only Mode
 
@@ -24,7 +24,7 @@ Disable all password-based authentication, forcing users to log in via SAML or O
 
 ## Frontend URL
 
-The base URL where users access the Observal web UI in their browser.
+The base URL where users access the Agentic Resource Registry web UI in their browser.
 
 **Affects:** OAuth/SAML redirect URIs, device authorization confirmation links, email notification links, and CORS origin validation.
 
@@ -43,7 +43,7 @@ The base URL where users access the Observal web UI in their browser.
 
 ## Public API URL
 
-The externally-reachable URL of the Observal API server.
+The externally-reachable URL of the Agentic Resource Registry API server.
 
 **Affects:** CLI auto-configuration during `observal auth login`, telemetry endpoint discovery, webhook callback URLs, and inter-service communication references.
 
