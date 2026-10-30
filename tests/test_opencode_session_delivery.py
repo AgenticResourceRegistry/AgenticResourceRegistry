@@ -41,7 +41,7 @@ def _node_supports_strip_types() -> tuple[bool, str]:
 
 
 def test_generated_plugin_uses_durable_acknowledged_delivery():
-    assert OPENCODE_PLUGIN_VERSION == "7"
+    assert OPENCODE_PLUGIN_VERSION == "8"
     assert "data.registries?.[registryKey(config.server_url)]" in OPENCODE_PLUGIN_SOURCE
     assert "saveSessionState(state); // Durable before network delivery." in OPENCODE_PLUGIN_SOURCE
     assert "acknowledged_line" in OPENCODE_PLUGIN_SOURCE
@@ -204,6 +204,22 @@ const largePayloads = ingestPayloads.slice(2);
 assert.deepEqual(largePayloads.map((payload) => payload.lines.length), [500, 500, 1, 500, 1]);
 assert.deepEqual(largePayloads.map((payload) => payload.start_offset), [0, 500, 1000, 500, 1000]);
 assert.equal(largePayloads.at(-1).final, true);
+
+// Sessions without a pulled registry agent are still reported, unattributed.
+const before = ingestPayloads.length;
+shouldFail = false;
+checkpointLine = -1;
+clientMessages = clientMessages.slice(0, 2);
+for (const [id, properties] of [["builtin", { agent: "build" }], ["plain", {}]]) {
+  await hooks.event({ event: { type: "session.created", properties: { sessionID: id, ...properties } } });
+  await hooks.event({ event: { type: "message.updated", properties: { sessionID: id } } });
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: id } } });
+  checkpointLine = -1;
+}
+const plainPayloads = ingestPayloads.slice(before);
+assert.deepEqual(plainPayloads.map((payload) => payload.session_id), ["builtin", "plain"]);
+assert.ok(plainPayloads.every((payload) => payload.agent_id === null && payload.agent_version === null));
+assert.ok(plainPayloads.every((payload) => payload.lines.length === 2));
 """
     )
     env = os.environ | {"HOME": str(tmp_path)}

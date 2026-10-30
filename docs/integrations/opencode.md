@@ -186,8 +186,9 @@ You are an OpenCode agent with the following specialization...
 without running `observal agent pull`, the plugin may see the OpenCode agent
 name but have no Agentic Resource Registry id or version to send.
 
-**Built-in OpenCode agents are ignored.** Sessions for built-in agents are not
-attributed to registry agents.
+**Every session is reported.** Sessions that use a built-in OpenCode agent, or
+no pulled agent, are delivered without an agent id so component insights still
+see them. Only sessions that use a pulled agent are attributed to it.
 
 **MCP config is OpenCode-specific.** OpenCode uses `opencode.json` and the
 `mcp` key, not Kiro or Claude Code MCP paths.
