@@ -424,14 +424,14 @@ for (const subject_type of ["agent", "mcp"] as const) {
         { id: newRevisionId, number: 2, message: "Author resubmitted", created_by: id, created_at: now, pruned: false }],
       requested_reviewers: [commenterId], reviewer_names: { [reviewerId]: "reviewer", [commenterId]: "commenter" },
       commented_reviewers: [commenterId],
-      reviewer_decisions: { [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking", revision_id: id }, [secondId]: { verdict: "request_changes", status: "blocking", revision_id: id } },
+      reviewer_decisions: { [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "open", revision_id: id }, [secondId]: { verdict: "request_changes", status: "open", revision_id: id } },
       threads: { total: 3, unresolved: 3 },
       gate: { ready: false, approvals: 0, required: 1, policy_source: "organization", requirements: ["changes_requested", "required_approvals"], outstanding_requests: 2 },
     };
     const thread = (submissionId: string, threadKey: string, reviewerKey: string, status: string, can_withdraw: boolean) => ({
       id: threadKey, path: null, side: null, start_line: null, end_line: null, outdated: false,
-      resolved_at: status === "blocking" ? null : now, revision_id: null,
-      change_request: { submission_id: submissionId, reviewer_id: reviewerKey, status, can_withdraw, dismissed_by: status === "blocking" ? null : reviewerKey, dismissed_reason: status === "blocking" ? null : "Question answered" },
+      resolved_at: status === "open" ? null : now, revision_id: null,
+      change_request: { submission_id: submissionId, reviewer_id: reviewerKey, status, can_withdraw, dismissed_by: status === "open" ? null : reviewerKey, dismissed_reason: status === "open" ? null : "Question answered" },
       comments: [
         { id: submissionId, thread_id: threadKey, author_id: reviewerKey, body: "Is this change required?", created_at: now },
         ...(threadKey === threadId ? [{ id: "99999999-9999-4999-8999-999999999999", thread_id: threadKey, author_id: id, body: "I replied to this request", created_at: now }] : []),
@@ -450,20 +450,20 @@ for (const subject_type of ["agent", "mcp"] as const) {
       const data = suffix === "/timeline" ? route.request().url().includes("cursor=")
         ? { items: [...[requestId, secondId].map((key, index) => ({ id: key, kind: "verdict", actor_id: index ? secondId : reviewerId, created_at: now, verdict: "request_changes", body: "Is this change required?", state: "submitted" })), { id: commenterId, kind: "comment", actor_id: commenterId, created_at: now, payload: { thread_id: generalId } }], next_cursor: null }
         : { items: [{ id: "66666666-6666-4666-8666-666666666666", kind: "comment", actor_id: id, created_at: now, payload: { thread_id: threadId } }], next_cursor: "page-2" }
-        : suffix === "/threads" ? [thread(requestId, threadId, reviewerId, withdrawn ? "withdrawn" : "blocking", !author && !withdrawn), thread(secondId, secondId, secondId, "blocking", false), {
+        : suffix === "/threads" ? [thread(requestId, threadId, reviewerId, withdrawn ? "withdrawn" : "open", !author && !withdrawn), thread(secondId, secondId, secondId, "open", false), {
           id: generalId, path: null, side: null, start_line: null, end_line: null, outdated: false, resolved_at: null, revision_id: null,
           change_request: null, comments: [{ id: commenterId, thread_id: generalId, author_id: commenterId, body: "General note", created_at: now }],
         }]
         : suffix === "/gate" ? { ...detail.gate, outstanding_requests: withdrawn ? 1 : 2 }
         : suffix === "/files" || suffix === "/diff" ? []
-        : { ...detail, reviewer_decisions: { ...detail.reviewer_decisions, [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "blocking" } } };
+        : { ...detail, reviewer_decisions: { ...detail.reviewer_decisions, [reviewerId]: { verdict: "request_changes", status: withdrawn ? "withdrawn" : "open" } } };
       return route.fulfill({ json: data });
     });
     await page.goto("/review/42");
     // Resubmitting a revision does not clear a still-blocking request.
     await expect(page.locator("aside").getByText("Changes requested", { exact: true })).toHaveCount(2);
     const request = page.locator(`#thread-${threadId}`);
-    await expect(request.getByText("Changes requested · blocks publication")).toBeVisible();
+    await expect(request.getByText("Changes requested", { exact: true })).toBeVisible();
     await expect(request.getByText("I replied to this request")).toBeVisible();
     await expect(request.getByText("harish", { exact: true })).toBeVisible();
     await expect(request).toHaveCount(1);
@@ -487,9 +487,9 @@ for (const subject_type of ["agent", "mcp"] as const) {
       await request.getByRole("textbox", { name: "Withdrawal reason" }).fill("Question answered");
       page.once("dialog", dialog => dialog.accept());
       await request.getByRole("button", { name: "Confirm withdrawal" }).click();
-      await expect(request.getByText("Change request withdrawn · no longer blocks publication")).toBeVisible();
+      await expect(request.getByText("Change request withdrawn")).toBeVisible();
       await expect(page.getByText("Request withdrawn", { exact: true })).toBeVisible();
-      await expect(page.getByText("Changes requested · blocks publication")).toHaveCount(1);
+      await expect(page.getByText("Changes requested", { exact: true })).toHaveCount(1);
       expect(posts).toEqual([{ reason: "Question answered" }]);
     }
     await page.setViewportSize({ width: 390, height: 844 });

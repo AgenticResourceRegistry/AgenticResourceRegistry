@@ -157,7 +157,7 @@ async def threads(
                     "reviewer_id": requests[row.change_request_id].reviewer_id,
                     "status": request_status(row.change_request_id),
                     "can_withdraw": (
-                        request_status(row.change_request_id) == "blocking"
+                        request_status(row.change_request_id) == "open"
                         and await may_withdraw_request(db, review, requests[row.change_request_id], user)
                     ),
                     "dismissed_by": requests[row.change_request_id].dismissed_by,

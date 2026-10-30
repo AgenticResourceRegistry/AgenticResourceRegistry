@@ -59,20 +59,14 @@ MCP_VALIDATION_MESSAGE = "Updated by MCP validation"
 # Revisions the system pushed; none of them is the author's resubmission.
 SYSTEM_REVISION_MESSAGES = frozenset({DRAFT_EDIT_MESSAGE, MCP_VALIDATION_MESSAGE})
 
-# Unresolved conversations and abandoned edit locks are advisory; an explicit
-# change request remains a publication blocker until withdrawn or approved.
-ADVISORY_REQUIREMENTS = frozenset({"unresolved_threads", "edit_lock"})
-# Integrity and explicit reviewer decisions no publish path skips, including a super admin
-# override. A change request requires that reviewer to approve or explicitly withdraw it.
+# Open items reviewers discuss that never block a person's publish (OBS-1443): an unanswered
+# change request, unresolved threads and an abandoned edit lock.
+ADVISORY_REQUIREMENTS = frozenset({"changes_requested", "unresolved_threads", "edit_lock"})
+# Integrity rules no publish path skips, including a super admin override: content changed
+# without a new revision, an uninstallable or rollout-gated skill folder, a moved approved
+# base, and an agent pinning components that are not published.
 HARD_REQUIREMENTS = frozenset(
-    {
-        "changes_requested",
-        "unsubmitted_changes",
-        "skill_folder_rollout",
-        "skill_folder",
-        "approved_base_changed",
-        "pinned_components",
-    }
+    {"unsubmitted_changes", "skill_folder_rollout", "skill_folder", "approved_base_changed", "pinned_components"}
 )
 
 
@@ -389,7 +383,7 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
     # Dismissed decisions are terminal; neither an earlier approval nor an
     # earlier change request may silently reappear after withdrawal.
     approvals = len(_counted_approvals(latest.values(), head.id, policy))
-    # A change request remains blocking until its reviewer approves or withdraws it;
+    # A change request stays outstanding until its reviewer approves or withdraws it;
     # an author resubmitting new content does not silently clear the request.
     requests = {uid: s for uid, s in latest.items() if s.state == "submitted" and s.verdict == "request_changes"}
     blockers = []
@@ -463,7 +457,6 @@ async def gate(db, review, *, policy: ApprovalPolicy | None = None) -> Gate:
 
 _BLOCK_LABELS = {
     "required_checks": "required checks are failing",
-    "changes_requested": "a reviewer must withdraw or approve their change request",
     "mcp_validation": "MCP validation has not passed",
     "unsubmitted_changes": "the content changed after the latest revision; submit it as a new revision",
     "skill_folder_rollout": "skill folders with extra files cannot be installed yet",
@@ -725,7 +718,7 @@ async def publish(db, review, user, *, category=None, override_reason=None, auto
         raise HTTPException(
             409,
             f"Review gate blocked: {', '.join(result.blockers)}. {publish_block_message(result.blockers, result)}. "
-            "Unresolved conversations and edit locks are advisory; change requests block publication. "
+            "Change requests, unresolved conversations and edit locks are advisory. "
             "A super admin can publish past approvals and checks with an override reason.",
         )
     re_review = review.subject_type == "skill" and version.pre_public_status is not None
