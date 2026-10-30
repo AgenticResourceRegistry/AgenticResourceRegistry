@@ -208,6 +208,7 @@ def test_sessions_table_does_not_turn_unknown_into_zero(monkeypatch, kind):
             "session_id": "measured",
             "projection_state": "complete",
             "source_state": "available",
+            "usage_measurable": True,
             "observed_calls": 0,
             "confirmed_loads": 0,
             "invocations": None,
@@ -227,6 +228,42 @@ def test_sessions_table_does_not_turn_unknown_into_zero(monkeypatch, kind):
     else:
         assert "not recorded" in result.output
     assert "--cursor next" in result.output
+
+
+def test_mcp_complete_collision_is_unknown_in_sessions_table_but_json_keeps_attributed_count(monkeypatch):
+    monkeypatch.setattr("observal_cli.cmd_insights.client.resolve_registry_reference", lambda *_: COMPONENT_ID)
+    rows = [
+        {
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "harness": "codex",
+            "projection_state": "complete",
+            "source_state": "available",
+            "usage_measurable": False,
+            "observed_calls": 0,
+        },
+        {
+            "session_id": "22222222-2222-4222-8222-222222222222",
+            "harness": "codex",
+            "projection_state": "complete",
+            "source_state": "available",
+            "usage_measurable": True,
+            "observed_calls": 0,
+        },
+    ]
+    monkeypatch.setattr(
+        "observal_cli.cmd_insights.client.get", lambda *_args, **_kwargs: {"sessions": rows, "next_cursor": None}
+    )
+    command = ["sessions", "--component", "mcp", "team/probe"]
+    table = runner.invoke(insights_app, command)
+    assert table.exit_code == 0, table.output
+    # Rich may shorten the reason in a narrow terminal, but never replace it with a zero.
+    assert "not measured" in table.output
+    evidence_cells = [line.split("│")[-2].strip() for line in table.output.splitlines() if "│" in line]
+    assert any(cell.startswith("not measured") for cell in evidence_cells)
+    assert evidence_cells.count("0 calls") == 1
+    json_result = runner.invoke(insights_app, [*command, "--output", "json"])
+    assert json_result.exit_code == 0, json_result.output
+    assert json.loads(json_result.output)["sessions"] == rows
 
 
 @pytest.mark.parametrize("category,code", [(ErrorCategory.PERMISSION, 4), (ErrorCategory.UNAVAILABLE, 9)])

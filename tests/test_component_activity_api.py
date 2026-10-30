@@ -534,6 +534,38 @@ async def test_session_page_hides_non_complete_counts_and_emits_cursor_only_when
     assert queries.decode_cursor(cursor, scope=scope)[1] == ["u", "claude-code", "s1"]
 
 
+def test_complete_collision_exposes_unmeasurable_zero_in_session_api():
+    from schemas.component_activity import ActivitySession
+
+    row = {
+        "user_id": "u",
+        "harness": "codex",
+        "session_id": "synthetic-collision",
+        "last_event_time": "2026-01-01 00:00:00.000",
+        "projection_state": "complete",
+        "source_state": "available",
+        "candidate_count": 1,
+        "attributed_count": 0,
+        "collision_count": 1,
+        "usage_measurable": 0,
+        "calls": 0,
+        "refs": [],
+    }
+    unknown = ActivitySession.model_validate(queries._normalize_sessions([row])[0])
+    assert unknown.observed_calls == 0 and unknown.usage_measurable is False
+    measured = ActivitySession.model_validate(
+        queries._normalize_sessions(
+            [
+                row
+                | {"session_id": "synthetic-no-tool", "candidate_count": 0, "collision_count": 0, "usage_measurable": 1}
+            ]
+        )[0]
+    )
+    assert measured.observed_calls == 0 and measured.usage_measurable is True
+    description = ActivitySession.model_json_schema()["properties"]["observed_calls"]["description"]
+    assert "not a measured no-call session unless usage_measurable is true" in description
+
+
 @pytest.mark.asyncio
 async def test_presence_coverage_counts_in_clickhouse_without_materializing_cohort(monkeypatch):
     from services.layer_components import queries as presence_queries

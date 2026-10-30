@@ -168,9 +168,12 @@ class ActivitySession(BaseModel):
     last_event_time: str
     projection_state: SessionProjectionState
     source_state: SourceAvailabilityState
-    # Complete source can still contain an ambiguous native call: zero is unknown.
-    usage_measurable: bool = False
-    observed_calls: int
+    usage_measurable: bool = Field(
+        False, description="Whether this listing has attributable use or a defensible measured zero in this session"
+    )
+    observed_calls: int = Field(
+        ..., description="Attributed calls only; zero is not a measured no-call session unless usage_measurable is true"
+    )
     result_states: ResultStateCounts
     source_references: list[SourceReference]
     source_references_truncated: bool
