@@ -89,7 +89,7 @@ One command to install any agent into any supported harness. The config files ar
 ---
 ### Where does observal fit in your modern enterprise infrastructure?
 
-<img width="1920" height="1080" alt="Agentic Resource Registry (3)" src="https://github.com/user-attachments/assets/008f8a68-1269-46de-a9cf-ddfad37b0caa" />
+<img width="1920" height="1080" alt="Agentic Resource Registry in an enterprise stack: registry, insights, traces, review and version control beside the agent gateway, runtime, LLM gateway and MCP gateway" src="docs/img/enterprise-architecture.png" />
 
 
 ---
