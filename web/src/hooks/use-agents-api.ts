@@ -23,6 +23,7 @@ import {
   feedback,
   bulk,
   admin,
+  remoteAgents,
 } from "@/lib/api";
 import type { ForkRequest, LeaderboardWindow, SetRecommendedRequest } from "@/lib/types";
 
@@ -53,6 +54,14 @@ export function useMyAgents(enabled = true) {
   return useQuery({
     queryKey: ["registry", "agents", "my"],
     queryFn: () => registry.my(),
+    enabled,
+  });
+}
+
+export function useRemoteAgents(enabled = true) {
+  return useQuery({
+    queryKey: ["ard", "imports"],
+    queryFn: () => remoteAgents.list(),
     enabled,
   });
 }

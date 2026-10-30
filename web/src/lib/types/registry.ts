@@ -540,3 +540,21 @@ export interface SetRecommendedResponse {
 	entity_id: string;
 	is_recommended: boolean;
 }
+
+// ── Remote A2A agents ───────────────────────────────────────────────
+
+/** A remote agent registered by its A2A Agent Card (ADR 0002), as listed by `GET /ard/imports`. */
+export interface RemoteAgent {
+	identifier: string;
+	displayName: string;
+	version?: string;
+	url?: string;
+	"obs:lifecycle": "approved" | "pending" | "rejected" | "archived" | "draft";
+	"obs:visibility": "public" | "team" | "owner";
+	"obs:delegable": boolean;
+}
+
+export interface RemoteAgentList {
+	items: RemoteAgent[];
+	total: number;
+}
