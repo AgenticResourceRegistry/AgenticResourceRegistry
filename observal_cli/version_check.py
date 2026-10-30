@@ -28,6 +28,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http import HTTPStatus
 from pathlib import Path
 
 import httpx
@@ -219,7 +220,7 @@ def _fetch_from_server(server_url: str, token: str) -> dict | None:
                 "User-Agent": f"observal-cli/{get_current_version()}",
             },
         )
-        if resp.status_code != 200:
+        if resp.status_code != HTTPStatus.OK:
             return None
         data = resp.json()
         if not isinstance(data, dict):
@@ -271,7 +272,7 @@ def _fetch_from_github(include_pre: bool = False) -> dict | None:
             },
             follow_redirects=False,
         )
-        if resp.status_code != 200:
+        if resp.status_code != HTTPStatus.OK:
             return None
         if len(resp.content) > MAX_RESPONSE_SIZE:
             return None
@@ -318,7 +319,7 @@ def fetch_available_server_images() -> list[str]:
             timeout=10,
             headers={"User-Agent": f"observal-cli/{get_current_version()}"},
         )
-        if token_resp.status_code != 200:
+        if token_resp.status_code != HTTPStatus.OK:
             return []
         token = token_resp.json().get("token", "")
         if not token:
@@ -334,7 +335,7 @@ def fetch_available_server_images() -> list[str]:
                 "User-Agent": f"observal-cli/{get_current_version()}",
             },
         )
-        if resp.status_code != 200:
+        if resp.status_code != HTTPStatus.OK:
             return []
 
         data = resp.json()
@@ -366,7 +367,7 @@ def verify_server_image_exists(version: str) -> bool:
             timeout=10,
             headers={"User-Agent": f"observal-cli/{get_current_version()}"},
         )
-        if token_resp.status_code != 200:
+        if token_resp.status_code != HTTPStatus.OK:
             return False
         token = token_resp.json().get("token", "")
 
@@ -379,7 +380,7 @@ def verify_server_image_exists(version: str) -> bool:
                 "User-Agent": f"observal-cli/{get_current_version()}",
             },
         )
-        return resp.status_code == 200
+        return resp.status_code == HTTPStatus.OK
     except (httpx.HTTPError, json.JSONDecodeError, KeyError):
         return False
 
@@ -518,7 +519,7 @@ def fetch_all_releases(include_pre: bool = False) -> list[dict]:
                     "X-GitHub-Api-Version": "2022-11-28",
                 },
             )
-            if resp.status_code != 200:
+            if resp.status_code != HTTPStatus.OK:
                 break
             data = resp.json()
             if not data:
@@ -570,7 +571,7 @@ def check_version_compatibility(server_url: str) -> None:
     if not server_ver:
         try:
             resp = httpx.get(f"{server_url.rstrip('/')}/api/v1/config/version", timeout=5)
-            if resp.status_code != 200:
+            if resp.status_code != HTTPStatus.OK:
                 return
             data = resp.json()
             server_ver = data.get("server_version")
