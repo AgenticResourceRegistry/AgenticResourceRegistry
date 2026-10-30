@@ -551,8 +551,6 @@ async def submit_verdict(db, review, user, verdict, body="", *, policy=None, rev
     own = _own_work(subject, version, user.id)
     if own and verdict == "request_changes":
         raise HTTPException(403, "Cannot request changes on your own work")
-    if own and verdict == "approve" and (policy or await policy_for(review, db=db)).self_approval != "counted":
-        raise HTTPException(403, "Self-approval is not permitted by the review policy")
     # Submitting a pending review publishes all of that user's draft comments
     # atomically with their verdict, rather than stranding them in a draft row.
     submission = await db.scalar(

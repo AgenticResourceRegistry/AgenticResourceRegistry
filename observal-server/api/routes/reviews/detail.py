@@ -30,7 +30,7 @@ from models.user import User, UserRole
 from schemas.review import ReviewEdit
 from services.registry_fork import provenance_for
 from services.review import check_config, ci
-from services.review.decisions import _lock_review, _own_work, _target, gate
+from services.review.decisions import _can_self_publish, _lock_review, _own_work, _reviewer_in_scope, _target, gate
 from services.review.diff import diff_files
 from services.review.policy import policy_for
 from services.review.requests import (
@@ -105,7 +105,26 @@ async def detail(
     subject, version = await _target(db, review)
     base = await db.get(type(version), review.base_version_id) if review.base_version_id else None
     policy = await policy_for(review, db=db)
-    self_approval_allowed = subject.is_private and policy.source == "teamspace" and policy.self_approval == "counted"
+    own = _own_work(subject, version, user.id)
+    eligible = await _reviewer_in_scope(db, subject, version, user)
+    active = review.state.value not in ("published", "closed")
+    self_approval_allowed = eligible and policy.self_approval == "counted"
+    # An eligible owner may record a counted approval without necessarily being
+    # allowed to publish; public releases still require a separate reviewer.
+    can_self_publish = eligible and _can_self_publish(subject, policy)
+    if review.subject_type == "agent":
+        can_edit = get_effective_agent_permission(subject, user) in ("owner", "edit")
+        can_withdraw = user.id in (version.released_by, subject.created_by)
+    else:
+        permission = get_effective_component_permission(subject, user)
+        can_edit = permission == "owner" and not (review.subject_type == "skill" and version.status.value == "pending")
+        can_withdraw = (
+            permission == "owner"
+            if review.subject_type == "skill"
+            else user.id in (version.released_by, subject.submitted_by)
+        )
+    if review.subject_type == "skill" and version.pre_public_status is not None:
+        can_withdraw = False
     submissions, latest_decisions, request_statuses = await review_decisions(db, review)
     return {
         **await summary(db, review, user),

@@ -121,6 +121,17 @@ async def threads(
         stmt = stmt.where(ReviewThread.outdated == outdated)
     rows = (await db.scalars(stmt.order_by(ReviewThread.created_at, ReviewThread.id))).all()
     comments = await _comments(db, review, rows, user)
+    my_draft_ids = set(
+        (
+            await db.scalars(
+                select(ReviewSubmission.id).where(
+                    ReviewSubmission.review_id == review.id,
+                    ReviewSubmission.reviewer_id == user.id,
+                    ReviewSubmission.state == "draft",
+                )
+            )
+        ).all()
+    )
     _, _, statuses = await review_decisions(db, review)
     requests = {
         s.id: s
@@ -136,7 +147,9 @@ async def threads(
     }
     by_thread = {row.id: [] for row in rows}
     for comment in comments:
-        by_thread[comment.thread_id].append(_render_comment(comment))
+        by_thread[comment.thread_id].append(
+            {**_render_comment(comment), "pending": comment.submission_id in my_draft_ids}
+        )
 
     def request_status(request_id):
         return request_lifecycle_status(review, requests[request_id], statuses)

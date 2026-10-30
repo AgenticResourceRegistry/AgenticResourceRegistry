@@ -133,10 +133,8 @@ async def test_change_request_survives_revisions_until_reviewer_approves(db):
 @pytest.mark.asyncio
 async def test_self_approval_not_counted_override_audited_and_stale(db):
     author, reviewer, admin, listing, ver, review = await fixture_review(db)
-    # super-admin is a co-author; a non-counting self-approval is refused.
-    with pytest.raises(HTTPException) as exc:
-        await submit_verdict(db, review, admin, "approve", policy=ApprovalPolicy())
-    assert exc.value.status_code == 403
+    # super-admin is a co-author; self-approval is recorded but doesn't count.
+    await submit_verdict(db, review, admin, "approve", policy=ApprovalPolicy())
     assert (await gate(db, review, policy=ApprovalPolicy())).approvals == 0
     with pytest.raises(HTTPException):
         await publish(db, review, admin, policy=ApprovalPolicy())
