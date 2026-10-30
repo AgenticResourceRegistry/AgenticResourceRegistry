@@ -195,7 +195,6 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
     }
     const value = suffix === "/submissions/draft" ? { submission_id: null, comments: [] } : suffix === "/gate" ? detail.gate : suffix === "/timeline" ? { items: [
       { id, kind: "opened", actor_id: id, actor_name: "harish", created_at: now },
-      { id: "10000000-0000-4000-8000-000000000003", kind: "verdict", actor_id: id, actor_name: "harish", created_at: now, revision_id: id, verdict: "approve", state: "submitted" },
       { id: "10000000-0000-4000-8000-000000000001", kind: "verdict", actor_id: id, actor_name: "harish", created_at: now, verdict: "comment", body: "Please verify permissions.", state: "submitted" },
       { id: "10000000-0000-4000-8000-000000000002", kind: "comment", actor_id: id, actor_name: "harish", created_at: now, payload: { thread_id: "20000000-0000-4000-8000-000000000001" } },
     ], next_cursor: null }
@@ -207,7 +206,6 @@ test("review detail exposes the gate, revision diff, and a separate verdict", as
   await expect(page.getByRole("heading", { name: "Skill: verify source" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Publication gate" })).toBeVisible();
   await expect(page.getByText("Please verify permissions.")).toBeVisible();
-  await expect(page.getByText("Approved", { exact: true })).toBeVisible();
   await expect(page.getByText("The command needs a permission check.")).toBeVisible();
   await expect(page.getByText("Approval outdated", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("pr-review-conversation-desktop.png"), fullPage: true });
@@ -354,6 +352,8 @@ test("super admin cannot override a reviewer's change request", async ({ page },
     ...summary(42, "Skill: verify source", "skill"), state: "changes_requested", gate,
     opened_at: now, closed_at: null, closed_reason: null, published_at: null, published_by: null,
     base_version_id: null, head_revision_id: id, my_subscription: null, self_approval_allowed: false,
+    is_own_work: false, can_approve: true, can_request_changes: true, can_comment: true, can_publish: true,
+    can_override_publish: true, can_close: true, can_withdraw: false, can_edit: false,
     revisions: [{ id, number: 1, message: "First release", created_by: id, created_at: now, pruned: false }],
     requested_reviewers: [], reviewer_names: {},
   };
@@ -410,6 +410,110 @@ test("close review asks for a reason in a dialog", async ({ page }) => {
   await expect(dialog).toHaveCount(0);
 });
 
+test("super-admin owner can override a ready gate", async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("observal_access_token", "review-ui-test");
+    localStorage.setItem("observal_user_role", "super_admin");
+  });
+  await page.route("**/api/v1/**", route => route.fulfill({ json: {} }));
+  await page.route("**/api/v1/config/public", route => route.fulfill({ json: { experimental_review_checks: false } }));
+  await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id, username: "admin", role: "super_admin" } }));
+  await page.route("**/api/v1/reviews/42**", route => {
+    const suffix = new URL(route.request().url()).pathname.replace("/api/v1/reviews/42", "");
+    const detail = {
+      ...summary(42, "Own review", "agent"), body: "", author_id: id, opened_at: now,
+      closed_at: null, closed_reason: null, published_at: null, published_by: null,
+      base_version_id: null, head_revision_id: id, my_subscription: null,
+      self_approval_allowed: false, is_own_work: true, can_approve: false,
+      can_request_changes: false, can_comment: true, can_publish: false,
+      can_override_publish: true, can_close: false, can_withdraw: true, can_edit: true,
+      gate: { ready: true, approvals: 1, required: 1, policy_source: "organization", requirements: [] },
+      revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false }],
+      requested_reviewers: [], reviewer_names: {},
+    };
+    return route.fulfill({ json: suffix === "/gate" ? detail.gate : suffix === "/submissions/draft" ? { submission_id: null, comments: [] } : suffix === "/timeline" ? { items: [], next_cursor: null } : suffix === "/files" || suffix === "/threads" ? [] : detail });
+  });
+  await page.goto("/review/42");
+  await expect(page.getByRole("button", { name: "Publish with override" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Publish v/ })).toHaveCount(0);
+});
+
+for (const subject_type of ["agent", "mcp"] as const) {
+  for (const own of [true, false]) test(`${subject_type} ${own ? "author" : "reviewer"} separates verdict from comment`, async ({ page }) => {
+    await page.addInitScript(role => {
+      sessionStorage.setItem("observal_access_token", "review-ui-test");
+      localStorage.setItem("observal_user_role", role);
+    }, own ? "user" : "reviewer");
+    const comments: unknown[] = [];
+    const verdicts: unknown[] = [];
+    const detail = {
+      ...summary(42, "Review action test", "agent"), subject_type, body: "Review this release.",
+      author_id: own ? id : "another-author", opened_at: now, closed_at: null, closed_reason: null,
+      published_at: null, published_by: null, base_version_id: null, head_revision_id: id,
+      my_subscription: null, self_approval_allowed: false, is_own_work: own,
+      can_approve: !own, can_request_changes: !own, can_comment: true, can_publish: !own,
+      can_override_publish: false, can_close: !own, can_withdraw: own, can_edit: own,
+      revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false }],
+      requested_reviewers: [], reviewer_names: {},
+    };
+    await page.route("**/api/v1/**", route => route.fulfill({ json: { items: [], unread: 0, action_required: 0 } }));
+    await page.route("**/api/v1/config/public", route => route.fulfill({ json: { experimental_review_checks: false } }));
+    await page.route("**/api/v1/auth/whoami", route => route.fulfill({ json: { id, username: "tester", role: own ? "user" : "reviewer" } }));
+    await page.route("**/api/v1/reviews/42**", route => {
+      const suffix = new URL(route.request().url()).pathname.replace("/api/v1/reviews/42", "");
+      if (suffix === "/threads" && route.request().method() === "POST") {
+        comments.push(route.request().postDataJSON());
+        return route.fulfill({ status: 201, json: { id } });
+      }
+      if (suffix === "/submissions" && route.request().method() === "POST") {
+        verdicts.push(route.request().postDataJSON());
+        return route.fulfill({ status: 201, json: { id } });
+      }
+      const submitted = comments[0] as { body: string; as_draft: boolean } | undefined;
+      const postedThread = submitted && !submitted.as_draft ? [{
+        id, review_id: id, path: null, side: null, start_line: null, end_line: null,
+        resolved_at: null, outdated: false, change_request: null,
+        comments: [{ id, author_id: id, body: submitted.body, created_at: now, pending: false }],
+      }] : [];
+      const data = suffix === "/submissions/draft" ? { submission_id: null, comments: [] }
+        : suffix === "/timeline" ? { items: postedThread.length ? [{ id, kind: "comment", actor_id: id, created_at: now, payload: { thread_id: id } }] : [], next_cursor: null }
+        : suffix === "/threads" ? postedThread
+        : suffix === "/files" || suffix === "/diff" ? []
+        : suffix === "/gate" ? detail.gate : detail;
+      return route.fulfill({ json: data });
+    });
+    await page.goto("/review/42");
+    const reviewAction = page.getByRole("button", { name: "Review changes" });
+    if (own) {
+      await expect(reviewAction).toBeDisabled();
+      await expect(page.getByText("You can't review your own work under this policy.")).toBeVisible();
+      await page.keyboard.press("r");
+      await expect(page.getByRole("heading", { name: "Finish your review" })).toHaveCount(0);
+    } else {
+      await expect(reviewAction).toBeEnabled();
+    }
+    await page.getByRole("button", { name: "Comment on review" }).click();
+    const composer = page.getByRole("textbox", { name: "Comment", exact: true });
+    await expect(composer).toBeFocused();
+    await composer.fill("A general comment");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await expect.poll(() => comments.length).toBe(1);
+    expect(comments).toEqual([{ body: "A general comment", as_draft: false }]);
+    expect(verdicts).toHaveLength(0);
+    await expect(page.getByLabel("Conversation on review").getByText("A general comment")).toBeVisible();
+    await expect(page.getByText("Review updated", { exact: true })).toHaveCount(0, { timeout: 12000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole("button", { name: "Comment on review" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    if (!own) {
+      await reviewAction.click();
+      await expect(page.getByRole("radio", { name: "Approve" })).toBeVisible();
+      await expect(page.getByRole("radio", { name: "Request changes" })).toBeVisible();
+      await expect(page.getByRole("radio", { name: "Comment" })).toHaveCount(0);
+    }
+  });
+}
+
 for (const subject_type of ["agent", "mcp"] as const) {
   for (const author of [true, false]) test(`${subject_type} ${author ? "author" : "reviewer"} sees linked change request`, async ({ page }) => {
     await page.addInitScript(role => {
@@ -428,7 +532,9 @@ for (const subject_type of ["agent", "mcp"] as const) {
     const detail = { ...summary(42, "Disputed review", "agent"), subject_type, author_id: id,
       state: "changes_requested", body: "Please review", opened_at: now, closed_at: null, closed_reason: null,
       published_at: null, published_by: null, base_version_id: null, head_revision_id: newRevisionId, head_revision: 2, my_subscription: null,
-      self_approval_allowed: false, revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false },
+      self_approval_allowed: false, is_own_work: author, can_approve: !author, can_request_changes: !author, can_comment: true,
+      can_publish: !author, can_override_publish: false, can_close: !author, can_withdraw: author, can_edit: author,
+      revisions: [{ id, number: 1, message: null, created_by: id, created_at: now, pruned: false },
         { id: newRevisionId, number: 2, message: "Author resubmitted", created_by: id, created_at: now, pruned: false }],
       requested_reviewers: [commenterId], reviewer_names: { [reviewerId]: "reviewer", [commenterId]: "commenter" },
       commented_reviewers: [commenterId],
@@ -497,7 +603,7 @@ for (const subject_type of ["agent", "mcp"] as const) {
       await request.getByRole("button", { name: "Confirm withdrawal" }).click();
       await expect(request.getByText("Change request withdrawn")).toBeVisible();
       await expect(page.getByText("Request withdrawn", { exact: true })).toBeVisible();
-      await expect(page.getByText("Changes requested", { exact: true })).toHaveCount(1);
+      await expect(page.locator("section[aria-label^='Conversation']").getByText("Changes requested", { exact: true })).toHaveCount(1);
       expect(posts).toEqual([{ reason: "Question answered" }]);
     }
     await page.setViewportSize({ width: 390, height: 844 });
