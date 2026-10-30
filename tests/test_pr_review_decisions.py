@@ -98,7 +98,7 @@ async def test_version_rounds_gate_publish_and_author_denial(db):
 
 
 @pytest.mark.asyncio
-async def test_change_request_survives_revisions_and_blocks_until_reviewer_approves(db):
+async def test_change_request_survives_revisions_until_reviewer_approves(db):
     from services.review.decisions import DRAFT_EDIT_MESSAGE
 
     author, reviewer, _, listing, version, review = await fixture_review(db)
@@ -124,10 +124,8 @@ async def test_change_request_survives_revisions_and_blocks_until_reviewer_appro
     assert review.state == ReviewState.changes_requested  # A new request supersedes the previous one.
     await submit_verdict(db, review, second, "approve", policy=ApprovalPolicy())
     result = await gate(db, review, policy=ApprovalPolicy())
-    assert not result.ready and "changes_requested" in result.blockers
-    with pytest.raises(HTTPException) as blocked:
-        await publish(db, review, second, policy=ApprovalPolicy())
-    assert blocked.value.status_code == 409
+    # Still outstanding, but advisory: it never blocks a publish.
+    assert result.ready and "changes_requested" in result.requirements and "changes_requested" not in result.blockers
     await submit_verdict(db, review, reviewer, "approve", policy=ApprovalPolicy())
     assert (await gate(db, review, policy=ApprovalPolicy())).clear
 

@@ -27,7 +27,7 @@ def decision_statuses(submissions):
             statuses[previous.id] = "cleared" if row.verdict == "approve" else "superseded"
         latest[row.reviewer_id] = row
         if row.verdict == "request_changes":
-            statuses[row.id] = "withdrawn" if row.state == "dismissed" else "blocking"
+            statuses[row.id] = "withdrawn" if row.state == "dismissed" else "open"
     return latest, statuses
 
 
@@ -43,7 +43,7 @@ async def review_decisions(db, review):
 
 
 def request_lifecycle_status(review, request, statuses):
-    """Describe why a request does or does not currently block publication."""
+    """Describe whether a request is still open and, if not, why it closed."""
     if review.state.value == "closed" and review.closed_reason == "superseded":
         return "superseded"
     if (request.dismissed_reason or "").startswith("Visibility changed"):
@@ -54,7 +54,7 @@ def request_lifecycle_status(review, request, statuses):
 
 
 async def reconcile_request_threads(db, review, *, actor_id=None):
-    """Close only requests no longer blocking; do not resolve unrelated threads."""
+    """Close only requests that are no longer open; do not resolve unrelated threads."""
     from models.inbox import InboxKind
     from services.review.notifications import resolve_review_work
 
@@ -66,7 +66,7 @@ async def reconcile_request_threads(db, review, *, actor_id=None):
     ).all()
     for thread in linked:
         state = statuses.get(thread.change_request_id)
-        if state == "blocking" and review.state.value not in ("published", "closed"):
+        if state == "open" and review.state.value not in ("published", "closed"):
             if thread.resolved_at is not None:
                 thread.resolved_at = None
                 thread.resolved_by = None
@@ -74,7 +74,7 @@ async def reconcile_request_threads(db, review, *, actor_id=None):
         if thread.resolved_at is None:
             thread.resolved_at = datetime.now(UTC)
             thread.resolved_by = actor_id
-        if state != "blocking" or review.state.value in ("published", "closed"):
+        if state != "open" or review.state.value in ("published", "closed"):
             await resolve_review_work(
                 db, review, actor_id, kinds=(InboxKind.change_requested,), request_ids={str(thread.change_request_id)}
             )
@@ -85,8 +85,8 @@ def _has_stale_threads(review, statuses, existing):
     """Check whether linked conversations disagree with their request lifecycle."""
     terminal = review.state.value in ("published", "closed")
     return any(
-        (thread.resolved_at is None and (statuses.get(thread.change_request_id) != "blocking" or terminal))
-        or (thread.resolved_at is not None and statuses.get(thread.change_request_id) == "blocking" and not terminal)
+        (thread.resolved_at is None and (statuses.get(thread.change_request_id) != "open" or terminal))
+        or (thread.resolved_at is not None and statuses.get(thread.change_request_id) == "open" and not terminal)
         for thread in existing
     )
 
@@ -127,7 +127,7 @@ async def ensure_request_threads(db, review, *, persist=True, update_state=True)
     for request in rows:
         if request.verdict != "request_changes" or request.id in linked:
             continue
-        cleared = statuses.get(request.id) != "blocking" or review.state.value in ("published", "closed")
+        cleared = statuses.get(request.id) != "open" or review.state.value in ("published", "closed")
         thread = ReviewThread(
             review_id=review.id,
             change_request_id=request.id,

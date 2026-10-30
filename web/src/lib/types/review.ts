@@ -98,7 +98,7 @@ export interface ReviewThread {
   change_request?: {
     submission_id: string;
     reviewer_id: string;
-    status: "blocking" | "withdrawn" | "superseded" | "cleared" | "invalidated" | "closed";
+    status: "open" | "withdrawn" | "superseded" | "cleared" | "invalidated" | "closed";
     can_withdraw: boolean;
     dismissed_by: string | null;
     dismissed_reason: string | null;

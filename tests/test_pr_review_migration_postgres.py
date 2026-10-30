@@ -274,7 +274,7 @@ async def test_request_migration_backfills_and_recovers_downgraded_threads(monke
                 row for row in visible if row["change_request"] and row["change_request"]["submission_id"] == live.id
             )
             assert tombstone["comments"] == []
-            assert tombstone["change_request"]["status"] == "blocking"
+            assert tombstone["change_request"]["status"] == "open"
             assert tombstone["id"] != live_thread_id
             assert (await gate(db, review)).outstanding_requests == 1
             assert not (await gate(db, review)).ready

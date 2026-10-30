@@ -698,7 +698,7 @@ async def test_reopening_withdrawn_review_reopens_blocking_request_thread(api):
         await db.commit()
     current[0] = reviewer
     reopened = next(row for row in (await client.get(base + "/threads")).json() if row["id"] == thread["id"])
-    assert reopened["change_request"]["status"] == "blocking"
+    assert reopened["change_request"]["status"] == "open"
     assert reopened["resolved_at"] is None
     assert (await client.get(base + "/gate")).json()["outstanding_requests"] == 1
 
@@ -737,7 +737,7 @@ async def test_empty_linked_request_tombstone_is_visible_withdrawable_and_replya
     tombstone = next(row for row in listed.json() if row["id"] == str(thread_id))
     assert tombstone["comments"] == []
     assert tombstone["change_request"]["submission_id"] == str(request_id)
-    assert tombstone["change_request"]["status"] == "blocking"
+    assert tombstone["change_request"]["status"] == "open"
     assert {str(empty_id), str(private_id)}.isdisjoint({row["id"] for row in listed.json()})
     for hidden_id in (empty_id, private_id):
         assert (await client.post(base + f"/threads/{hidden_id}/comments", json={"body": "Hidden"})).status_code == 404
@@ -769,7 +769,7 @@ async def test_disputed_request_can_be_withdrawn_without_a_revision(api):
     first_id = first.json()["id"]
     thread = next(row for row in (await client.get(base + "/threads")).json() if row["change_request"])
     assert thread["change_request"]["submission_id"] == first_id
-    assert thread["change_request"]["status"] == "blocking"
+    assert thread["change_request"]["status"] == "open"
     thread_id = thread["id"]
     current[0] = author
     assert (
@@ -1439,8 +1439,8 @@ async def test_failing_secret_scan_blocks_normal_publish_but_super_admin_can_ove
 
 
 @pytest.mark.asyncio
-async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
-    """A counted approval cannot silently bypass an explicit request for changes."""
+async def test_change_request_is_advisory_until_reviewer_withdraws(api):
+    """An open request is shown and tracked, but never blocks a publish (OBS-1443)."""
     client, current, (author, reviewer, _, second), (_, number), factory = api
     current[0] = second
     request = await client.post(
@@ -1452,18 +1452,9 @@ async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
         await client.post(f"/api/v1/reviews/{number}/submissions", json={"verdict": "approve", "body": "ok"})
     ).status_code == 201
     gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
-    assert "changes_requested" in gate["blockers"] and gate["hard_blockers"] == ["changes_requested"]
-    assert not gate["ready"]
-    assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 409
-    # Even the author acting as super admin cannot override an explicit reviewer request.
-    current[0] = author
-    async with factory() as db:
-        db_author = await db.get(User, author.id)
-        db_author.role = UserRole.super_admin
-        await db.commit()
-    author.role = UserRole.super_admin
-    bypass = await client.post(f"/api/v1/reviews/{number}/publish", json={"override_reason": "Emergency"})
-    assert bypass.status_code == 409 and "changes_requested" in bypass.json()["detail"]
+    assert "changes_requested" in gate["requirements"]
+    assert "changes_requested" not in gate["blockers"] and gate["hard_blockers"] == []
+    assert gate["ready"]
     current[0] = second
     withdrawn = await client.post(
         f"/api/v1/reviews/{number}/submissions/{request.json()['id']}/withdraw-request",
@@ -1471,7 +1462,8 @@ async def test_change_request_blocks_publish_until_reviewer_withdraws(api):
     )
     assert withdrawn.status_code == 200, withdrawn.text
     current[0] = reviewer
-    assert (await client.get(f"/api/v1/reviews/{number}/gate")).json()["ready"]
+    gate = (await client.get(f"/api/v1/reviews/{number}/gate")).json()
+    assert "changes_requested" not in gate["requirements"] and gate["ready"]
     assert (await client.post(f"/api/v1/reviews/{number}/publish", json={})).status_code == 200
 
 
