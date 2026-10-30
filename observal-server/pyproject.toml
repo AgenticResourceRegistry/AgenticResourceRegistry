@@ -23,11 +23,12 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "python-dotenv",
     "email-validator",
+    "dnspython>=2.9.0",  # CVE-2026-114605 (DNS decompression DoS)
     "alembic",
     "httpx",
     "gitpython>=3.1.59",
     "boto3",
-    "litellm>=1.89.7,<1.90.0",  # >=1.89.7: CVE-2026-84377 (proxy credential redirect)
+    "litellm>=1.100.4,<1.101.0",  # main's patched release line; Codex measurement does not depend on LiteLLM
     # Required by LiteLLM for the `vertex_ai/*` models the insights settings
     # page offers. Without it every Vertex call fails with "Google Cloud SDK
     # not found", including Express Mode keys that need no GCP project.
@@ -35,7 +36,7 @@ dependencies = [
     "redis[hiredis]>=5.0",
     "arq",
     "strawberry-graphql[fastapi]>=0.327.2",
-    "authlib>=1.6.11",
+    "authlib>=1.9.1",  # >=1.9.1: fixes the audited JOSE/OIDC advisories
     "itsdangerous",
     # >=50.0.0: PYSEC-2026-3552 (PKCS#7 decrypt Bleichenbacher oracle).
     "cryptography>=50.0.0",
@@ -51,7 +52,7 @@ dependencies = [
     "fastapi-cache2>=0.2.2",
     "structlog>=24.1.0",
     "loguru>=0.7.0",
-    "prometheus-fastapi-instrumentator>=7.0.0",
+    "prometheus-fastapi-instrumentator>=8.1.0,<9.0.0",  # 8.1 supports patched Starlette 1.x
     "urllib3>=2.8.0",
     "aiohttp>=3.14.4",
     "certifi>=2026.10.19",
@@ -65,16 +66,6 @@ dependencies = [
 
 [tool.uv.sources]
 observal-shared = { path = "../packages/observal-shared" }
-
-[tool.uv]
-# CVE-2026-48710 / CVE-2026-54282 / CVE-2026-54283: starlette <1.3.1 has
-# Host header poisoning, url-authority confusion, and unbounded urlencoded
-# form parsing. prometheus-fastapi-instrumentator 7.1.0 caps starlette<1.0.0
-# but is runtime-compatible with 1.x (only a type annotation differs).
-# Remove this override when upstream releases starlette 1.x support.
-override-dependencies = [
-    "starlette>=1.3.1",
-]
 
 [dependency-groups]
 dev = [

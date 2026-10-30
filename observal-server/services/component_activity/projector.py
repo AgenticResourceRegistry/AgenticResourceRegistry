@@ -30,7 +30,10 @@ class ProjectionRaceError(RuntimeError):
 PROJECTION_VERSION = 3
 # 2: result-link ordering. 3: Pi server identity. 4: Codex native
 # McpToolCall outcome and timestamp, with unknown lifecycle vetoing a session.
-MATCHER_VERSION = 4
+# 5: tested Codex 0.165.0 success omits isError but has completed status and content.
+# 6: 0.165.0 MCP evidence requires a closed native turn; a received prefix is not a no-tool zero.
+# 7: collisions/unmatched native calls cannot be counted as listing-level measured zeros.
+MATCHER_VERSION = 7
 MAX_SOURCE_RECORDS = 50_000
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 

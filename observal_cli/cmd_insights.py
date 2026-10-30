@@ -280,6 +280,10 @@ def insights_sessions(
         source = row.get("source_state", "available")
         if row.get("projection_state") != "complete" or source != "available":
             signal = "not measured"
+        elif component[0] == "mcp" and row.get("usage_measurable") is not True:
+            # A completed projection can have an unattributed native call;
+            # observed_calls=0 is then not evidence of no use.
+            signal = "not measured (unknown)"
         elif component[0] == "mcp":
             signal = f"{row.get('observed_calls', 0)} calls"
         elif component[0] == "skill":

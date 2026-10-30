@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Codex 0.163.0 project/user skill inventory and native selection provenance.
+"""Codex 0.163.0/0.165.0 project/user skill inventory and native selection provenance.
 
 Codex writes the skills inventory in a developer ``response_item`` as a
 ``## Skills`` block with a ``### Skill roots`` table and an ``### Available
@@ -18,7 +18,9 @@ markup, an ordinary file read or a ``$name`` user message alone never qualifies.
 No prompt, description, instruction body or path is published.
 
 Other Codex versions and missing/ambiguous inventories are unsupported, not
-measured zero. Parent-workspace roots cannot match a different pinned home.
+measured zero. A 0.165.0 source prefix with an offer but no completed native
+turn is also unsupported: selection may still arrive later. Parent-workspace
+roots cannot match a different pinned home.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from .skill_evidence import SkillEvidence, SkillEvidenceExtraction
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-_TESTED_VERSION = "0.163.0"
+_TESTED_VERSIONS = frozenset({"0.163.0", "0.165.0"})
 _ALIAS = r"[A-Za-z0-9_-]{1,128}"
 _ROOT = re.compile(r"- `(r[0-9]{1,3})` = `(/[^`\r\n]{1,4096})`\Z")
 _ENTRY = re.compile(
@@ -50,6 +52,29 @@ _SELECTION = re.compile(
 def _mac_tmp(path: str) -> str:
     """Compare macOS's canonical /private/tmp to the recorded /tmp cwd."""
     return path.removeprefix("/private") if path.startswith("/private/tmp/") else path
+
+
+def _complete_0165_turns(records: Sequence[tuple[int, dict, Mapping[str, object]]]) -> bool:
+    """A contiguous source prefix with an offer is not a completed turn."""
+    open_turn = False
+    completed = 0
+    for _, record, _ in records:
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if record.get("type") == "event_msg":
+            if payload.get("type") == "task_started":
+                if open_turn:
+                    return False
+                open_turn = True
+            elif payload.get("type") == "task_complete":
+                if not open_turn:
+                    return False
+                completed += 1
+                open_turn = False
+        elif record.get("type") == "response_item" and payload.get("role") in {"user", "developer"} and not open_turn:
+            return False
+    return completed > 0 and not open_turn
 
 
 def _time(record: dict, row: Mapping[str, object]) -> datetime | None:
@@ -95,10 +120,12 @@ class CodexSkillEvidenceExtractor:
             return SkillEvidenceExtraction("unsupported", (), malformed)
 
         metas = [record.get("payload") for _, record, _ in records if record.get("type") == "session_meta"]
-        if len(metas) != 1 or not isinstance(metas[0], dict) or metas[0].get("cli_version") != _TESTED_VERSION:
+        if len(metas) != 1 or not isinstance(metas[0], dict) or metas[0].get("cli_version") not in _TESTED_VERSIONS:
             return SkillEvidenceExtraction("unsupported", (), malformed)
         cwd = metas[0].get("cwd")
         if not isinstance(cwd, str) or not cwd.startswith("/") or posixpath.normpath(cwd) != cwd:
+            return SkillEvidenceExtraction("unsupported", (), malformed)
+        if metas[0]["cli_version"] == "0.165.0" and not _complete_0165_turns(records):
             return SkillEvidenceExtraction("unsupported", (), malformed)
         project_skills = _mac_tmp(cwd).rstrip("/") + "/.agents/skills"
         candidates: dict[str, list[SkillEvidence]] = defaultdict(list)

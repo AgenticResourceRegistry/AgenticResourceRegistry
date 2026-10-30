@@ -99,7 +99,7 @@ class ActivityCoverage(BaseModel):
     projection: ProjectionCoverage
     calls: CallCoverage
     usage_rate_denominator_sessions: int = Field(
-        0, description="Present sessions on a supported harness with a complete current publication"
+        0, description="Verified-present sessions with complete evidence and no ambiguous unobserved call"
     )
     observed_sessions: int = 0
     usage_rate: float | None = None
@@ -168,7 +168,12 @@ class ActivitySession(BaseModel):
     last_event_time: str
     projection_state: SessionProjectionState
     source_state: SourceAvailabilityState
-    observed_calls: int
+    usage_measurable: bool = Field(
+        False, description="Whether this listing has attributable use or a defensible measured zero in this session"
+    )
+    observed_calls: int = Field(
+        ..., description="Attributed calls only; zero is not a measured no-call session unless usage_measurable is true"
+    )
     result_states: ResultStateCounts
     source_references: list[SourceReference]
     source_references_truncated: bool

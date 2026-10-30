@@ -44,7 +44,12 @@ _SUMMARY = {
     "activation_actions": {"context_sessions": 0, "next_session_sessions": 1},
     "coverage": coverage.build_coverage(
         {"present_sessions": 2, "present_users": 1},
-        {"supported_present_sessions": 2, "projection_complete_sessions": 2, "observed_sessions": 1},
+        {
+            "supported_present_sessions": 2,
+            "projection_complete_sessions": 2,
+            "usage_measurable_sessions": 2,
+            "observed_sessions": 1,
+        },
         257,
     ),
 }
@@ -335,7 +340,9 @@ def test_cursor_round_trip_pins_window_end_and_rejects_tampering(api):
 
 def test_coverage_distinguishes_no_observed_calls_from_attribution_not_possible():
     processed = coverage.build_coverage(
-        {"present_sessions": 3}, {"supported_present_sessions": 3, "projection_complete_sessions": 2}, 257
+        {"present_sessions": 3},
+        {"supported_present_sessions": 3, "projection_complete_sessions": 2, "usage_measurable_sessions": 2},
+        257,
     )
     assert processed.attribution_state == "no_observed_calls" and processed.usage_rate == 0
     assert processed.usage_rate_denominator_sessions == 2
@@ -349,11 +356,35 @@ def test_coverage_distinguishes_no_observed_calls_from_attribution_not_possible(
     empty = coverage.build_coverage({}, {}, 257)
     assert empty.attribution_state == "attribution_not_possible" and "no_present_sessions" in empty.reasons
     observed = coverage.build_coverage(
-        {"present_sessions": 4}, {"projection_complete_sessions": 4, "observed_sessions": 1}, 257
+        {"present_sessions": 4},
+        {"projection_complete_sessions": 4, "usage_measurable_sessions": 4, "observed_sessions": 1},
+        257,
     )
     assert observed.attribution_state == "observed" and observed.usage_rate == 0.25
     assert any("sender_cached_hash_not_proven_stable" in item for item in observed.limitations)
     assert any("historical_final_push_unproven" in item for item in observed.limitations)
+
+
+def test_collision_is_not_a_measured_zero_even_with_complete_source():
+    # Two Registry listings can have different namespace/slugs but the same
+    # local Codex alias. A rejected ambiguous call must not become a zero.
+    activity = {
+        "supported_present_sessions": 1,
+        "projection_complete_sessions": 1,
+        "usage_measurable_sessions": 0,
+        "candidate_calls": 1,
+        "attributed_calls": 0,
+        "collision_calls": 1,
+    }
+    result = coverage.build_coverage({"present_sessions": 1}, activity, 257)
+    assert result.projection.projection_complete_sessions == 1
+    assert result.usage_rate_denominator_sessions == 0
+    assert result.usage_rate is None and result.attribution_state == "attribution_not_possible"
+    assert "unattributed_calls" in result.reasons
+    assert "countIf(usage_measurable) AS usage_measurable_sessions" in queries._SUMMARY
+    assert "ifNull(p.candidate_count, 0) = ifNull(p.attributed_count, 0)" in queries._SESSIONS
+    assert "ifNull(p.collision_count, 0) = 0" in queries._SESSIONS
+    assert "ifNull(p.unmatched_count, 0) = 0" in queries._SESSIONS
 
 
 @pytest.mark.asyncio
@@ -501,6 +532,38 @@ async def test_session_page_hides_non_complete_counts_and_emits_cursor_only_when
     assert "_source_line_hash" not in public["source_references"][0]
     assert sessions[1]["observed_calls"] == 0 and sessions[1]["source_references"] == []
     assert queries.decode_cursor(cursor, scope=scope)[1] == ["u", "claude-code", "s1"]
+
+
+def test_complete_collision_exposes_unmeasurable_zero_in_session_api():
+    from schemas.component_activity import ActivitySession
+
+    row = {
+        "user_id": "u",
+        "harness": "codex",
+        "session_id": "synthetic-collision",
+        "last_event_time": "2026-01-01 00:00:00.000",
+        "projection_state": "complete",
+        "source_state": "available",
+        "candidate_count": 1,
+        "attributed_count": 0,
+        "collision_count": 1,
+        "usage_measurable": 0,
+        "calls": 0,
+        "refs": [],
+    }
+    unknown = ActivitySession.model_validate(queries._normalize_sessions([row])[0])
+    assert unknown.observed_calls == 0 and unknown.usage_measurable is False
+    measured = ActivitySession.model_validate(
+        queries._normalize_sessions(
+            [
+                row
+                | {"session_id": "synthetic-no-tool", "candidate_count": 0, "collision_count": 0, "usage_measurable": 1}
+            ]
+        )[0]
+    )
+    assert measured.observed_calls == 0 and measured.usage_measurable is True
+    description = ActivitySession.model_json_schema()["properties"]["observed_calls"]["description"]
+    assert "not a measured no-call session unless usage_measurable is true" in description
 
 
 @pytest.mark.asyncio
