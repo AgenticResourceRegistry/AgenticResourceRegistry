@@ -187,6 +187,20 @@ def test_server_package_uses_secret_files_and_loopback_defaults():
     assert "./secrets/grafana:/run/secrets:ro" in grafana
 
 
+def test_server_package_shares_writable_migration_artifacts():
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent
+    compose = yaml.safe_load((root / "docker/server-package/docker-compose.yml").read_text())
+    services = compose["services"]
+    for name in ("observal-api", "observal-worker"):
+        service = services[name]
+        assert "apidata:/data" in service["volumes"]
+        assert "MIGRATION_ARTIFACT_ROOT=/data/migration_artifacts" in service["environment"]
+        assert service["read_only"] is True
+    assert "apidata" in compose["volumes"]
+
+
 def _package_fixture(tmp_path):
     root = Path(__file__).resolve().parent.parent
     install = tmp_path / "install"
@@ -199,6 +213,7 @@ def _package_fixture(tmp_path):
     docker.write_text("#!/bin/sh\nexit 0\n")
     docker.chmod(0o755)
     env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "OBSERVAL_INSTALL_DIR": str(install)}
+    env.pop("API_HOST_PORT", None)
     return install, env
 
 
@@ -240,6 +255,76 @@ def test_server_package_headless_setup_uses_safe_defaults(tmp_path):
     assert "FRONTEND_URL=http://localhost:3000" in generated_env
     assert "DEMO_SUPER_ADMIN_EMAIL=super@demo.example" in generated_env
     assert "Password file:" in result.stdout
+    assert "Server URL on this machine: http://localhost:8000" in result.stdout
+    assert "Health check: curl http://localhost:8000/health" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("bind_address", "host"),
+    [
+        ("192.0.2.10", "192.0.2.10"),
+        ("::1", "localhost"),
+        ("[::1]", "localhost"),
+        ("::", "localhost"),
+        ("[::]", "localhost"),
+        ("2001:db8::10", "[2001:db8::10]"),
+        ("[2001:db8::10]", "[2001:db8::10]"),
+    ],
+)
+def test_server_package_prints_actual_non_loopback_bind(tmp_path, bind_address, host):
+    install, env = _package_fixture(tmp_path)
+    result = subprocess.run(
+        ["bash", str(install / "setup.sh")],
+        input=f"http://example.test:3000\n{bind_address}\nnone\n",
+        text=True,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+
+    assert f"Server URL on this machine: http://{host}:8000" in result.stdout
+    assert f"Health check: curl http://{host}:8000/health" in result.stdout
+    if bind_address in ("::1", "[::1]"):
+        assert "Remote HTTP is enabled" not in result.stdout
+
+
+@pytest.mark.parametrize("process_port, expected_port", [(None, "8123"), ("9123", "9123"), ("", "8000")])
+def test_server_package_prints_compose_port_precedence(tmp_path, process_port, expected_port):
+    install, env = _package_fixture(tmp_path)
+    with (install / "env.template").open("a") as template:
+        template.write("\nAPI_HOST_PORT=8123\n")
+    if process_port is not None:
+        env["API_HOST_PORT"] = process_port
+
+    result = subprocess.run(
+        ["bash", str(install / "setup.sh")],
+        input="",
+        text=True,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+
+    assert "API_HOST_PORT=8123" in (install / ".env").read_text()
+    assert f"Server URL on this machine: http://localhost:{expected_port}" in result.stdout
+    assert f"Health check: curl http://localhost:{expected_port}/health" in result.stdout
+
+
+def test_server_package_prints_dynamically_assigned_compose_port(tmp_path):
+    install, env = _package_fixture(tmp_path)
+    env["API_HOST_PORT"] = "0"
+    docker = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
+    docker.write_text('#!/bin/sh\ncase " $* " in *" port observal-lb 80"*) echo "127.0.0.1:32771" ;; esac\n')
+    result = subprocess.run(
+        ["bash", str(install / "setup.sh")],
+        input="",
+        text=True,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    assert "Server URL on this machine: http://localhost:32771" in result.stdout
+    assert "Health check: curl http://localhost:32771/health" in result.stdout
 
 
 def test_installer_selects_tty_or_safe_headless_input():
@@ -247,6 +332,21 @@ def test_installer_selects_tty_or_safe_headless_input():
     assert "if ( : </dev/tty )" in installer
     assert 'bash "$INSTALL_DIR/setup.sh" </dev/tty' in installer
     assert 'bash "$INSTALL_DIR/setup.sh" </dev/null' in installer
+
+
+def test_server_package_uses_arr_release_and_images_but_keeps_observal_cli():
+    root = Path(__file__).resolve().parent.parent
+    installer = (root / "install-server.sh").read_text()
+    compose = (root / "docker/server-package/docker-compose.yml").read_text()
+    guide = (root / "docs/getting-started/installation.md").read_text()
+
+    repo = "AgenticResourceRegistry/AgenticResourceRegistry"
+    assert f'GITHUB_REPO="{repo}"' in installer
+    assert f"https://raw.githubusercontent.com/{repo}/main/install-server.sh" in guide
+    assert "ghcr.io/agenticresourceregistry/observal-api:" in compose
+    assert "ghcr.io/agenticresourceregistry/observal-web:" in compose
+    assert "observal admin create-user" in guide
+    assert "use the server URL printed by setup" in guide
 
 
 def test_server_package_upgrade_preserves_legacy_public_bind(tmp_path):
