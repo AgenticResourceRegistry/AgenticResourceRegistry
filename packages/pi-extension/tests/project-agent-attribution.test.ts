@@ -13,6 +13,7 @@ import * as path from "node:path";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "observal-pi-project-agent-"));
 process.env.HOME = home;
+process.env.USERPROFILE = home; // os.homedir() reads this on Windows
 delete process.env.OBSERVAL_DELEGATION_TASK_ID;
 const observalDir = path.join(home, ".observal");
 fs.mkdirSync(observalDir, { recursive: true });

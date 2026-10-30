@@ -20,6 +20,16 @@ const writeJson = (file: string, value: unknown) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value));
 };
+// A new runtime stands for a restarted Pi, so the old one's timers must die with it.
+// Left running, an old runtime with no credentials can finish a later switch first.
+const intervals = new Set<ReturnType<typeof setInterval>>();
+const realSetInterval = globalThis.setInterval;
+globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+  const timer = realSetInterval(...args);
+  intervals.add(timer);
+  return timer;
+}) as typeof setInterval;
+
 const extension = await import(`../extensions/observal.ts?agent-activation=${Date.now()}`);
 const serverEntry = (name: string) => ({ command: "node", args: ["/tmp/isolated-stdio-fixture.js", name] });
 const one = serverEntry("one");
@@ -84,6 +94,8 @@ writeJson(path.join(configDir, "lockfile.json"), {
   },
 });
 function loadRuntime() {
+  for (const timer of intervals) clearInterval(timer);
+  intervals.clear();
   const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
   const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
   extension.default({
