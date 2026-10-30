@@ -23,6 +23,7 @@ const unrelated = path.join(home, "unrelated");
 for (const dir of [nestedB, unrelated]) fs.mkdirSync(dir, { recursive: true });
 
 const payloads: Array<Record<string, any>> = [];
+const snapshots: Array<Record<string, any>> = [];
 const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "application/json");
   if (request.method === "GET") {
@@ -34,6 +35,7 @@ const server = http.createServer((request, response) => {
   request.on("end", () => {
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
     if (request.url === "/api/v1/layer-snapshots") {
+      snapshots.push(payload);
       response.end(JSON.stringify({ hash: payload.hash }));
       return;
     }
@@ -98,6 +100,8 @@ assert.deepEqual(await sessionIn(unrelated), { agent_id: null, agent_version: nu
 // The deepest project wins inside nested installs, and a user-scope agent covers everywhere else.
 writeState({ id: "agent-y", name: "everyday" }, [projectAgent, nestedAgent, userAgent]);
 assert.deepEqual(await sessionIn(path.join(nestedB, "src")), { agent_id: "agent-b", agent_version: "2.0.0" });
+// The layer snapshot of that session pins the agent it is attributed to, not only installs at its exact cwd.
+assert(snapshots.at(-1)!.pinned_versions.agents.some((agent: any) => agent.name === "pkg-b"));
 assert.deepEqual(await sessionIn(projectA), { agent_id: "agent-x", agent_version: "1.0.0" });
 assert.deepEqual(await sessionIn(unrelated), { agent_id: "agent-y", agent_version: "3.0.0" });
 

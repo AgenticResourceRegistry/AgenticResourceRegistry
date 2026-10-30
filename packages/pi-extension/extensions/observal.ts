@@ -1750,9 +1750,9 @@ export default function (pi: ExtensionAPI) {
     const pins: Record<string, any> = { schema_version: 2, agents: [], standalone: [] };
     const section = registry?.harnesses?.pi;
     if (!section || typeof section !== "object" || Array.isArray(section)) return pins;
-    const directory = path.resolve(cwd);
+    // Same rule as sessionAgentBinding: a project install covers its directory and everything below it.
     const included = (item: Record<string, any>): boolean =>
-      item.scope === "user" || (typeof item.directory === "string" && path.resolve(item.directory) === directory);
+      item.scope === "user" || (typeof item.directory === "string" && item.directory !== "" && isSameOrUnder(cwd, item.directory));
     const common = (item: Record<string, any>, scope: string): Record<string, any> => {
       const projected: Record<string, any> = {
         type: text(item.type), id: uuid(item.id), name: text(item.name), version: text(item.version),
