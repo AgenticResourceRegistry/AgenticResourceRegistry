@@ -3,7 +3,7 @@
 
 import { expect, test } from "@playwright/test";
 
-test("registration explains username rules and blocks invalid names before sending a request", async ({ page }, testInfo) => {
+test("registration explains username rules and blocks invalid names before sending a request", async ({ page }) => {
   await page.route("**/api/v1/config/public", async (route) => {
     const response = await route.fetch();
     const config = await response.json();
@@ -29,10 +29,8 @@ test("registration explains username rules and blocks invalid names before sendi
   await expect(username).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("alert").filter({ hasText: /valid username/ })).toBeVisible();
   expect(registrationRequests).toBe(0);
-  await page.screenshot({ path: testInfo.outputPath("username-desktop.png"), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("alert").filter({ hasText: /valid username/ })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("username-mobile.png"), fullPage: true });
 
   await username.fill("Test-User");
   await expect(username).toHaveAttribute("aria-invalid", "false");
