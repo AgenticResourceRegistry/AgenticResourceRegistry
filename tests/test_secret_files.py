@@ -224,6 +224,35 @@ def test_server_package_new_install_generates_restricted_secrets(tmp_path):
     assert "Password file:" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("stack", "expected_prefix"),
+    [
+        ("none", "compose -f docker-compose.yml"),
+        ("prometheus", "compose -f docker-compose.yml -f docker-compose.observability.yml"),
+        ("grafana", "compose --profile grafana -f docker-compose.yml -f docker-compose.observability.yml"),
+    ],
+)
+def test_server_package_compose_args_work_with_empty_profile(tmp_path, stack, expected_prefix):
+    install, env = _package_fixture(tmp_path)
+    log = tmp_path / "compose.log"
+    docker = tmp_path / "bin/docker"
+    docker.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$OBSERVAL_TEST_COMPOSE_LOG"\n')
+    env["OBSERVAL_TEST_COMPOSE_LOG"] = str(log)
+
+    subprocess.run(
+        ["/bin/bash", str(install / "setup.sh")],
+        input=f"\n\n{stack}\n",
+        text=True,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+
+    commands = log.read_text().splitlines()
+    assert commands[1].startswith(f"{expected_prefix} --env-file .env up")
+    assert commands[2] == f"{expected_prefix} restart observal-lb"
+
+
 def test_server_package_headless_setup_uses_safe_defaults(tmp_path):
     install, env = _package_fixture(tmp_path)
     result = subprocess.run(
