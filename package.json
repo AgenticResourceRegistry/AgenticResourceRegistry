@@ -8,7 +8,8 @@
   "scripts": {
     "e2e": "pnpm --filter web e2e",
     "e2e:list": "pnpm --filter web exec playwright test --list",
-    "test:registry-slug": "node --experimental-strip-types --test tests/test_registry_slug.mjs"
+    "test:registry-slug": "node --experimental-strip-types --test tests/test_registry_slug.mjs",
+    "test:trace-tool-usage": "node --experimental-strip-types --test web/src/pages/user/traces/tool-usage.test.mjs"
   },
   "pnpm": {
     "overrides": {
