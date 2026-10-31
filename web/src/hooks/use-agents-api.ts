@@ -24,6 +24,7 @@ import {
   bulk,
   admin,
   remoteAgents,
+  discovery,
 } from "@/lib/api";
 import type { ForkRequest, LeaderboardWindow, SetRecommendedRequest } from "@/lib/types";
 
@@ -63,6 +64,18 @@ export function useRemoteAgents(enabled = true) {
     queryKey: ["ard", "imports"],
     queryFn: () => remoteAgents.list(),
     enabled,
+  });
+}
+
+/** ARD search, disabled until the query has a couple of characters. */
+export function useAgentDiscoverySearch(text: string) {
+  const trimmed = text.trim();
+  return useQuery({
+    queryKey: ["discovery", "agents", trimmed],
+    queryFn: () => discovery.searchAgents(trimmed),
+    enabled: trimmed.length >= 2,
+    staleTime: 60 * 1000,
+    retry: false,
   });
 }
 

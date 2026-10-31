@@ -18,6 +18,7 @@ import {
   useRestoreDeletedAgent,
   useSubmitDraft,
   useRemoteAgents,
+  useAgentDiscoverySearch,
 } from "@/hooks/use-api";
 import { registry, getUserRole } from "@/lib/api";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -87,28 +88,7 @@ function RestoreDeletedAgentButton({ agent }: { agent: RegistryItem }) {
   );
 }
 
-/** Running agents can hand a delegable agent a task through the observal-agents MCP server. */
-function DelegableBadge() {
-  return (
-    <span
-      className="inline-flex items-center rounded-full bg-light-blue px-2 py-0.5 text-2xs font-medium text-dark-blue"
-      title="Running agents can hand this agent a task through the observal-agents MCP server."
-    >
-      Delegable
-    </span>
-  );
-}
-
-/** Mirrors the server's `delegable()`: approved, and a supported harness (none listed means all) can run headless. */
-function useIsDelegable(agent: RegistryItem) {
-  const { data: harnessList = [] } = useHarnesses();
-  if ((agent.status ?? "approved") !== "approved") return false;
-  const headless = harnessList.filter((h) => h.runtime.headless_run).map((h) => h.name);
-  const supported = (agent.supported_harnesses as string[] | undefined) ?? [];
-  return supported.length ? supported.some((h) => headless.includes(h)) : headless.length > 0;
-}
-
-function RemoteAgentCard({ agent }: { agent: RemoteAgent }) {
+function RemoteAgentCard({ agent, matchedOn }: { agent: RemoteAgent; matchedOn?: string[] }) {
   const [copied, setCopied] = useState(false);
   const command = `observal delegate run ${agent.identifier} "<task>"`;
   const lifecycle = agent["obs:lifecycle"];
@@ -129,7 +109,6 @@ function RemoteAgentCard({ agent }: { agent: RemoteAgent }) {
           Remote A2A agent
         </span>
         <div className="flex items-center gap-1.5">
-          {agent["obs:delegable"] && <DelegableBadge />}
           <StatusBadge status={lifecycle} />
         </div>
       </div>
@@ -138,6 +117,9 @@ function RemoteAgentCard({ agent }: { agent: RemoteAgent }) {
         {agent.identifier}
         {agent.version ? ` · ${agent.version}` : ""}
       </div>
+      {matchedOn && matchedOn.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">Matched on {matchedOn.join(", ")}</p>
+      )}
       <div className="flex-1" />
       <button
         type="button"
@@ -156,7 +138,6 @@ function AgentCatalogCard({ agent, className }: { agent: RegistryItem; className
   const canonical = canonicalRouteParts(agent.namespace, agent.slug);
   const downloads = agent.download_count as number | undefined;
   const rating = agent.average_rating as number | null | undefined;
-  const delegable = useIsDelegable(agent);
 
   return (
     <ResourceCard
@@ -178,11 +159,6 @@ function AgentCatalogCard({ agent, className }: { agent: RegistryItem; className
         max={3}
         className="mt-2.5"
       />
-      {delegable && (
-        <div className="mt-2">
-          <DelegableBadge />
-        </div>
-      )}
       <CardFooter>
         {downloads != null && <span>{compactNumber(downloads)} pulls</span>}
         {rating != null && <span>★ {rating.toFixed(1)}</span>}
@@ -204,8 +180,7 @@ function AgentListRow({ agent, onClick }: { agent: RegistryItem; onClick: () => 
         : `${harnesses.length} supported`;
   const componentCount = agent.component_count as number | undefined;
   const handle = agent.namespace && agent.slug ? `${agent.namespace}/${agent.slug}` : agent.qualified_name || agent.name;
-  const delegable = useIsDelegable(agent);
-  const subtitle = [handle, harnessText, componentCount != null ? `${componentCount} components` : "", delegable ? "Delegable" : ""]
+  const subtitle = [handle, harnessText, componentCount != null ? `${componentCount} components` : ""]
     .filter(Boolean)
     .join(" · ");
 
@@ -229,8 +204,12 @@ export default function AgentsView() {
   const [layout, setLayout] = useState<ViewMode>("grid");
   const tab = TABS.find((t) => t === f.searchParams.view) ?? "discover";
 
-  const { data: agents, isLoading, isError, error, refetch } = useRegistryList("agents", {
-    ...(f.debouncedSearch ? { search: f.debouncedSearch } : {}),
+  // Two or more characters on the Discover tab search by task through ARD, ranked by relevance.
+  const ardActive = tab === "discover" && f.debouncedSearch.trim().length >= 2;
+  const ard = useAgentDiscoverySearch(ardActive ? f.debouncedSearch : "");
+
+  const { data: agents, isLoading: listLoading, isError: listError, error: listErr, refetch: refetchList } = useRegistryList("agents", {
+    ...(f.debouncedSearch && !ardActive ? { search: f.debouncedSearch } : {}),
     ...(namespace ? { namespace } : {}),
     ...(f.selectedTeam ? { team_id: f.selectedTeam.id } : {}),
     ...(category ? { category } : {}),
@@ -261,23 +240,57 @@ export default function AgentsView() {
     [isAdmin, allArchivedAgents, scopedMyAgents],
   );
 
+  const isLoading = listLoading || (ardActive && ard.isLoading);
+  const isError = listError || (ardActive && ard.isError);
+  const error = listErr ?? ard.error;
+  const refetch = () => {
+    refetchList();
+    if (ardActive) ard.refetch();
+  };
+
   const { filtered, pendingCount } = useMemo(() => {
+    if (ardActive) {
+      // ARD decides what matches and in which order; the list supplies the card data.
+      const score = new Map<string, number>();
+      for (const r of ard.data?.results ?? []) {
+        const ref = r["obs:nativeRef"]?.split("@", 1)[0];
+        if (r["obs:kind"] === "agent" && ref) score.set(ref, r.score);
+      }
+      const ranked = (agents ?? [])
+        .filter((a) => score.has(`${a.namespace}/${a.slug}`))
+        .sort((x, y) => score.get(`${y.namespace}/${y.slug}`)! - score.get(`${x.namespace}/${x.slug}`)!);
+      return { filtered: ranked, pendingCount: 0 };
+    }
     const active = agents ?? [];
     const activeIds = new Set(active.map((a) => a.id));
     const pending = scopedMyAgents.filter(
       (a) => !["approved", "draft", "rejected", "archived"].includes(a.status ?? "") && !activeIds.has(a.id),
     );
     return { filtered: [...pending, ...active], pendingCount: pending.length };
-  }, [agents, scopedMyAgents]);
+  }, [agents, scopedMyAgents, ardActive, ard.data]);
 
   // Remote A2A agents carry no namespace, team, category or harness, so those filters hide them.
-  const visibleRemote = useMemo(() => {
+  const visibleRemote = useMemo((): { agent: RemoteAgent; matchedOn?: string[] }[] => {
     if (tab !== "discover" || namespace || team || category || harness) return [];
+    if (ardActive) {
+      return (ard.data?.results ?? [])
+        .filter((r) => r["obs:kind"] === "external")
+        .map((r) => ({
+          matchedOn: r.matchedOn,
+          agent: {
+            identifier: r.identifier,
+            displayName: r.displayName ?? r.identifier,
+            version: r.version,
+            "obs:lifecycle": r["obs:approval"] ?? "approved",
+            "obs:visibility": r["obs:visibility"] ?? "public",
+          },
+        }));
+    }
     const q = f.debouncedSearch.trim().toLowerCase();
-    return remoteAgents.items.filter(
-      (r) => !q || r.displayName.toLowerCase().includes(q) || r.identifier.toLowerCase().includes(q),
-    );
-  }, [tab, namespace, team, category, harness, f.debouncedSearch, remoteAgents]);
+    return remoteAgents.items
+      .filter((r) => !q || r.displayName.toLowerCase().includes(q) || r.identifier.toLowerCase().includes(q))
+      .map((agent) => ({ agent }));
+  }, [tab, namespace, team, category, harness, ardActive, ard.data, f.debouncedSearch, remoteAgents]);
 
   const fields: FilterField[] = [
     ...commonFields(f, [
@@ -392,7 +405,7 @@ export default function AgentsView() {
           </h2>
           <CatalogGrid>
             {visibleRemote.map((r) => (
-              <RemoteAgentCard key={r.identifier} agent={r} />
+              <RemoteAgentCard key={r.agent.identifier} agent={r.agent} matchedOn={r.matchedOn} />
             ))}
           </CatalogGrid>
         </section>
