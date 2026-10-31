@@ -136,16 +136,16 @@ skips = [
 
 [dependency-groups]
 fuzz = [
-    "hypothesis==6.152.1",
+    "hypothesis==6.170.14",
     "loguru==0.7.3",
-    "orjson==3.11.9",
+    "orjson==3.13.0",
 ]
 dev = [
     "fastapi>=0.135.3",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.14.2",
     "sqlalchemy>=2.0.49",
-    "ruff==0.15.15",
+    "ruff==0.17.3",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=6.0",
@@ -155,5 +155,5 @@ dev = [
 # Exact pins for reproducible CLI binary builds (release pipeline).
 # `uv sync --frozen --group release` in the cli-binaries job installs these.
 release = [
-    "pyinstaller==6.21.0",
+    "pyinstaller==6.22.3",
 ]

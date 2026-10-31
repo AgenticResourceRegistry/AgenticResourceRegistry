@@ -27,7 +27,7 @@ dependencies = [
     "httpx",
     "gitpython>=3.1.59",
     "boto3",
-    "litellm>=1.100.4,<1.101.0",  # >=1.100.4: GHSA-g5ff-637f-6q2m, GHSA-7hp6-4w63-5g45
+    "litellm>=1.106.6,<1.107.0",  # >=1.100.4: GHSA-g5ff-637f-6q2m, GHSA-7hp6-4w63-5g45
     # Required by LiteLLM for the `vertex_ai/*` models the insights settings
     # page offers. Without it every Vertex call fails with "Google Cloud SDK
     # not found", including Express Mode keys that need no GCP project.
