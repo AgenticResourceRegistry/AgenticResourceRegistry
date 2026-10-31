@@ -17,7 +17,7 @@ test("Codex pre/post events for one call ID count as one use", () => {
 	);
 });
 
-test("missing IDs pair pre/post hooks by tool name, retaining unpaired uses", () => {
+test("missing IDs remain uncorrelated even when tool names match", () => {
 	assert.deepEqual(
 		countToolUsage([
 			{ eventName: "hook_pretooluse", toolName: "read" },
@@ -27,7 +27,7 @@ test("missing IDs pair pre/post hooks by tool name, retaining unpaired uses", ()
 			{ eventName: "hook_posttooluse", toolName: "read" },
 			{ eventName: "hook_pretooluse", toolName: "orphan" },
 		]),
-		{ read: 2, write: 1, orphan: 1 },
+		{ read: 3, write: 2, orphan: 1 },
 	);
 });
 

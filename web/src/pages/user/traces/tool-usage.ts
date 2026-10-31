@@ -11,7 +11,6 @@ interface ToolHook {
 export function countToolUsage(events: ReadonlyArray<ToolHook>): Record<string, number> {
 	const invocations: string[] = [];
 	const byId = new Map<string, number>();
-	const pendingPre = new Map<string, number[]>();
 
 	for (const { eventName, toolName, toolUseId } of events) {
 		if (
@@ -32,18 +31,9 @@ export function countToolUsage(events: ReadonlyArray<ToolHook>): Record<string, 
 			continue;
 		}
 
-		if (eventName === "hook_pretooluse") {
-			const index = invocations.push(name) - 1;
-			const waiting = pendingPre.get(name) ?? [];
-			waiting.push(index);
-			pendingPre.set(name, waiting);
-		} else if ((pendingPre.get(name)?.length ?? 0) > 0) {
-			// With no ID, pair the next result with an unmatched pre-hook of the
-			// same tool. A pre-hook left without a result remains a counted use.
-			pendingPre.get(name)?.shift();
-		} else {
-			invocations.push(name);
-		}
+		// Without an invocation ID, a matching name cannot prove these hooks
+		// belong to the same call (other calls may be interleaved).
+		invocations.push(name);
 	}
 
 	// Object.fromEntries avoids special keys such as "__proto__" mutating the
