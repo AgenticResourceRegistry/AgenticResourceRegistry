@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Database backup and restore for Observal server upgrades.
@@ -136,15 +137,14 @@ def restore_backup(backup_path: Path, compose_dir: Path) -> None:
                 "observal",
                 "--clean",
                 "--if-exists",
+                "--exit-on-error",
             ],
             stdin=f,
             capture_output=True,
             cwd=compose_dir,
             timeout=300,
         )
-    # pg_restore returns non-zero for warnings (e.g., "relation does not exist")
-    # which are safe to ignore during --clean restore
-    if result.returncode not in (0, 1):
+    if result.returncode != 0:
         raise RuntimeError(f"pg_restore failed: {result.stderr.decode()[:200]}")
 
     rprint("[dim]  PostgreSQL restored.[/dim]")

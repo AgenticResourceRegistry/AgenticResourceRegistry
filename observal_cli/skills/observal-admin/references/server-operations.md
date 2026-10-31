@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Server operations
@@ -38,10 +39,10 @@ Execute only the requested direction:
 
 ```bash
 observal server upgrade --version VERSION --force --output json
-observal server rollback --force --output json
+observal server rollback --from-backup ~/.observal/backups/vVERSION-TIMESTAMP --force --output json
 ```
 
-Rollback restores PostgreSQL and managed Docker image state, not ClickHouse telemetry. Verify service status and version after completion.
+Select the correct managed backup explicitly before rollback; `--from-backup` is required, even with `--force`. PostgreSQL restoration is not an exact clean-schema downgrade, and ClickHouse telemetry is unchanged. Verify Docker services and their running images with `docker compose ps` and check `/health` through the load balancer. `observal server status` checks the separate embedded server; `observal server versions` reads the configured `.env` version, not running images.
 
 ## PostgreSQL migration
 

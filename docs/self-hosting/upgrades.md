@@ -11,38 +11,42 @@ Safe upgrade flow for the Agentic Resource Registry server stack.
 > [!IMPORTANT]
 > When upgrading into the release that introduces complete-folder skill delivery, follow the [skill-folder rollout procedure](/skill-folder-rollout) instead of using the quick, standard, or blue/green instructions below unchanged. Those paths do not guarantee that old API and worker processes have stopped before the new init container runs PostgreSQL migrations. Keep folder delivery off, back up and rehearse the historical upgrade, and schedule a maintenance window to drain old processes **before** migration; enable delivery only after a homogeneous rollout and separate approval.
 
-## Quick upgrade (recommended)
+## Docker image upgrade
 
-If you installed Agentic Resource Registry via `observal server start` (the embedded stack), the CLI handles upgrades automatically:
+For a Docker Compose installation whose **installed** file already points to the target release's GHCR repository:
 
 ```bash
-observal server upgrade --dry-run --output json
-observal server upgrade --version 0.9.0 --force --output json
+observal server upgrade --version 1.16.0 --dry-run --output json
+observal server upgrade --version 1.16.0 --force --output json
 ```
 
-This pulls new Docker images, backs up PostgreSQL, recreates containers, and runs health checks. If the health check fails, it requests the previous image version again. Local shell and Docker access authorize the operation; the command does not require a reachable API or API role.
+The CLI refuses an old `ghcr.io/observal` Compose file when the target images are available only in `ghcr.io/agenticresourceregistry`. It does not rewrite installed Compose files or perform a cross-repository migration. Pulling happens before the PostgreSQL backup or container changes; old writers are stopped before starting init. On failure after init may have run, the CLI tries to stop writers and requires manual recovery, **not** an automatic restart of the old API. A package with `OBSERVAL_VERSION=latest` must first be pinned to its *verified running version* for CLI upgrades. Local shell and Docker access authorize the operation; no reachable API or API role is required.
 
 See [`observal server upgrade`](/cli/server#observal-server-upgrade) for full details.
 
 ### Server-package upgrades
 
-If you installed with `install-server.sh`, back up `.env`, `secrets/`, and the `apidata` and `pgdata` volumes before rerunning the installer for the target release. Setup detects the existing `.env`. Choose the default **No** response to preserve custom values and existing direct credentials. **This only stages the new package and retains a backup: no containers restart and no migrations run.** An exit code of zero means staging succeeded, not that the server has been upgraded. The installer records the prior bind address when an older install has no `OBSERVAL_BIND_ADDRESS` setting.
+If you installed with `install-server.sh`, back up `.env`, `secrets/`, `pgdata`, `apidata`, and `chdata` before staging the target release package. With an existing `.env`, the installer preserves it and the secrets, retains a copy of the previous package, and **never runs the downloaded setup script**: no containers restart or migrations run. It refuses an unidentifiable nonempty installation without `.env`. Other local package edits—including nginx rules, ClickHouse user/config files, and observability overrides—stay only in the backup: compare and reapply them before cutover. A zero exit code means *staged*, not upgraded. The preserved `OBSERVAL_VERSION=latest` or old pin may resolve to a different release under the new static Compose repository; do not start the staged stack until you have explicitly verified and pinned its image version. An absent `OBSERVAL_BIND_ADDRESS` remains absent (the packaged Compose default is loopback).
 
 For the complete-folder release, follow the [supervised rollout](/skill-folder-rollout): keep the delivery gate off, stop *all* old API and worker processes before starting the new init container, then run Compose from the installed package with the same optional observability overlay/profile used by the old deployment. For a core-only package installation, after staging the package and verifying backups and the gate:
 
 ```bash
 cd /opt/observal  # or the directory passed to --install-dir
-# Set OBSERVAL_VERSION in the preserved .env to the selected release's image tag.
-# For installer --version vX.Y.Z, the image tag is X.Y.Z (no leading v).
-# An old pinned tag keeps serving old images; latest also requires an explicit pull.
-docker compose -f docker-compose.yml --env-file .env stop observal-api observal-worker
-docker compose -f docker-compose.yml --env-file .env pull observal-init observal-api observal-worker observal-web
-docker compose -f docker-compose.yml --env-file .env up -d --wait --wait-timeout 300
+# Pin OBSERVAL_VERSION in .env to the verified target image tag (X.Y.Z, no v).
+# Unset any conflicting exported OBSERVAL_VERSION before Compose commands.
+docker compose -f docker-compose.yml --env-file .env config --images
+# Pull while the old stack is still serving: a missing tag must not cause downtime.
+docker compose -f docker-compose.yml --env-file .env pull  # all images, including nginx and dependencies
+# Stop and verify every old writer (including any overlays/replicas) before init.
+docker compose -f docker-compose.yml --env-file .env stop observal-api observal-worker observal-init
+docker compose -f docker-compose.yml --env-file .env ps --status running --services
+# STOP HERE until a tested, consistent snapshot of pgdata, apidata and chdata is complete.
+docker compose -f docker-compose.yml --env-file .env up -d --pull never --no-build --wait --wait-timeout 300
 docker compose -f docker-compose.yml --env-file .env restart observal-lb
-curl -fsS http://127.0.0.1:8000/health  # adjust for the configured API_HOST_PORT
+curl -fsS http://127.0.0.1:8000/health  # adjust for OBSERVAL_BIND_ADDRESS and API_HOST_PORT
 ```
 
-Add `-f docker-compose.observability.yml` and `--profile grafana` if those were used previously; do not silently drop optional services. Verify the API externally through the load balancer, not only via its container health check. Choosing **Yes** at the configuration prompt instead intentionally rebuilds the general configuration from the new template and starts services; for this release, **stop old API and worker processes before running the installer**, because setup will start the new init container. Core application, PostgreSQL, ClickHouse, Grafana, and demo credentials are preserved or migrated into restricted files, but unrelated custom environment entries must be reapplied.
+Add `-f docker-compose.observability.yml` and `--profile grafana` if those were used previously; do not silently drop optional services. Verify the API externally through the load balancer, not only via its container health check. The installer no longer offers an existing-install **Yes** path: configuration replacement and service cutover require a supervised procedure. Backing up only the CLI PostgreSQL dump is not a complete rollback of a migrated database or ClickHouse data.
 
 ## Before a manual upgrade
 
