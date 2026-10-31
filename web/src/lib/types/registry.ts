@@ -551,10 +551,29 @@ export interface RemoteAgent {
 	url?: string;
 	"obs:lifecycle": "approved" | "pending" | "rejected" | "archived" | "draft";
 	"obs:visibility": "public" | "team" | "owner";
-	"obs:delegable": boolean;
 }
 
 export interface RemoteAgentList {
 	items: RemoteAgent[];
 	total: number;
+}
+
+// ── Discovery (ARD search) ──────────────────────────────────────────
+
+/** One entry of `results` in an ARD Search response. `score` is relevance only. */
+export interface DiscoverySearchResult {
+	identifier: string;
+	displayName?: string;
+	version?: string;
+	score: number;
+	matchedOn?: string[];
+	"obs:kind"?: "agent" | "external";
+	/** `namespace/slug@version` of the registry agent behind the entry. */
+	"obs:nativeRef"?: string | null;
+	"obs:approval"?: RemoteAgent["obs:lifecycle"];
+	"obs:visibility"?: RemoteAgent["obs:visibility"];
+}
+
+export interface DiscoverySearchResponse {
+	results: DiscoverySearchResult[];
 }

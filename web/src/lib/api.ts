@@ -51,6 +51,7 @@ import type {
 	CheckSettings,
 	RegistryItem,
 	RemoteAgentList,
+	DiscoverySearchResponse,
 	ForkRequest,
 	ForkDiff,
 	ForksResponse,
@@ -1162,8 +1163,6 @@ export interface HarnessRuntimeFacts {
 	dynamic_tools: boolean;
 	prompt_context_injection: boolean;
 	guidance_file_write: boolean;
-	/** The harness CLI can run one prompt non-interactively, so agents can delegate tasks to it. */
-	headless_run: boolean;
 }
 
 export interface HarnessEntry {
@@ -1244,6 +1243,16 @@ export const config = {
 // ── Remote A2A agents ──────────────────────────────────────────────
 export const remoteAgents = {
 	list: () => get<RemoteAgentList>("/ard/imports"),
+};
+
+export const discovery = {
+	/** ARD Search over registry agents and remote A2A agents, ranked by relevance. */
+	searchAgents: (text: string, pageSize = 100) =>
+		post<DiscoverySearchResponse>("/ard/search", {
+			query: { text, filter: { "obs:kind": ["agent", "external"] } },
+			federation: "none",
+			pageSize,
+		}),
 };
 
 // ── Bulk ───────────────────────────────────────────────────────────
