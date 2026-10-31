@@ -55,6 +55,7 @@ jobs:
       pull-requests: read
     outputs:
       python: ${{ steps.filter.outputs.python }}
+      installer: ${{ steps.filter.outputs.installer }}
       web: ${{ steps.filter.outputs.web }}
       docker: ${{ steps.filter.outputs.docker }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -76,6 +77,10 @@ jobs:
               - 'uv.lock'
               - 'Makefile'
               - '.pre-commit-config.yaml'
+              - '.github/workflows/ci.yml'
+            installer:
+              - 'docker/server-package/setup.sh'
+              - 'tests/test_secret_files.py'
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
@@ -207,6 +212,31 @@ jobs:
           disable_search: true
           # Fork pull requests cannot access repository secrets, so Codecov authenticates those tokenlessly.
           fail_ci_if_error: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+
+# ── Job 3a: Validate the server installer with macOS's Bash 3.2 ─────────────
+  macos-installer:
+    name: macos-installer
+    runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python and dependencies
+        run: |
+          uv python install 3.13
+          cd observal-server
+          uv sync --python 3.13 --group dev
+
+      - name: Test empty installer arrays with Bash 3.2
+        run: |
+          /bin/bash -c '[[ ${BASH_VERSINFO[0]} == 3 && ${BASH_VERSINFO[1]} == 2 ]]'
+          cd observal-server
+          uv run --python 3.13 pytest ../tests/test_secret_files.py -q -k test_server_package_compose_args_work_with_empty_profile
 
 # ── Job 3b: Execute generated hook commands in native Windows shells ─────────
   windows-launchers:
