@@ -279,12 +279,12 @@ function CreatePanel({
 
         <div className="self-center" aria-live="polite" aria-atomic="true">
           <p className="text-xs font-medium text-muted-foreground">Live install identity</p>
-          <div className="mt-3 min-h-16 border-b border-border pb-4 font-mono text-xl tracking-tight 2xl:text-2xl">
-            <span className="text-muted-foreground">observal pull </span>
-            <span key={previewHandle} className="inline-block text-foreground">
+          <div className="mt-3 min-h-16 border-b border-border pb-4 font-mono text-base tracking-tight sm:text-xl 2xl:text-2xl">
+            <span className="text-muted-foreground">observal agent pull </span>
+            <span key={previewHandle} className="inline-block max-w-full break-all align-bottom text-foreground">
               {previewHandle}
             </span>
-            <span className="text-muted-foreground">/agent-name</span>
+            <span className="whitespace-nowrap text-muted-foreground">/agent-name</span>
           </div>
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
             This preview follows the same namespace rules as the final handle.
