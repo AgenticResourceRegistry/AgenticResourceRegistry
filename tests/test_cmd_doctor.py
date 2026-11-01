@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for observal_cli.cmd_doctor helpers."""
@@ -144,6 +145,43 @@ class TestChecks:
 
     def test_kiro_warns_when_agent_has_no_session_push(self, tmp_path: Path):
         write_json(tmp_path / ".kiro/agents/default.json", {"hooks": {}})
+        warnings: list[str] = []
+
+        _check_kiro([], warnings)
+
+        assert any("Kiro acknowledged session hooks not installed" in warning for warning in warnings)
+
+    def test_kiro_accepts_v3_array_hooks_with_session_push(self, tmp_path: Path):
+        command = "/usr/bin/python -m observal_cli.hooks.session_push --harness kiro"
+        hooks = [
+            {"name": "stop-0", "trigger": "stop", "action": {"type": "command", "command": command}},
+            {
+                "name": "userPromptSubmit-0",
+                "trigger": "userPromptSubmit",
+                "action": {"type": "command", "command": command},
+            },
+        ]
+        write_json(tmp_path / ".kiro/agents/default.json", {"hooks": hooks})
+        issues: list[str] = []
+        warnings: list[str] = []
+
+        _check_kiro(issues, warnings)
+
+        assert issues == []
+        assert warnings == []
+
+    def test_kiro_warns_for_v3_array_hooks_without_session_push(self, tmp_path: Path):
+        hooks = [{"name": "stop-0", "trigger": "stop", "action": {"type": "command", "command": "echo hi"}}]
+        write_json(tmp_path / ".kiro/agents/default.json", {"hooks": hooks})
+        warnings: list[str] = []
+
+        _check_kiro([], warnings)
+
+        assert any("Kiro acknowledged session hooks not installed" in warning for warning in warnings)
+
+    @pytest.mark.parametrize("hooks", ["stop", 3, None, [None, "stop", {"action": "echo"}], {"stop": [None, 3]}])
+    def test_kiro_ignores_unrecognised_hook_shapes(self, tmp_path: Path, hooks: object):
+        write_json(tmp_path / ".kiro/agents/default.json", {"hooks": hooks})
         warnings: list[str] = []
 
         _check_kiro([], warnings)
@@ -682,6 +720,50 @@ class TestCleanupFunctions:
         assert _cleanup_kiro(dry_run=False) is True
 
         assert read_json(agent_path)["hooks"]["userPromptSubmit"] == [foreign]
+
+    def test_cleanup_kiro_removes_managed_v3_array_hooks_and_keeps_foreign(self, tmp_path: Path):
+        agent_path = tmp_path / ".kiro/agents/default.json"
+        foreign = {"name": "lint", "trigger": "stop", "action": {"type": "command", "command": "make lint"}}
+        managed = [
+            {
+                "name": trigger + "-0",
+                "trigger": trigger,
+                "action": {
+                    "type": "command",
+                    "command": "/usr/bin/python -m observal_cli.hooks.session_push --harness kiro",
+                },
+            }
+            for trigger in ("stop", "userPromptSubmit")
+        ]
+        write_json(agent_path, {"name": "default", "hooks": [managed[0], foreign, managed[1]]})
+
+        assert _cleanup_kiro(dry_run=False) is True
+
+        assert read_json(agent_path) == {"name": "default", "hooks": [foreign]}
+
+    def test_cleanup_kiro_dry_run_leaves_v3_array_hooks_unchanged(self, tmp_path: Path):
+        agent_path = tmp_path / ".kiro/agents/default.json"
+        managed = {
+            "name": "stop-0",
+            "trigger": "stop",
+            "action": {"type": "command", "command": "python -m observal_cli.hooks.session_push --harness kiro"},
+        }
+        write_json(agent_path, {"hooks": [managed]})
+        before = agent_path.read_text()
+
+        assert _cleanup_kiro(dry_run=True) is True
+
+        assert agent_path.read_text() == before
+
+    def test_cleanup_kiro_ignores_v3_array_without_managed_hooks(self, tmp_path: Path):
+        agent_path = tmp_path / ".kiro/agents/default.json"
+        foreign = {"name": "lint", "trigger": "stop", "action": {"type": "command", "command": "make lint"}}
+        write_json(agent_path, {"hooks": [foreign, "not-a-hook"]})
+        before = agent_path.read_text()
+
+        assert _cleanup_kiro(dry_run=False) is False
+
+        assert agent_path.read_text() == before
 
     def test_cleanup_pi_removes_a_managed_install(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
