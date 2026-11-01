@@ -383,6 +383,30 @@ def _check_claude_code_agent_hooks(issues: list, warnings: list):
         )
 
 
+def _kiro_agent_hook_commands(hooks: object) -> list[str]:
+    """Return hook commands from a Kiro agent profile's ``hooks`` value.
+
+    Kiro CLI 2.x stores an object keyed by event (``{"stop": [{"command": ...}]}``).
+    Kiro CLI 3.0 upgrades profiles to an array of hook documents
+    (``[{"trigger": "stop", "action": {"command": ...}}]``). Any other shape is ignored.
+    """
+    if isinstance(hooks, dict):
+        entries = [entry for group in hooks.values() if isinstance(group, list) for entry in group]
+    elif isinstance(hooks, list):
+        entries = hooks
+    else:
+        return []
+    commands = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        action = entry.get("action")
+        command = action.get("command") if isinstance(action, dict) else entry.get("command")
+        if isinstance(command, str):
+            commands.append(command)
+    return commands
+
+
 def _check_kiro(issues: list, warnings: list):
     optic.trace("issues={}, warnings={}", issues, warnings)
     agents_dir = Path.home() / ".kiro" / "agents"
@@ -401,15 +425,12 @@ def _check_kiro(issues: list, warnings: list):
             agent_data = _read_json_object(af)
         except Exception:
             continue
-        hooks = agent_data.get("hooks", {})
-        for _event, entries in hooks.items():
-            if not isinstance(entries, list):
-                continue
-            for h in entries:
-                command = h.get("command", "")
-                if "observal_cli.hooks.session_push --harness kiro" in command:
-                    has_session_push = True
-                    break
+        if any(
+            "observal_cli.hooks.session_push --harness kiro" in command
+            for command in _kiro_agent_hook_commands(agent_data.get("hooks"))
+        ):
+            has_session_push = True
+            break
 
     if not has_session_push:
         warnings.append(
@@ -973,15 +994,24 @@ def _cleanup_kiro(dry_run: bool) -> bool:
         rprint("  [dim]No ~/.kiro/agents/ found - skipping[/dim]")
         return False
 
+    from observal_cli.harness_specs.kiro_hooks_spec import is_observal_v1_hook
+
     changed = False
     for agent_profile in sorted(agents_dir.glob("*.json")):
         agent_data = _read_json_object(agent_profile)
 
         agent_changed = False
 
-        # Remove hooks that reference Observal
+        # Remove hooks that reference Observal. Kiro CLI 2.x profiles key hooks by
+        # event; Kiro CLI 3.0 upgrades them to an array of hook documents.
         hooks = agent_data.get("hooks", {})
-        if isinstance(hooks, dict):
+        if isinstance(hooks, list):
+            cleaned = [h for h in hooks if not is_observal_v1_hook(h)]
+            if len(cleaned) < len(hooks):
+                agent_changed = True
+                if not dry_run:
+                    agent_data["hooks"] = cleaned
+        elif isinstance(hooks, dict):
             for event, entries in list(hooks.items()):
                 if not isinstance(entries, list):
                     continue

@@ -7,6 +7,7 @@
 <!-- SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -41,6 +42,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- stop `observal doctor` crashing on Kiro CLI 3.0 agent profiles, recognise Observal session hooks in their array-form `hooks`, and remove them on `observal doctor cleanup` (#2015)
 - repair in-app help links that still point at the renamed core concepts doc
 - install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
