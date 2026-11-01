@@ -89,7 +89,7 @@ One command to install any agent into any supported harness. The config files ar
 ---
 ### Where does Agentic Resource Registry fit in your modern enterprise infrastructure?
 
-<img width="1920" height="1080" alt="Agentic Resource Registry in an enterprise stack: registry, insights, traces, review and version control beside the agent gateway, runtime, LLM gateway and MCP gateway" src="docs/img/enterprise-architecture.png" />
+<img width="1920" height="1080" alt="Agentic Resource Registry in an enterprise stack: registry, insights, traces, review and version control beside the agent gateway, runtime, LLM gateway and MCP gateway" src="docs/img/observal.png" />
 
 
 ---
