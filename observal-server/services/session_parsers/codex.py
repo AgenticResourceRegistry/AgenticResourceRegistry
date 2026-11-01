@@ -195,7 +195,26 @@ def _handle_response_item(parsed: dict, ts: str, harness: str, events: list[dict
         return
 
     if role == "user":
-        # Injected context (AGENTS.md, permissions) - system, not real user input
+        metadata = payload.get("internal_chat_message_metadata_passthrough", {})
+        kinds = metadata.get("content_item_kinds") if isinstance(metadata, dict) else None
+        if isinstance(kinds, list) and len(content) == len(kinds):
+            text = " ".join(
+                str_field(block, "text")
+                for kind, block in zip(kinds, content, strict=True)
+                if kind == "user.text" and isinstance(block, dict) and block.get("type") == "input_text"
+            )
+            if text:
+                events.append(
+                    {
+                        "timestamp": ts,
+                        "event_name": "hook_userpromptsubmit",
+                        "body": text[:200],
+                        "attributes": {"tool_input": text},
+                        "service_name": harness,
+                    }
+                )
+                return
+        # Injected context (AGENTS.md, permissions) is not a user prompt.
         events.append(
             {
                 "timestamp": ts,

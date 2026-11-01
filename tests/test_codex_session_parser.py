@@ -26,6 +26,39 @@ def _token_count_row(info: object) -> dict:
     }
 
 
+def test_user_text_in_response_item_is_prompt_not_injected_context():
+    def row(kinds: list[str], texts: list[str]) -> dict:
+        record = {
+            "type": "response_item",
+            "timestamp": "2026-06-01T10:00:09.000Z",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text} for text in texts],
+                "internal_chat_message_metadata_passthrough": {"content_item_kinds": kinds},
+            },
+        }
+        return {"raw_line": json.dumps(record), "harness": "codex"}
+
+    events = parse_raw_events(
+        [
+            row(["agents_md.instructions", "environments.environment_context"], ["Instructions", "Context"]),
+            row(["agents_md.instructions", "user.text"], ["More context", "Check the build"]),
+            row(["user.text", "user.text"], ["First", "second"]),
+            row(["user.text", "user.text"], ["Mismatched metadata"]),
+        ]
+    )
+
+    assert [event["event_name"] for event in events] == [
+        "system",
+        "hook_userpromptsubmit",
+        "hook_userpromptsubmit",
+        "system",
+    ]
+    assert [event["body"] for event in events[1:3]] == ["Check the build", "First second"]
+    assert events[1]["attributes"]["tool_input"] == "Check the build"
+
+
 def test_token_count_reports_input_without_cached_tokens():
     """Codex input_tokens includes cached_input_tokens; the trace view shows them separately."""
     usage = {

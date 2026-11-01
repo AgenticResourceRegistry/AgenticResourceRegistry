@@ -576,6 +576,21 @@ def _classify_codex(parsed: dict) -> str | None:
             return "tool_result"
 
         if role == "user":
+            # Newer Codex rollouts store the actual prompt as a response_item,
+            # alongside injected AGENTS.md and environment messages with the
+            # same role. Only explicitly tagged user text counts as a prompt.
+            metadata = dict_field(payload, "internal_chat_message_metadata_passthrough")
+            kinds = metadata.get("content_item_kinds")
+            if (
+                isinstance(content, list)
+                and isinstance(kinds, list)
+                and len(content) == len(kinds)
+                and any(
+                    kind == "user.text" and isinstance(block, dict) and block.get("type") == "input_text"
+                    for kind, block in zip(kinds, content, strict=True)
+                )
+            ):
+                return "user_prompt"
             return "system"
         if role == "assistant":
             if isinstance(content, list):
@@ -653,12 +668,16 @@ def _preview_codex(parsed: dict, event_type: str) -> str:
             content = payload.get("content", [])
             if isinstance(content, list):
                 parts: list[str] = []
-                for block in content:
+                metadata = payload.get("internal_chat_message_metadata_passthrough", {})
+                kinds = metadata.get("content_item_kinds") if isinstance(metadata, dict) else None
+                for index, block in enumerate(content):
                     if not isinstance(block, dict):
                         continue
                     btype = block.get("type", "")
+                    if event_type == "user_prompt" and (not isinstance(kinds, list) or kinds[index] != "user.text"):
+                        continue
                     if btype in ("input_text", "output_text"):
-                        parts.append(block.get("text", "")[:_PREVIEW_MAX])
+                        parts.append(str(block.get("text", ""))[:_PREVIEW_MAX])
                     elif btype == "function_call":
                         parts.append(f"[tool_call: {block.get('name', '')}]")
                     elif btype == "function_call_output":

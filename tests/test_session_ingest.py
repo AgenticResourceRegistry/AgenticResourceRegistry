@@ -345,6 +345,60 @@ async def test_registered_harness_selects_its_parser_and_normalizes_the_write(
     external_calls.refresh.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, harness)
 
 
+@pytest.mark.asyncio
+async def test_codex_response_item_user_text_counts_as_prompt_not_injected_context(external_calls):
+    def item(blocks: list[tuple[str, str]]) -> str:
+        return json.dumps(
+            {
+                "type": "response_item",
+                "timestamp": "2026-06-01T10:00:00.000Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text} for _, text in blocks],
+                    "internal_chat_message_metadata_passthrough": {
+                        "content_item_kinds": [kind for kind, _ in blocks],
+                    },
+                },
+            }
+        )
+
+    lines = [
+        item([("agents_md.instructions", "Fixture instructions"), ("environments.environment_context", "Context")]),
+        item([("user.text", "Summarize the fixture project")]),
+        item([("agents_md.instructions", "Context"), ("user.text", "A second prompt")]),
+    ]
+    result = await _ingest(lines, harness="codex")
+
+    assert result == session_ingest.IngestResult(ingested=3, skipped=0, errors=0)
+    rows = external_calls.insert.await_args.args[0]
+    assert [row["event_type"] for row in rows] == ["system", "user_prompt", "user_prompt"]
+    assert rows[1]["content_preview"] == "Summarize the fixture project"
+    assert rows[2]["content_preview"] == "A second prompt"
+
+
+@pytest.mark.asyncio
+async def test_codex_user_role_without_matching_prompt_metadata_is_not_counted(external_calls):
+    records = [
+        {"content": [{"type": "input_text", "text": "Untagged context"}]},
+        {
+            "content": [{"type": "input_text", "text": "Bad metadata"}],
+            "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["user.text", "user.text"]},
+        },
+        {
+            "content": [{"type": "input_text", "text": "Not a prompt"}],
+            "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["agents_md.instructions"]},
+        },
+    ]
+    lines = [
+        json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", **record}})
+        for record in records
+    ]
+    await _ingest(lines, harness="codex")
+
+    assert [row["event_type"] for row in external_calls.insert.await_args.args[0]] == ["system"] * 3
+
+
 async def test_batch_normalizes_relationships_timestamps_usage_tools_and_result_counts(external_calls):
     assistant = json.loads(CLAUDE_ASSISTANT_TEXT)
     assistant["parentUuid"] = "123"
