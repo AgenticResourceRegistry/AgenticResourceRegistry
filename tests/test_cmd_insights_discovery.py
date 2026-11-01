@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -157,3 +158,70 @@ def test_agent_report_shows_the_section_in_its_place(monkeypatch):
     result = runner.invoke(insights_app, ["show", "ultra-pi"])
     assert result.exit_code == 0, result.output
     assert "Example search: review login and JWT code" in " ".join(result.output.split())
+
+
+def _agent_report(narrative: dict, *, requested: bool) -> dict:
+    return {
+        "id": "report-1",
+        "status": "completed",
+        "agent_version": "1.0.0",
+        "period_start": "2026-10-01",
+        "period_end": "2026-10-14",
+        "sessions_analyzed": 5,
+        "llm_model_used": "test/model",
+        "metrics": {},
+        "narrative": narrative,
+        "discovery_optimization_requested": requested,
+    }
+
+
+def test_agent_report_puts_the_section_in_a_panel_like_the_others(monkeypatch):
+    panels = []
+
+    class RecordingPanel:
+        def __init__(self, content, title="", **_):
+            panels.append((title, content))
+
+        def __rich__(self):
+            return ""
+
+    monkeypatch.setattr("observal_cli.cmd_insights.Panel", RecordingPanel)
+    monkeypatch.setattr("observal_cli.config.resolve_alias", lambda value: value)
+    monkeypatch.setattr(
+        "observal_cli.cmd_insights._resolve_report_for_show",
+        lambda *_: _agent_report({"discovery": ASSESSED}, requested=True),
+    )
+    result = runner.invoke(insights_app, ["show", "ultra-pi"])
+    assert result.exit_code == 0, result.output
+    assert any("ARD discovery suggestions" in title and "Example search" in content for title, content in panels), (
+        panels
+    )
+
+
+@pytest.mark.parametrize("output", ["table", "json"])
+@pytest.mark.parametrize("subject", ["agent", "component"])
+def test_asking_for_discovery_on_an_unrequested_report_says_why(monkeypatch, subject, output):
+    if subject == "agent":
+        report = _agent_report({"suggestions": {}}, requested=False)
+        args = ["ultra-pi"]
+        monkeypatch.setattr("observal_cli.config.resolve_alias", lambda value: value)
+    else:
+        report = {**_component_report("skill", None), "discovery_optimization_requested": False}
+        args = ["--component", "skill", "team/probe"]
+    result = _show(monkeypatch, report, *args, "--section", "discovery", "-o", output)
+    assert result.exit_code != 0
+    assert "generated without ARD discovery suggestions" in " ".join(result.output.split())
+    assert "Unknown" not in result.output
+
+
+def test_the_unrequested_section_error_names_the_flag_and_spares_requested_reports():
+    from observal_cli.cmd_insights import _fail_if_discovery_not_requested
+    from observal_cli.errors import CliError
+
+    with pytest.raises(CliError) as failure:
+        _fail_if_discovery_not_requested({"narrative": {}, "discovery_optimization_requested": False}, "discovery")
+    assert "--discovery" in failure.value.remediation
+    # Requested, or already holding the section, or asking for something else: no early failure.
+    _fail_if_discovery_not_requested({"narrative": {}, "discovery_optimization_requested": True}, "discovery")
+    _fail_if_discovery_not_requested({"narrative": {"discovery": ASSESSED}}, "discovery")
+    _fail_if_discovery_not_requested({"narrative": {}}, "suggestions")

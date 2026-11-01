@@ -34,7 +34,7 @@ import {
   useComponentSubmitDraft,
 } from "@/hooks/use-api";
 import { getUserRole, registry } from "@/lib/api";
-import { useComponentInsightReports, useGenerateComponentInsight } from "@/hooks/use-insights-api";
+import { useComponentInsightReports, useGenerateComponentInsight, useInsightsStatus } from "@/hooks/use-insights-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -74,6 +74,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { RecommendedBadge, RecommendedToggle } from "@/components/registry/recommended-badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
@@ -212,6 +213,9 @@ export default function ComponentDetailPage({
   const { data: reportPages, isLoading: reportsLoading, isError: reportsError, hasNextPage, fetchNextPage, isFetchingNextPage } = useComponentInsightReports(insightType ?? "mcp", id, showInsights);
   const componentReports = reportPages?.pages.flat() ?? [];
   const generateComponentInsight = useGenerateComponentInsight();
+  // The usage report runs without a model; the discovery suggestions need one.
+  const { data: insightsStatus } = useInsightsStatus(showInsights);
+  const discoveryAvailable = !(insightsStatus && !insightsStatus.available);
   // Only owners can read sync status, so only their open page follows GitHub syncs.
   useMcpSyncWatcher(item ? String(item.id) : undefined, canEdit && type === "mcps" && !!item?.git_url);
   const isEditableDraft = item?.status === "draft" || item?.status === "rejected";
@@ -629,15 +633,17 @@ export default function ComponentDetailPage({
                         : "Observed MCP calls and attribution coverage across verified present sessions. Partial activity never proves no use."}</p>
                   </div>
                   <Button type="button" disabled={generateComponentInsight.isPending || (!!selectedVersion && !selectedInsightVersion)}
-                    onClick={() => insightType && generateComponentInsight.mutate({ type: insightType, id, versionId: selectedInsightVersion?.id, includeDiscoveryOptimization })}>
+                    onClick={() => insightType && generateComponentInsight.mutate({ type: insightType, id, versionId: selectedInsightVersion?.id, includeDiscoveryOptimization: includeDiscoveryOptimization && discoveryAvailable })}>
                     {generateComponentInsight.isPending ? "Queueing…" : selectedVersion ? `Generate v${selectedVersion} report` : "Generate all-versions report"}
                   </Button>
                 </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={includeDiscoveryOptimization}
-                    onChange={(event) => setIncludeDiscoveryOptimization(event.target.checked)} />
-                  Include ARD discovery suggestions (uses the configured Insights model)
-                </label>
+                {discoveryAvailable && (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <Checkbox checked={includeDiscoveryOptimization} aria-label="Include ARD discovery suggestions"
+                      onCheckedChange={(checked) => setIncludeDiscoveryOptimization(checked === true)} />
+                    Include ARD discovery suggestions (uses the configured Insights model)
+                  </label>
+                )}
                 {reportsLoading ? <p role="status" className="text-sm text-muted-foreground">Loading reports…</p> :
                  reportsError ? <ErrorState message="Could not load component reports" /> :
                  !componentReports?.length ? <p className="text-sm text-muted-foreground">No reports yet. Generate one to see observed activity and its coverage.</p> :

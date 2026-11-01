@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Harishankar <harishankar0301@gmail.com>
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
@@ -87,6 +88,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
@@ -591,7 +593,7 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
             generateInsight.isPending ||
             hasRunning
           }
-          onClick={() => generateInsight.mutate({ agentId, agentVersion: agentVersion ?? undefined, includeDiscoveryOptimization })}
+          onClick={() => generateInsight.mutate({ agentId, agentVersion: agentVersion ?? undefined, includeDiscoveryOptimization: includeDiscoveryOptimization && !notConfigured })}
         >
           {generateInsight.isPending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -602,11 +604,14 @@ function InsightsTab({ agentId, agentVersion, enabled }: { agentId: string; agen
         </Button>
       </div>
 
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={includeDiscoveryOptimization}
-          onChange={(event) => setIncludeDiscoveryOptimization(event.target.checked)} />
-        Include ARD discovery suggestions (uses the configured Insights model)
-      </label>
+      {/* Suggestions need the Insights model, so the option only appears where one is configured. */}
+      {!notConfigured && (
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox checked={includeDiscoveryOptimization} aria-label="Include ARD discovery suggestions"
+            onCheckedChange={(checked) => setIncludeDiscoveryOptimization(checked === true)} />
+          Include ARD discovery suggestions (uses the configured Insights model)
+        </label>
+      )}
       {notConfigured && (
         <p className="text-xs text-muted-foreground">
           Insights are not configured on this server. Contact your admin.

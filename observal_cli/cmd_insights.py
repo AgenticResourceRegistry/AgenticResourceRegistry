@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -441,6 +442,7 @@ def insights_show(
             if component
             else _resolve_report_for_show(target, report_ref)
         )
+    _fail_if_discovery_not_requested(data, section)
     if data.get("subject_type") == "component" and section:
         narrative = data.get("narrative") or {}
         sections = {"metrics": data.get("metrics"), "coverage": data.get("coverage")}
@@ -645,7 +647,7 @@ def _render_component_section(name: str, content: object) -> None:
         _render_outcomes(content)
         return
     if name == "discovery" and isinstance(content, dict):
-        _render_discovery("ARD discovery suggestions", content)
+        _render_discovery_inline("ARD discovery suggestions", content)
         return
     if isinstance(content, str):
         rprint(f"  {esc(content)}")
@@ -779,33 +781,66 @@ def _render_analysis(analysis: dict, attention: list | None = None) -> None:
             rprint(f"    [dim]Based on: {esc(based_on)}[/dim]")
 
 
-def _render_discovery(title: str, discovery: dict) -> None:
+def _discovery_lines(discovery: dict) -> list[str]:
     """Description advice for the listing itself. Example searches are illustrative, never recorded queries."""
-    rprint(f"  [bold]{esc(title)}[/bold]")
     state = discovery.get("state")
     if state == "unavailable":
-        rprint("  [yellow]The suggestions could not be written (the model failed); generate the report again.[/yellow]")
-        return
+        return ["[yellow]The suggestions could not be written (the model failed); generate the report again.[/yellow]"]
     if state == "unknown":
-        rprint("  [dim]No suggestion passed the accuracy checks, so none are shown.[/dim]")
-        return
+        return ["[dim]No suggestion passed the accuracy checks, so none are shown.[/dim]"]
     suggestions = discovery.get("suggestions") or []
     if state != "assessed" or not suggestions:
-        rprint("  [dim]No supported description edits were identified. This does not measure search traffic.[/dim]")
-        return
+        return ["[dim]No supported description edits were identified. This does not measure search traffic.[/dim]"]
     scope = "the selected release" if discovery.get("metadata_version_scope") == "selected" else "the current listing"
     version = f" (v{esc(str(discovery['listing_version']))})" if discovery.get("listing_version") else ""
-    rprint(
-        f"  [dim]Illustrative searches, not recorded queries. Advice uses {scope}{version}. "
+    lines = [
+        f"[dim]Illustrative searches, not recorded queries. Advice uses {scope}{version}. "
         "Review every suggestion for accuracy before editing; no ranking is guaranteed.[/dim]"
-    )
+    ]
     for item in suggestions:
-        rprint(f"  [bold]Example search[/bold]: {esc(str(item.get('illustrative_query', '')))}")
-        rprint(f"    {esc(str(item.get('rationale', '')))}")
-        rprint(f"    [bold]Suggested description[/bold]: {esc(str(item.get('suggested_description', '')))}")
-        rprint(
-            f"    [dim]ARD relevance for this example: {item.get('relevance_before')} → {item.get('relevance_after')} "
-            "(not a search position)[/dim]"
+        lines += [
+            f"[bold]Example search[/bold]: {esc(str(item.get('illustrative_query', '')))}",
+            f"  {esc(str(item.get('rationale', '')))}",
+            f"  [bold]Suggested description[/bold]: {esc(str(item.get('suggested_description', '')))}",
+            f"  [dim]ARD relevance for this example: {item.get('relevance_before')} → {item.get('relevance_after')} "
+            "(not a search position)[/dim]",
+        ]
+    return lines
+
+
+def _render_discovery(title: str, discovery: dict) -> None:
+    """Agent reports: a panel, like every other narrative section."""
+    console.print(
+        Panel(
+            "\n".join(_discovery_lines(discovery)),
+            title=f"[bold]{esc(title)}[/bold]",
+            border_style="blue",
+            expand=False,
+        )
+    )
+
+
+def _render_discovery_inline(title: str, discovery: dict) -> None:
+    """Component reports print their sections inline, so this one does too."""
+    rprint(f"  [bold]{esc(title)}[/bold]")
+    for line in _discovery_lines(discovery):
+        rprint(f"  {line}")
+
+
+def _fail_if_discovery_not_requested(data: dict, section: str | None) -> None:
+    """A report generated without --discovery has no such section; say so rather than "unknown section"."""
+    narrative = data.get("narrative")
+    if (
+        section == "discovery"
+        and not data.get("discovery_optimization_requested")
+        and not (isinstance(narrative, dict) and "discovery" in narrative)
+    ):
+        fail(
+            ErrorCategory.VALIDATION,
+            "This report was generated without ARD discovery suggestions.",
+            operation="Show insight report",
+            resource="insight report section",
+            remediation="Generate a new report with --discovery to include them.",
         )
 
 
@@ -823,7 +858,7 @@ def _render_interpretation(narrative: dict) -> None:
         rprint("  [bold]Sessions with and without it[/bold]")
         _render_outcomes(narrative["outcomes"])
     if isinstance(narrative.get("discovery"), dict):
-        _render_discovery("ARD discovery suggestions", narrative["discovery"])
+        _render_discovery_inline("ARD discovery suggestions", narrative["discovery"])
 
 
 def _skill_count(metrics: dict, key: str, measured: bool, partial: bool) -> str:
