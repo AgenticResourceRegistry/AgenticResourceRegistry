@@ -5,12 +5,13 @@
 
 import { useEffect } from "react";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
+import { DEFAULT_REGISTRY_NAME } from "@/components/registry/registry-mark";
 
 export function DynamicTitle() {
   const { brandingAppName, brandingLogo } = useDeploymentConfig();
 
   useEffect(() => {
-    document.title = brandingAppName || "Observal";
+    document.title = brandingAppName || DEFAULT_REGISTRY_NAME;
   }, [brandingAppName]);
 
   useEffect(() => {

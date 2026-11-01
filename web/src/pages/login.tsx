@@ -16,6 +16,7 @@ import { isSafeNext, safeNext } from "@/lib/safe-next";
 import type { SsoHealthResult, E2eStatusResult, HealthCheck } from "@/lib/api";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
+import { DEFAULT_REGISTRY_NAME } from "@/components/registry/registry-mark";
 import { GoogleGIcon } from "@/components/ui/google-g-icon";
 import { GithubMarkIcon } from "@/components/ui/github-mark-icon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -305,10 +306,10 @@ function LoginContent() {
                 <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
               )}
               {brandingWordmark ? (
-                <img loading="lazy" src={brandingWordmark} alt={brandingAppName || "Observal"} width={192} height={24} className="h-6 max-w-48 object-contain" />
+                <img loading="lazy" src={brandingWordmark} alt={brandingAppName || DEFAULT_REGISTRY_NAME} width={192} height={24} className="h-6 max-w-48 object-contain" />
               ) : (
                 <h1 className="text-2xl font-semibold tracking-tight font-[family-name:var(--font-display)]">
-                  {brandingAppName || "Observal"}
+                  {brandingAppName || DEFAULT_REGISTRY_NAME}
                 </h1>
               )}
               <p className="text-sm text-muted-foreground">
@@ -394,10 +395,10 @@ function LoginContent() {
               <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
             )}
             {brandingWordmark ? (
-              <img loading="lazy" src={brandingWordmark} alt={brandingAppName || "Observal"} width={192} height={24} className="h-6 max-w-48 object-contain" />
+              <img loading="lazy" src={brandingWordmark} alt={brandingAppName || DEFAULT_REGISTRY_NAME} width={192} height={24} className="h-6 max-w-48 object-contain" />
             ) : (
               <h1 className="text-2xl font-semibold tracking-tight font-[family-name:var(--font-display)]">
-                {brandingAppName || "Observal"}
+                {brandingAppName || DEFAULT_REGISTRY_NAME}
               </h1>
             )}
             <p className="text-sm text-muted-foreground">
