@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """GitHub Copilot CLI harness adapter."""
@@ -10,6 +11,8 @@ import json
 import time
 from pathlib import Path
 
+from observal_cli.discovery.adapter_support import RichAdapterScanner
+from observal_cli.discovery.models import AdapterDiscoveryResult, DiscoveryScope
 from observal_cli.harness import (
     DiscoveredAgent,
     DiscoveredHook,
@@ -21,6 +24,7 @@ from observal_cli.harness import (
     register_adapter,
 )
 from observal_cli.harness.base import BaseAdapter
+from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest
 from observal_cli.shared.utils import (
     _OBSERVAL_HOOK_MARKERS,
     first_content_line,
@@ -32,6 +36,7 @@ class CopilotCliAdapter(BaseAdapter):
     """Adapter for GitHub Copilot CLI."""
 
     home_markers = (".copilot",)
+    headless_binary = "copilot"
     managed_agent_profiles = ("project:.github/agents/{name}.agent.md",)
     managed_skills = ("project:.agents/skills/{name}/SKILL.md", "user:skills/{name}/SKILL.md")
 
@@ -102,6 +107,53 @@ class CopilotCliAdapter(BaseAdapter):
         hooks = self._scan_hooks_dir(project_dir / ".github" / "hooks")
 
         return ScanResult(mcps=mcps, skills=skills, agents=agents, hooks=hooks)
+
+    def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        home = home or Path.home()
+        root = home / ".copilot"
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.USER,
+            root=root,
+            home=home,
+        )
+        self._discover_copilot_cli(scanner, root, project=False)
+        return scanner.finish()
+
+    def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.PROJECT,
+            root=project_dir,
+            project_dir=project_dir,
+        )
+        self._discover_copilot_cli(scanner, project_dir, project=True)
+        return scanner.finish()
+
+    def _discover_copilot_cli(self, scanner: RichAdapterScanner, root: Path, *, project: bool) -> None:
+        mcp_path = root / ".mcp.json" if project else root / "mcp-config.json"
+        mcp_data = scanner.read_json(mcp_path)
+        if mcp_data is not None:
+            scanner.add_mcps(
+                mcp_data.get("mcpServers", {}),
+                mcp_path,
+                source=f"copilot-cli:{'project' if project else 'global'}",
+                description_prefix="Copilot CLI MCP",
+            )
+        skills_dir = root / ".agents" / "skills" if project else root / "skills"
+        scanner.add_skills(skills_dir, source="copilot-cli:skills", prefix="Copilot CLI skill")
+        if project:
+            scanner.add_markdown_agents(root / ".github" / "agents", source_prefix="Copilot CLI agent")
+        hooks_dir = root / ".github" / "hooks" if project else root / "hooks"
+        for hook_path in scanner.walker.files(hooks_dir, suffix=".json"):
+            data = scanner.read_json(hook_path)
+            if data is not None:
+                scanner.add_hooks_mapping(
+                    hook_path,
+                    data.get("hooks", {}),
+                    name_prefix=hook_path.stem,
+                    source="copilot-cli:hooks",
+                )
 
     def get_hook_spec(self) -> HookSpec:
         return HookSpec(
@@ -310,6 +362,31 @@ class CopilotCliAdapter(BaseAdapter):
         from observal_cli.cmd_doctor import _cleanup_copilot_cli
 
         return _cleanup_copilot_cli(dry_run)
+
+    # ── Headless delegation ──────────────────────────────────
+
+    def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
+        # GitHub Copilot CLI: --prompt runs one prompt, --agent selects the
+        # custom agent, --allow-tool/--deny-tool gate tools in programmatic mode.
+        # Its MCP config lives in the home directory, so the agent's servers are
+        # passed on the command line instead of written there.
+        argv = [
+            "copilot",
+            f"--prompt={request.message}",
+            "--agent",
+            request.agent_name,
+            "--allow-tool",
+            "write",
+            "--deny-tool",
+            "shell",
+        ]
+        if request.mcp_servers:
+            argv += ["--additional-mcp-config", json.dumps({"mcpServers": request.mcp_servers})]
+            for name in request.mcp_servers:
+                argv += ["--allow-tool", name]
+        if request.model:
+            argv += ["--model", request.model]
+        return HeadlessPlan(argv=argv)
 
 
 register_adapter(CopilotCliAdapter())

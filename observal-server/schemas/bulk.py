@@ -5,22 +5,33 @@ from __future__ import annotations
 
 import uuid  # noqa: TC003 - needed at runtime by Pydantic
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from observal_shared.agent_model import AUTO_MODEL, normalize_model_name
 
 
 class BulkAgentItem(BaseModel):
     """Single agent in a bulk create request. Extends AgentCreateRequest fields with relaxed defaults."""
 
-    name: str
+    name: str = Field(min_length=1, max_length=255)
     version: str = "1.0.0"
     description: str = ""
     owner: str = ""
     prompt: str = ""
-    model_name: str = "claude-sonnet-4"
-    model_config_json: dict = {}
-    supported_harnesses: list[str] = []
-    components: list[dict] = []  # [{component_type, component_id}]
-    external_mcps: list[dict] = []
+    model_name: str = AUTO_MODEL
+    model_config_json: dict = Field(default_factory=dict)
+    supported_harnesses: list[str] = Field(default_factory=list)
+    components: list[dict] = Field(default_factory=list)  # [{component_type, component_id}]
+    external_mcps: list[dict] = Field(default_factory=list)
+
+    _normalize_model = field_validator("model_name", mode="before")(lambda v: normalize_model_name(v))
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Agent name must not be empty")
+        return value
 
 
 class BulkAgentRequest(BaseModel):
@@ -32,6 +43,7 @@ class BulkResultItem(BaseModel):
     name: str
     status: str  # "created", "skipped", "error"
     agent_id: uuid.UUID | None = None
+    review_number: int | None = None
     error: str | None = None
 
 
@@ -40,5 +52,6 @@ class BulkResult(BaseModel):
     created: int
     skipped: int
     errors: int
+    partial: bool
     dry_run: bool
     results: list[BulkResultItem]

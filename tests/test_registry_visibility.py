@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.deps import get_db, get_registry_user
@@ -48,8 +49,20 @@ from models.agent_component import AgentComponent
 from models.base import Base
 from models.inbox import InboxItem, InboxItemEvent
 from models.mcp import ListingStatus, McpListing, McpValidationResult, McpVersion
+from models.review import (
+    Review,
+    ReviewComment,
+    ReviewEvent,
+    ReviewReviewerRequest,
+    ReviewRevision,
+    ReviewState,
+    ReviewSubmission,
+    ReviewSubscription,
+    ReviewThread,
+)
 from models.team import Team, TeamMembership, TeamRole
 from models.user import User, UserRole
+from services.review.decisions import open_or_push
 
 # resolve_visible_listing calls the module-global resolve_listing inside
 # api.deps, so that is the only seam a patch can intercept.
@@ -270,6 +283,14 @@ _TABLES = [
     # to the reviewers in the same transaction.
     InboxItem.__table__,
     InboxItemEvent.__table__,
+    Review.__table__,
+    ReviewRevision.__table__,
+    ReviewEvent.__table__,
+    ReviewSubmission.__table__,
+    ReviewThread.__table__,
+    ReviewComment.__table__,
+    ReviewReviewerRequest.__table__,
+    ReviewSubscription.__table__,
     User.__table__,
 ]
 
@@ -703,6 +724,72 @@ async def test_team_owner_making_a_listing_public_sends_it_back_to_review():
             # The previous team-level approval must not be presented as a global one.
             assert version.reviewed_by is None
             assert version.reviewed_at is None
+
+
+@pytest.mark.asyncio
+async def test_public_visibility_requeues_older_approved_version_even_with_pending_latest():
+    async with _sessions() as sessions:
+        seed = await _seed_team_private_component(sessions)
+        async with sessions() as db:
+            listing = await db.get(McpListing, seed.listing_id)
+            older_id = listing.latest_version_id
+            newer = McpVersion(
+                listing_id=listing.id,
+                version="1.1.0",
+                description="not yet reviewed",
+                released_by=seed.owner.id,
+                released_at=datetime.now(UTC),
+                status=ListingStatus.pending,
+            )
+            db.add(newer)
+            await db.flush()
+            listing.latest_version_id = newer.id
+            await db.commit()
+        async with sessions() as db:
+            result = await _patch_visibility(db, seed.listing_id, seed.owner, visibility="public")
+        assert result["returned_to_review"] is True
+        async with sessions() as db:
+            assert (await db.get(McpVersion, older_id)).status == ListingStatus.pending
+            assert (await db.get(McpVersion, newer.id)).status == ListingStatus.pending
+            assert await db.scalar(select(Review).where(Review.version_id == older_id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_public_visibility_reopens_published_review_without_counting_private_approvals():
+    async with _sessions() as sessions:
+        seed = await _seed_team_private_component(sessions)
+        async with sessions() as db:
+            listing = await db.get(McpListing, seed.listing_id)
+            version = await db.get(McpVersion, listing.latest_version_id)
+            review = await open_or_push(db, "mcp", listing, version, seed.owner.id, backfill=True)
+            review.state = ReviewState.published
+            review.published_at = datetime.now(UTC)
+            original_number = review.number
+            db.add(
+                ReviewSubmission(
+                    review_id=review.id,
+                    revision_id=review.head_revision_id,
+                    reviewer_id=seed.owner.id,
+                    state="submitted",
+                    verdict="approve",
+                    submitted_at=datetime.now(UTC),
+                )
+            )
+            await db.commit()
+
+        async with sessions() as db:
+            result = await _patch_visibility(db, seed.listing_id, seed.owner, visibility="public")
+        assert result["returned_to_review"] is True
+        async with sessions() as db:
+            review = await db.scalar(select(Review).where(Review.number == original_number))
+            assert review.state == ReviewState.open
+            assert review.is_private is False
+            assert (await db.get(ReviewRevision, review.head_revision_id)).number == 2
+            assert (
+                await db.scalar(select(ReviewSubmission).where(ReviewSubmission.review_id == review.id))
+            ).state == "dismissed"
+            version = await db.get(McpVersion, review.version_id)
+            assert version.status == ListingStatus.pending
 
 
 @pytest.mark.asyncio

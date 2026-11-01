@@ -161,6 +161,9 @@
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 13px;
+  --radius-control: 11px;
+  --radius-control-compact: 9px;
+  --radius-overlay: 14px;
 
   /* ── Type scale ─────────────────────────────────── */
   /* Anchored to the mockup: 13.5px base body, 11px uppercase labels,
@@ -2522,7 +2525,6 @@ html {
      accompanying static dot or icon already conveys the state. */
   .animate-ping,
   .animate-pulse,
-  .animate-bounce,
   .animate-breathe {
     animation: none !important;
   }

@@ -363,9 +363,29 @@ class TestBuildCopilotCliHooks:
             bash = entries[0]["bash"]
             ps = entries[0]["powershell"]
             assert "OBSERVAL_AGENT_ID=agent-uuid-42" in bash, f"{event} bash missing UUID"
-            assert "agent-uuid-42" in ps and "OBSERVAL_AGENT_ID" in ps, f"{event} powershell missing UUID"
+            assert b"agent-uuid-42".hex() in ps, f"{event} powershell missing UUID"
             # The push command must still be present after the prefix.
             assert "hooks.session_push --harness copilot-cli" in bash
+
+    def test_powershell_invokes_cli_interpreter(self):
+        """PowerShell must run this CLI's interpreter, not bare python.
+
+        Regression: bare `python` cannot import observal_cli from a `uv tool`
+        install, and a quoted path without `&` is a string, not a command.
+        """
+        import sys
+
+        from observal_cli.harness_specs.copilot_cli_hooks_spec import build_copilot_cli_hooks
+        from observal_cli.shared.launcher import windows_powershell_module_command
+
+        ps_path = sys.executable.replace("'", "''")
+        for agent_id in ("", "agent-uuid-42"):
+            env = {"OBSERVAL_AGENT_ID": agent_id} if agent_id else None
+            invoke = windows_powershell_module_command("observal_cli.hooks.session_push", env)
+            for entries in build_copilot_cli_hooks(agent_id=agent_id)["hooks"].values():
+                ps = entries[0]["powershell"]
+                assert ps == f"{invoke} --harness copilot-cli"
+                assert ps.startswith(f"& '{ps_path}' '-I' ")
 
 
 class TestRewriteCopilotCliHooks:
@@ -390,6 +410,27 @@ class TestRewriteCopilotCliHooks:
             obs = [e for e in entries if "hooks.session_push --harness copilot-cli" in e.get("bash", "")]
             assert len(obs) == 1
             assert "OBSERVAL_AGENT_ID=uuid-99" in obs[0]["bash"]
+
+    def test_powershell_interpreter_path_is_literal(self, monkeypatch):
+        """A path with PowerShell metacharacters cannot interpolate commands."""
+        import sys
+
+        from observal_cli.harness_specs.copilot_cli_hooks_spec import build_copilot_cli_hooks
+
+        monkeypatch.setattr(sys, "executable", "C:/Apps/$env:TEMP/it's python.exe")
+        command = build_copilot_cli_hooks()["hooks"]["sessionStart"][0]["powershell"]
+        assert command.startswith("& 'C:/Apps/$env:TEMP/it''s python.exe' '-I' ")
+
+    def test_rebuilt_powershell_keeps_cli_interpreter(self):
+        """Pull pins the interpreter, then this rebuild runs; it must not restore bare python."""
+        import sys
+
+        from observal_cli.cmd_pull import _rewrite_copilot_cli_hooks
+
+        out = _rewrite_copilot_cli_hooks(self._server_content(), agent_id="uuid-99")
+        for entries in out["hooks"].values():
+            obs = [e for e in entries if "hooks.session_push --harness copilot-cli" in e.get("bash", "")]
+            assert obs[0]["powershell"].startswith(f"& '{sys.executable}' '-I' ")
 
     def test_preserves_user_added_hooks(self):
         from observal_cli.cmd_pull import _rewrite_copilot_cli_hooks
@@ -935,7 +976,7 @@ class TestServerAdapterFormatConfig:
         result = adapter.format_config(ctx)
 
         mcp_config = result["mcp_config"]
-        assert mcp_config["path"] == "~/.copilot/mcp-config.json"
+        assert mcp_config["path"] == ".mcp.json"
         assert "mcpServers" in mcp_config["content"]
 
     def test_no_prompt_files_without_prompt_components(self):
@@ -1173,7 +1214,7 @@ class TestPropertyConfigGenerationFormat:
         assert result["agent_profile"]["path"].endswith(".agent.md")
 
         assert "mcp_config" in result
-        assert result["mcp_config"]["path"] == "~/.copilot/mcp-config.json"
+        assert result["mcp_config"]["path"] == ".mcp.json"
         assert "mcpServers" in result["mcp_config"]["content"]
 
         assert "hooks_config" in result

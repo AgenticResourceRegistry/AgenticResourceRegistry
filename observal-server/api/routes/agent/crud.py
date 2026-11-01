@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent CRUD routes: create, list, get, update, delete, archive, unarchive."""
@@ -38,9 +39,11 @@ from schemas.agent import (
 )
 from services.cache import invalidate_namespace
 from services.config_generator import validate_mcp_command
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
+from services.registry_fork import agent_fork_counts, provenance_for, provenance_for_many
 from services.registry_namespace import identity_exists, slugify
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
 from ._router import router
@@ -51,6 +54,24 @@ from .helpers import (
     _resolve_component_names,
     _resolve_component_statuses,
     _validate_mcp_ids,
+)
+
+# Fields stored on the agent version rather than the agent identity.
+_VERSION_OWNED_FIELDS = (
+    "version",
+    "version_bump_type",
+    "description",
+    "prompt",
+    "model_name",
+    "model_config_json",
+    "models_by_harness",
+    "supported_harnesses",
+    "external_mcps",
+    "components",
+    "mcp_server_ids",
+)
+_EDITABLE_VERSION_STATUSES = frozenset(
+    {AgentStatus.draft, AgentStatus.pending, AgentStatus.rejected, AgentStatus.changes_requested}
 )
 
 
@@ -77,7 +98,7 @@ async def create_agent(
         req.mcp_server_ids = []
 
     # Validate legacy mcp_server_ids
-    mcp_listings = await _validate_mcp_ids(
+    await _validate_mcp_ids(
         req.mcp_server_ids,
         db,
         current_user=current_user,
@@ -150,10 +171,8 @@ async def create_agent(
         models_by_harness=req.models_by_harness,
         external_mcps=[m.model_dump() for m in req.external_mcps],
         supported_harnesses=req.supported_harnesses,
-        status=AgentStatus.approved if target.auto_approve else AgentStatus.pending,
+        status=AgentStatus.pending,
         released_by=current_user.id,
-        reviewed_by=current_user.id if target.auto_approve else None,
-        reviewed_at=datetime.now(UTC) if target.auto_approve else None,
         success_criteria=req.success_criteria.model_dump() if req.success_criteria else None,
     )
     db.add(version)
@@ -161,39 +180,16 @@ async def create_agent(
 
     agent.latest_version_id = version.id
 
-    # Legacy: mcp_server_ids → AgentComponent(type=mcp)
-    order = 0
-    for mid, listing in zip(req.mcp_server_ids, mcp_listings, strict=False):
-        db.add(
-            AgentComponent(
-                agent_version_id=version.id,
-                component_type="mcp",
-                component_id=mid,
-                component_name="",
-                resolved_version=listing.version,
-                order_index=order,
-            )
-        )
-        order += 1
+    # Legacy mcp_server_ids come first, then typed components, each pinned to an
+    # exact release (an explicit version, or the latest approved one).
+    from services.agent_lock import attach_pinned_components
 
-    from services.agent_resolver import resolve_component_versions
-
-    component_versions = await resolve_component_versions(req.components, db)
-
-    # New: components list with all types
-    for cref in req.components:
-        db.add(
-            AgentComponent(
-                agent_version_id=version.id,
-                component_type=cref.component_type,
-                component_id=cref.component_id,
-                component_name="",
-                resolved_version=component_versions.get((cref.component_type, cref.component_id), "latest"),
-                order_index=order,
-                config_override=cref.config_override,
-            )
-        )
-        order += 1
+    await attach_pinned_components(
+        db,
+        version.id,
+        [{"component_type": "mcp", "component_id": mid} for mid in req.mcp_server_ids] + list(req.components),
+        current_user=current_user,
+    )
 
     # Auto-infer harness feature requirements from the request data
     # (avoid accessing agent.components which would trigger a lazy load)
@@ -211,15 +207,20 @@ async def create_agent(
         components = all_crefs
         external_mcps = version.external_mcps
 
-    version.required_capabilities = infer_required_features(_AgentProxy(), skill_listings=skill_listings_map)
-    version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(version, _AgentProxy(), skill_listings=skill_listings_map)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     # Flush pending AgentComponent + goal rows so the snapshot builder picks
     # them up via its own SELECTs (the relationship cache is empty).
     await db.flush()
+    from services.agent_lock import lock_agent_version
     from services.agent_snapshot import build_yaml_snapshot
 
+    await lock_agent_version(db, agent, version)
     version.yaml_snapshot = await build_yaml_snapshot(version, db)
+    review = await submit_for_review(db, "agent", agent, version, current_user.id)
 
     try:
         await db.commit()
@@ -246,8 +247,12 @@ async def create_agent(
     )
 
     return _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
-    )
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        warnings=harness_warnings,
+    ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 @router.get("", response_model=list[AgentSummary])
@@ -333,6 +338,9 @@ async def list_agents(
         )
         rating_map = {r[0]: round(float(r[1]), 2) for r in rows.all()}
 
+    fork_counts = await agent_fork_counts(db, agent_ids)
+    provenance = await provenance_for_many(agents, current_user, db)
+
     # Batch-fetch creator emails and usernames
     user_ids = {a.created_by for a in agents}
     email_map: dict[uuid.UUID, str] = {}
@@ -368,6 +376,9 @@ async def list_agents(
             created_by_username=username_map.get(a.created_by),
             created_at=a.created_at,
             updated_at=a.updated_at,
+            is_recommended=a.is_recommended,
+            forked_from=provenance.get(a.id),
+            fork_count=fork_counts.get(a.id, 0),
         )
         for a in agents
     ]
@@ -399,6 +410,8 @@ async def my_agents(
         )
         rating_map = {r[0]: round(float(r[1]), 2) for r in rows.all()}
 
+    fork_counts = await agent_fork_counts(db, agent_ids)
+    provenance = await provenance_for_many(agents, current_user, db)
     return [
         AgentSummary(
             id=a.id,
@@ -424,6 +437,9 @@ async def my_agents(
             created_by_username=current_user.username,
             created_at=a.created_at,
             updated_at=a.updated_at,
+            is_recommended=a.is_recommended,
+            forked_from=provenance.get(a.id),
+            fork_count=fork_counts.get(a.id, 0),
         )
         for a in agents
     ]
@@ -489,6 +505,7 @@ async def archived_agents(
             created_by_username=username_map.get(a.created_by),
             created_at=a.created_at,
             updated_at=a.updated_at,
+            is_recommended=a.is_recommended,
         )
         for a in agents
     ]
@@ -554,6 +571,7 @@ async def deleted_agents(
             created_at=a.created_at,
             deleted_at=a.deleted_at,
             updated_at=a.updated_at,
+            is_recommended=a.is_recommended,
         )
         for a in agents
     ]
@@ -589,6 +607,8 @@ async def get_agent(
         user_permission=perm,
         status_map=status_map,
         identity_map=identity_map,
+        forked_from=await provenance_for(agent, current_user, db),
+        fork_count=(await agent_fork_counts(db, [agent.id])).get(agent.id, 0),
     )
 
 
@@ -664,6 +684,24 @@ async def update_agent(
             detail="Teamspace cannot be changed here. Recreate the agent under the target teamspace.",
         )
 
+    # An approved version is a lock that installs and pins depend on. Its contents
+    # never change in place; edits become a new release that goes through review.
+    latest = agent.latest_version
+    edits_version = "success_criteria" in req.model_fields_set or any(
+        getattr(req, field) is not None for field in _VERSION_OWNED_FIELDS
+    )
+    if edits_version and latest is not None:
+        await lock_review_for_edit(db, "agent", latest)
+    if edits_version and latest is not None and latest.status not in _EDITABLE_VERSION_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Version {latest.version} is {latest.status.value} and cannot be edited in place. "
+                f"Release a new version instead: observal agent release {agent.namespace}/{agent.slug} --bump patch "
+                f"(POST /api/v1/agents/{agent.id}/versions)."
+            ),
+        )
+
     if req.version_bump_type and req.version is None:
         from services.versioning import bump_version
 
@@ -732,11 +770,10 @@ async def update_agent(
                     for e in errors
                 ],
             )
-        from services.agent_resolver import resolve_component_versions
+        from services.agent_lock import attach_pinned_components
 
-        component_versions = await resolve_component_versions(req.components, db)
-
-        # Remove ALL old components on the latest version
+        # Replace every component on the latest version. Components that were
+        # already attached keep their pins unless the request names a version.
         version_id = agent.latest_version.id
         old_comps = (
             (await db.execute(select(AgentComponent).where(AgentComponent.agent_version_id == version_id)))
@@ -747,30 +784,21 @@ async def update_agent(
             await db.delete(comp)
         if old_comps:
             await db.flush()
-        for i, cref in enumerate(req.components):
-            db.add(
-                AgentComponent(
-                    agent_version_id=version_id,
-                    component_type=cref.component_type,
-                    component_id=cref.component_id,
-                    component_name="",
-                    resolved_version=component_versions.get((cref.component_type, cref.component_id), "latest"),
-                    order_index=i,
-                    config_override=cref.config_override,
-                )
-            )
+        await attach_pinned_components(db, version_id, req.components, previous=old_comps, current_user=current_user)
     elif req.mcp_server_ids is not None:
         # Legacy: only update MCP components
         if not agent.latest_version:
             raise HTTPException(status_code=400, detail="Agent has no version to update components on")
 
-        mcp_listings = await _validate_mcp_ids(
+        await _validate_mcp_ids(
             req.mcp_server_ids,
             db,
             current_user=current_user,
             target_team_id=agent.team_id if agent.is_private else None,
             enforce_target=True,
         )
+        from services.agent_lock import attach_pinned_components
+
         version_id = agent.latest_version.id
         old_comps = (
             (
@@ -788,20 +816,22 @@ async def update_agent(
             await db.delete(comp)
         if old_comps:
             await db.flush()
-        for i, (mid, listing) in enumerate(zip(req.mcp_server_ids, mcp_listings, strict=False)):
-            db.add(
-                AgentComponent(
-                    agent_version_id=version_id,
-                    component_type="mcp",
-                    component_id=mid,
-                    component_name="",
-                    resolved_version=listing.version,
-                    order_index=i,
-                )
-            )
+        await attach_pinned_components(
+            db,
+            version_id,
+            [{"component_type": "mcp", "component_id": mid} for mid in req.mcp_server_ids],
+            previous=old_comps,
+            current_user=current_user,
+        )
 
-    # Re-infer harness features only when components or external_mcps changed
-    if req.components is not None or req.mcp_server_ids is not None or req.external_mcps is not None:
+    # Re-infer harness features when components, external_mcps or the declared harnesses changed
+    harness_warnings: list[str] = []
+    if (
+        req.components is not None
+        or req.mcp_server_ids is not None
+        or req.external_mcps is not None
+        or req.supported_harnesses is not None
+    ):
         if not agent.latest_version:
             raise HTTPException(status_code=400, detail="Agent has no version to update features on")
         current_comps = (
@@ -819,8 +849,10 @@ async def update_agent(
             components = current_comps
             external_mcps = agent.external_mcps
 
-        agent.required_capabilities = infer_required_features(_AgentProxy(), skill_listings=skill_listings_map_update)
-        agent.inferred_supported_harnesses = compute_supported_harnesses(agent.required_capabilities)
+        try:
+            harness_warnings = apply_harness_inference(agent, _AgentProxy(), skill_listings=skill_listings_map_update)
+        except NoCompatibleHarnessError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     snapshot_fields = (
         "version",
@@ -841,9 +873,17 @@ async def update_agent(
     )
     if snapshot_needs_refresh:
         await db.flush()
+        from services.agent_lock import lock_agent_version
         from services.agent_snapshot import build_yaml_snapshot
 
+        await lock_agent_version(db, agent, agent.latest_version)
         agent.latest_version.yaml_snapshot = await build_yaml_snapshot(agent.latest_version, db)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = (
+        await push_draft_edit(db, "agent", agent, agent.latest_version, current_user.id)
+        if edits_version and agent.latest_version is not None
+        else None
+    )
 
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
@@ -858,9 +898,14 @@ async def update_agent(
         resource_name=agent.name,
     )
 
-    return _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
+    response = _agent_to_response(
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        warnings=harness_warnings,
     )
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.delete("/{agent_id}")
@@ -921,7 +966,10 @@ async def restore_deleted_agent(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     restore_name = req.name if req and req.name else agent.name
-    restore_slug = slugify(restore_name) if req and req.name else agent.slug
+    try:
+        restore_slug = slugify(restore_name) if req and req.name else agent.slug
+    except ValueError as exc:  # a reserved slug such as "draft"
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if await identity_exists(db, Agent, agent.namespace, restore_slug, exclude_id=agent.id):
         raise HTTPException(
             status_code=409,

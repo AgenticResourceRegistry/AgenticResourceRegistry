@@ -27,7 +27,6 @@ import { useInboxCounts } from "@/hooks/use-inbox-api";
 
 import {
 	Home,
-	Bot,
 	Blocks,
 	Hammer,
 	Trophy,
@@ -38,7 +37,6 @@ import {
 	Settings,
 	ScrollText,
 	ShieldAlert,
-	Stethoscope,
 	KeyRound,
 	BookOpen,
 	Inbox,
@@ -63,13 +61,19 @@ type NavItem = {
 	icon: typeof Home;
 	requiresAuth?: boolean;
 	minRole?: Role;
+	/** Extra path prefixes (e.g. detail pages) that should also highlight this item. */
+	alsoActive?: string[];
 };
 
 const registryNav: NavItem[] = [
 	{ title: "Home", href: "/", icon: Home },
-	{ title: "Agents", href: "/agents", icon: Bot },
+	{
+		title: "Agentic Resources",
+		href: "/resources",
+		icon: Blocks,
+		alsoActive: ["/agents", "/components"],
+	},
 	{ title: "Leaderboard", href: "/leaderboard", icon: Trophy },
-	{ title: "Components", href: "/components", icon: Blocks },
 	{
 		title: "Teamspaces",
 		href: "/teamspaces",
@@ -86,7 +90,7 @@ const registryNav: NavItem[] = [
 ];
 
 const reviewNav: NavItem[] = [
-	{ title: "Review", href: "/review", icon: ShieldCheck, minRole: "reviewer" },
+	{ title: "Review", href: "/review", icon: ShieldCheck, minRole: "user" },
 ];
 
 const userNav: NavItem[] = [
@@ -118,12 +122,6 @@ const adminNav: NavItem[] = [
 		title: "SSO",
 		href: "/sso",
 		icon: KeyRound,
-		minRole: "admin",
-	},
-	{
-		title: "Diagnostics",
-		href: "/diagnostics",
-		icon: Stethoscope,
 		minRole: "admin",
 	},
 	{ title: "Settings", href: "/settings", icon: Settings, minRole: "super_admin" },
@@ -165,9 +163,10 @@ export function RegistrySidebar() {
 		brandingLogo,
 		brandingAppName,
 		brandingWordmark,
+		leaderboardEnabled,
 	} = useDeploymentConfig();
 
-	function isActive(href: string) {
+	function isActive({ href, alsoActive = [] }: NavItem) {
 		if (href === "/") return pathname === "/";
 		if (pathname === href) return true;
 		// Only treat as active if no *more-specific* sibling nav item matches.
@@ -178,15 +177,18 @@ export function RegistrySidebar() {
 			...userNav,
 			...adminNav,
 		].map((n) => n.href);
-		const moreSpecific = allHrefs.some(
-			(h) => h !== href && h.startsWith(href + "/") && pathname.startsWith(h),
+		return [href, ...alsoActive].some(
+			(prefix) =>
+				pathname.startsWith(prefix) &&
+				!allHrefs.some(
+					(h) => h !== href && h.startsWith(prefix + "/") && pathname.startsWith(h),
+				),
 		);
-		if (moreSpecific) return false;
-		return pathname.startsWith(href);
 	}
 
 	const visibleRegistryNav = registryNav.filter(
-		(item) => !item.requiresAuth || isAuthenticated,
+		(item) => (!item.requiresAuth || isAuthenticated) &&
+			(item.href !== "/leaderboard" || leaderboardEnabled),
 	);
 
 	const visibleReviewNav = isAuthenticated
@@ -227,7 +229,7 @@ export function RegistrySidebar() {
 										/>
 									) : (
 										<img
-											src="/observal-logo.svg"
+											src="/logo.png"
 											alt=""
 											width={26}
 											height={26}
@@ -264,7 +266,7 @@ export function RegistrySidebar() {
 						<SidebarMenu>
 							{visibleRegistryNav.map((item) => (
 								<SidebarMenuItem key={item.href}>
-									<SidebarMenuButton asChild isActive={isActive(item.href)}>
+									<SidebarMenuButton asChild isActive={isActive(item)}>
 										<Link to={item.href}>
 											<item.icon className="h-4 w-4" />
 											<span>{item.title}</span>
@@ -285,7 +287,7 @@ export function RegistrySidebar() {
 							<SidebarMenu>
 								{visibleReviewNav.map((item) => (
 									<SidebarMenuItem key={item.href}>
-										<SidebarMenuButton asChild isActive={isActive(item.href)}>
+										<SidebarMenuButton asChild isActive={isActive(item)}>
 											<Link to={item.href}>
 												<item.icon className="h-4 w-4" />
 												<span>{item.title}</span>
@@ -307,7 +309,7 @@ export function RegistrySidebar() {
 							<SidebarMenu>
 								{visibleUserNav.map((item) => (
 									<SidebarMenuItem key={item.href}>
-										<SidebarMenuButton asChild isActive={isActive(item.href)}>
+										<SidebarMenuButton asChild isActive={isActive(item)}>
 											<Link to={item.href}>
 												<item.icon className="h-4 w-4" />
 												<span>{item.title}</span>
@@ -338,7 +340,7 @@ export function RegistrySidebar() {
 							<SidebarMenu>
 								{visibleAdminNav.map((item) => (
 									<SidebarMenuItem key={item.href}>
-										<SidebarMenuButton asChild isActive={isActive(item.href)}>
+										<SidebarMenuButton asChild isActive={isActive(item)}>
 											<Link to={item.href}>
 												<item.icon className="h-4 w-4" />
 												<span>{item.title}</span>

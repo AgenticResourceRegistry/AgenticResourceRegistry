@@ -1,5 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Observal CLI Command Reference
@@ -16,19 +20,15 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal reconcile`: Backfill local session records missed by automatic hook delivery
 - `observal scan`: Show a read-only inventory of your local harness setup.
 
-**`observal admin`**: Core administration and submission review commands
+**`observal admin`**: Core administration commands (use 'observal review' for submission reviews)
 
-- `observal admin review`: Submission review commands
-  - `observal admin review approve`: Approve a component, Agent, or bundle submission.
-  - `observal admin review list`: List pending submissions awaiting review.
-  - `observal admin review reject`: Reject a component, Agent, or bundle submission.
-  - `observal admin review show`: Show review details for a component or Agent.
 - `observal admin audit-log`: Query the compliance audit log.
 - `observal admin audit-log-export`: Export the compliance audit log as CSV or JSON.
 - `observal admin cache-clear`: Clear all server caches.
 - `observal admin create-user`: Create a new user account. Requires admin privileges.
 - `observal admin delete-user`: Delete a user account. Requires admin privileges.
 - `observal admin diagnostics`: Show system diagnostics and health status.
+- `observal admin recommend`: Mark or unmark an agent or component as recommended.
 - `observal admin reset-password`: Reset a user's password. Requires admin privileges.
 - `observal admin saml-config`: View current SAML SSO configuration.
 - `observal admin saml-config-delete`: Delete SAML SSO configuration. Disables SAML SSO.
@@ -56,10 +56,13 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal agent bulk-create`: Bulk-create agents from a JSON file.
 - `observal agent create`: Create a new agent (interactive wizard, from file, or via flags).
 - `observal agent delete`: Archive an agent. Prefer the archive command.
+- `observal agent edit`: Amend an unpublished agent version in place.
+- `observal agent fork`: Fork an approved agent release into your own editable draft.
 - `observal agent init`: Scaffold an observal-agent.yaml definition file.
 - `observal agent install`: Get install config for an agent.
 - `observal agent list`: List active agents (paginated).
 - `observal agent my`: List your own agents (all statuses).
+- `observal agent outdated`: Show which components an agent version pins behind their latest release.
 - `observal agent publish`: Publish the agent definition to the server.
 - `observal agent pull`: Fetch agent config and write harness files to disk.
 - `observal agent release`: Bump version and push a versioned release to the registry.
@@ -71,10 +74,10 @@ Every command available in the installed CLI. This block is generated from the T
 **`observal auth`**: Authentication and account commands
 
 - `observal auth login`: Connect to Observal.
-- `observal auth logout`: Clear saved credentials.
+- `observal auth logout`: Attempt to sign out everywhere and clear saved credentials.
 - `observal auth whoami`: Show current authenticated user.
 - `observal auth status`: Check authenticated server connectivity and local outbox health.
-- `observal auth change-password`: Change your password.
+- `observal auth change-password`: Change your password and sign out every other session.
 - `observal auth set-username`: Set or update your username.
 
 **`observal config`**: CLI configuration
@@ -84,6 +87,22 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal config path`: Show the config file path.
 - `observal config set`: Set a validated user-managed CLI setting.
 - `observal config show`: Show effective CLI configuration without exposing credentials.
+
+**`observal delegate`**: Hand a task to another approved agent (registry or remote A2A)
+
+- `observal delegate cancel`: Stop a delegated task.
+- `observal delegate find`: Find approved agents (registry and remote A2A) that can take a task.
+- `observal delegate list`: List recent delegated tasks on this machine.
+- `observal delegate mcp`: Run the observal-agents MCP server on stdio.
+- `observal delegate reply`: Answer a remote agent that asked for more input.
+- `observal delegate run`: Delegate a task and wait for the result.
+- `observal delegate status`: Show a delegated task, optionally waiting for it to finish.
+
+**`observal discover`**: Find approved resources for a task and use them in this session
+
+- `observal discover inspect`: Show the complete entry for one resource.
+- `observal discover search`: Search approved resources for a task.
+- `observal discover use`: Activate a resource for the current task.
 
 **`observal doctor`**: Diagnose and patch harness settings for Observal telemetry
 
@@ -107,9 +126,11 @@ Every command available in the installed CLI. This block is generated from the T
 
 **`observal ops`**: Observability and operational commands (sessions, telemetry, rankings, feedback, insights)
 
-- `observal ops insights`: Agent insight reports
+- `observal ops insights`: Agent, MCP, skill and hook component insight reports
+  - `observal ops insights activity`: Show current verified presence, usage and coverage before generating a report.
   - `observal ops insights generate`: Trigger generation of a new insight report.
   - `observal ops insights list`: List insight reports for an agent.
+  - `observal ops insights sessions`: List verified-present sessions and their published component evidence.
   - `observal ops insights show`: Show an insight report with pretty-printed narrative.
 - `observal ops logs`: Live log viewer (open in a separate tab)
 - `observal ops telemetry`: Telemetry health commands
@@ -121,8 +142,13 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal ops top`: Show top MCP servers or agents by usage.
 - `observal ops traces`: List recent traces (sessions).
 
-**`observal registry`**: Component registry (MCPs, skills, hooks, prompts, sandboxes)
+**`observal registry`**: Component registry (MCPs, skills, hooks, prompts, sandboxes, remote A2A agents)
 
+- `observal registry a2a`: Remote A2A agents (register an Agent Card, review, remove)
+  - `observal registry a2a list`: List remote A2A agents you can see, including pending ones you own or review.
+  - `observal registry a2a remove`: Remove a registered agent from discovery (owner or admin).
+  - `observal registry a2a review`: Approve or reject a registered agent (reviewers and admins).
+  - `observal registry a2a submit`: Register (or refresh) a remote A2A agent for review.
 - `observal registry bulk`: Submit mixed Registry components from one JSON file.
   - `observal registry bulk submit`: Submit mixed MCP, skill, hook, prompt, and sandbox entries.
 - `observal registry hook`: Hook registry commands
@@ -132,6 +158,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry hook co-authors remove`: Remove a co-author.
   - `observal registry hook archive`: Archive this component.
   - `observal registry hook edit`: Edit a draft, rejected, or pending hook submission.
+  - `observal registry hook fork`: Fork an approved hook release into your own editable draft.
   - `observal registry hook install`: Install a hook for a specific harness.
   - `observal registry hook list`: List approved hooks from the registry.
   - `observal registry hook show`: Show detailed information for a single hook.
@@ -143,11 +170,18 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry mcp co-authors add`: Add a co-author.
     - `observal registry mcp co-authors list`: List co-authors.
     - `observal registry mcp co-authors remove`: Remove a co-author.
+  - `observal registry mcp sync`: Publish a new MCP version automatically when its GitHub or GitLab repository changes
+    - `observal registry mcp sync disable`: Turn off webhook sync. Published versions are kept.
+    - `observal registry mcp sync enable`: Turn on GitHub or GitLab webhook sync, or change which events trigger it.
+    - `observal registry mcp sync rotate-secret`: Issue a new webhook secret. Update it in GitHub or GitLab, or deliveries will be rejected.
+    - `observal registry mcp sync run`: Sync the tracked branch now, without waiting for a push.
+    - `observal registry mcp sync status`: Show webhook sync settings and the result of the last sync.
   - `observal registry mcp submit`: Submit an MCP server to the registry.
   - `observal registry mcp show`: Show full details of an MCP server.
-  - `observal registry mcp install`: Generate an install config snippet for an MCP server.
+  - `observal registry mcp install`: Generate a snippet, or with --apply configure and track a Claude Code MCP.
   - `observal registry mcp archive`: Archive this component.
   - `observal registry mcp edit`: Edit an MCP server submission.
+  - `observal registry mcp fork`: Fork an approved mcp release into your own editable draft.
   - `observal registry mcp list`: List approved MCP servers in the registry.
   - `observal registry mcp my`: List your own MCP servers across all statuses.
   - `observal registry mcp transfer-owner`: Transfer ownership to another username.
@@ -161,6 +195,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry prompt co-authors remove`: Remove a co-author.
   - `observal registry prompt archive`: Archive this component.
   - `observal registry prompt edit`: Edit a draft, rejected, or pending prompt submission.
+  - `observal registry prompt fork`: Fork an approved prompt release into your own editable draft.
   - `observal registry prompt list`: List approved prompts in the registry.
   - `observal registry prompt my`: List your own prompts across all statuses.
   - `observal registry prompt render`: Render a prompt template with variable substitution.
@@ -178,28 +213,69 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry sandbox co-authors remove`: Remove a co-author.
   - `observal registry sandbox archive`: Archive this component.
   - `observal registry sandbox edit`: Edit a draft, rejected, or pending sandbox submission.
+  - `observal registry sandbox fork`: Fork an approved sandbox release into your own editable draft.
   - `observal registry sandbox list`: List approved sandboxes in the registry.
   - `observal registry sandbox show`: Show detailed information about a sandbox.
   - `observal registry sandbox submit`: Submit a new sandbox environment for review.
   - `observal registry sandbox transfer-owner`: Transfer ownership to another username.
   - `observal registry sandbox unarchive`: Restore an archived component.
 - `observal registry skill`: Skill registry commands
+  - `observal registry skill backups`: List, restore or explicitly prune verified skill folder backups.
+    - `observal registry skill backups list`: List retained verified backups and their ages.
+    - `observal registry skill backups prune`: Explicitly remove one old backup after verifying its active successor.
+    - `observal registry skill backups restore`: Restore only a byte-verified unmodified active installation.
   - `observal registry skill co-authors`: Manage co-authors for skills
     - `observal registry skill co-authors add`: Add a co-author.
     - `observal registry skill co-authors list`: List co-authors.
     - `observal registry skill co-authors remove`: Remove a co-author.
   - `observal registry skill archive`: Archive this component.
   - `observal registry skill edit`: Edit a draft, rejected, or pending skill submission.
-  - `observal registry skill install`: Install a skill by fetching the full skill directory from git.
+  - `observal registry skill export`: Export a skill version to a local directory.
+  - `observal registry skill fork`: Create an editable successor to the currently reviewed direct release.
+  - `observal registry skill fork-listing`: Fork an approved skill release into your own editable draft.
+  - `observal registry skill import-folder`: Create one complete direct-folder draft under a reviewed Git or legacy listing.
+  - `observal registry skill install`: Install an approved skill from Git or a complete reviewed registry folder.
   - `observal registry skill list`: List approved skills in the registry.
   - `observal registry skill my`: List your own skills across all statuses.
+  - `observal registry skill rebase`: Rebase a draft skill version on the current approved version.
+  - `observal registry skill replace-files`: Replace all files in a skill version with contents from a directory.
   - `observal registry skill show`: Show detailed information about a skill.
   - `observal registry skill submit`: Submit a new skill for review.
   - `observal registry skill transfer-owner`: Transfer ownership to another username.
   - `observal registry skill unarchive`: Restore an archived component.
+  - `observal registry skill withdraw`: Withdraw a pending skill version from review.
 - `observal registry version`: Manage component versions
   - `observal registry version list`: List version history for a registry component.
   - `observal registry version publish`: Publish a new version for a registry component.
+
+**`observal review`**: Review versions, conversations, checks, and publication gates
+
+- `observal review policy`: Organization and teamspace review policy
+  - `observal review policy set`: Set a policy key; use required_approvals.TYPE and a count for per-type gates.
+  - `observal review policy show`: Show organization or teamspace review policy.
+- `observal review approve`: Submit an approval, without publishing the version.
+- `observal review checks`: Show validation and advisory checks.
+- `observal review close`: Close and reject a review.
+- `observal review comment`: Add a general or line-anchored comment, optionally to a pending review.
+- `observal review diff`: Show numbered unified diff hunks (server redaction applies).
+- `observal review dismiss`: Dismiss a verdict (admin or team owner, reason required).
+- `observal review draft`: View or discard your pending review comments.
+- `observal review files`: List changed virtual files.
+- `observal review gate`: Show what blocks publishing and which open items are advisory.
+- `observal review list`: List reviews visible to you; pass the review number to other review commands.
+- `observal review mute`: Mute review activity except final outcomes.
+- `observal review publish`: Publish once the gate allows it; super admins can override approvals and checks with a reason.
+- `observal review reopen`: Reopen a review you withdrew by resubmitting its version.
+- `observal review reply`: Reply to a conversation.
+- `observal review request-changes`: Request changes on a review.
+- `observal review request-reviewer`: Request a reviewer by user UUID.
+- `observal review resolve`: Resolve a conversation.
+- `observal review show`: Show a review and its publication gate.
+- `observal review submit`: Submit pending comments with a verdict; publishing is a separate action.
+- `observal review threads`: List inline and general conversations.
+- `observal review unresolve`: Reopen a conversation.
+- `observal review watch`: Watch review activity.
+- `observal review withdraw`: Withdraw your own review.
 
 **`observal self`**: CLI self-management commands (upgrade, downgrade, rollback, status)
 
@@ -228,6 +304,13 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal server rollback`: Restore PostgreSQL and the Docker image version from backup.
 - `observal server upgrade`: Upgrade a local Docker deployment.
 - `observal server versions`: List Docker image versions and managed PostgreSQL backups.
+
+**`observal share`**: Share version-pinned Agents installed in the current repository.
+
+- `observal share candidates`: List shareable Agent versions tracked in the current repository.
+- `observal share create`: Select repository Agents and create an opaque, expiring share link.
+- `observal share open`: Open a share and, after confirmation, pull its accessible Agents.
+- `observal share revoke`: Revoke a share link immediately.
 
 **`observal team`**: Manage teamspaces: creation, membership, access, and visibility.
 

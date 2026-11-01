@@ -1,5 +1,7 @@
-# SPDX-FileCopyrightText: 2026 OpenAI contributors
+# SPDX-FileCopyrightText: 2026 ahmadalguydi <ahmadalgaidy@hotmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral tests for :mod:`observal_cli.cmd_auth`."""
@@ -264,6 +266,22 @@ def test_version_check_blocks_mismatch_with_correct_remediation(
         upgrade.assert_called_once_with(server_version)
 
 
+def test_version_check_dev_server_gives_source_install_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    import observal_cli.version_check as version_check
+
+    monkeypatch.setattr(version_check, "get_current_version", lambda: "1.13.1")
+    monkeypatch.setattr(auth.httpx, "get", lambda *_args, **_kwargs: _response(200, {"server_version": "1.15.0-dev.0"}))
+
+    with pytest.raises(CliError) as exc_info:
+        auth._ensure_cli_matches_server(SERVER_URL)
+
+    assert exc_info.value.category is ErrorCategory.VERSION
+    assert "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main" in (
+        exc_info.value.remediation or ""
+    )
+    assert "observal-cli==1.15.0-dev.0" not in (exc_info.value.remediation or "")
+
+
 def _prepare_login(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -482,6 +500,9 @@ def test_login_with_credentials_routes_to_password_authentication(
         ("3", {"sso_enabled": True}, True, "oidc"),
         ("3", {"saml_enabled": True}, True, "saml"),
         ("4", {"sso_enabled": True, "saml_enabled": True}, True, "saml"),
+        ("3", {"google_sso_enabled": True}, True, "google"),
+        ("4", {"sso_enabled": True, "google_sso_enabled": True}, True, "google"),
+        ("5", {"sso_enabled": True, "github_sso_enabled": True, "saml_enabled": True}, True, "saml"),
     ],
 )
 def test_login_method_menu_routes_browser_flows(
@@ -508,22 +529,30 @@ def test_login_method_menu_routes_browser_flows(
 
 
 @pytest.mark.parametrize(
-    ("sso", "saml", "provider"),
-    [(True, False, None), (False, True, "saml")],
+    ("sso", "saml", "provider_option", "provider"),
+    [
+        (False, True, None, "saml"),
+        (False, False, "google", "google"),
+        (True, False, "GitHub", "github"),
+    ],
 )
-def test_login_sso_flags_bypass_method_prompt(
+def test_login_explicit_provider_bypasses_prompts(
     sso: bool,
     saml: bool,
-    provider: str | None,
+    provider_option: str | None,
+    provider: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _prepare_login(monkeypatch, public={"sso_enabled": True, "saml_enabled": True})
+    _prepare_login(
+        monkeypatch,
+        public={"sso_enabled": True, "google_sso_enabled": True, "github_sso_enabled": True, "saml_enabled": True},
+    )
     quick_choice = MagicMock()
     device_login = MagicMock()
     monkeypatch.setattr(auth, "quick_choice", quick_choice)
     monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
 
-    auth.login(SERVER_URL, None, None, None, sso, saml)
+    auth.login(SERVER_URL, None, None, None, sso, saml, provider=provider_option)
 
     quick_choice.assert_not_called()
     device_login.assert_called_once_with(
@@ -545,10 +574,153 @@ def test_login_sso_only_server_forces_browser_flow(monkeypatch: pytest.MonkeyPat
     device_login.assert_called_once_with(
         SERVER_URL,
         direct_sso=True,
-        provider=None,
+        provider="oidc",
         output=auth.OutputMode.table,
         run_setup=True,
     )
+
+
+@pytest.mark.parametrize(
+    ("public", "answer", "expected_provider"),
+    [
+        ({"sso_enabled": True, "google_sso_enabled": True}, "2", "google"),
+        ({"sso_enabled": True, "google_sso_enabled": True, "saml_enabled": True}, "1", "oidc"),
+        ({"sso_only": True, "sso_enabled": True, "github_sso_enabled": True}, "2", "github"),
+    ],
+)
+def test_bare_sso_asks_which_provider_when_several_are_enabled(
+    public: dict[str, object],
+    answer: str,
+    expected_provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_login(monkeypatch, public=public)
+    quick_choice = MagicMock(return_value=answer)
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "quick_choice", quick_choice)
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+    monkeypatch.setattr(auth.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+
+    auth.login(SERVER_URL, None, None, None, not public.get("sso_only"), False)
+
+    prompt, valid = quick_choice.call_args.args
+    assert prompt == "SSO provider"
+    assert len(valid) == sum(1 for key, value in public.items() if key != "sso_only" and value)
+    device_login.assert_called_once_with(
+        SERVER_URL,
+        direct_sso=True,
+        provider=expected_provider,
+        output=auth.OutputMode.table,
+        run_setup=True,
+    )
+
+
+def test_bare_sso_uses_the_only_enabled_provider_without_asking(monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_login(monkeypatch, public={"google_sso_enabled": True})
+    quick_choice = MagicMock()
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "quick_choice", quick_choice)
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+
+    auth.login(SERVER_URL, None, None, None, True, False)
+
+    quick_choice.assert_not_called()
+    assert device_login.call_args.kwargs["provider"] == "google"
+
+
+def test_bare_sso_without_terminal_keeps_server_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_login(monkeypatch, public={"sso_enabled": True, "google_sso_enabled": True})
+    quick_choice = MagicMock(side_effect=AssertionError("non-interactive stdin must not prompt"))
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "quick_choice", quick_choice)
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+    monkeypatch.setattr(auth.sys, "stdin", SimpleNamespace(isatty=lambda: False))
+
+    auth.login(SERVER_URL, None, None, None, True, False)
+
+    assert device_login.call_args.kwargs["provider"] is None
+
+
+@pytest.mark.parametrize("provider", ["google", "okta"])
+def test_login_rejects_saml_with_a_different_provider(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_login(monkeypatch, public={"sso_enabled": True, "google_sso_enabled": True, "saml_enabled": True})
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+
+    with pytest.raises(CliError) as exc_info:
+        auth.login(SERVER_URL, None, None, None, False, True, provider=provider)
+
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    assert "--saml and --provider" in exc_info.value.message
+    device_login.assert_not_called()
+
+
+def test_login_accepts_saml_with_matching_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_login(monkeypatch, public={"saml_enabled": True})
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+
+    auth.login(SERVER_URL, None, None, None, False, True, provider="SAML")
+
+    assert device_login.call_args.kwargs["provider"] == "saml"
+
+
+def test_json_bare_sso_keeps_server_default_without_prompting(monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_login(monkeypatch, public={"sso_enabled": True, "google_sso_enabled": True})
+    quick_choice = MagicMock(side_effect=AssertionError("JSON mode must not prompt"))
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "quick_choice", quick_choice)
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+
+    auth.login(SERVER_URL, None, None, None, True, False, output=auth.OutputMode.json)
+
+    device_login.assert_called_once_with(
+        SERVER_URL,
+        direct_sso=True,
+        provider=None,
+        output=auth.OutputMode.json,
+        run_setup=False,
+    )
+
+
+def test_json_provider_implies_sso(monkeypatch: pytest.MonkeyPatch) -> None:
+    _prepare_login(monkeypatch, public={"sso_enabled": True, "google_sso_enabled": True})
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+
+    auth.login(SERVER_URL, None, None, None, False, False, output=auth.OutputMode.json, provider="google")
+
+    device_login.assert_called_once_with(
+        SERVER_URL,
+        direct_sso=True,
+        provider="google",
+        output=auth.OutputMode.json,
+        run_setup=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "message"),
+    [
+        ("google", "Google is not configured"),
+        ("okta", "Unknown SSO provider: okta"),
+    ],
+)
+def test_login_rejects_unusable_explicit_provider(
+    provider: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_login(monkeypatch, public={"sso_enabled": True})
+    device_login = MagicMock()
+    monkeypatch.setattr(auth, "_do_device_flow_login", device_login)
+
+    with pytest.raises(CliError) as exc_info:
+        auth.login(SERVER_URL, None, None, None, True, False, provider=provider)
+
+    assert exc_info.value.category is ErrorCategory.VALIDATION
+    assert message in exc_info.value.message
+    device_login.assert_not_called()
 
 
 def test_quick_choice_restores_terminal_before_printing_selection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -581,6 +753,24 @@ def test_quick_choice_restores_terminal_before_printing_selection(monkeypatch: p
     assert events[1] == ("raw", 7)
     assert events[2][0] == "restore"
     assert events[3] == ("print", ("1",), {})
+
+
+def test_quick_choice_windows_uses_native_keypress(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rich
+
+    from observal_cli import prompts
+
+    keys = iter(["x", "2"])
+    msvcrt = ModuleType("msvcrt")
+    msvcrt.getwch = lambda: next(keys)
+    monkeypatch.setitem(sys.modules, "msvcrt", msvcrt)
+    monkeypatch.setattr(prompts.sys, "platform", "win32")
+    monkeypatch.setattr(prompts.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    printed: list[str] = []
+    monkeypatch.setattr(rich, "print", lambda value, **_kwargs: printed.append(value))
+
+    assert prompts.quick_choice("Login method", ["1", "2"]) == "2"
+    assert printed == ["  Login method: ", "2"]
 
 
 def test_login_password_menu_prompts_for_identifier_and_password(
@@ -879,6 +1069,32 @@ def test_change_password_sends_current_and_validated_password_with_bearer_token(
     assert current_password not in output
     assert VALID_PASSWORD not in output
     assert ACCESS_TOKEN not in output
+
+
+def test_change_password_keeps_this_cli_signed_in_without_printing_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server signs out every session, so the CLI must swap its one-time code for the fresh pair."""
+    auth.config.save(
+        {"server_url": SERVER_URL, "access_token": ACCESS_TOKEN, "refresh_token": "old", "api_key": "hooks"}
+    )
+    secrets = {"OBSERVAL_CURRENT_PASSWORD": "CurrentPassword1!", "OBSERVAL_NEW_PASSWORD": VALID_PASSWORD}
+    monkeypatch.setattr(auth, "_secret", lambda name, **_kwargs: secrets[name])
+    monkeypatch.setattr(
+        auth.client,
+        "put",
+        MagicMock(return_value={"message": "Password changed", "exchange_code": "one-time-code"}),
+    )
+    exchange = MagicMock(return_value={"access_token": "fresh-access", "refresh_token": "fresh-refresh"})
+    monkeypatch.setattr(auth.client, "post", exchange)
+    emitted: list[dict] = []
+    monkeypatch.setattr(auth, "output_json", emitted.append)
+
+    auth.change_password(output=auth.OutputMode.json)
+
+    saved = json.loads(auth.config.CONFIG_FILE.read_text())
+    assert (saved["access_token"], saved["refresh_token"]) == ("fresh-access", "fresh-refresh")
+    assert "api_key" not in saved  # the revoked hooks token would make every hook upload fail
+    assert exchange.call_args.args == ("/api/v1/auth/exchange", {"code": "one-time-code"})
+    assert emitted == [{"message": "Password changed"}]  # neither the code nor tokens are printed
 
 
 def test_change_password_rejects_mismatched_confirmation(
@@ -1483,7 +1699,11 @@ def test_config_show_defaults_to_table(
         ("update_check", "off", False),
         ("timeout", "60", 60),
         ("update_check_interval", "120", 120),
-        ("update_check_repo", "Observal/Observal", "Observal/Observal"),
+        (
+            "update_check_repo",
+            "AgenticResourceRegistry/AgenticResourceRegistry",
+            "AgenticResourceRegistry/AgenticResourceRegistry",
+        ),
     ],
 )
 def test_config_set_normalizes_supported_values(
@@ -1718,34 +1938,44 @@ def test_config_storage_is_atomic_private_and_rejects_malformed_json(
 
 
 def test_post_login_setup_installs_skills_snapshots_and_runs_doctor(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import observal_cli.cmd_doctor as cmd_doctor
 
-    install = MagicMock()
-    snapshot = MagicMock()
-    doctor = MagicMock()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    setup_order: list[str] = []
+    install = MagicMock(side_effect=lambda: setup_order.append("skills"))
+    pi_extension = MagicMock(side_effect=lambda: setup_order.append("pi"))
+    snapshot = MagicMock(side_effect=lambda: setup_order.append("snapshot"))
+    doctor = MagicMock(side_effect=lambda **_kwargs: setup_order.append("doctor"))
     monkeypatch.setattr(auth, "_install_observal_skill", install)
+    monkeypatch.setattr(auth, "_install_or_check_pi_extension", pi_extension)
     monkeypatch.setattr(auth, "_generate_initial_layer_snapshot", snapshot)
     monkeypatch.setattr(cmd_doctor, "doctor", doctor)
 
     auth._post_login_setup()
 
     install.assert_called_once_with()
+    pi_extension.assert_called_once_with()
     snapshot.assert_called_once_with()
     assert doctor.call_args.kwargs["yes"] is False
     assert doctor.call_args.kwargs["ctx"].invoked_subcommand is None
+    assert setup_order == ["skills", "pi", "snapshot", "doctor"]
 
 
 @pytest.mark.parametrize("error", [typer.Exit(1), RuntimeError("doctor unavailable")])
 def test_post_login_setup_contains_doctor_failures(
     error: Exception,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     printed: list[str],
 ) -> None:
     import observal_cli.cmd_doctor as cmd_doctor
 
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(auth, "_install_observal_skill", MagicMock())
+    monkeypatch.setattr(auth, "_install_or_check_pi_extension", MagicMock())
     monkeypatch.setattr(auth, "_generate_initial_layer_snapshot", MagicMock())
     monkeypatch.setattr(cmd_doctor, "doctor", MagicMock(side_effect=error))
 
@@ -1831,6 +2061,95 @@ def test_install_observal_skill_delegates_to_installer(monkeypatch: pytest.Monke
     install.assert_called_once_with()
 
 
+def test_pi_extension_setup_is_silent_when_pi_not_detected(monkeypatch: pytest.MonkeyPatch, printed: list[str]) -> None:
+    import observal_cli.pi_extension as pi_extension
+
+    monkeypatch.setattr(pi_extension, "check_status", lambda: pi_extension.PiExtensionStatus(pi_extension.NOT_DETECTED))
+    install_or_refresh = MagicMock(return_value=pi_extension.PiExtensionResult(True))
+    monkeypatch.setattr(pi_extension, "install_or_refresh", install_or_refresh)
+
+    auth._install_or_check_pi_extension()
+
+    install_or_refresh.assert_not_called()
+    assert printed == []
+
+
+def test_pi_extension_setup_installs_when_missing(monkeypatch: pytest.MonkeyPatch, printed: list[str]) -> None:
+    import observal_cli.pi_extension as pi_extension
+
+    status = pi_extension.PiExtensionStatus(pi_extension.NOT_INSTALLED, "not installed", action="install")
+    monkeypatch.setattr(pi_extension, "check_status", lambda: status)
+    install_or_refresh = MagicMock(return_value=pi_extension.PiExtensionResult(True))
+    monkeypatch.setattr(pi_extension, "install_or_refresh", install_or_refresh)
+
+    auth._install_or_check_pi_extension()
+
+    install_or_refresh.assert_called_once_with(dry_run=False, status=status)
+    assert any("Installed the Pi telemetry extension" in message for message in printed)
+
+
+def test_pi_extension_setup_refreshes_and_prompts_reload_when_stale(
+    monkeypatch: pytest.MonkeyPatch, printed: list[str]
+) -> None:
+    import observal_cli.pi_extension as pi_extension
+
+    status = pi_extension.PiExtensionStatus(pi_extension.STALE, "stale", action="refresh")
+    monkeypatch.setattr(pi_extension, "check_status", lambda: status)
+    monkeypatch.setattr(
+        pi_extension, "install_or_refresh", MagicMock(return_value=pi_extension.PiExtensionResult(True))
+    )
+
+    auth._install_or_check_pi_extension()
+
+    output = "\n".join(printed)
+    assert "Updated the Pi telemetry extension" in output
+    assert "reload" in output.lower()
+
+
+def test_pi_extension_setup_adopts_silently(monkeypatch: pytest.MonkeyPatch, printed: list[str]) -> None:
+    import observal_cli.pi_extension as pi_extension
+
+    status = pi_extension.PiExtensionStatus(pi_extension.CURRENT, action="adopt")
+    monkeypatch.setattr(pi_extension, "check_status", lambda: status)
+    install_or_refresh = MagicMock(return_value=pi_extension.PiExtensionResult(True))
+    monkeypatch.setattr(pi_extension, "install_or_refresh", install_or_refresh)
+
+    auth._install_or_check_pi_extension()
+
+    install_or_refresh.assert_called_once_with(dry_run=False, status=status)
+    assert printed == []
+
+
+def test_pi_extension_setup_migrates_pre_manifest_install(monkeypatch: pytest.MonkeyPatch, printed: list[str]) -> None:
+    from pathlib import Path  # module-level import is TYPE_CHECKING-only
+
+    import observal_cli.pi_extension as pi_extension
+
+    status = pi_extension.PiExtensionStatus(pi_extension.MIGRATABLE, "older CLI", action="migrate")
+    monkeypatch.setattr(pi_extension, "check_status", lambda: status)
+    backup = Path("/home/u/.pi/agent/extensions/observal.ts.bak")
+    install_or_refresh = MagicMock(return_value=pi_extension.PiExtensionResult(True, "migrate", backup))
+    monkeypatch.setattr(pi_extension, "install_or_refresh", install_or_refresh)
+
+    auth._install_or_check_pi_extension()
+
+    install_or_refresh.assert_called_once_with(dry_run=False, status=status)
+    output = "\n".join(printed)
+    assert "Migrated the Pi telemetry extension" in output
+    assert "observal.ts.bak" in output
+    assert "reload" in output.lower()
+
+
+def test_pi_extension_setup_never_blocks_login_on_failure(monkeypatch: pytest.MonkeyPatch, printed: list[str]) -> None:
+    import observal_cli.pi_extension as pi_extension
+
+    monkeypatch.setattr(pi_extension, "check_status", MagicMock(side_effect=OSError("settings.json unreadable")))
+
+    auth._install_or_check_pi_extension()  # must not raise
+
+    assert any("Could not check the Pi telemetry extension" in message for message in printed)
+
+
 def test_run_doctor_patch_uses_isolated_subprocess_environment(
     monkeypatch: pytest.MonkeyPatch,
     printed: list[str],
@@ -1838,11 +2157,15 @@ def test_run_doctor_patch_uses_isolated_subprocess_environment(
     completed = SimpleNamespace(returncode=1, stdout="doctor output\n", stderr="doctor warning\n")
     run = MagicMock(return_value=completed)
     monkeypatch.setattr(subprocess, "run", run)
+    from observal_cli.shared import launcher
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
 
     auth._run_doctor_patch("cursor")
 
     command = run.call_args.args[0]
-    assert command[:4] == [sys.executable, "-m", "observal_cli.main", "doctor"]
+    # -I keeps the working directory and any inherited PYTHONPATH off sys.path.
+    assert command[:6] == [sys.executable, "-I", "-X", "utf8", "-m", "observal_cli.main"]
     assert command[-1] == "cursor"
     assert run.call_args.kwargs["capture_output"] is True
     assert run.call_args.kwargs["timeout"] == 30

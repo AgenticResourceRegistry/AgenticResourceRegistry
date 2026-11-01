@@ -133,6 +133,12 @@ def generate_clickhouse_config() -> Path:
             <max_server_memory_usage_ratio>0.5</max_server_memory_usage_ratio>
             <max_concurrent_queries>20</max_concurrent_queries>
 
+            <send_crash_reports>
+                <enabled>false</enabled>
+                <send_logical_errors>false</send_logical_errors>
+            </send_crash_reports>
+            <remote_url_allow_hosts></remote_url_allow_hosts>
+
             <mark_cache_size>5368709120</mark_cache_size>
 
             <users>

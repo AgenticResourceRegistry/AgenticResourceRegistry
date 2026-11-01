@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for bulk agent creation endpoint.
@@ -10,6 +11,7 @@ and validation of empty requests.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,6 +21,13 @@ from httpx import ASGITransport, AsyncClient
 from api.deps import get_current_user, get_db
 from api.routes.bulk import router
 from models.user import User, UserRole
+
+
+@pytest.fixture(autouse=True)
+def _mock_review_boundary(monkeypatch):
+    """Bulk routing tests use a mocked session; review persistence is tested separately."""
+    monkeypatch.setattr("api.routes.bulk.submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
+
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -122,6 +131,7 @@ class TestBulkCreate:
         assert data["created"] == 3
         assert data["skipped"] == 0
         assert data["errors"] == 0
+        assert data["partial"] is False
         assert data["dry_run"] is False
         assert len(data["results"]) == 3
         db.commit.assert_awaited_once()
@@ -138,14 +148,14 @@ class TestBulkCreate:
         app, db, _ = _app_with()
         db.execute = AsyncMock(return_value=_empty_result())
 
-        # Two flushes per item (agent, then version); no reviewers exist here, so
-        # delivery adds none. Failing the third fails the SECOND item, leaving a
-        # neighbour on each side to prove the batch carried on.
+        # Three flushes per item (agent, version, then the lock); no reviewers
+        # exist here, so delivery adds none. Failing the fourth fails the SECOND
+        # item, leaving a neighbour on each side to prove the batch carried on.
         flushes = {"n": 0}
 
         async def flaky_flush(*_a, **_k):
             flushes["n"] += 1
-            if flushes["n"] == 3:
+            if flushes["n"] == 4:
                 raise RuntimeError("simulated database failure")
 
         db.flush = AsyncMock(side_effect=flaky_flush)
@@ -166,10 +176,13 @@ class TestBulkCreate:
         data = r.json()
         assert data["created"] == 2
         assert data["errors"] == 1
+        assert data["partial"] is True
 
         by_name = {item["name"]: item for item in data["results"]}
         assert by_name["agent-one"]["status"] == "created"
         assert by_name["agent-two"]["status"] == "error"
+        assert by_name["agent-two"]["error"] == "Agent could not be created"
+        assert "simulated database failure" not in str(data)
         # The item after the failure still ran, which is the part a poisoned
         # transaction would have taken away.
         assert by_name["agent-three"]["status"] == "created"
@@ -227,6 +240,34 @@ class TestBulkDryRun:
         db.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_dry_run_reports_invalid_components_as_partial(self):
+        app, db, _ = _app_with()
+        db.execute = AsyncMock(return_value=_empty_result())
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/api/v1/bulk/agents",
+                json={
+                    "agents": [
+                        _agent_item(
+                            "invalid-agent",
+                            components=[{"component_type": "skill"}],
+                        )
+                    ],
+                    "dry_run": True,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["created"] == 0
+        assert data["errors"] == 1
+        assert data["partial"] is True
+        assert data["results"][0]["status"] == "error"
+        assert data["results"][0]["error"] == "Agent definition is invalid"
+        db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_dry_run_no_agent_ids(self):
         """Dry-run results should not include agent_id values."""
         app, db, _ = _app_with()
@@ -281,6 +322,29 @@ class TestBulkDedup:
         assert data["skipped"] == 1
         assert data["results"][0]["status"] == "skipped"
         assert data["results"][1]["status"] == "created"
+
+    @pytest.mark.asyncio
+    async def test_same_request_duplicates_are_skipped_in_dry_run(self):
+        app, db, _ = _app_with()
+        db.execute = AsyncMock(return_value=_empty_result())
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/api/v1/bulk/agents",
+                json={
+                    "agents": [_agent_item("Review Agent"), _agent_item("review-agent")],
+                    "dry_run": True,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["created"] == 1
+        assert data["skipped"] == 1
+        assert data["errors"] == 0
+        assert data["partial"] is False
+        assert data["results"][1]["status"] == "skipped"
+        assert "batch" in data["results"][1]["error"]
 
     @pytest.mark.asyncio
     async def test_skipped_result_includes_error_message(self):

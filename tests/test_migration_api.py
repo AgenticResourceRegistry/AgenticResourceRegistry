@@ -15,8 +15,11 @@ Requirements: 2.1, 2.2, 2.3, 4.9, 4.10, 4.12, 6.1, 6.7
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import importlib.util
+import inspect
+import os
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -126,6 +129,15 @@ skip_if_no_module = pytest.mark.skipif(_migrate_mod is None, reason="Cannot load
 
 class TestStartEndpoints:
     """Start endpoints return 202 with a job_id."""
+
+    @skip_if_no_module
+    @pytest.mark.parametrize("endpoint_name", ["start_import", "start_validate"])
+    def test_upload_scope_is_read_from_multipart_form(self, endpoint_name):
+        """The UI sends scope in FormData, not in the query string."""
+        from fastapi.params import Form
+
+        endpoint = getattr(_migrate_mod, endpoint_name)
+        assert isinstance(inspect.signature(endpoint).parameters["scope"].default, Form)
 
     @skip_if_no_module
     @pytest.mark.asyncio
@@ -291,6 +303,39 @@ class TestInvalidUploads:
 
     @skip_if_no_module
     @pytest.mark.asyncio
+    async def test_both_scope_requires_both_archives(self):
+        """Registry + telemetry rejects a request containing only one archive."""
+        from fastapi import HTTPException
+
+        mock_file = MagicMock()
+        mock_file.filename = "pg_export (2).tar.gz"
+        mock_file.size = 1024
+        mock_file.read = AsyncMock(return_value=b"\x1f\x8b\x00\x00")
+        mock_file.seek = AsyncMock()
+
+        with pytest.raises(HTTPException, match="both the PostgreSQL and telemetry"):
+            await _migrate_mod._validate_upload_files([mock_file], MigrationScope.both)
+
+    @skip_if_no_module
+    @pytest.mark.asyncio
+    async def test_both_scope_accepts_downloaded_archive_names(self):
+        """Browser duplicate suffixes do not prevent artifact classification."""
+        pg_file = MagicMock()
+        pg_file.filename = "pg_export (2).tar.gz"
+        pg_file.size = 1024
+        pg_file.read = AsyncMock(return_value=b"\x1f\x8b\x00\x00")
+        pg_file.seek = AsyncMock()
+
+        telemetry_file = MagicMock()
+        telemetry_file.filename = "telemetry_export (1).tar.gz"
+        telemetry_file.size = 2048
+        telemetry_file.read = AsyncMock(return_value=b"\x1f\x8b\x00\x00")
+        telemetry_file.seek = AsyncMock()
+
+        await _migrate_mod._validate_upload_files([pg_file, telemetry_file], MigrationScope.both)
+
+    @skip_if_no_module
+    @pytest.mark.asyncio
     async def test_scope_mismatch_returns_422(self):
         """Parquet-only upload for postgres scope is rejected."""
         from fastapi import HTTPException
@@ -309,6 +354,68 @@ class TestInvalidUploads:
         ):
             await _validate_upload_files([mock_file], MigrationScope.postgres)
         assert exc_info.value.status_code == 422
+
+
+class TestUploadStorage:
+    """Large artifact storage must remain bounded and clean up partial writes."""
+
+    @skip_if_no_module
+    @pytest.mark.asyncio
+    async def test_store_upload_streams_in_bounded_chunks(self, tmp_path):
+        upload = MagicMock()
+        upload.filename = "telemetry_export (1).tar.gz"
+        upload.seek = AsyncMock()
+        upload.read = AsyncMock(side_effect=[b"a" * 10, b"b" * 7, b""])
+        job_id = uuid.uuid4()
+
+        with (
+            patch.dict(os.environ, {"MIGRATION_ARTIFACT_ROOT": str(tmp_path)}),
+            patch("services.dynamic_settings.get_int", new_callable=AsyncMock, return_value=1024),
+        ):
+            job_dir = await _migrate_mod._store_upload_files([upload], job_id)
+
+        stored = job_dir / upload.filename
+        assert stored.read_bytes() == b"a" * 10 + b"b" * 7
+        assert all(call.args == (_migrate_mod._UPLOAD_COPY_CHUNK_BYTES,) for call in upload.read.await_args_list)
+        assert stored.stat().st_mode & 0o777 == 0o600
+
+    @skip_if_no_module
+    @pytest.mark.asyncio
+    async def test_store_upload_removes_partial_job_on_client_cancellation(self, tmp_path):
+        upload = MagicMock()
+        upload.filename = "telemetry_export.tar.gz"
+        upload.seek = AsyncMock()
+        upload.read = AsyncMock(side_effect=[b"partial", asyncio.CancelledError()])
+        job_id = uuid.uuid4()
+
+        with (
+            patch.dict(os.environ, {"MIGRATION_ARTIFACT_ROOT": str(tmp_path)}),
+            patch("services.dynamic_settings.get_int", new_callable=AsyncMock, return_value=1024),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _migrate_mod._store_upload_files([upload], job_id)
+
+        assert not (tmp_path / str(job_id)).exists()
+
+    @skip_if_no_module
+    @pytest.mark.asyncio
+    async def test_store_upload_removes_partial_job_on_streamed_size_violation(self, tmp_path):
+        from fastapi import HTTPException
+
+        upload = MagicMock()
+        upload.filename = "telemetry_export.tar.gz"
+        upload.seek = AsyncMock()
+        upload.read = AsyncMock(side_effect=[b"1234", b"5678", b""])
+        job_id = uuid.uuid4()
+
+        with (
+            patch.dict(os.environ, {"MIGRATION_ARTIFACT_ROOT": str(tmp_path)}),
+            patch("services.dynamic_settings.get_int", new_callable=AsyncMock, return_value=6),
+            pytest.raises(HTTPException, match="exceeds maximum upload size"),
+        ):
+            await _migrate_mod._store_upload_files([upload], job_id)
+
+        assert not (tmp_path / str(job_id)).exists()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

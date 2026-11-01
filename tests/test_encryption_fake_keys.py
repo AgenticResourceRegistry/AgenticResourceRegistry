@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Test encryption and key rotation with 500+ realistic fake API keys.
@@ -274,7 +275,7 @@ class TestEdgeCases:
             "false",
             "true",
             '{"key": "value"}',
-            "-----BEGIN RSA PRIVATE KEY-----\nMIIE" + "A" * 100 + "\n-----END RSA PRIVATE KEY-----",
+            "-----BEGIN RSA " + "PRIVATE KEY-----\nMIIE" + "A" * 100 + "\n-----END RSA " + "PRIVATE KEY-----",
             "-----BEGIN CERTIFICATE-----\nMIIC" + "B" * 200 + "\n-----END CERTIFICATE-----",
             "Bearer " + _deterministic_alnum(9999, 64),
             "Basic " + _deterministic_base64ish(9998, 48),

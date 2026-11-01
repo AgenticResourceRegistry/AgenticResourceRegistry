@@ -2,9 +2,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal Server
+# Agentic Resource Registry Server
 
-FastAPI backend that powers the Observal platform. Provides REST and GraphQL APIs for managing agents, components, telemetry, and user access.
+FastAPI backend that powers the Agentic Resource Registry platform. Provides REST and GraphQL APIs for managing agents, components, telemetry, and user access.
 
 ## Stack
 

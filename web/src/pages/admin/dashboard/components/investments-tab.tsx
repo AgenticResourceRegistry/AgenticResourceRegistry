@@ -11,16 +11,14 @@ import {
 import { useExecPlatforms, useExecStrategicInsights } from "@/hooks/use-api";
 import type { ExecPlatformScore } from "@/lib/types";
 
-import { AXIS_TICK, CHART_SERIES, CURSOR_FILL, GRID_STROKE, TOOLTIP_STYLE, token } from "@/lib/chart-theme";
+import { CHART_SERIES } from "@/lib/chart-theme";
 
 const COLORS = CHART_SERIES;
 
-function deriveRadarData(p: ExecPlatformScore, best: { latency: number; cost: number }) {
-  const speedScore = best.latency > 0 ? Math.max(0, 100 - ((p.avg_latency_ms / best.latency) - 1) * 50) : 100;
-  const costScore = best.cost > 0 ? Math.max(0, 100 - ((p.avg_cost / best.cost) - 1) * 50) : 100;
+function deriveRadarData(p: ExecPlatformScore, bestLatency: number) {
+  const speedScore = bestLatency > 0 ? Math.max(0, 100 - ((p.avg_latency_ms / bestLatency) - 1) * 50) : 100;
   const data = [
     { metric: "Speed", value: Math.min(Math.max(speedScore, 0), 100) },
-    { metric: "Cost Efficiency", value: Math.min(Math.max(costScore, 0), 100) },
     { metric: "Volume", value: Math.min(Math.max(p.composite_score, 0), 100) },
   ];
   if (p.success_rate !== null) data.unshift({ metric: "Success Rate", value: Math.min(p.success_rate, 100) });
@@ -64,8 +62,8 @@ export function InvestmentsTab() {
 
   const platform = platforms[selected];
   const bestLatency = Math.min(...platforms.map((p) => p.avg_latency_ms || Infinity));
-  const bestCost = Math.min(...platforms.filter((p) => p.avg_cost > 0).map((p) => p.avg_cost));
-  const radarData = deriveRadarData(platform, { latency: bestLatency, cost: bestCost || 1 });
+  const radarData = deriveRadarData(platform, bestLatency);
+  const hasCostData = platform.avg_cost > 0;
 
   const chartData = platforms.map((p, i) => ({
     name: p.platform,
@@ -105,15 +103,13 @@ export function InvestmentsTab() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 border-t border-border pt-4 sm:grid-cols-3">
-            <div className="text-center">
-              <div className="text-lg font-bold">{(platform.sessions / 1000).toFixed(1)}K</div>
-              <div className="text-xs text-muted-foreground">Sessions</div>
-            </div>
-            <div className="text-center">
-              <div className="text-lg font-bold text-success">${platform.avg_cost.toFixed(3)}</div>
-              <div className="text-xs text-muted-foreground">Avg Cost/Task</div>
-            </div>
+          <div className="grid grid-cols-1 gap-4 border-t border-border pt-4 sm:grid-cols-2">
+            {hasCostData && (
+              <div className="text-center">
+                <div className="text-lg font-bold text-success">${platform.avg_cost.toFixed(3)}</div>
+                <div className="text-xs text-muted-foreground">Avg Cost/Task</div>
+              </div>
+            )}
             <div className="text-center">
               <div className="text-lg font-bold">{formatPercent(platform.success_rate)}</div>
               <div className="text-xs text-muted-foreground">Success Rate</div>
@@ -136,7 +132,7 @@ export function InvestmentsTab() {
           </div>
         </div>
         <div className="rounded-xl bg-card shadow-sm p-5">
-          <h3 className="text-sm font-medium mb-2">Performance Radar</h3>
+          <h3 className="text-sm font-medium mb-2">Platform signals</h3>
           <ResponsiveContainer width="100%" height={300}>
             <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="80%">
               <PolarGrid stroke="oklch(var(--border))" strokeOpacity={0.5} />
@@ -202,20 +198,12 @@ function ModelComparison() {
   if (models.length === 0) return null;
 
   const model = models[selectedModel];
-  const maxSessions = Math.max(...models.map((m) => m.sessions)) || 1;
-
-  const radarData = [
-    { metric: "Success Rate", value: model?.success_rate ?? 0 },
-    { metric: "Cost Efficiency", value: model ? Math.max(0, 100 - (model.avg_cost * 2000)) : 0 },
-    { metric: "Token Efficiency", value: model ? Math.max(0, 100 - (model.avg_tokens / 100)) : 0 },
-    { metric: "Volume", value: model ? (model.sessions / maxSessions) * 100 : 0 },
-  ];
 
   return (
     <div className="space-y-6">
       <div className="rounded-xl bg-card shadow-sm p-5">
         <h3 className="text-sm font-medium mb-1">Model Provider Comparison</h3>
-        <p className="text-xs text-muted-foreground mb-4">Performance and cost by AI model (from actual usage)</p>
+        <p className="text-xs text-muted-foreground mb-4">Observed usage, cost, tokens, and outcomes by AI model.</p>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="space-y-2">
@@ -238,25 +226,26 @@ function ModelComparison() {
               </div>
             ))}
           </div>
-          <div>
-            <ResponsiveContainer width="100%" height={260}>
-              <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="80%">
-                <PolarGrid stroke="oklch(var(--border))" strokeOpacity={0.5} />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: "oklch(var(--muted-foreground))", fontSize: 11 }} />
-                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar
-                  dataKey="value"
-                  stroke={COLORS[selectedModel % COLORS.length]}
-                  fill={COLORS[selectedModel % COLORS.length]}
-                  fillOpacity={0.2}
-                  strokeWidth={2.5}
-                />
-              </RadarChart>
-            </ResponsiveContainer>
-            <div className="text-center mt-2">
-              <p className="text-sm font-semibold">{model?.model}</p>
-              <p className="text-xs text-muted-foreground">{model?.avg_tokens.toLocaleString()} avg tokens/session</p>
-            </div>
+          <div className="rounded-lg border border-border bg-surface-raised p-4">
+            <p className="text-sm font-semibold">{model?.model}</p>
+            <dl className="mt-4 grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <dt className="text-xs text-muted-foreground">Sessions</dt>
+                <dd className="mt-1 font-semibold tabular-nums">{model?.sessions.toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Success rate</dt>
+                <dd className="mt-1 font-semibold tabular-nums">{model?.success_rate}%</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Average cost</dt>
+                <dd className="mt-1 font-semibold tabular-nums">${model?.avg_cost.toFixed(4)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Average tokens</dt>
+                <dd className="mt-1 font-semibold tabular-nums">{model?.avg_tokens.toLocaleString()}</dd>
+              </div>
+            </dl>
           </div>
         </div>
       </div>

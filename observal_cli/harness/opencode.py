@@ -15,6 +15,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from observal_cli.discovery.adapter_support import RichAdapterScanner
+from observal_cli.discovery.models import AdapterDiscoveryResult, DiagnosticCode, DiscoveryScope
+from observal_cli.discovery.redact import redact_text
 from observal_cli.harness import (
     DiscoveredAgent,
     DiscoveredHook,
@@ -25,6 +28,7 @@ from observal_cli.harness import (
     register_adapter,
 )
 from observal_cli.harness.base import BaseAdapter
+from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest
 
 _JSONC_COMMENT_RE = re.compile(
     r'("(?:[^"\\]|\\.)*")|//[^\n]*|/\*.*?\*/',
@@ -47,6 +51,7 @@ class OpenCodeAdapter(BaseAdapter):
     """Adapter for OpenCode."""
 
     home_markers = (".config/opencode",)
+    headless_binary = "opencode"
     managed_agent_profiles = ("user:agents/{name}.md", "project:.opencode/agents/{name}.md")
     managed_skills = ("user:skills/{name}/SKILL.md", "project:.opencode/skills/{name}/SKILL.md")
 
@@ -79,6 +84,85 @@ class OpenCodeAdapter(BaseAdapter):
             result.mcps.extend(dir_result.mcps)
 
         return result
+
+    def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        home = home or Path.home()
+        root = home / ".config" / "opencode"
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.USER,
+            root=root,
+            home=home,
+        )
+        self._discover_opencode(scanner, root, root / "opencode.json", "opencode:global")
+        return scanner.finish()
+
+    def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.PROJECT,
+            root=project_dir,
+            project_dir=project_dir,
+        )
+        self._discover_opencode(scanner, project_dir / ".opencode", project_dir / "opencode.json", "opencode:project")
+        return scanner.finish()
+
+    def _discover_opencode(
+        self,
+        scanner: RichAdapterScanner,
+        component_root: Path,
+        config_path: Path,
+        source: str,
+    ) -> None:
+        if not config_path.exists() and config_path.name == "opencode.json":
+            jsonc_path = config_path.with_suffix(".jsonc")
+            if jsonc_path.exists():
+                config_path = jsonc_path
+        content = scanner.walker.read_text(config_path)
+        if content is not None:
+            try:
+                data = json.loads(_strip_jsonc_comments(content))
+            except json.JSONDecodeError:
+                scanner.diagnostic(DiagnosticCode.METADATA_MALFORMED, config_path, "malformed JSONC metadata")
+            else:
+                raw_servers = data.get("mcp", {}) if isinstance(data, dict) else {}
+                servers: dict[str, Any] = {}
+                if isinstance(raw_servers, dict):
+                    for name, raw_config in raw_servers.items():
+                        if not isinstance(raw_config, dict):
+                            servers[str(name)] = raw_config
+                            continue
+                        config = dict(raw_config)
+                        command = config.get("command")
+                        if isinstance(command, list):
+                            config["command"] = command[0] if command else None
+                            config["args"] = command[1:]
+                        if config.get("type") in {"local", "remote"}:
+                            config.pop("type")
+                        servers[str(name)] = config
+                scanner.add_mcps(
+                    servers,
+                    config_path,
+                    source=source,
+                    description_prefix="OpenCode MCP",
+                )
+        scanner.add_skills(component_root / "skills", source=source, prefix="OpenCode skill")
+        scanner.add_markdown_agents(component_root / "agents", source_prefix="OpenCode agent")
+        for plugin_path in scanner.walker.files(component_root / "plugins"):
+            if plugin_path.suffix not in {".ts", ".js", ".mjs"}:
+                continue
+            name = redact_text(plugin_path.stem)
+            scanner.add_component(
+                DiscoveredHook(
+                    name=name,
+                    event="plugin",
+                    handler_type="plugin",
+                    handler_config={},
+                    description=f"OpenCode plugin hook: {name}",
+                    source=source,
+                ),
+                plugin_path,
+            )
 
     def get_hook_spec(self) -> HookSpec:
         return HookSpec(
@@ -324,6 +408,15 @@ class OpenCodeAdapter(BaseAdapter):
         from observal_cli.cmd_doctor import _cleanup_opencode
 
         return _cleanup_opencode(dry_run)
+
+    # ── Headless delegation ──────────────────────────────────
+
+    def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
+        # opencode.ai/docs/cli: `opencode run --agent <name> [message..]`.
+        argv = ["opencode", "run", "--agent", request.agent_name]
+        if request.model:
+            argv += ["--model", request.model]
+        return HeadlessPlan(argv=[*argv, "--", request.message])
 
 
 register_adapter(OpenCodeAdapter())

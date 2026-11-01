@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Tests for SEC-027: approved-only agent install and MCP command validation."""
 
@@ -78,6 +79,8 @@ def _agent_mock(status=AgentStatus.pending, created_by=None, **extra):
     m.latest_version.prompt = m.prompt
     m.latest_version.required_capabilities = []
     m.latest_version.inferred_supported_harnesses = []
+    m.latest_version.version = m.version
+    m.latest_version.lock_snapshot = None
     col_keys = [
         "id",
         "name",

@@ -557,6 +557,49 @@ async def _call_section(section_name: str, prompt: str, model: str | None = None
         return section_name, {}
 
 
+def generate_component_sections(summary: dict, coverage: dict) -> dict:
+    """Deterministic component subject variant; no LLM or invented evidence.
+
+    Counts are copied only from the shared observability summary. Collision and
+    unmatched counts describe the entire present-session candidate universe,
+    not calls known to belong to the selected component.
+    """
+    calls = int(summary["observed_calls"])
+    state = coverage["attribution_state"]
+    if calls:
+        conclusion = "Observed attributed calls in processed present sessions."
+    elif state == "no_observed_calls":
+        conclusion = "No attributed calls observed in processed present sessions; this does not prove no use."
+    else:
+        conclusion = "Activity attribution is unavailable for this cohort; no use conclusion can be drawn."
+    return {
+        "summary": conclusion,
+        "evidence": {
+            "present": summary["present_sessions"],
+            "activated": summary["activation_actions"],  # configuration actions, not use
+            "observed": calls,
+            "inferred": "Not assessed; inferred evidence is not part of deterministic reports.",
+            "not_observed": {
+                "processed_present_sessions_without_attributed_calls": max(
+                    0, coverage["projection"]["projection_complete_sessions"] - coverage["observed_sessions"]
+                ),
+                "note": "No attributed call in these processed sessions; this does not prove no use.",
+            },
+            "unknown": list(coverage["reasons"]),
+            "cohort_collisions": coverage["calls"]["collision_calls"],
+        },
+        "synthesis": {
+            "conclusion": conclusion,
+            "coverage": {
+                "attribution_state": state,
+                "processed_present_sessions": coverage["projection"]["projection_complete_sessions"],
+                "present_sessions": summary["present_sessions"],
+                "limitations": coverage["limitations"],
+            },
+        },
+    }
+
+
 async def generate_sections(
     data_block: str,
     previous_report: dict | None = None,

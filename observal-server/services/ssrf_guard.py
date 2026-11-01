@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Shared SSRF guard for all outbound HTTP and Git clone operations.
 
@@ -46,7 +47,13 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
     ipaddress.ip_network("ff00::/8"),  # IPv6 multicast
     ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6
+    ipaddress.ip_network("::/128"),  # IPv6 unspecified: connects to the local host on Linux
+    ipaddress.ip_network("64:ff9b:1::/48"),  # local-use NAT64
+    ipaddress.ip_network("198.18.0.0/15"),  # benchmarking, often routed internally
 ]
+
+
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
 
 def _ip_is_private(addr_str: str) -> bool:
@@ -55,9 +62,15 @@ def _ip_is_private(addr_str: str) -> bool:
         addr = ipaddress.ip_address(addr_str)
     except ValueError:
         return True  # unparseable, block it
-    # IPv4-mapped IPv6 (::ffff:a.b.c.d): extract and check the IPv4 part
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-        addr = addr.ipv4_mapped
+    # IPv6 forms that carry an IPv4 address are judged by that address: IPv4-mapped (::ffff:a.b.c.d),
+    # 6to4 (2002::/16) and well-known NAT64 (64:ff9b::/96, what DNS64 returns on IPv6-only networks).
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        elif addr.sixtofour:
+            addr = addr.sixtofour
+        elif addr in _NAT64:
+            addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
     return any(addr in net for net in _PRIVATE_NETWORKS)
 
 
@@ -103,3 +116,29 @@ def is_private_url(url: str) -> bool:
         return any(_ip_is_private(r[4][0]) for r in results)
     except (socket.gaierror, OSError):
         return True  # DNS failure, fail closed
+
+
+def resolve_public_address(hostname: str) -> str | None:
+    """Resolve *hostname* once and return an address to connect to, or None if any address is private.
+
+    Connect to the returned address instead of resolving the name again, so DNS
+    rebinding cannot swap in a private address between the check and the
+    connection. DNS failures return None (fail closed).
+    """
+    host = (hostname or "").lower().strip("[]")
+    if not host or host in _BLOCKED_HOSTNAMES:
+        return None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return None if _ip_is_private(host) else host
+    try:
+        results = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except (socket.gaierror, OSError):
+        return None
+    addresses = [r[4][0] for r in results]
+    if not addresses or any(_ip_is_private(a) for a in addresses):
+        return None
+    return addresses[0]

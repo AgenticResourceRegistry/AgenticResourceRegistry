@@ -90,3 +90,7 @@ node_modules
 *.bak
 scripts/seed_demo.py
 .playwright-cli/
+
+# Playwright artifacts (e2e runs from tests/e2e)
+tests/e2e/test-results/
+tests/e2e/playwright-report/

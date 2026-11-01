@@ -1,23 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Semantic versioning utilities for agent version management."""
 
 from __future__ import annotations
 
-import hashlib
 import re
 
 from loguru import logger as optic
 
 SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
-
-
-def compute_integrity_hash(content: str) -> str:
-    """Compute sha256 integrity hash for lock file entries."""
-    optic.trace("computing integrity hash for {} bytes", len(content))
-    digest = hashlib.sha256(content.encode()).hexdigest()
-    return f"sha256-{digest}"
 
 
 def parse_semver(version: str) -> tuple[int, int, int] | None:

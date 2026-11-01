@@ -343,6 +343,9 @@ async def test_report_routes_allow_owners_and_admins(route, actor):
     response = await _call_report_route(route, str(report.id), _report_db(report, agent), users[actor])
 
     assert response is not None
+    if route == "get_report":
+        # Pre-component agent reports need the response schema's agent default.
+        assert response.subject_type == "agent"
 
 
 @pytest.mark.asyncio
@@ -412,7 +415,13 @@ def test_no_route_bypasses_the_permission_gate():
 
     source = inspect.getsource(insights)
     tree = ast.parse(source)
-    gates = {"_resolve_insights_agent", "_authorize_report_agent", "_require_agent_edit_access"}
+    gates = {
+        "_resolve_insights_agent",
+        "_authorize_report_agent",
+        "_require_agent_edit_access",
+        "_authorize_report",
+        "_authorize_component",
+    }
     exempt = {"insights_status"} | gates
 
     unguarded = []

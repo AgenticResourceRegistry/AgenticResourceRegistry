@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from loguru import logger as optic
@@ -25,7 +27,9 @@ from rich.table import Table
 
 from observal_cli import client, config
 from observal_cli.analyzer import analyze_local
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import VALID_HARNESSES, VALID_MCP_CATEGORIES
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import fuzzy_select, select_one, text_input
 from observal_cli.render import (
@@ -36,12 +40,15 @@ from observal_cli.render import (
     handle,
     ide_tags,
     kv_panel,
+    listing_status,
     name_inline,
     output_json,
     relative_time,
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
+from observal_shared.mcp_analysis import docker_image_from_args
 
 mcp_app = typer.Typer(
     help=(
@@ -421,12 +428,10 @@ def _parse_direct_config(cfg: dict) -> dict:
         cmd = inner["command"]
         if cmd == "docker":
             parsed["framework"] = "docker"
-            # Extract docker_image: last non-flag arg
-            args = parsed["args"]
-            for arg in reversed(args):
-                if not arg.startswith("-"):
-                    parsed["docker_image"] = arg
-                    break
+            # The image is the first positional after `docker run` options, not a trailing container arg.
+            image = docker_image_from_args(parsed["args"])
+            if image:
+                parsed["docker_image"] = image
         elif cmd in ("python", "python3"):
             parsed["framework"] = "python"
         elif cmd in ("npx", "node"):
@@ -655,6 +660,8 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
         rprint(f"\n[green]{msg}[/green] ID: [bold]{result['id']}[/bold]")
         rprint(f"  Install: [cyan]observal registry mcp install {client.canonical_name(result)}[/cyan]")
         rprint(f"  Status: {status_badge(result.get('status', 'pending'))}")
+        if not draft:
+            print_review_link(result)
         return result
 
     # ── Path A: Git URL analysis ─────────────────────────────
@@ -844,10 +851,7 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
                 # Re-derive framework
                 if _command == "docker":
                     _framework = "docker"
-                    for arg in reversed(_args):
-                        if not arg.startswith("-"):
-                            _docker_image = arg
-                            break
+                    _docker_image = docker_image_from_args(_args) or _docker_image
                 elif _command in ("python", "python3"):
                     _framework = "python"
                 elif _command in ("npx", "node"):
@@ -861,10 +865,7 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
                 _args = raw_args.split() if raw_args.strip() else []
                 if _command == "docker":
                     _framework = "docker"
-                    for arg in reversed(_args):
-                        if not arg.startswith("-"):
-                            _docker_image = arg
-                            break
+                    _docker_image = docker_image_from_args(_args) or _docker_image
                 elif _command in ("python", "python3"):
                     _framework = "python"
                 elif _command in ("npx", "node"):
@@ -965,6 +966,8 @@ def _submit_impl(git_url, name, category, yes, direct_config=False, draft=False,
     if _framework:
         rprint(f"  Framework: [cyan]{_framework}[/cyan]")
     rprint(f"  Status: {status_badge(result.get('status', 'pending'))}")
+    if not draft:
+        print_review_link(result)
     return result
 
 
@@ -1051,7 +1054,7 @@ def _show_impl(mcp_id, output):
         kv_panel(
             f"{esc(display_name(item))} v{esc(item.get('version', '?'))}",
             [
-                ("Status", status_badge(item.get("status", ""))),
+                ("Status", listing_status(item)),
                 ("Category", esc(item.get("category", "N/A"))),
                 ("Namespace", esc(handle(item) or "N/A")),
                 ("Description", esc(item.get("description", ""))),
@@ -1060,6 +1063,7 @@ def _show_impl(mcp_id, output):
                 ("Setup", esc(item.get("setup_instructions") or "none")),
                 ("Changelog", esc(item.get("changelog") or "none")),
                 ("Created", esc(relative_time(item.get("created_at")))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{esc(item['id'])}[/dim]"),
             ],
             border_style="cyan",
@@ -1073,6 +1077,26 @@ def _show_impl(mcp_id, output):
             rprint(f"  {icon} {esc(v['stage'])}: {esc(v.get('details', '') or 'passed')}")
 
 
+def _install_input_definitions(listing: dict, field: str, kind: str) -> list[dict]:
+    """Validate server-provided input metadata before using it in machine workflows."""
+    definitions = listing.get(field, [])
+    if definitions is None:
+        definitions = []
+    if not isinstance(definitions, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip()
+        for item in definitions
+    ):
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "The server returned invalid MCP installation requirements.",
+            operation="Install MCP server",
+            resource=listing.get("qualified_name") or listing.get("name") or "MCP server",
+            remediation="Check server compatibility and retry.",
+            result={"invalid_input_kind": kind},
+        )
+    return definitions
+
+
 def _install_impl(
     mcp_id,
     harness,
@@ -1084,8 +1108,19 @@ def _install_impl(
     env_file: str | None = None,
     no_prompt: bool = False,
     output: OutputMode = OutputMode.table,
+    apply: bool = False,
+    directory: str | None = None,
+    scope: str | None = None,
 ):
     optic.trace("mcp_id={}, harness={}, version={}", mcp_id, harness, version)
+    if apply and (harness != "claude-code" or directory is None or scope not in {"project", "user"} or raw):
+        fail(
+            ErrorCategory.VALIDATION,
+            "Tracked install requires Claude Code, --dir, --scope and no --raw.",
+            operation="Install MCP server",
+            resource="tracked install",
+            remediation="Use --apply --harness claude-code --dir DIR --scope project|user, or omit --apply for a snippet.",
+        )
     import json as _json
 
     resolved = client.resolve_registry_reference("mcp", mcp_id)
@@ -1094,6 +1129,10 @@ def _install_impl(
     fetch_context = nullcontext() if machine_output else spinner("Fetching server details...")
     with fetch_context:
         listing = client.get(f"/api/v1/mcps/{resolved}")
+        # Required inputs come from the version that will be installed, not the latest listing.
+        spec = client.get(f"/api/v1/mcps/{resolved}/versions/{version}") if version else listing
+    env_var_list = _install_input_definitions(spec, "environment_variables", "environment_variable")
+    header_list = _install_input_definitions(spec, "headers", "header")
 
     # Build env overrides from --env flags and --env-file
     _env_from_flags: dict[str, str] = dict(env_overrides) if env_overrides else {}
@@ -1119,7 +1158,26 @@ def _install_impl(
     skip_prompts = machine_output or no_prompt
 
     env_values: dict[str, str] = {}
-    env_var_list = listing.get("environment_variables") or []
+    if output == "json":
+        missing_inputs = [
+            {"kind": "environment_variable", "name": ev["name"]}
+            for ev in env_var_list
+            if ev.get("required", True) and not _env_from_flags.get(ev["name"])
+        ]
+        missing_inputs.extend(
+            {"kind": "header", "name": header["name"]}
+            for header in header_list
+            if header.get("required", True) and not _header_from_flags.get(header["name"])
+        )
+        if missing_inputs:
+            fail(
+                ErrorCategory.VALIDATION,
+                "MCP installation requires values that are unavailable in non-interactive mode.",
+                operation="Install MCP server",
+                resource=listing.get("qualified_name") or listing.get("name") or resolved,
+                remediation="Provide non-secret values explicitly; for credentials, use interactive table mode.",
+                result={"needs_input": True, "inputs": missing_inputs},
+            )
     if env_var_list and not skip_prompts:
         required = [ev for ev in env_var_list if ev.get("required", True)]
         optional = [ev for ev in env_var_list if not ev.get("required", True)]
@@ -1156,7 +1214,6 @@ def _install_impl(
 
     # Prompt for headers (SSE/HTTP servers with auth)
     header_values: dict[str, str] = {}
-    header_list = listing.get("headers") or []
     if header_list and not skip_prompts:
         required_headers = [h for h in header_list if h.get("required", True)]
         optional_headers = [h for h in header_list if not h.get("required", True)]
@@ -1190,7 +1247,27 @@ def _install_impl(
 
     from observal_cli.lockfile import local_registry_name
 
-    local_name = local_registry_name(harness, "mcp", listing["namespace"], listing["slug"])
+    try:
+        if apply:
+            local_name = local_registry_name(
+                harness,
+                "mcp",
+                listing["namespace"],
+                listing["slug"],
+                scope=scope,
+                directory=str(Path(directory).resolve()),
+            )
+        else:
+            local_name = local_registry_name(harness, "mcp", listing["namespace"], listing["slug"])
+    except (OSError, RuntimeError) as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Could not read the installation lockfile.",
+            operation="Install MCP server",
+            resource="Observal lockfile",
+            remediation="Repair the lockfile and retry.",
+            detail=repr(error),
+        )
     generate_context = nullcontext() if machine_output else spinner(f"Generating {harness} config...")
     with generate_context:
         install_body = {
@@ -1207,6 +1284,129 @@ def _install_impl(
         )
 
     snippet = result.get("config_snippet", {})
+    if apply:
+        from observal_cli.layer import ensure_local_snapshot, get_local_snapshot, verify_installed_mcp
+        from observal_cli.lockfile import upsert_standalone
+
+        selected_version = result.get("selected_version")
+        alias = result.get("local_name")
+        command = snippet.get("command")
+        if (
+            not isinstance(selected_version, str)
+            or not selected_version
+            or not isinstance(alias, str)
+            or not alias
+            or not isinstance(command, list)
+            or command[:3] != ["claude", "mcp", "add"]
+            or len(command) < 4
+            or command[3] != alias
+            or (version and version != selected_version)
+            or str(result.get("listing_id") or resolved) != str(resolved)
+        ):
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "Server did not return a verifiable MCP install command and version.",
+                operation="Install MCP server",
+                resource="install configuration",
+                remediation="Update the server and retry; the snippet mode remains available.",
+            )
+        target_dir = Path(directory).resolve()
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            installed = subprocess.run(
+                [*command[:3], "--scope", scope, *command[3:]],
+                cwd=target_dir,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as error:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "MCP setup could not run.",
+                operation="Install MCP server",
+                resource="Claude Code",
+                remediation="Check the Claude CLI and target directory.",
+                detail=repr(error),
+            )
+        if installed.returncode != 0:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "MCP setup command failed.",
+                operation="Install MCP server",
+                resource="Claude Code",
+                remediation="Check the Claude CLI and retry.",
+            )
+        status, integrity = verify_installed_mcp(harness, scope, str(target_dir), alias)
+        if status != "verified" or integrity is None:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "Installed MCP entry could not be verified.",
+                operation="Install MCP server",
+                resource="Claude Code MCP settings",
+                remediation="Check the effective MCP config and retry; no registry identity was recorded.",
+            )
+        try:
+            upsert_standalone(
+                harness,
+                component_type="mcp",
+                name=listing["name"],
+                component_id=str(result.get("listing_id") or resolved),
+                version=selected_version,
+                scope=scope,
+                directory=str(target_dir),
+                integrity=None,
+                namespace=listing.get("namespace"),
+                slug=listing.get("slug"),
+                local_name=alias,
+                mcp_integrity=integrity,
+            )
+            snapshot_hash = ensure_local_snapshot(project_dir=str(target_dir))
+        except (OSError, RuntimeError, ValueError) as error:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "MCP configuration succeeded but tracking or snapshot failed.",
+                operation="Install MCP server",
+                resource="Observal lockfile or snapshot",
+                remediation="Repair local installation state and retry.",
+                detail=repr(error),
+            )
+        snapshot = get_local_snapshot()
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        drift = snapshot.get("drift")
+        checks = drift.get("mcp_verifications", []) if isinstance(drift, dict) else []
+        matching = [
+            check
+            for check in checks
+            if isinstance(check, dict)
+            and check.get("harness") == harness
+            and check.get("component_id") == str(resolved)
+            and check.get("alias") == alias
+            and check.get("scope") == scope
+            and not check.get("parent_agent_id")
+        ]
+        if snapshot.get("hash") != snapshot_hash or len(matching) != 1 or matching[0]["status"] != "verified":
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                "MCP registration cannot be verified in its layer snapshot.",
+                operation="Install MCP server",
+                resource="layer snapshot",
+                remediation="Check the effective config and snapshot limits before retrying.",
+            )
+        if output == "json":
+            output_json(
+                {
+                    "listing_id": str(result.get("listing_id") or resolved),
+                    "harness": harness,
+                    "version": selected_version,
+                    "local_name": alias,
+                    "scope": scope,
+                    "target_directory": str(target_dir),
+                    "layer_hash": snapshot_hash,
+                }
+            )
+        else:
+            rprint(f"[green]Installed and verified[/green] {esc(alias)} ({esc(scope)}) in {esc(str(target_dir))}")
+        return
     if raw:
         print(_json.dumps(snippet, indent=2))
         return
@@ -1260,7 +1460,10 @@ def submit(
     yes: bool = typer.Option(False, "--yes", "-y", help="Accept JSON-derived defaults"),
     config: bool = typer.Option(False, "--config", hidden=True, help="(deprecated) JSON paste is now the default"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (MCP ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (MCP ID)"
+    ),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -1304,11 +1507,12 @@ def submit(
         resolved = client.resolve_registry_reference("mcp", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/mcps/{resolved}/submit")
+            result = client.post(f"/api/v1/mcps/{resolved}/submit" + (f"?message={quote(message)}" if message else ""))
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{result['id']}[/bold]")
+            print_review_link(result)
         return
     if output != "json":
         if config:
@@ -1468,9 +1672,14 @@ def install(
     header: list[str] | None = typer.Option(None, "--header", help="Header value (KEY=VALUE, repeatable)"),
     env_file: str | None = typer.Option(None, "--env-file", help="Path to .env file for environment variables"),
     no_prompt: bool = typer.Option(False, "--no-prompt", "-y", help="Skip interactive prompts"),
+    apply: bool = typer.Option(
+        False, "--apply", help="Configure and track a Claude Code MCP instead of printing a snippet"
+    ),
+    directory: str | None = typer.Option(None, "--dir", "-d", help="Explicit target directory for --apply"),
+    scope: str | None = typer.Option(None, "--scope", help="Explicit project or user install scope for --apply"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
-    """Generate an install config snippet for an MCP server.
+    """Generate a snippet, or with --apply configure and track a Claude Code MCP.
 
     Produces harness-specific configuration that you paste into your editor's
     MCP settings file. Prompts for required environment variables and
@@ -1519,6 +1728,14 @@ def install(
             )
     env_overrides = _parse_assignments(env, "environment variable")
     header_overrides = _parse_assignments(header, "header")
+    if output == "json" and not no_prompt:
+        fail(
+            ErrorCategory.VALIDATION,
+            "JSON mode cannot prompt for MCP installation values.",
+            operation="Install MCP server",
+            resource="MCP installation",
+            remediation="Add --no-prompt and provide every required value, or use interactive table mode.",
+        )
     _install_impl(
         mcp_id,
         harness,
@@ -1529,6 +1746,9 @@ def install(
         env_file=env_file,
         no_prompt=no_prompt,
         output=output,
+        apply=apply,
+        directory=directory,
+        scope=scope,
     )
 
 
@@ -1736,7 +1956,10 @@ def edit_mcp(
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/mcps/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("mcp", "mcps", resolved, result)
     if output == "json":
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry mcp submit --submit {result.get('id', '<id>')}")

@@ -1,9 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal outdated"
+---
 
-# `observal outdated`
-
-Compare versions recorded in `~/.observal/lockfile.json` with the latest versions available from the active Observal registry. The command never installs an update.
+Compare versions recorded in `~/.observal/lockfile.json` with the latest versions available from the active Agentic Resource Registry registry. The command never installs an update.
 
 ## Synopsis
 
@@ -22,7 +24,9 @@ The command checks:
 * Separately installed skills
 * Separately installed hooks
 
-Components bundled inside a pulled agent are not checked independently. Their versions belong to the pinned agent release, so update the agent when a newer agent version is reported.
+Components bundled inside a pulled agent are not checked independently. Agent versions pin exact component versions, so update the agent when a newer agent version is reported. The exception is an agent version released before pinning: a component it never locked installs at its latest approved release, with a warning, and `--strict` refuses it. Agent authors use [`observal agent outdated`](/cli/agent#check-component-pins) to see which pinned components have newer releases and which are unlocked.
+
+A plain `observal agent pull` keeps an installed agent on its locked version, so the upgrade command for an agent includes `--upgrade`.
 
 The command reads only the active registry section of the lockfile. It requires authenticated registry access to retrieve current versions.
 
@@ -47,8 +51,9 @@ Table output includes every installed item that was checked. Each row has one of
 | `outdated` | A newer registry version exists |
 | `current` | The pinned version is current or newer |
 | `missing` | The pinned item no longer exists in the active registry |
+| `unknown` | The lockfile has no version for the item; reinstall it with the suggested command to record one |
 
-Outdated rows are followed by a type-specific command using the canonical `namespace/slug` identity. Agents use `observal agent pull`; standalone components use their matching registry install command.
+Outdated and unknown rows are followed by a type-specific command using the canonical `namespace/slug` identity. Agents use `observal agent pull --upgrade`; standalone components use their matching registry install command.
 
 A missing item is an item-level result, not a command failure, so a completed comparison containing missing rows exits successfully.
 
@@ -72,14 +77,15 @@ JSON output has a stable top-level object:
       "status": "outdated",
       "outdated": true,
       "error": null,
-      "upgrade_command": "observal agent pull acme/reviewer --harness claude-code --no-prompt"
+      "upgrade_command": "observal agent pull acme/reviewer --harness claude-code --no-prompt --upgrade"
     }
   ],
   "summary": {
     "total": 1,
     "outdated": 1,
     "current": 0,
-    "missing": 0
+    "missing": 0,
+    "unknown": 0
   },
   "report": {
     "requested": true,
@@ -118,6 +124,6 @@ Use `--no-report` when no Inbox mutation is wanted. This does not make the comma
 
 ## Related
 
-* [`observal agent pull`](pull.md): update a pulled agent
-* [`observal registry`](registry.md): install a standalone component
-* [`observal config`](config.md): inspect the active server configuration
+* [`observal agent pull`](/cli/pull): update a pulled agent
+* [`observal registry`](/cli/registry): install a standalone component
+* [`observal config`](/cli/config): inspect the active server configuration

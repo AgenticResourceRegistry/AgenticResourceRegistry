@@ -1,4 +1,5 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Component submission
@@ -12,6 +13,7 @@
 - Hook
 - Prompt
 - Sandbox
+- Remote A2A agent
 - Drafts and review status
 
 Submit only content the user owns or is authorized to publish. Use `--team TEAM_HANDLE --visibility team` for private teamspace ownership, or `--visibility public` for reviewable public content.
@@ -33,7 +35,7 @@ observal registry bulk submit --from-file components.json --dry-run --output jso
 observal registry bulk submit --from-file components.json --yes --output json
 ```
 
-Each entry contains `type` plus the normal API submission fields. Supported types are `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. Inspect `submitted`, `skipped`, `errors`, and every result. Authentication and service failures stop the batch. After an uncertain failure, verify by UUID or `qualified_name` before rerunning.
+Each entry contains `type` plus the normal API submission fields. Supported types are `mcp`, `skill`, `hook`, `prompt`, and `sandbox`. Inspect `submitted`, `skipped`, `errors`, `partial`, and every result. Actual item errors set `partial: true` and exit with code `11`; conflicts counted as skips remain successful. Authentication and service failures stop the batch. After an uncertain failure, verify by UUID or `qualified_name` before rerunning.
 
 ## MCP server
 
@@ -91,13 +93,28 @@ observal registry sandbox submit --from-file sandbox.json --output json
 
 Treat runtime, image, network policy, limits, entrypoint, and harness support as security-relevant fields. Do not weaken them silently.
 
+## Remote A2A agent
+
+A running service that publishes an A2A Agent Card (another team's agent, a deployed triage or data agent) is registered by URL, not submitted as a component. Registered agents are reviewed like components; once approved, agents can find them with discovery and hand them tasks.
+
+```bash
+observal registry a2a submit https://agents.acme.com --visibility private --output json          # /.well-known/agent-card.json
+observal registry a2a submit https://agents.acme.com/a2a/card.json --visibility team --team platform --output json
+observal registry a2a list --output json
+observal discover inspect urn:air:agents.acme.com:a2a:incident-triage --output json                 # read the card and its obs:artifactDigest
+observal registry a2a review urn:air:agents.acme.com:a2a:incident-triage --approve --digest sha256:... --output json   # reviewers only
+observal registry a2a remove urn:air:agents.acme.com:a2a:incident-triage --yes --output json
+```
+
+The server fetches the card over https (internal hosts only when an administrator allowed them), and the reviewed card is pinned. Resubmitting a card whose content changed sends it back to review. Credentials are never stored in Observal.
+
 ## Drafts and review status
 
 Submission commands support draft workflows where documented. Use local help for the exact leaf:
 
 ```bash
 observal registry skill submit --skill-md ./SKILL.md --delivery-mode registry_direct --name my-skill --description 'What it does' --task-type general --draft --output json
-observal registry skill submit --submit NAMESPACE/SLUG --output json
+observal registry skill submit --submit NAMESPACE/SLUG --message 'Address reviewer feedback' --output json
 ```
 
-After any submit, report whether the item is draft, pending, approved, rejected, or archived. Never collapse pending into published.
+After submitting, use the returned `review_number` / `review_url` (or the Review #N link in human output) to open `observal review show N` and address threads. `--submit` (alias `--submit-draft`) works for MCP, hook, prompt, sandbox and skill submissions, and `agent publish`; each accepts `--message` for the revision note. Edits to an item under review already reach that review as a new revision. Report draft, pending, changes requested, approved, rejected, or archived accurately; a pending review is not a publication.

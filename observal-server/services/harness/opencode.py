@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """OpenCode harness adapter for agent config generation.
@@ -19,6 +20,8 @@ from services.harness.helpers import (
     _collect_hook_script_files,
     _collect_opencode_hook_plugins,
 )
+
+OPENCODE_SCHEMA = "https://opencode.ai/config.json"
 
 
 class OpenCodeAdapter(BaseHarnessAdapter):
@@ -79,7 +82,9 @@ class OpenCodeAdapter(BaseHarnessAdapter):
 
         rules_path = opencode_spec["agent_profile"][opencode_scope].format(name=safe_name)
         mcp_path = opencode_spec["mcp_config"].get(opencode_scope, next(iter(opencode_spec["mcp_config"].values())))
-        opencode_content: dict = {opencode_spec["mcp_servers_key"]: opencode_mcp}
+        # OpenCode writes "$schema" into a project config that lacks it every time it starts; carrying it
+        # here keeps a delegated run from rewriting the config the install wrote.
+        opencode_content: dict = {"$schema": OPENCODE_SCHEMA, opencode_spec["mcp_servers_key"]: opencode_mcp}
         opencode_model = options.get("_resolved_model")
         if opencode_model:
             opencode_content["model"] = opencode_model

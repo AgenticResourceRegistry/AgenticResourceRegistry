@@ -19,7 +19,9 @@
 #     • test (3.12)
 #     • test (3.13)
 #     • test (3.14)
+#     • windows-launchers
 #     • web-lint
+#     • pi-extension
 #     • docker-build
 #     • dependency-audit
 #   Require a pull request before merging
@@ -31,11 +33,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   merge_group:
     types: [checks_requested]
   push:
-    branches: [main]
+    branches: [main, 'release/**']
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -56,6 +58,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       docker: ${{ steps.filter.outputs.docker }}
       helm: ${{ steps.filter.outputs.helm }}
+      pi_extension: ${{ steps.filter.outputs.pi_extension }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       # v4 compares merge-queue candidates using merge_group.base_sha/head_sha.
@@ -76,6 +79,14 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
+              - '.github/workflows/ci.yml'
+            # The extension's tests include Python/TypeScript parity checks against observal_cli.
+            pi_extension:
+              - 'packages/pi-extension/**'
+              - 'observal_cli/**'
+              - 'packages/observal-shared/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
               - '.github/workflows/ci.yml'
             helm:
               - 'infra/helm/**'
@@ -192,12 +203,40 @@ jobs:
         with:
           files: observal-server/coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: Observal/Observal
+          slug: AgenticResourceRegistry/AgenticResourceRegistry
           disable_search: true
           # Fork pull requests cannot access repository secrets, so Codecov authenticates those tokenlessly.
           fail_ci_if_error: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
 
-# ── Job 4: Next.js lint + typecheck ───────────────────────────────────────────
+# ── Job 3b: Execute generated hook commands in native Windows shells ─────────
+  windows-launchers:
+    name: windows-launchers
+    runs-on: windows-latest
+    needs: changes
+    steps:
+      - name: Skip if no Python changes
+        if: needs.changes.outputs.python != 'true'
+        run: echo '::notice::No Python changes detected, skipping Windows launcher tests'
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: needs.changes.outputs.python == 'true'
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        if: needs.changes.outputs.python == 'true'
+        with:
+          enable-cache: true
+
+      - name: Install Python and project dependencies
+        if: needs.changes.outputs.python == 'true'
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev
+
+      - name: Run cmd.exe and PowerShell launchers
+        if: needs.changes.outputs.python == 'true'
+        run: uv run --python 3.13 pytest tests/test_windows_launcher_native.py -q
+
+# ── Job 4: Web lint + typecheck ───────────────────────────────────────────────
   web-lint:
     name: web-lint
     runs-on: ubuntu-latest
@@ -241,6 +280,48 @@ jobs:
       - name: TypeScript typecheck
         if: needs.changes.outputs.web == 'true'
         run: pnpm run typecheck
+
+# ── Job 4b: Pi extension tests ────────────────────────────────────────────────
+  pi-extension:
+    name: pi-extension
+    runs-on: ubuntu-latest
+    needs: changes
+    steps:
+      - name: Skip if no Pi extension changes
+        if: needs.changes.outputs.pi_extension != 'true'
+        run: |
+          echo "::notice::No Pi extension changes detected, skipping pi-extension"
+          echo "This job reports success to satisfy branch protection"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: needs.changes.outputs.pi_extension == 'true'
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: needs.changes.outputs.pi_extension == 'true'
+        with:
+          node-version: 24
+
+      # The parity tests run `uv run python` with a temporary HOME; keep uv's
+      # cache and managed Pythons where that cannot move them.
+      - name: Pin uv directories
+        if: needs.changes.outputs.pi_extension == 'true'
+        run: |
+          echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache" >> "$GITHUB_ENV"
+          echo "UV_PYTHON_INSTALL_DIR=$RUNNER_TEMP/uv-python" >> "$GITHUB_ENV"
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        if: needs.changes.outputs.pi_extension == 'true'
+
+      - name: Install the CLI for parity checks
+        if: needs.changes.outputs.pi_extension == 'true'
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13
+
+      - name: Run extension tests
+        if: needs.changes.outputs.pi_extension == 'true'
+        working-directory: packages/pi-extension
+        run: npm test
 
 # ── Job 5: Helm chart lint ───────────────────────────────────────────────────
   helm-lint:
@@ -295,9 +376,9 @@ jobs:
           helm template observal "chart-dist/observal-${VERSION}.tgz" \
             --namespace observal > chart-dist/rendered.yaml
 
-          API_IMAGE_COUNT="$(grep -c "image: ghcr.io/observal/observal-api:${VERSION}" chart-dist/rendered.yaml)"
+          API_IMAGE_COUNT="$(grep -c "image: ghcr.io/agenticresourceregistry/observal-api:${VERSION}" chart-dist/rendered.yaml)"
           test "$API_IMAGE_COUNT" -ge 3
-          grep -q "image: ghcr.io/observal/observal-web:${VERSION}" chart-dist/rendered.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-web:${VERSION}" chart-dist/rendered.yaml
 
           helm template observal "chart-dist/observal-${VERSION}.tgz" \
             --namespace observal \
@@ -305,9 +386,9 @@ jobs:
             --set worker.image.tag=custom-worker \
             --set web.image.tag=custom-web > chart-dist/rendered-overrides.yaml
 
-          grep -q "image: ghcr.io/observal/observal-api:custom-api" chart-dist/rendered-overrides.yaml
-          grep -q "image: ghcr.io/observal/observal-api:custom-worker" chart-dist/rendered-overrides.yaml
-          grep -q "image: ghcr.io/observal/observal-web:custom-web" chart-dist/rendered-overrides.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-api:custom-api" chart-dist/rendered-overrides.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-api:custom-worker" chart-dist/rendered-overrides.yaml
+          grep -q "image: ghcr.io/agenticresourceregistry/observal-web:custom-web" chart-dist/rendered-overrides.yaml
 
 # ── Job 6: Docker build ───────────────────────────────────────────────────────
   docker-build:
@@ -337,6 +418,57 @@ jobs:
         if: needs.changes.outputs.docker == 'true'
         run: docker compose build
 
+      - name: Verify ClickHouse egress restrictions
+        if: needs.changes.outputs.docker == 'true'
+        run: |
+          set -euo pipefail
+          container="observal-clickhouse-egress-check"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+
+          docker run --detach --name "$container" \
+            --volume "$PWD/clickhouse/config.d:/etc/clickhouse-server/config.d:ro" \
+            clickhouse/clickhouse-server:26.6
+
+          ready=false
+          for _ in $(seq 1 60); do
+            if docker exec "$container" clickhouse-client --query "SELECT 1" >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            docker logs "$container"
+            exit 1
+          fi
+
+          settings=$(docker exec "$container" clickhouse-client --query \
+            "SELECT name, value FROM system.server_settings WHERE name LIKE 'send_crash_reports%' FORMAT TSV")
+          if [ -n "$settings" ]; then
+            printf '%s\n' "$settings"
+            printf '%s\n' "$settings" | awk -F '\t' '$2 != "false" && $2 != "0" { exit 1 }'
+          else
+            config_ok=false
+            for _ in $(seq 1 10); do
+              rm -f /tmp/clickhouse-config.xml
+              docker cp "$container:/var/lib/clickhouse/preprocessed_configs/config.xml" /tmp/clickhouse-config.xml
+              if python3 -c 'from xml.etree import ElementTree as ET; raise SystemExit(ET.parse("/tmp/clickhouse-config.xml").findtext("send_crash_reports/enabled") != "false")'; then
+                config_ok=true
+                break
+              fi
+              sleep 1
+            done
+            test "$config_ok" = true
+          fi
+
+          if docker exec "$container" clickhouse-client --query \
+            "SELECT * FROM url('https://example.com', 'RawBLOB')" \
+            >/tmp/clickhouse-url.out 2>/tmp/clickhouse-url.err; then
+            echo "URL table function unexpectedly succeeded"
+            exit 1
+          fi
+          grep -q "UNACCEPTABLE_URL" /tmp/clickhouse-url.err
+
 # ── Job 7: Dependency audit ─────────────────────────────────────────────────
   dependency-audit:
     name: dependency-audit
@@ -359,3 +491,23 @@ jobs:
         with:
           scan-args: |-
             --lockfile=pnpm-lock.yaml
+
+  release-policy:
+    name: release-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Check release policy and run release tests
+        env:
+          BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref || github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 tools/check_release_policy.py
+          python3 -m unittest discover -s tests/release -v

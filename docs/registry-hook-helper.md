@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Hook helper
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Hook helper"
+---
 
 Use hook components when a harness should run deterministic checks or side effects around agent lifecycle events.
 

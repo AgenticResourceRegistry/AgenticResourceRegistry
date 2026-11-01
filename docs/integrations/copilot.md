@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Copilot"
+---
 
-# Copilot
-
-Copilot is a first-class Observal harness integration. Observal can install
+Copilot is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install
 GitHub Copilot agents, configure MCP servers, expose skills, and bridge
 telemetry hooks.
 
@@ -35,7 +36,7 @@ configuration.
 
 ## Setup
 
-### 1. Install the Observal CLI
+### 1. Install the Agentic Resource Registry CLI
 
 ```bash
 uv tool install observal-cli
@@ -81,7 +82,7 @@ Copilot MCP configuration uses the `servers` key.
 
 ### Event map
 
-| Observal event | Copilot event |
+| Agentic Resource Registry event | Copilot event |
 | -------------- | ------------- |
 | `SessionStart` | `SessionStart` |
 | `UserPromptSubmit` | `UserPromptSubmit` |

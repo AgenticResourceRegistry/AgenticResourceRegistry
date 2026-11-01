@@ -18,6 +18,7 @@ interface UserSearchInputProps {
 	placeholder?: string;
 	disabled?: boolean;
 	className?: string;
+	inputClassName?: string;
 }
 
 function initials(user: UserSearchResult): string {
@@ -32,6 +33,7 @@ export function UserSearchInput({
 	placeholder = "Search by name, username, or email",
 	disabled = false,
 	className,
+	inputClassName,
 }: UserSearchInputProps) {
 	const [open, setOpen] = useState(false);
 	const [debounced, setDebounced] = useState(value);
@@ -62,7 +64,7 @@ export function UserSearchInput({
 						}}
 						onFocus={() => setOpen(true)}
 						disabled={disabled}
-						className="pl-8 w-full"
+						className={cn("w-full pl-8", inputClassName)}
 					/>
 				</div>
 			</PopoverAnchor>

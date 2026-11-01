@@ -48,7 +48,7 @@ DEFAULTS = {
     "timeout": 30,
     "update_check": True,
     "update_check_interval": 86400,  # seconds (24h)
-    "update_check_repo": "",  # empty = Observal/Observal
+    "update_check_repo": "",  # empty = AgenticResourceRegistry/AgenticResourceRegistry
 }
 
 

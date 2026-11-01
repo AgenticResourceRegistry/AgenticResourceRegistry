@@ -39,6 +39,7 @@ async def test_delete_batch_uses_parameterized_query():
         assert "param_cutoff" in params
         assert params["param_pid"] == "test-project-id"
         assert params["param_cutoff"] == "2026-04-01 00:00:00.000"
+        assert "lightweight_deletes_sync = 1" in sql
 
 
 @pytest.mark.asyncio
@@ -60,26 +61,37 @@ async def test_purge_time_based_correct_columns():
 
 
 @pytest.mark.asyncio
-async def test_session_stats_orphan_cleanup():
-    """session_stats_agg cleanup uses NOT IN subquery, not time-based delete."""
+async def test_scoped_session_orphan_cleanup():
+    """A surviving session belonging to another user or harness cannot preserve an orphan."""
     with patch("services.clickhouse._query", new_callable=AsyncMock) as mock_query:
         mock_query.return_value = _mock_response()
 
-        from services.retention import _purge_session_stats_orphans
+        from services.retention import _purge_session_orphans
 
-        await _purge_session_stats_orphans("test-pid")
+        result = await _purge_session_orphans("test-pid", "2026-04-01 00:00:00.000")
 
-        sql = mock_query.call_args.args[0]
-        assert "session_stats_agg" in sql
-        assert "NOT IN" in sql
-        assert "session_events" in sql
+    assert set(result) == {
+        "session_stats_agg",
+        "component_activity",
+        "component_activity_publications",
+        "session_capabilities",
+    }
+    for call in mock_query.call_args_list:
+        sql, params = call.args
+        assert "(user_id, harness, session_id) NOT IN" in sql
+        assert "project_id = {pid:String}" in sql and "project_id = {pid2:String}" in sql
+        assert params["param_pid"] == params["param_pid2"] == "test-pid"
+        assert "lightweight_deletes_sync = 1" in sql
+    assert "used_at < {cutoff:String}" in mock_query.call_args.args[0]
 
 
 @pytest.mark.asyncio
 async def test_count_based_purge_uses_daily_aggregation():
     """Count-based purge queries daily counts, not OFFSET."""
-    with patch("services.clickhouse._query", new_callable=AsyncMock) as mock_query:
-        # First call: daily aggregation returns data exceeding limit
+    with (
+        patch("services.clickhouse._query", new_callable=AsyncMock) as mock_query,
+        patch("services.retention._delete_batch", new=AsyncMock(return_value=1)),
+    ):
         mock_query.return_value = _mock_response(
             data=[
                 {"day": "2026-05-11", "cnt": "1000"},
@@ -87,7 +99,6 @@ async def test_count_based_purge_uses_daily_aggregation():
                 {"day": "2026-05-09", "cnt": "1000"},
             ]
         )
-
         from services.retention import _purge_count_based
 
         await _purge_count_based("test-pid", 1500)
@@ -100,31 +111,12 @@ async def test_count_based_purge_uses_daily_aggregation():
         assert "OFFSET" not in first_sql
 
 
-@pytest.mark.asyncio
-async def test_has_data_check():
-    """_has_data uses parameterized query with LIMIT 1."""
-    with patch("services.clickhouse._query", new_callable=AsyncMock) as mock_query:
-        mock_query.return_value = _mock_response(data=[{"1": 1}])
+def test_scheduled_retention_never_deletes_layer_snapshots():
+    """Senders cache "already uploaded" per hash, so a deleted snapshot is never re-sent (the admin purge agrees)."""
+    import inspect
 
-        from services.retention import _has_data
+    from services import retention
 
-        result = await _has_data("test-pid")
-
-        assert result is True
-        sql = mock_query.call_args.args[0]
-        assert "{pid:String}" in sql
-        assert "LIMIT 1" in sql
-        params = mock_query.call_args.args[1]
-        assert params["param_pid"] == "test-pid"
-
-
-@pytest.mark.asyncio
-async def test_has_data_returns_false_when_empty():
-    """_has_data returns False when no traces exist."""
-    with patch("services.clickhouse._query", new_callable=AsyncMock) as mock_query:
-        mock_query.return_value = _mock_response(data=[])
-
-        from services.retention import _has_data
-
-        result = await _has_data("empty-pid")
-        assert result is False
+    source = inspect.getsource(retention)
+    assert "DELETE FROM layer_" not in source
+    assert "_purge_layer_orphans" not in source

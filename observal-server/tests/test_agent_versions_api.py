@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the agent versioning API endpoints.
@@ -46,6 +47,8 @@ def _make_agent(owner_id: uuid.UUID | None = None):
     agent.co_authors = []
     agent.latest_version_id = None
     agent.latest_version = None
+    agent.is_private = False
+    agent.team_id = None
     return agent
 
 
@@ -305,8 +308,24 @@ async def test_get_version_not_found():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def create_release_dependencies():
+    # Pinning, model resolution, notifications and locks have dedicated tests.
+    # These route tests assert that the interactions occur without relying on
+    # an AsyncMock session to emulate PostgreSQL joins or nested transactions.
+    with (
+        patch("services.agent_lock.attach_pinned_components", new=AsyncMock(return_value=[])) as pins,
+        patch("services.agent_lock.lock_agent_version", new=AsyncMock()) as lock,
+        patch(
+            "services.model_resolver.resolve_model_for_harness", new=AsyncMock(return_value=("claude-3-5-sonnet", []))
+        ),
+        patch("api.routes.agent_versions.inbox.on_publish", new=AsyncMock(return_value=0)) as notification,
+    ):
+        yield pins, lock, notification
+
+
 @pytest.mark.asyncio
-async def test_create_version_happy_path():
+async def test_create_version_happy_path(create_release_dependencies):
     """create_agent_version creates a new AgentVersion and returns its data."""
     from api.routes.agent_versions import _create_agent_version
     from schemas.agent import AgentVersionCreateRequest
@@ -358,6 +377,8 @@ async def test_create_version_happy_path():
     assert result["status"] == AgentStatus.pending.value
     db.add.assert_called()
     db.commit.assert_called_once()
+    for dependency in create_release_dependencies:
+        dependency.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -462,7 +483,7 @@ async def test_create_version_not_owner_403():
 
 
 @pytest.mark.asyncio
-async def test_create_version_co_author_allowed():
+async def test_create_version_co_author_allowed(create_release_dependencies):
     """create_agent_version succeeds for a co-maintainer (not just owner)."""
     from api.routes.agent_versions import _create_agent_version
     from schemas.agent import AgentVersionCreateRequest
@@ -514,7 +535,7 @@ async def test_create_version_co_author_allowed():
 
 
 @pytest.mark.asyncio
-async def test_create_version_warns_multiple_pending():
+async def test_create_version_warns_multiple_pending(create_release_dependencies):
     """create_agent_version includes warning when other pending versions exist."""
     from api.routes.agent_versions import _create_agent_version
     from schemas.agent import AgentVersionCreateRequest
@@ -567,8 +588,15 @@ async def test_create_version_warns_multiple_pending():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def review_notification():
+    # The inbox service's nested transaction is tested independently.
+    with patch("api.routes.agent_versions.inbox.on_review_decided", new=AsyncMock(return_value=0)) as notify:
+        yield notify
+
+
 @pytest.mark.asyncio
-async def test_review_version_approve_updates_latest():
+async def test_review_version_approve_updates_latest(review_notification):
     """Approving a pending version sets agent.latest_version_id."""
     from api.routes.agent_versions import _review_agent_version
     from schemas.agent import AgentVersionReviewRequest
@@ -601,11 +629,12 @@ async def test_review_version_approve_updates_latest():
         )
 
     assert result["new_status"] == AgentStatus.approved.value
+    review_notification.assert_awaited_once()
     db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_review_version_reject_stores_reason():
+async def test_review_version_reject_stores_reason(review_notification):
     """Rejecting a pending version stores the rejection reason."""
     from api.routes.agent_versions import _review_agent_version
     from schemas.agent import AgentVersionReviewRequest
@@ -637,6 +666,7 @@ async def test_review_version_reject_stores_reason():
 
     assert result["new_status"] == AgentStatus.rejected.value
     assert ver.rejection_reason == "Prompt violates policy"
+    review_notification.assert_awaited_once()
     db.commit.assert_called_once()
 
 

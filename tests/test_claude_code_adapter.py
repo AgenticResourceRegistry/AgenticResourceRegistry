@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused coverage for the Claude Code CLI harness adapter."""
@@ -58,6 +58,45 @@ def _install_plugin(
         claude_dir / "plugins" / "installed_plugins.json",
         {"plugins": {plugin_key: [{"installPath": str(plugin_dir)}]}},
     )
+
+
+def test_windows_claude_mcp_commands_use_native_cmd_shim(monkeypatch: pytest.MonkeyPatch):
+    import shutil
+    import sys
+
+    adapter = ClaudeCodeAdapter()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda name: "C:/Apps/Claude CLI/claude.cmd" if name == "claude.cmd" else None)
+    assert adapter.prepare_mcp_setup_command(["claude", "mcp", "add", "srv", "--", "python"], "project") == [
+        "C:/Apps/Claude CLI/claude.cmd",
+        "mcp",
+        "add",
+        "--scope",
+        "local",
+        "srv",
+        "--",
+        "python",
+    ]
+    assert adapter.prepare_mcp_setup_command(
+        ["claude", "mcp", "add", "srv", "--", "runner", "--scope", "internal"], "user"
+    ) == [
+        "C:/Apps/Claude CLI/claude.cmd",
+        "mcp",
+        "add",
+        "--scope",
+        "user",
+        "srv",
+        "--",
+        "runner",
+        "--scope",
+        "internal",
+    ]
+    assert adapter.prepare_mcp_setup_command(["claude", "mcp", "remove", "srv"], "project") == [
+        "C:/Apps/Claude CLI/claude.cmd",
+        "mcp",
+        "remove",
+        "srv",
+    ]
 
 
 def test_adapter_metadata_registry_and_capability_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -618,7 +657,7 @@ def test_empty_skills_and_agents_use_exact_defaults_and_sorted_order(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    ("managed_groups", "expected"), [(0, "missing"), (1, "partial"), (2, "partial"), (3, "installed")]
+    ("managed_groups", "expected"), [(0, "missing"), (1, "partial"), (2, "partial"), (3, "partial")]
 )
 def test_detect_hooks_counts_managed_groups_and_ignores_unmanaged_entries(
     tmp_path: Path,
@@ -636,6 +675,32 @@ def test_detect_hooks_counts_managed_groups_and_ignores_unmanaged_entries(
     )
 
     assert ClaudeCodeAdapter().detect_hooks(tmp_path) == expected
+
+
+def test_detect_hooks_requires_both_session_events(tmp_path: Path):
+    from observal_cli.harness_specs.claude_code_hooks_spec import get_desired_hooks
+
+    _write_json(tmp_path / "settings.json", {"hooks": get_desired_hooks()})
+    assert ClaudeCodeAdapter().detect_hooks(tmp_path) == "installed"
+
+
+@pytest.mark.parametrize(
+    ("hook_type", "command"),
+    [
+        ("command", "python -m observal_cli.hooks.session_push --harness codex"),
+        ("http", "python -m observal_cli.hooks.session_push --harness claude-code"),
+    ],
+)
+def test_detect_hooks_rejects_other_harnesses_and_non_command_hooks(tmp_path: Path, hook_type: str, command: str):
+    _write_json(
+        tmp_path / "settings.json",
+        {
+            "hooks": {
+                event: [{"hooks": [{"type": hook_type, "command": command}]}] for event in ("UserPromptSubmit", "Stop")
+            }
+        },
+    )
+    assert ClaudeCodeAdapter().detect_hooks(tmp_path) == "partial"
 
 
 def test_detect_hooks_accepts_managed_url_and_fails_soft_on_missing_or_malformed_settings(tmp_path: Path):

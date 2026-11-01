@@ -32,26 +32,27 @@ LIST_SQL_FILTERED = (
     "SELECT session_id, if(first_event_time > '2020-01-01 00:00:00' AND first_event_time < "
     "'2099-01-01 00:00:00',    first_event_time, last_event_time) AS first_event_time, "
     "if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) AS last_event_time, "
-    "(if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) > now() - INTERVAL "
+    "(if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) > now() - INTERVAL "
     "5 MINUTE) AS is_active, prompt_count, 0                   AS api_request_count, tool_result_count, "
     "input_tokens        AS total_input_tokens, output_tokens       AS total_output_tokens, "
     "cache_read_tokens   AS total_cache_read_tokens, cache_write_tokens  AS total_cache_write_tokens, "
     "total_credits, model, harness, agent_id, agent_version, user_id FROM session_stats_agg FINAL "
     "WHERE session_id != '' AND parent_session_id = '' AND prompt_count > 0 AND user_id = {uid:String} "
-    "AND last_event_time > now() - INTERVAL 365 DAY AND harness = {platform:String} "
-    "AND user_id IN ({user_0:String}, {user_1:String}) ORDER BY last_event_time DESC LIMIT 25 OFFSET 10"
+    "AND if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) > now() - INTERVAL 365 DAY AND harness = {platform:String} "
+    "AND user_id IN ({user_0:String}, {user_1:String}) ORDER BY "
+    "if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) DESC LIMIT 25 OFFSET 10"
 )
 LIST_SQL_UNFILTERED = (
     "SELECT session_id, if(first_event_time > '2020-01-01 00:00:00' AND first_event_time < "
     "'2099-01-01 00:00:00',    first_event_time, last_event_time) AS first_event_time, "
     "if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) AS last_event_time, "
-    "(if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) > now() - INTERVAL "
+    "(if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) > now() - INTERVAL "
     "5 MINUTE) AS is_active, prompt_count, 0                   AS api_request_count, tool_result_count, "
     "input_tokens        AS total_input_tokens, output_tokens       AS total_output_tokens, "
     "cache_read_tokens   AS total_cache_read_tokens, cache_write_tokens  AS total_cache_write_tokens, "
     "total_credits, model, harness, agent_id, agent_version, user_id FROM session_stats_agg FINAL "
     "WHERE session_id != '' AND parent_session_id = '' AND prompt_count > 0 "
-    "ORDER BY last_event_time DESC LIMIT 50 OFFSET 0"
+    "ORDER BY if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) DESC LIMIT 50 OFFSET 0"
 )
 IDENTITY_SQL_USER = (
     "SELECT project_id, user_id, harness FROM session_events FINAL WHERE session_id = {sid:String} "
@@ -236,6 +237,24 @@ async def test_list_query_uses_exact_filters_pagination_and_parameters(monkeypat
         "param_user_0": "u1",
         "param_user_1": "u2",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("Kiro", "kiro"), ("Pi", "pi"), ("Claude Code", "claude-code"), ("claude-code", "claude-code")],
+)
+async def test_list_query_accepts_harness_id_or_display_name(monkeypatch, platform, expected):
+    query = AsyncMock(return_value=[])
+    monkeypatch.setattr(sessions, "_ch_json", query)
+
+    await sessions._list_sessions_query(platform=platform, user_ids=None, days=None, is_admin=True, uid="admin")
+    assert query.await_args.args[1]["param_platform"] == expected
+
+
+def test_harness_id_takes_precedence_over_another_harness_display_name(monkeypatch):
+    monkeypatch.setattr(sessions, "_PLATFORM_NAMES", {"first": "second", "second": "Second harness"})
+    assert sessions._harness_id("SeCoNd") == "second"
 
 
 @pytest.mark.asyncio
@@ -489,7 +508,7 @@ async def test_list_sessions_name_lookup_failures_use_safe_fallbacks(monkeypatch
 async def test_list_sessions_status_filter_only_removes_inactive_rows(monkeypatch, status, expected):
     rows = [
         {"session_id": "active", "user_id": "", "harness": "opencode", "is_active": 1},
-        {"session_id": "idle", "user_id": "", "harness": "codex-cli", "is_active": 0},
+        {"session_id": "idle", "user_id": "", "harness": "codex", "is_active": 0},
     ]
     monkeypatch.setattr(sessions, "_list_sessions_query", AsyncMock(return_value=rows))
     session_factory = MagicMock(side_effect=AssertionError("database should not be opened"))
@@ -507,7 +526,7 @@ async def test_list_sessions_status_filter_only_removes_inactive_rows(monkeypatc
     )
 
     assert [row["session_id"] for row in result] == expected
-    assert [row["platform"] for row in rows] == ["OpenCode", "Codex CLI"]
+    assert [row["platform"] for row in rows] == ["OpenCode", "Codex"]
     session_factory.assert_not_called()
 
 
@@ -943,3 +962,169 @@ async def test_session_query_validation_rejects_invalid_requests(monkeypatch, pa
     detail = response.json()["detail"]
     assert [(item["loc"], item["type"]) for item in detail] == [(location, error_type)]
     query.assert_not_awaited()
+
+
+# ── Agent ids that outlive their agent ─────────────────────────────
+#
+# A session keeps the agent id it was attributed to. The agent can later be
+# deleted, or the id can come from a lockfile pointing at a different registry,
+# leaving a row with an id and nothing to call it.
+
+
+def test_resolved_agent_name_returns_the_known_name():
+    assert sessions._resolved_agent_name("abc", {"abc": "reviewer"}, queried=True) == "reviewer"
+
+
+def test_resolved_agent_name_labels_an_agent_that_no_longer_exists():
+    """Naming the state beats rendering an id with a blank name."""
+    missing = "506fdb3f-d08a-4a60-8d75-7bee17233cd9"
+
+    assert sessions._resolved_agent_name(missing, {}, queried=True) == "unknown agent (506fdb3f)"
+
+
+def test_resolved_agent_name_stays_silent_when_the_id_was_never_queried():
+    """A malformed id or a failed lookup proves nothing about the agent."""
+    assert sessions._resolved_agent_name("not-a-uuid", {}, queried=False) is None
+
+
+@pytest.mark.asyncio
+async def test_session_list_labels_deleted_agents_but_not_unqueryable_ones(monkeypatch):
+    """One row's agent is genuinely gone; the other's id was never queryable."""
+    deleted_id = str(AGENT_ID)
+    rows = [
+        {
+            "session_id": "deleted-agent",
+            "user_id": str(USER_ID),
+            "is_active": 0,
+            "agent_id": deleted_id,
+            "agent_version": "1.0.0",
+            "harness": "kiro",
+        },
+        {
+            "session_id": "malformed-agent",
+            "user_id": str(USER_ID),
+            "is_active": 0,
+            "agent_id": "not-an-agent-uuid",
+            "agent_version": None,
+            "harness": "kiro",
+        },
+    ]
+    user_db = _db(_result(rows=[(USER_ID, "Current User")]))
+    agent_db = _db(_result())  # queried successfully, returned no agents
+    monkeypatch.setattr(sessions, "_list_sessions_query", AsyncMock(return_value=rows))
+    monkeypatch.setattr(sessions, "resolve_user_filter_values", AsyncMock(return_value=None))
+    monkeypatch.setattr(sessions, "async_session", _session_factory(user_db, agent_db))
+
+    result = await sessions.list_sessions(
+        status=None,
+        platform=None,
+        user=None,
+        days=None,
+        limit=50,
+        offset=0,
+        mine=False,
+        current_user=_user(),
+    )
+
+    by_id = {row["session_id"]: row for row in result}
+    assert by_id["deleted-agent"]["agent_name"] == f"unknown agent ({deleted_id[:8]})"
+    assert by_id["malformed-agent"]["agent_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_session_detail_labels_a_deleted_agent(monkeypatch):
+    identity = {"project_id": "project-a", "user_id": str(USER_ID), "harness": "kiro"}
+    rows = [{"line_offset": 1, "harness": "kiro", "agent_id": str(AGENT_ID), "raw_line": "event"}]
+    query = AsyncMock(side_effect=[[identity], rows, []])
+    scalar = MagicMock()
+    scalar.scalar_one_or_none = MagicMock(return_value=None)
+    monkeypatch.setattr(sessions, "_ch_json", query)
+    monkeypatch.setattr("services.session_parsers.parse_raw_events", MagicMock(return_value=[]))
+    monkeypatch.setattr(sessions, "async_session", _session_factory(_db(scalar)))
+
+    result = await sessions.get_session("session", after_offset=None, current_user=_user())
+
+    assert result["agent_id"] == str(AGENT_ID)
+    assert result["agent_name"] == f"unknown agent ({str(AGENT_ID)[:8]})"
+
+
+@pytest.mark.asyncio
+async def test_session_list_resolves_a_non_canonical_agent_id(monkeypatch):
+    """A session can store a valid id in uppercase or without hyphens.
+
+    It queries correctly, but the row returns canonical, so keying results by
+    the returned id alone missed the original and labelled a live agent
+    unknown - worse than returning nothing.
+    """
+    stored = str(AGENT_ID).replace("-", "").upper()
+    rows = [
+        {
+            "session_id": "noncanonical",
+            "user_id": str(USER_ID),
+            "is_active": 0,
+            "agent_id": stored,
+            "agent_version": "1.0.0",
+            "harness": "kiro",
+        }
+    ]
+    user_db = _db(_result(rows=[(USER_ID, "Current User")]))
+    agent_db = _db(_result(rows=[(AGENT_ID, "Canonical Agent")]))
+    monkeypatch.setattr(sessions, "_list_sessions_query", AsyncMock(return_value=rows))
+    monkeypatch.setattr(sessions, "resolve_user_filter_values", AsyncMock(return_value=None))
+    monkeypatch.setattr(sessions, "async_session", _session_factory(user_db, agent_db))
+
+    result = await sessions.list_sessions(
+        status=None,
+        platform=None,
+        user=None,
+        days=None,
+        limit=50,
+        offset=0,
+        mine=False,
+        current_user=_user(),
+    )
+
+    assert result[0]["agent_name"] == "Canonical Agent"
+
+
+@pytest.mark.asyncio
+async def test_session_list_resolves_every_stored_form_of_one_agent(monkeypatch):
+    """Two sessions on one page can spell the same agent id differently.
+
+    Mapping each canonical id to a single stored form resolved one session and
+    left the other labelled unknown.
+    """
+    canonical = str(AGENT_ID)
+    shouty = canonical.replace("-", "").upper()
+    rows = [
+        {
+            "session_id": form,
+            "user_id": str(USER_ID),
+            "is_active": 0,
+            "agent_id": form,
+            "agent_version": "1.0.0",
+            "harness": "kiro",
+        }
+        for form in (canonical, shouty)
+    ]
+    user_db = _db(_result(rows=[(USER_ID, "Current User")]))
+    agent_db = _db(_result(rows=[(AGENT_ID, "Canonical Agent")]))
+    monkeypatch.setattr(sessions, "_list_sessions_query", AsyncMock(return_value=rows))
+    monkeypatch.setattr(sessions, "resolve_user_filter_values", AsyncMock(return_value=None))
+    monkeypatch.setattr(sessions, "async_session", _session_factory(user_db, agent_db))
+
+    result = await sessions.list_sessions(
+        status=None,
+        platform=None,
+        user=None,
+        days=None,
+        limit=50,
+        offset=0,
+        mine=False,
+        current_user=_user(),
+    )
+
+    assert {row["session_id"]: row["agent_name"] for row in result} == {
+        canonical: "Canonical Agent",
+        shouty: "Canonical Agent",
+    }

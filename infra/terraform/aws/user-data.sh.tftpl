@@ -85,7 +85,7 @@ INSTALL_DIR=/opt/observal
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-TARBALL_URL="https://github.com/Observal/Observal/releases/download/v${image_tag}/observal-server-v${image_tag}.tar.gz"
+TARBALL_URL="https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/releases/download/v${image_tag}/observal-server-v${image_tag}.tar.gz"
 TARBALL_OK=false
 if [ "${image_tag}" != "latest" ]; then
   for attempt in 1 2 3 4 5; do
@@ -164,6 +164,16 @@ cat > "$INSTALL_DIR/docker/clickhouse/config.d/memory.xml" <<'CHCFG'
     </part_log>
 </clickhouse>
 CHCFG
+
+cat > "$INSTALL_DIR/docker/clickhouse/config.d/telemetry.xml" <<'CHTELEMETRY'
+<clickhouse>
+    <send_crash_reports>
+        <enabled>false</enabled>
+        <send_logical_errors>false</send_logical_errors>
+    </send_crash_reports>
+    <remote_url_allow_hosts></remote_url_allow_hosts>
+</clickhouse>
+CHTELEMETRY
 
 cat > "$INSTALL_DIR/docker/clickhouse/users.d/default-user.xml" <<CHUSER
 <clickhouse>

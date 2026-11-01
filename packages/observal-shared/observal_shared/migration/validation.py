@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tarfile
@@ -14,12 +13,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from observal_shared.migration.archive import _safe_tar_extract, _sha256_file, read_manifest
-from observal_shared.migration.ch_export import _ch_query, _read_count
+from observal_shared.migration.archive import _safe_tar_extract, _sha256_file, read_manifest, write_manifest
+from observal_shared.migration.ch_export import (
+    EXPORT_QUERY_SETTINGS,
+    TelemetryChunk,
+    _build_ch_count_query,
+    _ch_query,
+    _chunk_params,
+    _parse_ch_datetime,
+    _read_count,
+)
 from observal_shared.migration.connections import ChConnParams, PgConnParams, connect_pg, parse_clickhouse_url
 from observal_shared.migration.constants import _UUID_RE, CLICKHOUSE_TABLES, INSERT_ORDER
 from observal_shared.migration.exceptions import MigrationError
 from observal_shared.migration.results import ChecksumResult, TelemetryValidationResult, ValidationResult
+from observal_shared.migration.telemetry_manifest import validate_telemetry_manifest
 
 if TYPE_CHECKING:
     import asyncpg
@@ -53,13 +61,14 @@ async def _validate_fk_references(
             cols_to_read = [c for c in fk_cols if c in fk_values]
             if not cols_to_read:
                 continue
-            table = pq.read_table(filepath, columns=cols_to_read)
-            for col in cols_to_read:
-                if col in table.column_names:
-                    unique = pc.unique(table.column(col))
-                    for val in unique.to_pylist():
-                        if val is not None and val != "":
-                            fk_values[col].add(str(val))
+            parquet = pq.ParquetFile(filepath)
+            for batch in parquet.iter_batches(batch_size=65_536, columns=cols_to_read):
+                for col in cols_to_read:
+                    if col in batch.schema.names:
+                        unique = pc.unique(batch.column(batch.schema.get_field_index(col)))
+                        for val in unique.to_pylist():
+                            if val is not None and val != "":
+                                fk_values[col].add(str(val))
 
     # Audit events identify users through actor_id.
     fk_values["user_id"] |= fk_values.pop("actor_id", set())
@@ -175,79 +184,109 @@ async def validate_ch(
     input_dir: Path,
     reporter: ProgressReporter,
 ) -> TelemetryValidationResult:
-    """Validate telemetry Parquet files: checksums, row counts, FK references."""
+    """Validate chunk integrity and optionally compare bounded target counts/FKs."""
     import httpx as _httpx
+    import pyarrow.parquet as pq
 
     manifest_path = input_dir / "telemetry_manifest.json"
     if not manifest_path.exists():
         raise MigrationError("Telemetry manifest not found.")
     manifest = read_manifest(manifest_path)
+    chunks_by_table = validate_telemetry_manifest(manifest, input_dir)
 
-    await reporter.update(phase="validate", pct=0, message="Verifying telemetry checksums")
-
-    # Checksum verification
+    await reporter.update(phase="validate", pct=0, message="Verifying telemetry chunks")
     checksum_results: dict[str, bool] = {}
-    for table_cfg in CLICKHOUSE_TABLES:
-        table_name = table_cfg["name"]
-        table_info = manifest["tables"].get(table_name, {})
-        for filename, expected in table_info.get("checksum", {}).items():
-            filepath = input_dir / filename
-            if not filepath.exists():
-                checksum_results[filename] = False
+    for chunks in chunks_by_table.values():
+        for chunk in chunks:
+            filename = chunk.get("file")
+            if not filename:
                 continue
-            actual = _sha256_file(filepath)
-            checksum_results[filename] = actual == expected
+            filepath = input_dir / filename
+            passed = filepath.is_file()
+            if passed:
+                passed = filepath.stat().st_size == chunk["size_bytes"]
+            if passed:
+                passed = _sha256_file(filepath) == chunk["sha256"]
+            if passed:
+                try:
+                    passed = pq.read_metadata(filepath).num_rows == chunk["row_count"]
+                except Exception:
+                    passed = False
+            checksum_results[filename] = passed
 
     checksums_valid = all(checksum_results.values()) if checksum_results else True
 
-    # Optional row count comparison
     row_count_results: dict[str, tuple[int, int]] | None = None
     if ch_params:
-        await reporter.update(phase="validate", pct=40, message="Comparing telemetry row counts")
-
+        await reporter.update(phase="validate", pct=40, message="Comparing bounded telemetry row counts")
         http_url, db, user, password = parse_clickhouse_url(ch_params.url)
         try:
-            async with _httpx.AsyncClient(timeout=_httpx.Timeout(30.0, connect=10.0)) as hc:
-                resp = await hc.post(http_url, content="SELECT 1", auth=(user, password), params={"database": db})
+            async with _httpx.AsyncClient(timeout=_httpx.Timeout(30.0, connect=10.0)) as health_client:
+                resp = await health_client.post(
+                    http_url,
+                    content="SELECT 1",
+                    auth=(user, password),
+                    params={"database": db},
+                )
                 resp.raise_for_status()
         except (_httpx.HTTPStatusError, _httpx.RequestError) as exc:
-            raise MigrationError(f"ClickHouse health check failed: {exc}") from exc
+            raise MigrationError(f"ClickHouse health check failed: {type(exc).__name__}") from exc
 
-        existing_sql = "SELECT name FROM system.tables WHERE database = {db:String} FORMAT JSON"
-        existing_resp = await _ch_query(http_url, db, user, password, existing_sql, extra_params={"param_db": db})
-        existing = {r["name"] for r in existing_resp.json().get("data", [])}
-
+        cutoff = manifest["export_time_cutoff"]
         row_count_results = {}
-        for table_cfg in CLICKHOUSE_TABLES:
-            table_name = table_cfg["name"]
-            manifest_count = manifest["tables"].get(table_name, {}).get("row_count", 0)
-            if table_name not in existing:
-                row_count_results[table_name] = (manifest_count, -1)
-                continue
-            if table_cfg["engine"] == "replacing":
-                sql = f"SELECT count() AS cnt FROM {table_name} FINAL FORMAT JSON"
-            else:
-                sql = f"SELECT count() AS cnt FROM {table_name} FORMAT JSON"
-            resp = await _ch_query(http_url, db, user, password, sql)
-            db_count = _read_count(resp)
-            row_count_results[table_name] = (manifest_count, db_count)
+        async with _httpx.AsyncClient(timeout=_httpx.Timeout(300.0, connect=10.0)) as http_client:
+            existing_sql = "SELECT name FROM system.tables WHERE database = {db:String} FORMAT JSON"
+            existing_resp = await _ch_query(
+                http_url,
+                db,
+                user,
+                password,
+                existing_sql,
+                http_client=http_client,
+                extra_params={"param_db": db},
+            )
+            existing = {row["name"] for row in existing_resp.json().get("data", [])}
 
-    # Optional FK validation
+            for table_cfg in CLICKHOUSE_TABLES:
+                table_name = table_cfg["name"]
+                manifest_count = manifest["tables"].get(table_name, {}).get("row_count", 0)
+                if table_name not in existing:
+                    row_count_results[table_name] = (manifest_count, -1)
+                    continue
+
+                target_count = 0
+                for item in chunks_by_table[table_name]:
+                    chunk = TelemetryChunk(
+                        table=table_name,
+                        start=_parse_ch_datetime(item["range_start"]),
+                        end=_parse_ch_datetime(item["range_end"]),
+                        bucket=item["bucket"],
+                        shard_count=item["shard_count"],
+                    )
+                    resp = await _ch_query(
+                        http_url,
+                        db,
+                        user,
+                        password,
+                        _build_ch_count_query(table_cfg, chunk),
+                        http_client=http_client,
+                        extra_params={**_chunk_params(chunk, cutoff), **EXPORT_QUERY_SETTINGS},
+                    )
+                    target_count += _read_count(resp)
+                row_count_results[table_name] = (manifest_count, target_count)
+
     fk_results: dict[str, list[str]] | None = None
     if pg_params:
         await reporter.update(phase="validate", pct=70, message="Validating FK references")
-
         conn = await connect_pg(pg_params)
         try:
             fk_results = await _validate_fk_references(input_dir, manifest, conn)
-            # Update manifest with FK results
             manifest["fk_validation"] = {**fk_results, "validated_at": datetime.now(UTC).isoformat()}
-            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            write_manifest(manifest_path, manifest)
         finally:
             await conn.close()
 
     await reporter.update(phase="validate", pct=100, message="Telemetry validation complete")
-
     return TelemetryValidationResult(
         checksums_valid=checksums_valid,
         checksum_results=checksum_results,

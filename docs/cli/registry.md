@@ -1,8 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# observal registry
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry"
+---
 
 Publish and manage registry components. The registry has five component types: MCP servers, skills, hooks, prompts, and sandboxes.
 
@@ -12,17 +15,29 @@ Publish and manage registry components. The registry has five component types: M
 observal registry <type> <action> [args]
 ```
 
-| Type | Submit | List | My | Show | Install | Render | Edit |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `mcp` | yes | yes | yes | yes | yes | no | yes |
-| `skill` | yes | yes | yes | yes | yes | no | yes |
-| `hook` | yes | yes | no | yes | yes | no | yes |
-| `prompt` | yes | yes | yes | yes | no | yes | yes |
-| `sandbox` | yes | yes | no | yes | no | no | yes |
+| Type | Submit | List | My | Show | Install | Render | Edit | Fork |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `mcp` | yes | yes | yes | yes | yes | no | yes | yes |
+| `skill` | yes | yes | yes | yes | yes | no | yes | yes |
+| `hook` | yes | yes | no | yes | yes | no | yes | yes |
+| `prompt` | yes | yes | yes | yes | no | yes | yes | yes |
+| `sandbox` | yes | yes | no | yes | no | no | yes | yes |
 
 Every component type also supports archive, unarchive, ownership transfer, and co-author management. Registry also contains the `models`, `version`, `recommend`, and mixed `bulk` groups.
 
 All registry references accept a UUID, canonical `namespace/slug`, a unique legacy bare name, a row number from the latest human list output for the same component type, or an `@alias`. Agents and scripts must use returned UUIDs or `qualified_name` values, never row numbers. If the same bare slug exists in multiple namespaces, qualify it, for example `alice/search` instead of `search`.
+
+### Fork an approved component
+
+```bash
+observal registry skill fork-listing acme/review-skill --name my-review-skill --output json
+observal registry mcp fork acme/github --version 1.2.0 --new-version 0.1.0 --output json
+observal registry hook fork acme/audit --team platform --visibility team --output json
+observal registry prompt fork acme/review --output json
+observal registry sandbox fork acme/python --output json
+```
+
+The five `fork` commands accept `SOURCE [--name NAME] [--version BASE] [--new-version V] [--team HANDLE|UUID] [--visibility public|team] [--output table|json]`. Only currently approved sources and approved base versions are eligible. The fork is a separate editable **draft**, not a new release of the original; it has its own namespace, owner, reviews, and installation identity. Team-private sources can only be forked within their teamspace. JSON returns the direct server draft object. Edit using `observal registry <type> edit FORK_UUID ...` and submit through that type's draft workflow. `show` prints visible fork provenance and the count of public approved direct forks. If source access is lost, it displays **Source unavailable** rather than the saved source reference. A private or unpublished fork never increases the public count.
 
 ### Shared lifecycle and collaboration commands
 
@@ -91,7 +106,7 @@ The file is a bare array or an object with a `components` array. Each entry cont
 }
 ```
 
-Dry run validates file structure without contacting submission endpoints. Execution structurally validates every entry before the first mutation, submits entries in order, reports conflicts as skipped, and returns per-entry IDs, canonical names, review status, and safe errors. Authentication, permission, rate-limit, version, and service failures stop the batch. JSON execution requires `--yes`.
+Dry run validates file structure without contacting submission endpoints. Execution structurally validates every entry before the first mutation, submits entries in order, reports conflicts as skipped, and returns per-entry IDs, canonical names, review status, and safe errors. Results include `partial`; item errors set it to `true` and exit with code 11, while conflicts counted as skips remain successful. Authentication, permission, rate-limit, version, and service failures stop the batch. JSON execution requires `--yes`.
 
 Re-running a partially completed file is safe only after inspecting results. Existing identities are skipped for component types that reject duplicates. Verify created items by returned UUID or `qualified_name`.
 
@@ -173,7 +188,7 @@ observal registry mcp submit --submit my-server
 
 #### Valid transports
 
-`stdio`, `sse`, `streamable-http`.
+`stdio`, `sse`, `streamable-http`. The older `http` spelling is accepted and stored as `streamable-http`; any other value is rejected.
 
 #### Valid frameworks
 
@@ -240,7 +255,7 @@ observal registry mcp show @fav --output json
 
 ### `observal registry mcp install`
 
-Generate a harness config snippet for an MCP server. This command does not write harness configuration or record an installation. Prompts for required environment variables and headers unless non-interactive or machine output is selected.
+Generate a harness config snippet for an MCP server. This command does not write harness configuration or record an installation. Interactive mode prompts for required environment variables and headers. JSON mode requires `--no-prompt` and rejects missing required values before config generation with `error.result.needs_input: true`.
 
 ```bash
 observal registry mcp install <id-or-name> --harness <harness> [options]
@@ -249,12 +264,12 @@ observal registry mcp install <id-or-name> --harness <harness> [options]
 | Option | Short | Description |
 | --- | --- | --- |
 | `--harness` | `-i` | Target harness (required) |
-| `--version` | `-V` | Generate configuration for one version |
+| `--version` | `-V` | Generate configuration from that exact version instead of the latest |
 | `--env` | `-e` | Environment value as `KEY=VALUE`; repeatable |
 | `--header` | | Header value as `KEY=VALUE`; repeatable |
 | `--env-file` | | Read environment values from a file |
-| `--no-prompt` | `-y` | Use supplied values and placeholders without prompting |
-| `--raw` | | Output only the bare config snippet for piping |
+| `--no-prompt` | `-y` | Use supplied values without prompting; JSON fails if required values are missing |
+| `--raw` | | Output only a bare config template; missing values remain explicit placeholders |
 | `--output` | `-o` | Output the complete operation result as table or JSON |
 
 ```bash
@@ -312,6 +327,44 @@ Transfer ownership to another username. You stop being the owner immediately.
 
 ```bash
 observal registry mcp transfer-owner my-server @alice -y
+```
+
+---
+
+### `observal registry mcp sync`
+
+Publish a new MCP version automatically when the listing's GitHub or GitLab repository changes. See [Sync an MCP server from GitHub or GitLab](/use-cases/mcp-repo-sync) for the full setup.
+
+| Command | Description |
+| --- | --- |
+| `enable <id-or-name>` | Turn on sync, or change its triggers. Prints the webhook URL, and the secret on first enable |
+| `status <id-or-name>` | Show the triggers, tracked branch, and last sync result |
+| `run <id-or-name>` | Sync the tracked branch now |
+| `rotate-secret <id-or-name>` | Issue a new webhook secret |
+| `disable <id-or-name>` | Turn off sync. Published versions are kept |
+
+| `enable` option | Short | Description |
+| --- | --- | --- |
+| `--push / --no-push` | | Publish a version on each push to the tracked branch (on by default) |
+| `--release / --no-release` | | Publish a version when a release is published (off by default) |
+| `--branch` | `-b` | Branch to track. Defaults to the repository's default branch |
+| `--provider` | | `github` or `gitlab`. Detected from the repository URL; set it for a self-managed GitLab whose hostname does not contain `gitlab` |
+| `--output` | `-o` | Output format: `table` or `json` |
+
+On an existing setup, `enable` keeps any setting you do not pass.
+
+```bash
+# Push sync on the default branch
+observal registry mcp sync enable alice/weather-mcp
+
+# Releases only
+observal registry mcp sync enable alice/weather-mcp --release --no-push
+
+# Self-managed GitLab on its own hostname
+observal registry mcp sync enable alice/weather-mcp --provider gitlab
+
+# Check the last result
+observal registry mcp sync status alice/weather-mcp --output json
 ```
 
 ---
@@ -426,7 +479,7 @@ Scopes:
 - `user` (default): writes to `~/.<harness>/skills/<name>/` globally.
 - `project`: writes to `.agents/skills/<name>/` in the current directory, then symlinks into detected harness config directories.
 
-JSON output does not disable installation. It returns whether files were written and the installed path. Raw and no-write modes do not record the skill as installed. A failed file write or lockfile update returns a categorized failure instead of reporting success.
+JSON output does not disable installation. It returns whether files were written and the installed path. Raw and no-write modes do not record the skill as installed. An installed skill is recorded with its exact version, version id, and digest, with or without `--version`. A failed file write or lockfile update returns a categorized failure instead of reporting success.
 
 ```bash
 observal registry skill install my-skill --harness claude-code
@@ -539,7 +592,7 @@ observal registry hook show @guard --output json
 Install a hook for a specific harness. Writes script files and merges hook config into the harness's settings. Existing hooks are preserved during merge.
 
 ```bash
-observal registry hook install <id-or-name> --harness <harness> [--platform PLATFORM] [--raw] [--dir DIR]
+observal registry hook install <id-or-name> --harness <harness> [--platform PLATFORM] [--raw] [--dir DIR] [--version VERSION]
 ```
 
 | Option | Short | Description |
@@ -548,6 +601,7 @@ observal registry hook install <id-or-name> --harness <harness> [--platform PLAT
 | `--platform` | `-p` | Platform: `win32`, `darwin`, `linux` |
 | `--raw` | | Output raw JSON only (no file writes) |
 | `--dir` | `-d` | Project directory for file writes (default: cwd) |
+| `--version` | `-V` | Install one version instead of the latest |
 | `--output` | `-o` | Output the complete installation result as table or JSON |
 
 ```bash
@@ -558,7 +612,7 @@ observal registry hook install my-hook --harness claude-code --platform darwin
 observal registry hook install my-hook --harness claude-code --output json
 ```
 
-Hook installation validates every path before writing, refuses to replace malformed existing JSON, writes files atomically, and does not duplicate an existing event entry when repeated.
+Hook installation validates every path before writing, refuses to replace malformed existing JSON, writes files atomically, and does not duplicate an existing event entry when repeated. The lockfile records the installed version, its version id and digest, and any version you requested.
 
 ---
 
@@ -816,10 +870,10 @@ observal registry sandbox edit @env --runtime-type docker --version 2.0.0 --outp
 
 Use `observal registry version publish` and `observal registry version list` for all five component types. Publication supports direct JSON results; history supports explicit pagination.
 
-See [`observal registry version`](component.md) for the complete contract.
+See [`observal registry version`](/cli/component) for the complete contract.
 
 ## Personalized recommendations
 
 Use `observal registry recommend` to rank visible components against the signed-in user's sessions and to dismiss or mark recommendations as installed.
 
-See [`observal registry recommend`](recommend.md) for the JSON schema and feedback actions.
+See [`observal registry recommend`](/cli/recommend) for the JSON schema and feedback actions.

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Property-based tests (Hypothesis) for the admin data migration service layer.
@@ -522,6 +523,9 @@ class TestCredentialExclusionFromLogs:
     def test_credentials_not_in_result_fields(self, password, db_host):
         """Password-like values don't appear in result/output fields."""
         assume(len(password) >= 5)
+        # A bare random password can occur in the fixed result text by chance
+        # ("archi" is inside "archive_path"); "pw" never occurs there.
+        password = f"pw{password}"
         dsn = f"postgresql://user:{password}@{db_host}:5432/db"
 
         # Simulate what the service does: result fields never include DSN

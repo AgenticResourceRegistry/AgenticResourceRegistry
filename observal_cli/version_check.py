@@ -36,9 +36,9 @@ from observal_cli.config import CONFIG_DIR
 from observal_cli.config import load as load_config
 
 CACHE_FILE = CONFIG_DIR / "version_cache.json"
-GITHUB_REPO_DEFAULT = "Observal/Observal"
+GITHUB_REPO_DEFAULT = "AgenticResourceRegistry/AgenticResourceRegistry"
 GITHUB_API_BASE = "https://api.github.com/repos"
-GHCR_API_BASE = "https://ghcr.io/v2/observal"
+GHCR_API_BASE = "https://ghcr.io/v2/agenticresourceregistry"
 CHECK_INTERVAL_DEFAULT = 86400  # 24 hours
 CHECK_TIMEOUT = 3  # seconds, must never block CLI
 MAX_RESPONSE_SIZE = 1_048_576  # 1MB
@@ -314,7 +314,7 @@ def fetch_available_server_images() -> list[str]:
         # GHCR requires a token even for public images
         # First get an anonymous token
         token_resp = httpx.get(
-            "https://ghcr.io/token?scope=repository:observal/observal-api:pull",
+            "https://ghcr.io/token?scope=repository:agenticresourceregistry/observal-api:pull",
             timeout=10,
             headers={"User-Agent": f"observal-cli/{get_current_version()}"},
         )
@@ -362,7 +362,7 @@ def verify_server_image_exists(version: str) -> bool:
     """
     try:
         token_resp = httpx.get(
-            "https://ghcr.io/token?scope=repository:observal/observal-api:pull",
+            "https://ghcr.io/token?scope=repository:agenticresourceregistry/observal-api:pull",
             timeout=10,
             headers={"User-Agent": f"observal-cli/{get_current_version()}"},
         )

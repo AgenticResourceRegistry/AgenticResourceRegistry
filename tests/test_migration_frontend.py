@@ -19,13 +19,33 @@ Components to test:
 Requirements: 1.1, 1.2, 1.3, 1.4, 3.9, 4.8, 6.3, 6.6, 7.7
 """
 
+from pathlib import Path
 
-class TestFrontendComponentStub:
-    """Placeholder: frontend tests run in the web/ vitest environment."""
+ROOT = Path(__file__).resolve().parents[1]
+FIELDS = ROOT / "web/src/pages/admin/dashboard/components/migrate-form-fields.tsx"
+IMPORT_FORM = ROOT / "web/src/pages/admin/dashboard/components/migrate-import-form.tsx"
+VALIDATE_FORM = ROOT / "web/src/pages/admin/dashboard/components/migrate-validate-form.tsx"
 
-    def test_stub_note(self):
-        """This file is a placeholder. React component tests run via vitest."""
-        # Frontend tests for the Migration Panel are located in:
-        #   web/src/components/admin/__tests__/MigrationPanel.test.tsx
-        # Run with: cd web && pnpm test
-        pass
+
+class TestMigrationArtifactPicker:
+    """Source-level contracts for the migration artifact picker."""
+
+    def test_picker_adds_sequential_selections_and_can_remove_files(self):
+        source = FIELDS.read_text(encoding="utf-8")
+
+        assert "const next = [...files]" in source
+        assert 'event.target.value = ""' in source
+        assert "removeFile" in source
+        assert "Selected migration artifacts" in source
+
+    def test_both_scope_requires_registry_and_telemetry(self):
+        source = FIELDS.read_text(encoding="utf-8")
+
+        assert "Select both the PostgreSQL registry archive and the telemetry archive." in source
+        assert "artifactSelectionError" in source
+
+    def test_import_and_validate_disable_submission_until_selection_is_valid(self):
+        for path in (IMPORT_FORM, VALIDATE_FORM):
+            source = path.read_text(encoding="utf-8")
+            assert "artifactSelectionError(files, scope)" in source
+            assert "Boolean(selectionError)" in source

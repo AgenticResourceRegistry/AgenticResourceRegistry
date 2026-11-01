@@ -23,7 +23,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { PickerSelect } from "@/components/ui/picker-select";
-import { PageHeader, PageIntro } from "@/components/layouts/page-header";
+import { PageHeader } from "@/components/layouts/page-header";
 import { AdminPanel } from "./components/admin-surface";
 import { TableSkeleton } from "@/components/shared/skeleton-layouts";
 import { ErrorState } from "@/components/shared/error-state";
@@ -196,23 +196,6 @@ export default function UsersPage() {
         breadcrumbs={[{ label: "Administration" }, { label: "Users" }]}
       />
       <div className="page-body mx-auto w-full">
-        <PageIntro
-          eyebrow="Access management"
-          title="Users"
-          subtitle="Manage accounts, departments, roles, and authentication access."
-        >
-          <Button size="sm" variant="outline" onClick={() => setShowBulkDept(true)}>
-            <Users className="h-3.5 w-3.5" />
-            Bulk departments
-          </Button>
-          {!ssoOnly && (
-            <Button size="sm" onClick={() => setShowCreate(true)}>
-              <Plus className="h-3.5 w-3.5" />
-              Add user
-            </Button>
-          )}
-        </PageIntro>
-
         {isLoading ? (
           <TableSkeleton rows={5} cols={6} />
         ) : isError ? (
@@ -222,11 +205,27 @@ export default function UsersPage() {
             icon={Users}
             title="No users yet"
             description="Users will appear here once they sign up or are added by an admin."
+            actionLabel="Add user"
+            onAction={ssoOnly ? undefined : () => setShowCreate(true)}
           />
         ) : (
           <AdminPanel
             title="Organization users"
             subtitle={`${userCount} ${userCount === 1 ? "account" : "accounts"}`}
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => setShowBulkDept(true)}>
+                  <Users className="h-3.5 w-3.5" />
+                  Bulk departments
+                </Button>
+                {!ssoOnly && (
+                  <Button size="sm" onClick={() => setShowCreate(true)}>
+                    <Plus className="h-3.5 w-3.5" />
+                    Add user
+                  </Button>
+                )}
+              </div>
+            }
           >
             <div className="hidden overflow-x-auto md:block">
               <Table>

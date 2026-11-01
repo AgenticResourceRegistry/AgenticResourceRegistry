@@ -1,0 +1,18 @@
+{
+ "agent_id": "fixture-agent-id",
+ "agent_transcript_path": "/home/fixture/.claude/projects/-home-fixture-project/agent_transcript_path.jsonl",
+ "agent_type": "probe-agent",
+ "background_tasks": [],
+ "cwd": "/home/fixture/project",
+ "effort": {
+  "level": "high"
+ },
+ "hook_event_name": "SubagentStop",
+ "last_assistant_message": "<placeholder>",
+ "permission_mode": "default",
+ "prompt_id": "fixture-prompt_id",
+ "session_crons": [],
+ "session_id": "fixture-session_id",
+ "stop_hook_active": false,
+ "transcript_path": "/home/fixture/.claude/projects/-home-fixture-project/transcript_path.jsonl"
+}

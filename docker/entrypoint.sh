@@ -3,61 +3,36 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-set -e
+set -euo pipefail
 
-echo "Ensuring base schema exists..."
-/app/.venv/bin/python -c "
-import asyncio
-from sqlalchemy import text
-from database import engine
-from models import Base
-
-async def init():
-    async with engine.begin() as conn:
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm;'))
-        await conn.run_sync(Base.metadata.create_all)
-    await engine.dispose()
-
-asyncio.run(init())
-"
-
-echo "Running database migrations..."
-if ! /app/.venv/bin/python -m alembic upgrade head; then
-    # Only stamp on a genuinely fresh database: one with no recorded alembic
-    # revision. A failure on a DB that already has an alembic_version row means
-    # a real migration problem (e.g. DuplicateTableError from a partial run),
-    # and stamping HEAD would silently skip the missing migrations.
-    DB_STATE=$(/app/.venv/bin/python -c "
-import asyncio
-from sqlalchemy import text
-from database import engine
-
-async def check():
-    async with engine.connect() as conn:
-        has_table = await conn.scalar(
-            text(\"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version')\")
-        )
-        if not has_table:
-            return 'fresh'
-        rev = await conn.scalar(text('SELECT version_num FROM alembic_version LIMIT 1'))
-        return 'fresh' if not rev else 'existing'
-
-try:
-    print(asyncio.run(check()))
-finally:
-    asyncio.run(engine.dispose())
-")
-    if [ "$DB_STATE" = "fresh" ]; then
-        echo "Fresh database detected: stamping current schema version..."
+echo "Checking PostgreSQL schema state..."
+DB_STATE=$(/app/.venv/bin/python -m services.schema_bootstrap state)
+case "$DB_STATE" in
+    fresh)
+        echo "Fresh database detected: creating current schema and migration-only objects..."
+        /app/.venv/bin/python -m services.schema_bootstrap init
+        echo "Stamping current schema version..."
         /app/.venv/bin/python -m alembic stamp head
-    else
-        echo "ERROR: alembic upgrade failed on an existing database (revision present)."
-        echo "Refusing to stamp HEAD; resolve the failing migration manually."
+        ;;
+    existing)
+        echo "Running database migrations on the versioned database..."
+        if ! /app/.venv/bin/python -m alembic upgrade head; then
+            echo "ERROR: alembic upgrade failed; no revision was stamped." >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "ERROR: refusing to stamp an unversioned or partially initialized database." >&2
+        echo "Verify its schema and migration history manually before retrying." >&2
         exit 1
-    fi
-fi
+        ;;
+esac
+
+echo "Backfilling pending version reviews before serving traffic..."
+/app/.venv/bin/python -m jobs.review_backfill
 
 echo "Running ClickHouse migrations..."
 /app/.venv/bin/python -m services.clickhouse.migrations

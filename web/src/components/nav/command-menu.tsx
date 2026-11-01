@@ -1,4 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -14,11 +16,13 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { allNavItems } from "./registry-sidebar";
 
 export function CommandMenu() {
   const [open, setOpen] = useState(false);
   const router = useRouter();
+  const { leaderboardEnabled } = useDeploymentConfig();
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -44,7 +48,7 @@ export function CommandMenu() {
         className="hidden sm:inline-flex items-center justify-start gap-2 w-[min(280px,24vw)] min-h-[34px] px-3.5 rounded-[9px] text-xs font-normal text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground"
       >
         <Search className="h-4 w-4 shrink-0" />
-        <span className="truncate">Search workspace…</span>
+        <span className="truncate">Navigate</span>
         <kbd className="ml-auto shrink-0 rounded-[5px] bg-surface-raised px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
           ⌘K
         </kbd>
@@ -53,39 +57,41 @@ export function CommandMenu() {
       <button
         onClick={() => setOpen(true)}
         className="inline-flex sm:hidden h-[34px] w-[34px] items-center justify-center rounded-[9px] text-foreground/65 hover:bg-surface-raised hover:text-foreground"
-        aria-label="Search"
+        aria-label="Open navigation"
       >
         <Search className="h-4 w-4" />
       </button>
 
       <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Search agents, components, traces..." />
+      <CommandInput placeholder="Find a page or action..." />
       <CommandList>
-        <CommandEmpty>No results found.</CommandEmpty>
+        <CommandEmpty>No pages or actions found.</CommandEmpty>
         <CommandGroup heading="Navigate">
           {allNavItems.map((group) =>
-            group.items.map((item) => (
-              <CommandItem
-                key={item.href}
-                onSelect={() => onSelect(item.href)}
-              >
-                <item.icon className="mr-2 h-4 w-4" />
-                {item.title}
-              </CommandItem>
-            )),
+            group.items
+              .filter((item) => item.href !== "/leaderboard" || leaderboardEnabled)
+              .map((item) => (
+                <CommandItem
+                  key={item.href}
+                  onSelect={() => onSelect(item.href)}
+                >
+                  <item.icon className="mr-2 h-4 w-4" />
+                  {item.title}
+                </CommandItem>
+              )),
           )}
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Quick Actions">
           <CommandItem onSelect={() => onSelect("/agents/builder")}>
             <span className="mr-2 text-sm">+</span>
-            New Agent
+            New Agent File
           </CommandItem>
-          <CommandItem onSelect={() => onSelect("/agents?search=")}>
+          <CommandItem onSelect={() => onSelect("/resources/agents")}>
             <span className="mr-2 text-sm">?</span>
-            Search Agents
+            Search Agent Files
           </CommandItem>
-          <CommandItem onSelect={() => onSelect("/components?search=")}>
+          <CommandItem onSelect={() => onSelect("/resources/mcps")}>
             <span className="mr-2 text-sm">?</span>
             Search Components
           </CommandItem>

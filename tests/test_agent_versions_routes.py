@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused business coverage for the agent version routes."""
@@ -24,12 +25,13 @@ from models.agent_component import AgentComponent
 from models.user import UserRole
 from schemas.agent import (
     AgentVersionCreateRequest,
-    AgentVersionReviewRequest,
     ComponentRef,
     ExternalMcp,
     SuccessCriteria,
     SuccessMetric,
 )
+from services import harness_capability_inference as inference
+from services.agent_lock import PinnedListing
 
 NOW = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
 USER_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
@@ -217,20 +219,41 @@ def _sql(statement) -> str:
 
 @pytest.fixture
 def boundaries(monkeypatch):
+    import services.agent_lock as agent_lock
     import services.agent_snapshot as snapshot
     import services.clickhouse as clickhouse
     import services.model_resolver as model_resolver
 
     load = AsyncMock()
     validate_components = AsyncMock(return_value=[])
-    resolve_versions = AsyncMock(return_value={})
+    pins: dict = {}
+
+    async def fake_attach(db, agent_version_id, refs, *, order_start=0, **_options):
+        # Stand in for the lock service: pin each ref to the version in ``pins``.
+        links = []
+        for offset, ref in enumerate(refs):
+            link = AgentComponent(
+                agent_version_id=agent_version_id,
+                component_type=ref.component_type,
+                component_id=ref.component_id,
+                component_name="",
+                resolved_version=pins.get((ref.component_type, ref.component_id), "1.0.0"),
+                order_index=order_start + offset,
+                config_override=ref.config_override,
+            )
+            db.add(link)
+            links.append(link)
+        return links
+
+    attach = AsyncMock(side_effect=fake_attach)
+    lock = AsyncMock(return_value={})
+    pinned = AsyncMock(return_value={})
     infer = MagicMock(return_value=[])
-    compute = MagicMock(return_value=[])
+    compute = MagicMock(return_value=["kiro"])
     generate = MagicMock(return_value={"files": {}})
     build_snapshot = AsyncMock(return_value="snapshot: generated\n")
     resolve_model = AsyncMock(return_value=("resolved-model", []))
-    publish = AsyncMock(return_value=1)
-    review = AsyncMock(return_value=1)
+    publish = AsyncMock(return_value=SimpleNamespace(number=42))
     legacy_audit = AsyncMock()
     clickhouse_insert = AsyncMock()
     names = AsyncMock(return_value={})
@@ -239,15 +262,16 @@ def boundaries(monkeypatch):
     monkeypatch.setattr(routes, "datetime", _FixedDateTime)
     monkeypatch.setattr(routes, "_load_agent", load)
     monkeypatch.setattr(routes, "validate_component_ids", validate_components)
-    monkeypatch.setattr(routes, "resolve_component_versions", resolve_versions)
-    monkeypatch.setattr(routes, "infer_required_features", infer)
-    monkeypatch.setattr(routes, "compute_supported_harnesses", compute)
+    monkeypatch.setattr(agent_lock, "attach_pinned_components", attach)
+    monkeypatch.setattr(agent_lock, "lock_agent_version", lock)
+    monkeypatch.setattr(agent_lock, "pinned_versions", pinned)
+    monkeypatch.setattr(inference, "infer_required_features", infer)
+    monkeypatch.setattr(inference, "compute_supported_harnesses", compute)
     monkeypatch.setattr(routes, "generate_agent_config", generate)
     monkeypatch.setattr(routes, "audit", legacy_audit)
     monkeypatch.setattr(snapshot, "build_yaml_snapshot", build_snapshot)
     monkeypatch.setattr(model_resolver, "resolve_model_for_harness", resolve_model)
-    monkeypatch.setattr(routes.inbox, "on_publish", publish)
-    monkeypatch.setattr(routes.inbox, "on_review_decided", review)
+    monkeypatch.setattr(routes, "submit_for_review", publish)
     monkeypatch.setattr(clickhouse, "insert_audit_log", clickhouse_insert)
     monkeypatch.setattr(agent_routes, "_resolve_component_names", names)
     monkeypatch.setattr(agent_routes, "_resolve_component_statuses", statuses)
@@ -255,14 +279,16 @@ def boundaries(monkeypatch):
     return SimpleNamespace(
         load=load,
         validate_components=validate_components,
-        resolve_versions=resolve_versions,
+        pins=pins,
+        attach=attach,
+        lock=lock,
+        pinned=pinned,
         infer=infer,
         compute=compute,
         generate=generate,
         build_snapshot=build_snapshot,
         resolve_model=resolve_model,
         publish=publish,
-        review=review,
         legacy_audit=legacy_audit,
         clickhouse_insert=clickhouse_insert,
         names=names,
@@ -272,7 +298,7 @@ def boundaries(monkeypatch):
 
 def test_summary_and_detail_serialize_version_owned_fields():
     components = [
-        _component(name="GitHub"),
+        _component(name="GitHub", config_override={"env": {"MODE": "safe"}}),
         _component("skill", SKILL_ID, name="", resolved_version=None, order=1),
     ]
     version = _version(components=components)
@@ -304,6 +330,7 @@ def test_summary_and_detail_serialize_version_owned_fields():
             "component_id": str(MCP_ID),
             "name": "GitHub",
             "resolved_version": "1.2.3",
+            "config_override": {"env": {"MODE": "safe"}},
         },
         {
             "component_type": "skill",
@@ -523,16 +550,16 @@ async def test_create_surfaces_component_validation_errors_for_target_team(bound
         target_team_id=TEAM_ID,
         enforce_target=True,
     )
-    boundaries.resolve_versions.assert_not_awaited()
+    boundaries.attach.assert_not_awaited()
     db.add.assert_not_called()
 
 
 async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(boundaries):
     agent = _agent(created_by=OTHER_USER_ID, co_authors=[str(USER_ID)])
     boundaries.load.return_value = agent
-    boundaries.resolve_versions.return_value = {("mcp", MCP_ID): "4.1.0", ("skill", SKILL_ID): "3.2.0"}
+    boundaries.pins.update({("mcp", MCP_ID): "4.1.0", ("skill", SKILL_ID): "3.2.0"})
     boundaries.infer.return_value = ["mcp_servers", "skills"]
-    boundaries.compute.return_value = ["kiro", "claude-code"]
+    boundaries.compute.return_value = ["claude-code", "codex", "kiro"]
     skill_listing = SimpleNamespace(id=SKILL_ID, name="Reviewer")
     mcp_listing = SimpleNamespace(id=MCP_ID, name="GitHub")
     db = _creation_db(
@@ -566,6 +593,8 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
 
     boundaries.resolve_model.side_effect = resolve_model
     boundaries.generate.return_value = {"agent_profile": {"content": "review"}}
+    pinned_mcp = SimpleNamespace(version="4.1.0", command="npx")
+    boundaries.pinned.return_value = {("mcp", MCP_ID): pinned_mcp}
 
     response = await routes._create_agent_version(str(AGENT_ID), request, db, _user())
 
@@ -583,7 +612,7 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
     assert version.success_criteria == criteria.model_dump()
     assert version.is_prerelease is True
     assert version.required_capabilities == ["mcp_servers", "skills"]
-    assert version.inferred_supported_harnesses == ["kiro", "claude-code"]
+    assert version.inferred_supported_harnesses == ["claude-code", "codex", "kiro"]
     assert version.yaml_snapshot == "snapshot: generated\n"
     assert version.harness_configs == {"kiro": {"agent_profile": {"content": "review"}}}
     assert [(link.component_type, link.component_id, link.resolved_version, link.order_index) for link in links] == [
@@ -592,7 +621,16 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
     ]
     assert links[0].config_override == {"safe": True}
     boundaries.validate_components.assert_awaited_once()
-    boundaries.resolve_versions.assert_awaited_once_with(request.components, db)
+    boundaries.attach.assert_awaited_once_with(
+        db,
+        VERSION_ID,
+        request.components,
+        previous=[],
+        refresh=False,
+        require_approved=True,
+        current_user=_user(),
+    )
+    boundaries.lock.assert_awaited_once_with(db, agent, version)
     proxy = boundaries.infer.call_args.args[0]
     assert proxy.components == request.components
     assert proxy.external_mcps == version.external_mcps
@@ -607,18 +645,17 @@ async def test_create_resolves_components_builds_snapshot_and_reports_conflicts(
     assert config_agent.name == agent.name
     assert config_agent.version == version.version
     assert config_agent.components == links
-    assert generate_call.kwargs == {
-        "mcp_listings": {MCP_ID: mcp_listing},
-        "options": {"_resolved_model": "claude-haiku-4", "_model_warnings": ["normalized alias"]},
+    # Stored release configs come from the pinned MCP release, not the listing's latest.
+    boundaries.pinned.assert_awaited_once_with(db, links)
+    generated_mcp = generate_call.kwargs["mcp_listings"][MCP_ID]
+    assert isinstance(generated_mcp, PinnedListing)
+    assert (generated_mcp.listing, generated_mcp.pinned_version) == (mcp_listing, pinned_mcp)
+    assert generate_call.kwargs["options"] == {
+        "_resolved_model": "claude-haiku-4",
+        "_model_warnings": ["normalized alias"],
     }
-    boundaries.publish.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=USER_ID,
-        auto_approved=False,
-        version="2.0.0",
-    )
+    boundaries.publish.assert_awaited_once_with(db, "agent", agent, version, USER_ID, message=None)
+    assert response["review_number"] == 42 and response["review_url"] == "/review/42"
     db.commit.assert_awaited_once()
     assert response["id"] == str(VERSION_ID)
     assert response["status"] == "pending"
@@ -653,17 +690,44 @@ async def test_create_draft_skips_queue_and_has_no_warning(boundaries):
     assert response["status"] == "draft"
     assert "warnings" not in response
     boundaries.validate_components.assert_not_awaited()
-    boundaries.resolve_versions.assert_awaited_once_with([], db)
-    boundaries.generate.assert_not_called()
-    boundaries.publish.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=USER_ID,
-        auto_approved=True,
-        version="2.0.0",
+    boundaries.attach.assert_awaited_once_with(
+        db, VERSION_ID, [], previous=[], refresh=False, require_approved=True, current_user=_user()
     )
+    boundaries.generate.assert_not_called()
+    boundaries.publish.assert_not_awaited()
     assert len(db.statements) == 2
+
+
+async def test_create_leaves_out_declared_harnesses_that_cannot_run_the_components(boundaries):
+    boundaries.load.return_value = _agent()
+    boundaries.infer.return_value = ["skills"]
+    boundaries.compute.return_value = ["kiro"]
+    db = _creation_db(_result(one=None), _result(scalar=None))
+
+    response = await routes._create_agent_version(
+        str(AGENT_ID), _request(save_as_draft=True, supported_harnesses=["cursor", "kiro"]), db, _user()
+    )
+
+    version = next(call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], AgentVersion))
+    assert version.supported_harnesses == ["kiro"]
+    assert response["supported_harnesses"] == ["kiro"]
+    assert response["warnings"] == ["cursor has no skills support, so it was left out of supported harnesses."]
+
+
+async def test_create_refuses_when_no_declared_harness_can_run_the_components(boundaries):
+    boundaries.load.return_value = _agent()
+    boundaries.infer.return_value = ["skills"]
+    boundaries.compute.return_value = ["kiro"]
+    db = _creation_db(_result(one=None), _result(scalar=None))
+
+    with pytest.raises(HTTPException) as caught:
+        await routes._create_agent_version(
+            str(AGENT_ID), _request(save_as_draft=True, supported_harnesses=["cursor"]), db, _user()
+        )
+
+    assert caught.value.status_code == 422
+    assert "cursor has no skills support" in caught.value.detail
+    db.commit.assert_not_awaited()
 
 
 async def test_create_snapshot_failure_aborts_before_notification_or_commit(boundaries):
@@ -688,179 +752,6 @@ async def test_create_commit_failure_propagates_without_audit(boundaries):
         await routes._create_agent_version(str(AGENT_ID), _request(), db, _user())
 
     boundaries.publish.assert_awaited_once()
-    boundaries.legacy_audit.assert_not_awaited()
-    boundaries.clickhouse_insert.assert_not_awaited()
-
-
-async def test_review_guards_missing_version_and_nonpending_state(boundaries):
-    request = AgentVersionReviewRequest(action="approve")
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-    boundaries.load.return_value = None
-    with pytest.raises(HTTPException) as missing_agent:
-        await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, _db(), reviewer)
-    assert (missing_agent.value.status_code, missing_agent.value.detail) == (404, "Agent not found")
-
-    boundaries.load.return_value = _agent(created_by=OTHER_USER_ID)
-    missing_db = _db(_result(one=None))
-    with pytest.raises(HTTPException) as missing_version:
-        await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, missing_db, reviewer)
-    assert (missing_version.value.status_code, missing_version.value.detail) == (404, "Version not found")
-
-    approved = _version(version="2.0.0", status=AgentStatus.approved)
-    state_db = _db(_result(one=approved))
-    with pytest.raises(HTTPException) as wrong_state:
-        await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, state_db, reviewer)
-    assert wrong_state.value.status_code == 422
-    assert wrong_state.value.detail == "Version is 'approved', only pending versions can be reviewed"
-    boundaries.review.assert_not_awaited()
-
-
-async def test_review_query_hides_pending_version_from_plain_user(boundaries):
-    boundaries.load.return_value = _agent(created_by=OTHER_USER_ID)
-    db = _db(_result(one=None))
-
-    with pytest.raises(HTTPException) as caught:
-        await routes._review_agent_version(
-            str(AGENT_ID),
-            "2.0.0",
-            AgentVersionReviewRequest(action="approve"),
-            db,
-            _user(),
-        )
-
-    assert caught.value.status_code == 404
-    assert "agent_versions.status = 'approved'" in _sql(db.statements[0])
-
-
-@pytest.mark.parametrize(
-    ("current_version", "candidate_version", "promoted"),
-    [
-        (None, "1.0.0", True),
-        ("1.0.0", "2.0.0", True),
-        ("2.0.0", "2.0.0", True),
-        ("3.0.0", "2.0.0", False),
-        ("legacy", "2.0.0", False),
-        ("1.0.0", "legacy", False),
-    ],
-)
-async def test_approve_promotes_only_latest_semver_and_ignores_edit_lock(
-    current_version,
-    candidate_version,
-    promoted,
-    boundaries,
-):
-    current = (
-        _version(current_version, version_id=LATEST_VERSION_ID, status=AgentStatus.approved)
-        if current_version is not None
-        else None
-    )
-    agent = _agent(created_by=OTHER_USER_ID, latest=current)
-    candidate = _version(candidate_version)
-    candidate.rejection_reason = "old rejection"
-    candidate.is_editing = True
-    candidate.editing_by = OTHER_USER_ID
-    candidate.editing_since = NOW
-    boundaries.load.return_value = agent
-    events = []
-    db = _db(_result(one=candidate))
-    db.flush.side_effect = lambda: events.append("flush")
-
-    async def notify(*args, **kwargs):
-        events.append("notify")
-        return 1
-
-    async def commit():
-        events.append("commit")
-
-    boundaries.review.side_effect = notify
-    db.commit.side_effect = commit
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-
-    response = await routes._review_agent_version(
-        str(AGENT_ID),
-        candidate_version,
-        AgentVersionReviewRequest(action="approve"),
-        db,
-        reviewer,
-    )
-
-    assert response == {"version": candidate_version, "new_status": "approved", "reason": None}
-    assert candidate.status == AgentStatus.approved
-    assert candidate.rejection_reason is None
-    assert candidate.reviewed_by == REVIEWER_ID
-    assert candidate.reviewed_at == NOW
-    assert candidate.is_editing is True
-    assert candidate.editing_by == OTHER_USER_ID
-    expected_latest = VERSION_ID if promoted else LATEST_VERSION_ID
-    assert agent.latest_version_id == expected_latest
-    assert events == ["flush", "notify", "commit"]
-    boundaries.review.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        approved=True,
-        actor_id=REVIEWER_ID,
-        version=candidate_version,
-        reason=None,
-        submitter_id=USER_ID,
-    )
-    assert "agent_versions.status = 'approved'" not in _sql(db.statements[0])
-    boundaries.legacy_audit.assert_not_awaited()
-
-
-async def test_reject_records_reason_without_changing_latest_version(boundaries):
-    current = _version("1.0.0", version_id=LATEST_VERSION_ID, status=AgentStatus.approved)
-    agent = _agent(created_by=OTHER_USER_ID, latest=current)
-    candidate = _version("2.0.0")
-    boundaries.load.return_value = agent
-    db = _db(_result(one=candidate))
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-    request = AgentVersionReviewRequest(action="reject", reason="Needs safer defaults")
-
-    response = await routes._review_agent_version(str(AGENT_ID), "2.0.0", request, db, reviewer)
-
-    assert response == {
-        "version": "2.0.0",
-        "new_status": "rejected",
-        "reason": "Needs safer defaults",
-    }
-    assert candidate.status == AgentStatus.rejected
-    assert candidate.rejection_reason == "Needs safer defaults"
-    assert candidate.reviewed_by == REVIEWER_ID
-    assert candidate.reviewed_at == NOW
-    assert agent.latest_version_id == LATEST_VERSION_ID
-    db.flush.assert_not_awaited()
-    boundaries.review.assert_awaited_once_with(
-        db,
-        agent,
-        subject_type="agent",
-        approved=False,
-        actor_id=REVIEWER_ID,
-        version="2.0.0",
-        reason="Needs safer defaults",
-        submitter_id=USER_ID,
-    )
-    db.commit.assert_awaited_once()
-
-
-async def test_review_commit_failure_propagates_after_transactional_notification(boundaries):
-    candidate = _version("2.0.0")
-    boundaries.load.return_value = _agent(created_by=OTHER_USER_ID)
-    db = _db(_result(one=candidate))
-    db.commit.side_effect = RuntimeError("database unavailable")
-    reviewer = _user(user_id=REVIEWER_ID, role=UserRole.reviewer, username="reviewer")
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        await routes._review_agent_version(
-            str(AGENT_ID),
-            "2.0.0",
-            AgentVersionReviewRequest(action="approve"),
-            db,
-            reviewer,
-        )
-
-    db.flush.assert_awaited_once()
-    boundaries.review.assert_awaited_once()
     boundaries.legacy_audit.assert_not_awaited()
     boundaries.clickhouse_insert.assert_not_awaited()
 
@@ -978,13 +869,11 @@ async def test_route_handlers_delegate_and_json_serialize_owned_responses(monkey
     list_versions = AsyncMock(return_value=payload)
     get_version = AsyncMock(return_value=payload)
     create_version = AsyncMock(return_value=payload)
-    review_version = AsyncMock(return_value=payload)
     get_config = AsyncMock(return_value=payload)
     get_diff = AsyncMock(return_value=payload)
     monkeypatch.setattr(routes, "_list_agent_versions", list_versions)
     monkeypatch.setattr(routes, "_get_agent_version", get_version)
     monkeypatch.setattr(routes, "_create_agent_version", create_version)
-    monkeypatch.setattr(routes, "_review_agent_version", review_version)
     monkeypatch.setattr(routes, "_get_agent_harness_config", get_config)
     monkeypatch.setattr(routes, "_get_version_diff", get_diff)
     app = _route_app(user, db)
@@ -997,15 +886,11 @@ async def test_route_handlers_delegate_and_json_serialize_owned_responses(monkey
                 f"/api/v1/agents/{AGENT_ID}/versions",
                 json={"version": "2.0.0", "model_name": "claude-sonnet-4"},
             ),
-            await client.post(
-                f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/review",
-                json={"action": "approve"},
-            ),
             await client.get(f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/harness/kiro"),
             await client.get(f"/api/v1/agents/{AGENT_ID}/versions/1.0.0/diff/2.0.0"),
         ]
 
-    assert [response.status_code for response in responses] == [200] * 6
+    assert [response.status_code for response in responses] == [200] * 5
     for response in responses:
         assert response.json()["id"] == str(VERSION_ID)
         assert response.json()["at"].startswith("2026-04-21T12:00:00")
@@ -1022,34 +907,14 @@ async def test_route_handlers_delegate_and_json_serialize_owned_responses(monkey
     assert create_call["req"].version == "2.0.0"
     assert create_call["db"] is db
     assert create_call["current_user"] is user
-    review_call = review_version.await_args.kwargs
-    assert review_call["agent_id"] == str(AGENT_ID)
-    assert review_call["version"] == "2.0.0"
-    assert review_call["req"].action == "approve"
     get_config.assert_awaited_once_with(
         agent_id=str(AGENT_ID), version="2.0.0", harness="kiro", db=db, current_user=user
     )
     get_diff.assert_awaited_once_with(agent_id=str(AGENT_ID), v1="1.0.0", v2="2.0.0", db=db, current_user=user)
 
 
-async def test_review_route_requires_reviewer_before_business_logic(monkeypatch):
-    import api.deps as deps
-
-    user = _user()
-    db = _db()
-    review = AsyncMock()
-    security_event = AsyncMock()
-    monkeypatch.setattr(routes, "_review_agent_version", review)
-    monkeypatch.setattr(deps, "emit_security_event", security_event)
-    app = _route_app(user, db)
-
+async def test_old_agent_review_action_is_removed():
+    app = _route_app(_user(), _db())
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/review",
-            json={"action": "approve"},
-        )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Insufficient permissions"
-    review.assert_not_awaited()
-    security_event.assert_awaited_once()
+        response = await client.post(f"/api/v1/agents/{AGENT_ID}/versions/2.0.0/review", json={"action": "approve"})
+    assert response.status_code == 404

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Per-type field validation for component version publishing."""
@@ -11,8 +12,10 @@ import re
 
 from fastapi import HTTPException
 from loguru import logger as optic
+from pydantic import TypeAdapter, ValidationError
 
 from schemas.skill_commands import normalize_slash_command
+from schemas.skill_resources import SkillResource
 from services.skill_validator import SkillValidationError, validate_skill_md_content_frontmatter
 
 _OCI_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,499}$")
@@ -45,6 +48,10 @@ SKILL_FIELDS = {
     "task_type",
     "slash_command",
     "has_scripts",
+    "delivery_mode",
+    "script_content",
+    "script_filename",
+    "extra_files",
 }
 
 PROMPT_FIELDS = {
@@ -111,6 +118,10 @@ FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "git_url": str,
     "git_ref": str,
     "skill_md_content": str,
+    "delivery_mode": str,
+    "script_content": str,
+    "script_filename": str,
+    "extra_files": list,
     "task_type": str,
     "slash_command": str,
     "category": str,
@@ -229,6 +240,15 @@ def validate_and_extract(component_type: str, extra: dict | None) -> dict:
 
     clean = {k: v for k, v in extra.items() if k in allowed}
     if component_type == "skill":
+        if "extra_files" in clean:
+            if clean["extra_files"] is None:
+                raise HTTPException(status_code=422, detail="extra_files cannot be null; use [] to clear")
+            try:
+                clean["extra_files"] = [
+                    item.model_dump() for item in TypeAdapter(list[SkillResource]).validate_python(clean["extra_files"])
+                ]
+            except ValidationError as exc:
+                raise HTTPException(status_code=422, detail="Invalid extra_files entries") from exc
         try:
             if "slash_command" in clean:
                 clean["slash_command"] = normalize_slash_command(clean["slash_command"])

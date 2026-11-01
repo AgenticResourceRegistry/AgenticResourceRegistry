@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -53,7 +54,7 @@ function BaselinesConfigForm({ onSaved }: { onSaved: () => void }) {
       <div className="rounded-xl bg-card p-5 shadow-sm">
         <h3 className="text-sm font-semibold mb-1">Configure Cost Baselines</h3>
         <p className="text-xs text-muted-foreground mb-6">
-          Enter what tasks cost before AI agents were deployed. This allows the dashboard to compute savings and ROI.
+          Enter what tasks cost before AI Agent Files were deployed. This allows the dashboard to compute savings and ROI.
         </p>
 
         <div className="space-y-4">
@@ -322,7 +323,7 @@ export function CostTab() {
             </div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-1.5 bg-success rounded" />
-              <span>After (AI agents)</span>
+              <span>After (AI Agent Files)</span>
             </div>
           </div>
         </div>

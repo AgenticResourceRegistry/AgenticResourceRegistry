@@ -1,25 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { createFileRoute } from "@tanstack/react-router";
-import { lazy } from "react";
-const AgentsPage = lazy(() => import("@/pages/registry/agents/index"));
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-export type AgentsSearch = {
-  search?: string;
-  namespace?: string;
-  team?: string;
-  category?: string;
-  harness?: string;
-};
-
+// Legacy list URL; the list now lives under Agentic Resources.
 export const Route = createFileRoute("/_authed/agents/")({
-  component: AgentsPage,
-  validateSearch: (search: Record<string, unknown>): AgentsSearch => ({
-    search: (search.search as string) || undefined,
-    namespace: (search.namespace as string) || undefined,
-    team: (search.team as string) || undefined,
-    category: (search.category as string) || undefined,
-    harness: (search.harness as string) || undefined,
-  }),
+  validateSearch: (search: Record<string, unknown>) => search,
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/resources/$type", params: { type: "agents" }, search, replace: true });
+  },
 });

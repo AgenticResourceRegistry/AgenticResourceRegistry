@@ -9,9 +9,7 @@ import { sessionExpiredLoginUrl } from "@/lib/safe-next";
 function getWsUrl(): string {
   const api =
     import.meta.env.VITE_API_URL ||
-    (typeof window !== "undefined"
-      ? `${window.location.protocol}//${window.location.hostname}:8000`
-      : "http://localhost:8000");
+    (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
   return api.replace(/^http/, "ws") + "/api/v1/graphql";
 }
 
@@ -71,6 +69,28 @@ export function subscribeToSessionUpdates(
         if (data) {
           onEvent(data.sessionId, data.eventName);
         }
+      },
+      error: (err) => handleSubscriptionAuthError(err),
+      complete: () => {},
+    },
+  );
+}
+
+export function subscribeToReviewId(
+  reviewId: string,
+  onEvent: (event: { number: number | null; state: string | null; action: string }) => void,
+): () => void {
+  return getClient().subscribe(
+    {
+      query: `subscription ReviewUpdated($reviewId: String) {
+        reviewUpdated(reviewId: $reviewId) { number state action }
+      }`,
+      variables: { reviewId },
+    },
+    {
+      next: (value) => {
+        const data = (value.data as { reviewUpdated?: { number: number | null; state: string | null; action: string } })?.reviewUpdated;
+        if (data) onEvent(data);
       },
       error: (err) => handleSubscriptionAuthError(err),
       complete: () => {},

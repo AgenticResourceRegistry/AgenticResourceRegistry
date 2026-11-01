@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json as _json
 import re
 from contextlib import nullcontext
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib.parse import quote
 from uuid import UUID
 
 import typer
@@ -27,8 +29,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from observal_cli import client, config
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import AGENT_NAME_REGEX, VALID_HARNESSES
-from observal_cli.errors import CliError, ErrorCategory, fail
+from observal_cli.draft_submit import needs_resubmission
+from observal_cli.errors import CliError, ErrorCategory, exit_partial, fail
 from observal_cli.prompts import fuzzy_select, select_many, select_one, text_input
 from observal_cli.render import (
     OutputMode,
@@ -38,19 +42,35 @@ from observal_cli.render import (
     handle,
     ide_tags,
     kv_panel,
+    listing_status,
     name_inline,
     output_json,
     relative_time,
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
+from observal_shared.agent_model import AUTO_MODEL, normalize_model_name
 
 # ── Agent authoring constants ──────────────────────────────
 YAML_FILE = "observal-agent.yaml"
 VALID_COMPONENT_TYPES = {"mcp", "skill", "hook", "prompt", "sandbox"}
+_RESERVED_AGENT_SLUGS = {
+    "archive",
+    "draft",
+    "fork",
+    "forks",
+    "install",
+    "resolve",
+    "restore",
+    "submit",
+    "unarchive",
+    "versions",
+}
 
 # Common model choices for the interactive wizard
 _MODEL_CHOICES = [
+    AUTO_MODEL,  # each harness uses its own default model
     "claude-sonnet-4",
     "claude-opus-4",
     "claude-haiku-4-5",
@@ -66,6 +86,12 @@ def _slugify(raw: str) -> str:
     s = re.sub(r"[^a-z0-9_-]+", "-", s)
     s = re.sub(r"-{2,}", "-", s)
     return s.strip("-")
+
+
+def _bulk_agent_slug(raw: str) -> str:
+    """Mirror the server's canonical registry slug for duplicate preflight."""
+    slug = re.sub(r"[^a-z0-9_-]+", "-", raw.strip().lower()).strip("-_")
+    return slug[:64].rstrip("-_")
 
 
 def _validate_name(name: str) -> str | None:
@@ -100,6 +126,26 @@ def _validate_version(value: str, *, operation: str) -> str:
             resource="agent version",
             remediation="Use a semantic version such as 1.2.3.",
         )
+
+
+_EXACT_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$")
+
+
+def _validate_exact_version(value: str, *, operation: str, resource: str) -> str:
+    """Pinned and looked-up versions are matched exactly, so keep them exactly as written.
+
+    Unlike ``_validate_version``, this never normalizes: PEP 440 would turn
+    ``1.2.0-beta.1`` into ``1.2.0b1``, which names no registry version.
+    """
+    if not _EXACT_VERSION_RE.match(value):
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Invalid {resource}: {value}.",
+            operation=operation,
+            resource=resource,
+            remediation="Use an exact version such as 1.2.0.",
+        )
+    return value
 
 
 def _validate_harnesses(values: list[str], *, operation: str) -> list[str]:
@@ -261,7 +307,9 @@ def _validate_agent_definition(data: dict, *, operation: str) -> dict:
     return data
 
 
-def _save_agent_yaml(directory: Path, data: dict, *, operation: str = "Write agent definition") -> Path:
+def _save_agent_yaml(
+    directory: Path, data: dict, *, operation: str = "Write agent definition", overwrite: bool = True
+) -> Path:
     path = directory / YAML_FILE
     temporary: Path | None = None
     try:
@@ -269,7 +317,13 @@ def _save_agent_yaml(directory: Path, data: dict, *, operation: str = "Write age
         with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as file:
             temporary = Path(file.name)
             file.write(_dump_agent_yaml(data))
-        temporary.replace(path)
+        if overwrite:
+            temporary.replace(path)
+        else:
+            # Exclusive, atomic creation: an intervening writer cannot lose
+            # its file between fork's preflight and this local scaffold write.
+            path.hardlink_to(temporary)
+            temporary.unlink()
     except OSError as error:
         if temporary:
             temporary.unlink(missing_ok=True)
@@ -303,7 +357,9 @@ def agent_create(
     description: str | None = typer.Option(None, "--description", "-d", help="Short description"),
     prompt: str | None = typer.Option(None, "--prompt", "-p", help="System prompt text"),
     prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read system prompt from a file"),
-    model_name: str | None = typer.Option(None, "--model", "-m", help="Model name (e.g. claude-sonnet-4)"),
+    model_name: str | None = typer.Option(
+        None, "--model", "-m", help="Model name (default: auto, each harness picks its own default)"
+    ),
     supported_harnesses: list[str] | None = typer.Option(
         None, "--harness", help="Supported harnesses (repeat for multiple)"
     ),
@@ -359,7 +415,8 @@ def agent_create(
             return
         status = result.get("status", "pending")
         rprint(f"[green]✓ Agent submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
-        rprint(f"[yellow]Status: {esc(status)} - an admin must approve it before it becomes visible.[/yellow]")
+        print_review_link(result)
+        rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
         return
 
     # ── Path B: From flags (non-interactive) ─────────────────
@@ -421,8 +478,8 @@ def agent_create(
         normalized_version = _validate_version(version or "1.0.0", operation="Create agent")
         normalized_harnesses = _validate_harnesses(supported_harnesses or [], operation="Create agent")
 
-        # Default model
-        _model = model_name or "claude-sonnet-4"
+        # Every agent has a model; a missing or blank one is "auto".
+        _model = normalize_model_name(model_name)
 
         # Resolve owner from whoami
         whoami = client.get("/api/v1/auth/whoami")
@@ -474,7 +531,7 @@ def agent_create(
 
     description = text_input("  Description")
     version = _validate_version(text_input("  Version", default="1.0.0"), operation="Create agent")
-    model_name = select_one("  Model", _MODEL_CHOICES, default="claude-sonnet-4")
+    model_name = select_one("  Model", _MODEL_CHOICES, default=AUTO_MODEL)
 
     # ── Phase 2: Components ──────────────────────────────────
     rprint("\n[bold]2. Components[/bold]")
@@ -567,7 +624,8 @@ def agent_create(
         result = client.post("/api/v1/agents", payload)
     status = result.get("status", "pending")
     rprint(f"\n[green]✓ Agent submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
-    rprint(f"[yellow]Status: {esc(status)} - an admin must approve it before it becomes visible.[/yellow]")
+    print_review_link(result)
+    rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
 
 
 @agent_app.command(name="bulk-create")
@@ -620,6 +678,131 @@ def agent_bulk_create(
             resource=file_path,
             remediation="Replace scalar or array entries with agent definition objects.",
         )
+    if len(agents) > 50:
+        fail(
+            ErrorCategory.VALIDATION,
+            "Bulk agent files may contain at most 50 entries.",
+            operation="Bulk create agents",
+            resource=file_path,
+            remediation="Split the input into files of 50 entries or fewer.",
+        )
+
+    identities: dict[str, int] = {}
+    for index, item in enumerate(agents, 1):
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} requires a non-empty string name.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Add a name to every agent definition.",
+            )
+        if len(name) > 255:
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} has a name longer than 255 characters.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Shorten the agent name and retry.",
+            )
+        identity = _bulk_agent_slug(name)
+        if not identity:
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} has a name without letters or numbers.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Use a name containing at least one letter or number.",
+            )
+        if identity in _RESERVED_AGENT_SLUGS:
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} resolves to reserved name: {identity}.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Choose a non-reserved agent name.",
+            )
+        if identity in identities:
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entries {identities[identity]} and {index} resolve to the same name: {identity}.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Keep one entry for each canonical agent name.",
+            )
+        identities[identity] = index
+
+        components = item.get("components", [])
+        if not isinstance(components, list):
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} components must be a list.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Use a list of component reference objects.",
+            )
+        for component_index, component in enumerate(components, 1):
+            if not isinstance(component, dict):
+                fail(
+                    ErrorCategory.VALIDATION,
+                    f"Bulk agent entry {index} component {component_index} must be an object.",
+                    operation="Bulk create agents",
+                    resource=file_path,
+                    remediation="Replace scalar component references with objects.",
+                )
+            component_type = component.get("component_type", "mcp")
+            if component_type not in VALID_COMPONENT_TYPES or not str(component.get("component_id") or "").strip():
+                fail(
+                    ErrorCategory.VALIDATION,
+                    f"Bulk agent entry {index} component {component_index} is incomplete.",
+                    operation="Bulk create agents",
+                    resource=file_path,
+                    remediation="Provide a valid component_type and component_id.",
+                )
+        for field in ("version", "description", "owner", "prompt", "model_name"):
+            if field in item and not isinstance(item[field], str):
+                fail(
+                    ErrorCategory.VALIDATION,
+                    f"Bulk agent entry {index} field {field} has the wrong type.",
+                    operation="Bulk create agents",
+                    resource=file_path,
+                    remediation=f"Use a JSON string for {field}.",
+                )
+        if "model_config_json" in item and not isinstance(item["model_config_json"], dict):
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} field model_config_json has the wrong type.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Use a JSON object for model_config_json.",
+            )
+        for field in ("supported_harnesses", "external_mcps"):
+            if field in item and not isinstance(item[field], list):
+                fail(
+                    ErrorCategory.VALIDATION,
+                    f"Bulk agent entry {index} field {field} has the wrong type.",
+                    operation="Bulk create agents",
+                    resource=file_path,
+                    remediation=f"Use a JSON list for {field}.",
+                )
+        if "supported_harnesses" in item and not all(isinstance(value, str) for value in item["supported_harnesses"]):
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} supported_harnesses must contain strings.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Replace non-string harness values.",
+            )
+        if "external_mcps" in item and not all(isinstance(value, dict) for value in item["external_mcps"]):
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Bulk agent entry {index} external_mcps must contain objects.",
+                operation="Bulk create agents",
+                resource=file_path,
+                remediation="Replace non-object external MCP values.",
+            )
+
     if output == "json" and not (dry_run or yes):
         fail(
             ErrorCategory.VALIDATION,
@@ -643,7 +826,7 @@ def agent_bulk_create(
             esc(ag.get("name", "unnamed")),
             esc(ag.get("version", "1.0.0")),
             comp_count,
-            esc(ag.get("model_name", "claude-sonnet-4")),
+            esc(normalize_model_name(ag.get("model_name"))),
         )
     if output != "json":
         console.print(preview)
@@ -652,8 +835,12 @@ def agent_bulk_create(
     if dry_run:
         with _progress(output, "Running dry-run..."):
             result = client.post("/api/v1/bulk/agents", {"agents": agents, "dry_run": True})
+        result = dict(result)
+        result["partial"] = result.get("errors", 0) > 0
         if output == "json":
             output_json(result)
+            if result["partial"]:
+                exit_partial()
             return
 
         results_table = Table(title="Dry-run results", show_lines=False, padding=(0, 1))
@@ -675,6 +862,8 @@ def agent_bulk_create(
             f"\n[bold]Summary:[/bold] {result.get('created', 0)} would be created, "
             f"{result.get('skipped', 0)} skipped, {result.get('errors', 0)} errors"
         )
+        if result["partial"]:
+            exit_partial()
         return
 
     # ── Confirmation ─────────────────────────────────────────
@@ -685,8 +874,12 @@ def agent_bulk_create(
     # ── Create ───────────────────────────────────────────────
     with _progress(output, "Creating agents..."):
         result = client.post("/api/v1/bulk/agents", {"agents": agents, "dry_run": False})
+    result = dict(result)
+    result["partial"] = result.get("errors", 0) > 0
     if output == "json":
         output_json(result)
+        if result["partial"]:
+            exit_partial()
         return
 
     results_table = Table(title="Bulk create results", show_lines=False, padding=(0, 1))
@@ -711,6 +904,8 @@ def agent_bulk_create(
         f"{result.get('created', 0)} created, {result.get('skipped', 0)} skipped, "
         f"{result.get('errors', 0)} errors"
     )
+    if result["partial"]:
+        exit_partial()
 
 
 @agent_app.command(name="list")
@@ -761,7 +956,7 @@ def agent_list(
         def _display(item: dict) -> str:
             email = item.get("created_by_email", "")
             suffix = f"  by {email}" if email else ""
-            return f"{name_inline(item)}  v{item.get('version', '?')}  {item.get('model_name', '')}{suffix}"
+            return f"{name_inline(item)}  v{item.get('version', '?')}  {normalize_model_name(item.get('model_name'))}{suffix}"
 
         selected = fuzzy_select(data, _display, label="Select agent")
         if selected:
@@ -803,7 +998,7 @@ def agent_list(
             str(i),
             esc(display_name(item)),
             esc(item.get("version", "")),
-            esc(item.get("model_name", "")),
+            esc(normalize_model_name(item.get("model_name"))),
             esc(handle(item)),
         ]
         if include_id:
@@ -858,7 +1053,7 @@ def agent_my(
             str(i),
             esc(display_name(item)),
             esc(item.get("version", "")),
-            esc(item.get("model_name", "")),
+            esc(normalize_model_name(item.get("model_name"))),
             esc(handle(item)),
             status_badge(item.get("status", "")),
             str(item["id"])[:8] + "…",
@@ -895,13 +1090,14 @@ def agent_show(
         kv_panel(
             f"{display_name(item)} v{item.get('version', '?')}",
             [
-                ("Status", status_badge(item.get("status", ""))),
-                ("Model", f"[bold]{esc(item.get('model_name', 'N/A'))}[/bold]"),
+                ("Status", listing_status(item)),
+                ("Model", f"[bold]{esc(normalize_model_name(item.get('model_name')))}[/bold]"),
                 ("Namespace", esc(handle(item) or "N/A")),
                 ("Created By", esc(item.get("created_by_username") or item.get("created_by_email", ""))),
                 ("Description", esc(item.get("description", ""))),
                 ("harnesses", ide_tags([esc(value) for value in item.get("supported_harnesses", [])])),
                 ("Created", relative_time(item.get("created_at"))),
+                *fork_detail_rows(item),
                 ("ID", f"[dim]{item['id']}[/dim]"),
             ],
             border_style="magenta",
@@ -930,6 +1126,107 @@ def agent_show(
             rprint(f"  [cyan]Notes:[/cyan] {esc(sc['evaluation_notes'])}")
 
 
+def _fork_agent_yaml(item: dict) -> dict:
+    """Build editable authoring YAML from the fork response, not its install snapshot."""
+    components = []
+    for link in item.get("component_links") or []:
+        ref = {"component_type": link["component_type"], "component_id": link["component_id"]}
+        if link.get("version_ref"):
+            ref["version"] = link["version_ref"]
+        if link.get("config_override") is not None:
+            ref["config_override"] = link["config_override"]
+        components.append(ref)
+    return {
+        "agent_id": item["id"],
+        "name": item["slug"],
+        "version": item["version"],
+        "description": item.get("description") or "",
+        "owner": item.get("owner") or "",
+        "category": item.get("category"),
+        "model_name": normalize_model_name(item.get("model_name")),
+        "model_config_json": item.get("model_config_json") or {},
+        "models_by_harness": item.get("models_by_harness") or {},
+        "prompt": item.get("prompt") or "",
+        "supported_harnesses": item.get("supported_harnesses") or [],
+        "components": components,
+        "external_mcps": item.get("external_mcps") or [],
+        "success_criteria": item.get("success_criteria"),
+    }
+
+
+@agent_app.command(name="fork")
+def agent_fork(
+    source: str = typer.Argument(..., help="UUID, namespace/slug, list row, or @alias"),
+    name: str | None = typer.Option(None, "--name", help="New draft name (defaults to the source name)"),
+    version: str | None = typer.Option(None, "--version", help="Approved source version to copy"),
+    new_version: str | None = typer.Option(None, "--new-version", help="Version of the new draft"),
+    team: str | None = typer.Option(None, "--team", help="Target teamspace handle or UUID"),
+    visibility: str | None = typer.Option(None, "--visibility", help="public or team"),
+    directory: str | None = typer.Option(None, "--dir", "-d", help="Create an editable observal-agent.yaml here"),
+    output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+):
+    """Fork an approved agent release into your own editable draft.
+
+    Examples:
+      observal agent fork acme/pr-reviewer
+      observal agent fork acme/pr-reviewer --name my-reviewer --team payments --visibility team
+      observal agent fork acme/pr-reviewer --dir ./my-reviewer --output json
+    """
+    target_path = Path(directory) / YAML_FILE if directory is not None else None
+    if target_path is not None and (target_path.exists() or target_path.is_symlink()):
+        fail(
+            ErrorCategory.CONFLICT,
+            f"Agent definition already exists: {target_path}.",
+            operation="Fork agent",
+            resource=str(target_path),
+            remediation="Choose an empty directory with --dir; existing files are not overwritten.",
+        )
+    payload = {
+        key: value
+        for key, value in {
+            "name": name,
+            "version": version,
+            "new_version": new_version,
+        }.items()
+        if value is not None
+    }
+    if team is not None or visibility is not None:
+        client.add_publish_target(payload, team, visibility)
+    resolved = client.resolve_registry_reference("agent", source)
+    with _progress(output, "Forking agent..."):
+        result = client.post(f"/api/v1/agents/{resolved}/fork", json_data=payload)
+    if directory is not None:
+        try:
+            saved = _save_agent_yaml(
+                Path(directory), _fork_agent_yaml(result), operation="Scaffold forked agent", overwrite=False
+            )
+        except CliError as error:
+            fail(
+                error.category,
+                "The fork was created, but its local YAML could not be written.",
+                operation="Scaffold forked agent",
+                resource=str(target_path),
+                remediation=f"Inspect the existing draft with `observal agent show {result['id']}`; do not fork again.",
+                detail=error.detail,
+                result={"id": result["id"], "qualified_name": result.get("qualified_name"), "partial": True},
+            )
+        result = {**result, "yaml_path": str(saved)}
+    if output == "json":
+        output_json(result)
+        return
+    console.print(
+        kv_panel(
+            f"Forked agent: {esc(result.get('qualified_name') or result.get('name', ''))}",
+            [("Status", esc(result.get("status", "draft"))), *fork_detail_rows(result), ("ID", esc(result["id"]))],
+            border_style="magenta",
+        )
+    )
+    if directory is not None:
+        rprint(f"[dim]Next:[/dim] observal agent publish --update --dir {esc(directory)}")
+    rprint(f"[dim]Submit:[/dim] observal agent publish --submit {esc(result['id'])}")
+    _print_warnings(result)
+
+
 @agent_app.command(name="install")
 def agent_install(
     agent_id: str = typer.Argument(..., help="Agent ID, name, row number, or @alias"),
@@ -944,6 +1241,10 @@ def agent_install(
     files depending on the target harness. Use --raw to pipe JSON directly
     to a file.
 
+    Observal's own launchers (telemetry hooks, sandbox and delegation MCP
+    servers) are rewritten to this CLI's Python interpreter, exactly as
+    `agent pull` writes them, so a copied snippet works on this machine.
+
     Examples:
       observal agent install my-agent --harness claude-code
       observal agent install my-agent --harness cursor --raw > config.json
@@ -954,7 +1255,16 @@ def agent_install(
     with _progress("json" if raw else output, f"Generating {harness} config..."):
         result = client.post_public(f"/api/v1/agents/{resolved}/install", {"harness": harness})
 
-    snippet = result.get("config_snippet", {})
+    # The server names a bare python3; localize the launchers the way agent pull writes them.
+    from observal_cli.cmd_pull import localize_install_snippet
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    snippet = localize_install_snippet(
+        result.get("config_snippet", {}), adapter=get_adapter(harness), agent_id=str(resolved)
+    )
+    if "config_snippet" in result:
+        result = {**result, "config_snippet": snippet}
     if raw:
         output_json(snippet)
         return
@@ -1107,6 +1417,61 @@ def agent_unarchive(
 # ═══════════════════════════════════════════════════════════════
 
 
+_SINCE_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def _parse_since(value: str, *, operation: str) -> int:
+    """Turn ``2h`` / ``3d`` / ``45m`` into seconds."""
+    text = (value or "").strip().lower()
+    match = re.fullmatch(r"(\d+)([mhdw])", text)
+    if not match:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Invalid --since value: {value}.",
+            operation=operation,
+            resource="--since",
+            remediation="Use a number and unit, e.g. 45m, 2h, 3d, 1w.",
+        )
+    return int(match.group(1)) * _SINCE_UNITS[match.group(2)]
+
+
+def _components_from_capabilities(since: str, *, operation: str) -> tuple[list[dict], list[str], list[str]]:
+    """Read the capability lock for this directory and shape it into agent components.
+
+    Returns (components, harnesses seen, skipped agent refs). Agents are
+    skipped because an Agent cannot nest another Agent; the user is told.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from observal_cli import capability_lock
+
+    window = timedelta(seconds=_parse_since(since, operation=operation))
+    uses = capability_lock.matching(harness=None, cwd=str(Path.cwd()), since=datetime.now(UTC) - window)
+    components: list[dict] = []
+    harnesses: list[str] = []
+    skipped: list[str] = []
+    for use in capability_lock.dedupe_latest(uses):
+        if use.harness and use.harness in VALID_HARNESSES and use.harness not in harnesses:
+            harnesses.append(use.harness)
+        if use.kind == "agent":
+            skipped.append(use.native_ref or use.component_id or use.identifier or "unknown")
+            continue
+        if use.kind not in VALID_COMPONENT_TYPES or not use.component_id:
+            continue
+        components.append(
+            {
+                "component_type": use.kind,
+                "component_id": use.component_id,
+                "native_ref": use.native_ref,
+                "version": use.version,
+                "identifier": use.identifier,
+                "mode": use.mode,
+                "used_at": use.ts,
+            }
+        )
+    return components, sorted(harnesses), skipped
+
+
 @agent_app.command(name="init")
 def agent_init(
     directory: str = typer.Option(".", "--dir", "-d", help="Directory to scaffold in"),
@@ -1114,10 +1479,16 @@ def agent_init(
     name: str | None = typer.Option(None, "--name", "-n", help="Agent name"),
     version: str | None = typer.Option(None, "--version", "-v", help="Version"),
     description: str | None = typer.Option(None, "--description", help="Description"),
-    model_name: str | None = typer.Option(None, "--model", "-m", help="Model name"),
+    model_name: str | None = typer.Option(None, "--model", "-m", help="Model name (default: auto)"),
     prompt: str | None = typer.Option(None, "--prompt", "-p", help="System prompt text"),
     prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read system prompt from a file"),
     supported_harnesses: list[str] | None = typer.Option(None, "--harness", help="Supported harness (repeatable)"),
+    from_capabilities: bool = typer.Option(
+        False,
+        "--from-capabilities",
+        help="Pre-fill components from resources used in this directory (the capability lock)",
+    ),
+    since: str = typer.Option("24h", "--since", help="With --from-capabilities: how far back to look (e.g. 2h, 3d)"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Scaffold an observal-agent.yaml definition file.
@@ -1127,18 +1498,45 @@ def agent_init(
     observal-agent.yaml in the target directory. Use --beta to start
     at version 0.1.0 instead of 1.0.0.
 
+    With --from-capabilities, the components list is pre-filled from the
+    resources `observal discover use` and the install commands recorded for
+    this directory, so a session that worked can be saved as an Agent.
+
     Examples:
       observal agent init
-      observal agent init --dir ./my-agent
-      observal agent init --beta
+      observal agent init --dir ./my-agent --beta
+      observal agent init --from-capabilities --name pr-review-flow --output json
     """
     dir_path = Path(directory)
     yaml_path = dir_path / YAML_FILE
 
-    if output == "json" and not any(
+    flag_mode = any(
         value is not None
         for value in (name, version, description, model_name, prompt, prompt_file, supported_harnesses)
-    ):
+    )
+    captured: list[dict] = []
+    captured_harnesses: list[str] = []
+    skipped_agents: list[str] = []
+    if from_capabilities:
+        captured, captured_harnesses, skipped_agents = _components_from_capabilities(
+            since, operation="Initialize agent definition"
+        )
+        if not captured and not skipped_agents:
+            fail(
+                ErrorCategory.NOT_FOUND,
+                f"No resources were used in {Path.cwd()} in the last {since}.",
+                operation="Initialize agent definition",
+                resource="capability lock",
+                remediation="Use `observal discover use <identifier>` or install something first, or widen --since.",
+            )
+        if description is None and output == "json":
+            description = f"Assembled from {len(captured)} resource(s) used in {Path.cwd().name}."
+        if prompt is None and prompt_file is None and output == "json":
+            prompt = "Use the attached components to complete the task."
+        if not supported_harnesses and captured_harnesses:
+            supported_harnesses = captured_harnesses
+
+    if output == "json" and not flag_mode:
         fail(
             ErrorCategory.VALIDATION,
             "JSON mode cannot run the interactive agent initializer.",
@@ -1160,9 +1558,6 @@ def agent_init(
             raise typer.Abort()
 
     default_version = "0.1.0" if beta else "1.0.0"
-    flag_mode = any(
-        x is not None for x in (name, version, description, model_name, prompt, prompt_file, supported_harnesses)
-    )
     if flag_mode:
         if not name or not description or not (prompt or prompt_file):
             fail(
@@ -1203,9 +1598,11 @@ def agent_init(
         raw_name = text_input("Agent name")
         version = text_input("Version", default=default_version)
         description = text_input("Description")
-        model_name = text_input("Model name", default="claude-sonnet-4")
+        model_name = text_input("Model name", default=AUTO_MODEL)
         prompt_text = text_input("System prompt")
-        harnesses = list(VALID_HARNESSES)
+        harnesses = _validate_harnesses(
+            supported_harnesses or list(VALID_HARNESSES), operation="Initialize agent definition"
+        )
 
     name = _slugify(raw_name)
     if name != raw_name:
@@ -1228,10 +1625,10 @@ def agent_init(
         "version": version,
         "description": description,
         "owner": owner,
-        "model_name": model_name or "claude-sonnet-4",
+        "model_name": normalize_model_name(model_name),
         "model_config_json": {},
         # Optional per-harness model overrides, e.g. {"kiro": "claude-haiku-4-5"}.
-        # Leave empty to use model_name everywhere that accepts a model choice.
+        # Leave empty to use model_name everywhere that accepts a model choice ("auto" = harness default).
         "models_by_harness": {},
         "prompt": prompt_text,
         "supported_harnesses": harnesses,
@@ -1240,17 +1637,38 @@ def agent_init(
         "success_criteria": None,
     }
 
+    if captured:
+        data["components"] = [
+            {"component_type": item["component_type"], "component_id": item["component_id"]} for item in captured
+        ]
+
     saved_path = _save_agent_yaml(dir_path, data, operation="Initialize agent definition")
     if output == "json":
-        output_json({"path": str(saved_path), "agent": data})
+        result: dict = {"path": str(saved_path), "agent": data}
+        if from_capabilities:
+            result["from_capabilities"] = {"components": captured, "skipped_agents": skipped_agents, "since": since}
+        output_json(result)
         return
     rprint(f"[green]✓ Created {esc(yaml_path)}[/green]")
+    if captured:
+        rprint(
+            f"  [dim]Pre-filled {len(captured)} component(s) from resources used here in the last {esc(since)}:[/dim]"
+        )
+        for item in captured:
+            rprint(f"    • {esc(item['component_type'])} {esc(item.get('native_ref') or item['component_id'])}")
+    for ref in skipped_agents:
+        rprint(
+            f"  [yellow]Skipped agent {esc(ref)}: an Agent cannot contain another Agent; add its components instead.[/yellow]"
+        )
 
 
 @agent_app.command(name="add")
 def agent_add(
     component_type: str = typer.Argument(..., help="Component type: mcp, skill, hook, prompt, sandbox"),
     component_id: str = typer.Argument(..., help="Component ID (UUID)"),
+    version: str | None = typer.Option(
+        None, "--version", "-V", help="Pin an exact component version (default: keep or use latest approved)"
+    ),
     directory: str = typer.Option(".", "--dir", "-d", help="Directory containing observal-agent.yaml"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
@@ -1258,11 +1676,13 @@ def agent_add(
 
     Appends a component entry to the components list in your local
     observal-agent.yaml file. The component is referenced by type and
-    UUID. Duplicates are rejected.
+    UUID. Duplicates are rejected. With --version the agent pins that exact
+    release; without it the agent keeps its current pin, or pins the latest
+    approved release when it first gains the component.
 
     Examples:
       observal agent add mcp a1b2c3d4-e5f6-7890-abcd-ef1234567890
-      observal agent add skill b2c3d4e5-f6a7-8901-bcde-f12345678901
+      observal agent add skill b2c3d4e5-f6a7-8901-bcde-f12345678901 --version 1.2.0
       observal agent add hook c3d4e5f6-... --dir ./my-agent
     """
     component_type = component_type.strip().lower()
@@ -1275,6 +1695,8 @@ def agent_add(
             remediation=f"Choose from: {', '.join(sorted(VALID_COMPONENT_TYPES))}.",
         )
     component_id = _validate_component_id(component_id)
+    if version is not None:
+        version = _validate_exact_version(version, operation="Add agent component", resource="component version")
 
     dir_path = Path(directory)
     data = _load_agent_yaml(dir_path, operation="Add agent component")
@@ -1298,7 +1720,10 @@ def agent_add(
                 remediation="Choose a different component or leave the definition unchanged.",
             )
 
-    components.append({"component_type": component_type, "component_id": component_id})
+    entry = {"component_type": component_type, "component_id": component_id}
+    if version is not None:
+        entry["version"] = version
+    components.append(entry)
     data["components"] = components
     path = _save_agent_yaml(dir_path, data, operation="Add agent component")
     result = {"path": str(path), "component": components[-1]}
@@ -1332,7 +1757,7 @@ def agent_build(
 
     if output != "json":
         rprint(f"[bold]Agent:[/bold] {esc(data.get('name', 'unnamed'))} v{esc(data.get('version', '?'))}")
-        rprint(f"[bold]Model:[/bold] {esc(data.get('model_name', 'N/A'))}")
+        rprint(f"[bold]Model:[/bold] {esc(normalize_model_name(data.get('model_name')))}")
         rprint()
 
     components = data.get("components", [])
@@ -1371,6 +1796,9 @@ def agent_build(
         # API convention: plural resource name
         plural = {"mcp": "mcps", "skill": "skills", "hook": "hooks", "prompt": "prompts", "sandbox": "sandboxes"}
         endpoint = f"/api/v1/{plural[ctype]}/{cid}"
+        if comp.get("version"):
+            # A pinned version has to exist, not just the component.
+            endpoint = f"{endpoint}/versions/{comp['version']}"
         try:
             with _progress(output, f"Checking {ctype} {cid[:8]}..."):
                 client.get(endpoint)
@@ -1388,20 +1816,30 @@ def agent_build(
     if output != "json":
         console.print(table)
 
-    scope_payload = {"components": components}
+    declared = data.get("supported_harnesses", [])
+    scope_payload = {"components": components, "supported_harnesses": declared}
     client.add_publish_target(scope_payload, team, visibility)
     with _progress(output, "Checking agent composition scope..."):
         scope_result = client.post("/api/v1/agents/validate", scope_payload)
     issues = scope_result.get("issues", [])
+    warnings: list[str] = []
     for issue in issues:
-        errors.append(issue.get("message", "Component is not valid for this agent target"))
+        message = issue.get("message", "Component is not valid for this agent target")
+        if issue.get("severity") == "warning":
+            warnings.append(message)
+        else:
+            errors.append(message)
 
     result = {
         "valid": not errors,
         "agent": data.get("name"),
         "components": component_results,
         "issues": issues,
+        "supported_harnesses": scope_result.get("supported_harnesses", declared),
     }
+    if output != "json":
+        for warning in warnings:
+            rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
     if errors:
         if output != "json":
             rprint(f"\n[red]{len(errors)} component issue(s):[/red]")
@@ -1413,7 +1851,7 @@ def agent_build(
             operation="Validate agent",
             resource=str(dir_path / YAML_FILE),
             remediation="Fix the reported component references or target scope and retry.",
-            detail=_json.dumps(result, default=str),
+            result=result,
         )
     if output == "json":
         output_json(result)
@@ -1421,13 +1859,134 @@ def agent_build(
         rprint("\n[green]✓ All components valid.[/green]")
 
 
+def _print_warnings(result: dict) -> None:
+    for warning in result.get("warnings") or []:
+        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+
+
+# Statuses whose version is not published yet and is amended in place (a new review revision).
+_AMENDABLE_STATUSES = ("draft", "pending", "changes_requested", "rejected")
+
+
+def _amend_hint(agent: dict) -> str:
+    ref = client.canonical_name(agent) if agent.get("namespace") else agent.get("id", "AGENT")
+    return f"observal agent edit {ref} --description '...' (or edit observal-agent.yaml and run observal agent publish --update)"
+
+
+def _refuse_release_over_unpublished_first_release(agent: dict, *, operation: str) -> None:
+    """A first release still under review is amended, never superseded by a new version."""
+    if agent.get("status") in ("pending", "changes_requested") and not agent.get("latest_approved_version"):
+        fail(
+            ErrorCategory.CONFLICT,
+            f"v{agent.get('version', '?')} is not published yet, so there is no release to version from.",
+            operation=operation,
+            resource=str(agent.get("id", "agent")),
+            remediation=f"Amend it in place; reviewers see the change as a new revision of the same review: {_amend_hint(agent)}",
+        )
+
+
+@agent_app.command(name="edit")
+def agent_edit(
+    name: str = typer.Argument(..., help="Agent name, ID, row number, or @alias"),
+    description: str | None = typer.Option(None, "--description", "-d", help="New description"),
+    prompt: str | None = typer.Option(None, "--prompt", help="New system prompt"),
+    prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read the new system prompt from a file"),
+    model_name: str | None = typer.Option(None, "--model", "-m", help="New default model (blank = auto)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note for the review"),
+    output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+):
+    """Amend an unpublished agent version in place.
+
+    Works while the latest version is a draft, pending review, changes
+    requested, or rejected. The version number stays the same. Under review,
+    the edit is submitted as a new revision of the same review, which answers
+    requested changes (like Save & update review in the web Edit tab).
+    An approved version is immutable: use `observal agent release` instead.
+
+    Examples:
+      observal agent edit my-agent --description 'Reviews pull requests for risk'
+      observal agent edit my-agent --prompt-file ./PROMPT.md --output json
+    """
+    if prompt is not None and prompt_file is not None:
+        fail(
+            ErrorCategory.VALIDATION,
+            "--prompt and --prompt-file cannot be used together.",
+            operation="Edit agent",
+            resource="agent prompt",
+            remediation="Choose one prompt source.",
+        )
+    if prompt_file is not None:
+        try:
+            prompt = Path(prompt_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            fail(
+                ErrorCategory.NOT_FOUND,
+                f"Could not read prompt file: {prompt_file}.",
+                operation="Edit agent",
+                resource=prompt_file,
+                remediation="Provide a readable UTF-8 prompt file.",
+                detail=repr(error),
+            )
+    updates = {
+        key: value
+        for key, value in (("description", description), ("prompt", prompt), ("model_name", model_name))
+        if value is not None
+    }
+    if not updates:
+        fail(
+            ErrorCategory.VALIDATION,
+            "Nothing to change.",
+            operation="Edit agent",
+            resource="agent edit options",
+            remediation="Pass --description, --prompt, --prompt-file, or --model.",
+        )
+    resolved = client.resolve_registry_reference("agent", name)
+    agent = client.get(f"/api/v1/agents/{resolved}")
+    if agent.get("status") not in _AMENDABLE_STATUSES:
+        fail(
+            ErrorCategory.CONFLICT,
+            f"v{agent.get('version', '?')} is {agent.get('status')} and cannot be edited in place.",
+            operation="Edit agent",
+            resource=str(agent.get("id", name)),
+            remediation=f"Release a new version: observal agent release {name} --bump patch",
+        )
+    client.post(f"/api/v1/agents/{agent['id']}/start-edit")
+    try:
+        with _progress(output, "Saving changes..."):
+            result = client.put(f"/api/v1/agents/{agent['id']}/draft", updates)
+    except BaseException:
+        # A failed save must not leave the edit lock blocking other editors for its full timeout.
+        with contextlib.suppress(Exception):
+            client.post(f"/api/v1/agents/{agent['id']}/cancel-edit")
+        raise
+    if agent.get("status") in ("pending", "changes_requested") and needs_resubmission(
+        {**result, "status": agent.get("status")}
+    ):
+        # Saving under review is the author's resubmission; it answers requested changes.
+        with _progress(output, "Submitting revision..."):
+            submitted = client.post(
+                f"/api/v1/agents/{agent['id']}/submit" + (f"?message={quote(message)}" if message else "")
+            )
+        result = {**result, **{k: v for k, v in submitted.items() if k in ("status", "review_number", "review_url")}}
+    if output == "json":
+        output_json(result)
+        return
+    rprint(f"[green]✓ Updated {esc(result.get('name', name))}[/green] v{esc(result.get('version', '?'))}")
+    print_draft_save(result, f"observal agent publish --submit {result.get('id', agent['id'])}")
+
+
 @agent_app.command(name="publish")
 def agent_publish(
     directory: str = typer.Option(".", "--dir", "-d", help="Directory containing observal-agent.yaml"),
     update: bool = typer.Option(False, "--update", "-u", help="Update existing agent instead of creating"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit: str | None = typer.Option(None, "--submit", help="Submit a draft agent for review (agent ID)"),
-    bump: str | None = typer.Option(None, "--bump", help="Version bump type: patch, minor, or major (skips prompt)"),
+    submit: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (agent ID)"
+    ),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
+    bump: str | None = typer.Option(
+        None, "--bump", help="With --update: also bump the unpublished version number (default: keep it)"
+    ),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -1462,11 +2021,14 @@ def agent_publish(
     if submit:
         resolved = client.resolve_registry_reference("agent", submit)
         with _progress(output, "Submitting draft for review..."):
-            result = client.post(f"/api/v1/agents/{resolved}/submit")
+            result = client.post(
+                f"/api/v1/agents/{resolved}/submit" + (f"?message={quote(message)}" if message else "")
+            )
         if output == "json":
             output_json(result)
             return
         rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        print_review_link(result)
         return
 
     dir_path = Path(directory)
@@ -1477,13 +2039,18 @@ def agent_publish(
         "version": data.get("version", "1.0.0"),
         "description": data.get("description", ""),
         "owner": data.get("owner", ""),
-        "model_name": data.get("model_name", "claude-sonnet-4"),
+        "model_name": normalize_model_name(data.get("model_name")),
         "models_by_harness": data.get("models_by_harness", {}) or {},
         "prompt": data.get("prompt", ""),
         "supported_harnesses": data.get("supported_harnesses", []),
         "components": data.get("components", []),
         "success_criteria": data.get("success_criteria"),
     }
+    # Preserve legacy YAML that omits these optional fields; a fork scaffold
+    # includes them explicitly and therefore round-trips their exact values.
+    for field in ("model_config_json", "external_mcps", "category"):
+        if field in data:
+            payload[field] = data[field]
 
     if update:
         # The update endpoint refuses both fields by design: visibility has its own
@@ -1519,44 +2086,53 @@ def agent_publish(
             output_json(result)
             return
         rprint(f"[green]✓ Draft saved![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        _print_warnings(result)
         return
 
     if update:
-        # Find existing agent by name
-        with _progress(output, "Looking up existing agent..."):
-            results = client.get("/api/v1/agents", params={"search": data["name"]})
-        match = next((agent for agent in results if agent.get("name") == data["name"]), None)
-        if not match:
+        # Fork scaffolds carry the exact new draft ID: an unapproved draft does
+        # not appear in the public search and must not update a namesake instead.
+        draft_id = data.get("agent_id")
+        if draft_id is not None:
+            try:
+                agent_id = str(UUID(str(draft_id)))
+            except ValueError:
+                fail(
+                    ErrorCategory.VALIDATION,
+                    "Agent YAML has an invalid agent_id.",
+                    operation="Publish agent",
+                    resource=str(dir_path / YAML_FILE),
+                    remediation="Use the ID returned by `observal agent fork` or remove agent_id.",
+                )
+        else:
+            with _progress(output, "Looking up existing agent..."):
+                results = client.get("/api/v1/agents", params={"search": data["name"]})
+            match = next((agent for agent in results if agent.get("name") == data["name"]), None)
+            if not match:
+                fail(
+                    ErrorCategory.NOT_FOUND,
+                    f"No existing agent has the name {data['name']}.",
+                    operation="Publish agent",
+                    resource="agent registry",
+                    remediation="Check the name or publish without --update.",
+                )
+            agent_id = match["id"]
+
+        # --update amends the current version in place; it never bumps semver unless asked.
+        # A pending or changes-requested version becomes a new revision of the same review.
+        with _progress(output, "Checking current version..."):
+            current_agent = client.get(f"/api/v1/agents/{agent_id}")
+        if current_agent.get("status") not in _AMENDABLE_STATUSES:
             fail(
-                ErrorCategory.NOT_FOUND,
-                f"No existing agent has the name {data['name']}.",
+                ErrorCategory.CONFLICT,
+                f"v{current_agent.get('version', '?')} is {current_agent.get('status')} and cannot be updated in place.",
                 operation="Publish agent",
-                resource="agent registry",
-                remediation="Check the name or publish without --update.",
+                resource=agent_id,
+                remediation=f"Release a new version: observal agent release {agent_id} --bump patch --dir {directory}",
             )
-        agent_id = match["id"]
-
-        # Version bump selection (interactive only when --bump not provided)
-        import sys
-
         if bump and bump in ("patch", "minor", "major"):
             payload["version_bump_type"] = bump
             payload.pop("version", None)
-        elif sys.stdin.isatty():
-            current_version = match.get("version", "1.0.0")
-            suggestions = client.get(f"/api/v1/agents/{agent_id}/version-suggestions")
-            sug = suggestions.get("suggestions", {})
-            bump_choices = [
-                f"patch  {current_version} → {sug.get('patch', '?')}  (bug fix)",
-                f"minor  {current_version} → {sug.get('minor', '?')}  (improvement)",
-                f"major  {current_version} → {sug.get('major', '?')}  (revamp)",
-                "keep   (use version from YAML)",
-            ]
-            choice = select_one("Version bump type", bump_choices, default=bump_choices[0])
-            bump_type = choice.split()[0]
-            if bump_type != "keep":
-                payload["version_bump_type"] = bump_type
-                payload.pop("version", None)
 
         with _progress(output, "Updating agent..."):
             result = client.put(f"/api/v1/agents/{agent_id}", payload)
@@ -1564,8 +2140,10 @@ def agent_publish(
             output_json(result)
             return
         rprint(
-            f"[green]✓ Agent updated![/green] ID: [bold]{esc(result['id'])}[/bold]  v{esc(result.get('version', '?'))}"
+            f"[green]✓ Agent updated in place![/green] ID: [bold]{esc(result['id'])}[/bold]  v{esc(result.get('version', '?'))}"
         )
+        print_draft_save(result, f"observal agent publish --submit {result.get('id', '<id>')}")
+        _print_warnings(result)
     else:
         with _progress(output, "Submitting agent for review..."):
             result = client.post("/api/v1/agents", payload)
@@ -1574,9 +2152,11 @@ def agent_publish(
             return
         status = result.get("status", "pending")
         rprint(f"[green]✓ Agent submitted![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        print_review_link(result)
         rprint(f"  Pull: [cyan]observal agent pull {esc(client.canonical_name(result))}[/cyan]")
         if status != "approved":
-            rprint(f"[yellow]Status: {esc(status)} - an admin must approve it before it becomes visible.[/yellow]")
+            rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
+        _print_warnings(result)
 
 
 @agent_app.command(name="release")
@@ -1584,6 +2164,12 @@ def agent_release(
     name: str = typer.Argument(..., help="Agent name, ID, row number, or @alias"),
     bump: str = typer.Option(..., "--bump", help="Version bump type: patch, minor, or major"),
     directory: str = typer.Option(".", "--dir", "-d", help="Directory containing observal-agent.yaml"),
+    refresh_components: bool = typer.Option(
+        False,
+        "--refresh-components",
+        help="Move every component without a version in the YAML to its latest approved release",
+    ),
+    message: str | None = typer.Option(None, "--message", help="Review revision note"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Bump version and push a versioned release to the registry.
@@ -1592,10 +2178,16 @@ def agent_release(
     to the review queue. The YAML must contain all required fields including
     model_config_json: {} and external_mcps: [].
 
+    A release keeps every component at the version the current release
+    pinned, so components never change without the author asking. Pin one
+    component by giving it a `version` in the YAML, or pass
+    --refresh-components to move the rest to their latest approved release.
+    `observal agent outdated` shows what that would change.
+
     Examples:
       observal agent release my-agent --bump patch
       observal agent release my-agent --bump minor --dir /tmp/my-agent
-      observal agent release my-agent --bump major
+      observal agent release my-agent --bump patch --refresh-components
     """
     if bump not in ("patch", "minor", "major"):
         fail(
@@ -1615,6 +2207,7 @@ def agent_release(
     with _progress(output, "Looking up agent..."):
         agent = client.get(f"/api/v1/agents/{resolved}")
     agent_id = agent["id"]
+    _refuse_release_over_unpublished_first_release(agent, operation="Release agent version")
 
     # Fetch version suggestions
     with _progress(output, "Fetching version suggestions..."):
@@ -1643,7 +2236,7 @@ def agent_release(
         "version": new_version,
         "description": data.get("description", ""),
         "prompt": data.get("prompt", ""),
-        "model_name": data.get("model_name", "claude-sonnet-4"),
+        "model_name": normalize_model_name(data.get("model_name")),
         "model_config_json": data.get("model_config_json") or {},
         "models_by_harness": data.get("models_by_harness", {}) or {},
         "external_mcps": data.get("external_mcps") or [],
@@ -1651,7 +2244,10 @@ def agent_release(
         "components": data.get("components", []),
         "yaml_snapshot": raw_yaml,
         "success_criteria": data.get("success_criteria"),
+        "refresh_components": refresh_components,
     }
+    if message:
+        payload["message"] = message
 
     if output != "json":
         rprint("[dim]→[/dim] Pushing definition to registry...")
@@ -1665,8 +2261,8 @@ def agent_release(
         return
 
     rprint(f"[green]✓ Version {esc(new_version)} submitted for review[/green]")
-    for warning in result.get("warnings", []):
-        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+    print_review_link(result)
+    _print_warnings(result)
 
 
 @agent_app.command(name="versions")
@@ -1719,3 +2315,77 @@ def agent_versions(
         )
 
     console.print(table)
+
+
+@agent_app.command(name="outdated")
+def agent_outdated(
+    name: str = typer.Argument(..., help="Agent name, ID, row number, or @alias"),
+    version: str | None = typer.Option(
+        None, "--version", "-V", help="Agent version to check (default: the latest version)"
+    ),
+    output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+):
+    """Show which components an agent version pins behind their latest release.
+
+    Every agent version pins exact component versions, and pulls always
+    install those pins. Use this as the agent's author to see what a
+    refreshed release would change, then publish one with
+    `observal agent release <agent> --bump patch --refresh-components`.
+
+    Examples:
+      observal agent outdated alice/reviewer
+      observal agent outdated alice/reviewer --version 1.2.0 --output json
+    """
+    if version:
+        version = _validate_exact_version(version, operation="Check agent components", resource="agent version")
+    resolved = client.resolve_registry_reference("agent", name)
+    with _progress(output, "Checking pinned components..."):
+        if not version:
+            version = str(client.get(f"/api/v1/agents/{resolved}").get("version") or "")
+        data = client.get(f"/api/v1/agents/{resolved}/versions/{version}/outdated")
+
+    if output == "json":
+        output_json(data)
+        return
+
+    components = data.get("components", [])
+    if not components:
+        rprint(f"[dim]{esc(data.get('qualified_name', name))} v{esc(version)} has no components.[/dim]")
+        return
+
+    table = Table(title=f"{data.get('qualified_name', name)} v{version}", show_lines=False, padding=(0, 1))
+    table.add_column("TYPE", style="dim")
+    table.add_column("COMPONENT", style="cyan")
+    table.add_column("PINNED", style="yellow")
+    table.add_column("LATEST", style="green")
+    table.add_column("STATUS")
+    for item in components:
+        if not item.get("locked"):
+            status = "[yellow]unlocked[/yellow]"
+        elif item.get("outdated"):
+            status = "[yellow]outdated[/yellow]"
+        else:
+            status = "[green]current[/green]"
+        if item.get("archived"):
+            status += " [dim](archived)[/dim]"
+        table.add_row(
+            esc(item.get("type", "")),
+            esc(item.get("qualified_name") or item.get("name", "")),
+            esc(item.get("pinned_version") or "?"),
+            esc(item.get("latest_version") or "none"),
+            status,
+        )
+    console.print(table)
+
+    summary = data.get("summary", {})
+    if summary.get("outdated") or summary.get("unlocked"):
+        rprint(
+            f"\n[yellow]{summary.get('outdated', 0)} outdated, {summary.get('unlocked', 0)} unlocked.[/yellow] "
+            "Release a refreshed version to move pins forward:"
+        )
+        rprint(
+            f"  [cyan]observal agent release {esc(data.get('qualified_name', name))} --bump patch "
+            "--refresh-components[/cyan]"
+        )
+    else:
+        rprint("\n[green]✓ Every pinned component is on its latest approved release.[/green]")

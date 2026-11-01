@@ -15,6 +15,11 @@ data:
         <listen_host>0.0.0.0</listen_host>
         <listen_try>1</listen_try>
         <max_server_memory_usage_to_ram_ratio>0.8</max_server_memory_usage_to_ram_ratio>
+        <send_crash_reports>
+            <enabled>false</enabled>
+            <send_logical_errors>false</send_logical_errors>
+        </send_crash_reports>
+        <remote_url_allow_hosts></remote_url_allow_hosts>
         <merge_tree>
             <parts_to_delay_insert>200</parts_to_delay_insert>
             <parts_to_throw_insert>500</parts_to_throw_insert>

@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Installation"
+---
 
-# Installation
-
-Observal has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
+Agentic Resource Registry has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
 
 ## Install the server
 
@@ -17,7 +18,7 @@ The server runs as a Docker Compose stack (API, web UI, PostgreSQL, ClickHouse, 
 **One-line install:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install-server.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
 ```
 
 This downloads a config package, runs guided setup (domain, secrets, ports), pulls container images from GHCR, and starts the full stack.
@@ -25,12 +26,12 @@ This downloads a config package, runs guided setup (domain, secrets, ports), pul
 **From source** (for contributors):
 
 ```bash
-git clone https://github.com/Observal/Observal.git && cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
 cp .env.example .env
 make up
 ```
 
-For deployment options, see [Self-Hosting](../self-hosting/docker-compose.md) and [Production deployment](../self-hosting/production-deploy.md).
+For deployment options, see [Self-Hosting](/self-hosting/docker-compose) and [Production deployment](/self-hosting/production-deploy).
 
 ## Install the CLI
 
@@ -40,13 +41,21 @@ The CLI is what you use to log in, instrument harness configs, pull agents, and 
 
 The standalone binary is the simplest way to install. No Python required.
 
+macOS / Linux:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
-This downloads the latest release binary for your platform and places it on your `PATH`.
+Windows (PowerShell):
 
-This validates the Ed25519-signed key, installs the CLI, and writes the key to `~/.observal/config.json`. If the key is invalid or expired, the installer exits with an error.
+```powershell
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
+```
+
+This downloads the latest release binary for your platform and places it on your `PATH`. On Windows it installs to `%LOCALAPPDATA%\Programs\Observal` and updates your user `PATH` (open a new terminal afterwards). Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to pin a version or change the install directory.
+
+Connecting to a server your team already runs? See the [Setup guide](/getting-started/onboarding).
 
 Verify it worked:
 
@@ -78,38 +87,31 @@ pip install --user observal-cli
 
 ### Optional extras
 
-Observal ships with two opt-in extras for the Python install:
-
-| Extra     | What it adds                                   | When to install                                              |
-| --------- | ---------------------------------------------- | ------------------------------------------------------------ |
-| `sandbox` | Docker SDK (for sandbox execution)             | If you run agents inside Observal sandboxes                  |
-| `migrate` | `pyarrow` (for `observal server migrate`) | If you move registry and telemetry data between deployments |
-| `all`     | Both of the above                              | If you do both                                               |
-
-Install an extra:
+The Python package includes the Docker SDK. The `migrate` extra adds `pyarrow` for `observal server migrate`:
 
 ```bash
-uv tool install 'observal-cli[sandbox]'
+uv tool install 'observal-cli[migrate]'
 ```
 
 ## Install from source (for contributors)
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
 uv tool install --editable .
 ```
 
 ## What gets installed
 
-Four entry points land on your `PATH`:
+The Python package provides three entry points:
 
 | Command                | Purpose                                              |
 | ---------------------- | ---------------------------------------------------- |
 | `observal`             | The main CLI                                         |
-| `observal-sandbox-run` | Sandbox runner invoked by Observal sandboxes         |
+| `observal-sandbox-run` | Sandbox runner invoked by Agentic Resource Registry sandboxes         |
+| `observal-sandbox-mcp` | MCP adapter used by sandbox execution               |
 
-You will almost never call the sandbox runner directly. The CLI wires it into your harness config for you.
+You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.
 
 ## Upgrade
 
@@ -141,4 +143,4 @@ rm -rf ~/.observal
 
 ## Next
 
--> [Quickstart](quickstart.md)
+-> [Quickstart](/getting-started/quickstart)

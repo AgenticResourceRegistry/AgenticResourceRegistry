@@ -17,6 +17,8 @@ from pathlib import Path  # noqa: TC003 (used at runtime)
 from observal_cli.config import CONFIG_DIR
 
 STALE_THRESHOLD = 1800  # 30 minutes; after this, assume lock is orphaned
+SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 3600
 
 
 class UpgradeLockError(RuntimeError):
@@ -88,9 +90,9 @@ def _pid_alive(pid: int) -> bool:
 def _format_age(timestamp: float) -> str:
     """Format time elapsed since timestamp as human-readable string."""
     elapsed = int(time.time() - timestamp)
-    if elapsed < 60:
+    if elapsed < SECONDS_PER_MINUTE:
         return f"{elapsed}s"
-    elif elapsed < 3600:
-        return f"{elapsed // 60}m"
+    elif elapsed < SECONDS_PER_HOUR:
+        return f"{elapsed // SECONDS_PER_MINUTE}m"
     else:
-        return f"{elapsed // 3600}h {(elapsed % 3600) // 60}m"
+        return f"{elapsed // SECONDS_PER_HOUR}h {(elapsed % SECONDS_PER_HOUR) // SECONDS_PER_MINUTE}m"

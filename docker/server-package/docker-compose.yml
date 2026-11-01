@@ -7,7 +7,7 @@
 
 services:
   observal-init:
-    image: ghcr.io/observal/observal-api:${OBSERVAL_VERSION:-latest}
+    image: ghcr.io/agenticresourceregistry/observal-api:${OBSERVAL_VERSION:-latest}
     command: ["/app/entrypoint.sh"]
     env_file:
       - ./.env
@@ -32,7 +32,7 @@ services:
       - observal-net
 
   observal-api:
-    image: ghcr.io/observal/observal-api:${OBSERVAL_VERSION:-latest}
+    image: ghcr.io/agenticresourceregistry/observal-api:${OBSERVAL_VERSION:-latest}
     command: ["/app/.venv/bin/python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - ./.env
@@ -74,6 +74,7 @@ services:
       - observal-net
 
   observal-db:
+    restart: unless-stopped
     image: postgres:18
     group_add:
       - "${OBSERVAL_SECRET_GID:-1000}"
@@ -100,6 +101,7 @@ services:
       - observal-net
 
   observal-clickhouse:
+    restart: unless-stopped
     image: clickhouse/clickhouse-server:26.6
     group_add:
       - "${OBSERVAL_SECRET_GID:-1000}"
@@ -130,6 +132,7 @@ services:
       - observal-net
 
   observal-redis:
+    restart: unless-stopped
     image: redis:8-alpine
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
@@ -148,7 +151,7 @@ services:
       - observal-net
 
   observal-worker:
-    image: ghcr.io/observal/observal-api:${OBSERVAL_VERSION:-latest}
+    image: ghcr.io/agenticresourceregistry/observal-api:${OBSERVAL_VERSION:-latest}
     command: ["/app/.venv/bin/python", "-c", "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); from arq import run_worker; from worker import WorkerSettings; run_worker(WorkerSettings)"]
     env_file:
       - ./.env
@@ -176,7 +179,7 @@ services:
       - observal-net
 
   observal-web:
-    image: ghcr.io/observal/observal-web:${OBSERVAL_VERSION:-latest}
+    image: ghcr.io/agenticresourceregistry/observal-web:${OBSERVAL_VERSION:-latest}
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${WEB_HOST_PORT:-3000}:3000"
     depends_on:
@@ -199,7 +202,7 @@ services:
       - observal-net
 
   observal-lb:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${API_HOST_PORT:-8000}:80"
     volumes:

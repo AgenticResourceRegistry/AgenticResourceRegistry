@@ -1,12 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Run a team-wide agent registry"
+---
 
-# Run a team-wide agent registry
-
-Once two or more people are authoring agents, you need a single source of truth. Observal becomes your team's internal Docker Hub for AI agents, with review, RBAC, and telemetry baked in.
+Once two or more people are authoring agents, you need a single source of truth. Agentic Resource Registry becomes your team's internal Docker Hub for AI agents, with review, RBAC, and telemetry baked in.
 
 ## What changes at team scale
 
@@ -21,7 +22,7 @@ Deploy once, everyone points at it.
 
 ```mermaid
 flowchart TB
-    server["Observal server - API + Web UI"]
+    server["Agentic Resource Registry server - API + Web UI"]
     db[(PostgreSQL)]
     ch[(ClickHouse)]
     redis[(Redis)]
@@ -37,7 +38,7 @@ flowchart TB
     c --> server
 ```
 
-Install the server once ([Self-Hosting](../self-hosting/README.md)). Then every engineer installs the CLI and runs `observal auth login` pointed at your shared server URL.
+Install the server once ([Self-Hosting](/self-hosting)). Then every engineer installs the CLI and runs `observal auth login` pointed at your shared server URL.
 
 ## Users and roles
 
@@ -66,11 +67,11 @@ Two commands to get them productive:
 
 ```bash
 # The new engineer runs:
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 observal auth login --server https://observal.your-company.internal
 ```
 
-For managed deployments, users authenticate through SSO or are provisioned by an admin. See [Authentication and SSO](../self-hosting/authentication.md).
+For managed deployments, users authenticate through SSO or are provisioned by an admin. See [Authentication and SSO](/self-hosting/authentication).
 
 After logging in, they can:
 
@@ -86,10 +87,11 @@ observal doctor patch --all-harnesses        # instrument everything
 Authors submit. Reviewers approve. Approved items appear in the public listing.
 
 ```bash
-observal admin review list --output json
-observal admin review show <id> --output json
-observal admin review approve <id> --output json
-observal admin review reject <id> --reason "missing env var docs" --output json
+observal review list --output json
+observal review show <number> --output json
+observal review approve <number> --output json
+observal review request-changes <number> --body "missing env var docs" --output json
+observal review publish <number> --output json
 ```
 
 What reviewers look for:
@@ -122,8 +124,8 @@ For orgs that need SSO and audit logging, configure OIDC in **Admin → SSO**:
 | `oauth.client_secret` | Your IdP client secret |
 | `oauth.server_metadata_url` | Your IdP discovery URL |
 
-Restart the API after OIDC changes. See [Authentication and SSO](../self-hosting/authentication.md).
+Restart the API after OIDC changes. See [Authentication and SSO](/self-hosting/authentication).
 
 ## Next
 
-→ [Self-Hosting](../self-hosting/README.md): the operator's playbook for actually running the server this use case depends on.
+→ [Self-Hosting](/self-hosting): the operator's playbook for actually running the server this use case depends on.

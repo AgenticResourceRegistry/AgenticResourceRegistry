@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Contract tests for the outdated command."""
@@ -115,7 +116,7 @@ def test_empty_results_have_stable_table_and_json_output(
         "total": 0,
         "page": 1,
         "page_size": 0,
-        "summary": {"total": 0, "outdated": 0, "current": 0, "missing": 0},
+        "summary": {"total": 0, "outdated": 0, "current": 0, "missing": 0, "unknown": 0},
         "report": {
             "requested": True,
             "attempted": False,
@@ -187,10 +188,10 @@ def test_json_reports_current_outdated_and_inbox_state(
     payload = json.loads(result.stdout)
     assert [item["status"] for item in payload["items"]] == ["outdated", "current"]
     assert payload["items"][0]["upgrade_command"] == (
-        "observal agent pull acme/reviewer --harness claude-code --no-prompt"
+        "observal agent pull acme/reviewer --harness claude-code --no-prompt --upgrade"
     )
     assert payload["items"][1]["upgrade_command"] is None
-    assert payload["summary"] == {"total": 2, "outdated": 1, "current": 1, "missing": 0}
+    assert payload["summary"] == {"total": 2, "outdated": 1, "current": 1, "missing": 0, "unknown": 0}
     assert payload["report"] == {
         "requested": True,
         "attempted": True,
@@ -489,7 +490,7 @@ def test_no_report_prevents_inbox_write(
 @pytest.mark.parametrize(
     ("item_type", "expected"),
     [
-        ("agent", "observal agent pull acme/tool --harness pi --no-prompt"),
+        ("agent", "observal agent pull acme/tool --harness pi --no-prompt --upgrade"),
         ("mcp", "observal registry mcp install acme/tool --harness pi --no-prompt"),
         ("skill", "observal registry skill install acme/tool --harness pi"),
         ("hook", "observal registry hook install acme/tool --harness pi"),
@@ -499,3 +500,37 @@ def test_upgrade_commands_are_type_specific(item_type: str, expected: str) -> No
     assert (
         cmd_outdated._upgrade_command({"type": item_type, "qualified_name": "acme/tool", "harness": "pi"}) == expected
     )
+
+
+def test_unversioned_entry_is_reported_as_unknown_instead_of_aborting(
+    cli: typer.Typer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Older CLIs recorded no version for skills installed without --version.
+    skill = {**_mcp(), "type": "skill", "version": None, "qualified_name": "acme/review", "slug": "review"}
+    _set_entries(monkeypatch, [skill, _agent()])
+    get = MagicMock(side_effect=[{"version": "1.2.0"}, {"latest_approved_version": "1.0.0"}])
+    monkeypatch.setattr(cmd_outdated.client, "get", get)
+
+    result = CliRunner().invoke(cli, ["outdated", "--output", "json", "--no-report"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    unknown, current = payload["items"]
+    assert (unknown["status"], unknown["current_version"], unknown["outdated"]) == ("unknown", None, False)
+    assert unknown["upgrade_command"] == "observal registry skill install acme/review --harness pi"
+    assert current["status"] == "current"
+    assert payload["summary"]["unknown"] == 1
+
+
+def test_invalid_registry_version_is_unavailable_even_for_an_unversioned_entry(
+    cli: typer.Typer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    skill = {**_mcp(), "type": "skill", "version": None, "qualified_name": "acme/review", "slug": "review"}
+    _set_entries(monkeypatch, [skill])
+    monkeypatch.setattr(cmd_outdated.client, "get", lambda *_args, **_kwargs: {"version": "not a version"})
+
+    result = CliRunner().invoke(cli, ["outdated", "--output", "json", "--no-report"])
+
+    assert result.exit_code == ExitCode.UNAVAILABLE
+    assert result.stdout == ""
+    assert json.loads(result.stderr)["error"]["category"] == "unavailable"

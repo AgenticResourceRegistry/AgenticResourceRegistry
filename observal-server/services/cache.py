@@ -12,6 +12,7 @@ from redis import asyncio as aioredis
 from starlette.requests import Request
 
 from config import settings
+from services.auth_header import bearer_token
 
 CACHE_PREFIX = "observal-cache"
 
@@ -30,7 +31,7 @@ def _request_key_builder(func, namespace="", *, request: Request | None = None, 
     identity = "anon"
     if request:
         auth = request.headers.get("authorization", "")
-        if auth.startswith("Bearer "):
+        if bearer_token(auth) is not None:
             identity = hashlib.sha256(auth.encode(), usedforsecurity=False).hexdigest()[:16]
 
     raw = f"{identity}:{url}?{qs}" if qs else f"{identity}:{url}"

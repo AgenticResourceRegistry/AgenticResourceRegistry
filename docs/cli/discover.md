@@ -1,0 +1,90 @@
+---
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal discover"
+---
+
+Find approved registry resources for the task at hand and use them in the current session, without building an Agent first.
+
+Discovery searches every kind at once (agents, MCP servers, skills, hooks, prompts, sandboxes), ranks by relevance, and tells you separately whether each result is approved, whether it works in your harness, and whether it can be used right now or only after a restart. For signed-in users, results are scoped to personal listings they own and listings in every teamspace they currently belong to (including public teamspace listings); other people's public listings are not returned. Global reviewers and admins retain their review/admin scope. Anonymous public discovery is unchanged when the public registry is enabled. The bundled `observal` skill tells coding assistants to run this before reinventing something or declaring a capability unavailable.
+
+## Search
+
+```bash
+observal discover search review a pull request for authentication bugs
+observal discover search 'query postgres' --type mcp --output json
+observal discover search generate tests --harness pi
+observal discover search release notes --include-unapproved
+```
+
+Pass the task as one shell-escaped argument (single-quote it and escape any embedded `'` as `'\''`). Several bare words are still joined into one query, but the text comes from the user and must never be spliced into a shell command unquoted.
+
+| Option | Description |
+| --- | --- |
+| `--type`, `-t` | Restrict to `agent`, `mcp`, `skill`, `hook`, `prompt`, or `sandbox` |
+| `--harness`, `-i` | Only resources that explicitly list this harness as supported. Resources that declare no harnesses are left out (support is unknown, not implied); drop the flag to see them. Remote A2A agents are kept, since they run elsewhere. |
+| `--limit`, `-n` | Number of results, 1 through 25 (default 5) |
+| `--include-unapproved` | Also return your own pending or rejected submissions |
+| `--output`, `-o` | Table or JSON output |
+
+JSON returns `query`, `harness`, `count`, and `results[]`. Important result fields:
+
+| Field | Meaning |
+| --- | --- |
+| `identifier` | Permanent `urn:air:<domain>:<kind>:<uuid>` used by `inspect` and `use` |
+| `score` | Relevance to the query, 0 to 100. Never approval or trust. |
+| `matchedOn` | The query words that matched |
+| `obs:kind` | `agent`, `mcp`, `skill`, `hook`, `prompt`, `sandbox` |
+| `obs:nativeRef` | `namespace/slug@version`, usable with the registry and agent commands |
+| `obs:approval` | `approved`, `pending`, `rejected`, `archived`, `draft` |
+| `obs:availability` | `now`, `next-session`, `explicit-install`, `not-approved`, `archived`, `unsupported-in-harness` |
+| `obs:supportedHarnesses` | Harnesses the publisher declared; empty means support is unknown (not unrestricted). Policy: `--harness` search needs positive evidence, so it leaves out resources that declare no harnesses; `inspect` and `use` only refuse a resource that declares other harnesses, so a resource that declares none stays usable. |
+| `obs:artifactDigest` | SHA-256 of the exact artifact bytes |
+
+An empty `results` array is a successful answer: nothing matched. Try fewer or different words before concluding the resource does not exist.
+
+## Inspect
+
+```bash
+observal discover inspect urn:air:observal.acme.com:skill:5f2c... --output json
+```
+
+Returns the complete entry, including `representativeQueries` (what the resource is good for), `capabilities`, the versioned artifact `url`, and its digest. The predecessor `urn:ai:` prefix is accepted.
+
+## Use
+
+```bash
+observal discover use urn:air:observal.acme.com:skill:5f2c...
+observal discover use urn:air:observal.acme.com:mcp:9a1b... --harness kiro --output json
+```
+
+| Option | Description |
+| --- | --- |
+| `--harness`, `-i` | Harness this session runs in. Detected from `OBSERVAL_HARNESS` or the only installed harness when omitted. |
+| `--max-chars` | Cap on printed content (default 32000); longer artifacts are truncated with a pointer to the full URL |
+| `--yes`, `-y` | Load a resource that is not approved (your own drafts) |
+| `--output`, `-o` | Table or JSON output |
+
+What happens depends on the kind:
+
+- **Skills and prompts** are text. The exact approved version is fetched from its permanent URL and printed (JSON: `content`, `activated: true`, `mode: context`). The use is recorded in the capability lock.
+- **MCP servers, agents, and hooks** change your setup. Nothing is written; the response carries `next_step`, the existing install command (`observal registry mcp install …`, `observal agent pull …`), which confirms before touching harness config and takes effect after a restart. JSON: `activated: false`, `mode: next-session`.
+- **Sandboxes** have no install command; they reach a machine only inside an Agent. `next_step` is `observal agent add sandbox <uuid> [--version V]`, run in an Agent directory (`observal agent init`); `reason` says to then `observal agent publish` and `observal agent pull <agent> --harness <harness>`. JSON: `activated: false`, `mode: next-session`.
+
+Unapproved resources are refused without `--yes`. A resource whose `obs:supportedHarnesses` excludes the detected harness is refused; pass `--harness` to override the detection.
+
+## The capability lock
+
+Every activation appends one line to `~/.observal/capability_lock.jsonl`: timestamp, harness, working directory, identifier, kind, version, digest, and mode. `agent pull` and the component install commands append too. Session upload (`session_push` hooks, `observal reconcile`, and the Pi extension) attaches lines to a session as `capabilities_used`, which is how Agentic Resource Registry knows which resources a session relied on:
+
+- Every line must match the session's harness and directory. A line recorded inside a harness session (it carries that session's ID) belongs only to that session; the same ID in another harness or directory is a different session.
+- An install (`mode: next-session`) takes effect in the **next** session: the earliest session in the same harness and directory that started after the install. Each later session carries the install; the server keeps only the earliest-started one, so the order sessions are uploaded or reconciled in does not matter. It is never attached to the session that ran the install or to one already running.
+- Any other line (for example a `discover use` run from a plain terminal) belongs to sessions in the same harness and directory that started up to 15 minutes after it.
+
+Install lines are configuration actions; Agentic Resource Registry never counts them as use. The resulting activation count is best effort, not a complete history: it only considers sessions that were delivered, and a sender with more than 200 capability lines for one session sends the most recent and omits older installs. Sessions that started at the same instant are ordered by session ID. Nothing secret is stored.
+
+Entries older than 30 days are pruned. Related: [`observal agent init --from-capabilities`](/cli/agent) turns the resources used in a directory into a draft Agent.
+
+## Exit codes
+
+Follows the shared CLI error contract: `4` permission (unapproved resource without `--yes`), `5` not found, `7` validation (unknown type, harness, or identifier).

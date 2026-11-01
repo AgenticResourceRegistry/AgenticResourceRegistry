@@ -34,7 +34,7 @@ locals {
   raw_secrets = merge(
     {
       "DB_PASSWORD"         = random_password.db.result
-      "CLICKHOUSE_PASSWORD" = local.clickhouse_self_hosted ? random_password.clickhouse.result : var.clickhouse_cloud_password
+      "CLICKHOUSE_PASSWORD" = random_password.clickhouse.result
       "SECRET_KEY"          = random_password.secret_key.result
     },
     local.observability_grafana_enabled ? { "GRAFANA_ADMIN_PASSWORD" = random_password.grafana_admin.result } : {}
@@ -43,7 +43,7 @@ locals {
   derived_urls = {
     "DATABASE_URL"   = "postgresql+asyncpg://observal:${random_password.db.result}@${aws_db_instance.postgres.address}:${aws_db_instance.postgres.port}/observal"
     "REDIS_URL"      = "redis://${aws_elasticache_replication_group.redis.primary_endpoint_address}:${aws_elasticache_replication_group.redis.port}"
-    "CLICKHOUSE_URL" = local.clickhouse_self_hosted ? "clickhouse://default:${random_password.clickhouse.result}@${local.clickhouse_host_internal}:8123/observal" : var.clickhouse_cloud_url
+    "CLICKHOUSE_URL" = "clickhouse://default:${random_password.clickhouse.result}@${local.clickhouse_host_internal}:8123/observal"
   }
 }
 

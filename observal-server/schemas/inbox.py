@@ -1,4 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Request and response shapes for the inbox API."""
@@ -51,6 +53,8 @@ class InboxListResponse(BaseModel):
 
     items: list[InboxItemResponse]
     total: int
+    # Unread rows among ``total``: the same filters, so the two always agree.
+    unread: int = 0
     page: int
     page_size: int
 
@@ -64,11 +68,20 @@ class InboxCountResponse(BaseModel):
     never renders would be a cost with no reader.
     """
 
+    # Unread items in the Open bucket: exactly the unread rows the Inbox lists.
     unread: int
     action_required: int
     open: int
     done: int = 0
     dismissed: int = 0
+    # The rest is filled only when facets are requested.
+    # Unread items per folder: what each folder in the filter sheet shows.
+    unread_by_state: dict[str, int] = Field(default_factory=dict)
+    # The selected folder (or every folder) under the active search.
+    scope_total: int = 0
+    scope_unread: int = 0
+    scope_action_required: int = 0
+    # Also narrowed by the Unread and Needs action toggles, so they add up to the list.
     by_kind: dict[str, int] = Field(default_factory=dict)
     by_subject_type: dict[str, int] = Field(default_factory=dict)
 

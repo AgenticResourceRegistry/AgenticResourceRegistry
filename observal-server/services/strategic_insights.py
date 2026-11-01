@@ -99,7 +99,7 @@ async def generate_strategic_insights(metrics_data: dict) -> dict:
 
     configured_model = await ds.get("insights.model_synthesis") or await ds.get("insights.model_sections")
     if not configured_model:
-        optic.warning("strategic_insights_no_model", reason="no insights model configured")
+        optic.warning("strategic_insights_no_model: no insights model configured")
         return {}
 
     data_block = _build_data_block(metrics_data)
@@ -110,12 +110,12 @@ async def generate_strategic_insights(metrics_data: dict) -> dict:
     try:
         result = await call_model(prompt, model_override=model, max_tokens=4096)
         if result and isinstance(result, dict):
-            optic.info("strategic_insights_generated", keys=list(result.keys()))
+            optic.info("strategic_insights_generated: keys={}", list(result.keys()))
             return result
         optic.warning("strategic_insights_empty_response")
         return {}
     except Exception as e:
-        optic.error("strategic_insights_failed", error=str(e))
+        optic.error("strategic_insights_failed: error={}", str(e))
         return {}
 
 

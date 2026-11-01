@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for OAuth 2.0 Device Authorization Grant (RFC 8628) endpoints."""
@@ -177,6 +178,57 @@ class TestDeviceAuthorize:
             stored_data = json.loads(fake_redis._store[device_keys[0]])
             assert stored_data["status"] == "pending"
             assert stored_data["user_code"] == body["user_code"]
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("provider", "google_on", "github_on", "expected_path"),
+        [
+            ("google", True, False, "/api/v1/auth/oauth/google/login?next="),
+            ("github", False, True, "/api/v1/auth/oauth/github/login?next="),
+            (None, True, True, "/api/v1/auth/oauth/login?next="),
+        ],
+    )
+    async def test_sso_provider_selects_login_route(self, provider, google_on, github_on, expected_path):
+        fake_redis = FakeRedis()
+        try:
+            with (
+                patch("api.routes.device_auth.get_redis", return_value=fake_redis),
+                patch("api.routes.device_auth._saml_configured", AsyncMock(return_value=False)),
+                patch("api.routes.auth.is_oidc_configured", return_value=True),
+                patch("api.routes.auth.is_google_oauth_configured", return_value=google_on),
+                patch("api.routes.auth.is_github_oauth_configured", return_value=github_on),
+            ):
+                async with _make_async_client() as client:
+                    resp = await client.post("/api/v1/auth/device/authorize", json={"sso": True, "provider": provider})
+
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert expected_path in body["verification_uri"]
+            # The device page must still be the post-login destination.
+            assert "%2Fdevice%3Fcode%3D" in body["verification_uri"]
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider", ["google", "github"])
+    async def test_unconfigured_social_provider_is_rejected_not_sent_to_oidc(self, provider):
+        fake_redis = FakeRedis()
+        try:
+            with (
+                patch("api.routes.device_auth.get_redis", return_value=fake_redis),
+                patch("api.routes.auth.is_oidc_configured", return_value=True),
+                patch("api.routes.auth.is_google_oauth_configured", return_value=False),
+                patch("api.routes.auth.is_github_oauth_configured", return_value=False),
+            ):
+                async with _make_async_client() as client:
+                    resp = await client.post("/api/v1/auth/device/authorize", json={"sso": True, "provider": provider})
+
+            assert resp.status_code == 400, resp.text
+            assert "not configured" in resp.json()["detail"]
+            # No device code is issued for a request that can never complete.
+            assert not fake_redis._store
         finally:
             _cleanup()
 

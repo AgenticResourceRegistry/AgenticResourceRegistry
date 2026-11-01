@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Deterministic behavioral coverage for the insights CLI boundary."""
@@ -765,4 +765,372 @@ def test_typer_validation_rejects_bad_arguments_before_any_side_effect(cli, argu
 
 
 def test_insights_app_registers_only_current_commands():
-    assert sorted(get_command(insights.insights_app).commands) == ["generate", "list", "show"]
+    assert sorted(get_command(insights.insights_app).commands) == ["activity", "generate", "list", "sessions", "show"]
+
+
+def test_component_cli_list_show_generate_use_owner_scoped_routes(cli):
+    _returns(cli.resolve, "component-id")
+    _returns(
+        cli.client_get,
+        [
+            {
+                "id": REPORT_ID,
+                "status": "completed",
+                "component_version": None,
+                "period_start": "2026-05-01",
+                "period_end": "2026-05-14",
+            }
+        ],
+    )
+    listed = runner.invoke(insights.insights_app, ["list", "--component", "mcp", "team/tool", "--output", "json"])
+    assert listed.exit_code == 0, listed.output
+    cli.client_get.assert_called_with("/api/v1/insights/components/mcp/component-id/reports")
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        {"id": REPORT_ID, "subject_type": "component", "status": "completed", "coverage": {}},
+    ]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "mcp", "team/tool", "--output", "json"])
+    assert shown.exit_code == 0, shown.output
+    assert cli.client_get.call_args_list[-1] == call(f"/api/v1/insights/reports/{REPORT_ID}")
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        {
+            "id": REPORT_ID,
+            "subject_type": "component",
+            "status": "completed",
+            "coverage": {},
+            "narrative": {
+                "summary": "Observed call",
+                "component_analysis": {
+                    "state": "assessed",
+                    "sampled_sessions": 1,
+                    "truncated": False,
+                    "findings": [
+                        {
+                            "kind": "workflow",
+                            "insight": "Used to find docs",
+                            "confidence": "low",
+                            "evidence_refs": ["s0-call0"],
+                        }
+                    ],
+                    "evidence": {"s0-call0": "search (result: unknown)"},
+                },
+            },
+        },
+    ]
+    plain = runner.invoke(insights.insights_app, ["show", "--component", "mcp", "team/tool"])
+    assert plain.exit_code == 0, plain.output
+    assert "What the published calls suggest" in " ".join(cli.messages())
+    assert "search (result: unknown)" in " ".join(cli.messages())
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = _blocked("component generate should not check LLM status").side_effect
+    _returns(cli.client_post, {"id": REPORT_ID, "status": "pending"})
+    queued = runner.invoke(
+        insights.insights_app, ["generate", "--component", "mcp", "team/tool", "--period", "14", "--output", "json"]
+    )
+    assert queued.exit_code == 0, queued.output
+    cli.client_get.assert_not_called()
+    cli.client_post.assert_called_once_with(
+        "/api/v1/insights/components/mcp/component-id/generate", {"period_days": 14}
+    )
+
+
+def test_component_cli_all_pages_and_exact_historical_id(cli):
+    _returns(cli.resolve, "component-id")
+    page = [{"id": REPORT_ID, "created_at": "2026-05-17T00:00:00Z", "status": "completed"}] * 100
+    cli.client_get.side_effect = [page, [{"id": "older", "created_at": "2026-05-16T00:00:00Z"}]]
+    listed = runner.invoke(
+        insights.insights_app,
+        [
+            "list",
+            "--component",
+            "mcp",
+            "team/tool",
+            "--all",
+            "--output",
+            "json",
+        ],
+    )
+    assert listed.exit_code == 0, listed.output
+    assert len(cli.json[-1]) == 101
+    assert "before_created_at=2026-05-17T00%3A00%3A00Z" in cli.client_get.call_args_list[-1].args[0]
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [{"id": REPORT_ID, "component_id": "component-id", "status": "completed"}]
+    shown = runner.invoke(
+        insights.insights_app,
+        [
+            "show",
+            REPORT_ID,
+            "--component",
+            "mcp",
+            "team/tool",
+            "--output",
+            "json",
+        ],
+    )
+    assert shown.exit_code == 0, shown.output
+    cli.client_get.assert_called_once_with(f"/api/v1/insights/reports/{REPORT_ID}")
+
+
+def _skill_report(**metrics) -> dict:
+    """Shape of a real skill report (services.insights.component_report._generate_skill_content)."""
+    base = {
+        "present_sessions": 6,
+        "loaded_sessions": 2,
+        "confirmed_loads": 2,
+        "load_attempts": 0,
+        "invoked_sessions": 2,
+        "invocations": 2,
+        "available_sessions": 1,
+        "harness_distribution": {"claude-code": 5, "pi": 1},
+        "version_distribution": {"unknown": 6},
+    }
+    return {
+        "id": REPORT_ID,
+        "subject_type": "component",
+        "component_type": "skill",
+        "component_name": "team/review",
+        "status": "completed",
+        "metrics": base | metrics,
+        "narrative": {"summary": "The skill's instructions entered context in processed present sessions."},
+        "coverage": {
+            "attribution_state": "observed",
+            "presence": {"present_sessions": 6},
+            "projection": {"projection_complete_sessions": 6},
+            "evidence": {"collision_facts": 0, "unmatched_facts": 1},
+            "usage_rate_denominator_sessions": 6,
+            "reasons": ["available_not_recorded_on_some_harnesses", "invoked_not_recorded_on_some_harnesses"],
+            "limitations": ["entered_context_not_helped: a load shows context, not help"],
+        },
+    }
+
+
+def test_skill_component_reports_use_skill_routes_and_never_mcp_wording(cli):
+    _returns(cli.resolve, "skill-id")
+    cli.client_get.side_effect = [[{"id": REPORT_ID, "status": "completed"}], _skill_report()]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "skill", "team/review"])
+    assert shown.exit_code == 0, shown.output
+    assert cli.client_get.call_args_list[0] == call("/api/v1/insights/components/skill/skill-id/reports")
+    text = " ".join(cli.messages())
+    assert "Sessions with a confirmed load: 2" in text
+    assert "Sessions where offered: 1 (only harnesses that record it)" in text
+    assert "entered_context_not_helped" in text
+    for mcp_only in ("Observed calls", "What the published calls suggest", "collisions,"):
+        assert mcp_only not in text
+
+    cli.client_get.reset_mock()
+    cli.client_get.side_effect = [
+        [{"id": REPORT_ID, "status": "completed"}],
+        _skill_report(available_sessions=None, invoked_sessions=None, invocations=None),
+    ]
+    runner.invoke(insights.insights_app, ["show", "--component", "skill", "team/review"])
+    text = " ".join(cli.messages())
+    assert "Sessions where offered: not recorded" in text and "Sessions with an invocation: not recorded" in text
+
+    cli.client_get.side_effect = _blocked("skill generate should not check LLM status").side_effect
+    _returns(cli.client_post, {"id": REPORT_ID, "status": "pending"})
+    queued = runner.invoke(insights.insights_app, ["generate", "--component", "skill", "team/review", "-o", "json"])
+    assert queued.exit_code == 0, queued.output
+    cli.client_post.assert_called_once_with("/api/v1/insights/components/skill/skill-id/generate", {"period_days": 14})
+
+
+def test_unsupported_component_reports_are_refused_before_any_request(cli):
+    result = runner.invoke(insights.insights_app, ["list", "--component", "prompt", "team/p"])
+    assert result.exit_code != 0
+    cli.resolve.assert_not_called()
+    cli.client_get.assert_not_called()
+
+
+def _hook_report(**metrics) -> dict:
+    """Shape of a real hook report (services.insights.component_report._generate_hook_content)."""
+    return {
+        "id": REPORT_ID,
+        "subject_type": "component",
+        "component_type": "hook",
+        "component_name": "team/lint",
+        "status": "completed",
+        "metrics": {
+            "present_sessions": 3,
+            "eligible_sessions": 1,
+            "sessions_with_recorded_run": 1,
+            "runs_with_output": 0,
+            "failures": 1,
+            "blocks": 0,
+            "harness_distribution": {"claude-code": 3},
+            "version_distribution": {},
+        }
+        | metrics,
+        "narrative": {"summary": "The hook has recorded runs in sessions where it could run."},
+        "coverage": {
+            "attribution_state": "observed",
+            "presence": {"present_sessions": 3},
+            "projection": {"projection_complete_sessions": 3},
+            "eligibility": {"eligible_sessions": 1, "headless_sessions": 1, "agent_inactive_sessions": 1},
+            "evidence": {"collision_runs": 0, "unmatched_runs": 0},
+            "usage_rate_denominator_sessions": 1,
+            "reasons": ["agent_hook_headless_sessions"],
+            "limitations": ["silent_success_unrecorded: recorded runs are a lower bound"],
+        },
+    }
+
+
+def test_hook_component_reports_show_lower_bounds_and_sessions_that_could_not_run(cli):
+    _returns(cli.resolve, "hook-id")
+    cli.client_get.side_effect = [[{"id": REPORT_ID, "status": "completed"}], _hook_report()]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "hook", "team/lint"])
+    assert shown.exit_code == 0, shown.output
+    assert cli.client_get.call_args_list[0] == call("/api/v1/insights/components/hook/hook-id/reports")
+    text = " ".join(cli.messages())
+    assert "Sessions with a recorded run: 1 (a lower bound)" in text
+    assert "0 with output, 1 failed, 0 blocked" in text
+    assert "1 headless (this agent hook's placement cannot run), 1 agent not active" in text
+    for other in ("Observed calls", "confirmed load", "invocation"):
+        assert other not in text
+
+
+def test_hook_reports_count_silent_runs_where_every_run_is_recorded(cli):
+    """Regression: Pi's silent runs were dropped, and every hook report claimed a lower bound."""
+    report = _hook_report(silent_runs=4, harness_distribution={"pi": 3})
+    report["coverage"] |= {"limitations": [], "reasons": []}
+    _returns(cli.resolve, "hook-id")
+    cli.client_get.side_effect = [[{"id": REPORT_ID, "status": "completed"}], report]
+    shown = runner.invoke(insights.insights_app, ["show", "--component", "hook", "team/lint"])
+    assert shown.exit_code == 0, shown.output
+    text = " ".join(cli.messages())
+    assert "Sessions with a recorded run: 1" in text
+    assert "(a lower bound)" not in text
+    assert "0 with output, 4 silent, 1 failed, 0 blocked" in text
+
+
+_ANALYSIS = {
+    "version": 1,
+    "state": "assessed",
+    "at_a_glance": {"health": "needs_attention", "summary": "9 of 10 recorded runs failed."},
+    "what_works": [{"title": "Runs recorded", "detail": "Each run leaves a record."}],
+    "friction": [{"title": "Failures", "detail": "Most runs exit with an error."}],
+    "suggestions": [
+        {
+            "action_type": "edit_component",
+            "title": "Exit cleanly",
+            "detail": "Return 0 when nothing is wrong.",
+            "evidence": ["hook_failing", "friction"],
+            "confidence": "medium",
+        }
+    ],
+}
+_ATTENTION = [
+    {
+        "id": "hook_failing",
+        "severity": "attention",
+        "title": "Most recorded runs failed",
+        "detail": "9 of 10 recorded runs failed.",
+        "evidence": {},
+        "suggestion": "Check that its command exits 0.",
+    },
+    {"id": "note", "severity": "info", "title": "A note", "detail": "Some detail.", "evidence": {}, "suggestion": None},
+]
+_SIDE = {
+    "sessions": 40,
+    "sampled": 30,
+    "analyzed": 20,
+    "achieved": 6,
+    "not_achieved": 14,
+    "friction_types": [["tool_failed", 8]],
+}
+_OUTCOMES = {
+    "version": 1,
+    "state": "assessed",
+    "with": _SIDE,
+    "without": {**_SIDE, "sessions": 90, "analyzed": 30, "achieved": 20, "not_achieved": 10, "friction_types": []},
+    "gap": {"state": "lower"},
+    "comparison": "Sessions in this project in the same period.",
+}
+
+
+def test_interpretation_renders_reading_attention_and_outcomes_in_that_order(cli):
+    insights._render_interpretation({"analysis": _ANALYSIS, "attention": _ATTENTION, "outcomes": _OUTCOMES})
+    text = "\n".join(cli.messages())
+    order = [
+        "needs attention. 9 of 10 recorded runs failed.",
+        "What works",
+        "Failures: Most runs exit with an error.",
+        "Suggestion[/bold] (edit component, medium confidence) Exit cleanly: Return 0 when nothing is wrong.",
+        "Based on: Most recorded runs failed; friction in sessions with it",
+        "What to look at",
+        "Suggestion: Check that its command exits 0.",
+        "Sessions with and without it",
+        "With it:    6 of 20 sessions with a known outcome achieved their goal (30%); 20 analyzed of 40 (30 sampled)",
+        "friction: tool failed 8",
+        "Without it: 20 of 30 sessions with a known outcome achieved their goal (67%)",
+        "Difference: achieved less often with it. These sessions differ in more than the component: an association, not a cause.",
+    ]
+    positions = [text.index(item) for item in order]
+    assert positions == sorted(positions), text
+
+
+@pytest.mark.parametrize(
+    ("analysis", "phrase"),
+    [
+        ({"state": "unavailable"}, "could not run"),
+        ({"state": "insufficient"}, "Too few sessions"),
+        ({"state": "unknown"}, "No reading was kept"),
+    ],
+)
+def test_interpretation_says_why_there_is_no_reading(cli, analysis, phrase):
+    insights._render_interpretation({"analysis": analysis, "attention": [], "outcomes": {"state": "insufficient"}})
+    text = "\n".join(cli.messages())
+    assert phrase in text and "No sessions with this component have outcome data yet" in text
+
+
+def test_interpretation_flags_a_failed_outcome_read_and_old_reports(cli):
+    insights._render_interpretation({"outcomes": {"state": "unavailable"}})
+    assert "Outcomes could not be read" in "\n".join(cli.messages())
+    cli.prints.clear()
+    insights._render_interpretation({"summary": "old report"})
+    assert "predates outcome analysis" in "\n".join(cli.messages())
+
+
+@pytest.mark.parametrize(
+    ("gap", "phrase"),
+    [
+        ({"state": "higher"}, "achieved more often with it"),
+        ({"state": "no_difference"}, "no difference large enough to report"),
+        ({"state": "insufficient", "min_per_side": 10}, "too few sessions to compare (needs 10"),
+    ],
+)
+def test_outcome_verdicts(cli, gap, phrase):
+    insights._render_outcomes({**_OUTCOMES, "gap": gap})
+    assert phrase in "\n".join(cli.messages())
+
+
+@pytest.mark.parametrize("component_type", ["mcp", "skill", "hook"])
+def test_every_component_report_shows_the_interpretation(cli, monkeypatch, component_type):
+    narrative = {"summary": "counts only", "analysis": _ANALYSIS, "attention": _ATTENTION, "outcomes": _OUTCOMES}
+    report = _completed_report(
+        subject_type="component",
+        component_type=component_type,
+        component_name="user/thing",
+        metrics={},
+        coverage={},
+        narrative=narrative,
+    )
+    monkeypatch.setattr(insights, "_resolve_report_for_show", lambda *_args, **_kwargs: report)
+    insights.insights_show("user/thing", "latest", "table", None)
+    text = "\n".join(cli.messages())
+    assert "counts only" in text and "needs attention. 9 of 10 recorded runs failed." in text
+    assert "Most recorded runs failed" in text and "Difference: achieved less often with it" in text
+
+
+def test_component_sections_render_their_own_shapes(cli):
+    insights._render_component_section("attention", _ATTENTION)
+    insights._render_component_section("analysis", _ANALYSIS)
+    insights._render_component_section("outcomes", _OUTCOMES)
+    text = "\n".join(cli.messages())
+    assert (
+        "Most recorded runs failed" in text and "needs attention" in text and "Difference: achieved less often" in text
+    )

@@ -4,15 +4,16 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-# ── Build stage: install pnpm, deps, and build the Next.js app ──────────────
+# ── Build stage: install pnpm, deps, and build the Vite app ────────────────
 # node:24-alpine (multi-arch: linux/amd64, linux/arm64, linux/s390x)
 FROM node:24-alpine@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3 AS builder
 ARG TARGETARCH
 ARG PNPM_VERSION=10.34.4
 ARG PNPM_SHA256_AMD64=15092b4d71f1192f67501116dd87dd20be8c4238434371959820255a374219c1
 ARG PNPM_SHA256_ARM64=9513a31bc1e166f5f6e6dbaadca91fa05b44e919ea53685c754ab0acd5501514
-RUN apk add --no-cache wget && \
-    case "$TARGETARCH" in \
+# Alpine provides BusyBox wget; the downloaded pnpm binary is SHA-256 pinned.
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+RUN case "$TARGETARCH" in \
         amd64) PNPM_ARCH=x64; PNPM_SHA256="$PNPM_SHA256_AMD64" ;; \
         arm64) PNPM_ARCH=arm64; PNPM_SHA256="$PNPM_SHA256_ARM64" ;; \
         *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
@@ -25,12 +26,20 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY web/package.json ./web/
 RUN mkdir -p tests/e2e && echo '{"name":"@observal/e2e","version":"0.0.0","private":true,"devDependencies":{"@playwright/test":"^1.59.1"}}' > tests/e2e/package.json
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
 
 COPY web/ ./web/
 COPY docs/ ./docs/
 WORKDIR /app/web
-RUN pnpm run build
+
+# Typecheck and bundle run as parallel BuildKit stages (what `pnpm run build` does serially).
+# The runner binds the typecheck marker so a type error still fails the build.
+FROM builder AS typecheck
+RUN --mount=type=cache,target=/tmp/tsc-cache \
+    pnpm exec tsc --noEmit --tsBuildInfoFile /tmp/tsc-cache/web.tsbuildinfo && touch /typecheck.ok
+
+FROM builder AS bundle
+RUN pnpm exec vite build
 
 # ── Runtime stage: nginx serves the static SPA build ────────────────────────
 # nginx:alpine (multi-arch: linux/amd64, linux/arm64, others)
@@ -39,7 +48,8 @@ FROM nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2
 # - docker/nginx-spa.conf     (default) — includes proxy_pass for Docker Compose
 # - docker/nginx-spa-ecs.conf            — SPA-only, no upstream (for ECS/Fargate)
 ARG NGINX_CONF=docker/nginx-spa.conf
-COPY --from=builder /app/web/dist /usr/share/nginx/html
+RUN --mount=type=bind,from=typecheck,source=/typecheck.ok,target=/typecheck.ok true
+COPY --from=bundle /app/web/dist /usr/share/nginx/html
 COPY ${NGINX_CONF} /etc/nginx/conf.d/default.conf
 EXPOSE 3000
 CMD ["nginx", "-g", "daemon off;"]

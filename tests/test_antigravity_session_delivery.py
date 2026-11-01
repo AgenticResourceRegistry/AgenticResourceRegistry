@@ -95,6 +95,12 @@ def test_public_reconcile_uses_shared_drain(tmp_path: Path, monkeypatch):
             assert since_hours == 24
             return [source]
 
+        def related_session_sources(self, source):
+            return []
+
+        def session_extra_records(self, source, event, final):
+            return ()
+
     calls = []
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _harness: Adapter())
     monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (0, 0, False))

@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .base import basic_event, load_line, pick_timestamp, strip_ansi
+from .base import basic_event, load_line, pick_timestamp, strip_ansi, token_count, uncached_input_tokens
 
 _MAX_BODY = 120
 _MAX_RESPONSE = 2000
@@ -201,15 +201,24 @@ def _token_attributes(metadata: Any) -> dict[str, str]:
     usage = metadata.get("usage")
     attributes: dict[str, str] = {}
     if isinstance(usage, dict):
+        # Goose counts cache reads and writes inside inputTokens.
+        input_tokens = uncached_input_tokens(
+            token_count(usage, "inputTokens"),
+            token_count(usage, "cacheReadTokens"),
+            token_count(usage, "cacheWriteTokens"),
+        )
+        if input_tokens:
+            attributes["input_tokens"] = str(input_tokens)
         for key, name in (
-            ("inputTokens", "input_tokens"),
             ("outputTokens", "output_tokens"),
             ("cacheReadTokens", "cache_read_tokens"),
             ("cacheWriteTokens", "cache_creation_tokens"),
-            ("cost", "cost"),
         ):
-            if usage.get(key):
-                attributes[name] = str(usage[key])
+            count = token_count(usage, key)
+            if count:
+                attributes[name] = str(count)
+        if usage.get("cost"):
+            attributes["cost"] = str(usage["cost"])
     inference = metadata.get("inference")
     if isinstance(inference, dict):
         model = inference.get("resolvedModel") or inference.get("requestedModel")

@@ -57,6 +57,12 @@ def status_badge(status: str) -> str:
     return f"[{color}]{label}[/{color}]"
 
 
+def listing_status(item: dict) -> str:
+    """Status badge for a registry item, marked when an admin recommended it."""
+    badge = status_badge(item.get("status", ""))
+    return f"{badge}  [cyan]recommended[/cyan]" if item.get("is_recommended") else badge
+
+
 # ── Relative time ────────────────────────────────────────
 
 

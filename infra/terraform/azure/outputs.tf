@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Tanvi Reddy
+# SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 output "api_url" {
@@ -23,12 +23,12 @@ output "postgresql_fqdn" {
 
 output "redis_hostname" {
   description = "Redis endpoint."
-  value       = var.redis_mode == "enterprise" ? azurerm_redis_enterprise_cluster.main[0].hostname : "${azurerm_network_interface.clickhouse[0].private_ip_address}:6379"
+  value       = var.redis_mode == "enterprise" ? azurerm_redis_enterprise_cluster.main[0].hostname : "${azurerm_network_interface.clickhouse.private_ip_address}:6379"
 }
 
 output "clickhouse_private_ip" {
   description = "ClickHouse VM private IP (VNet only)."
-  value       = local.clickhouse_self_hosted ? azurerm_network_interface.clickhouse[0].private_ip_address : "using ClickHouse Cloud"
+  value       = azurerm_network_interface.clickhouse.private_ip_address
 }
 
 output "acr_login_server" {

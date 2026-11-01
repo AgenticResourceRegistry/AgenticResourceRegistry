@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 
 from api.deps import get_db
 from models.scim_token import ScimToken
-from models.user import User, UserRole
+from models.user import User, UserRole, live_users
+from services.auth_header import bearer_token
 from services.events import UserCreated, UserDeleted, bus
 from services.scim_service import (
     SCIM_PATCH_SCHEMA,
@@ -40,6 +41,7 @@ from services.security_events import (
     Severity,
     emit_security_event,
 )
+from services.user_deletion import LastAdminError, delete_user_account, revoke_deleted_user_tokens
 from services.username_generator import generate_unique_username
 
 logger = logging.getLogger("observal.scim")
@@ -55,7 +57,7 @@ async def _get_scoped_user(user_id: str, db: AsyncSession) -> User | None:
         uid = _uuid.UUID(user_id)
     except ValueError:
         return None
-    q = select(User).where(User.id == uid)
+    q = select(User).where(User.id == uid, live_users())
     result = await db.execute(q)
     return result.scalar_one_or_none()
 
@@ -64,10 +66,10 @@ async def _verify_scim_token(
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> ScimToken:
-    if not authorization or not authorization.startswith("Bearer "):
+    token = bearer_token(authorization)
+    if token is None:
         raise HTTPException(status_code=401, detail="Missing or invalid SCIM bearer token")
 
-    token = authorization.removeprefix("Bearer ").strip()
     token_hash = hash_scim_token(token)
 
     result = await db.execute(
@@ -116,7 +118,7 @@ async def list_users(
 
         if parsed_filter.attr == "username":
             value = parsed_filter.value.strip().lower()
-            q = select(User)
+            q = select(User).where(live_users())
             if parsed_filter.op == "eq":
                 q = q.where(User.email == value)
             elif parsed_filter.op == "sw":
@@ -146,7 +148,7 @@ async def list_users(
             media_type=SCIM_CONTENT_TYPE,
         )
 
-    base_q = select(User)
+    base_q = select(User).where(live_users())
 
     total_q = select(func.count()).select_from(base_q.subquery())
     total = (await db.execute(total_q)).scalar() or 0
@@ -293,8 +295,19 @@ async def delete_user(
 
     email = user.email
     user_id_str = str(user.id)
-    await db.delete(user)
+    # Same account deletion as the admin route: the row becomes a scrubbed
+    # shell so authored records and telemetry keep resolving.
+    try:
+        await delete_user_account(db, user)
+    except LastAdminError as error:
+        await db.rollback()
+        return JSONResponse(
+            status_code=400,
+            content=format_scim_error(400, str(error)),
+            media_type=SCIM_CONTENT_TYPE,
+        )
     await db.commit()
+    await revoke_deleted_user_tokens(user.id)
 
     await bus.emit(UserDeleted(user_id=user_id_str, email=email))
 

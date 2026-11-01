@@ -10,7 +10,7 @@ body:
     attributes:
       value: |
         **Have a quick idea or want to gauge interest first?**
-        Consider starting a conversation in our [GitHub Discussions](https://github.com/Observal/Observal/discussions) before filing a formal feature request.
+        Consider starting a conversation in our [GitHub Discussions](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/discussions) before filing a formal feature request.
 
   - type: textarea
     id: problem

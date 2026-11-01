@@ -1,9 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Testing Guide"
+---
 
-# Testing Guide
-
-This guide defines the pattern for new Python tests in Observal. The current test suite has several styles because it grew over time. Do not rewrite old tests only for style. New tests and touched files should move toward this pattern when it keeps the diff focused.
+This guide defines the pattern for new Python tests in Agentic Resource Registry. The current test suite has several styles because it grew over time. Do not rewrite old tests only for style. New tests and touched files should move toward this pattern when it keeps the diff focused.
 
 ## Goals
 
@@ -21,7 +23,6 @@ Use this structure for most new test files:
 
 ```python
 # SPDX-FileCopyrightText: 2026 Your Name <email@example.com>
-<!-- SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com> -->
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the behavior under test.
@@ -448,6 +449,7 @@ Use the existing directories:
 - `observal-server/tests/` for server-focused tests that live with the server package
 - `observal_cli/tests/` for CLI command and CLI package tests
 - `tests/e2e/` for Playwright tests that require the running stack
+- `tests/integration_clickhouse/` for opt-in tests against real ClickHouse and PostgreSQL; see [Database integration tests](database-integration-tests.md)
 
 Shared setup should stay small:
 

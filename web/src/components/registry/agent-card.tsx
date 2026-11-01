@@ -7,6 +7,9 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowDownToLine, Puzzle, Star } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { RecommendedBadge } from "@/components/registry/recommended-badge";
+import { ForkMarkers } from "@/components/registry/fork-provenance";
+import type { ForkProvenance } from "@/lib/types";
 import { HarnessBadges } from "@/components/registry/harness-badges";
 import { RegistryName } from "@/components/registry/registry-name";
 import { canonicalRouteParts } from "@/lib/registry-name";
@@ -29,6 +32,9 @@ interface AgentCardProps {
   status?: string;
   supported_harnesses?: string[];
   inferred_supported_harnesses?: string[];
+  is_recommended?: boolean;
+  forked_from?: ForkProvenance | null;
+  fork_count?: number;
   className?: string;
 }
 
@@ -47,6 +53,9 @@ export function AgentCard({
   component_count,
   supported_harnesses,
   inferred_supported_harnesses,
+  is_recommended,
+  forked_from,
+  fork_count,
   className,
 }: AgentCardProps) {
   const cardClassName = [
@@ -68,11 +77,15 @@ export function AgentCard({
           item={{ name, namespace, slug, qualified_name }}
           nameClassName="font-display text-sm font-semibold leading-tight"
         />
-        {version && (
-          <Badge variant="secondary" className="shrink-0 text-[10px] px-1.5 py-0">
-            {version}
-          </Badge>
-        )}
+        <div className="flex items-center gap-1.5">
+          {is_recommended && <RecommendedBadge />}
+          <ForkMarkers provenance={forked_from} count={fork_count} />
+          {version && (
+            <Badge variant="secondary" className="shrink-0 text-[10px] px-1.5 py-0">
+              {version}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {description && (

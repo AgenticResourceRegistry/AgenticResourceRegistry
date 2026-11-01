@@ -12,6 +12,7 @@ import tempfile
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -19,6 +20,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from observal_cli import client, config
+from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import (
     HARNESS_CAPABILITIES,
     VALID_HARNESSES,
@@ -27,6 +29,7 @@ from observal_cli.constants import (
     VALID_HOOK_HANDLER_TYPES,
     VALID_HOOK_SCOPES,
 )
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import select_one, text_input
 from observal_cli.render import (
@@ -36,11 +39,13 @@ from observal_cli.render import (
     esc,
     handle,
     kv_panel,
+    listing_status,
     output_json,
     relative_time,
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
 
 hook_app = typer.Typer(
     help=(
@@ -97,7 +102,10 @@ def _validate_timeout(execution_mode: str, handler_config: dict) -> None:
 def hook_submit(
     from_file: str | None = typer.Option(None, "--from-file", "-f", help="Create from JSON file"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (hook ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (hook ID)"
+    ),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     script: str | None = typer.Option(None, "--script", help="Path to hook script file (content stored in registry)"),
     source_url: str | None = typer.Option(None, "--source-url", help="Git repo containing hook scripts"),
     source_ref: str | None = typer.Option(None, "--source-ref", help="Branch/tag to track (default: main)"),
@@ -142,11 +150,12 @@ def hook_submit(
         resolved = client.resolve_registry_reference("hook", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/hooks/{resolved}/submit")
+            result = client.post(f"/api/v1/hooks/{resolved}/submit" + (f"?message={quote(message)}" if message else ""))
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+            print_review_link(result)
         return
 
     if from_file:
@@ -336,9 +345,11 @@ def hook_submit(
     if output == "json":
         output_json(result)
         return
-    message = "Draft saved" if draft else "Hook submitted"
-    rprint(f"[green]✓ {message}![/green] ID: [bold]{esc(result['id'])}[/bold]")
+    label = "Draft saved" if draft else "Hook submitted"
+    rprint(f"[green]✓ {label}![/green] ID: [bold]{esc(result['id'])}[/bold]")
     rprint(f"  Install: [cyan]observal registry hook install {esc(client.canonical_name(result))}[/cyan]")
+    if not draft:
+        print_review_link(result)
 
 
 @hook_app.command(name="list")
@@ -437,7 +448,7 @@ def hook_show(
         output_json(item)
         return
     rows = [
-        ("Status", status_badge(item.get("status", ""))),
+        ("Status", listing_status(item)),
         ("Event", esc(item.get("event", "N/A"))),
         ("Handler Type", esc(item.get("handler_type", "N/A"))),
         ("Handler Config", esc(_json.dumps(item.get("handler_config", {}), indent=2))),
@@ -446,6 +457,7 @@ def hook_show(
         ("Namespace", esc(handle(item) or "N/A")),
         ("Description", esc(item.get("description", ""))),
         ("Created", esc(relative_time(item.get("created_at")))),
+        *fork_detail_rows(item),
         ("ID", f"[dim]{esc(item['id'])}[/dim]"),
     ]
     if item.get("script_filename"):
@@ -487,6 +499,9 @@ def hook_install(
     platform: str = typer.Option("", "--platform", "-p", help="Platform (win32, darwin, linux)"),
     raw: bool = typer.Option(False, "--raw", help="Output raw JSON only (no file writes)"),
     directory: str | None = typer.Option(None, "--dir", "-d", help="Project directory for file writes"),
+    version: str | None = typer.Option(
+        None, "--version", "-V", help="Install a specific version (e.g. '1.2.0'). Defaults to latest."
+    ),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Install a hook for a specific harness.
@@ -498,7 +513,7 @@ def hook_install(
     \b
     Examples:
       observal registry hook install my-hook --harness claude-code
-      observal registry hook install @guard --harness kiro --dir ./project
+      observal registry hook install @guard --harness kiro --dir ./project --version 1.2.0
       observal registry hook install my-hook --harness cursor --raw
     """
     if raw and output == "json":
@@ -525,6 +540,18 @@ def hook_install(
             resource="platform",
             remediation="Choose win32, darwin, or linux.",
         )
+    if version:
+        try:
+            Version(version)
+        except InvalidVersion as error:
+            fail(
+                ErrorCategory.VALIDATION,
+                "The requested hook version is invalid.",
+                operation="Install hook",
+                resource=version,
+                remediation="Provide a valid version and retry.",
+                detail=repr(error),
+            )
     machine_output = raw or output == "json"
     resolved = client.resolve_registry_reference("hook", hook_id)
     listing = client.get(f"/api/v1/hooks/{resolved}")
@@ -541,10 +568,10 @@ def hook_install(
     )
     install_context = nullcontext() if machine_output else spinner(f"Generating {harness} config...")
     with install_context:
-        result = client.post_public(
-            f"/api/v1/hooks/{resolved}/install",
-            {"harness": harness, "platform": platform, "local_name": local_name},
-        )
+        install_body = {"harness": harness, "platform": platform, "local_name": local_name}
+        if version:
+            install_body["version"] = version
+        result = client.post_public(f"/api/v1/hooks/{resolved}/install", install_body)
 
     config_snippet = result.get("config_snippet", {})
     files = result.get("files", [])
@@ -666,20 +693,34 @@ def hook_install(
             _atomic_write_text(cfg_file, config_content)
             rprint(f"  [green]✓[/green] Updated {esc(cfg_file)}")
 
+    from observal_cli.harness import ensure_loaded, get_adapter
     from observal_cli.lockfile import upsert_standalone
 
+    ensure_loaded()
+    try:
+        binding = get_adapter(harness).standalone_hook_binding(
+            config_path or "",
+            config_snippet if isinstance(config_snippet, dict) else {},
+            [(path, path.relative_to(project_root)) for path, _content, _executable in file_writes],
+        )
+    except KeyError:
+        binding = None
     try:
         upsert_standalone(
             harness,
             component_type="hook",
             name=listing.get("name", resolved),
             component_id=str(listing.get("id", resolved)),
-            version=listing.get("version"),
+            version=result.get("version") or listing.get("version"),
             scope="project",
+            version_id=str(result["version_id"]) if result.get("version_id") else None,
+            digest=result.get("digest"),
+            requested_version=version,
             directory=str(project_root),
             namespace=listing.get("namespace"),
             slug=listing.get("slug"),
             local_name=local_name,
+            hook_binding=binding,
         )
     except PermissionError as error:
         fail(
@@ -792,7 +833,10 @@ def hook_edit(
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/hooks/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("hook", "hooks", resolved, result)
     if output == "json":
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry hook submit --submit {result.get('id', '<id>')}")

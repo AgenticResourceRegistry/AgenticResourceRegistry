@@ -1,0 +1,785 @@
+{
+  "_comment": "Hand-written task-to-resource relevance judgments for discovery search. Entries are realistic registry resources; queries are things a developer would actually ask. Add cases when a real search misses; never tune a case to make the current ranker pass.",
+  "entries": [
+    {
+      "id": "security-review",
+      "kind": "skill",
+      "name": "Security Review",
+      "description": "Reviews pull requests for authentication, authorization and injection vulnerabilities.",
+      "queries": [
+        "review this pull request for security vulnerabilities",
+        "look for authentication bugs in these changes"
+      ],
+      "capabilities": [
+        "code review",
+        "security"
+      ],
+      "tags": [
+        "skill",
+        "security",
+        "code review"
+      ]
+    },
+    {
+      "id": "playwright-tests",
+      "kind": "skill",
+      "name": "Playwright Test Writer",
+      "description": "Generates end-to-end Playwright tests for React pages and flows.",
+      "queries": [
+        "write playwright tests for this page",
+        "add end to end browser tests"
+      ],
+      "capabilities": [
+        "testing",
+        "playwright"
+      ],
+      "tags": [
+        "skill",
+        "testing"
+      ]
+    },
+    {
+      "id": "commit-messages",
+      "kind": "skill",
+      "name": "Conventional Commits",
+      "description": "Writes commit messages that follow the Conventional Commits specification.",
+      "queries": [
+        "write a commit message for these changes",
+        "format my commit as conventional commits"
+      ],
+      "capabilities": [
+        "git",
+        "commit message"
+      ],
+      "tags": [
+        "skill",
+        "git"
+      ]
+    },
+    {
+      "id": "sql-migrations",
+      "kind": "skill",
+      "name": "Alembic Migration Author",
+      "description": "Writes and reviews Alembic database migrations for SQLAlchemy models.",
+      "queries": [
+        "create a database migration for this model change",
+        "review my alembic migration"
+      ],
+      "capabilities": [
+        "database",
+        "migrations",
+        "alembic"
+      ],
+      "tags": [
+        "skill",
+        "database"
+      ]
+    },
+    {
+      "id": "release-notes-skill",
+      "kind": "skill",
+      "name": "Release Notes Author",
+      "description": "Summarises merged pull requests into customer-facing release notes.",
+      "queries": [
+        "write release notes for this version",
+        "summarise what changed since the last release"
+      ],
+      "capabilities": [
+        "documentation",
+        "release notes"
+      ],
+      "tags": [
+        "skill",
+        "documentation"
+      ]
+    },
+    {
+      "id": "react-a11y",
+      "kind": "skill",
+      "name": "Accessibility Auditor",
+      "description": "Checks React components for WCAG accessibility problems and suggests fixes.",
+      "queries": [
+        "check this component for accessibility issues",
+        "make this page screen reader friendly"
+      ],
+      "capabilities": [
+        "accessibility",
+        "react",
+        "wcag"
+      ],
+      "tags": [
+        "skill",
+        "frontend"
+      ]
+    },
+    {
+      "id": "perf-profiler",
+      "kind": "skill",
+      "name": "Python Performance Profiler",
+      "description": "Profiles slow Python code paths and recommends optimisations.",
+      "queries": [
+        "why is this python function slow",
+        "profile and speed up this code"
+      ],
+      "capabilities": [
+        "performance",
+        "python",
+        "profiling"
+      ],
+      "tags": [
+        "skill",
+        "python"
+      ]
+    },
+    {
+      "id": "terraform-review",
+      "kind": "skill",
+      "name": "Terraform Plan Reviewer",
+      "description": "Reviews Terraform plans for destructive changes and drift before apply.",
+      "queries": [
+        "review this terraform plan before I apply it",
+        "will this terraform change destroy anything"
+      ],
+      "capabilities": [
+        "terraform",
+        "infrastructure",
+        "review"
+      ],
+      "tags": [
+        "skill",
+        "infrastructure"
+      ]
+    },
+    {
+      "id": "github-mcp",
+      "kind": "mcp",
+      "name": "GitHub",
+      "description": "Read pull requests, issues, and file contents from GitHub repositories.",
+      "queries": [
+        "list open pull requests in a repository",
+        "read a file from a github repo"
+      ],
+      "capabilities": [
+        "list_pull_requests",
+        "get_file_contents",
+        "search_issues"
+      ],
+      "tags": [
+        "mcp",
+        "developer tools"
+      ]
+    },
+    {
+      "id": "postgres-mcp",
+      "kind": "mcp",
+      "name": "PostgreSQL",
+      "description": "Run read-only SQL queries and inspect schemas in PostgreSQL databases.",
+      "queries": [
+        "query our postgres database",
+        "show me the schema of a table"
+      ],
+      "capabilities": [
+        "query",
+        "list_tables",
+        "describe_table"
+      ],
+      "tags": [
+        "mcp",
+        "database"
+      ]
+    },
+    {
+      "id": "snowflake-mcp",
+      "kind": "mcp",
+      "name": "Snowflake",
+      "description": "Execute SQL against Snowflake warehouses and browse databases and schemas.",
+      "queries": [
+        "query the snowflake warehouse",
+        "run sql on snowflake"
+      ],
+      "capabilities": [
+        "execute_sql",
+        "list_databases"
+      ],
+      "tags": [
+        "mcp",
+        "data warehouse"
+      ]
+    },
+    {
+      "id": "linear-mcp",
+      "kind": "mcp",
+      "name": "Linear",
+      "description": "Create, update and search Linear issues, projects and cycles.",
+      "queries": [
+        "create a linear issue for this bug",
+        "what linear issues are assigned to me"
+      ],
+      "capabilities": [
+        "create_issue",
+        "search_issues",
+        "list_cycles"
+      ],
+      "tags": [
+        "mcp",
+        "project management"
+      ]
+    },
+    {
+      "id": "slack-mcp",
+      "kind": "mcp",
+      "name": "Slack",
+      "description": "Post messages and read channel history in Slack workspaces.",
+      "queries": [
+        "post an update to the team slack channel",
+        "read the latest messages in a slack channel"
+      ],
+      "capabilities": [
+        "post_message",
+        "read_channel"
+      ],
+      "tags": [
+        "mcp",
+        "communication"
+      ]
+    },
+    {
+      "id": "sentry-mcp",
+      "kind": "mcp",
+      "name": "Sentry",
+      "description": "Look up Sentry issues, stack traces and release health.",
+      "queries": [
+        "show me the latest sentry errors for this service",
+        "what is the stack trace for this sentry issue"
+      ],
+      "capabilities": [
+        "list_issues",
+        "get_issue",
+        "release_health"
+      ],
+      "tags": [
+        "mcp",
+        "observability"
+      ]
+    },
+    {
+      "id": "filesystem-mcp",
+      "kind": "mcp",
+      "name": "Filesystem",
+      "description": "Read, write and search files within an allowed directory tree.",
+      "queries": [
+        "search files in this directory",
+        "read and edit local files"
+      ],
+      "capabilities": [
+        "read_file",
+        "write_file",
+        "search_files"
+      ],
+      "tags": [
+        "mcp",
+        "developer tools"
+      ]
+    },
+    {
+      "id": "browser-mcp",
+      "kind": "mcp",
+      "name": "Browser Automation",
+      "description": "Drive a headless browser: open pages, click, fill forms and take screenshots.",
+      "queries": [
+        "open a web page and take a screenshot",
+        "fill in this form in a browser"
+      ],
+      "capabilities": [
+        "navigate",
+        "click",
+        "screenshot"
+      ],
+      "tags": [
+        "mcp",
+        "browser"
+      ]
+    },
+    {
+      "id": "pr-description",
+      "kind": "prompt",
+      "name": "Pull Request Description",
+      "description": "Drafts a pull request description with summary, motivation and test plan from a diff.",
+      "queries": [
+        "write a pull request description for this diff",
+        "draft the pr summary and test plan"
+      ],
+      "capabilities": [
+        "documentation",
+        "variable:diff"
+      ],
+      "tags": [
+        "prompt",
+        "documentation"
+      ]
+    },
+    {
+      "id": "incident-postmortem",
+      "kind": "prompt",
+      "name": "Incident Postmortem",
+      "description": "Structures an incident postmortem: timeline, impact, root cause, action items.",
+      "queries": [
+        "write a postmortem for this incident",
+        "structure the root cause analysis"
+      ],
+      "capabilities": [
+        "incident",
+        "postmortem",
+        "variable:timeline"
+      ],
+      "tags": [
+        "prompt",
+        "operations"
+      ]
+    },
+    {
+      "id": "api-docs-prompt",
+      "kind": "prompt",
+      "name": "API Endpoint Docs",
+      "description": "Generates reference documentation for an HTTP API endpoint from its handler code.",
+      "queries": [
+        "document this api endpoint",
+        "generate openapi style docs for this route"
+      ],
+      "capabilities": [
+        "documentation",
+        "api",
+        "variable:handler"
+      ],
+      "tags": [
+        "prompt",
+        "documentation"
+      ]
+    },
+    {
+      "id": "lint-on-save",
+      "kind": "hook",
+      "name": "Lint on Save",
+      "description": "Runs the project linter after every file the agent edits.",
+      "queries": [
+        "run the linter after each edit",
+        "automatically lint files the agent changes"
+      ],
+      "capabilities": [
+        "event:PostToolUse",
+        "handler:command"
+      ],
+      "tags": [
+        "hook",
+        "post tool use"
+      ]
+    },
+    {
+      "id": "block-secrets",
+      "kind": "hook",
+      "name": "Block Secret Commits",
+      "description": "Blocks tool calls that would write API keys or credentials into the repository.",
+      "queries": [
+        "stop the agent from committing secrets",
+        "prevent api keys being written to files"
+      ],
+      "capabilities": [
+        "event:PreToolUse",
+        "handler:command",
+        "secrets"
+      ],
+      "tags": [
+        "hook",
+        "security"
+      ]
+    },
+    {
+      "id": "python-sandbox",
+      "kind": "sandbox",
+      "name": "Python Runner",
+      "description": "Runs untrusted Python in an isolated container with no network access.",
+      "queries": [
+        "run untrusted python code safely",
+        "execute this script in an isolated environment"
+      ],
+      "capabilities": [
+        "runtime:docker",
+        "network:none",
+        "python"
+      ],
+      "tags": [
+        "sandbox",
+        "python"
+      ]
+    },
+    {
+      "id": "node-sandbox",
+      "kind": "sandbox",
+      "name": "Node.js Runner",
+      "description": "Executes JavaScript and TypeScript in a locked-down Node.js container.",
+      "queries": [
+        "run this javascript in a sandbox",
+        "execute typescript safely"
+      ],
+      "capabilities": [
+        "runtime:docker",
+        "network:none",
+        "node"
+      ],
+      "tags": [
+        "sandbox",
+        "javascript"
+      ]
+    },
+    {
+      "id": "pr-reviewer-agent",
+      "kind": "agent",
+      "name": "PR Reviewer",
+      "description": "Reviews pull requests end to end using GitHub, the security review skill and Linear.",
+      "queries": [
+        "review my pull request",
+        "use the pr reviewer agent"
+      ],
+      "capabilities": [
+        "skill:Security Review",
+        "mcp:GitHub",
+        "mcp:Linear"
+      ],
+      "tags": [
+        "agent",
+        "code review"
+      ]
+    },
+    {
+      "id": "data-analyst-agent",
+      "kind": "agent",
+      "name": "Data Analyst",
+      "description": "Answers business questions by querying Snowflake and PostgreSQL and charting results.",
+      "queries": [
+        "analyse our sales data",
+        "answer a question from the warehouse"
+      ],
+      "capabilities": [
+        "mcp:Snowflake",
+        "mcp:PostgreSQL"
+      ],
+      "tags": [
+        "agent",
+        "data"
+      ]
+    },
+    {
+      "id": "oncall-agent",
+      "kind": "agent",
+      "name": "On-call Assistant",
+      "description": "Triages production incidents using Sentry, Slack and the incident postmortem prompt.",
+      "queries": [
+        "help me triage this production incident",
+        "what is breaking in production right now"
+      ],
+      "capabilities": [
+        "mcp:Sentry",
+        "mcp:Slack",
+        "prompt:Incident Postmortem"
+      ],
+      "tags": [
+        "agent",
+        "operations"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "review a pull request for authentication vulnerabilities",
+      "expected": [
+        "security-review",
+        "pr-reviewer-agent"
+      ]
+    },
+    {
+      "text": "look for auth bugs in this diff",
+      "expected": [
+        "security-review"
+      ]
+    },
+    {
+      "text": "generate playwright tests for the checkout page",
+      "expected": [
+        "playwright-tests"
+      ]
+    },
+    {
+      "text": "add browser end-to-end tests",
+      "expected": [
+        "playwright-tests"
+      ]
+    },
+    {
+      "text": "write a commit message",
+      "expected": [
+        "commit-messages"
+      ]
+    },
+    {
+      "text": "create an alembic migration for the new column",
+      "expected": [
+        "sql-migrations"
+      ]
+    },
+    {
+      "text": "database migration review",
+      "expected": [
+        "sql-migrations"
+      ]
+    },
+    {
+      "text": "write release notes from merged PRs",
+      "expected": [
+        "release-notes-skill"
+      ]
+    },
+    {
+      "text": "is this react component accessible",
+      "expected": [
+        "react-a11y"
+      ]
+    },
+    {
+      "text": "profile slow python code",
+      "expected": [
+        "perf-profiler"
+      ]
+    },
+    {
+      "text": "review terraform plan for destructive changes",
+      "expected": [
+        "terraform-review"
+      ]
+    },
+    {
+      "text": "list open pull requests on github",
+      "expected": [
+        "github-mcp"
+      ]
+    },
+    {
+      "text": "read a file from a github repository",
+      "expected": [
+        "github-mcp",
+        "filesystem-mcp"
+      ]
+    },
+    {
+      "text": "query our postgres database",
+      "expected": [
+        "postgres-mcp"
+      ]
+    },
+    {
+      "text": "show me the schema of the users table",
+      "expected": [
+        "postgres-mcp"
+      ]
+    },
+    {
+      "text": "run sql against snowflake",
+      "expected": [
+        "snowflake-mcp"
+      ]
+    },
+    {
+      "text": "create a linear issue for this bug",
+      "expected": [
+        "linear-mcp"
+      ]
+    },
+    {
+      "text": "post a message to slack",
+      "expected": [
+        "slack-mcp"
+      ]
+    },
+    {
+      "text": "latest sentry errors for the payments service",
+      "expected": [
+        "sentry-mcp"
+      ]
+    },
+    {
+      "text": "take a screenshot of a web page",
+      "expected": [
+        "browser-mcp"
+      ]
+    },
+    {
+      "text": "search files in the current directory",
+      "expected": [
+        "filesystem-mcp"
+      ]
+    },
+    {
+      "text": "draft a pull request description",
+      "expected": [
+        "pr-description"
+      ]
+    },
+    {
+      "text": "write an incident postmortem",
+      "expected": [
+        "incident-postmortem"
+      ]
+    },
+    {
+      "text": "document this API endpoint",
+      "expected": [
+        "api-docs-prompt"
+      ]
+    },
+    {
+      "text": "run the linter after every edit",
+      "expected": [
+        "lint-on-save"
+      ]
+    },
+    {
+      "text": "prevent the agent from committing API keys",
+      "expected": [
+        "block-secrets"
+      ]
+    },
+    {
+      "text": "run untrusted python safely",
+      "expected": [
+        "python-sandbox"
+      ]
+    },
+    {
+      "text": "execute typescript in a sandbox",
+      "expected": [
+        "node-sandbox"
+      ]
+    },
+    {
+      "text": "analyse sales data from the warehouse",
+      "expected": [
+        "data-analyst-agent",
+        "snowflake-mcp"
+      ]
+    },
+    {
+      "text": "triage a production incident",
+      "expected": [
+        "oncall-agent",
+        "incident-postmortem"
+      ]
+    },
+    {
+      "text": "Security Review",
+      "expected": [
+        "security-review"
+      ]
+    },
+    {
+      "text": "GitHub",
+      "expected": [
+        "github-mcp"
+      ]
+    },
+    {
+      "text": "snowflake",
+      "expected": [
+        "snowflake-mcp",
+        "data-analyst-agent"
+      ]
+    },
+    {
+      "text": "find an auth bypass in the payments PR",
+      "expected": [
+        "security-review"
+      ]
+    },
+    {
+      "text": "e2e coverage for the signup flow",
+      "expected": [
+        "playwright-tests"
+      ]
+    },
+    {
+      "text": "what changed since v2.3 for the changelog",
+      "expected": [
+        "release-notes-skill"
+      ]
+    },
+    {
+      "text": "our dashboard is slow in python, find the hot path",
+      "expected": [
+        "perf-profiler"
+      ]
+    },
+    {
+      "text": "will this infra change delete the production bucket",
+      "expected": [
+        "terraform-review"
+      ]
+    },
+    {
+      "text": "which PRs are waiting on me",
+      "expected": [
+        "github-mcp"
+      ]
+    },
+    {
+      "text": "how many rows are in the orders table",
+      "expected": [
+        "postgres-mcp",
+        "snowflake-mcp",
+        "data-analyst-agent"
+      ]
+    },
+    {
+      "text": "file a ticket for this crash",
+      "expected": [
+        "linear-mcp"
+      ]
+    },
+    {
+      "text": "tell the team we are deploying",
+      "expected": [
+        "slack-mcp"
+      ]
+    },
+    {
+      "text": "what is exploding in prod right now",
+      "expected": [
+        "sentry-mcp",
+        "oncall-agent"
+      ]
+    },
+    {
+      "text": "explain this outage in a writeup",
+      "expected": [
+        "incident-postmortem",
+        "oncall-agent"
+      ]
+    },
+    {
+      "text": "keep credentials out of the repo",
+      "expected": [
+        "block-secrets"
+      ]
+    },
+    {
+      "text": "screen reader support for the modal",
+      "expected": [
+        "react-a11y"
+      ]
+    },
+    {
+      "text": "somewhere safe to run this sketchy script",
+      "expected": [
+        "python-sandbox",
+        "node-sandbox"
+      ]
+    }
+  ]
+}

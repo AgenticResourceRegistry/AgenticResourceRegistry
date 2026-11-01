@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Compare installed lockfile versions with the active registry."""
@@ -161,7 +162,12 @@ def register_outdated(app: typer.Typer):
                     )
 
                 try:
-                    is_outdated = _version_newer(latest, item["current_version"])
+                    # Check the registry's version even when the installed one is
+                    # unknown, so a malformed release is never reported as fine.
+                    Version(latest)
+                    is_outdated = item["current_version"] is not None and _version_newer(
+                        latest, item["current_version"]
+                    )
                 except InvalidVersion as error:
                     fail(
                         ErrorCategory.UNAVAILABLE,
@@ -181,12 +187,13 @@ def register_outdated(app: typer.Typer):
                     "namespace": namespace,
                     "slug": slug,
                     "latest_version": latest,
-                    "status": "outdated" if is_outdated else "current",
+                    "status": _status(item["current_version"], is_outdated),
                     "outdated": is_outdated,
                     "error": None,
                     "upgrade_command": None,
                 }
-                if is_outdated:
+                if result["status"] != "current":
+                    # Reinstalling also records the version of an "unknown" entry.
                     result["upgrade_command"] = _upgrade_command(result)
                 results.append(result)
 
@@ -200,6 +207,12 @@ def register_outdated(app: typer.Typer):
             return
 
         _render_table(payload)
+
+
+def _status(current_version: str | None, is_outdated: bool) -> str:
+    if current_version is None:
+        return "unknown"
+    return "outdated" if is_outdated else "current"
 
 
 def _text(value: object) -> str | None:
@@ -228,12 +241,14 @@ def _prepare_entry(entry: object, lockfile_path: str) -> dict:
         )
 
     item_id = _text(entry.get("id"))
+    # Older CLIs recorded no version for skills installed without --version.
+    # Such entries are reported as "unknown" rather than failing the whole check.
     current_version = _text(entry.get("version"))
     item_harness = _text(entry.get("harness"))
-    if not item_id or not current_version or not item_harness:
+    if not item_id or not item_harness:
         fail(
             ErrorCategory.VALIDATION,
-            "An installed-state lockfile entry is missing its ID, version, or harness.",
+            "An installed-state lockfile entry is missing its ID or harness.",
             operation=_OPERATION,
             resource=lockfile_path,
             remediation="Reinstall the affected item to rebuild its lockfile entry.",
@@ -247,7 +262,8 @@ def _prepare_entry(entry: object, lockfile_path: str) -> dict:
             remediation="Reinstall the affected item for a currently supported harness.",
         )
     try:
-        Version(current_version)
+        if current_version is not None:
+            Version(current_version)
     except InvalidVersion as error:
         fail(
             ErrorCategory.VALIDATION,
@@ -291,7 +307,8 @@ def _upgrade_command(item: dict) -> str:
     target = shlex.quote(item["qualified_name"])
     harness = shlex.quote(item["harness"])
     if item["type"] == "agent":
-        return f"observal agent pull {target} --harness {harness} --no-prompt"
+        # A plain pull keeps the locked version; moving forward is explicit.
+        return f"observal agent pull {target} --harness {harness} --no-prompt --upgrade"
     prompt_flag = " --no-prompt" if item["type"] == "mcp" else ""
     return f"observal registry {item['type']} install {target} --harness {harness}{prompt_flag}"
 
@@ -374,6 +391,7 @@ def _result_payload(results: list[dict], report_status: dict) -> dict:
             "outdated": sum(item["status"] == "outdated" for item in results),
             "current": sum(item["status"] == "current" for item in results),
             "missing": sum(item["status"] == "missing" for item in results),
+            "unknown": sum(item["status"] == "unknown" for item in results),
         },
         "report": report_status,
     }
@@ -394,20 +412,22 @@ def _render_table(payload: dict) -> None:
         "outdated": "[yellow]outdated[/yellow]",
         "current": "[green]current[/green]",
         "missing": "[red]missing[/red]",
+        "unknown": "[yellow]unknown[/yellow]",
     }
     for item in items:
         table.add_row(
             esc(item["qualified_name"]),
             esc(item["type"]),
             esc(item["harness"]),
-            esc(item["current_version"]),
+            esc(item["current_version"] or "unrecorded"),
             esc(item["latest_version"] or "not found"),
             status_labels[item["status"]],
         )
     console.print(table)
 
-    if summary["outdated"]:
-        rprint(f"\n[yellow]{summary['outdated']} item(s) have newer versions available.[/yellow]")
+    if summary["outdated"] or summary["unknown"]:
+        if summary["outdated"]:
+            rprint(f"\n[yellow]{summary['outdated']} item(s) have newer versions available.[/yellow]")
         rprint("[bold]Upgrade commands:[/bold]")
         for item in items:
             if item["upgrade_command"]:
@@ -421,6 +441,11 @@ def _render_table(payload: dict) -> None:
         rprint(f"[dim]{summary['current']} item(s) up to date.[/dim]")
     if summary["missing"]:
         rprint(f"[yellow]{summary['missing']} item(s) no longer exist in the active registry.[/yellow]")
+    if summary["unknown"]:
+        rprint(
+            f"[yellow]{summary['unknown']} item(s) have no recorded version; "
+            "reinstall them with the commands above to record one.[/yellow]"
+        )
 
     report = payload["report"]
     if report["attempted"] and report["succeeded"]:

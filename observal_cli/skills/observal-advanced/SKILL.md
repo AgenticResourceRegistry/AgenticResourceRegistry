@@ -29,7 +29,7 @@ Read [Recovery workflows](references/recovery-workflows.md) completely before ex
 - Healthy telemetry does not need routine reconciliation.
 - Reconcile repairs missed local session delivery. It does not replace hook or extension installation.
 - Upgrade, downgrade, and rollback are distinct requests. Do not substitute one for another.
-- Local fallback is allowed only after the CLI explicitly reports `Connection failed` or `Not configured`, and only when the user still wants local files written.
+- Local fallback is allowed only after JSON reports `error.category: unavailable` with exit code `9`, or `error.category: authentication` with operation `Load authenticated CLI configuration` and exit code `3`. The user must still request local files.
 - Local fallback creates harness-native Agent files. It does not publish Registry state and must be reported as local-only.
 - Never invent telemetry environment variables or wrappers.
 

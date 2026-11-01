@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Mixed Registry component bulk submission."""
@@ -13,7 +13,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from observal_cli import client
-from observal_cli.errors import CliError, ErrorCategory, fail
+from observal_cli.errors import CliError, ErrorCategory, exit_partial, fail
 from observal_cli.render import OutputMode, esc, output_json
 
 bulk_app = typer.Typer(
@@ -209,6 +209,7 @@ def bulk_submit_components(
             "submitted": 0,
             "skipped": 0,
             "errors": 0,
+            "partial": False,
             "dry_run": True,
             "results": results,
         }
@@ -271,11 +272,14 @@ def bulk_submit_components(
         "submitted": submitted,
         "skipped": skipped,
         "errors": errors,
+        "partial": errors > 0,
         "dry_run": False,
         "results": results,
     }
     if output == "json":
         output_json(response)
-        return
-    rprint(_results_table(results, title="Bulk submission results"))
-    rprint(f"[green]{submitted} submitted[/green], [yellow]{skipped} skipped[/yellow], [red]{errors} errors[/red]")
+    else:
+        rprint(_results_table(results, title="Bulk submission results"))
+        rprint(f"[green]{submitted} submitted[/green], [yellow]{skipped} skipped[/yellow], [red]{errors} errors[/red]")
+    if errors:
+        exit_partial()

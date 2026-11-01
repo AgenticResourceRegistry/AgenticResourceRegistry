@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -35,8 +36,8 @@ export function RetentionWarningBanner() {
       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
       <span className="flex-1">
         Data retention is active ({data.retention_days} days).{" "}
-        {data.warnings.length} agent{data.warnings.length > 1 ? "s have" : " has"} unanalyzed traces.{" "}
-        Generate insights from the agent detail page before they expire.
+        {data.warnings.length} Agent File{data.warnings.length > 1 ? "s have" : " has"} unanalyzed traces.{" "}
+        Generate insights from the Agent File detail page before they expire.
       </span>
       <button onClick={handleDismiss} className="p-0.5 hover:bg-amber-500/20 rounded">
         <X className="h-3.5 w-3.5" />

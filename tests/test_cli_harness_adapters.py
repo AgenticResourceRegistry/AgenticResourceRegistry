@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the CLI-side harness adapter protocol and registry."""
@@ -99,6 +100,16 @@ class TestAdapterRegistry:
 
         assert plan.target == tmp_path / ".pi/agent/skills/observal/SKILL.md"
         assert plan.reuse_candidates == (tmp_path / ".agents/skills/observal/SKILL.md",)
+
+    def test_pi_detect_hooks_missing_when_neither_install_mode_is_present(self, tmp_path):
+        assert get_adapter("pi").detect_hooks(tmp_path) == "missing"
+
+    def test_pi_detect_hooks_recognizes_local_extension_file(self, tmp_path):
+        extension = tmp_path / "extensions" / "observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("extension", encoding="utf-8")
+
+        assert get_adapter("pi").detect_hooks(tmp_path) == "installed"
 
 
 class TestManagedLayerFiles:

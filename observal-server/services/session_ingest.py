@@ -31,7 +31,9 @@ from services.clickhouse import (
     refresh_session_summary,
 )
 from services.secrets_redactor import redact_secrets
+from services.session_parsers.base import token_count, uncached_input_tokens
 from services.session_parsers.ingest_classify import extract_timestamp, get_classifier, get_extra_rows
+from services.session_parsers.kiro import extract_usage as _usage_kiro
 
 # ---------------------------------------------------------------------------
 # Per-harness token usage extraction (dispatch pattern)
@@ -39,7 +41,7 @@ from services.session_parsers.ingest_classify import extract_timestamp, get_clas
 
 
 def _usage_claude_code(parsed: dict) -> dict:
-    """Claude Code / Cursor / Kiro: usage.input_tokens, usage.output_tokens, etc."""
+    """Claude Code / Cursor: usage.input_tokens, usage.output_tokens, etc."""
     msg = parsed.get("message", {})
     usage = msg.get("usage") or {}
     return {
@@ -85,34 +87,40 @@ def _usage_goose(parsed: dict) -> dict:
     if not isinstance(inference, dict):
         inference = {}
 
-    def count(key: str) -> int:
-        try:
-            return int(usage.get(key) or 0)
-        except (TypeError, ValueError):
-            return 0
-
+    cache_read = token_count(usage, "cacheReadTokens")
+    cache_write = token_count(usage, "cacheWriteTokens")
     return {
-        "input_tokens": count("inputTokens"),
-        "output_tokens": count("outputTokens"),
-        "cache_read_tokens": count("cacheReadTokens"),
-        "cache_write_tokens": count("cacheWriteTokens"),
+        # Goose counts cache reads and writes inside inputTokens.
+        "input_tokens": uncached_input_tokens(token_count(usage, "inputTokens"), cache_read, cache_write),
+        "output_tokens": token_count(usage, "outputTokens"),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
         "model": str(inference.get("resolvedModel") or inference.get("requestedModel") or ""),
     }
 
 
 def _usage_codex(parsed: dict) -> dict:
-    """Codex: event_msg/token_count has payload.info.total_token_usage."""
+    """Codex: event_msg/token_count has payload.info.last_token_usage.
+
+    Codex follows the OpenAI convention where input_tokens includes
+    cached_input_tokens, so the cached part is subtracted.
+    """
     payload = parsed.get("payload", {})
     if not isinstance(payload, dict):
         return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "model": ""}
     info = payload.get("info", {})
     if not isinstance(info, dict):
         info = {}
-    usage = info.get("last_token_usage") or info.get("total_token_usage") or {}
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict) or not usage:
+        usage = info.get("total_token_usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    cached = token_count(usage, "cached_input_tokens")
     return {
-        "input_tokens": int(usage.get("input_tokens") or 0),
-        "output_tokens": int(usage.get("output_tokens") or 0),
-        "cache_read_tokens": int(usage.get("cached_input_tokens") or 0),
+        "input_tokens": uncached_input_tokens(token_count(usage, "input_tokens"), cached),
+        "output_tokens": token_count(usage, "output_tokens"),
+        "cache_read_tokens": cached,
         "cache_write_tokens": 0,
         "model": "",
     }
@@ -129,28 +137,29 @@ def _usage_copilot_cli(parsed: dict) -> dict:
     # Try flat format first (Copilot CLI v1.0.59+)
     data = parsed.get("data", {})
     if isinstance(data, dict) and (data.get("outputTokens") or data.get("inputTokens")):
-        return {
-            "input_tokens": int(data.get("inputTokens") or 0),
-            "output_tokens": int(data.get("outputTokens") or 0),
-            "cache_read_tokens": int(data.get("cacheReadTokens") or 0),
-            "cache_write_tokens": int(data.get("cacheWriteTokens") or 0),
-            "model": str(data.get("model") or ""),
-        }
+        return _copilot_usage(data)
 
     # Try envelope format (older/SDK)
     event = parsed.get("event", {})
     if isinstance(event, dict):
         edata = event.get("data", {})
         if isinstance(edata, dict) and (edata.get("outputTokens") or edata.get("inputTokens")):
-            return {
-                "input_tokens": int(edata.get("inputTokens") or 0),
-                "output_tokens": int(edata.get("outputTokens") or 0),
-                "cache_read_tokens": int(edata.get("cacheReadTokens") or 0),
-                "cache_write_tokens": int(edata.get("cacheWriteTokens") or 0),
-                "model": str(edata.get("model") or ""),
-            }
+            return _copilot_usage(edata)
 
     return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "model": ""}
+
+
+def _copilot_usage(data: dict) -> dict:
+    """Copilot usage counts cache reads and writes inside inputTokens."""
+    cache_read = token_count(data, "cacheReadTokens")
+    cache_write = token_count(data, "cacheWriteTokens")
+    return {
+        "input_tokens": uncached_input_tokens(token_count(data, "inputTokens"), cache_read, cache_write),
+        "output_tokens": token_count(data, "outputTokens"),
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        "model": str(data.get("model") or ""),
+    }
 
 
 _UsageFn = Callable[[dict], dict]
@@ -158,7 +167,7 @@ _UsageFn = Callable[[dict], dict]
 _USAGE_EXTRACTORS: dict[str, _UsageFn] = {
     "claude-code": _usage_claude_code,
     "codex": _usage_codex,
-    "kiro": _usage_claude_code,
+    "kiro": _usage_kiro,
     "cursor": _usage_claude_code,
     "goose": _usage_goose,
     "pi": _usage_pi,
@@ -175,8 +184,18 @@ _USAGE_EXTRACTORS: dict[str, _UsageFn] = {
 
 
 def _uuid_default(parsed: dict) -> tuple[str | None, str | None]:
-    """Claude Code / Kiro / Cursor: uuid, parentUuid."""
+    """Claude Code / Cursor: uuid, parentUuid."""
     return parsed.get("uuid"), parsed.get("parentUuid")
+
+
+def _uuid_kiro(parsed: dict) -> tuple[str | None, str | None]:
+    """Kiro: CLI records carry uuid/parentUuid, IDE records a flat ``id``."""
+    uuid = parsed.get("uuid")
+    if uuid:
+        return uuid, parsed.get("parentUuid")
+    if isinstance(parsed.get("payload"), dict):
+        return parsed.get("id"), None
+    return None, None
 
 
 def _uuid_pi(parsed: dict) -> tuple[str | None, str | None]:
@@ -201,7 +220,7 @@ _UuidFn = Callable[[dict], "tuple[str | None, str | None]"]
 
 _UUID_EXTRACTORS: dict[str, _UuidFn] = {
     "claude-code": _uuid_default,
-    "kiro": _uuid_default,
+    "kiro": _uuid_kiro,
     "cursor": _uuid_default,
     "goose": _uuid_goose,
     "opencode": _uuid_default,
@@ -250,7 +269,7 @@ async def _resolve_agent_id(agent_id: str | None) -> str | None:
     ~500 Postgres queries/sec.
 
     Returns the original value unchanged if it is already a UUID, None,
-    or if the name cannot be resolved.
+    or if the name matches no live agent or more than one.
     """
     if not agent_id:
         return agent_id
@@ -279,12 +298,15 @@ async def _resolve_agent_id(agent_id: str | None) -> str | None:
     resolved = None
     try:
         async with async_session() as db:
-            stmt = select(Agent.id).where(Agent.name == agent_id).limit(1)
+            # Names are not unique across namespaces: only an unambiguous live match is safe to attribute.
+            stmt = select(Agent.id).where(Agent.name == agent_id, Agent.deleted_at.is_(None)).limit(2)
             result = await db.execute(stmt)
-            row = result.scalar_one_or_none()
-            if row:
-                resolved = str(row)
+            rows = result.scalars().all()
+            if len(rows) == 1:
+                resolved = str(rows[0])
                 optic.debug("resolved agent name '{}' to UUID {}", agent_id, resolved)
+            elif rows:
+                optic.warning("agent name '{}' matches several agents; leaving the session unattributed", agent_id)
     except Exception as e:
         optic.warning("agent_id resolution failed: {}", e)
 
@@ -531,8 +553,8 @@ async def ingest_session_lines(
                 "tool_name": tool_name,
                 "tool_id": tool_id,
                 "content_preview": preview,
-                "content_length": len(raw_line.encode()),
-                "raw_line": redact_secrets(raw_line),
+                "content_length": len(raw_line.encode("utf-8", errors="replace")),
+                "raw_line": redact_secrets(raw_line.encode("utf-8", errors="replace").decode("utf-8")),
                 "credits": 0.0,
                 "parent_session_id": parent_session_id,
                 **usage,

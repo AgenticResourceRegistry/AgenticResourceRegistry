@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Recovery workflows
@@ -46,11 +46,13 @@ observal self downgrade --version 2.5.0 --force --output json
 observal self rollback --force --output json
 ```
 
+`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds them from `git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main`. Without `--version`, a CLI logged in to a server that runs a `-dev` build targets that build instead of the latest release, because no release would pass the version gate. If the server cannot be reached, upgrade falls back to GitHub releases and says so. The 426 error and `observal auth login` print the exact command. If it fails, as a last resort install from source: `uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` (dev) or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
+
 Standalone binary changes require a published checksum because JSON mode does not accept unsigned downloads interactively. Verify installed version after mutation.
 
 ## Explicit local fallback
 
-Use only after the requested CLI operation returns `Connection failed` or `Not configured`, and only after the user confirms they want a local-only Agent file.
+Use only after JSON returns either `error.category: unavailable` with exit code `9`, or `error.category: authentication` with operation `Load authenticated CLI configuration` and exit code `3`. The user confirms they still want a local-only Agent file before anything is written.
 
 | Harness | User scope | Project scope |
 | --- | --- | --- |

@@ -1,18 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""The events that produce inbox items.
+"""The events that produce inbox items outside PR-style reviews.
 
-Review is not one choke point. Decisions land in seven endpoints across
-``api/routes/review.py``, and a review can be requested from every submit and
-publish path plus the visibility flip in
-``teamspace.review_publication_to_public``. Every one of them calls a helper
-here rather than assembling a delivery of its own, so the recipient rule, the
-title and the dedupe key are decided once.
-
-Auto-approved publishes deliberately emit nothing: a team owner publishing
-team-visible work approves it for themselves, and there is no pending state for
-anyone to act on.
+PR-style review notices are delivered by ``services.review.notifications``,
+which notifies only reviewers someone explicitly requested. Nothing here fans a
+review request out to every reviewer who could act on it.
 """
 
 from __future__ import annotations
@@ -54,51 +49,24 @@ def subject_from_entity(entity, subject_type: str, *, version: str | None = None
     )
 
 
-async def on_review_requested(
+async def on_review_withdrawn(
     db: AsyncSession,
     entity,
     *,
     subject_type: str,
-    actor_id: uuid.UUID | None,
-    version: str | None = None,
+    actor_id: uuid.UUID,
+    version: str,
 ) -> int:
-    """Something entered the review queue: tell everyone who can clear it.
-
-    Call this only when a version is actually left pending. A publish that
-    auto-approves has nothing waiting on a reviewer.
-    """
+    """Close every reviewer's copy of a withdrawn version's open request."""
     subject = subject_from_entity(entity, subject_type, version=version)
-    users = await recipients.reviewers_for(db, entity)
-    items = await deliver(
+    request_key = spec_for(InboxKind.review_requested).dedupe(subject, {})[:255]
+    return await resolve_matching(
         db,
         kind=InboxKind.review_requested,
-        recipients=users,
-        subject=subject,
+        dedupe_key=request_key,
+        detail="Review request withdrawn by author",
         actor_id=actor_id,
     )
-    optic.debug("inbox: review_requested for {} {} -> {} item(s)", subject_type, subject.id, len(items))
-    return len(items)
-
-
-async def on_publish(
-    db: AsyncSession,
-    entity,
-    *,
-    subject_type: str,
-    actor_id: uuid.UUID | None,
-    auto_approved: bool,
-    version: str | None = None,
-) -> int:
-    """A submit or publish finished: queue a review notice only if one is owed.
-
-    Every publish path ends in the same fork — auto-approve, or leave pending —
-    so the fork is encoded here once. A call site passing its own
-    ``auto_approve`` result cannot forget the rule that self-approved work
-    notifies nobody, because there is no pending state for a reviewer to act on.
-    """
-    if auto_approved:
-        return 0
-    return await on_review_requested(db, entity, subject_type=subject_type, actor_id=actor_id, version=version)
 
 
 def _version_author(entity, version: str | None) -> uuid.UUID | None:

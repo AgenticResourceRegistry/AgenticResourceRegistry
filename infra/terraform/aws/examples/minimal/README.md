@@ -3,7 +3,7 @@
 
 # Minimal example
 
-End-to-end working call of the Observal AWS module with sensible defaults.
+End-to-end working call of the Agentic Resource Registry AWS module with sensible defaults.
 
 ```bash
 cd infra/terraform/aws/examples/minimal

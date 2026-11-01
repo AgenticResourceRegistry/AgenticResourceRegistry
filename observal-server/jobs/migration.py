@@ -28,7 +28,15 @@ from observal_shared.migration import (
     validate_ch,
     validate_pg,
 )
+from observal_shared.migration.archive import _safe_tar_extract
 from services.security_events import EventType, SecurityEvent, Severity, emit_security_event
+
+MAX_MIGRATION_JOB_TIMEOUT_SECONDS = 86400
+
+
+def _bounded_migration_timeout(configured_timeout: int) -> int:
+    return min(max(configured_timeout, 1), MAX_MIGRATION_JOB_TIMEOUT_SECONDS)
+
 
 # ── DB-backed progress reporter ──────────────────────────────────────────────
 
@@ -149,8 +157,12 @@ async def run_migration_job(ctx: dict, job_id: str) -> None:
     # Build progress reporter
     reporter = DbProgressReporter(async_session, job_id)
 
-    # Get job timeout from dynamic settings
-    timeout_seconds = await ds.get_int("migration.job_timeout_seconds", default=3600)
+    # Keep the inner timeout aligned with arq's function-specific ceiling.
+    configured_timeout = await ds.get_int(
+        "migration.job_timeout_seconds",
+        default=MAX_MIGRATION_JOB_TIMEOUT_SECONDS,
+    )
+    timeout_seconds = _bounded_migration_timeout(configured_timeout)
 
     # Resolve connections
     pg_conn = await _resolve_pg_conn()
@@ -360,6 +372,8 @@ async def _run_import(
         result["rows_inserted"] = import_result.rows_inserted
         result["rows_skipped"] = import_result.rows_skipped
         result["tables_skipped"] = []
+        if import_result.warnings:
+            result["warnings"] = import_result.warnings
         schema_version = None
 
     if data_scope in (MigrationScope.clickhouse, MigrationScope.both):
@@ -373,7 +387,7 @@ async def _run_import(
             extract_dir = artifact_path / "telemetry"
             extract_dir.mkdir(exist_ok=True)
             with _tarfile.open(telemetry_archives[0], "r:gz") as tar:
-                tar.extractall(extract_dir, filter="data")
+                _safe_tar_extract(tar, extract_dir)
 
         # Telemetry files may be in a subdirectory or the root
         telemetry_dir = artifact_path / "telemetry" if (artifact_path / "telemetry").is_dir() else artifact_path
@@ -448,7 +462,7 @@ async def _run_validate(
             extract_dir = artifact_path / "telemetry"
             extract_dir.mkdir(exist_ok=True)
             with _tarfile.open(telemetry_archives[0], "r:gz") as tar:
-                tar.extractall(extract_dir, filter="data")
+                _safe_tar_extract(tar, extract_dir)
 
         # Telemetry files may be in a subdirectory or the root
         telemetry_dir = artifact_path / "telemetry" if (artifact_path / "telemetry").is_dir() else artifact_path
@@ -461,6 +475,10 @@ async def _run_validate(
         )
         result["checksums_valid"] = result["checksums_valid"] and ch_val.checksums_valid
         result["checksum_details"].update(ch_val.checksum_results or {})
+        if ch_val.row_count_results:
+            comparisons = result["row_count_comparison"] or {}
+            comparisons.update({table: list(counts) for table, counts in ch_val.row_count_results.items()})
+            result["row_count_comparison"] = comparisons
         result["orphaned_fk_refs"] = ch_val.fk_results
 
     return result, None, schema_version

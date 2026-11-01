@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ── ALB ────────────────────────────────────────────────────────────────────
@@ -21,6 +21,17 @@ resource "aws_security_group" "alb" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = var.alb_ingress_cidrs
+  }
+
+  dynamic "ingress" {
+    for_each = local.webhook_ingress_enabled ? [1] : []
+    content {
+      description     = "Git provider webhooks from the API Gateway VPC link"
+      from_port       = local.webhook_alb_port
+      to_port         = local.webhook_alb_port
+      protocol        = "tcp"
+      security_groups = [aws_security_group.webhook_vpc_link[0].id]
+    }
   }
 
   egress {

@@ -4,6 +4,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import uuid  # noqa: TC003
 from datetime import UTC, timedelta
 from datetime import datetime as dt
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger as optic
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
@@ -51,6 +52,16 @@ router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
 _RANGE_MAP = {"24h": 1, "7d": 7, "30d": 30, "90d": 90}
 
+LEADERBOARD_SETTING = "deployment.leaderboard_enabled"
+
+
+async def require_leaderboard_enabled() -> None:
+    """Hide the deprecated leaderboard endpoints unless a super admin turned the Leaderboard on."""
+    import services.dynamic_settings as ds
+
+    if not await ds.get_bool(LEADERBOARD_SETTING, False):
+        raise HTTPException(status_code=404, detail="Leaderboard is disabled")
+
 
 def _range_days(range_: str | None) -> int:
     return _RANGE_MAP.get(range_ or "7d", 7)
@@ -68,7 +79,7 @@ async def _ch_json(sql: str, params: dict | None = None) -> list[dict]:
         if r.status_code == 200:
             return r.json().get("data", [])
     except Exception as e:
-        optic.warning("clickhouse_query_failed", error=str(e))
+        optic.warning("clickhouse_query_failed: error={}", str(e))
     return []
 
 
@@ -140,7 +151,7 @@ async def top_mcps(
 
 @router.get("/overview/top-agents", response_model=list[TopAgentItem])
 async def top_agents(
-    limit: int = Query(6, le=50),
+    limit: int = Query(6, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_registry_user),
 ):
@@ -204,10 +215,14 @@ async def top_agents(
     ]
 
 
-@router.get("/overview/leaderboard", response_model=list[LeaderboardItem])
+@router.get(
+    "/overview/leaderboard",
+    response_model=list[LeaderboardItem],
+    dependencies=[Depends(require_leaderboard_enabled)],
+)
 async def agent_leaderboard(
     window: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
-    limit: int = Query(20, le=50),
+    limit: int = Query(20, ge=1, le=50),
     user: str | None = Query(None, description="Filter by creator email or username"),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_registry_user),
@@ -338,10 +353,14 @@ async def agent_leaderboard(
     ] + extra_items
 
 
-@router.get("/overview/component-leaderboard", response_model=list[ComponentLeaderboardItem])
+@router.get(
+    "/overview/component-leaderboard",
+    response_model=list[ComponentLeaderboardItem],
+    dependencies=[Depends(require_leaderboard_enabled)],
+)
 async def component_leaderboard(
     window: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
-    limit: int = Query(20, le=50),
+    limit: int = Query(20, ge=1, le=50),
     user: str | None = Query(None, description="Filter by creator email or username"),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_registry_user),
@@ -548,7 +567,10 @@ async def trends(
 
 
 @router.get("/dashboard/tokens", response_model=TokenStats)
-async def token_stats(range_: str | None = Query(None, alias="range")):
+async def token_stats(
+    range_: str | None = Query(None, alias="range"),
+    current_user: User = Depends(require_role(UserRole.admin)),
+):
     optic.trace("range={}", range_)
     return TokenStats(
         total_input=0, total_output=0, total_tokens=0, avg_per_trace=0, by_agent=[], by_mcp=[], over_time=[]

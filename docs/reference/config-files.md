@@ -1,11 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Config files"
+---
 
-# Config files
-
-Every file Observal reads or writes on the client (`~/.observal/`) and in each harness's config directory.
+Every file Agentic Resource Registry reads or writes on the client (`~/.observal/`) and in each harness's config directory.
 
 ## Client-side: `~/.observal/`
 
@@ -37,11 +39,11 @@ Every file Observal reads or writes on the client (`~/.observal/`) and in each h
 }
 ```
 
-Authentication and identity fields are managed by `observal auth`. The `config set` command accepts only `server_url`, `timeout`, `update_check`, `update_check_interval`, and `update_check_repo`. Supported environment variables override persisted values for the current invocation; see [Environment variables](environment-variables.md).
+Authentication and identity fields are managed by `observal auth`. The `config set` command accepts only `server_url`, `timeout`, `update_check`, `update_check_interval`, and `update_check_repo`. Supported environment variables override persisted values for the current invocation; see [Environment variables](/reference/environment-variables).
 
 ### Durable session outbox
 
-Python session exporters persist each observed batch in `telemetry_buffer.db` before network delivery. OpenCode and Pi use per-session files under their native outbox directories because their TypeScript runtimes cannot call the Python SQLite engine. All follow the same protocol: pending data survives process restarts and failed attempts, and the source line advances only when the server's contiguous checkpoint covers the complete batch. Observal does not silently evict unacknowledged records at capacity.
+Python session exporters persist each observed batch in `telemetry_buffer.db` before network delivery. OpenCode and Pi use per-session files under their native outbox directories because their TypeScript runtimes cannot call the Python SQLite engine. All follow the same protocol: pending data survives process restarts and failed attempts, and the source line advances only when the server's contiguous checkpoint covers the complete batch. Agentic Resource Registry does not silently evict unacknowledged records at capacity.
 
 `sync_state.json` is a cache of acknowledged local positions, not the authority for delivered history. If it is missing, corrupt, or stale, recovery validates and restores positions from the authenticated server checkpoint. Finalized sessions also send a SHA-256 audit manifest; hashing is not performed on ordinary incremental uploads.
 
@@ -118,6 +120,34 @@ Each list invocation replaces this cache, including an empty result. Numeric row
 | --- | --- |
 | `AGENTS.md` | Rules (rules-only integration) |
 
+### Pi
+
+| Path | Purpose |
+| --- | --- |
+| `~/.pi/agent/extensions/observal.ts` | Bundled telemetry extension |
+| `~/.pi/agent/extensions/.observal-extension.json` | Manifest recording the CLI version the local extension was installed from |
+| `~/.pi/agent/extensions/observal.ts.bak` | Copy of the previous extension, kept whenever Agentic Resource Registry replaces or removes one |
+
+`observal auth login` and `observal doctor patch` install the extension bundled with the CLI directly to `extensions/observal.ts`, recording the installed CLI version in the adjacent manifest. A later CLI upgrade rewrites each of those files atomically (the two are written in sequence, not as a single atomic unit) and prints a reminder to restart Pi or run `/reload`; a newer local install than the current CLI is left alone. If the file still carries the current version but its contents have drifted from the bundled source, such as an edited working copy, doctor restores it and keeps the previous contents as `observal.ts.bak`.
+
+Agentic Resource Registry keeps a copy of the file whenever it rewrites or deletes one, named
+`observal.ts.bak` (`.bak.1`, `.bak.2`, … if that name is taken). The copy does
+not end in `.ts`, so Pi does not load it; delete it once you are satisfied with
+the result.
+
+There are two cases where no copy is made, because nothing is lost: adopting a
+file whose contents already match the bundle, where only the manifest is
+written, and `observal doctor cleanup` removing a tracked install that still
+matches what Agentic Resource Registry wrote. Every other refresh, restore, migration and
+duplicate removal keeps one — a manifest records which CLI version wrote an
+install, not that its bytes are still unedited.
+
+### Migrating installs from before version tracking
+
+CLI versions before the manifest existed wrote `extensions/observal.ts` with nothing beside it. Those installs are recognized by the doc header every Agentic Resource Registry extension carries, and `observal auth login` or `observal doctor patch` migrates them: the existing file is copied to `observal.ts.bak` (`.bak.1`, `.bak.2`, … if that name is taken), the current extension is written in its place, and the manifest is created. The backup does not end in `.ts`, so Pi does not load it; delete it once you're satisfied with the upgrade.
+
+If `extensions/observal.ts` exists without a matching manifest, doesn't match the bundled source, and carries no Observal header (`Observal session telemetry extension for Pi`), Agentic Resource Registry treats it as unmanaged and never overwrites or removes it — remove or move the file aside, then re-run `observal doctor patch --harness pi` to let Agentic Resource Registry manage it.
+
 ## Safe writes
 
 `observal doctor patch` and `observal doctor cleanup` write each managed configuration file atomically and preserve unrelated entries. Use `--dry-run --output json` to review planned harness changes before writing. Agent Pull reports every created or merged file in its result.
@@ -128,5 +158,5 @@ Client-side files under `~/.observal/` are created with mode `0600` (owner read/
 
 ## Related
 
-* [Environment variables](environment-variables.md) - supported runtime overrides
-* [`observal config`](../cli/config.md), CLI surface for editing
+* [Environment variables](/reference/environment-variables) - supported runtime overrides
+* [`observal config`](/cli/config), CLI surface for editing

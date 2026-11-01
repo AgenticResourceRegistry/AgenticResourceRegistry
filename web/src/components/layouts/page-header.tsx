@@ -46,6 +46,7 @@ export function PageHeader({
 
   return (
     <header className="sticky top-0 z-30 flex min-h-[54px] items-center gap-3.5 border-b bg-background px-[30px]">
+      <h1 className="sr-only">{title}</h1>
       {/* Sidebar toggle */}
       <SidebarTrigger className="h-[34px] w-[34px] shrink-0 rounded-[9px] text-foreground/65 hover:bg-surface-raised hover:text-foreground" />
 
@@ -96,7 +97,7 @@ export function PageIntro({
   className,
 }: {
   eyebrow?: string;
-  title: string;
+  title?: string;
   subtitle?: string;
   children?: React.ReactNode;
   size?: "page" | "pane";
@@ -117,14 +118,16 @@ export function PageIntro({
             {eyebrow}
           </p>
         )}
-        <h1
-          className={cn(
-            "font-medium leading-[1.3] tracking-[-0.025em]",
-            isPane ? "text-xl" : "text-2xl"
-          )}
-        >
-          {title}
-        </h1>
+        {title && (
+          <h1
+            className={cn(
+              "font-medium leading-[1.3] tracking-[-0.025em]",
+              isPane ? "text-xl" : "text-2xl"
+            )}
+          >
+            {title}
+          </h1>
+        )}
         {subtitle && (
           <p className="mt-[6px] text-[13px] text-muted-foreground">{subtitle}</p>
         )}

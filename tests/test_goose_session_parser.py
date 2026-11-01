@@ -118,7 +118,7 @@ def test_usage_and_uuid_extraction():
     )
 
     assert _extract_usage_tokens(record, "goose") == {
-        "input_tokens": 120,
+        "input_tokens": 105,
         "output_tokens": 45,
         "cache_read_tokens": 10,
         "cache_write_tokens": 5,
@@ -301,6 +301,28 @@ def test_parse_rows_reports_usage_for_a_tool_only_turn():
 
     assert [event["event_name"] for event in events] == ["hook_posttooluse", "hook_token_usage"]
     assert events[1]["attributes"]["output_tokens"] == "7"
+
+
+def test_parse_rows_reports_input_tokens_without_cache():
+    """Goose counts cache reads and writes inside inputTokens; the trace view shows them separately."""
+    usage = {"inputTokens": 6010, "outputTokens": 50, "cacheReadTokens": 5000, "cacheWriteTokens": 1000}
+    events = parse_raw_events([_row(_message("assistant", [_TOOL_REQUEST], metadata={"usage": usage}))])
+
+    attributes = events[1]["attributes"]
+    assert attributes["input_tokens"] == "10"
+    assert attributes["cache_read_tokens"] == "5000"
+    assert attributes["cache_creation_tokens"] == "1000"
+
+
+def test_parse_rows_ignores_malformed_token_attributes():
+    usage = {"inputTokens": 8, "outputTokens": "many", "cacheReadTokens": -4, "cacheWriteTokens": [2]}
+    events = parse_raw_events([_row(_message("assistant", [_TOOL_REQUEST], metadata={"usage": usage}))])
+
+    attributes = events[1]["attributes"]
+    assert attributes["input_tokens"] == "8"
+    assert "output_tokens" not in attributes
+    assert "cache_read_tokens" not in attributes
+    assert "cache_creation_tokens" not in attributes
 
 
 def test_parse_rows_emits_orphan_tool_results_standalone():

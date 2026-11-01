@@ -67,7 +67,7 @@ async def _query_server(sql: str):
     return await client.post(
         _client.CLICKHOUSE_HTTP,
         content=sql,
-        params={"user": _client.CLICKHOUSE_USER, "password": _client.CLICKHOUSE_PASSWORD},
+        headers=_client.credential_headers(),
     )
 
 

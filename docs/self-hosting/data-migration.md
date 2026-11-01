@@ -1,21 +1,22 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Data migration"
+---
 
-# Data migration
-
-Use data migration when you need to move an Observal instance to a new deployment, validate a backup, or copy production data into a controlled recovery environment.
+Use data migration when you need to move an Agentic Resource Registry instance to a new deployment, validate a backup, or copy production data into a controlled recovery environment.
 
 Only super admins can start migration jobs.
 
 ## What can be moved
 
 - **Registry data**: users, agents, components, versions, settings, review records, and related PostgreSQL data.
-- **Telemetry data**: session events, audit events, security events, and webhook delivery history stored in ClickHouse.
+- **Telemetry data**: sessions, checkpoints, layer snapshots, audit events, security events, and webhook delivery history stored in ClickHouse. Large tables are exported as bounded Parquet chunks, so total export size is not limited by ClickHouse query memory.
 - **Registry + telemetry**: a full instance move when both stores are available.
 
 ## Before you start
 
-1. Confirm both source and target instances are on compatible Observal versions.
+1. Confirm both source and target instances are on compatible Agentic Resource Registry versions.
 2. Schedule a maintenance window if users are actively changing registry data.
 3. Make sure the target deployment has enough disk space for uploaded artifacts.
 4. Decide whether you need registry data only or registry plus telemetry.
@@ -40,7 +41,7 @@ Run validation on the target instance before importing.
 
 1. Open **Admin → Settings → Data Migration** on the target instance.
 2. Select **Validate**.
-3. Upload the artifacts from the export.
+3. Upload the artifacts from the export. For **Registry + telemetry**, add both `pg_export.tar.gz` and `telemetry_export.tar.gz`; the picker retains files added in separate selections and lists each selected artifact.
 4. Choose the same scope you plan to import.
 5. Click **Start validation**.
 6. Review the result:
@@ -54,14 +55,14 @@ Do not import artifacts that fail checksum validation.
 
 1. Open **Admin → Settings → Data Migration** on the target instance.
 2. Select **Import**.
-3. Upload the validated artifacts.
+3. Upload the validated artifacts. For **Registry + telemetry**, both the PostgreSQL and telemetry archives are required.
 4. Choose the import scope.
 5. Imports normalize all project-keyed telemetry to the deployment project `default`.
 6. Click **Start import**.
 7. Wait for the job to finish.
 8. Check agents, components, users, and sessions in the target instance.
 
-Imports are idempotent where possible. Existing rows are skipped rather than overwritten.
+PostgreSQL imports skip conflicting rows. Telemetry imports resume per checksummed Parquet chunk; a retry skips only chunks already completed for the same migration artifact.
 
 ## CLI alternative
 
@@ -92,11 +93,17 @@ observal server migrate import-telemetry --input-dir telemetry --output json
 
 ### Validation fails
 
-Re-download the artifacts from the source export. If checksums still fail, create a new export.
+Confirm the selected scope matches the uploaded files. **Registry + telemetry** requires both export archives, and the picker must show both filenames before submission. Re-download the artifacts from the source export if checksums fail; if they still fail, create a new export.
 
-### Import skips rows
+Large migration uploads are streamed through nginx and spooled to the persistent migration data volume instead of API memory. Ensure that volume has room for both the uploaded telemetry archive and its extracted Parquet files during validation/import.
 
-Rows are skipped when they already exist on the target. This is expected for retrying a partially completed import.
+### Import resumes completed telemetry chunks
+
+Telemetry resume state is stored beside the extracted artifact in `.import_state.json`. A retry verifies the artifact and skips chunks already completed with the same checksum. It does not skip an entire month merely because the target already contains some rows from that month.
+
+### ClickHouse reports a memory limit
+
+The exporter automatically subdivides a memory-limited chunk and retries it. If the smallest supported chunk still fails, inspect the reported table and chunk ID for a pathological key distribution or a ClickHouse limit below the documented deployment minimum. Increasing the container limit should not be required merely because the total telemetry archive is large.
 
 ### Telemetry import has missing registry references
 

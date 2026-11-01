@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from typing import TYPE_CHECKING
+
+import pytest
 
 from observal_shared.opencode_plugin_source import OPENCODE_PLUGIN_SOURCE, OPENCODE_PLUGIN_VERSION
 
@@ -13,8 +16,32 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _node_supports_strip_types() -> tuple[bool, str]:
+    """Return whether `node --experimental-strip-types` can run on this machine."""
+    try:
+        version_output = subprocess.run(
+            ["node", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return False, "node executable not found"
+    if version_output.returncode != 0:
+        return False, f"node --version failed: {version_output.stderr.strip()}"
+    match = re.search(r"v(\d+)\.(\d+)", version_output.stdout)
+    if not match:
+        return False, f"could not parse node version from {version_output.stdout.strip()!r}"
+    major, minor = int(match.group(1)), int(match.group(2))
+    # --experimental-strip-types landed in Node 22.6.0 (package.json engines).
+    if (major, minor) < (22, 6):
+        return False, f"requires Node >= 22.6 for --experimental-strip-types (found {version_output.stdout.strip()})"
+    return True, ""
+
+
 def test_generated_plugin_uses_durable_acknowledged_delivery():
-    assert OPENCODE_PLUGIN_VERSION == "7"
+    assert OPENCODE_PLUGIN_VERSION == "8"
     assert "data.registries?.[registryKey(config.server_url)]" in OPENCODE_PLUGIN_SOURCE
     assert "saveSessionState(state); // Durable before network delivery." in OPENCODE_PLUGIN_SOURCE
     assert "acknowledged_line" in OPENCODE_PLUGIN_SOURCE
@@ -23,6 +50,9 @@ def test_generated_plugin_uses_durable_acknowledged_delivery():
 
 
 def test_native_outbox_survives_restart_and_clears_only_after_ack(tmp_path: Path):
+    supported, reason = _node_supports_strip_types()
+    if not supported:
+        pytest.fail(f"{reason}; see CONTRIBUTING.md prerequisites")
     plugin = tmp_path / "plugin.ts"
     plugin.write_text(
         OPENCODE_PLUGIN_SOURCE
@@ -174,6 +204,22 @@ const largePayloads = ingestPayloads.slice(2);
 assert.deepEqual(largePayloads.map((payload) => payload.lines.length), [500, 500, 1, 500, 1]);
 assert.deepEqual(largePayloads.map((payload) => payload.start_offset), [0, 500, 1000, 500, 1000]);
 assert.equal(largePayloads.at(-1).final, true);
+
+// Sessions without a pulled registry agent are still reported, unattributed.
+const before = ingestPayloads.length;
+shouldFail = false;
+checkpointLine = -1;
+clientMessages = clientMessages.slice(0, 2);
+for (const [id, properties] of [["builtin", { agent: "build" }], ["plain", {}]]) {
+  await hooks.event({ event: { type: "session.created", properties: { sessionID: id, ...properties } } });
+  await hooks.event({ event: { type: "message.updated", properties: { sessionID: id } } });
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: id } } });
+  checkpointLine = -1;
+}
+const plainPayloads = ingestPayloads.slice(before);
+assert.deepEqual(plainPayloads.map((payload) => payload.session_id), ["builtin", "plain"]);
+assert.ok(plainPayloads.every((payload) => payload.agent_id === null && payload.agent_version === null));
+assert.ok(plainPayloads.every((payload) => payload.lines.length === 2));
 """
     )
     env = os.environ | {"HOME": str(tmp_path)}

@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal self`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal self"
+---
 
 Inspect or change the installed CLI version.
 
@@ -63,7 +64,7 @@ observal self upgrade --pre --force --output json
 
 A completed JSON result contains the prior version, target version, install method, and executable path. When the current version already matches the target, status is `up_to_date` and no installation occurs.
 
-The command rejects invalid versions and targets older than the current version. Homebrew and system-package installations must be upgraded through their package manager.
+The command rejects invalid versions and targets older than the current version. System-package installations must be upgraded through their package manager.
 
 ## Downgrade
 
@@ -81,7 +82,7 @@ Install an older release:
 observal self downgrade --version 2.4.0 --force --output json
 ```
 
-`--list` and `--version` are mutually exclusive. The target must be older than the current version and at least the CLI version floor. Homebrew and system-package installations must use their package manager.
+`--list` and `--version` are mutually exclusive. The target must be older than the current version and at least the CLI version floor. System-package installations must use their package manager.
 
 Releases before 1.10.4 are pinned by disabling their legacy automatic-update setting. The JSON result reports this as `automatic_updates_disabled`.
 
@@ -118,6 +119,6 @@ Human mode may explicitly confirm an unsigned binary. JSON mode never prompts an
 
 ## Related
 
-* [`observal server`](server.md): manage server stack versions separately
-* [Upgrades](../self-hosting/upgrades.md): server and CLI upgrade procedures
-* [Environment variables](../reference/environment-variables.md): update-check settings
+* [`observal server`](/cli/server): manage server stack versions separately
+* [Upgrades](/self-hosting/upgrades): server and CLI upgrade procedures
+* [Environment variables](/reference/environment-variables): update-check settings

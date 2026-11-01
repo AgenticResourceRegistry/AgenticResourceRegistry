@@ -1,4 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Lock file management for Observal CLI.
@@ -14,17 +17,32 @@ The lock file is:
 
 from __future__ import annotations
 
-import fcntl
+import functools
 import hashlib
 import json
+import os
+import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger as optic
 
 from observal_cli.config import CONFIG_DIR
+
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; the lock uses msvcrt there
+    fcntl = None
+    import msvcrt
+else:
+    msvcrt = None
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 LOCKFILE_PATH = CONFIG_DIR / "lockfile.json"
 _LOCKFILE_LOCK = CONFIG_DIR / "lockfile.lock"
@@ -36,6 +54,58 @@ LOCK_VERSION = 2
 # ---------------------------------------------------------------------------
 # Read / Write primitives
 # ---------------------------------------------------------------------------
+
+
+_lock_state = threading.local()
+
+
+@contextmanager
+def _exclusive_lock(path: Path | None = None) -> Iterator[None]:
+    """Hold a cross-process lock, re-entrant for the same path in one thread.
+
+    Different managed-folder locks must still be acquired independently; skipping
+    them just because the lockfile lock is held would bypass folder ownership.
+    """
+    path = (path or _LOCKFILE_LOCK).absolute()
+    held = getattr(_lock_state, "held", None)
+    if held is None:
+        held = {}
+        _lock_state.held = held
+    if held.get(path):
+        held[path] += 1
+        try:
+            yield
+        finally:
+            held[path] -= 1
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as lock_fd:
+        if fcntl is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        else:
+            lock_fd.seek(0)
+            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_LOCK, 1)
+        held[path] = 1
+        try:
+            yield
+        finally:
+            del held[path]
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            else:
+                lock_fd.seek(0)
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _locked_mutation(func: Callable) -> Callable:
+    """Reread, mutate and write the lockfile under one exclusive lock."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _exclusive_lock():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def normalize_server_url(server_url: str) -> str:
@@ -64,7 +134,7 @@ def migrate_lockfile_v1(server_url: str | None = None) -> bool:
         return False
     try:
         data = json.loads(LOCKFILE_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
         raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
@@ -93,7 +163,7 @@ def read_lockfile() -> dict:
         return _empty_lockfile()
     try:
         data = json.loads(LOCKFILE_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
         raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
@@ -102,29 +172,61 @@ def read_lockfile() -> dict:
     return data
 
 
-def write_lockfile(data: dict) -> None:
-    """Write the complete lockfile atomically with file locking."""
+def _write_locked(data: dict) -> None:
+    """Replace the lockfile while its cross-process lock is held."""
     data["updated_at"] = datetime.now(UTC).isoformat()
     data["lock_version"] = LOCK_VERSION
-
-    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    lock_fd = None
+    descriptor, name = tempfile.mkstemp(prefix=".lockfile.", suffix=".tmp", dir=LOCKFILE_PATH.parent)
+    tmp_path = Path(name)
     try:
-        lock_fd = open(_LOCKFILE_LOCK, "w")  # noqa: SIM115
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        tmp_path = LOCKFILE_PATH.with_suffix(".tmp")
-        try:
-            tmp_path.write_text(json.dumps(data, indent=2) + "\n")
-            tmp_path.replace(LOCKFILE_PATH)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(json.dumps(data, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(tmp_path, 0o600)
+        tmp_path.replace(LOCKFILE_PATH)
+        if os.name == "posix":
+            directory = os.open(LOCKFILE_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
-        if lock_fd:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            lock_fd.close()
+        tmp_path.unlink(missing_ok=True)
 
+
+def write_lockfile(data: dict) -> None:
+    """Write the complete lockfile atomically with file locking."""
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock():
+        _write_locked(data)
     optic.debug("lockfile written: {}", LOCKFILE_PATH)
+
+
+def update_lockfile(mutate: Any) -> Any:
+    """Serialize the entire read/modify/write, including across different targets."""
+    LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(_LOCKFILE_LOCK):
+        if LOCKFILE_PATH.exists():
+            try:
+                data = json.loads(LOCKFILE_PATH.read_text())
+            except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+                raise RuntimeError(f"Cannot read {LOCKFILE_PATH}: {exc}") from exc
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Invalid lockfile structure in {LOCKFILE_PATH}")
+            if data.get("lock_version") == 1:
+                url = current_registry_url()
+                data = {
+                    "lock_version": LOCK_VERSION,
+                    "registries": {url: {"server_url": url, "harnesses": data.get("harnesses", {})}},
+                }
+            if data.get("lock_version") != LOCK_VERSION or not isinstance(data.get("registries"), dict):
+                raise RuntimeError(f"Unsupported lockfile version in {LOCKFILE_PATH}")
+        else:
+            data = _empty_lockfile()
+        result = mutate(data)
+        _write_locked(data)
+        return result
 
 
 def read_registry_lockfile(*, create: bool = False) -> tuple[dict, dict]:
@@ -202,6 +304,41 @@ def _ensure_harness(data: dict, harness: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _record_capability_use(
+    *,
+    kind: str,
+    source: str,
+    harness: str,
+    component_id: str,
+    version: str | None,
+    directory: str | None,
+    namespace: str | None,
+    slug: str | None,
+) -> None:
+    """Note an install in the capability lock so session upload can attribute it.
+
+    Best effort: the lock is evidence, and a failure to write it must never
+    break an install that already succeeded.
+    """
+    try:
+        from observal_cli import capability_lock
+
+        native_ref = f"{namespace}/{slug}@{version}" if namespace and slug and version else None
+        capability_lock.record(
+            kind=kind,
+            mode=capability_lock.MODE_NEXT_SESSION,
+            source=source,
+            harness=harness,
+            cwd=directory,
+            component_id=component_id,
+            native_ref=native_ref,
+            version=version,
+        )
+    except Exception as exc:
+        optic.debug("capability lock not updated (type={})", type(exc).__name__)
+
+
+@_locked_mutation
 def upsert_agent(
     harness: str,
     *,
@@ -214,17 +351,23 @@ def upsert_agent(
     namespace: str | None = None,
     slug: str | None = None,
     local_name: str | None = None,
+    lock_digest: str | None = None,
+    lock_status: str | None = None,
+    hook_placement: str | None = None,
+    hook_on_unknown: str | None = None,
+    hook_gate_agent: str | None = None,
 ) -> None:
     """Add or update an agent entry in the lock file.
 
     Matches on (harness, agent_id, directory) for project-scoped or
-    (harness, agent_id) for user-scoped.
+    (harness, agent_id) for user-scoped. ``components`` are the exact versions
+    the server installed; ``lock_digest`` and ``lock_status`` describe the
+    agent version's lock they were installed from. ``hook_placement``
+    (``settings`` when the agent's hooks are gated in settings.json),
+    ``hook_on_unknown`` and ``hook_gate_agent`` (the agent name its settings
+    groups are owned under) are remembered so a later pull keeps the choice.
     """
-    optic.debug("upsert_agent: harness={}, name={}, version={}", harness, name, version)
-    data, registry = read_registry_lockfile(create=True)
-    harness_section = _ensure_harness(registry, harness)
-    agents = harness_section["agents"]
-
+    optic.debug("upsert_agent: recording agent installation")
     entry = {
         "name": name,
         "id": agent_id,
@@ -244,17 +387,43 @@ def upsert_agent(
         entry["qualified_name"] = f"{namespace}/{slug}"
     if local_name:
         entry["local_name"] = local_name
+    if lock_digest:
+        entry["lock_digest"] = lock_digest
+    if lock_status:
+        entry["lock_status"] = lock_status
+    if hook_placement == "settings":
+        entry["hook_placement"] = hook_placement
+        if hook_on_unknown:
+            entry["hook_on_unknown"] = hook_on_unknown
+        if hook_gate_agent:
+            entry["hook_gate_agent"] = hook_gate_agent
 
-    # Find existing entry to update
-    existing_idx = _find_agent_idx(agents, agent_id, scope, directory)
-    if existing_idx is not None:
-        agents[existing_idx] = entry
-    else:
-        agents.append(entry)
+    def update(data: dict) -> None:
+        url = current_registry_url()
+        registry = data["registries"].setdefault(url, {"server_url": url, "harnesses": {}})
+        agents = _ensure_harness(registry, harness)["agents"]
+        existing_idx = _find_agent_idx(agents, agent_id, scope, directory)
+        if existing_idx is not None:
+            if any(c.get("folder_receipt") for c in agents[existing_idx].get("components", [])):
+                raise RuntimeError("Pinned Agent owns verified skill folders; legacy pull cannot replace receipts")
+            agents[existing_idx] = entry
+        else:
+            agents.append(entry)
 
-    write_lockfile(data)
+    update_lockfile(update)
+    _record_capability_use(
+        kind="agent",
+        source="pull",
+        harness=harness,
+        component_id=agent_id,
+        version=version,
+        directory=directory,
+        namespace=namespace,
+        slug=slug,
+    )
 
 
+@_locked_mutation
 def remove_agent(harness: str, agent_id: str, directory: str | None = None) -> bool:
     """Remove an agent entry. Returns True if found and removed."""
     data, registry = read_registry_lockfile(create=True)
@@ -290,6 +459,7 @@ def _find_agent_idx(agents: list[dict], agent_id: str, scope: str, directory: st
 # ---------------------------------------------------------------------------
 
 
+@_locked_mutation
 def upsert_standalone(
     harness: str,
     *,
@@ -303,13 +473,19 @@ def upsert_standalone(
     namespace: str | None = None,
     slug: str | None = None,
     local_name: str | None = None,
+    version_id: str | None = None,
+    digest: str | None = None,
+    requested_version: str | None = None,
+    mcp_integrity: str | None = None,
+    skill_integrity: str | None = None,
+    hook_binding: dict | None = None,
 ) -> None:
-    """Add or update a standalone component (MCP, skill, hook, etc.) in the lock file."""
-    optic.debug("upsert_standalone: harness={}, type={}, name={}", harness, component_type, name)
-    data, registry = read_registry_lockfile(create=True)
-    harness_section = _ensure_harness(registry, harness)
-    standalone = harness_section["standalone"]
+    """Add or update a standalone component (MCP, skill, hook, etc.) in the lock file.
 
+    ``version_id`` and ``digest`` identify the exact registry release that was
+    installed; ``requested_version`` is set when the user pinned it explicitly.
+    """
+    optic.debug("upsert_standalone: harness={}, type={}, name={}", harness, component_type, name)
     entry: dict[str, Any] = {
         "type": component_type,
         "name": name,
@@ -322,6 +498,10 @@ def upsert_standalone(
         entry["directory"] = directory
     if integrity:
         entry["integrity"] = integrity
+    if mcp_integrity:
+        entry["mcp_integrity"] = mcp_integrity
+    if skill_integrity:
+        entry["skill_integrity"] = skill_integrity
     if namespace:
         entry["namespace"] = namespace
     if slug:
@@ -330,17 +510,44 @@ def upsert_standalone(
         entry["qualified_name"] = f"{namespace}/{slug}"
     if local_name:
         entry["local_name"] = local_name
+    if version_id:
+        entry["version_id"] = version_id
+    if digest:
+        entry["digest"] = digest
+    if requested_version:
+        entry["requested_version"] = requested_version
+    if hook_binding:
+        # Where the hook was written (hook_event, hook_command, hook_config, ...), for verification.
+        entry.update({key: value for key, value in hook_binding.items() if key.startswith("hook_")})
 
-    # Find existing entry to update (match on type + id + scope + directory)
-    existing_idx = _find_standalone_idx(standalone, component_type, component_id, scope, directory)
-    if existing_idx is not None:
-        standalone[existing_idx] = entry
-    else:
-        standalone.append(entry)
+    def update(data: dict) -> None:
+        url = current_registry_url()
+        registry = data["registries"].setdefault(url, {"server_url": url, "harnesses": {}})
+        standalone = _ensure_harness(registry, harness)["standalone"]
+        existing_idx = _find_standalone_idx(standalone, component_type, component_id, scope, directory)
+        if existing_idx is not None:
+            if component_type == "skill" and standalone[existing_idx].get("folder_receipt"):
+                raise RuntimeError(
+                    "A verified skill folder owns this installation; legacy delivery cannot replace its receipt"
+                )
+            standalone[existing_idx] = entry
+        else:
+            standalone.append(entry)
 
-    write_lockfile(data)
+    update_lockfile(update)
+    _record_capability_use(
+        kind=component_type,
+        source="install",
+        harness=harness,
+        component_id=component_id,
+        version=version,
+        directory=directory,
+        namespace=namespace,
+        slug=slug,
+    )
 
 
+@_locked_mutation
 def remove_standalone(harness: str, component_type: str, component_id: str, directory: str | None = None) -> bool:
     """Remove a standalone component entry. Returns True if found and removed."""
     data, registry = read_registry_lockfile(create=True)
@@ -392,6 +599,37 @@ def get_agent_for_directory(harness: str, directory: str) -> dict | None:
         if agent.get("directory") == directory:
             return agent
     return None
+
+
+def installed_agent(harness: str, agent_id: str, *, scope: str, directory: str | None) -> dict | None:
+    """The lockfile entry for an agent already installed in this harness and place."""
+    _, registry = read_registry_lockfile()
+    agents = registry.get("harnesses", {}).get(harness, {}).get("agents", [])
+    index = _find_agent_idx(agents, agent_id, scope, directory)
+    return agents[index] if index is not None else None
+
+
+# Statuses that lockfile reconciliation assigns to an entry the registry could
+# not confirm: "invalid" when the id is not even a UUID, "unavailable" when the
+# server explicitly reported it as not found.
+_UNCONFIRMED_REGISTRY_STATUSES = frozenset({"invalid", "unavailable"})
+
+
+def agent_entry_is_registry_backed(entry: dict | None) -> bool:
+    """Return True when a lockfile agent may be used to attribute a session.
+
+    Sessions are attributed from the local lockfile, which can outlive the
+    registry it was written against - agents get deleted, and a lockfile can
+    carry ids from a server that no longer has them. Attributing to one of
+    those produces a session tagged with an id nothing can resolve.
+
+    Entries are trusted by default: a missing status only means reconciliation
+    has not run, which is not evidence against the entry. Only a status that
+    reconciliation actively set to "not found" disqualifies it.
+    """
+    if not entry:
+        return False
+    return str(entry.get("registry_status") or "") not in _UNCONFIRMED_REGISTRY_STATUSES
 
 
 def get_agent_by_id(agent_id: str, harness: str | None = None) -> dict | None:
@@ -535,7 +773,7 @@ def migrate_agent_markers() -> int:
                 try:
                     marker_data = json.loads(marker.read_text())
                     markers_found.append((marker.parent.parent, marker_data))
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, OSError, UnicodeError):
                     continue
         except (OSError, PermissionError):
             continue

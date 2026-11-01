@@ -172,9 +172,13 @@ def _reconcile_harness(
             detail=repr(error),
         )
 
+    # Kiro IDE stores delegated work in separate transcripts; reconcile both
+    # the parent conversation and its children, as the live hook does.
+    candidates = [candidate for source in sources for candidate in (source, *adapter.related_session_sources(source))]
+
     result = {
         "harness": harness,
-        "discovered": len(sources),
+        "discovered": len(candidates),
         "pushed": 0,
         "finalized": 0,
         "queued": 0,
@@ -193,7 +197,7 @@ def _reconcile_harness(
 
     rprint(f"[cyan]{esc(harness)}: scanning sessions...[/cyan]")
     rejections = rejections if rejections is not None else []
-    for source in sources:
+    for source in candidates:
         session = {"session_id": source.session_id, "status": "skipped", "bytes_new": 0}
         if source.path is None:
             result["skipped"] += 1
@@ -259,6 +263,7 @@ def _reconcile_harness(
                 cfg,
                 hook_event="Reconcile",
                 final=True,
+                extra_records=adapter.session_extra_records(source, {"event": "Reconcile"}, True),
                 rejections=rejections,
             )
         except sqlite3.Error as error:

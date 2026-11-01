@@ -1,15 +1,16 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Web Frontend
 
-Vite 6 / React 19 / TypeScript 6 / TanStack Router / Tailwind CSS 4 / Playwright 1.59
+Vite 8 / React 19 / TypeScript 6 / TanStack Router / Tailwind CSS 4 / Playwright 1.59
 
 ## How users interact with it
 
-The web UI is one of three ways to interact with Observal, alongside the CLI and the bundled observal skill. It covers:
+The web UI is one of three ways to interact with Agentic Resource Registry, alongside the CLI and the bundled observal skill. It covers:
 
-- **Browsing and installing agents** from the registry
+- **Browsing and installing agents and components** from the registry (Agentic Resources)
 - **Viewing session traces** with conversation replay, span tree, and token counts
 - **Admin operations** such as review queue, user management, insights, and audit logs
 - **Agent building** with component assembly and live YAML preview
@@ -50,13 +51,15 @@ src/routes/
 ├── _authed.tsx                     # Authenticated layout and guard
 ├── _authed/
 │   ├── index.tsx                   #   Registry home
+│   ├── resources/
+│   │   └── $type.tsx               #   Agentic Resources list (agents | mcps | skills | hooks | prompts | sandboxes)
 │   ├── agents/
-│   │   ├── index.tsx               #   Agent list
+│   │   ├── index.tsx               #   Redirect to /resources/agents
 │   │   ├── $agentId.tsx            #   Agent detail
 │   │   ├── builder.tsx             #   Agent builder
 │   │   └── $agentId/insights/$reportId.tsx
 │   ├── components/
-│   │   ├── index.tsx               #   Component browser
+│   │   ├── index.tsx               #   Redirect to /resources/mcps
 │   │   └── $componentId.tsx        #   Component detail
 │   ├── leaderboard.tsx             #   Agent leaderboard
 │   ├── insights/$reportId.tsx      #   Insight report detail
@@ -69,8 +72,7 @@ src/routes/
 │   │   ├── sso.tsx
 │   │   ├── users.tsx
 │   │   ├── audit-log.tsx
-│   │   ├── security-events.tsx
-│   │   └── diagnostics.tsx
+│   │   └── security-events.tsx
 │   ├── _user.tsx                   #   User layout
 │   └── _user/
 │       ├── account.tsx
@@ -133,7 +135,7 @@ src/lib/           # API wrapper, types, query client, theme, GraphQL WS
 
 ```bash
 pnpm dev          # Vite dev server on :3000
-pnpm build        # Typecheck and production build
+pnpm build        # Typecheck and production build (Vite 8 / Rolldown; chunking is `build.rolldownOptions.output.codeSplitting`, not Rollup `manualChunks`)
 pnpm lint         # ESLint
 pnpm typecheck    # TypeScript only
 pnpm e2e          # Playwright, requires running Docker stack
@@ -142,3 +144,5 @@ pnpm e2e:ui       # Playwright UI mode
 ```
 
 E2E specs live in `tests/e2e/*.spec.ts` in the repo root workspace.
+
+For UI changes, rebuild the live stack with `make rebuild` and check the affected pages in a browser (or run the relevant spec with `CI=1 pnpm exec playwright test <spec>` against `:80`) in addition to `pnpm build` and `pnpm lint`.

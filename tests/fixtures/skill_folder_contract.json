@@ -1,0 +1,42 @@
+{
+  "note": "Server author/review contract; resource-bearing decisions and install stay disabled until registry.skill_folder_delivery_enabled is explicitly enabled after compatible fleet/installer rollout. Files are relative to the selected skill version, not the listing pointer.",
+  "typed_install_example": "skill_folder_install_contract.json",
+  "listing_id": "11111111-1111-4111-8111-111111111111",
+  "base_version_id": "22222222-2222-4222-8222-222222222222",
+  "draft_version_id": "44444444-4444-4444-8444-444444444444",
+  "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "snapshot": {
+    "skill_md_content": "---\nname: example\ndescription: Example skill\n---\n# Example\n",
+    "extra_files": [
+      {"path": "scripts/one.sh", "content": "#!/bin/sh\necho one\n", "executable": true},
+      {"path": "scripts/two.py", "content": "print('two')\n", "executable": true},
+      {"path": "scripts/empty.sh", "content": "", "executable": true},
+      {"path": "templates/one.txt", "content": "one"},
+      {"path": "templates/two.txt", "content": "two"},
+      {"path": "templates/three.txt", "content": "three"},
+      {"path": "templates/four.txt", "content": "four"},
+      {"path": "templates/five.txt", "content": "five"},
+      {"path": "assets/logo.bin", "content": "AP8=", "encoding": "base64"}
+    ]
+  },
+  "author_create": {"method": "POST", "path": "/api/v1/skills/folder-drafts", "body": {"name": "Example", "version": "1.1.0", "description": "Example skill", "owner": "kaushik", "task_type": "general", "skill_md_content": "---\nname: example\ndescription: Example skill\n---\n# Example\n", "extra_files": [{"path": "scripts/one.sh", "content": "#!/bin/sh\necho one\n", "executable": true}]}},
+  "author_replace": {"method": "PUT", "path": "/api/v1/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444/files", "body": {"observed_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "skill_md_content": "---\nname: example\ndescription: Example skill\n---\n# Example\n", "extra_files": [{"path": "scripts/one.sh", "content": "#!/bin/sh\necho one\n", "executable": true}, {"path": "scripts/two.py", "content": "print('two')\n", "executable": true}, {"path": "scripts/empty.sh", "content": "", "executable": true}, {"path": "templates/one.txt", "content": "one"}, {"path": "templates/two.txt", "content": "two"}, {"path": "templates/three.txt", "content": "three"}, {"path": "templates/four.txt", "content": "four"}, {"path": "templates/five.txt", "content": "five"}, {"path": "assets/logo.bin", "content": "AP8=", "encoding": "base64"}]}},
+
+  "author_patch": {"method": "PATCH", "path": "/api/v1/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444/files", "body": {"observed_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "operations": [{"action": "put", "file": {"path": "templates/one.txt", "content": "replaced"}}, {"action": "rename", "path": "templates/two.txt", "new_path": "templates/second.txt"}, {"action": "delete", "path": "templates/three.txt"}]}},
+  "author_submit": {"method": "POST", "path": "/api/v1/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444/submit", "body": {"observed_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+  "author_withdraw": {"method": "POST", "path": "/api/v1/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444/withdraw", "body": {"observed_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+  "author_rebase": {"method": "POST", "path": "/api/v1/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444/rebase", "body": {"observed_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "current_version_id": "33333333-3333-4333-8333-333333333333", "observed_current_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "new_version": "1.2.0"}},
+  "review_detail": {"method": "GET", "path": "/api/v1/review/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444"},
+  "review": {"method": "POST", "path": "/api/v1/review/skills/11111111-1111-4111-8111-111111111111/versions/44444444-4444-4444-8444-444444444444/decision", "body": {"action": "approve", "observed_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+  "manifest_identity": {"listing_id": "11111111-1111-4111-8111-111111111111", "version_id": "44444444-4444-4444-8444-444444444444", "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "standalone_request": {"harness": "claude-code", "scope": "project", "version": "1.1.0", "supported_features": ["skill_extra_files_v1"]},
+  "agent_request": {"harness": "claude-code", "options": {"scope": "project"}, "supported_features": ["skill_extra_files_v1"]},
+  "failures": {
+    "missing_feature": {"status": 409, "detail": "Client must support skill_extra_files_v1 to install this skill version"},
+    "missing_revision": {"status": 409, "detail": "Review the bundled skill UUID with its observed revision"},
+    "stale_revision": {"status": 409, "detail": "Skill version changed; refresh before review"},
+    "invalid_tree": {"status": 422},
+    "out_of_scope": {"status": 404}
+  },
+  "sixty_file_tree": {"skill_md_content": "---\nname: large-example\ndescription: Sixty-file validation fixture\n---\n", "path_prefix": "templates/item-", "path_suffix": ".txt", "first_index": 0, "last_index": 59, "content_prefix": "item-", "executable": false}
+}

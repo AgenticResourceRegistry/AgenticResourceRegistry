@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Self-Observability"
+---
 
-# Self-Observability
-
-Observal exposes health probes, structured logs, and Prometheus metrics for monitoring itself.
+Agentic Resource Registry exposes health probes, structured logs, and Prometheus metrics for monitoring itself.
 
 ## Health Endpoints
 

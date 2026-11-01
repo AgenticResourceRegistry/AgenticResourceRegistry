@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused coverage for the DB-backed dynamic settings service."""
@@ -597,6 +598,29 @@ def test_settings_schema_labels_restart_and_external_metadata():
         "is_externally_managed": True,
     }
     assert all("keys" in section and "settings" in section for section in schema)
+    registry = next(section for section in schema if section["id"] == "registry")
+    rollout = next(
+        setting for setting in registry["settings"] if setting["key"] == "registry.skill_folder_delivery_enabled"
+    )
+    assert rollout["default"] == "false"
+    assert "draining all API/worker processes" in rollout["subtitle"]
+    assert "mixed-version rollout" in rollout["subtitle"]
+
+
+def test_registry_fork_settings_have_defaults_and_appear_in_admin_schema():
+    expected = {
+        "registry.fork.enabled": "true",
+        "registry.fork.max_per_user_per_hour": "30",
+    }
+    registry = next(section for section in ds.settings_schema() if section["id"] == "registry")
+    settings = {setting["key"]: setting for setting in registry["settings"]}
+    for key, default in expected.items():
+        assert ds.DEFAULTS[key] == default
+        assert settings[key]["default"] == default
+        assert settings[key]["restart_required"] is False
+    # Source-owner fork notices are not implemented; no inert admin control is offered.
+    assert "registry.fork.notify_source_owner" not in ds.DEFAULTS
+    assert "registry.fork.notify_source_owner" not in settings
 
 
 def test_mask_value_only_reveals_sensitive_suffix():

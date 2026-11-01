@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Antigravity CLI harness adapter."""
@@ -10,6 +11,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from observal_cli.discovery.adapter_support import RichAdapterScanner
+from observal_cli.discovery.models import AdapterDiscoveryResult, DiscoveryScope
+from observal_cli.discovery.redact import redact_text
 from observal_cli.harness import (
     DiscoveredAgent,
     DiscoveredHook,
@@ -20,7 +24,8 @@ from observal_cli.harness import (
     SessionSource,
     register_adapter,
 )
-from observal_cli.harness.base import BaseAdapter
+from observal_cli.harness.base import BaseAdapter, inline_agent_prompt
+from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest
 from observal_cli.shared.utils import (
     extract_mcp_servers,
     first_content_line,
@@ -33,6 +38,7 @@ class AntigravityAdapter(BaseAdapter):
     """Adapter for Antigravity CLI."""
 
     home_markers = (".gemini/antigravity-cli", ".gemini/config")
+    headless_binary = "agy"
     managed_agent_profiles = ()
 
     @property
@@ -136,6 +142,95 @@ class AntigravityAdapter(BaseAdapter):
         mcps = self._scan_mcps(ag_dir / "mcp_config.json", "antigravity:project")
         skills = self._scan_skills(ag_dir / "skills")
         return ScanResult(mcps=mcps, skills=skills)
+
+    def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        home = home or Path.home()
+        config_dir = resolve_antigravity_config_dir(home)
+        agent_dir = self._resolve_ag_dir(home)
+        if config_dir is None and agent_dir is None:
+            return AdapterDiscoveryResult()
+        config_dir = config_dir or agent_dir
+        agent_dir = agent_dir or config_dir
+        assert config_dir is not None and agent_dir is not None
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.USER,
+            root=config_dir,
+            home=home,
+        )
+        self._discover_antigravity_config(scanner, config_dir, "antigravity:global")
+        same_root = agent_dir.resolve(strict=False) == config_dir.resolve(strict=False)
+        if same_root:
+            self._discover_antigravity_agents(scanner, agent_dir / "agents", "antigravity:global")
+        result = scanner.finish()
+        if not same_root:
+            agent_scanner = RichAdapterScanner(
+                harness=self.harness_name,
+                scope=DiscoveryScope.USER,
+                root=agent_dir,
+                home=home,
+            )
+            self._discover_antigravity_agents(agent_scanner, agent_dir / "agents", "antigravity:global")
+            extra = agent_scanner.finish()
+            result.evidence.extend(extra.evidence)
+            result.diagnostics.extend(extra.diagnostics)
+        return result
+
+    def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
+        root = project_dir / ".agents"
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.PROJECT,
+            root=root,
+            project_dir=project_dir,
+        )
+        self._discover_antigravity_config(scanner, root, "antigravity:project")
+        return scanner.finish()
+
+    def _discover_antigravity_config(self, scanner: RichAdapterScanner, root: Path, source: str) -> None:
+        mcp_path = root / "mcp_config.json"
+        mcp_data = scanner.read_json(mcp_path)
+        if mcp_data is not None:
+            scanner.add_mcps(
+                extract_mcp_servers(dict(mcp_data), "antigravity"),
+                mcp_path,
+                source=source,
+                description_prefix="Antigravity MCP",
+            )
+        scanner.add_skills(root / "skills", source="antigravity:skills", prefix="Antigravity skill")
+        hooks_path = root / "hooks.json"
+        hooks_data = scanner.read_json(hooks_path)
+        if hooks_data is not None:
+            for hook_name, hook_def in hooks_data.items():
+                if not isinstance(hook_def, dict):
+                    continue
+                for event, entries in hook_def.items():
+                    if event == "enabled" or not isinstance(entries, list):
+                        continue
+                    scanner.add_hooks_mapping(
+                        hooks_path,
+                        {event: entries},
+                        name_prefix=redact_text(str(hook_name)),
+                        source="antigravity:hooks",
+                    )
+
+    def _discover_antigravity_agents(self, scanner: RichAdapterScanner, agents_dir: Path, source: str) -> None:
+        for agent_path in scanner.walker.files(agents_dir, name="agent.json"):
+            data = scanner.read_json(agent_path)
+            if data is None:
+                continue
+            name = redact_text(str(data.get("name") or agent_path.parent.name))
+            prompt = redact_text(str(data.get("system_prompt") or ""))
+            scanner.add_component(
+                DiscoveredAgent(
+                    name=name,
+                    description=redact_text(str(data.get("description") or f"Agent: {name}")),
+                    model_name=redact_text(str(data.get("model") or "")),
+                    prompt=prompt,
+                    source_file=str(agent_path),
+                ),
+                agent_path,
+            )
 
     # -- Hook detection ----------------------------------------------------
 
@@ -287,6 +382,16 @@ class AntigravityAdapter(BaseAdapter):
         from observal_cli.cmd_doctor import _patch_antigravity
 
         return _patch_antigravity(dry_run)
+
+    # ── Headless delegation ──────────────────────────────────
+
+    def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
+        # agy --help: --print <prompt>, --print-timeout, --sandbox. No agent
+        # flag, so the agent's instructions are inlined into the prompt.
+        argv = ["agy", f"--print={inline_agent_prompt(request)}", "--print-timeout", "30m", "--sandbox"]
+        if request.model:
+            argv += ["--model", request.model]
+        return HeadlessPlan(argv=argv)
 
 
 register_adapter(AntigravityAdapter())

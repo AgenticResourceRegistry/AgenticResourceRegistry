@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for sandbox runner and config generators."""
@@ -195,14 +196,24 @@ class TestInstallRouteWiring:
         from unittest.mock import AsyncMock, patch
 
         from api.routes.skill import install_skill
+        from models.mcp import ListingStatus
         from schemas.skill import SkillInstallRequest
 
+        version = _MockListing(
+            id=uuid.uuid4(),
+            version="1.0.0",
+            status=ListingStatus.approved,
+            requires_global_review=False,
+            delivery_mode="git_fetch",
+            download_count=0,
+        )
         listing = _MockListing(
             id=uuid.uuid4(),
             name="test-skill",
             git_url=None,
             skill_path=None,
-            status=MagicMock(value="approved"),
+            status=ListingStatus.approved,
+            latest_version=version,
         )
 
         mock_db = AsyncMock()
@@ -215,13 +226,16 @@ class TestInstallRouteWiring:
         mock_user.id = uuid.uuid4()
 
         req = SkillInstallRequest(harness="claude-code")
-        with patch(
-            "api.routes.config.derive_endpoints",
-            return_value={
-                "api": "http://localhost:8000",
-                "otlp_http": "http://localhost:8000",
-                "web": "http://localhost:3000",
-            },
+        with (
+            patch("api.routes.skill._selected_skill_release", new_callable=AsyncMock, return_value=(listing, version)),
+            patch(
+                "api.routes.config.derive_endpoints",
+                return_value={
+                    "api": "http://localhost:8000",
+                    "otlp_http": "http://localhost:8000",
+                    "web": "http://localhost:3000",
+                },
+            ),
         ):
             resp = await install_skill(listing.id, req, MagicMock(), mock_db, mock_user)
         config = resp.config_snippet

@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -83,7 +84,7 @@ export function DepartmentsTab() {
             <tr className="border-b border-border bg-muted/30">
               <th className="text-left p-3 font-medium">Department</th>
               <th className="text-left p-3 font-medium">Team Size</th>
-              <th className="text-left p-3 font-medium">Agents</th>
+              <th className="text-left p-3 font-medium">Agent Files</th>
               <th className="text-left p-3 font-medium">AI Utilization</th>
               <th className="text-left p-3 font-medium">Sessions/User</th>
             </tr>

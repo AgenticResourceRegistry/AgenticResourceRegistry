@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, useEffect } from "react";
 import { useSearch } from "@tanstack/react-router";
 import { loadDoc, listDocPaths } from "@/lib/docs-loader";
 import { WikiRenderer } from "@/components/wiki/wiki-renderer";
-import { PageHeader, PageIntro } from "@/components/layouts/page-header";
+import { PageHeader } from "@/components/layouts/page-header";
 import { Loader2, ChevronRight, ArrowLeft } from "lucide-react";
 import { WikiNavItem } from "@/components/registry/registry-primitives";
 
@@ -81,11 +82,6 @@ export default function WikiPage() {
 			<div className="page-body w-full">
 				{!activePath ? (
 					<>
-						<PageIntro
-							eyebrow="Registry"
-							title="Wiki"
-							subtitle="Practical guidance for registry publishing, telemetry, administration, and operating Observal."
-						/>
 						<div className="grid grid-cols-1 gap-3.5 md:grid-cols-[200px_minmax(0,1fr)]">
 							{/* Sidebar navigation */}
 							<aside className="self-start rounded-xl bg-card p-2 shadow-sm">
@@ -110,14 +106,14 @@ export default function WikiPage() {
 								</p>
 								<h2 className="text-xl font-medium tracking-tight">How Observal fits together</h2>
 								<p className="mt-2.5 max-w-[680px] text-sm leading-relaxed text-muted-foreground">
-									Observal gives engineering teams one place to package coding agents, install them across
-									different harnesses, and understand what those agents actually do during execution.
+									Observal gives engineering teams one place to package coding Agent Files, install them across
+									different harnesses, and understand what those Agent Files actually do during execution.
 								</p>
 
 								<div className="mt-6 space-y-3">
 									<h3 className="text-base font-medium">The operating model</h3>
 									<pre className="rounded-[11px] bg-surface-raised px-4 py-3 font-mono text-2xs leading-relaxed text-foreground">
-										Registry asset → Agent version → Harness installation → Session trace → Insight
+										Registry asset → Agent File version → Harness installation → Session trace → Insight
 									</pre>
 								</div>
 

@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import services.dynamic_settings as ds
 from api.deps import get_current_user, get_db, require_password_auth
 from api.ratelimit import limiter
-from models.user import User, UserRole
+from models.user import User, UserRole, is_deleted_account, live_users
 from models.user_group import UserGroup
 from schemas.auth import (
     ChangePasswordRequest,
@@ -50,6 +50,7 @@ from schemas.auth import (
 )
 from schemas.sso_health import make_check
 from services import sso_diagnostics
+from services.auth_header import bearer_token
 from services.jwt_service import create_access_token, create_refresh_token, decode_access_token, decode_refresh_token
 from services.redis import get_redis
 from services.registry_namespace import is_valid_namespace, rename_namespace, user_has_listings
@@ -61,6 +62,13 @@ from services.security_events import (
     emit_security_event,
 )
 from services.teamspace import reserve_handle as reserve_team_handle
+from services.token_revocation import (
+    get_revocation_marker,
+    is_revoked,
+    revoke_user_tokens,
+    token_issued_us,
+    upgrade_legacy_revocation,
+)
 from services.username_generator import generate_unique_username
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -241,15 +249,17 @@ async def _issue_tokens(user: User, groups: list[str] | None = None) -> tuple[st
     Fails open: tokens are still returned if Redis is temporarily unreachable.
     """
     optic.trace("user_id={}, groups={}", user.id, groups)
-    access_token, expires_in = create_access_token(user.id, user.role, groups=groups)
-    refresh_token, jti = create_refresh_token(user.id, user.role, groups=groups)
-
+    # A deleted account's revocation must never be undone by a new sign-in.
+    if is_deleted_account(user):
+        raise HTTPException(status_code=401, detail="User no longer exists")
     try:
         redis = get_redis()
+        # Before minting: an upgraded legacy marker means "now", and the new pair must postdate it.
+        await upgrade_legacy_revocation(redis, user.id)
+        access_token, expires_in = create_access_token(user.id, user.role, groups=groups)
+        refresh_token, jti = create_refresh_token(user.id, user.role, groups=groups)
         refresh_ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
         await redis.setex(f"refresh_jti:{jti}", refresh_ttl, str(user.id))
-        # Clear any logout revocation so hooks resume after re-login
-        await redis.delete(f"revoked_user:{user.id}")
     except RedisError as e:
         optic.warning("Redis unavailable when storing refresh JTI: {}", e)
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
@@ -388,9 +398,9 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     source_ip, user_agent = _extract_request_info(request)
     identifier = req.email
     if "@" in identifier:
-        stmt = select(User).where(User.email == identifier)
+        stmt = select(User).where(User.email == identifier, live_users())
     else:
-        stmt = select(User).where(or_(User.username == identifier, User.email == identifier))
+        stmt = select(User).where(or_(User.username == identifier, User.email == identifier), live_users())
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user or not user.verify_password(req.password):
@@ -1562,7 +1572,8 @@ async def exchange_code(req: CodeExchangeRequest, db: AsyncSession = Depends(get
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
-    if not user:
+    # Tokens pre-issued before the account was deleted are never handed out.
+    if not user or is_deleted_account(user):
         raise HTTPException(status_code=400, detail="Invalid or expired code")
     return InitResponse(
         user=UserResponse.model_validate(user),
@@ -1592,7 +1603,7 @@ async def logout(
     # Extract the raw token from the Authorization header so we can get jti/exp
     optic.debug("auth logout")
     auth_header = request.headers.get("authorization", "")
-    token = auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else ""
+    token = bearer_token(auth_header) or ""
 
     try:
         payload = decode_access_token(token)
@@ -1609,9 +1620,8 @@ async def logout(
             ttl = max(exp - now_ts, 1)
             await redis.setex(f"revoked_jti:{jti}", ttl, "1")
 
-        # Mark the user as revoked for 30 days (max hooks token lifetime)
-        hooks_ttl = 30 * 86400
-        await redis.setex(f"revoked_user:{current_user.id}", hooks_ttl, "1")
+        # Log out everywhere: every token issued so far, including hooks tokens, stops working.
+        await revoke_user_tokens(redis, current_user.id)
     except RedisError as e:
         optic.warning("Redis unavailable during logout: {}", e)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
@@ -1656,9 +1666,9 @@ async def issue_token(request: Request, req: TokenRequest, db: AsyncSession = De
     source_ip, user_agent = _extract_request_info(request)
     identifier = req.email
     if "@" in identifier:
-        stmt = select(User).where(User.email == identifier)
+        stmt = select(User).where(User.email == identifier, live_users())
     else:
-        stmt = select(User).where(or_(User.username == identifier, User.email == identifier))
+        stmt = select(User).where(or_(User.username == identifier, User.email == identifier), live_users())
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user or not user.verify_password(req.password):
@@ -1714,11 +1724,12 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
     try:
         redis = get_redis()
         stored = await redis.get(f"refresh_jti:{jti}")
+        marker = await get_revocation_marker(redis, user_id)
     except RedisError as e:
         optic.warning("Redis unavailable during token refresh: {}", e)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
-    if stored is None:
+    if stored is None or is_revoked(marker, token_issued_us(payload)):
         raise HTTPException(status_code=401, detail="Refresh token has been revoked or expired")
 
     # Revoke the old refresh token (one-time use / rotation)
@@ -1730,8 +1741,12 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
     # Look up the user to ensure they still exist
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user:
+    if not user or is_deleted_account(user):
         raise HTTPException(status_code=401, detail="User no longer exists")
+    # Every API request already refuses a SCIM-deactivated account; refresh must
+    # not keep minting tokens for it. Its presented refresh token was consumed above.
+    if user.auth_provider == "deactivated":
+        raise HTTPException(status_code=401, detail="Account deactivated")
 
     # Issue new token pair
     groups = payload.get("groups", [])
@@ -1741,9 +1756,16 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
     try:
         refresh_ttl = ds.get_sync_int("jwt.refresh_token_expire_days", 30) * 86400
         await redis.setex(f"refresh_jti:{new_jti}", refresh_ttl, str(user.id))
+        # A logout can land while this request is in flight. Re-check after issuing: a later
+        # revocation is newer than the new pair, so it is caught either here or by the marker itself.
+        revoked_meanwhile = is_revoked(await get_revocation_marker(redis, user_id), token_issued_us(payload))
+        if revoked_meanwhile:
+            await redis.delete(f"refresh_jti:{new_jti}")
     except RedisError as e:
         optic.warning("Redis unavailable when storing new refresh JTI: {}", e)
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
+    if revoked_meanwhile:
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked or expired")
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,
@@ -1754,7 +1776,13 @@ async def refresh_token(request: Request, req: RefreshRequest, db: AsyncSession 
 @router.post("/token/revoke")
 @limiter.limit(ds.get_sync("security.rate_limit_auth", "10/minute"))
 async def revoke_token(request: Request, req: RevokeRequest):
-    """Revoke a refresh token so it can no longer be used."""
+    """Revoke a refresh token so it can no longer be used.
+
+    An access token carries no link to the refresh token that minted it (each has its
+    own random jti), so one already issued stays valid until it expires. /auth/logout is the
+    call that ends a session at once: it blacklists the presented access token and
+    every token issued to the user so far.
+    """
     optic.debug("revoke_token called")
     try:
         payload = decode_refresh_token(req.refresh_token)
@@ -1790,14 +1818,35 @@ async def change_password(
 
     _validate_password_strength(req.new_password)
     current_user.set_password(req.new_password)
+    # Sign out every session before the change lands; if Redis is down the password stays unchanged.
+    try:
+        redis = get_redis()
+        await revoke_user_tokens(redis, current_user.id)
+    except RedisError:
+        raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
     await db.commit()
 
     try:
-        redis = get_redis()
         await redis.delete(f"must_change_password:{current_user.id}")
     except RedisError:
         pass
-    return {"message": "Password changed"}
+    # The device that made the change stays signed in with a pair issued after the revocation. Like SSO,
+    # the pair is handed over through a one-time /auth/exchange code rather than in this response.
+    access_token, refresh_token, expires_in = await _issue_tokens(current_user, getattr(current_user, "_groups", None))
+    code = secrets.token_urlsafe(32)
+    session = json.dumps(
+        {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_in": expires_in,
+            "user_id": str(current_user.id),
+        }
+    )
+    try:
+        await redis.setex(f"oauth_code:{code}", 30, session)
+    except RedisError:
+        raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
+    return {"message": "Password changed", "exchange_code": code}
 
 
 @router.put("/profile/username", response_model=UserResponse)

@@ -5,7 +5,7 @@
 
 Public API entry points:
     export_pg   — PostgreSQL snapshot export to .tar.gz archive
-    export_ch   — ClickHouse telemetry export to monthly Parquet files
+    export_ch   — ClickHouse telemetry export to bounded Parquet chunks
     import_pg   — Import PG archive into target database
     import_ch   — Import telemetry Parquet files into target ClickHouse
     validate_pg — Validate PG archive checksums and row counts

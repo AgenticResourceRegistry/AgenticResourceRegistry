@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Canonical harness metadata shared by the CLI and server."""
@@ -8,6 +9,41 @@
 from __future__ import annotations
 
 from .harness_models import supported_model_ids
+
+# ── Runtime facts vocabulary ─────────────────────────────────
+#
+# Every harness carries five verified runtime facts that discovery and
+# activation gate on. A value is only set to a non-default when the behaviour
+# was checked against the harness's own documentation or adapter code; the
+# per-harness comment records the evidence. Unknown means the default.
+#
+# mcp_install_mode        how Observal gets an MCP server into the harness
+#   file            written to a config file the harness reads natively
+#   setup_command   installed by running the harness's own CLI command
+#   adapter         written to a file read by a third-party adapter
+#   user_only       only a user-scope config file exists
+# dynamic_tools           harness refreshes MCP tools mid-session
+#                         (notifications/tools/list_changed). Default False
+#                         until verified at runtime.
+# prompt_context_injection  a hook or extension can add context before
+#                         the model answers a prompt.
+# guidance_file_write     Observal may write an instruction file the harness
+#                         reads (AGENTS.md, rules, steering). Always False:
+#                         the bundled skill is the instruction channel.
+# headless_run            the harness CLI runs one prompt non-interactively
+#                         and exits, so a delegated agent can run as a child
+#                         process (observal_cli.delegation). The CLI adapter's
+#                         headless_command builds the argv.
+
+HARNESS_MCP_INSTALL_MODES: tuple[str, ...] = ("file", "setup_command", "adapter", "user_only")
+
+HARNESS_RUNTIME_FACT_KEYS: tuple[str, ...] = (
+    "mcp_install_mode",
+    "dynamic_tools",
+    "prompt_context_injection",
+    "guidance_file_write",
+    "headless_run",
+)
 
 HARNESS_REGISTRY: dict[str, dict] = {
     "cursor": {
@@ -47,10 +83,18 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "SubagentStop": "subagentStop",
         },
         "config_dir": ".cursor",
+        # .cursor/mcp.json is read natively. No Observal hook spec exists for
+        # Cursor, so no verified context-injection path.
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # `cursor-agent -p` prints and exits (cursor-agent --help: --print, --mode plan, --trust).
+        "headless_run": True,
     },
     "kiro": {
         "display_name": "Kiro",
-        "capabilities": {"hooks", "mcp_servers"},
+        "capabilities": {"hooks", "mcp_servers", "skills"},
         "session_parser": "kiro",
         "scopes": ["project", "user"],
         "default_scope": "user",
@@ -84,11 +128,35 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "UserPromptSubmit": "userPromptSubmit",
         },
         "config_dir": ".kiro",
+        # .kiro/settings/mcp.json is read natively. Kiro hooks docs: Prompt
+        # Submit hooks can "inject context - feed the agent additional
+        # instructions" (kiro.dev/docs/cli/hooks).
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": True,
+        "guidance_file_write": False,
+        # `kiro-cli chat --no-interactive --agent <name>` (kiro-cli chat --help).
+        "headless_run": True,
     },
     "claude-code": {
         "display_name": "Claude Code",
         "capabilities": {"skills", "hooks", "mcp_servers"},
         "session_parser": "claude-code",
+        "invocation_extractor": "claude-code",
+        # Skill loads (Skill tool + linked expansion) and /name invocations (harness-written
+        # isMeta expansion); the skill listing has no locations, so never availability.
+        # Verified against Claude Code 2.1.286 and 2.1.310 (session_parsers/claude_code_skill_evidence.py).
+        "skill_evidence_extractor": "claude-code",
+        # Hook runs that printed output, failed, or blocked a tool; silent successes leave no
+        # record (session_parsers/claude_code_hook_evidence.py, Claude Code 2.1.286 and 2.1.310).
+        "hook_evidence_extractor": "claude-code",
+        # Claude Code versions whose hook records and hook inputs were recorded end to end
+        # (tests/fixtures/component_insights/claude_code). Hook evidence from a session on
+        # any other version is "version_unverified", and gated agent hooks warn there.
+        # Raise it only after recording fixtures on the newer version. 2.1.286 and 2.1.310
+        # have fixtures; 2.1.299 between them was checked against 66 recorded sessions (hook
+        # outputs, failures and blocks, and skill loads, each matching the raw transcripts).
+        "hook_evidence_tested_versions": ((2, 1, 286), (2, 1, 310)),
         "scopes": ["project", "user"],
         "default_scope": "project",
         "scope_labels": ("project (.claude/agents/)", "user (~/.claude/agents/)"),
@@ -123,6 +191,15 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "SubagentStop": "SubagentStop",
         },
         "config_dir": ".claude",
+        # mcp_config is None above: servers are installed with `claude mcp add`
+        # (services/harness/claude_code.py). UserPromptSubmit hooks return
+        # stdout / hookSpecificOutput.additionalContext into the prompt.
+        "mcp_install_mode": "setup_command",
+        "dynamic_tools": False,
+        "prompt_context_injection": True,
+        "guidance_file_write": False,
+        # `claude -p --agent <name>` (claude --help: --print, --agent, --permission-mode, --mcp-config).
+        "headless_run": True,
     },
     "codex": {
         "display_name": "Codex",
@@ -159,6 +236,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "Stop": "Stop",
         },
         "config_dir": ".codex",
+        # .codex/config.toml [mcp_servers] is read natively.
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # `codex exec` runs one prompt (Codex CLI reference: exec, --sandbox, --cd, --output-last-message).
+        "headless_run": True,
     },
     "copilot": {
         "display_name": "Copilot",
@@ -194,6 +278,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "Stop": "Stop",
         },
         "config_dir": ".vscode",
+        # .vscode/mcp.json is read natively.
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # VS Code Copilot has no CLI entry point; Copilot CLI covers headless runs.
+        "headless_run": False,
     },
     "copilot-cli": {
         "display_name": "Copilot CLI",
@@ -207,7 +298,7 @@ HARNESS_REGISTRY: dict[str, dict] = {
         },
         "agent_profile_format": "markdown",
         "mcp_config": {
-            "project": "~/.copilot/mcp-config.json",
+            "project": ".mcp.json",
         },
         "mcp_servers_key": "mcpServers",
         "skills": {
@@ -229,6 +320,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "Stop": "sessionEnd",
         },
         "config_dir": ".copilot",
+        # Project .mcp.json is read natively; ~/.copilot/mcp-config.json is user-only.
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # `copilot -p <prompt> --agent <name>` (GitHub Copilot CLI docs).
+        "headless_run": True,
     },
     "opencode": {
         "display_name": "OpenCode",
@@ -266,6 +364,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "UserPromptSubmit": "message.updated",
         },
         "config_dir": ".config/opencode",
+        # opencode.json "mcp" block is read natively.
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # `opencode run --agent <name> <message>` (opencode.ai/docs/cli).
+        "headless_run": True,
     },
     "antigravity": {
         "display_name": "Antigravity",
@@ -303,6 +408,13 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "UserPromptSubmit": "PreInvocation",
         },
         "config_dir": ".agents",
+        # .agents/mcp_config.json is read natively.
+        "mcp_install_mode": "file",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # `agy --print <prompt>` (agy --help: --print, --print-timeout, --sandbox).
+        "headless_run": True,
     },
     "goose": {
         "display_name": "Goose",
@@ -343,11 +455,28 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "UserPromptSubmit": "UserPromptSubmit",
         },
         "config_dir": ".config/goose",
+        # Goose reads extensions only from the single user-level config.yaml
+        # (mcp_config.project is None above).
+        "mcp_install_mode": "user_only",
+        "dynamic_tools": False,
+        "prompt_context_injection": False,
+        "guidance_file_write": False,
+        # Not verified: goose runs recipes headless, but agent profiles are not recipes.
+        "headless_run": False,
     },
     "pi": {
         "display_name": "Pi",
         "capabilities": {"skills", "hooks", "mcp_servers"},
         "session_parser": "pi",
+        # MCP call identity comes from pi-mcp-adapter's tool-result details
+        # (fixture-verified against pi-mcp-adapter 2.38.0 and 3.2.0 sources).
+        "invocation_extractor": "pi",
+        # Skill availability and model loads (session_parsers/pi_skill_evidence.py). Pi records no
+        # distinguishable /skill:name origin, so it never reports invocations.
+        "skill_evidence_extractor": "pi",
+        # Registry command hooks run by the Observal extension, from its run receipts
+        # (session_parsers/pi_hook_evidence.py; docs/integrations/pi.md "Registry hooks").
+        "hook_evidence_extractor": "pi",
         "scopes": ["project", "user"],
         "default_scope": "user",
         "scope_labels": ("project (.pi/)", "user (~/.pi/agent/)"),
@@ -371,8 +500,20 @@ HARNESS_REGISTRY: dict[str, dict] = {
             "user": "~/.pi/agent/settings.json",
         },
         "hook_scripts_dir": None,
-        "hook_events_map": {},
+        # Registry command hooks run inside the Observal extension (``observal-hooks.json``,
+        # docs/integrations/pi.md "Registry hooks"). Other events are not installed on Pi.
+        "hook_events_map": {"PreToolUse": "tool_call", "PostToolUse": "tool_result"},
         "config_dir": ".pi",
+        # Pi has no native MCP; ~/.pi/agent/mcp.json is read by the third-party
+        # pi-mcp-adapter. A Pi extension's before_agent_start handler can
+        # modify the system prompt for the turn (pi docs/extensions.md).
+        "mcp_install_mode": "adapter",
+        "dynamic_tools": False,
+        "prompt_context_injection": True,
+        "guidance_file_write": False,
+        # Verified against pi 0.87: `pi -p --session-id <id> -- <prompt>` answers
+        # on stdout and exits.
+        "headless_run": True,
     },
 }
 
@@ -448,3 +589,16 @@ def has_model_selection(harness: str) -> bool:
 def get_session_parser_id(harness: str) -> str:
     """Return the registered session parser ID for a harness."""
     return HARNESS_REGISTRY[harness]["session_parser"]
+
+
+def get_harness_runtime_facts(harness: str) -> dict[str, str | bool]:
+    """Return the verified runtime facts for a harness (see HARNESS_RUNTIME_FACT_KEYS)."""
+    spec = HARNESS_REGISTRY[harness]
+    return {key: spec[key] for key in HARNESS_RUNTIME_FACT_KEYS}
+
+
+def get_harnesses_with_fact(fact: str, value: str | bool = True) -> list[str]:
+    """Return harnesses whose runtime fact ``fact`` equals ``value``."""
+    if fact not in HARNESS_RUNTIME_FACT_KEYS:
+        raise KeyError(f"Unknown harness runtime fact: {fact}")
+    return [harness for harness, spec in HARNESS_REGISTRY.items() if spec[fact] == value]

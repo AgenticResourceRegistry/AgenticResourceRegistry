@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+from observal_cli.discovery.adapter_support import RichAdapterScanner
+from observal_cli.discovery.models import AdapterDiscoveryResult, DiscoveryScope
 from observal_cli.harness import (
     DiscoveredMcp,
     HookSpec,
@@ -157,6 +159,43 @@ class CopilotAdapter(BaseAdapter):
             return ScanResult(mcps=mcps)
         except (json.JSONDecodeError, OSError):
             return ScanResult()
+
+    def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        home = home or Path.home()
+        return self._discover_copilot_root(home / ".vscode", DiscoveryScope.USER, home=home)
+
+    def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
+        return self._discover_copilot_root(
+            project_dir / ".vscode",
+            DiscoveryScope.PROJECT,
+            project_dir=project_dir,
+        )
+
+    def _discover_copilot_root(
+        self,
+        root: Path,
+        scope: DiscoveryScope,
+        *,
+        home: Path | None = None,
+        project_dir: Path | None = None,
+    ) -> AdapterDiscoveryResult:
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=scope,
+            root=root,
+            home=home,
+            project_dir=project_dir,
+        )
+        config_path = root / "mcp.json"
+        data = scanner.read_json(config_path)
+        if data is not None:
+            scanner.add_mcps(
+                data.get("servers", data.get("mcpServers", {})),
+                config_path,
+                source=f"copilot:{'global' if scope is DiscoveryScope.USER else 'project'}",
+                description_prefix="Copilot MCP",
+            )
+        return scanner.finish()
 
     def detect_hooks(self, config_dir: Path) -> str:
         """Detect telemetry hooks for Copilot.

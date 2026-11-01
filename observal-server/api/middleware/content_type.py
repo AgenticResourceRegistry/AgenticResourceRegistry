@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from urllib.parse import unquote_to_bytes
 
 from fastapi.responses import JSONResponse
 from loguru import logger as optic
@@ -64,6 +65,22 @@ def _check_depth(obj: object, current: int = 0) -> bool:
     return False
 
 
+def _has_nul(obj: object) -> bool:
+    """PostgreSQL text cannot store NUL; JSON can carry it as \\u0000 in any string or key."""
+    if isinstance(obj, str):
+        return "\x00" in obj
+    if isinstance(obj, dict):
+        return any(_has_nul(k) or _has_nul(v) for k, v in obj.items())
+    if isinstance(obj, list):
+        return any(_has_nul(item) for item in obj)
+    return False
+
+
+def _query_has_nul(raw_query: bytes) -> bool:
+    """Query values feed PostgreSQL filters too, and %00 decodes to the NUL it cannot store."""
+    return b"\x00" in unquote_to_bytes(raw_query)
+
+
 def _content_type_base(header: str | None) -> str:
     """Extract the media type portion (before any parameters like charset)."""
     if not header:
@@ -76,6 +93,13 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         method = request.method.upper()
+
+        # Checked before the method gate because the list routes that filter on query values are GETs.
+        if _query_has_nul(request.scope.get("query_string", b"")):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Query parameters must not contain NUL characters"},
+            )
 
         # Only validate body-bearing methods.
         if method not in _BODY_METHODS:
@@ -122,6 +146,11 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
                         return JSONResponse(
                             status_code=400,
                             content={"detail": f"JSON payload exceeds maximum nesting depth of {MAX_JSON_DEPTH}"},
+                        )
+                    if _has_nul(parsed):
+                        return JSONResponse(
+                            status_code=422,
+                            content={"detail": "Text fields must not contain NUL characters"},
                         )
             except json.JSONDecodeError:
                 return JSONResponse(

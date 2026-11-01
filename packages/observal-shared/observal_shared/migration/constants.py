@@ -12,6 +12,7 @@ from typing import Literal, TypedDict
 
 CHUNK_SIZE = 500
 DEFAULT_PROJECT_ID = "default"
+TELEMETRY_MANIFEST_VERSION = "2.0"
 
 INSERT_ORDER: list[str] = [
     # Tier 0 - no FK dependencies
@@ -106,21 +107,85 @@ class TableCfg(TypedDict):
     engine: Literal["replacing", "mergetree"]
     time_col: str
     fk_cols: list[str]
+    shard_expr: str
+    base_shards: int
+    physical_shards: int
+    preserve_shard_group: bool
 
 
+# ReplacingMergeTree shard expressions use only ORDER BY identity columns so
+# every physical version of one logical row is processed by the same chunk.
 CLICKHOUSE_TABLES: list[TableCfg] = [
-    {"name": "session_events", "engine": "replacing", "time_col": "timestamp", "fk_cols": ["agent_id", "user_id"]},
-    {"name": "session_checkpoints", "engine": "replacing", "time_col": "updated_at", "fk_cols": ["user_id"]},
+    {
+        "name": "session_events",
+        "engine": "replacing",
+        "time_col": "timestamp",
+        "fk_cols": ["agent_id", "user_id"],
+        "shard_expr": "sipHash64(project_id, user_id, harness, session_id)",
+        "base_shards": 64,
+        "physical_shards": 64,
+        "preserve_shard_group": True,
+    },
+    {
+        "name": "session_checkpoints",
+        "engine": "replacing",
+        "time_col": "updated_at",
+        "fk_cols": ["user_id"],
+        "shard_expr": "sipHash64(project_id, user_id, harness, session_id)",
+        "base_shards": 16,
+        "physical_shards": 1,
+        "preserve_shard_group": True,
+    },
     {
         "name": "session_stats_agg",
         "engine": "replacing",
         "time_col": "first_event_time",
         "fk_cols": ["agent_id", "user_id"],
+        "shard_expr": "sipHash64(project_id, user_id, harness, session_id)",
+        "base_shards": 64,
+        "physical_shards": 64,
+        "preserve_shard_group": True,
     },
-    {"name": "layer_snapshots", "engine": "replacing", "time_col": "uploaded_at", "fk_cols": ["user_id"]},
-    {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": ["actor_id"]},
-    {"name": "security_events", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []},
-    {"name": "webhook_deliveries", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []},
+    {
+        "name": "layer_snapshots",
+        "engine": "replacing",
+        "time_col": "uploaded_at",
+        "fk_cols": ["user_id"],
+        "shard_expr": "sipHash64(project_id, user_id, hash)",
+        "base_shards": 16,
+        "physical_shards": 1,
+        "preserve_shard_group": True,
+    },
+    {
+        "name": "audit_log",
+        "engine": "mergetree",
+        "time_col": "timestamp",
+        "fk_cols": ["actor_id"],
+        "shard_expr": "sipHash64(event_id)",
+        "base_shards": 1,
+        "physical_shards": 1,
+        "preserve_shard_group": False,
+    },
+    {
+        "name": "security_events",
+        "engine": "mergetree",
+        "time_col": "timestamp",
+        "fk_cols": [],
+        "shard_expr": "sipHash64(event_id)",
+        "base_shards": 1,
+        "physical_shards": 1,
+        "preserve_shard_group": False,
+    },
+    {
+        "name": "webhook_deliveries",
+        "engine": "mergetree",
+        "time_col": "timestamp",
+        "fk_cols": [],
+        "shard_expr": "sipHash64(delivery_id)",
+        "base_shards": 1,
+        "physical_shards": 1,
+        "preserve_shard_group": False,
+    },
 ]
 
 FK_PG_TABLE_MAP: dict[str, str] = {

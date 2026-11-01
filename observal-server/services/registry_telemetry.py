@@ -35,6 +35,7 @@ def emit_registry_event(
     user_role: str = "",
     agent_id: str | None = None,
     resource_name: str = "",
+    resource_type: str = "agent",
     metadata: dict[str, str] | None = None,
 ) -> None:
     """Fire-and-forget a registry audit_log entry into ClickHouse."""
@@ -48,7 +49,7 @@ def emit_registry_event(
         "actor_email": user_email,
         "actor_role": user_role,
         "action": action,
-        "resource_type": "agent",
+        "resource_type": resource_type,
         "resource_id": agent_id or "",
         "resource_name": resource_name,
         "detail": ", ".join(f"{k}={v}" for k, v in meta.items()) if meta else "",

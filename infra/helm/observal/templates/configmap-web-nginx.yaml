@@ -42,6 +42,12 @@ data:
             proxy_set_header Host $host;
         }
 
+        # ARD discovery manifest (spec §5.1) and its predecessor path are served by the API.
+        location ~ ^/\.well-known/(ard|ai-catalog)\.json$ {
+            proxy_pass http://{{ include "observal.fullname" . }}-api:8000;
+            proxy_set_header Host $host;
+        }
+
         location / {
             try_files $uri $uri/ /index.html;
         }

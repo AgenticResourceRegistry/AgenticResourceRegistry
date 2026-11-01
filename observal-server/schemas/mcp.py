@@ -12,10 +12,15 @@ from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_MCP_CATEGORIES,
     VALID_MCP_FRAMEWORKS,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
+    RecommendedFlag,
     Visibility,
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 
 class McpEnvVar(BaseModel):
@@ -47,13 +52,25 @@ class ClientAnalysis(BaseModel):
     docker_image: str | None = None
 
 
+def _normalize_transport(v: str | None) -> str | None:
+    if v is None:
+        return None
+    normalized = v.lower()
+    if normalized == "http":
+        normalized = "streamable-http"
+    if normalized not in ("stdio", "sse", "streamable-http"):
+        raise ValueError("Transport must be stdio, sse, or streamable-http (http is also accepted)")
+    return normalized
+
+
 class McpSubmitRequest(BaseModel):
     git_url: str | None = None
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
+    message: str | None = None
     description: str = Field(min_length=1)
     category: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     framework: str | None = None
@@ -64,6 +81,8 @@ class McpSubmitRequest(BaseModel):
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     transport: str | None = None
+
+    _validate_transport = field_validator("transport")(_normalize_transport)
     supported_harnesses: list[str] = []
     environment_variables: list[McpEnvVar] = []
     setup_instructions: str | None = None
@@ -90,11 +109,11 @@ class McpSubmitRequest(BaseModel):
 
 
 class McpDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
     category: str = "other"
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     git_url: str | None = None
@@ -106,6 +125,8 @@ class McpDraftRequest(BaseModel):
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     transport: str | None = None
+
+    _validate_transport = field_validator("transport")(_normalize_transport)
     supported_harnesses: list[str] = []
     environment_variables: list[McpEnvVar] = []
     setup_instructions: str | None = None
@@ -116,11 +137,11 @@ class McpDraftRequest(BaseModel):
 
 
 class McpUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
     category: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     git_url: str | None = None
@@ -132,6 +153,8 @@ class McpUpdateRequest(BaseModel):
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     transport: str | None = None
+
+    _validate_transport = field_validator("transport")(_normalize_transport)
     supported_harnesses: list[str] | None = None
     environment_variables: list[McpEnvVar] | None = None
     setup_instructions: str | None = None
@@ -153,6 +176,13 @@ class McpValidationResultResponse(BaseModel):
 
 
 class McpListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
+    review_number: int | None = None
+    review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -175,6 +205,7 @@ class McpListingResponse(BaseModel):
     command: str | None = None
     args: list[str] | None = None
     url: str | None = None
+    transport: str | None = None
     headers: list[McpHeader] | None = None
     auto_approve: list[str] | None = None
     mcp_validated: bool = False
@@ -189,6 +220,7 @@ class McpListingResponse(BaseModel):
     validation_results: list[McpValidationResultResponse] = []
     download_count: int = 0
     user_permission: str | None = None
+    is_recommended: RecommendedFlag = False
 
     @field_validator("user_permission", mode="before")
     @classmethod
@@ -199,6 +231,8 @@ class McpListingResponse(BaseModel):
 
 
 class McpListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str
@@ -215,6 +249,7 @@ class McpListingSummary(BaseModel):
     status: ListingStatus
     rejection_reason: str | None = None
     updated_at: datetime | None = None
+    is_recommended: RecommendedFlag = False
 
     model_config = {"from_attributes": True}
 
@@ -231,7 +266,13 @@ class McpInstallResponse(BaseModel):
     listing_id: uuid.UUID
     harness: str
     config_snippet: dict
+    selected_version: str | None = None
+    local_name: str | None = None
     warnings: list[str] = []
+    # The exact component version that was installed and its content digest.
+    version: str | None = None
+    version_id: uuid.UUID | None = None
+    digest: str | None = None
 
 
 class McpAnalyzeRequest(BaseModel):

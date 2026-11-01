@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the component version API (factory-generated endpoints).
@@ -96,22 +97,22 @@ def _get_factory():
 
 
 def test_semver_pattern_matches_valid():
-    from api.routes.component_versions import SEMVER_RE
+    from schemas.constants import COMPONENT_VERSION_RE
 
-    assert SEMVER_RE.match(SEMVER_VALID)
-    assert SEMVER_RE.match(SEMVER_VALID_PRE)
-    assert SEMVER_RE.match("0.0.0")
-    assert SEMVER_RE.match("10.20.300")
+    assert COMPONENT_VERSION_RE.fullmatch(SEMVER_VALID)
+    assert COMPONENT_VERSION_RE.fullmatch(SEMVER_VALID_PRE)
+    assert COMPONENT_VERSION_RE.fullmatch("0.0.0")
+    assert COMPONENT_VERSION_RE.fullmatch("10.20.300")
 
 
 def test_semver_pattern_rejects_invalid():
-    from api.routes.component_versions import SEMVER_RE
+    from schemas.constants import COMPONENT_VERSION_RE
 
-    assert not SEMVER_RE.match(SEMVER_INVALID)
-    assert not SEMVER_RE.match("1.2")
-    assert not SEMVER_RE.match("1.2.3.4")
-    assert not SEMVER_RE.match("")
-    assert not SEMVER_RE.match("v1.2.3")
+    assert not COMPONENT_VERSION_RE.fullmatch(SEMVER_INVALID)
+    assert not COMPONENT_VERSION_RE.fullmatch("1.2")
+    assert not COMPONENT_VERSION_RE.fullmatch("1.2.3.4")
+    assert not COMPONENT_VERSION_RE.fullmatch("")
+    assert not COMPONENT_VERSION_RE.fullmatch("v1.2.3")
 
 
 # ---------------------------------------------------------------------------
@@ -287,35 +288,13 @@ async def test_get_version_not_found():
 
 @pytest.mark.asyncio
 async def test_publish_version_bad_semver():
-    """publish_version rejects invalid semver strings with 422."""
-    from fastapi import HTTPException
+    """The publish request rejects invalid semver, so FastAPI answers 422 before the handler runs."""
+    from pydantic import ValidationError
 
-    from api.routes.component_versions import _publish_version
-    from models.mcp import McpListing, McpVersion
     from schemas.component_version import VersionPublishRequest
 
-    owner_id = uuid.uuid4()
-    listing = _make_listing(owner_id)
-    user = _make_user()
-    user.id = owner_id
-
-    req = VersionPublishRequest(version=SEMVER_INVALID, description="test", changelog=None, extra=None)
-
-    with (
-        patch(RESOLVE_SEAM, new=AsyncMock(return_value=listing)),
-        pytest.raises(HTTPException) as exc,
-    ):
-        await _publish_version(
-            listing_id=str(listing.id),
-            req=req,
-            listing_model=McpListing,
-            version_model=McpVersion,
-            component_type="mcp",
-            db=AsyncMock(),
-            current_user=user,
-        )
-
-    assert exc.value.status_code == 422
+    with pytest.raises(ValidationError):
+        VersionPublishRequest(version=SEMVER_INVALID, description="test", changelog=None, extra=None)
 
 
 @pytest.mark.asyncio
@@ -405,11 +384,12 @@ async def test_publish_version_happy_path():
         version=SEMVER_VALID, description="New version desc", changelog="Added stuff", extra=None
     )
 
-    # DB returns None for the duplicate check
+    # DB returns None for the duplicate check; AsyncSession.add is synchronous.
     db = AsyncMock()
     dup_result = MagicMock()
     dup_result.scalar_one_or_none.return_value = None
     db.execute = AsyncMock(return_value=dup_result)
+    db.add = MagicMock()
     db.commit = AsyncMock()
 
     with (
@@ -437,8 +417,16 @@ async def test_publish_version_happy_path():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def review_notification():
+    # The inbox delivery service has its own integration tests; a generic
+    # AsyncMock session cannot represent its nested SQLAlchemy transaction.
+    with patch("services.inbox.sources.on_review_decided", new=AsyncMock(return_value=0)) as notify:
+        yield notify
+
+
 @pytest.mark.asyncio
-async def test_review_version_approve_updates_latest():
+async def test_review_version_approve_updates_latest(review_notification):
     """Approving a pending version sets listing.latest_version_id."""
     from api.routes.component_versions import _review_version
     from models.mcp import McpListing, McpVersion
@@ -475,11 +463,12 @@ async def test_review_version_approve_updates_latest():
 
     assert result["new_status"] == ListingStatus.approved.value
     assert listing.latest_version_id == ver.id
+    review_notification.assert_awaited_once()
     db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_review_version_reject_stores_reason():
+async def test_review_version_reject_stores_reason(review_notification):
     """Rejecting a pending version stores the rejection reason."""
     from api.routes.component_versions import _review_version
     from models.mcp import McpListing, McpVersion
@@ -515,6 +504,7 @@ async def test_review_version_reject_stores_reason():
 
     assert result["new_status"] == ListingStatus.rejected.value
     assert ver.rejection_reason == "Not acceptable"
+    review_notification.assert_awaited_once()
     db.commit.assert_called_once()
 
 

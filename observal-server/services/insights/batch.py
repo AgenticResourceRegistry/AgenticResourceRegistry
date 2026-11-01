@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from database import async_session
 from models.agent import Agent, AgentStatus, AgentVersion
@@ -25,6 +25,7 @@ from services.insight_version_filters import agent_version_filter
 from services.redis import _get_arq_pool
 from services.secrets_redactor import redact_secrets
 
+from ._deps import recording_models
 from .registry_match import RegistryScope
 
 logger = structlog.get_logger(__name__)
@@ -136,7 +137,67 @@ def _build_registry_scope(agent: Agent | None, agent_config: dict | None) -> Reg
 
 
 # Maximum time a report can stay in 'running' before being considered stale.
-_REPORT_TIMEOUT_MINUTES = 10
+REPORT_TIMEOUT_MINUTES = 10
+
+
+# Scheduled runs drift by seconds, so the report from one period back can end
+# just after the new window starts. A sliver that small is not an overlap.
+_BASELINE_SLACK = timedelta(hours=1)
+
+
+def insight_report_job_id(report_id) -> str:
+    """arq job id for generating one report.
+
+    Keyed on the report, not on its inputs: arq also refuses an id whose
+    result it still keeps, so an input-keyed id would silently drop a
+    legitimate re-run for an hour after the first one finished and leave its
+    report pending forever. Duplicate inputs are caught before the insert.
+    """
+    return f"insight-report:{report_id}"
+
+
+async def lock_agent_reports(db, subject_id) -> None:
+    """Serialize report creation for one agent or component until ``db``'s transaction ends.
+
+    The generate routes and the cron both check for an existing report and then
+    insert one. Without a shared lock, one of them can miss the other's
+    uncommitted row and queue a duplicate run. Agent and listing ids are UUIDs,
+    so one key space serves both.
+    """
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"insights.generate:{subject_id}"},
+    )
+
+
+async def find_baseline_report(
+    db, *, agent_id, agent_version: str | None, period_start: datetime, period_end: datetime
+) -> InsightReport | None:
+    """Pick the completed report covering the window just before this one.
+
+    Regression detection diffs raw totals, so the baseline has to be a
+    separate window of the same length. The latest report for the version
+    usually overlaps the new one, and two reports over the same sessions
+    always read as "stable". With no such window, the report gets no
+    previous data and the section says it cannot compare.
+    """
+    length = period_end - period_start
+    stmt = (
+        select(InsightReport)
+        .where(
+            InsightReport.agent_id == agent_id,
+            InsightReport.agent_version == agent_version,
+            InsightReport.status == InsightReportStatus.completed,
+            InsightReport.period_end <= period_start + _BASELINE_SLACK,
+            InsightReport.period_end >= period_start - length,
+        )
+        .order_by(InsightReport.period_end.desc(), InsightReport.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    for report in result.scalars().all():
+        if report.period_end - report.period_start == length:
+            return report
+    return None
 
 
 async def _reap_stale_reports() -> int:
@@ -145,7 +206,7 @@ async def _reap_stale_reports() -> int:
     Handles cases where the worker crashed, system shut off, or the job timed out.
     Returns the number of reports reaped.
     """
-    cutoff = datetime.now(UTC) - timedelta(minutes=_REPORT_TIMEOUT_MINUTES)
+    cutoff = datetime.now(UTC) - timedelta(minutes=REPORT_TIMEOUT_MINUTES)
     async with async_session() as db:
         stmt = select(InsightReport).where(
             InsightReport.status == InsightReportStatus.running,
@@ -155,7 +216,7 @@ async def _reap_stale_reports() -> int:
         stale = list(result.scalars().all())
         for report in stale:
             report.status = InsightReportStatus.failed
-            report.error_message = f"Timed out after {_REPORT_TIMEOUT_MINUTES} minutes (system may have restarted)"
+            report.error_message = f"Timed out after {REPORT_TIMEOUT_MINUTES} minutes (system may have restarted)"
             report.completed_at = datetime.now(UTC)
             logger.warning("insight_report_reaped", report_id=str(report.id), started_at=str(report.started_at))
         if stale:
@@ -176,6 +237,24 @@ async def _update_report_progress(
     await db.commit()
 
 
+async def _authorize_component_report_job(db, report: InsightReport) -> None:
+    """Repeat the full API visibility, ownership and version gate at execution time."""
+    from api.routes.component_activity import _authorize
+    from models.user import User, is_deleted_account
+
+    requester = await db.scalar(select(User).where(User.id == report.triggered_by))
+    # A deleted account keeps its row as a shell; it no longer holds any authority.
+    if requester is None or is_deleted_account(requester):
+        raise ValueError("Component report requester is no longer available")
+    # _authorize resolves visible listings first (including current private-team
+    # membership), then checks owner permission and the version's listing FK.
+    listing, _, version_label = await _authorize(
+        report.component_type, str(report.component_id), report.component_version_id, db, requester
+    )
+    if listing.id != report.component_id or version_label != report.component_version:
+        raise ValueError("Component report subject has changed")
+
+
 async def run_single_report(report_id: str) -> None:
     """Generate an insight report: load from DB, run pipeline, save results.
 
@@ -183,6 +262,7 @@ async def run_single_report(report_id: str) -> None:
     here in the main repo, computation is delegated to the observal-insights package.
     """
     from .generator import generate_report_content
+    from .scope import InsightScope
 
     # Reap any stale reports before starting (handles crash recovery)
     await _reap_stale_reports()
@@ -201,6 +281,29 @@ async def run_single_report(report_id: str) -> None:
         await _update_report_progress(db, report, "loading_sessions", 0, 9, "Loading report and agent context")
 
         try:
+            if report.subject_type == "component":
+                from .component_report import generate_component_content
+
+                await _authorize_component_report_job(db, report)
+                with recording_models() as models_used:
+                    content = await generate_component_content(report, db)
+                await _update_report_progress(db, report, "saving", 9, 9, "Saving component report")
+                report.metrics = content["metrics"]
+                report.narrative = content["narrative"]
+                report.coverage = content["coverage"]
+                report.sessions_analyzed = content["sessions_analyzed"]
+                report.aggregated_data = {"metrics": content["metrics"], "coverage": content["coverage"]}
+                report.report_version = 4
+                report.llm_model_used = ", ".join(sorted(models_used)) or None
+                report.status = InsightReportStatus.completed
+                report.completed_at = datetime.now(UTC)
+                report.progress_phase = "completed"
+                report.progress_percent = 100
+                report.progress_message = "Report completed"
+                report.progress_updated_at = report.completed_at
+                await db.commit()
+                return
+
             # Load agent
             agent_stmt = select(Agent).where(Agent.id == report.agent_id)
             agent_result = await db.execute(agent_stmt)
@@ -230,19 +333,21 @@ async def run_single_report(report_id: str) -> None:
                 await _update_report_progress(db, report, phase, current, total, message)
 
             # Run the insights pipeline
-            content = await generate_report_content(
-                agent_name=agent_name,
-                agent_id=str(report.agent_id),
-                agent_version=report.agent_version,
-                comparison_agent_version=report.comparison_agent_version,
-                period_start=start_str,
-                period_end=end_str,
-                previous_metrics=previous_metrics,
-                agent_config=agent_config,
-                registry_scope=registry_scope,
-                db=db,
-                progress_callback=progress_callback,
-            )
+            with recording_models() as models_used:
+                content = await generate_report_content(
+                    agent_name=agent_name,
+                    agent_id=str(report.agent_id),
+                    agent_version=report.agent_version,
+                    comparison_agent_version=report.comparison_agent_version,
+                    period_start=start_str,
+                    period_end=end_str,
+                    previous_metrics=previous_metrics,
+                    agent_config=agent_config,
+                    registry_scope=registry_scope,
+                    db=db,
+                    progress_callback=progress_callback,
+                    scope=InsightScope(subject_type="agent", agent_id=str(report.agent_id)),
+                )
 
             await _update_report_progress(db, report, "saving", 9, 9, "Saving report")
 
@@ -258,8 +363,7 @@ async def run_single_report(report_id: str) -> None:
             }
             report.report_version = 3
 
-            models_used = content.get("models_used", [])
-            report.llm_model_used = ", ".join(models_used) if models_used else None
+            report.llm_model_used = ", ".join(sorted(models_used)) or None
 
             report.status = InsightReportStatus.completed
             report.completed_at = datetime.now(UTC)
@@ -319,7 +423,7 @@ async def _count_agent_sessions(agent_id: str, agent_name: str, since: str, agen
         logger.warning("insight_batch_count_agg_failed", agent_name=agent_name, version=agent_version, error=str(e))
 
     fallback_sql = """
-        SELECT count(DISTINCT session_id) AS cnt
+        SELECT count(DISTINCT (project_id, user_id, harness, session_id)) AS cnt
         FROM session_events FINAL
         WHERE (agent_id = {agent_id:String} OR agent_id = {aname:String})
           AND timestamp >= {t_start:String}
@@ -372,6 +476,15 @@ async def discover_and_queue_reports() -> int:
 
         for agent in agents:
             try:
+                latest_version = agent.latest_version
+                if not latest_version or latest_version.status != AgentStatus.approved:
+                    continue
+
+                # Held until this agent's transaction ends, so every path below
+                # commits or rolls back, skips included. Committing a read-only
+                # transaction is safe here because the session does not expire on commit.
+                await lock_agent_reports(db, agent.id)
+
                 # Check if there's already a recent report (completed or in-progress)
                 latest_report_stmt = (
                     select(InsightReport)
@@ -393,12 +506,10 @@ async def discover_and_queue_reports() -> int:
 
                 # Skip if a report was generated within the last period
                 if latest_report and latest_report.created_at > period_start:
+                    await db.commit()
                     continue
 
                 # Count new sessions for the latest approved version by default.
-                latest_version = agent.latest_version
-                if not latest_version or latest_version.status != AgentStatus.approved:
-                    continue
                 since_str = period_start.strftime("%Y-%m-%d %H:%M:%S")
                 session_count = await _count_agent_sessions(
                     str(agent.id),
@@ -414,21 +525,16 @@ async def discover_and_queue_reports() -> int:
                         sessions=session_count,
                         min_required=min_sessions,
                     )
+                    await db.commit()
                     continue
 
-                # Find the most recent completed report for regression linking
-                prev_report_stmt = (
-                    select(InsightReport)
-                    .where(
-                        InsightReport.agent_id == agent.id,
-                        InsightReport.agent_version == latest_version.version,
-                        InsightReport.status == InsightReportStatus.completed,
-                    )
-                    .order_by(InsightReport.created_at.desc())
-                    .limit(1)
+                prev_report = await find_baseline_report(
+                    db,
+                    agent_id=agent.id,
+                    agent_version=latest_version.version,
+                    period_start=period_start,
+                    period_end=now,
                 )
-                prev_result = await db.execute(prev_report_stmt)
-                prev_report = prev_result.scalar_one_or_none()
 
                 # Create a new report record
                 report = InsightReport(
@@ -452,7 +558,9 @@ async def discover_and_queue_reports() -> int:
 
                 # Enqueue the generation job
                 pool = await _get_arq_pool()
-                await pool.enqueue_job("generate_insight_report", str(report.id))
+                await pool.enqueue_job(
+                    "generate_insight_report", str(report.id), _job_id=insight_report_job_id(report.id)
+                )
 
                 await db.commit()
                 queued += 1

@@ -1,10 +1,11 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 name: observal-admin
 command: observal
-description: "Administers Observal users, settings, diagnostics, review queues, security events, audit logs, SAML, SCIM, local server services, upgrades, rollback, and database migrations. Use when the user needs privileged governance, submission decisions, identity configuration, security investigation, or server operations."
-version: 2.2.0
+description: "Administers Observal users, settings, diagnostics, review queues, security events, audit logs, SAML, SCIM, the local Observal server, its upgrades and rollback, and its own PostgreSQL and ClickHouse schema migrations. Use when the user needs privileged governance, submission decisions, identity configuration, security investigation, or Observal server operations. Not for querying a database or any work outside Observal administration."
+version: 2.2.1
 owner: observal
 ---
 

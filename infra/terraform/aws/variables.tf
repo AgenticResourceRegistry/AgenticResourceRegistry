@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 variable "region" {
@@ -100,13 +101,13 @@ variable "sizing" {
 variable "image_repo_api" {
   description = "Container image repository for api + worker + init (they share an image)."
   type        = string
-  default     = "ghcr.io/observal/observal-api"
+  default     = "ghcr.io/agenticresourceregistry/observal-api"
 }
 
 variable "image_repo_web" {
-  description = "Container image repository for the Next.js web frontend."
+  description = "Container image repository for the web frontend."
   type        = string
-  default     = "ghcr.io/observal/observal-web"
+  default     = "ghcr.io/agenticresourceregistry/observal-web"
 }
 
 variable "image_tag" {
@@ -219,30 +220,6 @@ variable "run_init_on_apply" {
 
 # ── Data tier (ClickHouse plus optional observability on EC2) ───────────────
 
-variable "clickhouse_mode" {
-  description = "Where ClickHouse lives. 'self_hosted' = EC2 + EBS managed by this module. 'cloud' = ClickHouse Cloud, supply clickhouse_cloud_url + clickhouse_cloud_password."
-  type        = string
-  default     = "self_hosted"
-  validation {
-    condition     = contains(["self_hosted", "cloud"], var.clickhouse_mode)
-    error_message = "clickhouse_mode must be 'self_hosted' or 'cloud'."
-  }
-}
-
-variable "clickhouse_cloud_url" {
-  description = "ClickHouse Cloud DSN (e.g. https://abc123.us-east-1.aws.clickhouse.cloud:8443). Required when clickhouse_mode = 'cloud'."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "clickhouse_cloud_password" {
-  description = "ClickHouse Cloud password. Required when clickhouse_mode = 'cloud'."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "data_instance_type" {
   description = "EC2 instance type for the ClickHouse data host. 8 GB RAM is the floor for light use."
   type        = string
@@ -287,6 +264,52 @@ variable "alb_ingress_cidrs" {
   description = "CIDR blocks allowed to reach the ALB. Default is open; restrict for private installs."
   type        = list(string)
   default     = ["0.0.0.0/0"]
+}
+
+# ── Git webhook ingress (optional) ─────────────────────────────────────────
+# For private installs (alb_scheme = "internal") that use MCP repository sync.
+# Adds an API Gateway HTTP API that forwards only GitHub and/or GitLab webhook
+# deliveries to the ALB through a VPC link. See webhook-ingress.tf.
+
+variable "enable_webhook_ingress" {
+  description = "Create a public API Gateway endpoint that forwards only git provider webhook deliveries (POST /api/v1/webhooks/<provider>/mcp/{sync_id}) to the ALB through a VPC link, so MCP repository sync works on a private install. Requires alb_scheme = \"internal\"."
+  type        = bool
+  default     = false
+}
+
+variable "webhook_providers" {
+  description = "Providers whose webhooks the endpoint accepts: github, gitlab, or both. Each adds one route."
+  type        = list(string)
+  default     = ["github"]
+
+  validation {
+    condition     = length(var.webhook_providers) > 0 && alltrue([for p in var.webhook_providers : contains(["github", "gitlab"], p)])
+    error_message = "webhook_providers must list github, gitlab, or both."
+  }
+}
+
+variable "webhook_domain_name" {
+  description = "Optional custom hostname for the webhook endpoint (e.g. hooks.observal.example.com). Empty uses the API Gateway execute-api URL, which already has a valid certificate."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_route53_zone_id" {
+  description = "Public Route 53 hosted zone for webhook_domain_name (DNS record and certificate validation). Defaults to route53_zone_id."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_throttle_rate_limit" {
+  description = "Steady-state webhook requests per second API Gateway lets through to the VPC (best effort, a coarse backstop; the API also limits each webhook URL to 60 deliveries a minute). Excess deliveries get 429 and show as failed in the provider's delivery log."
+  type        = number
+  default     = 10
+}
+
+variable "webhook_throttle_burst_limit" {
+  description = "Webhook request burst API Gateway allows above webhook_throttle_rate_limit."
+  type        = number
+  default     = 50
 }
 
 # ── Application config ─────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Share agent configs across harnesses
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Share agent configs across harnesses"
+---
 
 Your team has a reviewer agent that works great in Claude Code. Now someone wants to use it in Kiro. Then Cursor. Then they want to tweak the skills. Copy-pasting config snippets across tools doesn't scale.
 
-Observal's registry gives you one agent definition that installs cleanly into every supported harness.
+Agentic Resource Registry's registry gives you one agent definition that installs cleanly into every supported harness.
 
 ## The shape of an agent
 
@@ -18,7 +19,7 @@ Every agent is a YAML file that bundles:
 * Prompts (with variables)
 * Sandboxes for code execution
 
-When someone runs `observal agent pull <agent>`, Observal templates that YAML into the right files for their harness: `~/.claude/agents/*.json`, `.kiro/agents/*.json`, `.cursor/mcp.json`, and so on.
+When someone runs `observal agent pull <agent>`, Agentic Resource Registry templates that YAML into the right files for their harness: `~/.claude/agents/*.json`, `.kiro/agents/*.json`, `.cursor/mcp.json`, and so on.
 
 ## Publish an agent
 
@@ -64,7 +65,7 @@ observal agent pull <agent-id> --harness vscode
 observal agent pull <agent-id> --harness codex
 ```
 
-The CLI prompts for any environment variables the MCP servers declare as required (GitHub tokens, API keys). These are stored in your harness config, not uploaded to Observal.
+The CLI prompts for any environment variables the MCP servers declare as required (GitHub tokens, API keys). These are stored in your harness config, not uploaded to Agentic Resource Registry.
 
 ### Control what gets installed
 
@@ -98,4 +99,4 @@ Useful when onboarding a new machine or swapping between "work setup" and "perso
 
 ## Next
 
-→ [Run a team-wide agent registry](team-registry.md): once publishing is routine, you need governance.
+→ [Run a team-wide agent registry](/use-cases/team-registry): once publishing is routine, you need governance.

@@ -24,7 +24,6 @@ redis_memory_size_gb = 1
 redis_tier           = "BASIC"
 
 # Data host (ClickHouse)
-clickhouse_mode      = "self_hosted"
 data_machine_type    = "e2-standard-2"
 data_disk_size_gb    = 100
 observability_stack  = "none"

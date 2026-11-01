@@ -183,7 +183,13 @@ async def call_model(prompt: str, model_override: str | None = None, max_tokens:
     # Normalize legacy model IDs to LiteLLM format
     model = _normalize_model_id(model)
 
-    return await _call_litellm(prompt, model, max_tokens=max_tokens)
+    result = await _call_litellm(prompt, model, max_tokens=max_tokens)
+    if result:
+        # Only a model that produced output is the report's provenance; failures return {}.
+        from . import _deps
+
+        _deps.note_model_used(model)
+    return result
 
 
 # ---------------------------------------------------------------------------

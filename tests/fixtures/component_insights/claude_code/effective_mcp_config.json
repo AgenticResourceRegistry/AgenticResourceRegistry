@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "component-insights-phase0-phase0-probe": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "<sanitized-local-probe-path>",
+        "component-insights-phase0-phase0-probe"
+      ]
+    },
+    "super-phase0-probe": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "<sanitized-local-probe-path>",
+        "super-phase0-probe"
+      ]
+    }
+  }
+}

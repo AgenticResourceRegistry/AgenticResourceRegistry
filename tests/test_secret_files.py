@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ def test_server_boot_and_cli_tokens_use_secret_files(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_CLONE_TOKEN_FILE", str(git_token))
     monkeypatch.setenv("OBSERVAL_TOKEN_FILE", str(token))
     monkeypatch.setattr(cli_config, "CONFIG_FILE", tmp_path / "missing.json")
+    # This case exercises explicit *_FILE env vars, not the developer's .env.
+    monkeypatch.chdir(tmp_path)
 
     overrides = _secret_overrides()
     assert overrides["SECRET_KEY"] == "a" * 32
@@ -82,6 +85,9 @@ async def test_dynamic_secret_files_stay_external_and_saml_files_are_paired(tmp_
         saml_key = tmp_path / "saml.key"
         saml_key.write_text("private-key")
 
+        # Ignore a developer checkout's .env; this case tests explicit file settings.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("OAUTH_CLIENT_SECRET", raising=False)
         monkeypatch.setenv("OAUTH_CLIENT_SECRET_FILE", str(oauth_secret))
         ds.load_external_settings()
         assert ds.is_externally_managed("oauth.client_secret")

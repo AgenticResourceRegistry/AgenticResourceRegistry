@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest endpoint."""
@@ -22,6 +23,55 @@ MAX_SESSION_LINES = 1000
 MAX_SESSION_TOTAL_LINES = 10_000_000
 
 
+MAX_CAPABILITIES_PER_PUSH = 200
+_CAPABILITY_KINDS = {"agent", "mcp", "skill", "hook", "prompt", "sandbox", "external"}
+# delegated: the session handed a task to this agent (ADR 0002)
+_CAPABILITY_MODES = {"context", "next-session", "delegated"}
+_CAPABILITY_CONFIDENCE = {"exact", "window", "loose"}
+
+
+class CapabilityUsed(BaseModel):
+    """One discovery resource the CLI recorded as used in this session (from the capability lock)."""
+
+    identifier: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
+    kind: str = Field(..., max_length=32)
+    component_id: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
+    native_ref: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
+    version: str | None = Field(None, max_length=64)
+    digest: str | None = Field(None, max_length=96)
+    mode: str = Field("context", max_length=32)
+    source: str = Field("unknown", max_length=32)
+    used_at: str = Field(..., max_length=64)
+    confidence: str = Field("window", max_length=16)
+
+    @field_validator("kind")
+    @classmethod
+    def kind_is_known(cls, value: str) -> str:
+        if value not in _CAPABILITY_KINDS:
+            raise ValueError(f"unknown capability kind: {value}")
+        return value
+
+    @field_validator("mode")
+    @classmethod
+    def mode_is_known(cls, value: str) -> str:
+        if value not in _CAPABILITY_MODES:
+            raise ValueError(f"unknown capability mode: {value}")
+        return value
+
+    @field_validator("confidence")
+    @classmethod
+    def confidence_is_known(cls, value: str) -> str:
+        if value not in _CAPABILITY_CONFIDENCE:
+            raise ValueError(f"unknown capability confidence: {value}")
+        return value
+
+    @model_validator(mode="after")
+    def has_some_identity(self):
+        if not (self.identifier or self.component_id or self.native_ref):
+            raise ValueError("a capability needs an identifier, component_id or native_ref")
+        return self
+
+
 class SessionIngestRequest(BaseModel):
     session_id: str = Field(..., max_length=MAX_SHORT_STRING_LENGTH)
     harness: str = Field("claude-code", max_length=MAX_SHORT_STRING_LENGTH)
@@ -42,6 +92,8 @@ class SessionIngestRequest(BaseModel):
     total_credits: float | None = Field(None, ge=0)
     # Claude Code subagent attribution: set when this session is a subagent
     parent_session_id: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
+    # Discovery resources the CLI's capability lock attributes to this session
+    capabilities_used: list[CapabilityUsed] | None = Field(None, max_length=MAX_CAPABILITIES_PER_PUSH)
 
     @field_validator("lines")
     @classmethod
@@ -149,6 +201,17 @@ async def ingest_session(
         req.harness,
     )
 
+    if req.capabilities_used:
+        from services.clickhouse import insert_session_capabilities
+
+        await insert_session_capabilities(
+            session_id=req.session_id,
+            project_id=project_id,
+            user_id=user_id,
+            harness=req.harness,
+            uses=[c.model_dump() for c in req.capabilities_used],
+        )
+
     integrity_ok = None
     if req.final and req.total_line_count is not None:
         integrity = await check_session_integrity(
@@ -184,6 +247,18 @@ async def ingest_session(
                 req.total_line_count,
                 req.total_offset,
             )
+
+    # Only an integrity-verified final push has a complete canonical source.
+    # A missing/late layer snapshot is retried by the job, not treated as no use.
+    if req.final and integrity_ok is True:
+        try:
+            from jobs.activity import enqueue_activity_projection
+
+            await enqueue_activity_projection(
+                project_id, user_id, req.harness, req.session_id, source_digest=integrity.server_hash or ""
+            )
+        except Exception as error:
+            optic.warning("session activity enqueue failed: {}", type(error).__name__)
 
     # Notify WebSocket subscribers so the frontend gets instant turn updates.
     # Publish to both a session-specific channel (for detail viewers, O(1) fan-out)

@@ -9,7 +9,7 @@
 
 # Contributing Guide
 
-Thank you for considering contributing to Observal. Contributions of all kinds are welcome: bug reports, bug fixes, new features, documentation improvements, and tests.
+Thank you for considering contributing to Agentic Resource Registry. Contributions of all kinds are welcome: bug reports, bug fixes, new features, documentation improvements, and tests.
 
 > [!TIP]
 > This page is a quick-start summary. For the full setup walkthrough, architecture notes, and detailed workflows, see the [Development Guide](docs/DEVELOPMENT_GUIDE.md). For new Python tests, follow the [Testing Guide](docs/testing/Testing_Guide.md). Reviewers and maintainers must follow the [Code Review Standard](docs/code-review.md).
@@ -17,7 +17,9 @@ Thank you for considering contributing to Observal. Contributions of all kinds a
 > [!IMPORTANT]
 > **Discord is our primary communication channel.** Join at [discord.observal.io](https://discord.observal.io) and ask questions in **#contributing**, report bugs in **#bug**, or discuss ideas in **#feature-requests**. GitHub issues and PRs are for concrete, actionable items, not exploratory discussion.
 
-Please read our [Code of Conduct](https://github.com/Observal/Observal/blob/main/CODE_OF_CONDUCT.md) and [AI Policy](AI_POLICY.md) before contributing.
+Please read our [Code of Conduct](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CODE_OF_CONDUCT.md) and [AI Policy](AI_POLICY.md) before contributing.
+
+Interested in how contributors are paid? See [Contributor Payments](docs/contributor-payments.md).
 
 > Parts of this guide were inspired by the contributing documentation from [AnkiDroid/Anki-Android](https://github.com/ankidroid/Anki-Android). They set a great standard for OSS contributor docs and were one of the first open-source projects some of our maintainers were part of. If you are looking for another welcoming OSS project, check them out.
 
@@ -42,15 +44,15 @@ Please read our [Code of Conduct](https://github.com/Observal/Observal/blob/main
 
 * Docker and Docker Compose
 * [uv](https://docs.astral.sh/uv/) (Python 3.11+)
-* Node.js 20+ and pnpm (for the web frontend)
+* Node.js 22.6+ and pnpm (for the web frontend and `make test`; matches `package.json` `engines` and `--experimental-strip-types`)
 * Git
 
 ### Fork and Clone
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/Observal.git
-cd Observal
-git remote add upstream https://github.com/Observal/Observal.git
+git clone https://github.com/YOUR-USERNAME/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
+git remote add upstream https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 ```
 
 ### Running Locally
@@ -61,14 +63,10 @@ No configuration needed for local development. All settings have working default
 
 ```bash
 cp .env.example .env
-make rebuild-fast
+make rebuild
 ```
 
-For normal backend, frontend, and dependency changes, use `make rebuild-fast`. It builds the shared API image once, reuses it for the API, init, and worker services, then builds the web image.
-
-Use `make rebuild` when the Compose topology changes, such as adding services, changing build contexts, changing image names, or updating volumes and networks.
-
-For schema, migration, ClickHouse setup, init path, or worker changes, use `make rebuild-fast` so the shared API image used by `observal-init` and `observal-worker` is refreshed.
+`make rebuild` (also available as `make rebuild-fast`, the same target) is the one command for backend, frontend, dependency, schema, migration, ClickHouse setup, init path, worker, and Compose topology changes. It builds the shared API image once (reused by the API, init, and worker services), builds the web image, then recreates whatever changed.
 
 Wait for services to be healthy, then:
 
@@ -77,7 +75,7 @@ uv tool install --editable .
 observal auth login
 ```
 
-The stack starts at `http://localhost` (nginx LB on port 80). The `.env.example` seeds demo accounts on first startup, log in with `super@demo.example` / `super-changeme` for admin access. See [SETUP.md](https://github.com/Observal/Observal/blob/main/SETUP.md) for all credentials.
+The stack starts at `http://localhost` (nginx LB on port 80). The `.env.example` seeds demo accounts on first startup, log in with `super@demo.example` / `super-changeme` for admin access. See [SETUP.md](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/SETUP.md) for all credentials.
 
 **Frontend only:**
 
@@ -85,7 +83,7 @@ The stack starts at `http://localhost` (nginx LB on port 80). The `.env.example`
 cd web && pnpm install && pnpm dev
 ```
 
-Set `NEXT_PUBLIC_API_URL=http://localhost` in `web/.env.local` if the backend is on a different host.
+The Vite dev server proxies `/api` to `http://localhost:8000` (see `web/vite.config.ts`); the Docker stack does not publish port 8000, so run the API locally or point the proxy target at `http://localhost` (the nginx LB).
 
 > [!NOTE]
 > See the [Development Guide](docs/DEVELOPMENT_GUIDE.md) for the full environment setup and troubleshooting steps.
@@ -94,7 +92,7 @@ Set `NEXT_PUBLIC_API_URL=http://localhost` in `web/.env.local` if the backend is
 
 ## Finding Work
 
-Check [open issues](https://github.com/Observal/Observal/issues) before starting. Look for **good first issue** if you are new.
+Check [open issues](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues) before starting. Look for **good first issue** if you are new.
 
 For larger changes, open an issue or discuss in **#contributing** on Discord before writing code.
 
@@ -120,7 +118,9 @@ fix/clickhouse-insert-timeout
 docs/update-setup-guide
 ```
 
-Never commit directly to `main`.
+Never commit directly to `main` or a protected `release/X.Y` branch.
+
+Normal changes target `main`. Release preparation and backport PRs target their matching `release/X.Y` line. Never merge a release line back into `main`. See the [release guide](docs/self-hosting/releasing.md) for beta, RC, stable, and backport workflows.
 
 ### Code Style
 
@@ -168,7 +168,7 @@ Subject line under 72 characters, imperative mood, no trailing period.
 
 ### Changelog
 
-Add an entry under `[Unreleased]` in [CHANGELOG.md](https://github.com/Observal/Observal/blob/main/CHANGELOG.md) for any user-facing change.
+Add an entry under `[Unreleased]` in [CHANGELOG.md](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md) for any user-facing change.
 
 ***
 
@@ -198,7 +198,7 @@ All pull requests are evaluated under the [Code Review Standard](docs/code-revie
 
 ### Bugs
 
-Search [existing issues](https://github.com/Observal/Observal/issues) first. Include:
+Search [existing issues](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/issues) first. Include:
 
 * Steps to reproduce
 * Expected vs actual behaviour
@@ -220,4 +220,4 @@ All code is licensed under [Apache-2.0](LICENSE).
 
 ## Contributor License Agreement (CLA)
 
-The [CLA-assistant](https://cla-assistant.io) bot will prompt you to sign the [Observal CLA](https://github.com/Observal/Observal/blob/main/CLA.md) on your first PR. You only need to sign once. For corporate contributions, contact harisrini21@gmail.com.
+The [CLA-assistant](https://cla-assistant.io) bot will prompt you to sign the [Agentic Resource Registry CLA](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CLA.md) on your first PR. You only need to sign once. For corporate contributions, contact harisrini21@gmail.com.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: 2026 Observal
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 set -eo pipefail
@@ -81,6 +81,16 @@ cat > "$INSTALL_DIR/clickhouse/config.d/memory.xml" <<'CHCFG'
     </merge_tree>
 </clickhouse>
 CHCFG
+
+cat > "$INSTALL_DIR/clickhouse/config.d/telemetry.xml" <<'CHTELEMETRY'
+<clickhouse>
+    <send_crash_reports>
+        <enabled>false</enabled>
+        <send_logical_errors>false</send_logical_errors>
+    </send_crash_reports>
+    <remote_url_allow_hosts></remote_url_allow_hosts>
+</clickhouse>
+CHTELEMETRY
 
 cat > "$INSTALL_DIR/clickhouse/users.d/default-user.xml" <<CHUSER
 <clickhouse>

@@ -29,7 +29,7 @@ export function GitHubStarBanner() {
   return (
     <div className="group/star flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
       <a
-        href="https://github.com/Observal/Observal"
+        href="https://github.com/AgenticResourceRegistry/AgenticResourceRegistry"
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center gap-1.5"

@@ -1,7 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal inbox`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal inbox"
+---
 
 View and update the signed-in user's work and event feed. Inbox items cover reviews, decisions, teamspace activity, update notices, completed insights, and system notices.
 
@@ -45,6 +47,8 @@ Supported kinds are:
 * `insight_ready`
 * `system_notice`
 
+Submitting a component or Agent for review sends a `review_requested` item to every reviewer who can act on it. Requesting a specific reviewer sends one more `review_requested` item to that reviewer only. Requested reviewers are then told when another reviewer approves and when the review is published. The author is told about approvals, change requests, and publication. When a review is decided, the other reviewers' copies move to Done and stop counting toward `unread`.
+
 JSON returns the direct paginated server object:
 
 ```json
@@ -65,7 +69,7 @@ observal inbox count --output json
 observal inbox count --facets --facet-state open --output json
 ```
 
-The basic result includes `unread`, `action_required`, `open`, `done`, and `dismissed`. `--facets` also returns `by_kind` and `by_subject_type`; `--facet-state` restricts those breakdowns and requires `--facets`.
+The basic result includes `unread`, `action_required`, `open`, `done`, and `dismissed`. `unread` and `action_required` count only open items, so `unread` matches the unread items the default Open list shows. `--facets` also returns `unread_by_state`, the `scope_total`, `scope_unread`, and `scope_action_required` counts for one folder, and `by_kind` and `by_subject_type`. `--facet-state` picks that folder (`open`, `done`, `dismissed`, or `all`) and requires `--facets`.
 
 ## Show an item
 
@@ -121,5 +125,5 @@ In JSON mode, stdout contains only the successful result. Failures leave stdout 
 
 ## Related
 
-* [`observal outdated`](outdated.md): report installed updates to Inbox
-* [`observal registry`](registry.md): inspect Registry subjects referenced by Inbox items
+* [`observal outdated`](/cli/outdated): report installed updates to Inbox
+* [`observal registry`](/cli/registry): inspect Registry subjects referenced by Inbox items

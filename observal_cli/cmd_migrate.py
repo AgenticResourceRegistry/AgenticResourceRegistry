@@ -436,7 +436,7 @@ def export_telemetry_cmd(
     """Export ClickHouse telemetry data to Parquet files.
 
     Phase 2 of migration: exports session, audit, security, and webhook telemetry
-    tables as monthly Parquet partitions. Requires a completed Phase 1 export
+    tables as bounded, resumable Parquet chunks. Requires a completed Phase 1 export
     (the migration_manifest.json produced by 'observal server migrate export').
 
     Uses a time cutoff recorded at export start for consistency. The output
@@ -504,10 +504,9 @@ def import_telemetry_cmd(
 ) -> None:
     """Import Parquet telemetry files into target ClickHouse.
 
-    Phase 2 import: loads monthly Parquet partitions into the target ClickHouse.
-    Verifies checksums before importing. Skips partitions that already contain
-    data for idempotent re-runs. Persists resume state so interrupted imports
-    can continue where they left off.
+    Phase 2 import: loads bounded Parquet chunks into the target ClickHouse.
+    Verifies checksums before importing and records completed chunk IDs and
+    checksums so interrupted imports can resume without skipping unrelated data.
 
     Examples:
         observal server migrate import-telemetry --clickhouse-url clickhouses://localhost/observal --input-dir ./telemetry-export

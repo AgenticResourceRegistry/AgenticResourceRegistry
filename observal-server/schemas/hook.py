@@ -14,17 +14,23 @@ from schemas.constants import (
     VALID_HOOK_EXECUTION_MODES,
     VALID_HOOK_HANDLER_TYPES,
     VALID_HOOK_SCOPES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
+    RecommendedFlag,
     Visibility,
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 
 class HookSubmitRequest(BaseModel):
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
+    message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     event: str
@@ -57,10 +63,10 @@ class HookSubmitRequest(BaseModel):
 
 
 class HookDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     event: str = "PreToolUse"
@@ -82,10 +88,10 @@ class HookDraftRequest(BaseModel):
 
 
 class HookUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     event: str | None = None
@@ -105,6 +111,13 @@ class HookUpdateRequest(BaseModel):
 
 
 class HookListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
+    review_number: int | None = None
+    review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -132,6 +145,7 @@ class HookListingResponse(BaseModel):
     updated_at: datetime
     download_count: int = 0
     user_permission: str | None = None
+    is_recommended: RecommendedFlag = False
 
     @field_validator("user_permission", mode="before")
     @classmethod
@@ -142,6 +156,8 @@ class HookListingResponse(BaseModel):
 
 
 class HookListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str
@@ -158,6 +174,8 @@ class HookListingSummary(BaseModel):
     status: ListingStatus
     rejection_reason: str | None = None
     updated_at: datetime | None = None
+    is_recommended: RecommendedFlag = False
+
     model_config = {"from_attributes": True}
 
 
@@ -165,6 +183,7 @@ class HookInstallRequest(BaseModel):
     harness: str
     local_name: str | None = None
     platform: str = ""  # e.g. "win32", "darwin", "linux" - empty = Unix default
+    version: str | None = None  # Specific version to install (None = latest)
 
 
 class HookFileEntry(BaseModel):
@@ -183,3 +202,7 @@ class HookInstallResponse(BaseModel):
     source_fetch: dict | None = None
     notes: list[str] = []
     warnings: list[str] = []
+    # The exact component version that was installed and its content digest.
+    version: str | None = None
+    version_id: uuid.UUID | None = None
+    digest: str | None = None

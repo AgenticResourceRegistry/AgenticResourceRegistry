@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useStartMigrationImport } from "@/hooks/use-admin-api";
 import type { MigrationScope } from "@/lib/types/admin";
-import { ArtifactPicker, ScopeChoiceGroup } from "./migrate-form-fields";
+import { ArtifactPicker, artifactSelectionError, ScopeChoiceGroup } from "./migrate-form-fields";
 
 interface MigrateImportFormProps {
 	onJobStarted: (jobId: string) => void;
@@ -15,9 +15,10 @@ export function MigrateImportForm({ onJobStarted }: MigrateImportFormProps) {
 	const [scope, setScope] = useState<MigrationScope>("both");
 	const [files, setFiles] = useState<File[]>([]);
 	const importMutation = useStartMigrationImport();
+	const selectionError = artifactSelectionError(files, scope);
 
 	const handleStart = () => {
-		if (files.length === 0) return;
+		if (selectionError) return;
 
 		const formData = new FormData();
 		files.forEach((file) => formData.append("files", file));
@@ -44,7 +45,9 @@ export function MigrateImportForm({ onJobStarted }: MigrateImportFormProps) {
 				<ScopeChoiceGroup name="import-scope" value={scope} onChange={setScope} />
 			</div>
 
-			<Button type="button" className="w-full" onClick={handleStart} disabled={importMutation.isPending || files.length === 0}>
+			{files.length > 0 && selectionError && <p className="text-xs text-destructive">{selectionError}</p>}
+
+			<Button type="button" className="w-full" onClick={handleStart} disabled={importMutation.isPending || Boolean(selectionError)}>
 				{importMutation.isPending ? "Starting import..." : "Start import"}
 			</Button>
 		</div>

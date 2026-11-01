@@ -1,0 +1,10 @@
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+<clickhouse>
+    <send_crash_reports>
+        <enabled>false</enabled>
+        <send_logical_errors>false</send_logical_errors>
+    </send_crash_reports>
+    <remote_url_allow_hosts></remote_url_allow_hosts>
+</clickhouse>

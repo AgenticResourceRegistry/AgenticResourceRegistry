@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for visibility and teamspace fields on the component update routes.
@@ -16,6 +17,7 @@ All five component types are covered by the same parametrized cases: no per-type
 from __future__ import annotations
 
 import uuid
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +28,8 @@ from httpx import ASGITransport, AsyncClient
 from api.deps import get_current_user, get_db
 from models.mcp import ListingStatus
 from models.user import User, UserRole
+
+pytestmark = pytest.mark.usefixtures("no_open_review")
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -66,6 +70,15 @@ def _version_mock():
     v.editing_by = None
     v.editing_since = None
     v.description = "original description"
+    v.status = ListingStatus.draft
+    v.content_revision = None
+    v.base_version_id = None
+    v.review_epoch = 0
+    v.delivery_mode = "git_fetch"
+    v.skill_md_content = None
+    v.script_content = None
+    v.script_filename = None
+    v.extra_files = []
     return v
 
 
@@ -81,14 +94,19 @@ def _listing_mock(submitted_by, *, is_private=False, team_id=None):
     m.owner = "testowner"
     m.status = ListingStatus.draft
     m.rejection_reason = None
+    m.forked_from = None
+    m.is_fork = False
     m.submitted_by = submitted_by
     m.co_authors = []
+    m.review_number = None
+    m.review_url = None
     # Visibility is the axis under test: set both halves explicitly. A bare MagicMock
     # attribute is truthy, which would make every listing look team-private.
     m.is_private = is_private
     m.team_id = team_id
     m.visibility = "team" if is_private else "public"
     m.latest_version = _version_mock()
+    m.latest_version_id = m.latest_version.id
     m.supported_harnesses = []
     m.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     m.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
@@ -174,8 +192,18 @@ async def _put_draft(item_type, base_path, listing, user, body):
     """PUT the update route with resolve_listing pinned to the given listing."""
     app, db = _app_with(_get_router(item_type), user)
     module = f"api.routes.{item_type}"
-    with patch(f"{module}.resolve_listing", new_callable=AsyncMock) as mock_resolve:
+    with ExitStack() as stack:
+        mock_resolve = stack.enter_context(patch(f"{module}.resolve_listing", new_callable=AsyncMock))
         mock_resolve.return_value = listing
+        if item_type == "skill":
+            stack.enter_context(
+                patch(
+                    "api.routes.skill.lock_skill_version",
+                    new_callable=AsyncMock,
+                    return_value=(listing.latest_version_id, listing.latest_version),
+                )
+            )
+            stack.enter_context(patch("api.routes.skill._recheck_skill_owner", new_callable=AsyncMock))
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             r = await ac.put(f"{base_path}/{listing.id}/draft", json=body)
     return r, db

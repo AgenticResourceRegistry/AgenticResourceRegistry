@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Team publishing review rules.
@@ -27,6 +28,15 @@ from models.mcp import ListingStatus
 from models.team import TeamRole
 from models.user import User, UserRole
 from services.teamspace import publish_auto_approves_for_entity, resolve_publish_target
+
+
+@pytest.fixture(autouse=True)
+def _lock_service_stub(monkeypatch):
+    """These routes run on a mocked session; the lock service has its own tests."""
+    import services.agent_lock as agent_lock
+
+    monkeypatch.setattr(agent_lock, "lock_agent_version", AsyncMock(return_value={}))
+
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -287,19 +297,20 @@ class TestSkillSubmitStatus:
         db.refresh = AsyncMock(side_effect=_refresh)
         app = _app_with(router, user, db)
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            r = await ac.post(
-                "/api/v1/skills/submit",
-                json={
-                    "name": "s",
-                    "version": "1.0",
-                    "description": "d",
-                    "owner": "o",
-                    "task_type": "code-review",
-                    "team_id": str(team_id),
-                    "visibility": visibility,
-                },
-            )
+        with patch("api.routes.skill.submit_for_review", new=AsyncMock(return_value=SimpleNamespace(number=42))):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                r = await ac.post(
+                    "/api/v1/skills/submit",
+                    json={
+                        "name": "s",
+                        "version": "1.0.0",
+                        "description": "d",
+                        "owner": "o",
+                        "task_type": "code-review",
+                        "team_id": str(team_id),
+                        "visibility": visibility,
+                    },
+                )
 
         assert r.status_code == 200, r.text
         listing = next(c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], SkillListing))
@@ -364,14 +375,21 @@ class TestAgentSubmitStatus:
         agent.created_by = user.id
         db = _mock_db([_membership(team_role)])
 
+        async def submitted(_db, _kind, subject, version, _actor, **_kwargs):
+            subject.status = AgentStatus.pending
+            version.status = AgentStatus.pending
+            return SimpleNamespace(number=42)
+
         with (
             patch("services.agent_snapshot.build_yaml_snapshot", new=AsyncMock(return_value="snapshot")),
             patch.object(draft_routes, "emit_registry_event"),
             patch.object(draft_routes, "_resolve_component_names", new=AsyncMock(return_value={})),
             patch.object(draft_routes, "_load_agent", new=AsyncMock(return_value=agent)),
-            patch.object(draft_routes, "_agent_to_response", new=MagicMock(return_value={"status": "ok"})),
+            patch.object(draft_routes, "_agent_to_response", new=MagicMock(return_value=MagicMock())),
+            patch("services.agent_lock.lock_agent_version", new=AsyncMock()),
+            patch.object(draft_routes, "submit_for_review", new=AsyncMock(side_effect=submitted)),
         ):
-            await draft_routes.submit_draft(str(agent.id), db, user)
+            await draft_routes.submit_draft(str(agent.id), db=db, current_user=user)
 
         return agent
 

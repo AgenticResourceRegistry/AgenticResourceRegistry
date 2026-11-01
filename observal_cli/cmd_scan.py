@@ -22,6 +22,8 @@ from loguru import logger as optic
 from rich import print as rprint
 from rich.table import Table
 
+from observal_cli.discovery.collector import collect_local_inventory
+from observal_cli.discovery.serialize import inventory_to_dict
 from observal_cli.harness import (
     DiscoveredMcp,
     NotSupportedError,
@@ -29,7 +31,7 @@ from observal_cli.harness import (
     get_adapter,
     get_all_adapters,
 )
-from observal_cli.render import OutputMode, console, output_json, spinner
+from observal_cli.render import OutputMode, console, esc, output_json, spinner
 
 # ── harness home directory paths (for status display) ────────────────
 
@@ -52,8 +54,10 @@ _HARNESS_HOME_DIRS: dict[str, str] = {
 def register_scan(app: typer.Typer):
     @app.command(name="scan")
     def scan(
+        ctx: typer.Context,
         harness: str | None = typer.Option(None, "--harness", "-i", help="Filter to a specific harness"),
         output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+        inventory: bool = typer.Option(False, "--inventory", help="Inspect bounded local harness evidence only"),
     ):
         """Show a read-only inventory of your local harness setup.
 
@@ -69,8 +73,26 @@ def register_scan(app: typer.Typer):
         Examples:
             observal scan
             observal scan --harness claude-code
-            observal scan --harness kiro
+            observal scan --inventory --output json
         """
+        startup = ctx.meta.get("observal.scan.startup")
+        if not inventory and startup is not None:
+            # Keep ordinary scan's existing startup behavior; only the opt-in
+            # inventory bypasses write-capable migrations and skill syncing.
+            import logging
+
+            from observal_cli.main import _migrate_legacy_mcp_configs, _try_lockfile_migration
+            from observal_cli.optic import setup_optic
+
+            debug, verbose = startup
+            setup_optic(debug=debug, verbose=verbose)
+            if debug:
+                logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
+            elif verbose:
+                logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+            _migrate_legacy_mcp_configs()
+            _try_lockfile_migration()
+
         ensure_loaded()
         optic.trace("harness={}", harness)
 
@@ -91,6 +113,23 @@ def register_scan(app: typer.Typer):
         adapters = {harness: get_adapter(harness)} if harness else get_all_adapters()
         home = Path.home()
         project_dir = Path(".").resolve()
+
+        if inventory:
+            found = collect_local_inventory(adapters, home=home, project_dir=project_dir)
+            data = inventory_to_dict(found.evidence, found.diagnostics, home=home, project_dir=project_dir)
+            if output == "json":
+                output_json(data)
+            else:
+                table = Table(title=f"Local inventory ({len(data['inventory'])})")
+                for label in ("Harness", "Scope", "Type", "Name", "Source"):
+                    table.add_column(label)
+                for item in data["inventory"]:
+                    table.add_row(*(esc(item[key] or "") for key in ("harness", "scope", "type", "name", "source")))
+                console.print(table)
+                for diagnostic in data["diagnostics"]:
+                    rprint(f"[yellow]{esc(diagnostic['provider'])}: {esc(diagnostic['code'])}[/yellow]")
+                rprint("[dim]To publish an item, use observal registry <type> submit --draft explicitly.[/dim]")
+            return
 
         all_mcps: list[DiscoveredMcp] = []
         all_skills = []

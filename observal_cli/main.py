@@ -30,7 +30,7 @@ from observal_cli.errors import ErrorHandlingGroup
 
 
 def _check_package_conflict() -> None:
-    """Warn if the legacy 'observal' package is installed alongside 'observal-cli'."""
+    """Reject the legacy 'observal' package through the shared error contract."""
     from importlib.metadata import PackageNotFoundError, metadata
 
     try:
@@ -38,25 +38,19 @@ def _check_package_conflict() -> None:
     except PackageNotFoundError:
         return
 
-    # If we get here, a package literally named "observal" exists.
-    # Check it's not just our own package under a different dist name.
-    pkg_name = meta.get("Name", "")
-    if pkg_name.lower() == "observal-cli":
+    if meta.get("Name", "").lower() == "observal-cli":
         return
 
-    from rich import print as rprint
+    from observal_cli.errors import ErrorCategory, fail
 
-    rprint(
-        "[bold yellow]⚠ Package conflict detected:[/bold yellow] "
-        "Both [bold]observal[/bold] and [bold]observal-cli[/bold] are installed.\n"
-        "  The legacy [dim]observal[/dim] package is no longer maintained and conflicts with the CLI.\n"
-        "  Please uninstall it:\n\n"
-        "    [cyan]uv pip uninstall observal[/cyan]    [dim]# or: pip uninstall observal[/dim]\n"
+    fail(
+        ErrorCategory.CONFLICT,
+        "The legacy observal package conflicts with observal-cli.",
+        operation="Start Observal CLI",
+        resource="installed Python packages",
+        remediation="Run `uv pip uninstall observal` or `pip uninstall observal`, then retry.",
     )
-    sys.exit(1)
 
-
-_check_package_conflict()
 
 # ── Version callback for --version flag ───────────────────
 
@@ -75,7 +69,12 @@ app = typer.Typer(
         "Examples:\n"
         "  observal scan\n"
         "  observal agent list\n"
-        "  observal registry mcp list"
+        "  observal registry mcp list\n\n"
+        "For agents: on a CLI/server version mismatch, run the command the error prints "
+        "(or `observal self upgrade --version <server version> --force --output json`) and re-check "
+        "`observal --version`. Only if that fails, install from the source repository: "
+        "`uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` for a -dev server, "
+        "or `...Observal@v<version>` for a release."
     ),
     no_args_is_help=True,
     rich_markup_mode="rich",
@@ -85,6 +84,7 @@ app = typer.Typer(
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: bool | None = typer.Option(
         None,
         "--version",
@@ -99,7 +99,15 @@ def main(
     """Observal: MCP Server & Agent Registry CLI"""
     from observal_cli.optic import setup_optic
 
+    # Scan must decide whether it is the strictly read-only inventory variant
+    # before any startup migration, skill synchronization, or file logging.
+    if ctx.invoked_subcommand == "scan":
+        ctx.meta["observal.scan.startup"] = (debug, verbose)
+        setup_optic(debug=False, verbose=debug or verbose)
+        return
+
     setup_optic(debug=debug, verbose=verbose)
+    _check_package_conflict()
 
     if debug:
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
@@ -111,23 +119,51 @@ def main(
     # One-time local state migrations
     _try_lockfile_migration()
 
+    if ctx.invoked_subcommand != "auth":
+        _warn_if_login_expired()
+
+
+def _warn_if_login_expired() -> None:
+    """Say so when hooks found the login revoked; their session pushes are failing."""
+    from observal_cli.errors import machine_output_requested
+    from observal_cli.sessions.base import login_expired
+
+    if machine_output_requested() or not login_expired():
+        return
+    from rich.console import Console
+
+    Console(stderr=True).print(
+        "[yellow]Your Observal login was revoked or has expired (a web logout signs out every device), "
+        "so sessions are not being sent. Run `observal auth login` to resume.[/yellow]"
+    )
+
 
 def _migrate_legacy_mcp_configs() -> None:
     """Rewrite legacy wrapped MCP entries before running a command."""
     from rich import print as rprint
 
     from observal_cli.config import migrate_shimmed_mcp_configs
+    from observal_cli.errors import ErrorCategory, fail, machine_output_requested
 
     try:
         migrated = migrate_shimmed_mcp_configs()
-    except RuntimeError as exc:
-        rprint(f"[red]MCP config migration failed:[/red] {exc}")
-        raise typer.Exit(1) from exc
+    except RuntimeError as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Legacy MCP configuration migration failed.",
+            operation="Migrate legacy MCP configuration",
+            resource="local harness configuration",
+            remediation="Run with --debug, repair the reported configuration, and retry.",
+            detail=repr(error),
+        )
 
-    if migrated:
-        rprint(f"[green]Migrated {len(migrated)} legacy MCP config file(s) to direct commands.[/green]")
+    if migrated and not machine_output_requested():
+        rprint(
+            f"[green]Migrated {len(migrated)} legacy MCP config file(s) to direct commands.[/green]",
+            file=sys.stderr,
+        )
         for path in migrated:
-            rprint(f"  [dim]{path}[/dim]")
+            rprint(f"  [dim]{path}[/dim]", file=sys.stderr)
 
 
 def _sync_bundled_skills() -> None:
@@ -160,12 +196,24 @@ def _try_lockfile_migration() -> None:
             return
         if not LOCKFILE_PATH.exists():
             migrate_agent_markers()
-    except Exception:
-        pass  # Never crash the CLI for migration
+    except Exception as error:
+        from loguru import logger as optic
+
+        from observal_cli.errors import emit_warning
+
+        optic.warning("legacy agent-marker migration failed: error_type={}", type(error).__name__)
+        emit_warning(
+            "local_state_migration",
+            "Legacy installation state could not be migrated.",
+            operation="Migrate legacy installation state",
+            remediation="Run `observal doctor` before relying on installed-state data.",
+            detail=repr(error),
+        )
 
 
 # ── Register command groups ──────────────────────────────
 
+from observal_cli.cmd_a2a import a2a_app
 from observal_cli.cmd_agent import agent_app
 from observal_cli.cmd_api import register_api
 from observal_cli.cmd_archive import add_archive_commands
@@ -173,12 +221,16 @@ from observal_cli.cmd_auth import auth_app, register_config
 from observal_cli.cmd_bulk import bulk_app
 from observal_cli.cmd_co_authors import make_co_authors_typer
 from observal_cli.cmd_component import version_app
+from observal_cli.cmd_delegate import delegate_app
+from observal_cli.cmd_discover import discover_app
 from observal_cli.cmd_doctor import doctor_app
+from observal_cli.cmd_fork import add_fork_command
 from observal_cli.cmd_hook import hook_app
 from observal_cli.cmd_inbox import inbox_app
 from observal_cli.cmd_insights import insights_app
 from observal_cli.cmd_logs import logs_app
 from observal_cli.cmd_mcp import mcp_app
+from observal_cli.cmd_mcp_sync import mcp_sync_app
 from observal_cli.cmd_migrate import migrate_app
 from observal_cli.cmd_models import models_app
 from observal_cli.cmd_ops import (
@@ -190,8 +242,10 @@ from observal_cli.cmd_outdated import register_outdated
 from observal_cli.cmd_prompt import prompt_app
 from observal_cli.cmd_pull import register_pull
 from observal_cli.cmd_recommend import recommend_app
+from observal_cli.cmd_review import review_app
 from observal_cli.cmd_sandbox import sandbox_app
 from observal_cli.cmd_scan import register_scan
+from observal_cli.cmd_share import share_app
 from observal_cli.cmd_skill import skill_app
 from observal_cli.cmd_support import support_app
 from observal_cli.cmd_team import team_app
@@ -204,7 +258,7 @@ from observal_cli.cmd_transfer import add_transfer_owner_command
 registry_app = typer.Typer(
     name="registry",
     help=(
-        "Component registry (MCPs, skills, hooks, prompts, sandboxes)\n\n"
+        "Component registry (MCPs, skills, hooks, prompts, sandboxes, remote A2A agents)\n\n"
         "Examples:\n"
         "  observal registry mcp list\n"
         "  observal registry skill list\n"
@@ -214,6 +268,7 @@ registry_app = typer.Typer(
 )
 
 registry_app.add_typer(mcp_app, name="mcp")
+mcp_app.add_typer(mcp_sync_app, name="sync")
 registry_app.add_typer(skill_app, name="skill")
 registry_app.add_typer(hook_app, name="hook")
 registry_app.add_typer(prompt_app, name="prompt")
@@ -222,6 +277,7 @@ registry_app.add_typer(models_app, name="models")
 registry_app.add_typer(version_app, name="version")
 registry_app.add_typer(recommend_app, name="recommend")
 registry_app.add_typer(bulk_app, name="bulk")
+registry_app.add_typer(a2a_app, name="a2a")
 
 # ── Co-authors and ownership sub-commands ─────────────────
 mcp_app.add_typer(make_co_authors_typer("mcps"), name="co-authors")
@@ -236,6 +292,14 @@ add_transfer_owner_command(hook_app, "hooks")
 add_transfer_owner_command(prompt_app, "prompts")
 add_transfer_owner_command(sandbox_app, "sandboxes")
 add_transfer_owner_command(agent_app, "agents")
+for _kind, _app in (
+    ("mcp", mcp_app),
+    ("skill", skill_app),
+    ("hook", hook_app),
+    ("prompt", prompt_app),
+    ("sandbox", sandbox_app),
+):
+    add_fork_command(_app, _kind)
 add_archive_commands(mcp_app, "mcps")
 add_archive_commands(skill_app, "skills")
 add_archive_commands(hook_app, "hooks")
@@ -250,6 +314,8 @@ register_config(app)
 register_api(app)
 register_scan(app)
 register_outdated(app)
+app.add_typer(discover_app, name="discover")
+app.add_typer(delegate_app, name="delegate")
 
 
 # ── Agent pull (full-featured, lives under `observal agent pull`) ──
@@ -259,7 +325,9 @@ register_pull(agent_app)
 app.add_typer(registry_app, name="registry")
 app.add_typer(inbox_app, name="inbox")
 app.add_typer(agent_app, name="agent")
+app.add_typer(share_app, name="share")
 app.add_typer(team_app, name="team")
+app.add_typer(review_app, name="review")
 app.add_typer(ops_app, name="ops")
 app.add_typer(admin_app, name="admin")
 app.add_typer(self_app, name="self")
@@ -298,6 +366,10 @@ def _show_update_banner() -> None:
 
     if not (_sys.stdout.isatty() and _sys.stderr.isatty()):
         return
+    from observal_cli.errors import machine_output_requested
+
+    if machine_output_requested(_sys.argv[1:]):
+        return
     if len(_sys.argv) > 1 and _sys.argv[1] in ("self", "server"):
         return
     if os.environ.get("CI") or os.environ.get("OBSERVAL_NO_UPDATE_CHECK"):
@@ -317,15 +389,19 @@ def _show_update_banner() -> None:
         if update.direction == "downgrade":
             _rprint(
                 f"\n[yellow]CLI v{update.current} is ahead of server v{update.latest}.[/yellow]\n"
-                f"  Downgrade to match: [bold cyan]{downgrade_command(update.latest)}[/bold cyan]"
+                f"  Downgrade to match: [bold cyan]{downgrade_command(update.latest)}[/bold cyan]",
+                file=_sys.stderr,
             )
         else:
             _rprint(
                 f"\n[green]Update available: v{update.current} \u2192 v{update.latest}[/green]\n"
-                f"  Run: [bold cyan]{upgrade_command(update.latest)}[/bold cyan]"
+                f"  Run: [bold cyan]{upgrade_command(update.latest)}[/bold cyan]",
+                file=_sys.stderr,
             )
-    except Exception:
-        pass  # Never crash the CLI for a version check
+    except Exception as error:
+        from loguru import logger as optic
+
+        optic.debug("CLI update check failed: error_type={}", type(error).__name__)
 
 
 # Register update banner as atexit handler so it runs via any entry point

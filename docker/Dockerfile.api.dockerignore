@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+# BuildKit reads this file instead of the root .dockerignore when building
+# docker/Dockerfile.api. Allowlist only what the Dockerfile copies so the
+# builder never walks web/, docs/, local worktrees, or virtualenvs.
+*
+!observal-server
+!packages/observal-shared
+!docker/entrypoint.sh
+
+**/.env
+**/.env.*
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.hypothesis
+**/.coverage
+**/htmlcov
+**/*.log

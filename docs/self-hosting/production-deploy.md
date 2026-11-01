@@ -1,15 +1,16 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Production deployment"
+---
 
-# Production deployment
+Deploy Agentic Resource Registry as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
 
-Deploy Observal as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
-
-**End state:** a fully managed Observal install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
+**End state:** a fully managed Agentic Resource Registry install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
 
 ## When to use this vs. single-node
 
-| | [Single-node](single-node-deploy.md) | Production (this guide) |
+| | [Single-node](/self-hosting/single-node-deploy) | Production (this guide) |
 |---|---|---|
 | **Best for** | Small/mid teams, internal use, POCs | Enterprise, SLA-bound, high-traffic |
 | **Infra** | 1 VM, any cloud or on-prem | ~100 managed cloud resources |
@@ -24,7 +25,7 @@ Deploy Observal as a distributed, highly available stack on AWS or GCP using Ter
 
 ## Choose your cloud
 
-Observal ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
+Agentic Resource Registry ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
 
 ### AWS
 
@@ -63,20 +64,20 @@ flowchart TB
 | Compute (stateless) | ECS Fargate | api, web, worker as separate services |
 | Postgres | RDS Postgres 16 | Multi-AZ on prod, encrypted, automated backups |
 | Redis | ElastiCache Redis 7 | 2-node replication, automatic failover on prod |
-| ClickHouse | EC2 + EBS gp3 | Self-hosted; option to use ClickHouse Cloud |
+| ClickHouse | EC2 + EBS gp3 | Self-hosted |
 | Load balancer | ALB | HTTPS via ACM, path-based routing |
 | Secrets | SSM Parameter Store | Encrypted with KMS, injected into ECS tasks |
 | Logging | CloudWatch | Per-service log groups |
 | Backups | S3 + RDS snapshots | Lifecycle: Standard → IA → Glacier → expire |
 | DNS | Route 53 | Optional; works without a custom domain |
 
-**Full walkthrough:** [AWS deployment with Terraform](aws-terraform.md)
+**Full walkthrough:** [AWS deployment with Terraform](/self-hosting/aws-terraform)
 
 **Quick start:**
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal/infra/terraform/aws
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry/infra/terraform/aws
 
 # Configure
 cp terraform.tfvars.example terraform.tfvars
@@ -134,7 +135,7 @@ flowchart TB
 | Migrations | Cloud Run Jobs | One-shot init task |
 | Postgres | Cloud SQL | HA configuration available |
 | Redis | Memorystore | Managed Redis |
-| ClickHouse | GCE instance | Docker Compose on a single VM; option for ClickHouse Cloud |
+| ClickHouse | GCE instance | Docker Compose on a single VM |
 | Load balancer | Global HTTPS LB | Managed SSL certificate |
 | Secrets | Secret Manager | Injected into Cloud Run at start |
 | Logging | Cloud Logging | Built-in, no config needed |
@@ -142,12 +143,12 @@ flowchart TB
 | DNS | Cloud DNS | Optional |
 | Shell access | IAP SSH tunnel | No public SSH, no SSH keys |
 
-**Full walkthrough:** [GCP deployment with Terraform](gcp-terraform.md)
+**Full walkthrough:** [GCP deployment with Terraform](/self-hosting/gcp-terraform)
 
 **Quick start:**
 
 ```bash
-cd Observal/infra/terraform/gcp
+cd AgenticResourceRegistry/infra/terraform/gcp
 
 # Enable required APIs
 gcloud services enable \
@@ -216,18 +217,6 @@ data_instance_type = "m6i.xlarge"        # AWS
 terraform apply
 ```
 
-### ClickHouse Cloud (for HA)
-
-The self-hosted ClickHouse is a single instance. For real high availability:
-
-```hcl
-clickhouse_mode           = "cloud"
-clickhouse_cloud_url      = "https://abc123.us-east-1.aws.clickhouse.cloud:8443"
-clickhouse_cloud_password = "..."
-```
-
-The EC2/GCE data host is skipped entirely. You become responsible for Grafana hosting (AWS Managed Grafana or a separate Cloud Run service).
-
 ### Tear down
 
 ```bash
@@ -283,15 +272,14 @@ Applies to both clouds. See the cloud-specific guides for implementation details
 - [ ] Set up alerting on database CPU, memory, and 5xx error rates
 - [ ] Attach a WAF to the load balancer
 - [ ] Enable Redis transit encryption
-- [ ] Configure [SSO](authentication.md) (SAML or OIDC)
-- [ ] Move ClickHouse to ClickHouse Cloud for HA
-- [ ] Test the [backup and restore](backup-and-restore.md) procedure end-to-end
+- [ ] Configure [SSO](/self-hosting/authentication) (SAML or OIDC)
+- [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 - [ ] Replace the GitHub tarball pull in the data host bootstrap with an artifact you control
 
 ## Next
 
-- [AWS deployment with Terraform](aws-terraform.md) — full AWS walkthrough
-- [GCP deployment with Terraform](gcp-terraform.md) — full GCP walkthrough
-- [Configuration](configuration.md) — environment variables reference
-- [Upgrades](upgrades.md) — upgrade and rollback procedures
-- [Backup and restore](backup-and-restore.md) — detailed restore procedures
+- [AWS deployment with Terraform](/self-hosting/aws-terraform) — full AWS walkthrough
+- [GCP deployment with Terraform](/self-hosting/gcp-terraform) — full GCP walkthrough
+- [Configuration](/self-hosting/configuration) — environment variables reference
+- [Upgrades](/self-hosting/upgrades) — upgrade and rollback procedures
+- [Backup and restore](/self-hosting/backup-and-restore) — detailed restore procedures

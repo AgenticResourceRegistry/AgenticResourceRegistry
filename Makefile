@@ -6,7 +6,7 @@
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: lint format check test test-adversarial test-eval-completeness test-fuzz test-all hooks clean migrate migrate-clickhouse check-migrations new-migration reset rebuild rebuild-fast rebuild-prometheus rebuild-observability rebuild-local reset-prometheus reset-observability up-prometheus up-observability down-prometheus down-observability logs-prometheus logs-observability release release-preview sync-skill ensure-host-dirs
+.PHONY: lint format check test test-ch test-adversarial test-eval-completeness test-fuzz test-all hooks clean migrate migrate-clickhouse check-migrations new-migration reset rebuild rebuild-fast rebuild-prometheus rebuild-observability rebuild-local reset-prometheus reset-observability up-prometheus up-observability down-prometheus down-observability logs-prometheus logs-observability release release-preview sync-skill ensure-host-dirs
 
 # ── Linting ──────────────────────────────────────────────
 
@@ -23,10 +23,13 @@ check:  ## Full pre-commit check on all files
 # ── Testing ──────────────────────────────────────────────
 
 test:  ## Run Python tests (parallel across cores)
-	cd observal-server && uv run --with pytest --with pytest-asyncio --with pytest-xdist --with pyyaml --with typer --with rich --with hypothesis --with pyarrow pytest ../tests/ -q -n auto
+	cd observal-server && uv run --with pytest --with pytest-asyncio --with pytest-xdist --with pyyaml --with typer --with rich --with hypothesis --with pyarrow pytest ../tests/ -q -n auto --ignore=../tests/integration_clickhouse
+
+test-ch:  ## Phase 0 publication proofs on the existing local sample ClickHouse DB; no migrations or drops
+	cd observal-server && OBSERVAL_CH_TEST_URL="$${OBSERVAL_CH_TEST_URL:-http://127.0.0.1:8123/observal}" uv run --with pytest --with pytest-asyncio --with pyyaml --with typer --with rich pytest ../tests/integration_clickhouse/ -q
 
 test-v:  ## Run Python tests (verbose, parallel across cores)
-	cd observal-server && uv run --with pytest --with pytest-asyncio --with pytest-xdist --with pyyaml --with typer --with rich --with hypothesis --with pyarrow pytest ../tests/ -v -n auto
+	cd observal-server && uv run --with pytest --with pytest-asyncio --with pytest-xdist --with pyyaml --with typer --with rich --with hypothesis --with pyarrow pytest ../tests/ -v -n auto --ignore=../tests/integration_clickhouse
 
 test-adversarial:  ## Run BenchJack self-test suite
 	cd observal-server && uv run --with pytest --with pytest-asyncio --with pyyaml --with typer --with rich pytest ../tests/test_adversarial_self.py -v --tb=short
@@ -97,14 +100,7 @@ new-migration:  ## Autogenerate a new migration (requires running stack): make n
 	@echo "Migration generated in observal-server/alembic/versions/."
 	@echo "Inspect the file, then apply with: make migrate"
 
-rebuild: ensure-host-dirs  ## Rebuild and restart Docker stack (runs migrations automatically)
-	cd docker && docker compose $(COMPOSE_FILES) up --build -d
-	@echo "Waiting for API to be healthy..."
-	@cd docker && until docker compose $(COMPOSE_FILES) exec observal-api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" >/dev/null 2>&1; do sleep 1; done
-	cd docker && docker compose $(COMPOSE_FILES) restart observal-lb
-	@echo "API is healthy."
-
-rebuild-fast: ensure-host-dirs  ## Fast app rebuild: build shared API and web images once
+rebuild rebuild-fast: ensure-host-dirs  ## Rebuild and restart Docker stack (builds API and web images once; rebuild-fast is the same target)
 	cd docker && docker compose $(COMPOSE_FILES) build observal-api observal-web
 	cd docker && docker compose $(COMPOSE_FILES) up -d --no-build
 	@echo "Waiting for API to be healthy..."
@@ -184,13 +180,13 @@ clean:  ## Remove build artifacts and caches
 
 # ── Release ─────────────────────────────────────────────────
 
-release:  ## Interactively prepare a curated release PR
-	uv run python tools/release.py
+release:  ## Prepare a release-line PR (pass ARGS for cut, channel, backport, status)
+	uv run python tools/release.py $(ARGS)
 
-release-preview:  ## Preview a curated release without writing changes
-	uv run python tools/release.py --preview
+release-preview:  ## Preview a release-line PR without writing changes
+	uv run python tools/release.py --preview $(ARGS)
 
 help:  ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_ -]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 .DEFAULT_GOAL := help

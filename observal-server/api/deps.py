@@ -23,7 +23,9 @@ from starlette.requests import Request
 
 import services.dynamic_settings as ds
 from database import async_session
-from models.user import User, UserRole
+from models.mcp import ListingStatus
+from models.user import User, UserRole, is_deleted_account
+from services.auth_header import bearer_token
 from services.jwt_service import decode_access_token
 from services.redis import get_redis
 from services.registry_namespace import _namespace_slug_parts, identity_for_user
@@ -33,6 +35,7 @@ from services.security_events import (
     Severity,
     emit_security_event,
 )
+from services.token_revocation import get_revocation_marker, is_revoked, token_issued_us
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -64,14 +67,14 @@ async def _authenticate_via_jwt(token: str, db: AsyncSession) -> User | None:
         if jti:
             checks.append(redis.get(f"revoked_jti:{jti}"))
         if user_id_str:
-            checks.append(redis.get(f"revoked_user:{user_id_str}"))
+            checks.append(get_revocation_marker(redis, user_id_str))
         results = await asyncio.gather(*checks) if checks else []
         idx = 0
         if jti:
             if results[idx]:
                 return None
             idx += 1
-        if user_id_str and results[idx]:
+        if user_id_str and is_revoked(results[idx], token_issued_us(payload)):
             return None  # SEC-001: account-wide revocation (e.g. logout all)
     except RedisError as e:
         # Redis is down: block all token-based auth to prevent revoked tokens
@@ -91,7 +94,9 @@ async def _authenticate_via_jwt(token: str, db: AsyncSession) -> User | None:
 
     result = await db.execute(select(User).where(User.id == uid))
     user = result.scalar_one_or_none()
-    if not user:
+    # A deleted account's shell row still exists; it never authenticates,
+    # whether or not its token revocation reached Redis.
+    if not user or is_deleted_account(user):
         return None
     user._trace_privacy = ds.get_sync_bool("security.trace_privacy")
     user._groups = payload.get("groups", [])
@@ -105,6 +110,7 @@ _PASSWORD_CHANGE_EXEMPT_PATHS = frozenset(
         "/api/v1/auth/whoami",
         "/api/v1/auth/token/refresh",
         "/api/v1/auth/token/revoke",
+        "/api/v1/auth/logout",
     }
 )
 
@@ -126,10 +132,10 @@ async def get_current_user(
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    if not authorization or not authorization.startswith("Bearer "):
+    token = bearer_token(authorization)
+    if token is None:
         optic.trace("request has no Bearer token")
         raise HTTPException(status_code=401, detail="Missing credentials")
-    token = authorization.removeprefix("Bearer ").strip()
     user = await _authenticate_via_jwt(token, db)
     if not user:
         optic.debug("authentication failed - token invalid or expired")
@@ -159,9 +165,9 @@ async def optional_current_user(
     Raises HTTP 401 if a Bearer token is present but invalid/expired -
     this distinguishes 'no credentials' from 'bad credentials'.
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    token = bearer_token(authorization)
+    if token is None:
         return None
-    token = authorization.removeprefix("Bearer ").strip()
     user = await _authenticate_via_jwt(token, db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -336,7 +342,9 @@ async def require_password_auth() -> None:
 MAX_BARE_NAME_MATCHES = 6
 
 
-async def resolve_listing(model, identifier: str, db: AsyncSession, *, require_status=None, current_user=None):
+async def resolve_listing(
+    model, identifier: str, db: AsyncSession, *, require_status=None, current_user=None, load_options=()
+):
     """Resolve a listing by UUID, canonical name, or unambiguous legacy bare name.
 
     ``current_user`` decides what the caller may see, and a listing they may not
@@ -379,7 +387,9 @@ async def resolve_listing(model, identifier: str, db: AsyncSession, *, require_s
         stmt = stmt.join(version_model, model.latest_version_id == version_model.id).where(
             version_model.status == require_status
         )
-    result = await db.execute(stmt.limit(MAX_BARE_NAME_MATCHES if ambiguous_label is not None else 2))
+    result = await db.execute(
+        stmt.options(*load_options).limit(MAX_BARE_NAME_MATCHES if ambiguous_label is not None else 2)
+    )
     scalars = result.scalars()
     matches = scalars.all()
     if not isinstance(matches, (list, tuple)):
@@ -568,18 +578,43 @@ async def check_listing_visibility_async(listing, current_user, db: AsyncSession
         return creator_id == current_user.id
     return (
         await db.scalar(
-            select(TeamMembership.id).where(
+            select(TeamMembership.id)
+            .where(
                 TeamMembership.team_id == team_id,
                 TeamMembership.user_id == current_user.id,
             )
+            .with_for_update(read=True)
         )
         is not None
     )
 
 
-async def resolve_visible_listing(model, identifier: str, db: AsyncSession, current_user, *, require_status=None):
+async def resolve_visible_listing(
+    model, identifier: str, db: AsyncSession, current_user, *, require_status=None, load_options=()
+):
     """Resolve a listing and hide it when the caller cannot see it."""
-    listing = await resolve_listing(model, identifier, db, require_status=require_status, current_user=current_user)
+    listing = await resolve_listing(
+        model, identifier, db, require_status=require_status, current_user=current_user, load_options=load_options
+    )
     if listing is None or not await check_listing_visibility_async(listing, current_user, db):
         return None
     return listing
+
+
+async def hidden_unapproved_listing(listing, current_user, db: AsyncSession) -> bool:
+    """True when a component listing is not approved and the caller may not view it.
+
+    Sibling routes (versions, feedback) must answer with the same 404 as
+    ``GET /{type}/{id}``, otherwise they confirm that someone else's draft exists.
+    Team reviewers who can review the listing keep access, as in the review queue.
+    """
+    if listing.status == ListingStatus.approved:
+        return False
+    if may_view_unapproved(get_effective_component_permission(listing, current_user), current_user):
+        return False
+    if current_user is None:
+        return True
+
+    from services.teamspace import can_review, review_scope
+
+    return not can_review(listing, await review_scope(db, current_user))

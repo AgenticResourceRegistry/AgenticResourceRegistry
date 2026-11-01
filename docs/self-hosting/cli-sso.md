@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "CLI Authentication with SSO"
+---
 
-# CLI Authentication with SSO
-
-This guide covers authenticating the Observal CLI when your deployment uses
+This guide covers authenticating the Agentic Resource Registry CLI when your deployment uses
 SSO (SAML, OIDC, or OAuth) for login. The CLI uses the
 [OAuth 2.0 Device Authorization Grant (RFC 8628)](https://datatracker.ietf.org/doc/html/rfc8628)
 to authenticate through your browser without handling IdP credentials directly.
@@ -34,7 +35,7 @@ CLI                         Server                     Browser
 
 1. The CLI requests a device code from the server.
 2. The server returns a short `user_code` (e.g., `BCDF-GHJK`) and a
-   `verification_uri` pointing to the Observal web UI.
+   `verification_uri` pointing to the Agentic Resource Registry web UI.
 3. The CLI opens the browser automatically and displays the URL + code in
    the terminal as a fallback.
 4. The user logs in via their normal SSO flow (SAML, OIDC, or OAuth) in
@@ -57,22 +58,35 @@ within that window, the CLI exits with an error.
 observal auth login --sso
 ```
 
-Or omit `--sso` and select "SSO (opens browser)" from the interactive menu
-when SSO is detected:
+When the server enables more than one SSO provider, `--sso` asks which one to
+use in an interactive terminal. JSON mode and non-interactive input never ask and
+fall back to the server's default, so name the provider up front with
+`--provider` (`oidc`, `saml`, `google` or `github`) there:
+
+```bash
+observal auth login --sso --provider google
+```
+
+Or omit `--sso` and pick a provider from the interactive menu, which lists
+every provider the server enables:
 
 ```bash
 observal auth login
 # Connected.
-#
-#   [1] Email + password
-#   [2] SSO (opens browser)
-# Login method: 2
+#   [1] CLI email/username + password
+#   [2] Web sign-in
+#   [3] OIDC SSO
+#   [4] Google
+#   [5] SAML SSO
+#   Login method: 4
 ```
 
 ### SSO-Only Deployments
 
 When `deployment.sso_only=true` is set on the server, the CLI automatically uses the
-device flow. No `--sso` flag or interactive choice is needed:
+device flow and skips the login-method menu, so no `--sso` flag is needed. If several SSO
+providers are enabled, a terminal session still asks which one to use; pass `--provider google`
+(or `github`, `saml`) to skip that prompt. With a single enabled provider, no prompt appears:
 
 ```bash
 observal auth login --server https://observal.company.com
@@ -92,11 +106,11 @@ For CI/CD pipelines and scripts where no browser is available, use the
 
 ```bash
 export OBSERVAL_TOKEN="your-api-token-here"
-observal agents list
+observal agent list
 ```
 
 The CLI checks `OBSERVAL_TOKEN` before reading `~/.observal/config.json`.
-Generate API tokens from the Observal web UI under your user settings.
+Generate API tokens from the Agentic Resource Registry web UI under your user settings.
 
 ---
 
@@ -147,7 +161,7 @@ Run `observal auth login --sso` again to get a fresh code.
 
 If the CLI cannot open a browser (e.g., SSH session, WSL without browser
 forwarding), manually copy the URL from the terminal into a browser on any
-device that can reach the Observal server.
+device that can reach the Agentic Resource Registry server.
 
 ### "SSO (opens browser)" option not shown
 

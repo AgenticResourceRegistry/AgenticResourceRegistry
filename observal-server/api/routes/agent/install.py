@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent install, download stats, traces, resolve, manifest, and validate routes."""
+
+from types import SimpleNamespace
 
 from fastapi import Depends, HTTPException, Query, Request
 from loguru import logger as optic
@@ -13,17 +18,19 @@ import services.dynamic_settings as _ds
 from api.deps import (
     apply_publish_scope,
     apply_visibility_filter,
+    check_listing_visibility_async,
     get_db,
     get_effective_agent_permission,
+    get_effective_component_permission,
     get_registry_user,
     require_role,
 )
 from api.routes._component_archive import archived_install_warning
 from models.agent import AgentStatus
 from models.hook import HookListing
-from models.mcp import ListingStatus, McpListing
+from models.mcp import ListingStatus, McpListing, McpVersion
 from models.prompt import PromptListing
-from models.sandbox import SandboxListing, SandboxVersion
+from models.sandbox import SandboxListing
 from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.agent import (
@@ -34,10 +41,60 @@ from schemas.agent import (
     ValidationResult,
 )
 from services.harness import generate_agent_config
+from services.harness.helpers import AliasCollisionError
+from services.harness_capability_inference import (
+    compute_supported_harnesses,
+    infer_required_features,
+    split_supported_harnesses,
+    unsupported_harness_reason,
+)
 from services.registry_telemetry import emit_registry_event
+from services.skill_bundle import (
+    SKILL_EXTRA_FILES_FEATURE,
+    declared_skill_folder_name,
+    needs_bundle_delivery,
+    prepare_agent_skill_folders,
+)
+from services.skill_validator import SkillValidationError
 
 from ._router import router
 from .helpers import _load_agent, _resolve_component_names
+
+_CAPABILITY_FOR_COMPONENT = {"mcp": "mcp_servers", "hook": "hooks", "skill": "skills"}
+
+
+def _unsupported_harness_warnings(name: str, version, harness: str, *, allowed: bool) -> list[str]:
+    """Refuse a harness the agent version does not list as supported, unless the caller allows it.
+
+    The author's ``supported_harnesses`` is authoritative; an empty list puts no limit on
+    harnesses. Generating config for any other harness used to succeed silently and leave a
+    partial install: components the harness has no place for, or puts where it never loads them.
+    """
+    supported = list(version.supported_harnesses or [])
+    if not supported or harness in supported:
+        return []
+    label = f"{name} {version.version}"
+    if not allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Agent {label} does not support {harness}; it supports {', '.join(supported)}. "
+                "Install it for one of those, or set allow_unsupported_harness (observal agent pull "
+                "--allow-unsupported-harness) to install it anyway; some components may be missing or not loaded."
+            ),
+        )
+    from schemas.constants import HARNESS_CAPABILITIES
+
+    capabilities = HARNESS_CAPABILITIES.get(harness, set())
+    types = {c.component_type for c in version.components or []}
+    lost = sorted(
+        t for t, capability in _CAPABILITY_FOR_COMPONENT.items() if t in types and capability not in capabilities
+    )
+    return [
+        f"Agent {label} does not list {harness} as supported (it supports {', '.join(supported)}). "
+        + (f"{harness} cannot install its {', '.join(lost)} components. " if lost else "")
+        + "Components may be missing or not loaded; check the install before relying on it."
+    ]
 
 
 @router.post("/{agent_id}/install", response_model=AgentInstallResponse)
@@ -57,11 +114,13 @@ async def install_agent(
     )
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.status != AgentStatus.approved and not (
+    # With draft installs allowed, the creator can install versions that are not approved yet.
+    owner_draft_install = (
         current_user is not None
         and _ds.get_sync_bool("security.allow_draft_install")
         and agent.created_by == current_user.id
-    ):
+    )
+    if agent.status != AgentStatus.approved and not owner_draft_install:
         raise HTTPException(status_code=404, detail="Agent not found or not approved for installation")
     if get_effective_agent_permission(agent, current_user) == "none":
         raise HTTPException(status_code=403, detail="Insufficient permissions to install this agent")
@@ -73,8 +132,9 @@ async def install_agent(
         version_stmt = select(AgentVersion).where(
             AgentVersion.agent_id == agent.id,
             AgentVersion.version == req.version,
-            AgentVersion.status == AgentStatus.approved,
         )
+        if not owner_draft_install:
+            version_stmt = version_stmt.where(AgentVersion.status == AgentStatus.approved)
         version_result = await db.execute(version_stmt)
         target_version = version_result.scalar_one_or_none()
         if not target_version:
@@ -88,6 +148,9 @@ async def install_agent(
     else:
         install_version = agent.latest_version
 
+    harness_warnings = _unsupported_harness_warnings(
+        agent.name, install_version, req.harness, allowed=req.allow_unsupported_harness
+    )
     install_components = list(install_version.components or [])
     component_target_team_id = agent.team_id if agent.is_private else None
 
@@ -128,11 +191,42 @@ async def install_agent(
         )
         mcp_rows = (await db.execute(mcp_stmt)).scalars().all()
         mcp_listings_map = {row.id: row for row in mcp_rows}
+        from services.config_generator import versioned_mcp_listing
+
+        for component in install_components:
+            if component.component_type != "mcp" or component.component_id not in mcp_listings_map:
+                continue
+            listing = mcp_listings_map[component.component_id]
+            pinned = component.resolved_version
+            if pinned and pinned != "latest" and pinned != listing.version:
+                selected = (
+                    await db.execute(
+                        select(McpVersion).where(
+                            McpVersion.listing_id == listing.id,
+                            McpVersion.version == pinned,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if selected is None or (
+                    selected.status != ListingStatus.approved
+                    and (current_user is None or get_effective_component_permission(listing, current_user) != "owner")
+                ):
+                    raise HTTPException(status_code=404, detail="Pinned MCP version is unavailable")
+                mcp_listings_map[component.component_id] = versioned_mcp_listing(listing, selected)
 
     # Pre-load skill listings for skill file generation
     skill_comp_ids = [c.component_id for c in install_components if c.component_type == "skill"]
     skill_listings_map = {}
     if skill_comp_ids:
+        # Serialize against skill privatization, re-review and decisions. Those
+        # writers take listing FOR UPDATE before touching versions; re-run the
+        # visibility query after the wait, not against a cached ORM instance.
+        await db.execute(
+            select(SkillListing.id)
+            .where(SkillListing.id.in_(skill_comp_ids))
+            .order_by(SkillListing.id)
+            .with_for_update(read=True)
+        )
         skill_stmt = apply_publish_scope(
             apply_visibility_filter(
                 select(SkillListing).where(SkillListing.id.in_(skill_comp_ids)), SkillListing, current_user
@@ -140,8 +234,15 @@ async def install_agent(
             SkillListing,
             component_target_team_id,
         )
-        skill_rows = (await db.execute(skill_stmt)).scalars().all()
-        skill_listings_map = {row.id: row for row in skill_rows}
+        skill_rows = (await db.execute(skill_stmt.execution_options(populate_existing=True))).scalars().all()
+        # EXISTS cannot hold the membership row: deletion can race after the
+        # query returned. A shared grant lock protects pinned bytes until the
+        # installer transaction completes, or observes a finished revocation.
+        skill_listings_map = {
+            row.id: row for row in skill_rows if await check_listing_visibility_async(row, current_user, db)
+        }
+        if set(skill_comp_ids) - skill_listings_map.keys():
+            raise HTTPException(status_code=404, detail="Agent references an unavailable skill")
 
     # Pre-load hook listings for hook config generation
     hook_comp_ids = [c.component_id for c in install_components if c.component_type == "hook"]
@@ -217,36 +318,6 @@ async def install_agent(
             .all()
         )
         sandbox_listings_map = {row.id: row for row in sandbox_rows}
-        sandbox_components = {c.component_id: c for c in install_components if c.component_type == "sandbox"}
-
-        class _VersionedSandboxListing:
-            def __init__(self, listing, version):
-                self._listing = listing
-                self._version = version
-
-            def __getattr__(self, name):
-                if name == "latest_version":
-                    return self._version
-                if hasattr(self._version, name):
-                    return getattr(self._version, name)
-                return getattr(self._listing, name)
-
-        for sid, listing in list(sandbox_listings_map.items()):
-            resolved_version = sandbox_components[sid].resolved_version
-            if resolved_version and resolved_version != "latest" and resolved_version != listing.version:
-                pinned = (
-                    await db.execute(
-                        select(SandboxVersion).where(
-                            SandboxVersion.listing_id == sid,
-                            SandboxVersion.version == resolved_version,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if not pinned:
-                    raise HTTPException(
-                        status_code=404, detail=f"Sandbox {listing.name} version {resolved_version!r} not found"
-                    )
-                sandbox_listings_map[sid] = _VersionedSandboxListing(listing, pinned)
 
     component_maps = (
         (mcp_comp_ids, mcp_listings_map),
@@ -257,6 +328,69 @@ async def install_agent(
     )
     if any(set(ids) - set(listings) for ids, listings in component_maps):
         raise HTTPException(status_code=404, detail="Agent contains a component unavailable to this agent target")
+    listing_by_type = {
+        "mcp": mcp_listings_map,
+        "skill": skill_listings_map,
+        "hook": hook_listings_map,
+        "prompt": prompt_listings_map,
+        "sandbox": sandbox_listings_map,
+    }
+    # Generate every component from the exact version this agent release pinned,
+    # never from the listing's latest release.
+    from services.agent_lock import LOCK_VERSION, load_pinned_listings, stored_lock_digest
+
+    pins = await load_pinned_listings(
+        db,
+        install_components,
+        {
+            "mcp": mcp_listings_map,
+            "skill": skill_listings_map,
+            "hook": hook_listings_map,
+            "prompt": prompt_listings_map,
+            "sandbox": sandbox_listings_map,
+        },
+    )
+    if req.strict and pins.problems:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Strict install refused: {'; '.join(pins.problems)}. Install without strict mode to accept "
+                "these with warnings, or ask the agent author to release a new version."
+            ),
+        )
+    # Non-strict mode is only a compatibility fallback for old resource-less
+    # locks. It must never publish an unapproved or public-re-review skill's
+    # bytes, even when its bundle has no extra files and the caller owns it.
+    from services.agent_lock import INSTALLABLE_STATUSES
+
+    if any(
+        (selected := getattr(row, "pinned_version", None) or getattr(row, "latest_version", None)) is None
+        or selected.status not in INSTALLABLE_STATUSES
+        or getattr(selected, "requires_global_review", False)
+        for row in pins.listings["skill"].values()
+    ):
+        raise HTTPException(status_code=409, detail="Agent skill pin is not approved or requires public review")
+    # The pinned proxy, not the listing pointer, selects each complete folder.
+    bundled_skills = any(needs_bundle_delivery(row) for row in pins.listings["skill"].values())
+    if bundled_skills and SKILL_EXTRA_FILES_FEATURE not in req.supported_features:
+        raise HTTPException(status_code=409, detail="Client must support skill_extra_files_v1 to install this agent")
+    if bundled_skills and not await _ds.get_bool("registry.skill_folder_delivery_enabled", False):
+        raise HTTPException(status_code=409, detail="Skill folder delivery is disabled until fleet rollout")
+    lock_digest = stored_lock_digest(install_version)
+    mcp_listings_map = pins.listings["mcp"]
+    skill_listings_map = pins.listings["skill"]
+    hook_listings_map = pins.listings["hook"]
+    prompt_listings_map = pins.listings["prompt"]
+    sandbox_listings_map = pins.listings["sandbox"]
+    skill_folder_names = {}
+    if SKILL_EXTRA_FILES_FEATURE in req.supported_features:
+        for listing_id, row in skill_listings_map.items():
+            if not row.extra_files:
+                continue  # Resource-less and legacy empty-script releases keep their aliases.
+            try:
+                skill_folder_names[listing_id] = declared_skill_folder_name(row.skill_md_content)
+            except SkillValidationError as exc:
+                raise HTTPException(status_code=409, detail="Pinned skill has no valid installed folder name") from exc
 
     archived_warnings = []
     setup_warnings = []
@@ -268,7 +402,7 @@ async def install_agent(
         ("sandbox", sandbox_listings_map.values()),
     ):
         for row in rows:
-            if row.status == ListingStatus.archived:
+            if getattr(row, "listing_status", row.status) == ListingStatus.archived:
                 archived_warnings.append(archived_install_warning(item_type, row.name))
             if item_type == "MCP" and row.setup_instructions:
                 setup_warnings.append(f"MCP '{row.name}' requires local setup before use:\n{row.setup_instructions}")
@@ -293,22 +427,76 @@ async def install_agent(
     )
     install_options["_resolved_model"] = resolved_model
     install_options["_model_warnings"] = model_warnings
+    install_options["_delegation"] = _ds.get_sync_bool("discovery.delegation_enabled", True)
 
-    snippet = generate_agent_config(
-        install_agent_obj,
-        req.harness,
-        observal_url=endpoints["api"],
-        mcp_listings=mcp_listings_map,
-        component_names=name_map,
-        env_values=req.env_values,
-        header_values=req.header_values,
-        options=install_options,
-        platform=req.platform,
-        skill_listings=skill_listings_map,
-        hook_listings=hook_listings_map,
-        prompt_listings=prompt_listings_map,
-        sandbox_listings=sandbox_listings_map,
-    )
+    component_aliases: dict[str, str] = {}
+    try:
+        snippet = generate_agent_config(
+            install_agent_obj,
+            req.harness,
+            observal_url=endpoints["api"],
+            mcp_listings=mcp_listings_map,
+            component_names=name_map,
+            env_values=req.env_values,
+            header_values=req.header_values,
+            options=install_options,
+            platform=req.platform,
+            skill_listings=skill_listings_map,
+            hook_listings=hook_listings_map,
+            prompt_listings=prompt_listings_map,
+            sandbox_listings=sandbox_listings_map,
+            component_aliases=component_aliases,
+            skill_folder_names=skill_folder_names,
+        )
+    except AliasCollisionError as error:
+        raise HTTPException(status_code=409, detail="Generated component aliases collide") from error
+    except ValueError as error:
+        # The remaining messages are fixed text about the agent's content (an unquotable command, a bad script name).
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    from services.harness.helpers import _local_registry_names, _sanitize_name
+
+    for kind, listings in (("skill", skill_listings_map), ("hook", hook_listings_map), ("prompt", prompt_listings_map)):
+        names = _local_registry_names(listings)
+        mapped = {
+            str(key): skill_folder_names.get(key, _sanitize_name(value))
+            if kind == "skill"
+            else _sanitize_name(value)
+            if kind != "hook"
+            else value
+            for key, value in names.items()
+        }
+        if len(set(mapped.values())) != len(mapped):
+            raise HTTPException(status_code=409, detail="Generated component aliases collide")
+        component_aliases.update(mapped)
+    component_pin_entries = []
+    for component in install_components:
+        listing = listing_by_type.get(component.component_type, {}).get(component.component_id)
+        component_pin_entries.append(
+            {
+                "id": str(component.component_id),
+                "type": component.component_type,
+                "name": getattr(listing, "name", component.component_name),
+                "version": listing.version if listing else "",
+                "local_name": component_aliases.get(str(component.component_id), ""),
+                "qualified_name": getattr(listing, "qualified_name", "") if listing else "",
+            }
+        )
+
+    try:
+        skill_bundles = (
+            prepare_agent_skill_folders(
+                skill_listings_map,
+                snippet,
+                req.harness,
+                scope=req.options.get("scope"),
+                folder_names=skill_folder_names,
+            )
+            if SKILL_EXTRA_FILES_FEATURE in req.supported_features
+            else []
+        )
+    except SkillValidationError as exc:
+        raise HTTPException(status_code=409, detail=f"Cannot deliver complete agent skill folders: {exc}") from exc
 
     # Capture agent.id before any DB operations that might expire the ORM
     # instance (e.g. savepoint rollback on duplicate download).
@@ -334,12 +522,32 @@ async def install_agent(
             user_role=current_user.role.value,
             agent_id=str(resolved_agent_id),
             resource_name=agent.name,
-            metadata={"harness": req.harness},
+            metadata={
+                "harness": req.harness,
+                "version": install_version.version,
+                "lock_status": pins.status,
+                "lock_digest": lock_digest or "",
+            },
         )
 
-    warnings = archived_warnings + setup_warnings + snippet.pop("_warnings", [])
+    warnings = harness_warnings + pins.warnings + archived_warnings + setup_warnings + snippet.pop("_warnings", [])
+    lock = {
+        "lock_version": LOCK_VERSION,
+        "status": pins.status,
+        "digest": lock_digest,
+        "components": pins.entries,
+        "problems": pins.problems,
+    }
     return AgentInstallResponse(
-        agent_id=resolved_agent_id, harness=req.harness, config_snippet=snippet, warnings=warnings
+        agent_id=resolved_agent_id,
+        harness=req.harness,
+        version=install_version.version,
+        config_snippet=snippet,
+        selected_version=install_version.version,
+        component_pins=component_pin_entries,
+        warnings=warnings,
+        lock=lock,
+        skill_bundles=skill_bundles,
     )
 
 
@@ -460,9 +668,6 @@ async def validate_agent_composition(
 ):
     """Validate a set of components for compatibility before publishing an agent."""
     optic.trace("req={}", req)
-    if not req.components:
-        return ValidationResult(valid=True, issues=[])
-
     from services.agent_resolver import validate_component_ids
 
     errors = await validate_component_ids(
@@ -482,4 +687,23 @@ async def validate_agent_composition(
         )
         for e in errors
     ]
-    return ValidationResult(valid=len(issues) == 0, issues=issues)
+
+    # The same harness check publish applies: declared harnesses that can't run the components are left out.
+    skill_ids = [c.component_id for c in req.components if c.component_type == "skill"]
+    skill_listings: dict = {}
+    if skill_ids:
+        rows = (await db.execute(select(SkillListing).where(SkillListing.id.in_(skill_ids)))).scalars().all()
+        skill_listings = {row.id: row for row in rows}
+    required = infer_required_features(SimpleNamespace(components=req.components), skill_listings=skill_listings)
+    kept, dropped = split_supported_harnesses(req.supported_harnesses, compute_supported_harnesses(required))
+    if dropped:
+        outcome = "so publish leaves it out of supported harnesses" if kept else "and no declared harness can run them"
+        issues.extend(
+            ValidationIssue(
+                severity="warning" if kept else "error",
+                message=f"{unsupported_harness_reason(harness, required)}, which the components need, {outcome}.",
+            )
+            for harness in dropped
+        )
+    valid = not any(issue.severity == "error" for issue in issues)
+    return ValidationResult(valid=valid, issues=issues, supported_harnesses=kept)

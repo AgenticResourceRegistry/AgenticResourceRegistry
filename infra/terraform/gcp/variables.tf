@@ -58,13 +58,13 @@ variable "dns_managed_zone_name" {
 variable "image_repo_api" {
   description = "Container image repository for api + worker + init."
   type        = string
-  default     = "ghcr.io/observal/observal-api"
+  default     = "ghcr.io/agenticresourceregistry/observal-api"
 }
 
 variable "image_repo_web" {
   description = "Container image repository for the web frontend."
   type        = string
-  default     = "ghcr.io/observal/observal-web"
+  default     = "ghcr.io/agenticresourceregistry/observal-web"
 }
 
 variable "image_tag" {
@@ -152,23 +152,6 @@ variable "worker_max_instances" {
 }
 
 # ── Data tier (ClickHouse on GCE) ─────────────────────────────────────────
-
-variable "clickhouse_mode" {
-  description = "'self_hosted' = GCE instance. 'cloud' = ClickHouse Cloud (supply clickhouse_cloud_url)."
-  type        = string
-  default     = "self_hosted"
-  validation {
-    condition     = contains(["self_hosted", "cloud"], var.clickhouse_mode)
-    error_message = "clickhouse_mode must be 'self_hosted' or 'cloud'."
-  }
-}
-
-variable "clickhouse_cloud_url" {
-  description = "ClickHouse Cloud DSN. Required when clickhouse_mode = 'cloud'."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
 
 variable "data_machine_type" {
   description = "Machine type for the ClickHouse data host."

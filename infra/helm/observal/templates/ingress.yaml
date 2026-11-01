@@ -53,6 +53,20 @@ spec:
                 name: {{ include "observal.fullname" . }}-api
                 port:
                   number: 8000
+          - path: /.well-known/ard.json
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "observal.fullname" . }}-api
+                port:
+                  number: 8000
+          - path: /.well-known/ai-catalog.json
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "observal.fullname" . }}-api
+                port:
+                  number: 8000
           - path: /
             pathType: Prefix
             backend:

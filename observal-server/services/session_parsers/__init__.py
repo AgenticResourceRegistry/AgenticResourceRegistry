@@ -17,6 +17,7 @@ When adding a new harness:
 Public API
 ----------
 parse_raw_events(rows)  -- consumed by api/routes/sessions.py
+meta_records(harness, entries)  -- consumed by services/insights/session_meta_extractor.py
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .antigravity import parse_rows as _parse_antigravity
+from .claude_code import meta_records as _claude_code_meta
 from .claude_code import parse_rows as _parse_claude_code
+from .codex import meta_records as _codex_meta
 from .codex import parse_rows as _parse_codex
 from .copilot_cli import parse_rows as _parse_copilot_cli
 from .cursor import parse_rows as _parse_cursor
@@ -68,3 +71,23 @@ def parse_raw_events(rows: list[dict]) -> list[dict]:
         return []
     parser = _PARSERS[parser_id]  # KeyError = unimplemented parser
     return parser(rows)
+
+
+# Maps session_parser ID -> converter from parsed transcript lines to the
+# Pi-style records the insight meta extractor reads. Pi lines already have that
+# shape and the extractor reads Kiro lines itself; other formats are not yet
+# converted, so their sessions report only a time range.
+_MetaFn = Callable[[list[dict]], list[dict]]
+_META_RECORDS: dict[str, _MetaFn] = {
+    "claude-code": _claude_code_meta,
+    "codex": _codex_meta,
+}
+
+
+def meta_records(harness: str, entries: list[dict]) -> list[dict]:
+    """Return *entries* (parsed transcript lines) as insight meta records for *harness*."""
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    parser_id = HARNESS_REGISTRY[harness]["session_parser"]  # KeyError = unknown harness
+    convert = _META_RECORDS.get(parser_id or "")
+    return convert(entries) if convert else entries

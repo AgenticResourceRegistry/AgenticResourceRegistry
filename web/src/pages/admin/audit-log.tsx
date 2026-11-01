@@ -6,7 +6,7 @@ import { useLocation, useSearch } from "@tanstack/react-router";
 import { AlertTriangle, ChevronDown, ChevronRight, Clock, Download, ScrollText, Shield } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeader, PageIntro } from "@/components/layouts/page-header";
+import { PageHeader } from "@/components/layouts/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { TableSkeleton } from "@/components/shared/skeleton-layouts";
@@ -210,25 +210,22 @@ export default function AuditLogPage() {
     <>
       <PageHeader title="Audit Log" breadcrumbs={[{ label: "Administration" }, { label: "Audit Log" }]} />
       <div className="page-body mx-auto w-full">
-        <PageIntro
-          eyebrow="Compliance"
-          title="Audit Log"
-          subtitle="Inspect immutable records of authenticated API and administrative actions."
-        >
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="h-3.5 w-3.5" />
-            Export CSV
-          </Button>
-        </PageIntro>
-
         <div className="space-y-5">
-          <SearchField
-            value={searchQuery}
-            onValueChange={handleSearchChange}
-            placeholder="actor:name action:login outcome:denied sensitivity:high"
-            aria-label="Search audit events"
-            mono
-          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 flex-1 sm:pr-3">
+              <SearchField
+                value={searchQuery}
+                onValueChange={handleSearchChange}
+                placeholder="actor:name action:login outcome:denied sensitivity:high"
+                aria-label="Search audit events"
+                mono
+              />
+            </div>
+            <Button variant="outline" size="sm" onClick={handleExport} className="shrink-0">
+              <Download className="h-3.5 w-3.5" />
+              Export CSV
+            </Button>
+          </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="mr-1 text-3xs text-muted-foreground">Filter syntax</span>
             {FILTER_HINTS.map((hint) => (

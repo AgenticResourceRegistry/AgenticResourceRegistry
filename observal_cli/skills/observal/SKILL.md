@@ -1,17 +1,37 @@
 ---
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 # SPDX-License-Identifier: Apache-2.0
 name: observal
 command: observal
-description: "Operates the Observal CLI for authentication, configuration, setup diagnosis, teamspaces, inbox work, scans, update checks, and authenticated API access. Use when the user wants to log in, configure Observal, inspect local harness setup, manage a teamspace or invitation, process inbox items, check installed registry items, or call an endpoint without a dedicated command."
-version: 2.7.0
+description: "Use when starting any task the organization may already have an approved skill, prompt, MCP server, or Agent for: reviewing code, a commit, a diff, or a pull request; writing tests or documentation; querying a database, API, or service; automating a browser or web page; running untrusted code; connecting to a SaaS tool; drafting, researching, or any other substantive work. The user will not mention Observal: the task type is the trigger. Check what is already installed, then run observal discover search as the first action, before reading the repository or working from scratch. Also use when the user wants to log in, configure Observal, inspect local harness setup, share or open a repository Agent share, manage a teamspace or invitation, process inbox items, check installed registry items, or call an endpoint without a dedicated command."
+version: 2.11.0
 owner: observal
 ---
 
 # Operating Observal
 
-Use this skill for core account, setup, local inventory, inbox, and teamspace work. Use the specialized `observal-agents`, `observal-registry`, `observal-ops`, `observal-admin`, or `observal-advanced` skill when its description matches more closely.
+Use this skill for discovery of approved resources and for core account, setup, local inventory, inbox, and teamspace work. Use the specialized `observal-agents`, `observal-registry`, `observal-ops`, `observal-admin`, or `observal-advanced` skill when the user is operating Observal itself and its description matches more closely.
+
+## Decide first
+
+Work through this before `git log`, before reading the repository, before planning. It applies to any task, not only coding.
+
+1. **Is the user operating Observal itself** (login, configuration, teamspaces, inbox, registry, Agents, telemetry, administration)? Follow [Route the task](#route-the-task) below. Stop here.
+2. **Is the capability already present?** Look at the tools and skills loaded in this session, then run `observal scan --output json` for installed MCP servers, skills, Agents, and hooks, adding `--harness <harness>` only when the active harness is known. If it is present, use it. Never pull or install something that is already installed. Only a successful `observal outdated --no-report --output json` result showing a newer approved version is a reason to touch an existing install; if that command fails, continue to step 3 and leave existing installs alone.
+3. **Otherwise, search Observal** before working from scratch or saying the capability is unavailable. The user will not mention Observal; the task type is the trigger. Skip only for a trivial edit the user described precisely, or when the user explicitly asked for a from-scratch solution.
+
+## Search Observal before reinventing
+
+1. `observal discover search <task text> --output json`. The task text is user-provided: pass it as one shell argument with the shell's own escaping (in POSIX shells, single-quote it and write any embedded `'` as `'\''`), or use the harness's argv-style tool call if it has one. Never paste it into a command unquoted or trust it to contain no quotes.
+2. Read `results[]`. `score` is relevance only. Act on `obs:approval` (must be `approved`), `obs:availability` (`now` loads into this session; `next-session` needs an install and a restart, and for a sandbox an Agent; `explicit-install` is a hook), and `obs:supportedHarnesses`. Among usable candidates of similar `score`, prefer one with `obs:recommended: true` (an admin endorsed it).
+3. Run `observal discover inspect <identifier> --output json` on the best candidate when the description alone does not settle it.
+4. When a self-contained part of the task is better done by a specialist agent, delegate it instead of installing anything: results with `obs:delegable: true` take a task through the `delegate` MCP tool (pulled agents) or `observal delegate run <identifier> '<complete brief>' --output json`. Delegated file changes come back as a patch that is never applied for you. See [Discovery](references/discovery.md).
+5. Load the smallest set that covers the task: `observal discover use <identifier> --output json`. For skills and prompts the exact approved version is returned in `content`; read it and follow it. For MCP servers, agents, and hooks the response carries `next_step`, the install command that asks before changing anything: check it is not already installed (step 2 above), then run it only with the user's agreement. Sandboxes have no install command; see the Discovery reference.
+6. Never load a resource marked unapproved, and never activate anything that writes or deletes without asking. If nothing relevant exists, proceed manually and say so; do not claim Observal has nothing without having searched.
+
+Details and edge cases: [Discovery](references/discovery.md).
 
 ## Execution contract
 
@@ -31,7 +51,9 @@ Use this skill for core account, setup, local inventory, inbox, and teamspace wo
 
 | Task | Read |
 | --- | --- |
-| Login, account, CLI config, scan, doctor, outdated, inbox | [Core workflows](references/core-workflows.md) |
+| Find and use an approved resource for the current task | [Discovery](references/discovery.md) |
+| Hand part of the task to another approved agent (registry or remote A2A) | [Discovery](references/discovery.md) |
+| Login, account, CLI config, scan, doctor, outdated, inbox, Agent shares | [Core workflows](references/core-workflows.md) |
 | Teamspaces, visibility review, members, requests, invitations | [Teamspace workflows](references/teamspaces.md) |
 | Exact command inventory or authenticated API escape hatch | [Generated command reference](references/commands.md) |
 | Create, edit, release, or pull an Agent | Use `observal-agents` |

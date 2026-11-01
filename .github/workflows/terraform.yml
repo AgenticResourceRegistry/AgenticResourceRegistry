@@ -5,7 +5,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Terraform — fmt + validate + tflint + env consistency for all modules.
 #
-# Runs on PRs and pushes to main that touch infra/terraform/**, .env.example,
+# Runs on PRs and pushes to main or release branches that touch infra/terraform/**, .env.example,
 # or observal-server/config.py. No cloud credentials needed.
 #
 # Modules covered:
@@ -20,15 +20,17 @@
 name: Terraform
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - 'infra/terraform/**'
       - '.github/workflows/terraform.yml'
       - '.env.example'
       - 'observal-server/config.py'
   push:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - 'infra/terraform/**'
       - '.github/workflows/terraform.yml'

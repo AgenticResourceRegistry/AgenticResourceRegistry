@@ -93,20 +93,17 @@ data "aws_iam_policy_document" "ec2_assume" {
 }
 
 resource "aws_iam_role" "data_host" {
-  count              = local.clickhouse_self_hosted ? 1 : 0
   name               = "${local.name}-data-host"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "data_host_ssm_core" {
-  count      = local.clickhouse_self_hosted ? 1 : 0
-  role       = aws_iam_role.data_host[0].name
+  role       = aws_iam_role.data_host.name
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_role_policy_attachment" "data_host_cw_agent" {
-  count      = local.clickhouse_self_hosted ? 1 : 0
-  role       = aws_iam_role.data_host[0].name
+  role       = aws_iam_role.data_host.name
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
 
@@ -134,15 +131,13 @@ data "aws_iam_policy_document" "data_host_ssm_read" {
 }
 
 resource "aws_iam_policy" "data_host_ssm_read" {
-  count  = local.clickhouse_self_hosted ? 1 : 0
   name   = "${local.name}-data-host-ssm-read"
   policy = data.aws_iam_policy_document.data_host_ssm_read.json
 }
 
 resource "aws_iam_role_policy_attachment" "data_host_ssm_read" {
-  count      = local.clickhouse_self_hosted ? 1 : 0
-  role       = aws_iam_role.data_host[0].name
-  policy_arn = aws_iam_policy.data_host_ssm_read[0].arn
+  role       = aws_iam_role.data_host.name
+  policy_arn = aws_iam_policy.data_host_ssm_read.arn
 }
 
 # Push ClickHouse snapshots to the backups bucket.
@@ -157,19 +152,16 @@ data "aws_iam_policy_document" "data_host_backups" {
 }
 
 resource "aws_iam_policy" "data_host_backups" {
-  count  = local.clickhouse_self_hosted ? 1 : 0
   name   = "${local.name}-data-host-backups"
   policy = data.aws_iam_policy_document.data_host_backups.json
 }
 
 resource "aws_iam_role_policy_attachment" "data_host_backups" {
-  count      = local.clickhouse_self_hosted ? 1 : 0
-  role       = aws_iam_role.data_host[0].name
-  policy_arn = aws_iam_policy.data_host_backups[0].arn
+  role       = aws_iam_role.data_host.name
+  policy_arn = aws_iam_policy.data_host_backups.arn
 }
 
 resource "aws_iam_instance_profile" "data_host" {
-  count = local.clickhouse_self_hosted ? 1 : 0
-  name  = "${local.name}-data-host"
-  role  = aws_iam_role.data_host[0].name
+  name = "${local.name}-data-host"
+  role = aws_iam_role.data_host.name
 }

@@ -1,4 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Harness adapter protocol, context, and registry."""
@@ -179,6 +181,8 @@ def generate_agent_config(
     hook_listings: dict | None = None,
     prompt_listings: dict | None = None,
     sandbox_listings: dict | None = None,
+    component_aliases: dict[str, str] | None = None,
+    skill_folder_names: dict | None = None,
 ) -> dict:
     """Generate harness-specific config for an agent.
 
@@ -187,6 +191,7 @@ def generate_agent_config(
     """
     ensure_loaded()
     from services.harness.helpers import (
+        _build_delegation_mcp_entry,
         _build_hook_configs,
         _build_mcp_configs,
         _build_rules_content,
@@ -204,13 +209,22 @@ def generate_agent_config(
     options = options or {}
     safe_name = _sanitize_name(options.get("local_name") or registry_item_slug(agent))
     mcp_configs = _build_mcp_configs(
-        agent, harness, observal_url, mcp_listings=mcp_listings, env_values=env_values, header_values=header_values
+        agent,
+        harness,
+        observal_url,
+        mcp_listings=mcp_listings,
+        env_values=env_values,
+        header_values=header_values,
+        component_aliases=component_aliases,
     )
 
     if sandbox_listings:
         sandbox_mcp = _build_sandbox_mcp_entry(sandbox_listings, harness)
         if sandbox_mcp:
             mcp_configs.update(sandbox_mcp)
+
+    if options.get("_delegation"):
+        mcp_configs.update(_build_delegation_mcp_entry(harness))
 
     # Harnesses with first-class prompt files keep the agent body to a name list.
     emit_prompt_files = adapter.emits_prompt_files()
@@ -220,7 +234,7 @@ def generate_agent_config(
         None if emit_prompt_files else prompt_listings,
         sandbox_listings,
     )
-    skill_configs = _build_skill_configs(agent, skill_listings)
+    skill_configs = _build_skill_configs(agent, skill_listings, folder_names=skill_folder_names)
     hook_configs = _build_hook_configs(agent, hook_listings)
     compatibility_warnings = _check_harness_compatibility(agent, harness)
 

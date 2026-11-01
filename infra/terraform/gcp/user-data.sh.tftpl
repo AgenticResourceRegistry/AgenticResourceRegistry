@@ -28,6 +28,18 @@ curl -fsSL "https://github.com/docker/compose/releases/download/$${DOCKER_COMPOS
   -o /usr/libexec/docker/cli-plugins/docker-compose
 chmod +x /usr/libexec/docker/cli-plugins/docker-compose
 
+# Write ClickHouse config
+mkdir -p "$${DATA_DIR}/clickhouse-config"
+cat > "$${DATA_DIR}/clickhouse-config/telemetry.xml" <<'CHTELEMETRY'
+<clickhouse>
+    <send_crash_reports>
+        <enabled>false</enabled>
+        <send_logical_errors>false</send_logical_errors>
+    </send_crash_reports>
+    <remote_url_allow_hosts></remote_url_allow_hosts>
+</clickhouse>
+CHTELEMETRY
+
 # Write docker-compose for the data stack
 cat > "$${DATA_DIR}/docker-compose.yml" <<'COMPOSE'
 services:
@@ -43,6 +55,7 @@ services:
       MAX_SERVER_MEMORY_USAGE_RATIO: "0.7"
     volumes:
       - /data/clickhouse:/var/lib/clickhouse
+      - /data/clickhouse-config:/etc/clickhouse-server/config.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --password ${clickhouse_password} --query 'SELECT 1'"]
       interval: 10s

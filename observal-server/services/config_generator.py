@@ -115,7 +115,11 @@ def _build_mcp_context(
     name = _sanitize_name(local_name or registry_item_slug(listing))
     server_env = _build_server_env(listing, env_values)
     transport = (listing.transport or "").lower()
-    url = listing.url if listing.url and transport in ("sse", "streamable-http", "") else None
+    if transport == "http":  # Legacy listings accepted before submit normalized the alias.
+        transport = "streamable-http"
+    if listing.url and transport not in ("sse", "streamable-http", ""):
+        raise ValueError(f"Unsupported remote MCP transport: {transport!r}")
+    url = listing.url if listing.url and transport != "stdio" else None
     run_cmd = (
         []
         if url
@@ -139,6 +143,32 @@ def _build_mcp_context(
         url=url,
         auto_approve=list(listing.auto_approve or []),
     )
+
+
+def versioned_mcp_listing(listing: McpListing, version: object):
+    """Expose a selected MCP version to the existing harness config generator."""
+
+    class SelectedListing:
+        def __getattr__(self, field: str):
+            if field == "latest_version":
+                return version
+            if field in {
+                "version",
+                "command",
+                "args",
+                "url",
+                "transport",
+                "framework",
+                "docker_image",
+                "environment_variables",
+                "headers",
+                "auto_approve",
+                "setup_instructions",
+            }:
+                return getattr(version, field)
+            return getattr(listing, field)
+
+    return SelectedListing()
 
 
 def generate_config(

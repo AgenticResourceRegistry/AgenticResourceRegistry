@@ -12,11 +12,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "rounded-[11px] bg-primary text-primary-foreground shadow hover:opacity-85",
-        destructive: "rounded-[9px] bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
-        outline: "rounded-[9px] border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
-        secondary: "rounded-[9px] bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
-        ghost: "rounded-[9px] hover:bg-surface-raised hover:text-foreground text-foreground/65",
+        default: "rounded-[var(--radius-control)] bg-primary text-primary-foreground shadow hover:opacity-85",
+        destructive: "rounded-[var(--radius-control-compact)] bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline: "rounded-[var(--radius-control-compact)] border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary: "rounded-[var(--radius-control-compact)] bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "rounded-[var(--radius-control-compact)] hover:bg-surface-raised hover:text-foreground text-foreground/65",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

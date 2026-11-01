@@ -5,8 +5,20 @@
 
 """Kiro JSONL session parser.
 
-Handles the Kiro CLI transcript format where each line has:
+Handles two transcript formats.
+
+The CLI writes flat lines keyed by ``kind``:
   { "version": "v1", "kind": "Prompt"|"AssistantMessage"|"ToolResults", "data": {...} }
+
+The IDE writes enveloped records keyed by ``payload.type``:
+  { "id": ..., "timestamp": ..., "payload": {"type": "user"|"assistant"|..., ...} }
+
+Both are normalised to the same ``hook_*`` events, because that is the
+vocabulary the trace viewer renders. The event names produced by
+``ingest_classify`` (assistant_text, thinking, ...) are a separate vocabulary
+used for ClickHouse event_type and counting; a session that reaches the UI
+carrying those names has fallen through to ``basic_event`` and will render
+blank, since the viewer reads content from ``attributes`` and never ``body``.
 
 Key differences from the Claude Code format:
 - Top-level discriminator is ``kind`` (not ``type``)
@@ -42,6 +54,12 @@ def parse_rows(rows: list[dict]) -> list[dict]:
     events: list[dict] = []
     # Maps toolUseId -> index in events list for merge-on-result
     tool_use_index: dict[str, int] = {}
+    latest_model = ""
+
+    # A sub-execution's prompt is supplied by the client rather than read from
+    # the transcript, so it arrives appended and would otherwise sort after the
+    # reply it prompted. Rows are ordered by line_offset, so hoist it here.
+    rows = sorted(rows, key=_sub_execution_prompt_first)
 
     for row in rows:
         raw_line = row.get("raw_line", "")
@@ -56,6 +74,19 @@ def parse_rows(rows: list[dict]) -> list[dict]:
         line = load_line(raw_line)
         if line is None:
             events.append(basic_event(row))
+            continue
+
+        payload = line.get("payload")
+        if isinstance(payload, dict):
+            if payload.get("type") == "assistant":
+                latest_model = extract_usage(line)["model"] or latest_model
+            _handle_ide_payload(
+                payload,
+                pick_timestamp(line.get("timestamp"), row_ts, ingested_at),
+                harness,
+                events,
+                tool_use_index,
+            )
             continue
 
         kind = line.get("kind", "")
@@ -76,18 +107,22 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             row_credits = row.get("credits") or data.get("credits")
             credits = _as_credits(row_credits)
             if row_credits and credits is not None:
+                attributes = {"credits": str(row_credits)}
+                if latest_model:
+                    attributes["model"] = latest_model
                 events.append(
                     {
                         "timestamp": ts,
                         "event_name": "kiro_credits",
                         "body": f"{credits:.4f} credits",
-                        "attributes": {"credits": str(row_credits), "model": "Kiro Auto"},
+                        "attributes": attributes,
                         "service_name": harness,
                     }
                 )
         elif kind == "Prompt":
             _handle_prompt(data, ts, harness, events)
         elif kind == "AssistantMessage":
+            latest_model = extract_usage(line)["model"] or latest_model
             _handle_assistant_message(data, ts, harness, events, tool_use_index)
         elif kind == "ToolResults":
             _handle_tool_results(data, ts, harness, events, tool_use_index)
@@ -95,6 +130,174 @@ def parse_rows(rows: list[dict]) -> list[dict]:
             events.append(basic_event(row))
 
     return events
+
+
+# ---------------------------------------------------------------------------
+# IDE format
+# ---------------------------------------------------------------------------
+
+
+def _sub_execution_prompt_first(row: dict) -> int:
+    """Sort key placing an injected sub-execution prompt before the reply."""
+    raw = row.get("raw_line", "")
+    if not raw or "_observalSubExecutionPrompt" not in raw:
+        return 1
+    line = load_line(raw)
+    payload = line.get("payload") if isinstance(line, dict) else None
+    if isinstance(payload, dict) and payload.get("_observalSubExecutionPrompt"):
+        return 0
+    return 1
+
+
+# Payload types that carry no content the trace viewer can render. The ingest
+# classifier stores them as "meta" so nothing is lost from the counts; emitting
+# them here would only produce blank rows.
+_IDE_SKIPPED_TYPES = frozenset(
+    {
+        "session_start",
+        "session_event",
+        "session_metadata",
+        "turn_start",
+        "turn_end",
+        "pending_interaction",
+        "interaction_resolved",
+        "ContextualHookInvoked",
+        "sub_agent_start",
+        "sub_agent_complete",
+        # Per-turn credit amounts. The session total is already written once as
+        # a synthetic kiro_credits row (see extra_rows), and that total is the
+        # sum of exactly these payloads - rendering both shows the same spend
+        # twice.
+        "usage_summary",
+    }
+)
+
+
+def _is_elided_reasoning(text: str) -> bool:
+    """Return True when a Reasoning payload carries no readable trace.
+
+    Kiro does not persist reasoning text. Every Reasoning payload observed
+    holds the literal placeholder "..." while the real trace stays sealed in
+    ``reasoningSignature``, so rendering them produces a run of "Thinking ..."
+    rows with nothing inside. The Kiro CLI transcript has no reasoning records
+    at all, so skipping these also keeps the two layouts consistent.
+
+    Written as a content check rather than a blanket skip so that a future Kiro
+    that does persist reasoning renders it without needing a code change.
+    """
+    return not text.strip(". \u2026\t\n\r")
+
+
+def _handle_ide_payload(
+    payload: dict,
+    ts: str,
+    harness: str,
+    events: list[dict],
+    tool_use_index: dict[str, int],
+) -> None:
+    """Expand one IDE payload into the hook_* events the viewer renders."""
+    ptype = str_field(payload, "type")
+
+    if ptype == "user":
+        text = str_field(payload, "content")
+        if text.strip():
+            events.append(
+                {
+                    "timestamp": ts,
+                    "event_name": "hook_userpromptsubmit",
+                    "body": text[:100],
+                    "attributes": {"tool_input": text},
+                    "service_name": harness,
+                }
+            )
+        return
+
+    if ptype == "assistant":
+        text = str_field(payload, "content")
+        if not text.strip():
+            return
+        # Reasoning is the model's internal trace, not user-visible output.
+        if str_field(payload, "operationType") == "Reasoning":
+            if _is_elided_reasoning(text):
+                return
+            events.append(
+                {
+                    "timestamp": ts,
+                    "event_name": "hook_assistant_thinking",
+                    "body": text[:100],
+                    "attributes": {"tool_response": text},
+                    "service_name": harness,
+                }
+            )
+            return
+        events.append(
+            {
+                "timestamp": ts,
+                "event_name": "hook_assistant_response",
+                "body": text[:100],
+                "attributes": {"tool_response": text},
+                "service_name": harness,
+            }
+        )
+        return
+
+    if ptype == "tool_call":
+        tool_name = str_field(payload, "toolName")
+        tool_call_id = str_field(payload, "toolCallId")
+        args = dict_field(payload, "args")
+        attributes = {
+            "tool_name": tool_name,
+            "tool_input": json.dumps(args),
+            "tool_use_id": tool_call_id,
+        }
+        title = str_field(payload, "title")
+        if title:
+            attributes["tool_title"] = title
+        tool_use_index[tool_call_id] = len(events)
+        events.append(
+            {
+                "timestamp": ts,
+                "event_name": "hook_posttooluse",
+                "body": tool_name,
+                "attributes": attributes,
+                "service_name": harness,
+            }
+        )
+        return
+
+    if ptype == "tool_result":
+        # Merge back into the tool_call this result belongs to, matching how the
+        # CLI parser merges ToolResults, so the viewer shows one tool event with
+        # both its input and its output.
+        tool_call_id = str_field(payload, "toolCallId")
+        index = tool_use_index.get(tool_call_id)
+        if index is None:
+            return  # orphan result -- the call was never seen
+        attributes = events[index]["attributes"]
+        attributes["tool_response"] = str_field(payload, "content")
+        duration = payload.get("durationMs")
+        if isinstance(duration, int | float):
+            attributes["duration_ms"] = str(int(duration))
+        if payload.get("success") is False:
+            attributes["tool_status"] = "error"
+            attributes["success"] = "false"
+        else:
+            attributes["success"] = "true"
+        return
+
+    if ptype in _IDE_SKIPPED_TYPES:
+        return
+
+    # Unknown payload -- surface it rather than dropping it silently.
+    events.append(
+        {
+            "timestamp": ts,
+            "event_name": "system",
+            "body": ptype,
+            "attributes": {"payload_type": ptype},
+            "service_name": harness,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +463,40 @@ def _extract_result_text(result_content: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Write-path helpers - called by session_ingest's harness dispatch
+# ---------------------------------------------------------------------------
+
+
+def extract_usage(parsed: dict) -> dict:
+    """Extract Kiro's model from CLI assistant blocks (no token counts in JSONL).
+
+    The Claude Code usage extractor reads ``message.model``; Kiro's CLI puts
+    ``modelId`` inside each content block's ``data`` instead. IDE records may
+    carry a model on the payload, but must never be interpreted as Claude rows.
+    """
+    model = ""
+    if parsed.get("kind") == "AssistantMessage":
+        data = dict_field(parsed, "data")
+        for item in list_field(data, "content"):
+            if not isinstance(item, dict):
+                continue
+            block = item.get("data")
+            if isinstance(block, dict):
+                model = str_field(block, "modelId") or model
+    else:
+        payload = parsed.get("payload")
+        if isinstance(payload, dict) and payload.get("type") == "assistant":
+            model = str_field(payload, "modelId")
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "model": model,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Write-path extras - called by ingest_classify.get_extra_rows()
 # ---------------------------------------------------------------------------
 
@@ -301,7 +538,7 @@ def extra_ingest_rows(
             "tool_id": None,
             "content_preview": f"{total_credits:.6f} credits",
             "content_length": 0,
-            "raw_line": json.dumps({"kind": "KiroCredits", "credits": total_credits, "model": "Kiro Auto"}),
+            "raw_line": json.dumps({"kind": "KiroCredits", "credits": total_credits}),
             "credits": total_credits,
         }
     ]

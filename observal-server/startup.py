@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from sqlalchemy import delete, select
@@ -18,6 +20,7 @@ from services.audit.event_handlers import shutdown_audit as shutdown_audit_handl
 from services.cache import close_cache, init_cache
 from services.clickhouse import init_clickhouse
 from services.crypto import init_key_manager
+from services.migration_uploads import configure_migration_upload_tempdir
 from services.redis import close as close_redis
 
 
@@ -53,6 +56,11 @@ async def run_startup_tasks() -> None:
 
     ds.load_external_settings()
     await ds.load_sync_cache()
+    artifact_root = os.environ.get("MIGRATION_ARTIFACT_ROOT") or ds.get_sync(
+        "migration.artifact_root",
+        str(Path.home() / ".observal" / "migration_artifacts"),
+    )
+    configure_migration_upload_tempdir(artifact_root)
     await ds.import_sso_env_once()
     await ds.reencrypt_on_key_rotation()
 
@@ -98,14 +106,67 @@ async def run_startup_tasks() -> None:
 
     configure_insights()
 
+    await start_discovery()
+
     # A successful startup applies all restart-required settings.
     async with session_factory() as db:
         await db.execute(delete(EnterpriseConfig).where(EnterpriseConfig.key == RESTART_PENDING_KEY))
         await db.commit()
 
 
+async def start_discovery() -> None:
+    """Install the reprojection hook and backfill the index if it is empty.
+
+    The backfill runs in the background so a large registry never delays
+    startup; the maintenance cron covers anything that fails here.
+    """
+    import asyncio
+
+    from sqlalchemy import func
+
+    from database import async_session as session_factory
+    from models.discovery_entry import DiscoveryEntry
+    from services.discovery import hooks as discovery_hooks
+    from services.discovery.projection import reproject_all
+
+    discovery_hooks.install()
+
+    async with session_factory() as db:
+        count = (await db.execute(select(func.count()).select_from(DiscoveryEntry))).scalar_one()
+    if count:
+        return
+
+    async def _backfill() -> None:
+        try:
+            async with session_factory() as db:
+                await reproject_all(db)
+        except Exception:
+            from loguru import logger as optic
+
+            optic.exception("discovery backfill failed")
+
+    task = asyncio.get_running_loop().create_task(_backfill())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+_background_tasks: set = set()
+
+
 async def run_shutdown_tasks() -> None:
     """Release application dependencies used by the FastAPI lifespan."""
+    import asyncio
+
+    from services.discovery import hooks as discovery_hooks
+
+    await discovery_hooks.drain()
+    if _background_tasks:
+        # Give the initial backfill a bounded chance to commit; never hang shutdown on it.
+        _done, pending = await asyncio.wait(list(_background_tasks), timeout=10)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
     await shutdown_audit()
     await shutdown_audit_handlers()
 

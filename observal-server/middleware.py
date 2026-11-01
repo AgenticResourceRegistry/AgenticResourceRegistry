@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -25,6 +26,19 @@ from services.audit import AUDIT_ENABLED
 
 DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:3000"
 DEFAULT_MAX_REQUEST_SIZE_MB = "10"
+DEFAULT_MAX_SKILL_REQUEST_SIZE_MB = "10"
+DEFAULT_MAX_MIGRATION_REQUEST_SIZE_MB = "6144"
+# A snapshot contains at most 5 MiB of file content, plus bounded pins and drift.
+# Do not inherit MAX_REQUEST_SIZE_MB: operators may raise that for other routes.
+MAX_LAYER_SNAPSHOT_REQUEST_BYTES = 10 * 1024 * 1024
+LAYER_SNAPSHOT_UPLOAD_PATH = "/api/v1/layer-snapshots"
+SKILL_AUTHORING_PATHS = frozenset({"/api/v1/skills/submit", "/api/v1/skills/draft", "/api/v1/skills/folder-drafts"})
+MIGRATION_UPLOAD_PATHS = frozenset(
+    {
+        "/api/v1/admin/migrate/import",
+        "/api/v1/admin/migrate/validate",
+    }
+)
 CLI_VERSION_EXEMPT_PATHS = {
     "/api/v1/config/version",
     "/api/v1/config/public",
@@ -50,12 +64,26 @@ CLI_USER_AGENT_PREFIXES = (
 )
 
 
-class RequestSizeLimitMiddleware:
-    """Reject requests whose Content-Length exceeds the configured limit."""
+class RequestBodyTooLargeError(Exception):
+    """Raised while streaming an ASGI request body beyond its route limit."""
 
-    def __init__(self, app, max_request_size_bytes: int):
+
+class RequestSizeLimitMiddleware:
+    """Reject declared or streamed request bodies that exceed route limits."""
+
+    def __init__(
+        self,
+        app,
+        max_request_size_bytes: int,
+        max_migration_request_size_bytes: int,
+        max_skill_request_size_bytes: int | None = None,
+        max_layer_snapshot_request_size_bytes: int = MAX_LAYER_SNAPSHOT_REQUEST_BYTES,
+    ):
         self.app = app
         self.max_request_size_bytes = max_request_size_bytes
+        self.max_migration_request_size_bytes = max_migration_request_size_bytes
+        self.max_skill_request_size_bytes = max_skill_request_size_bytes or max_request_size_bytes
+        self.max_layer_snapshot_request_size_bytes = max_layer_snapshot_request_size_bytes
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -63,11 +91,51 @@ class RequestSizeLimitMiddleware:
             return
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length")
-        if content_length and int(content_length) > self.max_request_size_bytes:
+        request_path = (scope.get("path") or "/").rstrip("/") or "/"
+        request_limit = (
+            self.max_migration_request_size_bytes
+            if request_path in MIGRATION_UPLOAD_PATHS
+            else self.max_layer_snapshot_request_size_bytes
+            if request_path == LAYER_SNAPSHOT_UPLOAD_PATH and scope.get("method") == "POST"
+            else self.max_skill_request_size_bytes
+            if request_path in SKILL_AUTHORING_PATHS
+            or (request_path.startswith("/api/v1/skills/") and request_path.endswith("/draft"))
+            or (request_path.startswith("/api/v1/skills/") and request_path.endswith("/versions"))
+            or (
+                request_path.startswith("/api/v1/skills/")
+                and "/versions/" in request_path
+                and request_path.endswith("/files")
+            )
+            else self.max_request_size_bytes
+        )
+        if content_length:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                response = JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+                await response(scope, receive, send)
+                return
+            if declared_length > request_limit:
+                response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
+                await response(scope, receive, send)
+                return
+
+        bytes_received = 0
+
+        async def receive_with_limit():
+            nonlocal bytes_received
+            message = await receive()
+            if message["type"] == "http.request":
+                bytes_received += len(message.get("body", b""))
+                if bytes_received > request_limit:
+                    raise RequestBodyTooLargeError
+            return message
+
+        try:
+            await self.app(scope, receive_with_limit, send)
+        except RequestBodyTooLargeError:
             response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
             await response(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
 
 
 class SecurityHeadersMiddleware:
@@ -108,11 +176,12 @@ class CacheControlMiddleware:
                 headers = dict(message.get("headers", []))
                 cache_header = headers.get(b"x-fastapi-cache", b"").decode()
                 if cache_header == "HIT" or (scope["method"] == "GET" and cache_header == "MISS"):
-                    extra = [
-                        (b"cache-control", f"public, max-age={ds.get_sync_int('data.cache_ttl_default', 30)}".encode())
+                    msg_headers = [
+                        (key, value) for key, value in message.get("headers", []) if key.lower() != b"cache-control"
                     ]
-                    msg_headers = list(message.get("headers", []))
-                    msg_headers.extend(extra)
+                    msg_headers.append(
+                        (b"cache-control", f"private, max-age={ds.get_sync_int('data.cache_ttl_default', 30)}".encode())
+                    )
                     message = {**message, "headers": msg_headers}
             await send(message)
 
@@ -126,6 +195,10 @@ def get_cors_allowed_origins() -> list[str]:
 
 def get_max_request_size_bytes() -> int:
     return int(os.environ.get("MAX_REQUEST_SIZE_MB", DEFAULT_MAX_REQUEST_SIZE_MB)) * 1024 * 1024
+
+
+def get_max_migration_request_size_bytes() -> int:
+    return int(os.environ.get("MAX_MIGRATION_REQUEST_SIZE_MB", DEFAULT_MAX_MIGRATION_REQUEST_SIZE_MB)) * 1024 * 1024
 
 
 def build_security_headers(cors_allowed_origins: list[str]) -> list[tuple[bytes, bytes]]:
@@ -203,14 +276,24 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
         except InvalidVersion:
             pass
 
-    install_command = f"observal self {direction} --version {server_ver}"
+    try:
+        unpublished = Version(server_ver).is_devrelease
+    except InvalidVersion:
+        unpublished = False
+    if unpublished:
+        # Development builds are not on PyPI; they are built from main.
+        install_command = (
+            'uv tool install --force "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"'
+        )
+    else:
+        install_command = f"observal self {direction} --version {server_ver}"
+    guidance = f"Run: {install_command}"
+
     shown_cli_version = cli_ver_str or "unknown"
     return JSONResponse(
         status_code=426,
         content={
-            "detail": (
-                f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. Run: {install_command}"
-            ),
+            "detail": f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. {guidance}",
             "server_version": server_ver,
             "cli_version": cli_ver_str,
             "install_command": install_command,
@@ -274,7 +357,14 @@ def configure_middleware(app: FastAPI) -> None:
         allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
     )
 
-    app.add_middleware(RequestSizeLimitMiddleware, max_request_size_bytes=get_max_request_size_bytes())
+    app.add_middleware(
+        RequestSizeLimitMiddleware,
+        max_request_size_bytes=get_max_request_size_bytes(),
+        max_skill_request_size_bytes=int(os.environ.get("MAX_SKILL_REQUEST_SIZE_MB", DEFAULT_MAX_SKILL_REQUEST_SIZE_MB))
+        * 1024
+        * 1024,
+        max_migration_request_size_bytes=get_max_migration_request_size_bytes(),
+    )
     app.add_middleware(SecurityHeadersMiddleware, security_headers=build_security_headers(cors_allowed_origins))
     app.add_middleware(ContentTypeMiddleware)
     app.add_middleware(RequestIDMiddleware)

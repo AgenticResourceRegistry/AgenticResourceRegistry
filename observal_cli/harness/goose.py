@@ -24,6 +24,9 @@ from typing import Any
 
 import yaml
 
+from observal_cli.discovery.adapter_support import RichAdapterScanner
+from observal_cli.discovery.models import AdapterDiscoveryResult, DiagnosticCode, DiscoveryScope
+from observal_cli.discovery.redact import redact_text, redact_value
 from observal_cli.harness import (
     DiscoveredAgent,
     DiscoveredHook,
@@ -179,6 +182,106 @@ class GooseAdapter(BaseAdapter):
             hooks=self._scan_plugins(agents_root / "plugins", "goose:project"),
             agents=self._scan_agents(agents_root / "agents", "goose:project"),
         )
+
+    def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        home = home or Path.home()
+        config_dir = resolve_goose_config_dir(home)
+        agents_root = resolve_goose_agents_home(home)
+        config_scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.USER,
+            root=config_dir,
+            home=home,
+        )
+        self._discover_goose_config(config_scanner, config_dir / "config.yaml", "goose:global")
+        result = config_scanner.finish()
+        agents_scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.USER,
+            root=agents_root,
+            home=home,
+        )
+        self._discover_goose_components(agents_scanner, agents_root, "goose:global")
+        extra = agents_scanner.finish()
+        result.evidence.extend(extra.evidence)
+        result.diagnostics.extend(extra.diagnostics)
+        return result
+
+    def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
+        root = project_dir / ".agents"
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=DiscoveryScope.PROJECT,
+            root=root,
+            project_dir=project_dir,
+        )
+        self._discover_goose_components(scanner, root, "goose:project")
+        return scanner.finish()
+
+    def _discover_goose_config(self, scanner: RichAdapterScanner, config_path: Path, source: str) -> None:
+        content = scanner.walker.read_text(config_path)
+        if content is None:
+            return
+        try:
+            data = yaml.safe_load(content) or {}
+        except yaml.YAMLError:
+            scanner.diagnostic(DiagnosticCode.METADATA_MALFORMED, config_path, "malformed YAML discovery metadata")
+            return
+        extensions = data.get("extensions", {}) if isinstance(data, dict) else {}
+        servers: dict[str, dict[str, Any]] = {}
+        if isinstance(extensions, dict):
+            for raw_name, entry in extensions.items():
+                if not isinstance(entry, dict):
+                    continue
+                entry_type = str(entry.get("type") or "")
+                if entry_type not in _COMMAND_TYPES | _REMOTE_TYPES:
+                    continue
+                name = str(entry.get("name") or raw_name)
+                server: dict[str, Any] = {
+                    "command": entry.get("cmd") or entry.get("command"),
+                    "args": entry.get("args") or [],
+                    "url": entry.get("uri") or entry.get("url"),
+                }
+                if entry_type in _REMOTE_TYPES:
+                    server["transport"] = entry_type.replace("_", "-")
+                servers[name] = server
+        scanner.add_mcps(servers, config_path, source=source, description_prefix="Goose extension")
+
+    def _discover_goose_components(self, scanner: RichAdapterScanner, root: Path, source: str) -> None:
+        scanner.add_skills(root / "skills", source=source, prefix="Goose skill")
+        scanner.add_markdown_agents(root / "agents", source_prefix="Goose agent")
+        for hooks_path in scanner.walker.files(root / "plugins", name="hooks.json"):
+            if hooks_path.parent.name != "hooks":
+                continue
+            data = scanner.read_json(hooks_path)
+            declared = data.get("hooks", {}) if data is not None else {}
+            if not isinstance(declared, dict):
+                continue
+            plugin_name = redact_text(hooks_path.parent.parent.name)
+            for event, rules in declared.items():
+                if not isinstance(rules, list):
+                    continue
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        continue
+                    handlers = rule.get("hooks", [])
+                    if not isinstance(handlers, list):
+                        continue
+                    for handler in handlers:
+                        safe_handler = redact_value(handler)
+                        if not isinstance(safe_handler, dict):
+                            continue
+                        scanner.add_component(
+                            DiscoveredHook(
+                                name=plugin_name,
+                                event=redact_text(str(event)),
+                                handler_type=redact_text(str(safe_handler.get("type", "command"))),
+                                handler_config=safe_handler,
+                                description=f"Goose plugin hook: {plugin_name} ({redact_text(str(event))})",
+                                source=source,
+                            ),
+                            hooks_path,
+                        )
 
     def extract_mcp_servers(self, config: dict) -> dict:
         """Return goose's ``extensions`` map, which is its MCP server registry."""

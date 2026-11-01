@@ -1,12 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal server"
+---
 
-# `observal server`
+Manage local Agentic Resource Registry deployments. The lifecycle commands operate the embedded PostgreSQL, ClickHouse, Redis, and API processes. Upgrade, rollback, and version commands operate a local Docker Compose deployment.
 
-Manage local Observal deployments. The lifecycle commands operate the embedded PostgreSQL, ClickHouse, Redis, and API processes. Upgrade, rollback, and version commands operate a local Docker Compose deployment.
-
-Local filesystem, process, Docker, and database access are the authorization boundary. These commands do not require a reachable Observal API or an API role.
+Local filesystem, process, Docker, and database access are the authorization boundary. These commands do not require a reachable Agentic Resource Registry API or an API role.
 
 ## Command summary
 
@@ -46,7 +46,7 @@ observal server restart --background --output json
 observal server stop --output json
 ```
 
-`start` accepts `--port/-p` and `--host`. When the default API port is occupied, it tries the documented local fallback ports and reports the selected port. An explicitly selected occupied port is a conflict.
+`start` accepts `--port/-p` and `--host`. When the default API port is occupied, it tries the documented local fallback ports and reports the selected port. An explicitly selected occupied port is a conflict. Background start and restart verify all four final service states before returning success; stop verifies that none remains running. Their JSON results include the verified `services` list, and an unverified transition exits with code 9 plus observed state in `error.result`.
 
 Startup performs these steps in order:
 
@@ -143,7 +143,7 @@ observal server rollback \
 
 Rollback accepts only backup directories under the managed backup root. It restores PostgreSQL, atomically restores the image version, recreates containers, and checks health.
 
-**ClickHouse telemetry is not restored by this command.** JSON and human results state `clickhouse_restored: false`. Use [`observal server migrate`](migrate.md) for ClickHouse export and import.
+**ClickHouse telemetry is not restored by this command.** JSON and human results state `clickhouse_restored: false`. Use [`observal server migrate`](/cli/migrate) for ClickHouse export and import.
 
 ## Docker versions
 
@@ -168,7 +168,7 @@ All finite commands accept `--output table|json`. JSON success writes one docume
 
 ## Related
 
-* [Database migration](migrate.md)
-* [Self-hosted upgrades](../self-hosting/upgrades.md)
-* [Backup and restore](../self-hosting/backup-and-restore.md)
-* [`observal self`](self.md), for CLI binary versions
+* [Database migration](/cli/migrate)
+* [Self-hosted upgrades](/self-hosting/upgrades)
+* [Backup and restore](/self-hosting/backup-and-restore)
+* [`observal self`](/cli/self), for CLI binary versions

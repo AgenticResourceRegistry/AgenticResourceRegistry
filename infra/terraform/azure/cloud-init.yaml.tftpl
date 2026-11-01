@@ -1,5 +1,5 @@
 #cloud-config
-# SPDX-FileCopyrightText: 2026 Tanvi Reddy
+# SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 package_update: true
 package_upgrade: true
@@ -9,6 +9,15 @@ packages:
   - docker-compose-v2
 
 write_files:
+  - path: /opt/observal/clickhouse/config.d/telemetry.xml
+    content: |
+      <clickhouse>
+          <send_crash_reports>
+              <enabled>false</enabled>
+              <send_logical_errors>false</send_logical_errors>
+          </send_crash_reports>
+          <remote_url_allow_hosts></remote_url_allow_hosts>
+      </clickhouse>
   - path: /opt/observal/docker-compose.yml
     content: |
       services:
@@ -25,6 +34,7 @@ write_files:
             MAX_SERVER_MEMORY_USAGE_RATIO: "0.8"
           volumes:
             - /data/clickhouse:/var/lib/clickhouse
+            - /opt/observal/clickhouse/config.d:/etc/clickhouse-server/config.d:ro
           deploy:
             resources:
               limits:

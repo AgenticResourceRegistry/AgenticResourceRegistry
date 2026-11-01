@@ -5,7 +5,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,7 +100,8 @@ async def update_retention_config(
 
 @router.get("/retention/preview")
 async def preview_retention(
-    days: int,
+    # The score cutoff is now minus 2 * days; a huge value lands before year 1 and raises OverflowError.
+    days: int = Query(le=36_500),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.super_admin)),
 ):

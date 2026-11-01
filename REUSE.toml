@@ -11,6 +11,11 @@ SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = "docs/img/enterprise-architecture.png"
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "grafana/dashboards/agent-activity.json"
 SPDX-FileCopyrightText = [
   "2026 Apoorv Garg <apoorvgarg.21@gmail.com>",
@@ -105,6 +110,28 @@ SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
 path = "test-agent.json"
 SPDX-FileCopyrightText = "2026 Naraen Rammoorthi <naraen13@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Pi JSONL fixtures must remain valid canonical session records; license them
+# without adding comment lines that would break parsing.
+[[annotations]]
+path = ["tests/fixtures/component_insights/pi/adapter4_proxy_session.jsonl", "tests/fixtures/component_insights/pi/direct_session.jsonl", "tests/fixtures/component_insights/pi/proxy_session.jsonl", "tests/fixtures/component_insights/pi/skill_session_model_read.jsonl", "tests/fixtures/component_insights/pi/skill_session_slash_command.jsonl"]
+SPDX-FileCopyrightText = "2026 Naraen Rammoorthi"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["tests/fixtures/component_insights/pi/hook_session_print.jsonl", "tests/fixtures/component_insights/pi/hook_session_print.hooks.json", "tests/fixtures/component_insights/pi/adapter4_direct_session.jsonl"]
+SPDX-FileCopyrightText = "2026 Observal Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["tests/fixtures/component_insights/claude_code/skill_session_model_read.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_slash_command.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_slash_args.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_literal_text.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_project_skill.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_unknown_skill.jsonl", "tests/fixtures/component_insights/claude_code/hook_session_settings_outcomes.jsonl", "tests/fixtures/component_insights/claude_code/hook_session_silent_success.jsonl", "tests/fixtures/component_insights/claude_code/hook_session_agent_interactive.jsonl", "tests/fixtures/component_insights/claude_code/hook_session_agent_headless.jsonl", "tests/fixtures/component_insights/claude_code/gate_session_headless_agent.jsonl", "tests/fixtures/component_insights/claude_code/gate_session_headless_other_agent.jsonl", "tests/fixtures/component_insights/claude_code/gate_session_headless_plain.jsonl", "tests/fixtures/component_insights/claude_code/gate_session_headless_subagent_main.jsonl", "tests/fixtures/component_insights/claude_code/gate_session_headless_subagent.jsonl", "tests/fixtures/component_insights/claude_code/hook_inputs/*.json"]
+SPDX-FileCopyrightText = "2026 Observal Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["tests/fixtures/component_insights/claude_code/hook_session_standalone_output_2_1_310.jsonl", "tests/fixtures/component_insights/claude_code/hook_session_standalone_blocked_2_1_310.jsonl", "tests/fixtures/component_insights/claude_code/skill_session_agent_load_2_1_310.jsonl"]
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
@@ -223,6 +250,11 @@ SPDX-License-Identifier = "Apache-2.0"
 
 
 [[annotations]]
+path = "docs/img/fork-workflow/*.png"
+SPDX-FileCopyrightText = "2026 Naraen Rammoorthi <naraen13@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = "docs/img/audit_logging.png"
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
@@ -312,19 +344,6 @@ SPDX-FileCopyrightText = "2026 Observal"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "web/public/favicon.ico"
-SPDX-FileCopyrightText = [
-  "2026 Hari Srinivasan <harisrini21@gmail.com>",
-  "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
-]
-SPDX-License-Identifier = "Apache-2.0"
-
-[[annotations]]
-path = "web/public/icon.png"
-SPDX-FileCopyrightText = "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
-SPDX-License-Identifier = "Apache-2.0"
-
-[[annotations]]
 path = "web/src/routeTree.gen.ts"
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
@@ -349,9 +368,45 @@ path = "docs/pr-screenshots/1732/**"
 SPDX-FileCopyrightText = "2026 Chandhini03 <chandhini06sv@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
+[[annotations]]
+path = "docs/pr-screenshots/review-system/*.png"
+SPDX-FileCopyrightText = "2026 Naraen Rammoorthi <naraen13@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
 # Fuzzing seed corpora are raw fuzzer inputs and cannot carry comment headers.
 [[annotations]]
 path = "fuzz/corpus/**"
 SPDX-FileCopyrightText = "2026 RAWx18 <rawx18.dev@gmail.com>"
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+SPDX-License-Identifier = "Apache-2.0"
+
+# Vendored Agentic Resource Discovery specification assets (schemas and the
+# official conformance CLI), copied unmodified from ards-project/ard-spec.
+# Provenance and the pinned commit are recorded in VENDORED.md alongside them.
+[[annotations]]
+path = ["observal-server/vendor/ard/spec/**", "observal-server/vendor/ard/conformance/**", "observal-server/vendor/ard/LICENSE"]
+SPDX-FileCopyrightText = "2026 Agentic Resource Discovery project"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ".github/release-ruleset.json"
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["docs/docs.json", "docs/images/**"]
+SPDX-FileCopyrightText = "2026 Lokesh Selvam <lokeshselvam7025@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+  "docs/logo.png",
+  "docs/images/favicon.png",
+  "docs/images/logo-dark.png",
+  "docs/images/logo-light.png",
+  "web/public/favicon.ico",
+  "web/public/icon.png",
+  "web/public/logo.png",
+]
+SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"

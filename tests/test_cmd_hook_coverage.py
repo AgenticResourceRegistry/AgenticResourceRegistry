@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -646,10 +647,15 @@ def test_install_writes_safe_files_config_and_lock_entry(tmp_path, monkeypatch):
         component_id="hook-123456789",
         version="1.2.3",
         scope="project",
+        version_id=None,
+        digest=None,
+        requested_version=None,
         directory=str(project.resolve()),
         namespace="alice",
         slug="guard",
         local_name="guard",
+        # Not the nested Claude Code hook shape, so the install stays unbound (unverified).
+        hook_binding=None,
     )
 
 
@@ -810,6 +816,7 @@ def test_edit_from_file_and_parse_failures(tmp_path, monkeypatch):
     assert "not found" in missing.output
     assert "not valid JSON" in broken.output
     put.assert_called_once_with("/api/v1/hooks/resolved/draft", valid_updates)
+    # The pending save pushed no revision (nothing changed), so it is not resubmitted.
     post.assert_called_once_with("/api/v1/hooks/resolved/start-edit")
 
 
@@ -1058,3 +1065,51 @@ def test_hook_validation_uses_stable_exit_code(arguments, monkeypatch):
 
     assert result.exit_code == 7
     get.assert_not_called()
+
+
+def test_install_sends_the_requested_version_and_records_what_was_installed(tmp_path, monkeypatch):
+    import observal_cli.lockfile as lockfile
+
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(hook.client, "resolve_registry_reference", Mock(return_value="hook-1"))
+    monkeypatch.setattr(
+        hook.client, "get", Mock(return_value={"id": "hook-1", "name": "Guard", "namespace": "alice", "slug": "guard"})
+    )
+    post = Mock(
+        return_value={"config_snippet": {}, "files": [], "version": "1.0.0", "version_id": "v-1", "digest": "sha256:x"}
+    )
+    monkeypatch.setattr(hook.client, "post", post)
+    monkeypatch.setattr(lockfile, "local_registry_name", Mock(return_value="guard"))
+    upsert = Mock()
+    monkeypatch.setattr(lockfile, "upsert_standalone", upsert)
+
+    result = runner.invoke(
+        app,
+        [
+            "registry",
+            "hook",
+            "install",
+            "guard",
+            "--harness",
+            "claude-code",
+            "--dir",
+            str(project),
+            "--version",
+            "1.0.0",
+        ],
+    )
+    invalid = runner.invoke(
+        app, ["registry", "hook", "install", "guard", "--harness", "claude-code", "--version", "not-a-version"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert post.call_args.args[1]["version"] == "1.0.0"
+    recorded = upsert.call_args.kwargs
+    assert (recorded["version"], recorded["version_id"], recorded["digest"], recorded["requested_version"]) == (
+        "1.0.0",
+        "v-1",
+        "sha256:x",
+        "1.0.0",
+    )
+    assert invalid.exit_code == 7

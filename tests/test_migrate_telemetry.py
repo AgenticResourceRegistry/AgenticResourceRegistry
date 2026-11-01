@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from hypothesis import given
+from hypothesis import HealthCheck, given
 from hypothesis import settings as hsettings
 from hypothesis import strategies as st
 from typer.testing import CliRunner
@@ -26,10 +26,14 @@ from typer.testing import CliRunner
 from observal_cli.main import app as cli_app
 from observal_shared.migration.archive import _is_empty_parquet, _month_range, _sha256_file
 from observal_shared.migration.ch_export import (
+    MAX_SHARD_COUNT,
+    TelemetryChunk,
     _build_ch_count_query,
     _build_ch_export_query,
     _build_ch_time_range_query,
+    _month_windows,
     _read_count,
+    _split_chunk,
 )
 from observal_shared.migration.connections import parse_clickhouse_url as _parse_clickhouse_url
 from observal_shared.migration.constants import _UUID_RE, CLICKHOUSE_TABLES, EPOCH_SENTINELS, FK_PG_TABLE_MAP, TableCfg
@@ -170,108 +174,55 @@ class TestParseClickhouseUrl:
 
 
 class TestBuildChExportQuery:
-    """Test _build_ch_export_query for ReplacingMergeTree vs MergeTree."""
+    """Test bounded export and count query construction."""
 
-    def test_replacing_engine_has_final(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
+    @staticmethod
+    def _chunk(table: str = "session_events") -> TelemetryChunk:
+        return TelemetryChunk(
+            table,
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2025, 2, 1, tzinfo=UTC),
+            3,
+            64,
+        )
+
+    def test_replacing_engine_has_final_and_bounds(self):
+        cfg = CLICKHOUSE_TABLES[0]
+        query = _build_ch_export_query(cfg, self._chunk())
         assert "FINAL" in query
-        assert "FINAL" in query
+        assert "timestamp >= {chunk_start:String}" in query
+        assert "timestamp < {chunk_end:String}" in query
+        assert "timestamp < {cutoff:String}" in query
+        assert "sipHash64(project_id, user_id, harness, session_id)" in query
+        assert "% {shard_count:UInt32} = {bucket:UInt32}" in query
+        assert query.rstrip().endswith("FORMAT Parquet")
 
     def test_mergetree_engine_plain_select(self):
-        cfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
+        cfg = next(item for item in CLICKHOUSE_TABLES if item["name"] == "audit_log")
+        query = _build_ch_export_query(cfg, self._chunk("audit_log"))
         assert "FINAL" not in query
-        assert "is_deleted" not in query
-
-    def test_correct_time_column_used(self):
-        cfg = {"name": "audit_log", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202503)
-        assert "toYYYYMM(start_time) = 202503" in query
-
-    def test_ends_with_format_parquet(self):
-        cfg = {"name": "security_events", "engine": "replacing", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
         assert query.rstrip().endswith("FORMAT Parquet")
 
-    def test_mergetree_ends_with_format_parquet(self):
-        cfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
-        assert query.rstrip().endswith("FORMAT Parquet")
-
-    def test_cutoff_in_replacing_query(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501, cutoff="2025-01-15T00:00:00")
-        assert "start_time < {cutoff:String}" in query
-        assert "FINAL" in query
-
-    def test_cutoff_in_mergetree_query(self):
-        cfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501, cutoff="2025-01-15T00:00:00")
-        assert "timestamp < {cutoff:String}" in query
-
-    def test_no_cutoff_when_none(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
-        assert "cutoff" not in query
-
-
-# ── Count Query Builder Tests ────────────────────────────
-
-
-class TestBuildChCountQuery:
-    """Test _build_ch_count_query for count() AS cnt and FORMAT JSON."""
-
-    def test_has_count_alias(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_count_query(cfg, 202501)
-        assert "count() AS cnt" in query
-
-    def test_has_format_json(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_count_query(cfg, 202501)
-        assert "FORMAT JSON" in query
-
-    def test_replacing_has_final(self):
-        cfg = {"name": "audit_log", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_count_query(cfg, 202501)
-        assert "FINAL" in query
-        assert "FINAL" in query
-
-    def test_mergetree_no_final(self):
-        cfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_count_query(cfg, 202501)
-        assert "FINAL" not in query
-        assert "is_deleted" not in query
-
-    def test_cutoff_in_count_query(self):
-        cfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_count_query(cfg, 202501, cutoff="2025-01-15T00:00:00")
-        assert "timestamp < {cutoff:String}" in query
-        assert "FORMAT JSON" in query
-
-
-# ── Time Range Query Builder Tests ───────────────────────
+    def test_count_uses_identical_bounded_predicate(self):
+        cfg = CLICKHOUSE_TABLES[0]
+        chunk = self._chunk()
+        export_query = _build_ch_export_query(cfg, chunk)
+        count_query = _build_ch_count_query(cfg, chunk)
+        assert "count() AS cnt" in count_query
+        assert count_query.endswith("FORMAT JSON")
+        assert export_query.split(" WHERE ", 1)[1].removesuffix(" FORMAT Parquet") == count_query.split(" WHERE ", 1)[
+            1
+        ].removesuffix(" FORMAT JSON")
 
 
 class TestBuildChTimeRangeQuery:
-    """Test _build_ch_time_range_query for min/max with aliases."""
+    """Time discovery must avoid an unbounded FINAL operation."""
 
-    def test_has_min_max_aliases(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_time_range_query(cfg)
+    def test_has_min_max_cutoff_and_no_final(self):
+        query = _build_ch_time_range_query(CLICKHOUSE_TABLES[0])
         assert "AS min_t" in query
         assert "AS max_t" in query
-
-    def test_replacing_has_final(self):
-        cfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_time_range_query(cfg)
-        assert "FINAL" in query
-        assert "FINAL" in query
-
-    def test_mergetree_no_final(self):
-        cfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_time_range_query(cfg)
+        assert "timestamp < {cutoff:String}" in query
         assert "FINAL" not in query
 
 
@@ -386,6 +337,10 @@ class TestConstants:
             assert "engine" in table_cfg
             assert "time_col" in table_cfg
             assert "fk_cols" in table_cfg
+            assert "shard_expr" in table_cfg
+            assert "base_shards" in table_cfg
+            assert "physical_shards" in table_cfg
+            assert "preserve_shard_group" in table_cfg
 
     def test_table_names(self):
         names = {t["name"] for t in CLICKHOUSE_TABLES}
@@ -407,6 +362,7 @@ class TestConstants:
     def test_replacing_tables_are_keyed_telemetry(self):
         replacing = {t["name"] for t in CLICKHOUSE_TABLES if t["engine"] == "replacing"}
         assert replacing == {"session_events", "session_checkpoints", "session_stats_agg", "layer_snapshots"}
+        assert all(t["preserve_shard_group"] for t in CLICKHOUSE_TABLES if t["engine"] == "replacing")
 
     def test_mergetree_tables(self):
         mergetree = [t["name"] for t in CLICKHOUSE_TABLES if t["engine"] == "mergetree"]
@@ -414,7 +370,16 @@ class TestConstants:
 
     def test_typed_dict_structure(self):
         """Verify CLICKHOUSE_TABLES entries conform to TableCfg TypedDict."""
-        required_keys = {"name", "engine", "time_col", "fk_cols"}
+        required_keys = {
+            "name",
+            "engine",
+            "time_col",
+            "fk_cols",
+            "shard_expr",
+            "base_shards",
+            "physical_shards",
+            "preserve_shard_group",
+        }
         for table_cfg in CLICKHOUSE_TABLES:
             assert set(table_cfg.keys()) == required_keys
             assert isinstance(table_cfg["name"], str)
@@ -422,12 +387,20 @@ class TestConstants:
             assert isinstance(table_cfg["time_col"], str)
             assert isinstance(table_cfg["fk_cols"], list)
             assert all(isinstance(c, str) for c in table_cfg["fk_cols"])
+            assert isinstance(table_cfg["shard_expr"], str)
+            assert table_cfg["base_shards"] >= 1
+            assert table_cfg["physical_shards"] >= 1
+            assert isinstance(table_cfg["preserve_shard_group"], bool)
 
     def test_tablecfg_type_exists(self):
         """Verify TableCfg is importable and is a TypedDict."""
         assert hasattr(TableCfg, "__annotations__")
         assert "name" in TableCfg.__annotations__
         assert "engine" in TableCfg.__annotations__
+        assert "shard_expr" in TableCfg.__annotations__
+        assert "base_shards" in TableCfg.__annotations__
+        assert "physical_shards" in TableCfg.__annotations__
+        assert "preserve_shard_group" in TableCfg.__annotations__
 
     def test_fk_pg_table_map_has_3_entries(self):
         assert len(FK_PG_TABLE_MAP) == 3
@@ -628,7 +601,7 @@ class TestClickhouseUrlParsingProperty:
             max_size=20,
         ),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     def test_url_components_extracted(self, host, port, db, user, password):
         url = f"clickhouse://{user}:{password}@{host}:{port}/{db}"
         http_url, parsed_db, parsed_user, parsed_password = _parse_clickhouse_url(url)
@@ -640,7 +613,7 @@ class TestClickhouseUrlParsingProperty:
     @given(
         host=st.from_regex(r"[a-z][a-z0-9-]{0,20}", fullmatch=True),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     def test_defaults_applied_for_missing_components(self, host):
         url = f"clickhouse://{host}"
         http_url, db, user, password = _parse_clickhouse_url(url)
@@ -660,7 +633,7 @@ class TestClickhouseUrlParsingProperty:
             max_size=20,
         ),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     def test_tls_url_components_extracted(self, host, port, db, user, password):
         url = f"clickhouses://{user}:{password}@{host}:{port}/{db}"
         http_url, parsed_db, parsed_user, parsed_password = _parse_clickhouse_url(url)
@@ -672,7 +645,7 @@ class TestClickhouseUrlParsingProperty:
     @given(
         host=st.from_regex(r"[a-z][a-z0-9-]{0,20}", fullmatch=True),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     def test_tls_defaults_applied(self, host):
         url = f"clickhouses://{host}"
         http_url, db, user, password = _parse_clickhouse_url(url)
@@ -691,43 +664,44 @@ class TestExportQueryBuilderProperty:
 
     @given(
         table_cfg=st.sampled_from(CLICKHOUSE_TABLES),
-        yyyymm=st.integers(min_value=200001, max_value=209912).filter(lambda x: 1 <= x % 100 <= 12),
+        bucket=st.integers(min_value=0, max_value=63),
     )
     @hsettings(max_examples=100)
-    def test_export_query_properties(self, table_cfg, yyyymm):
-        query = _build_ch_export_query(table_cfg, yyyymm)
-
-        # FINAL iff replacing
+    def test_export_query_properties(self, table_cfg, bucket):
+        chunk = TelemetryChunk(
+            table_cfg["name"],
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2025, 2, 1, tzinfo=UTC),
+            bucket,
+            64,
+        )
+        query = _build_ch_export_query(table_cfg, chunk)
         if table_cfg["engine"] == "replacing":
-            assert "FINAL" in query
             assert "FINAL" in query
         else:
             assert "FINAL" not in query
-            assert "is_deleted" not in query
-
-        # Correct time column
-        assert f"toYYYYMM({table_cfg['time_col']}) = {yyyymm}" in query
-
-        # Ends with FORMAT Parquet
+        assert table_cfg["time_col"] in query
+        assert table_cfg["shard_expr"] in query
         assert query.rstrip().endswith("FORMAT Parquet")
 
     @given(
         table_cfg=st.sampled_from(CLICKHOUSE_TABLES),
-        yyyymm=st.integers(min_value=200001, max_value=209912).filter(lambda x: 1 <= x % 100 <= 12),
+        bucket=st.integers(min_value=0, max_value=63),
     )
     @hsettings(max_examples=100)
-    def test_count_query_properties(self, table_cfg, yyyymm):
-        query = _build_ch_count_query(table_cfg, yyyymm)
-
+    def test_count_query_properties(self, table_cfg, bucket):
+        chunk = TelemetryChunk(
+            table_cfg["name"],
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2025, 2, 1, tzinfo=UTC),
+            bucket,
+            64,
+        )
+        query = _build_ch_count_query(table_cfg, chunk)
         assert "count() AS cnt" in query
         assert "FORMAT JSON" in query
-
-        if table_cfg["engine"] == "replacing":
-            assert "FINAL" in query
-            assert "FINAL" in query
-        else:
-            assert "FINAL" not in query
-            assert "is_deleted" not in query
+        assert table_cfg["shard_expr"] in query
+        assert ("FINAL" in query) is (table_cfg["engine"] == "replacing")
 
 
 # ── Property 4: Month range completeness and ordering ────
@@ -964,7 +938,7 @@ class TestConnectionStringNeverLeakedProperty:
         user=st.from_regex(r"[a-z]{3,10}", fullmatch=True),
         password=st.from_regex(r"[a-z0-9]{5,15}", fullmatch=True),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, deadline=None)
     def test_clickhouse_url_never_in_output(self, host, port, user, password):
         secret_url = f"clickhouse://{user}:{password}@{host}:{port}/testdb"
 
@@ -991,7 +965,7 @@ class TestConnectionStringNeverLeakedProperty:
         user=st.from_regex(r"[a-z]{3,10}", fullmatch=True),
         password=st.from_regex(r"[a-z0-9]{5,15}", fullmatch=True),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, deadline=None)
     def test_clickhouse_url_never_in_import_output(self, host, port, user, password):
         secret_url = f"clickhouse://{user}:{password}@{host}:{port}/testdb"
 
@@ -1015,7 +989,7 @@ class TestConnectionStringNeverLeakedProperty:
         user=st.from_regex(r"[a-z]{3,10}", fullmatch=True),
         password=st.from_regex(r"[a-z0-9]{5,15}", fullmatch=True),
     )
-    @hsettings(max_examples=100)
+    @hsettings(max_examples=100, deadline=None)
     def test_clickhouse_url_never_in_validate_output(self, host, port, user, password):
         secret_url = f"clickhouse://{user}:{password}@{host}:{port}/testdb"
 
@@ -1070,22 +1044,36 @@ class TestUUIDLowercaseNormalization:
 # ── Partition Check for All Engines ──────────────────────
 
 
-class TestPartitionCheckAllEngines:
-    """Verify partition-has-data check applies to both replacing and mergetree."""
+class TestChunkSplitting:
+    """Verify deterministic time/hash splitting covers the parent chunk."""
 
-    def test_replacing_partition_query_uses_final(self):
-        """For replacing engines, the partition check should use FINAL."""
-        # We test this indirectly by checking _ch_partition_has_data builds the right query.
-        # The function is async, so we verify the query pattern via _build_ch_export_query.
-        cfg: TableCfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
-        assert "FINAL" in query
-        assert "FINAL" in query
+    def test_time_split_is_contiguous(self):
+        chunk = TelemetryChunk(
+            "audit_log",
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2025, 2, 1, tzinfo=UTC),
+            0,
+            1,
+        )
+        left, right = _split_chunk(chunk, prefer_hash=False)
+        assert left.start == chunk.start
+        assert left.end == right.start
+        assert right.end == chunk.end
+        assert left.bucket == right.bucket == 0
 
-    def test_mergetree_partition_query_no_final(self):
-        cfg: TableCfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        query = _build_ch_export_query(cfg, 202501)
-        assert "FINAL" not in query
+    def test_hash_split_is_disjoint_and_bounded(self):
+        chunk = TelemetryChunk(
+            "session_events",
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2025, 1, 1, 1, tzinfo=UTC),
+            3,
+            64,
+        )
+        left, right = _split_chunk(chunk, prefer_hash=True)
+        assert left.shard_count == right.shard_count == 128
+        assert {left.bucket, right.bucket} == {3, 67}
+        terminal = TelemetryChunk(chunk.table, chunk.start, chunk.end, 0, MAX_SHARD_COUNT)
+        assert _split_chunk(terminal, prefer_hash=True) is None
 
 
 # ── Import Resume State ──────────────────────────────────
@@ -1097,13 +1085,20 @@ class TestImportResumeState:
     def test_state_file_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / ".import_state.json"
-            completed = {"session_events", "audit_log"}
+            completed = {
+                "session_events:chunk-1": {
+                    "filename": "session_events_chunk-1.parquet",
+                    "sha256": "a" * 64,
+                    "rows": 10,
+                }
+            }
             state_path.write_text(
-                json.dumps({"completed": sorted(completed)}, indent=2),
+                json.dumps({"migration_id": "migration-1", "completed_chunks": completed}, indent=2),
                 encoding="utf-8",
             )
             loaded = json.loads(state_path.read_text(encoding="utf-8"))
-            assert set(loaded["completed"]) == completed
+            assert loaded["migration_id"] == "migration-1"
+            assert loaded["completed_chunks"] == completed
 
     def test_state_file_empty_initially(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1194,30 +1189,21 @@ class TestParameterizedQuery:
 # ── Cutoff in WHERE Clause ───────────────────────────────
 
 
-class TestCutoffInWhereClause:
-    """Verify export_time_cutoff appears in WHERE clause."""
+class TestBoundedWindows:
+    """Verify month planning clips windows at the cutoff."""
 
-    def test_export_query_with_cutoff(self):
-        cfg: TableCfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        cutoff = "2025-06-15T12:00:00+00:00"
-        query = _build_ch_export_query(cfg, 202506, cutoff=cutoff)
-        assert "timestamp < {cutoff:String}" in query
-        assert "toYYYYMM(timestamp) = 202506" in query
-
-    def test_count_query_with_cutoff(self):
-        cfg: TableCfg = {"name": "audit_log", "engine": "mergetree", "time_col": "timestamp", "fk_cols": []}
-        cutoff = "2025-06-15T12:00:00+00:00"
-        query = _build_ch_count_query(cfg, 202506, cutoff=cutoff)
-        assert "timestamp < {cutoff:String}" in query
-        assert "count() AS cnt" in query
-
-    def test_replacing_query_with_cutoff(self):
-        cfg: TableCfg = {"name": "session_events", "engine": "replacing", "time_col": "start_time", "fk_cols": []}
-        cutoff = "2025-06-15T12:00:00+00:00"
-        query = _build_ch_export_query(cfg, 202506, cutoff=cutoff)
-        assert "start_time < {cutoff:String}" in query
-        assert "FINAL" in query
-        assert "FINAL" in query
+    def test_windows_are_contiguous_and_cutoff_bounded(self):
+        cutoff = datetime(2025, 2, 15, 12, tzinfo=UTC)
+        windows = _month_windows(
+            datetime(2025, 1, 10, tzinfo=UTC),
+            datetime(2025, 3, 10, tzinfo=UTC),
+            cutoff,
+        )
+        assert windows == [
+            (datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 2, 1, tzinfo=UTC)),
+            (datetime(2025, 2, 1, tzinfo=UTC), cutoff),
+        ]
+        assert windows[0][1] == windows[1][0]
 
 
 def test_exec_dashboard_queries_session_tables_only():

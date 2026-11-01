@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for versioned agent config generation (generate_all_harness_configs + lock file)."""
+"""Tests for versioned agent config generation (generate_all_harness_configs)."""
 
 from __future__ import annotations
 
@@ -10,59 +11,8 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
-from services.agent_lock_file import compute_integrity_hash, generate_lock_file
 from services.harness import generate_all_harness_configs
-
-# ── Lock file tests ──────────────────────────────────────────────
-
-
-class TestComputeIntegrityHash:
-    def test_returns_sha256_prefixed(self):
-        result = compute_integrity_hash("hello world")
-        assert result.startswith("sha256-")
-        assert len(result) == 7 + 64  # "sha256-" + 64 hex chars
-
-    def test_deterministic(self):
-        assert compute_integrity_hash("test") == compute_integrity_hash("test")
-
-    def test_different_inputs_different_hashes(self):
-        assert compute_integrity_hash("a") != compute_integrity_hash("b")
-
-
-class TestGenerateLockFile:
-    def test_produces_valid_yaml(self):
-        components = [
-            {"type": "mcp", "name": "fs-server", "resolved": "1.2.3", "id": "abc123", "source_sha": "deadbeef"},
-            {"type": "skill", "name": "review", "resolved": "2.0.0", "id": "def456", "content": "skill content"},
-        ]
-        result = generate_lock_file(components)
-        assert result.startswith("# Auto-generated")
-        parsed = yaml.safe_load(result)
-        assert parsed["lock_version"] == 1
-        assert "resolved_at" in parsed
-        assert len(parsed["components"]) == 2
-
-    def test_external_component_has_source_sha(self):
-        components = [{"type": "mcp", "name": "x", "resolved": "1.0.0", "id": "a", "source_sha": "abc123"}]
-        result = generate_lock_file(components)
-        parsed = yaml.safe_load(result)
-        assert parsed["components"][0]["source_sha"] == "abc123"
-        assert "integrity" not in parsed["components"][0]
-
-    def test_inline_component_has_integrity(self):
-        components = [{"type": "skill", "name": "x", "resolved": "1.0.0", "id": "a", "content": "hello"}]
-        result = generate_lock_file(components)
-        parsed = yaml.safe_load(result)
-        assert parsed["components"][0]["integrity"].startswith("sha256-")
-        assert "source_sha" not in parsed["components"][0]
-
-    def test_empty_components(self):
-        result = generate_lock_file([])
-        parsed = yaml.safe_load(result)
-        assert parsed["components"] == []
-
 
 # ── generate_all_harness_configs tests ───────────────────────────────
 

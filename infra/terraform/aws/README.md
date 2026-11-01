@@ -1,9 +1,10 @@
 <!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal on AWS - Terraform
+# Agentic Resource Registry on AWS - Terraform
 
-Production-shaped self-hosted Observal in your own AWS account. One `terraform apply` provisions:
+Production-shaped self-hosted Agentic Resource Registry in your own AWS account. One `terraform apply` provisions:
 
 - **VPC**: public + private subnets across 2 AZs, NAT gateway, VPC flow logs
 - **Application Load Balancer**: HTTPS via DNS-validated ACM (when domain supplied), path-based routing
@@ -43,7 +44,7 @@ Production-shaped self-hosted Observal in your own AWS account. One `terraform a
          └──────────────────────────────┘
 ```
 
-The stateless app tier (api/web/worker) lives on Fargate across both AZs with autoscaling and rolling deploys. The stateful data tier lives on a single EC2 with EBS so ClickHouse keeps its disk across instance replacements. Prometheus and Grafana are enabled with `observability_stack`. Real ClickHouse HA is out of scope; set `clickhouse_mode = "cloud"` and point at ClickHouse Cloud when you need it.
+The stateless app tier (api/web/worker) lives on Fargate across both AZs with autoscaling and rolling deploys. The stateful data tier lives on a single EC2 with EBS so ClickHouse keeps its disk across instance replacements. Prometheus and Grafana are enabled with `observability_stack`. ClickHouse HA is out of scope.
 
 ## Prerequisites
 
@@ -205,7 +206,6 @@ You only need to supply:
 2. **`region`** (default `us-east-1`).
 3. **(Optional) `domain_name` + `route53_zone_id`** for HTTPS on a real domain.
 4. **(Optional) `alb_ingress_cidrs`** to lock the ALB to specific IP ranges.
-5. **(Optional) `clickhouse_mode = "cloud"` + `clickhouse_cloud_*`** to use ClickHouse Cloud instead of self-hosting.
 
 ## Operating the install
 
@@ -271,7 +271,7 @@ Set `image_tag` to the previous version and re-apply. RDS / ClickHouse data are 
 ```bash
 terraform destroy
 ```
-The bootstrap module's bucket + table have `prevent_destroy = true`. Destroying the main module won't touch them. To remove them too, edit `bootstrap/main.tf` to drop the lifecycle blocks, then `terraform destroy` in `bootstrap/`. Don't do this until you're sure no Observal install in the account still needs the state.
+The bootstrap module's bucket + table have `prevent_destroy = true`. Destroying the main module won't touch them. To remove them too, edit `bootstrap/main.tf` to drop the lifecycle blocks, then `terraform destroy` in `bootstrap/`. Don't do this until you're sure no Agentic Resource Registry install in the account still needs the state.
 
 ### Disaster recovery
 - **Postgres**: automated daily snapshots (7-day retention on prod). Restore via `aws rds restore-db-instance-from-db-snapshot`.
@@ -289,7 +289,6 @@ Before using in front of customers:
 - [ ] Add a WAF in front of the ALB (`aws_wafv2_web_acl_association`)
 - [ ] Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
 - [ ] Replace the GitHub-tarball pull in `user-data.sh.tftpl` with your own signed artifact location
-- [ ] Move ClickHouse to ClickHouse Cloud (`clickhouse_mode = "cloud"`) for actual HA
 
 ## Layout
 
@@ -310,11 +309,16 @@ alb.tf                     # ALB, target groups, listeners, listener rules, ACM
 s3.tf                      # backups bucket with lifecycle and TLS-only policy
 logs.tf                    # CloudWatch log groups
 dns.tf                     # public Route 53 record (alias to ALB)
+webhook-ingress.tf         # optional API Gateway endpoint for GitHub/GitLab webhooks on private installs
 outputs.tf                 # app_url, ecs cluster/services, log groups, ...
 user-data.sh.tftpl         # cloud-init for the data host
 terraform.tfvars.example
 examples/minimal/          # ready-to-apply module-call example
 ```
+
+## Git webhooks on a private install
+
+With `alb_scheme = "internal"`, github.com and gitlab.com cannot deliver the webhooks that MCP repository sync relies on. Set `enable_webhook_ingress = true` and `webhook_providers` (`github`, `gitlab`, or both) to add an API Gateway HTTP API with one route per provider, `POST /api/v1/webhooks/<provider>/mcp/{sync_id}`, that reaches the ALB privately through a VPC link and answers `404` to everything else. See [Git webhooks on a private install](../../../docs/self-hosting/aws-terraform.md#git-webhooks-on-a-private-install).
 
 ## Troubleshooting
 

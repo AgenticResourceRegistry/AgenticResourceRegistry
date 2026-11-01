@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Stable error contract for CLI users, scripts, and agents."""
@@ -35,6 +36,7 @@ class ExitCode(IntEnum):
     RATE_LIMIT = 8
     UNAVAILABLE = 9
     VERSION = 10
+    PARTIAL = 11
 
 
 class ErrorCategory(StrEnum):
@@ -81,6 +83,7 @@ class CliError(click.exceptions.Exit):
     request_id: str | None = None
     http_status: int | None = None
     detail: str | None = None
+    result: object | None = None
 
     def __post_init__(self) -> None:
         super().__init__(int(_EXIT_CODES[self.category]))
@@ -100,6 +103,7 @@ def fail(
     request_id: str | None = None,
     http_status: int | None = None,
     detail: str | None = None,
+    result: object | None = None,
 ) -> NoReturn:
     error = CliError(
         category=category,
@@ -110,6 +114,7 @@ def fail(
         request_id=request_id,
         http_status=http_status,
         detail=detail,
+        result=result,
     )
     if not _boundary_active.get():
         frame = inspect.currentframe()
@@ -136,11 +141,17 @@ def json_errors_requested(args: tuple[str, ...] | list[str] | None = None) -> bo
     return False
 
 
-def load_json_object(path: str, *, operation: str, noun: str) -> dict:
-    """Load a CLI-supplied JSON object with categorized failures."""
+def machine_output_requested(args: tuple[str, ...] | list[str] | None = None) -> bool:
+    """Return whether an invocation selected finite JSON or raw JSON output."""
+    values = tuple(args) if args is not None else _invocation_args.get()
+    return json_errors_requested(values) or "--raw" in values
+
+
+def load_json_value(path: str, *, operation: str, noun: str) -> object:
+    """Load any CLI-supplied JSON value with categorized failures."""
     try:
         with open(path) as file:
-            payload = json.load(file)
+            return json.load(file)
     except json.JSONDecodeError as error:
         fail(
             ErrorCategory.VALIDATION,
@@ -159,6 +170,11 @@ def load_json_object(path: str, *, operation: str, noun: str) -> dict:
             remediation="Provide an existing JSON file and retry.",
             detail=repr(error),
         )
+
+
+def load_json_object(path: str, *, operation: str, noun: str) -> dict:
+    """Load a CLI-supplied JSON object with categorized failures."""
+    payload = load_json_value(path, operation=operation, noun=noun)
     if not isinstance(payload, dict):
         fail(
             ErrorCategory.VALIDATION,
@@ -207,9 +223,11 @@ def emit_error(error: CliError, *, json_mode: bool | None = None, debug: bool | 
             body["request_id"] = error.request_id
         if error.http_status is not None:
             body["http_status"] = error.http_status
+        if error.result is not None:
+            body["result"] = error.result
         if use_debug and error.detail:
             body["detail"] = error.detail
-        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps(payload, ensure_ascii=False, default=str), file=sys.stderr)
         return
 
     _console.print(f"[bold red]Error ({escape(error.category.value)}):[/bold red] {escape(error.message)}")
@@ -222,6 +240,33 @@ def emit_error(error: CliError, *, json_mode: bool | None = None, debug: bool | 
         _console.print(f"[dim]Request ID:[/dim] {escape(error.request_id)}")
     if use_debug and error.detail:
         _console.print(f"[dim]Detail:[/dim] {escape(error.detail)}")
+
+
+def emit_warning(
+    category: str,
+    message: str,
+    *,
+    operation: str,
+    remediation: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """Emit a nonfatal startup warning without contaminating command stdout."""
+    if _json_error_mode.get():
+        body: dict[str, object] = {
+            "category": category,
+            "message": message,
+            "operation": operation,
+        }
+        if remediation:
+            body["remediation"] = remediation
+        if debug_requested() and detail:
+            body["detail"] = detail
+        print(json.dumps({"warning": body}, ensure_ascii=False), file=sys.stderr)
+        return
+
+    _console.print(f"[bold yellow]Warning ({escape(category)}):[/bold yellow] {escape(message)}")
+    if remediation:
+        _console.print(f"[dim]Remediation:[/dim] {escape(remediation)}")
 
 
 def _resolve_command(command: click.Command, args: tuple[str, ...]) -> tuple[click.Command, str]:
@@ -249,6 +294,24 @@ def _uses_json_output(command: click.Command, args: tuple[str, ...]) -> bool:
     return has_format_option and json_errors_requested(args)
 
 
+def _uses_machine_output(command: click.Command, args: tuple[str, ...]) -> bool:
+    resolved, _path = _resolve_command(command, args)
+    has_raw_option = any(param.name == "raw" for param in resolved.params)
+    return _uses_json_output(command, args) or (has_raw_option and "--raw" in args)
+
+
+class PartialResultExit(click.exceptions.Exit):
+    """A nonzero batch outcome whose structured result must remain on stdout."""
+
+    def __init__(self) -> None:
+        super().__init__(int(ExitCode.PARTIAL))
+
+
+def exit_partial() -> NoReturn:
+    """Exit with the stable partial-result code after rendering the batch result."""
+    raise PartialResultExit()
+
+
 class _BoundaryError(Exception):
     def __init__(self, error: CliError) -> None:
         self.error = error
@@ -259,6 +322,32 @@ class _BoundaryExitError(Exception):
         self.error = error
 
 
+class _BoundaryPartialExitError(Exception):
+    def __init__(self, error: PartialResultExit) -> None:
+        self.error = error
+
+
+def http_status_category(status: int) -> ErrorCategory:
+    """Map HTTP failures to the stable CLI error category."""
+    return (
+        ErrorCategory.AUTH
+        if status == 401
+        else ErrorCategory.PERMISSION
+        if status == 403
+        else ErrorCategory.NOT_FOUND
+        if status == 404
+        else ErrorCategory.CONFLICT
+        if status == 409
+        else ErrorCategory.VERSION
+        if status == 426
+        else ErrorCategory.RATE_LIMIT
+        if status == 429
+        else ErrorCategory.UNAVAILABLE
+        if status >= 500
+        else ErrorCategory.VALIDATION
+    )
+
+
 class ErrorHandlingGroup(TyperGroup):
     """Root command group that enforces the CLI error contract."""
 
@@ -267,6 +356,8 @@ class ErrorHandlingGroup(TyperGroup):
             return super().invoke(ctx)
         except CliError as error:
             raise _BoundaryError(error) from error
+        except PartialResultExit as error:
+            raise _BoundaryPartialExitError(error) from error
         except click.UsageError:
             raise
         except click.exceptions.Exit as error:
@@ -278,7 +369,7 @@ class ErrorHandlingGroup(TyperGroup):
         invocation = tuple(args if args is not None else sys.argv[1:])
         token = _invocation_args.set(invocation)
         boundary_token = _boundary_active.set(True)
-        json_token = _json_error_mode.set(_uses_json_output(self, invocation))
+        json_token = _json_error_mode.set(_uses_machine_output(self, invocation))
         operation = f"Run {_command_path(self, invocation)}"
         captured = StringIO() if _json_error_mode.get() and not _json_stream_requested(self, invocation) else None
         output_context = redirect_stdout(captured) if captured is not None else nullcontext()
@@ -297,6 +388,10 @@ class ErrorHandlingGroup(TyperGroup):
         except _BoundaryError as wrapped:
             emit_error(wrapped.error)
             code = wrapped.error.contract_exit_code
+        except _BoundaryPartialExitError as wrapped:
+            if captured is not None:
+                sys.stdout.write(captured.getvalue())
+            code = int(wrapped.error.exit_code)
         except _BoundaryExitError as wrapped:
             code = int(wrapped.error.exit_code)
             emit_error(
@@ -328,23 +423,7 @@ class ErrorHandlingGroup(TyperGroup):
             raise
         except httpx.HTTPStatusError as error:
             status = error.response.status_code
-            category = (
-                ErrorCategory.AUTH
-                if status == 401
-                else ErrorCategory.PERMISSION
-                if status == 403
-                else ErrorCategory.NOT_FOUND
-                if status == 404
-                else ErrorCategory.CONFLICT
-                if status == 409
-                else ErrorCategory.VERSION
-                if status == 426
-                else ErrorCategory.RATE_LIMIT
-                if status == 429
-                else ErrorCategory.UNAVAILABLE
-                if status >= 500
-                else ErrorCategory.VALIDATION
-            )
+            category = http_status_category(status)
             failure = CliError(
                 category,
                 f"The server rejected the operation with HTTP {status}.",

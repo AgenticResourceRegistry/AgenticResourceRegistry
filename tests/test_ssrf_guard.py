@@ -33,6 +33,15 @@ class TestIsPrivateUrl:
 
         assert is_private_url("http://[::1]/") is True
 
+    def test_ipv6_forms_that_reach_local_or_embedded_ipv4(self):
+        from services.ssrf_guard import is_private_url
+
+        assert is_private_url("http://[::]/") is True
+        assert is_private_url("http://[64:ff9b::a9fe:a9fe]/") is True  # NAT64 for 169.254.169.254
+        assert is_private_url("http://[2002:a00:1::1]/") is True  # 6to4 for 10.0.0.1
+        # A public address behind NAT64 (IPv6-only networks with DNS64) stays reachable.
+        assert is_private_url("http://[64:ff9b::808:808]/") is False  # 8.8.8.8
+
     def test_cgnat(self):
         from services.ssrf_guard import is_private_url
 

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Build a deterministic YAML snapshot of an :class:`AgentVersion`.
@@ -70,6 +71,10 @@ async def _resolve_component_details(ver: AgentVersion, db: AsyncSession) -> lis
     )
     if not rows:
         return []
+    # Reviewers approve the pinned releases, so describe those, not the latest.
+    from services.agent_lock import pinned_versions
+
+    pinned = await pinned_versions(db, rows)
     details: list[dict] = []
     for comp in rows:
         entry: dict = {
@@ -81,11 +86,12 @@ async def _resolve_component_details(ver: AgentVersion, db: AsyncSession) -> lis
         if model is not None:
             listing = (await db.execute(select(model).where(model.id == comp.component_id))).scalar_one_or_none()
         if listing is not None:
+            content = pinned.get((comp.component_type, comp.component_id), listing)
             entry["name"] = getattr(listing, "name", "") or comp.component_name or ""
             if comp.component_type == "prompt":
-                entry["template"] = getattr(listing, "template", "") or ""
+                entry["template"] = getattr(content, "template", "") or ""
             else:
-                entry["description"] = getattr(listing, "description", "") or ""
+                entry["description"] = getattr(content, "description", "") or ""
         else:
             entry["name"] = comp.component_name or str(comp.component_id)[:8]
         if comp.resolved_version:

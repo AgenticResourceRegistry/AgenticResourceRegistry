@@ -9,14 +9,9 @@
 #
 # Why not an ASG: a 1-instance ASG buys nothing for HA (CH state lives on EBS,
 # not the instance) and complicates DNS. An aws_instance with a static private IP
-# attached via ENI gives stable in-VPC addressing. Outage on instance failure is
-# the same either way; the answer for real CH HA is ClickHouse Cloud.
-#
-# When clickhouse_mode = "cloud", none of the resources in this file are created;
-# Bundled observability is also skipped. Use AWS Managed Grafana or Grafana Cloud.
+# attached via ENI gives stable in-VPC addressing. HA is out of scope.
 
 data "aws_ami" "al2023" {
-  count       = local.clickhouse_self_hosted ? 1 : 0
   most_recent = true
   owners      = ["amazon"]
   filter {
@@ -31,8 +26,7 @@ data "aws_ami" "al2023" {
 
 # tfsec:ignore:aws-ec2-volume-encryption-customer-key AWS-managed aws/ebs key is encrypted at rest; supply a CMK in the production hardening checklist.
 resource "aws_ebs_volume" "data" {
-  count             = local.clickhouse_self_hosted ? 1 : 0
-  availability_zone = data.aws_subnet.data_host[0].availability_zone
+  availability_zone = data.aws_subnet.data_host.availability_zone
   size              = local.effective_data_volume_size_gb
   type              = "gp3"
   encrypted         = true
@@ -41,22 +35,20 @@ resource "aws_ebs_volume" "data" {
 }
 
 data "aws_subnet" "data_host" {
-  count = local.clickhouse_self_hosted ? 1 : 0
-  id    = local.private_subnet_ids[0]
+  id = local.private_subnet_ids[0]
 }
 
 # Static private IP via primary ENI — gives the host a stable address that
 # survives instance replacement.
 resource "aws_network_interface" "data_host" {
-  count           = local.clickhouse_self_hosted ? 1 : 0
   subnet_id       = local.private_subnet_ids[0]
-  security_groups = [aws_security_group.data_host[0].id]
+  security_groups = [aws_security_group.data_host.id]
 
   tags = { Name = "${local.name}-data-host-eni" }
 }
 
 locals {
-  data_host_user_data = local.clickhouse_self_hosted ? templatefile("${path.module}/user-data.sh.tftpl", {
+  data_host_user_data = templatefile("${path.module}/user-data.sh.tftpl", {
     region                           = var.region
     ssm_prefix                       = local.ssm_prefix
     image_tag                        = var.image_tag
@@ -68,18 +60,17 @@ locals {
     grafana_subpath_prefix           = "/grafana"
     observability_prometheus_enabled = local.observability_prometheus_enabled
     observability_grafana_enabled    = local.observability_grafana_enabled
-  }) : ""
+  })
 }
 
 resource "aws_instance" "data_host" {
-  count                = local.clickhouse_self_hosted ? 1 : 0
-  ami                  = data.aws_ami.al2023[0].id
+  ami                  = data.aws_ami.al2023.id
   instance_type        = local.effective_data_instance_type
-  iam_instance_profile = aws_iam_instance_profile.data_host[0].name
+  iam_instance_profile = aws_iam_instance_profile.data_host.name
 
   network_interface {
     device_index         = 0
-    network_interface_id = aws_network_interface.data_host[0].id
+    network_interface_id = aws_network_interface.data_host.id
   }
 
   user_data                   = local.data_host_user_data
@@ -105,21 +96,19 @@ resource "aws_instance" "data_host" {
 }
 
 resource "aws_volume_attachment" "data" {
-  count       = local.clickhouse_self_hosted ? 1 : 0
   device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.data[0].id
-  instance_id = aws_instance.data_host[0].id
+  volume_id   = aws_ebs_volume.data.id
+  instance_id = aws_instance.data_host.id
 }
 
 # ── Internal DNS so ECS tasks can reach ClickHouse and optional Grafana ────
 
 resource "aws_route53_record" "clickhouse_internal" {
-  count   = local.clickhouse_self_hosted ? 1 : 0
   zone_id = aws_route53_zone.internal.zone_id
   name    = "clickhouse.${var.internal_dns_zone}"
   type    = "A"
   ttl     = 60
-  records = [aws_network_interface.data_host[0].private_ip]
+  records = [aws_network_interface.data_host.private_ip]
 }
 
 resource "aws_route53_record" "grafana_internal" {
@@ -128,5 +117,5 @@ resource "aws_route53_record" "grafana_internal" {
   name    = "grafana.${var.internal_dns_zone}"
   type    = "A"
   ttl     = 60
-  records = [aws_network_interface.data_host[0].private_ip]
+  records = [aws_network_interface.data_host.private_ip]
 }

@@ -12,10 +12,15 @@ from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_SANDBOX_NETWORK_POLICIES,
     VALID_SANDBOX_RUNTIME_TYPES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
+    RecommendedFlag,
     Visibility,
     make_harness_list_validator,
     make_option_validator,
 )
+from schemas.fork import ForkProvenance
 
 _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,499}$")
 
@@ -38,10 +43,11 @@ def _validate_runtime_config(runtime_type: str | None, image: str | None, runtim
 
 
 class SandboxSubmitRequest(BaseModel):
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
+    message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     runtime_type: str
@@ -71,10 +77,10 @@ class SandboxSubmitRequest(BaseModel):
 
 
 class SandboxDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     runtime_type: str = "docker"
@@ -98,10 +104,10 @@ class SandboxDraftRequest(BaseModel):
 
 
 class SandboxUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     runtime_type: str | None = None
@@ -124,6 +130,13 @@ class SandboxUpdateRequest(BaseModel):
 
 
 class SandboxListingResponse(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
+    warnings: list[str] = []
+    review_number: int | None = None
+    review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str
@@ -152,6 +165,7 @@ class SandboxListingResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     user_permission: str | None = None
+    is_recommended: RecommendedFlag = False
 
     @field_validator("runtime_config", "resource_limits", mode="before")
     @classmethod
@@ -169,6 +183,8 @@ class SandboxListingResponse(BaseModel):
 
 
 class SandboxListingSummary(BaseModel):
+    forked_from: ForkProvenance | None = None
+    fork_count: int = 0
     id: uuid.UUID
     name: str
     namespace: str
@@ -193,4 +209,6 @@ class SandboxListingSummary(BaseModel):
     status: ListingStatus
     rejection_reason: str | None = None
     updated_at: datetime | None = None
+    is_recommended: RecommendedFlag = False
+
     model_config = {"from_attributes": True}

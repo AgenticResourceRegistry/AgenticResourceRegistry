@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Version-specific endpoints for agents.
@@ -15,6 +17,7 @@ All paths are relative to /api/v1/agents (no extra prefix).
 from __future__ import annotations
 
 import difflib
+import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,37 +42,19 @@ from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.agent import (  # noqa: TC001
     AgentVersionCreateRequest,
-    AgentVersionReviewRequest,
 )
-from services.agent_resolver import resolve_component_versions, validate_component_ids
+from services.agent_resolver import validate_component_ids
 from services.harness import generate_agent_config
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
-from services.inbox import sources as inbox
-from services.versioning import parse_semver, validate_semver
+from services.harness.proxy import AgentVersionConfigProxy
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
+from services.review.cutover import submit_for_review
+from services.versioning import validate_semver
 
 agent_version_router = APIRouter()
 
 
 async def audit(*_args, **_kwargs):
     return None
-
-
-class _AgentVersionConfigProxy:
-    """Expose one immutable version with its parent agent identity."""
-
-    def __init__(self, agent: Agent, version: AgentVersion, components: list) -> None:
-        self._agent = agent
-        self._version = version
-        self.components = components
-        self.id = agent.id
-        self.name = agent.name
-        self.namespace = agent.namespace
-        self.slug = agent.slug
-        self.team_id = agent.team_id
-        self.is_private = agent.is_private
-
-    def __getattr__(self, name: str):
-        return getattr(self._version, name)
 
 
 # Import _load_agent from agent.py to avoid duplication.
@@ -121,6 +106,7 @@ def _version_to_detail(ver: AgentVersion) -> dict:
             "component_id": str(c.component_id),
             "name": c.component_name or "",
             "resolved_version": c.resolved_version or "",
+            **({"config_override": c.config_override} if c.config_override is not None else {}),
         }
         for c in (ver.components or [])
     ]
@@ -227,6 +213,44 @@ async def _get_agent_version(
     return detail
 
 
+async def _refuse_release_over_unpublished_first_release(db: AsyncSession, agent) -> None:
+    """A first release still under review is amended in place, never superseded by a new version.
+
+    Releasing would open a second review and, while the agent's own components are still
+    pending, fail on component approval. The author should edit the pending release instead:
+    the save becomes a new revision of the same review.
+    """
+    from models.review import Review, ReviewState
+
+    latest = agent.latest_version
+    if latest is None or latest.status not in (AgentStatus.pending, AgentStatus.changes_requested):
+        return
+    approved = await db.scalar(
+        select(func.count(AgentVersion.id)).where(
+            AgentVersion.agent_id == agent.id, AgentVersion.status == AgentStatus.approved
+        )
+    )
+    if approved:
+        return  # Not a first release: releasing alongside a pending version stays allowed.
+    number = await db.scalar(
+        select(Review.number).where(
+            Review.subject_type == "agent",
+            Review.version_id == latest.id,
+            Review.state.notin_((ReviewState.closed, ReviewState.published)),
+        )
+    )
+    review = f" (review #{number})" if number else ""
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"v{latest.version} is not published yet{review}, so there is nothing to release a new version from. "
+            "Edit v" + latest.version + " in place instead: the change becomes a new revision of the same review. "
+            f"CLI: observal agent edit {agent.namespace}/{agent.slug} --description ... or "
+            "observal agent publish --update --dir DIR. Web: the agent's Edit tab, Save & update review."
+        ),
+    )
+
+
 async def _create_agent_version(
     agent_id: str,
     req: AgentVersionCreateRequest,
@@ -245,6 +269,8 @@ async def _create_agent_version(
     perm = get_effective_agent_permission(agent, current_user)
     if perm != "owner":
         raise HTTPException(status_code=403, detail="Not authorized to release versions")
+
+    await _refuse_release_over_unpublished_first_release(db, agent)
 
     # Duplicate check
     dup_stmt = select(AgentVersion).where(
@@ -301,23 +327,20 @@ async def _create_agent_version(
     db.add(ver)
     await db.flush()
 
-    # Create AgentComponent records
-    from models.agent_component import AgentComponent
+    # Pin components. A release carries forward every pin from the agent's current
+    # release unless the component names a version or the author asked to refresh.
+    from services.agent_lock import attach_pinned_components
 
-    component_versions = await resolve_component_versions(req.components, db)
-    version_components: list[AgentComponent] = []
-    for order, cref in enumerate(req.components):
-        component = AgentComponent(
-            agent_version_id=ver.id,
-            component_type=cref.component_type,
-            component_id=cref.component_id,
-            component_name="",
-            resolved_version=component_versions.get((cref.component_type, cref.component_id), "latest"),
-            order_index=order,
-            config_override=cref.config_override,
-        )
-        db.add(component)
-        version_components.append(component)
+    current = agent.latest_version
+    version_components = await attach_pinned_components(
+        db,
+        ver.id,
+        req.components,
+        previous=list(current.components or []) if current is not None else [],
+        refresh=req.refresh_components,
+        require_approved=True,
+        current_user=current_user,
+    )
 
     # Infer harness features from components
     skill_comp_ids = [c.component_id for c in req.components if c.component_type == "skill"]
@@ -330,31 +353,41 @@ async def _create_agent_version(
         components = req.components
         external_mcps = ver.external_mcps
 
-    ver.required_capabilities = infer_required_features(_VersionProxy(), skill_listings=skill_listings_map)
-    ver.inferred_supported_harnesses = compute_supported_harnesses(ver.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(ver, _VersionProxy(), skill_listings=skill_listings_map)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     # Always build the snapshot from structured fields so caller-provided text
     # cannot drift from the version stored in the database.
     await db.flush()
+    from services.agent_lock import lock_agent_version
     from services.agent_snapshot import build_yaml_snapshot
 
+    await lock_agent_version(db, agent, ver)
     ver.yaml_snapshot = await build_yaml_snapshot(ver, db)
 
     # Pre-generate harness configs at release time (spec: no generation at request time)
     mcp_comp_ids = [c.component_id for c in req.components if c.component_type == "mcp"]
     mcp_listings_map: dict = {}
     if mcp_comp_ids:
-        rows = (await db.execute(select(McpListing).where(McpListing.id.in_(mcp_comp_ids)))).scalars().all()
-        mcp_listings_map = {row.id: row for row in rows}
+        from services.agent_lock import PinnedListing, pinned_versions
 
-    # Pre-generate harness configs for supported_harnesses (the user-declared list).
-    # inferred_supported_harnesses is a compatibility analysis result used for display/filtering,
-    # but supported_harnesses is authoritative for which configs to generate.
+        # These configs are stored and served as this release's, so generate them
+        # from the MCP releases it pins, not from each listing's latest release.
+        pinned = await pinned_versions(db, version_components)
+        rows = (await db.execute(select(McpListing).where(McpListing.id.in_(mcp_comp_ids)))).scalars().all()
+        mcp_listings_map = {
+            row.id: PinnedListing(row, pinned[("mcp", row.id)]) if ("mcp", row.id) in pinned else row for row in rows
+        }
+
+    # Pre-generate harness configs for supported_harnesses: the declared list, already narrowed
+    # to the harnesses that can run these components.
     harness_configs: dict = {}
     failed_harnesses: list[str] = []
     from services.model_resolver import resolve_model_for_harness
 
-    config_agent = _AgentVersionConfigProxy(agent, ver, version_components)
+    config_agent = AgentVersionConfigProxy(agent, ver, version_components)
     for harness in ver.supported_harnesses or []:
         try:
             resolved_model, model_warnings = await resolve_model_for_harness(
@@ -376,20 +409,14 @@ async def _create_agent_version(
             failed_harnesses.append(harness)
     ver.harness_configs = harness_configs or {}
 
-    # A draft is not in anyone's queue; only a pending release is.
-    await inbox.on_publish(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=current_user.id,
-        auto_approved=initial_status != AgentStatus.pending,
-        version=ver.version,
-    )
+    review = None
+    if initial_status == AgentStatus.pending:
+        review = await submit_for_review(db, "agent", agent, ver, current_user.id, message=req.message)
 
-    # Do NOT update latest_version_id - that happens on approval
+    # Do NOT update latest_version_id - that happens on publication
     await db.commit()
 
-    warnings: list[str] = []
+    warnings: list[str] = list(harness_warnings)
     if pending_count > 0:
         warnings.append(f"This agent already has {pending_count} pending version(s)")
     if failed_harnesses:
@@ -411,84 +438,9 @@ async def _create_agent_version(
     }
     if warnings:
         result["warnings"] = warnings
+    if review:
+        result.update(review_number=review.number, review_url=f"/review/{review.number}")
     return result
-
-
-async def _review_agent_version(
-    agent_id: str,
-    version: str,
-    req: AgentVersionReviewRequest,
-    db: AsyncSession,
-    current_user: User,
-) -> dict:
-    optic.trace("agent_id={}, version={}", agent_id, version)
-    agent = await _load_agent(db, agent_id, current_user)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    perm = get_effective_agent_permission(agent, current_user)
-
-    # A version carries the agent's prompt and generated harness config. Seeing the
-    # agent is not enough to read a version nobody has approved: making a
-    # team-private agent public returns its versions to the queue, and without this
-    # an ordinary caller reads them before a reviewer does.
-    version_filters = [AgentVersion.agent_id == agent.id]
-    if not may_view_unapproved(perm, current_user):
-        version_filters.append(AgentVersion.status == AgentStatus.approved)
-
-    stmt = select(AgentVersion).where(*version_filters, AgentVersion.version == version)
-    ver = (await db.execute(stmt)).scalar_one_or_none()
-    if not ver:
-        raise HTTPException(status_code=404, detail="Version not found")
-
-    if ver.status != AgentStatus.pending:
-        raise HTTPException(
-            status_code=422, detail=f"Version is {ver.status.value!r}, only pending versions can be reviewed"
-        )
-
-    if req.action == "approve":
-        ver.status = AgentStatus.approved
-        ver.rejection_reason = None
-        ver.reviewed_by = current_user.id
-        ver.reviewed_at = datetime.now(UTC)
-        # Flush version status change first to avoid CircularDependencyError
-        # between Agent.latest_version (ManyToOne) and Agent.versions (OneToMany)
-        await db.flush()
-        # Update latest_version_id if this version is newer than (or equal to) the current latest
-        current_latest = agent.latest_version
-        new_parsed = parse_semver(ver.version)
-        current_parsed = parse_semver(current_latest.version) if current_latest else None
-        if not current_latest or (
-            new_parsed is not None and current_parsed is not None and new_parsed >= current_parsed
-        ):
-            agent.latest_version_id = ver.id
-    else:
-        ver.status = AgentStatus.rejected
-        ver.rejection_reason = req.reason
-        ver.reviewed_by = current_user.id
-        ver.reviewed_at = datetime.now(UTC)
-
-    # Same fact as a decision made through api/routes/review.py: the version's
-    # author hears the outcome, and every reviewer's open request item for this
-    # version is cleared. Delivered before the commit, in this transaction.
-    await inbox.on_review_decided(
-        db,
-        agent,
-        subject_type="agent",
-        approved=req.action == "approve",
-        actor_id=current_user.id,
-        version=ver.version,
-        reason=req.reason if req.action != "approve" else None,
-        submitter_id=ver.released_by,
-    )
-
-    await db.commit()
-
-    return {
-        "version": version,
-        "new_status": ver.status.value,
-        "reason": ver.rejection_reason,
-    }
 
 
 async def _get_agent_harness_config(
@@ -628,6 +580,61 @@ async def _get_version_diff(
     }
 
 
+async def _visible_agent_version(
+    agent_id: str, version: str, db: AsyncSession, current_user: User | None
+) -> tuple[Agent, AgentVersion]:
+    agent = await _load_agent(db, agent_id, current_user)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    perm = get_effective_agent_permission(agent, current_user)
+    if perm == "none":
+        raise HTTPException(status_code=403, detail="Insufficient permissions to view this agent")
+    version_filters = [AgentVersion.agent_id == agent.id, AgentVersion.version == version]
+    if not may_view_unapproved(perm, current_user):
+        version_filters.append(AgentVersion.status == AgentStatus.approved)
+    ver = (await db.execute(select(AgentVersion).where(*version_filters))).scalar_one_or_none()
+    if not ver:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return agent, ver
+
+
+async def _get_agent_version_lock(agent_id: str, version: str, db: AsyncSession, current_user: User | None) -> dict:
+    """The lock for one agent version: the frozen snapshot once approved."""
+    optic.trace("agent_id={}, version={}", agent_id, version)
+    from services.agent_lock import build_lock_document
+
+    agent, ver = await _visible_agent_version(agent_id, version, db, current_user)
+    if ver.status == AgentStatus.approved and ver.lock_snapshot:
+        try:
+            return json.loads(ver.lock_snapshot)
+        except ValueError:
+            optic.warning("agent version {} has an unreadable lock snapshot; rebuilding", ver.id)
+    # Drafts, pending versions, and legacy approved versions without a stored lock
+    # get the lock their current pins describe. Reading never persists it.
+    return await build_lock_document(db, agent, ver)
+
+
+async def _get_agent_version_outdated(agent_id: str, version: str, db: AsyncSession, current_user: User | None) -> dict:
+    """For each pinned component, whether a newer approved release exists."""
+    optic.trace("agent_id={}, version={}", agent_id, version)
+    from services.agent_lock import pin_freshness
+
+    agent, ver = await _visible_agent_version(agent_id, version, db, current_user)
+    components = await pin_freshness(db, ver.components or [])
+    return {
+        "agent_id": str(agent.id),
+        "qualified_name": f"{agent.namespace}/{agent.slug}",
+        "version": ver.version,
+        "components": components,
+        "summary": {
+            "total": len(components),
+            "outdated": sum(item["outdated"] for item in components),
+            "unlocked": sum(not item["locked"] for item in components),
+            "archived": sum(item["archived"] for item in components),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
@@ -683,24 +690,6 @@ async def create_agent_version(
     )
 
 
-@agent_version_router.post("/{agent_id}/versions/{version}/review")
-async def review_agent_version(
-    agent_id: str,
-    version: str,
-    req: AgentVersionReviewRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.reviewer)),
-):
-    optic.trace("agent_id={}, version={}", agent_id, version)
-    return await _review_agent_version(
-        agent_id=agent_id,
-        version=version,
-        req=req,
-        db=db,
-        current_user=current_user,
-    )
-
-
 @agent_version_router.get("/{agent_id}/versions/{version}/harness/{harness}")
 async def get_agent_harness_config(
     agent_id: str,
@@ -717,6 +706,28 @@ async def get_agent_harness_config(
         db=db,
         current_user=current_user,
     )
+
+
+@agent_version_router.get("/{agent_id}/versions/{version}/lock")
+async def get_agent_version_lock(
+    agent_id: str,
+    version: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_registry_user),
+):
+    optic.trace("agent_id={}, version={}", agent_id, version)
+    return await _get_agent_version_lock(agent_id=agent_id, version=version, db=db, current_user=current_user)
+
+
+@agent_version_router.get("/{agent_id}/versions/{version}/outdated")
+async def get_agent_version_outdated(
+    agent_id: str,
+    version: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_registry_user),
+):
+    optic.trace("agent_id={}, version={}", agent_id, version)
+    return await _get_agent_version_outdated(agent_id=agent_id, version=version, db=db, current_user=current_user)
 
 
 @agent_version_router.get("/{agent_id}/versions/{v1}/diff/{v2}")

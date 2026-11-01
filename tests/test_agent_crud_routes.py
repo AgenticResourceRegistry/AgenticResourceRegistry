@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused unit coverage for the agent CRUD routes."""
@@ -30,7 +31,10 @@ from schemas.agent import (
     SuccessCriteria,
     SuccessMetric,
 )
+from services import harness_capability_inference as inference
 from services.teamspace import PublishTarget
+
+pytestmark = pytest.mark.usefixtures("no_open_review")
 
 NOW = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
 USER_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
@@ -179,6 +183,8 @@ def _result(*, scalar=None, scalar_rows: list | None = None, rows: list | None =
 def _db(*results):
     db = MagicMock()
     db.execute = AsyncMock(side_effect=list(results))
+    db.scalar = AsyncMock(return_value=None)
+    db.refresh = AsyncMock()
     db.add = MagicMock()
     db.delete = AsyncMock()
     db.flush = AsyncMock()
@@ -223,6 +229,7 @@ def _sql(statement) -> str:
 
 @pytest.fixture
 def boundaries(monkeypatch):
+    import services.agent_lock as agent_lock
     import services.agent_resolver as resolver
     import services.agent_snapshot as snapshot
     import services.registry_telemetry as registry_telemetry
@@ -237,7 +244,31 @@ def boundaries(monkeypatch):
     )
     publish_target = AsyncMock(return_value=target)
     validate_components = AsyncMock(return_value=[])
-    resolve_versions = AsyncMock(return_value={})
+    pins: dict = {}
+
+    async def fake_attach(db, agent_version_id, refs, *, previous=(), order_start=0, **_options):
+        # Stand in for the lock service: pin each ref to the version in ``pins``.
+        links = []
+        for offset, ref in enumerate(refs):
+            field = (
+                ref.get if isinstance(ref, dict) else lambda name, default=None, ref=ref: getattr(ref, name, default)
+            )
+            key = (field("component_type"), field("component_id"))
+            link = AgentComponent(
+                agent_version_id=agent_version_id,
+                component_type=key[0],
+                component_id=key[1],
+                component_name="",
+                resolved_version=pins.get(key, "1.0.0"),
+                order_index=order_start + offset,
+                config_override=field("config_override"),
+            )
+            db.add(link)
+            links.append(link)
+        return links
+
+    attach = AsyncMock(side_effect=fake_attach)
+    lock = AsyncMock(return_value={})
     build_snapshot = AsyncMock(return_value="snapshot: true\n")
     emit = MagicMock()
     invalidate = AsyncMock(return_value=0)
@@ -248,21 +279,24 @@ def boundaries(monkeypatch):
     statuses = AsyncMock(return_value={})
     validate_mcps = AsyncMock(return_value=[])
     identity_exists = AsyncMock(return_value=False)
+    submit = AsyncMock(return_value=SimpleNamespace(number=42))
 
     monkeypatch.setattr(crud, "datetime", _FixedDateTime)
+    monkeypatch.setattr(crud, "submit_for_review", submit)
     monkeypatch.setattr(crud, "resolve_publish_target", publish_target)
     monkeypatch.setattr(crud, "emit_registry_event", emit)
     monkeypatch.setattr(crud, "invalidate_namespace", invalidate)
     monkeypatch.setattr(crud, "validate_mcp_command", validate_command)
-    monkeypatch.setattr(crud, "infer_required_features", MagicMock(return_value=["mcp_servers"]))
-    monkeypatch.setattr(crud, "compute_supported_harnesses", MagicMock(return_value=["kiro"]))
+    monkeypatch.setattr(inference, "infer_required_features", MagicMock(return_value=["mcp_servers"]))
+    monkeypatch.setattr(inference, "compute_supported_harnesses", MagicMock(return_value=["codex", "kiro"]))
     monkeypatch.setattr(crud, "_resolve_component_names", names)
     monkeypatch.setattr(crud, "_resolve_component_identities", identities)
     monkeypatch.setattr(crud, "_resolve_component_statuses", statuses)
     monkeypatch.setattr(crud, "_validate_mcp_ids", validate_mcps)
     monkeypatch.setattr(crud, "identity_exists", identity_exists)
     monkeypatch.setattr(resolver, "validate_component_ids", validate_components)
-    monkeypatch.setattr(resolver, "resolve_component_versions", resolve_versions)
+    monkeypatch.setattr(agent_lock, "attach_pinned_components", attach)
+    monkeypatch.setattr(agent_lock, "lock_agent_version", lock)
     monkeypatch.setattr(snapshot, "build_yaml_snapshot", build_snapshot)
     monkeypatch.setattr(registry_telemetry, "insert_audit_log", clickhouse_insert)
 
@@ -270,7 +304,9 @@ def boundaries(monkeypatch):
         target=target,
         publish_target=publish_target,
         validate_components=validate_components,
-        resolve_versions=resolve_versions,
+        pins=pins,
+        attach=attach,
+        lock=lock,
         build_snapshot=build_snapshot,
         emit=emit,
         invalidate=invalidate,
@@ -281,6 +317,7 @@ def boundaries(monkeypatch):
         statuses=statuses,
         validate_mcps=validate_mcps,
         identity_exists=identity_exists,
+        submit=submit,
     )
 
 
@@ -346,7 +383,7 @@ async def test_create_team_agent_with_typed_components_maps_response_and_audit(b
         auto_approve=True,
     )
     boundaries.publish_target.return_value = boundaries.target
-    boundaries.resolve_versions.return_value = {("mcp", MCP_ID): "2.0.0", ("skill", SKILL_ID): "3.0.0"}
+    boundaries.pins.update({("mcp", MCP_ID): "2.0.0", ("skill", SKILL_ID): "3.0.0"})
     skill = SimpleNamespace(id=SKILL_ID)
     db = _creation_db(_result(scalar=None), _result(scalar_rows=[skill]))
     loaded = _agent(
@@ -392,12 +429,14 @@ async def test_create_team_agent_with_typed_components_maps_response_and_audit(b
         TEAM_ID,
         True,
     )
-    assert version.status == AgentStatus.approved
-    assert version.reviewed_by == USER_ID
-    assert version.reviewed_at == NOW
+    assert version.status == AgentStatus.pending
+    assert version.reviewed_by is None
+    assert version.reviewed_at is None
+    assert response.review_number == 42 and response.review_url == "/review/42"
+    boundaries.submit.assert_awaited_once_with(db, "agent", new_agent, version, USER_ID)
     assert version.success_criteria == criteria.model_dump()
     assert version.required_capabilities == ["mcp_servers"]
-    assert version.inferred_supported_harnesses == ["kiro"]
+    assert version.inferred_supported_harnesses == ["codex", "kiro"]
     assert [(link.component_type, link.resolved_version, link.order_index) for link in links] == [
         ("mcp", "2.0.0", 0),
         ("skill", "3.0.0", 1),
@@ -427,7 +466,7 @@ async def test_create_team_agent_with_typed_components_maps_response_and_audit(b
 
 async def test_create_legacy_mcp_links_are_version_pinned_and_pending(boundaries, monkeypatch):
     second_mcp = uuid.UUID("50000000-0000-0000-0000-000000000002")
-    boundaries.validate_mcps.return_value = [SimpleNamespace(version="1.0.0"), SimpleNamespace(version="2.0.0")]
+    boundaries.pins.update({("mcp", MCP_ID): "1.0.0", ("mcp", second_mcp): "2.0.0"})
     db = _creation_db(_result(scalar=None))
     monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=_agent()))
     request = _create_request(owner="", mcp_server_ids=[MCP_ID, second_mcp])
@@ -446,7 +485,13 @@ async def test_create_legacy_mcp_links_are_version_pinned_and_pending(boundaries
         (MCP_ID, "1.0.0", 0),
         (second_mcp, "2.0.0", 1),
     ]
-    boundaries.resolve_versions.assert_awaited_once_with([], db)
+    boundaries.attach.assert_awaited_once_with(
+        db,
+        version.id,
+        [{"component_type": "mcp", "component_id": MCP_ID}, {"component_type": "mcp", "component_id": second_mcp}],
+        current_user=_user(),
+    )
+    boundaries.lock.assert_awaited_once_with(db, new_agent, version)
 
 
 @pytest.mark.parametrize(
@@ -481,6 +526,7 @@ async def test_list_agents_builds_scoped_search_queries_and_maps_batch_data(boun
         _result(scalar=1),
         _result(scalar_rows=[agent]),
         _result(rows=[(AGENT_ID, 4.126)]),
+        _result(rows=[]),  # public fork counts
         _result(rows=[(USER_ID, "creator@example.com", "creator")]),
     )
     response = Response()
@@ -547,7 +593,7 @@ async def test_list_agents_empty_page_skips_batch_queries(boundaries):
 
 async def test_my_agents_filters_owner_and_maps_rating(boundaries):
     agent = _agent()
-    db = _db(_result(scalar_rows=[agent]), _result(rows=[(AGENT_ID, 3.555)]))
+    db = _db(_result(scalar_rows=[agent]), _result(rows=[(AGENT_ID, 3.555)]), _result(rows=[]))
 
     result = await crud.my_agents(db=db, current_user=_user())
 
@@ -633,7 +679,7 @@ async def test_get_agent_resolves_qualified_name_and_maps_components(boundaries,
     boundaries.names.return_value = {str(MCP_ID): "GitHub"}
     boundaries.identities.return_value = {str(MCP_ID): ("acme", "github")}
     boundaries.statuses.return_value = {str(MCP_ID): "archived"}
-    db = _db(_result(first=("creator@example.com", "creator")))
+    db = _db(_result(first=("creator@example.com", "creator")), _result(rows=[]))
 
     result = await crud.get_agent("alice/review-agent", db=db, current_user=_user())
 
@@ -653,7 +699,7 @@ async def test_get_agent_resolves_qualified_name_and_maps_components(boundaries,
     assert result.component_links[0].qualified_name == "acme/github"
     assert result.component_links[0].status == "archived"
     assert result.mcp_links[0].mcp_name == "GitHub"
-    assert "users.id" in _sql(db.execute.await_args.args[0])
+    assert "users.id" in _sql(db.execute.await_args_list[0].args[0])
 
 
 @pytest.mark.parametrize(("loaded", "permission", "status_code"), [(None, "view", 404), (_agent(), "none", 403)])
@@ -780,10 +826,10 @@ async def test_update_rejects_duplicate_active_name(boundaries, monkeypatch):
 async def test_update_typed_components_refreshes_features_snapshot_and_response(boundaries, monkeypatch):
     old_mcp = _component()
     old_skill = _component("skill", SKILL_ID, order=1)
-    agent = _agent(components=[old_mcp, old_skill])
+    agent = _agent(components=[old_mcp, old_skill], status=AgentStatus.pending)
     load = AsyncMock(side_effect=[agent, agent])
     monkeypatch.setattr(crud, "_load_agent", load)
-    boundaries.resolve_versions.return_value = {("mcp", MCP_ID): "4.0.0", ("skill", SKILL_ID): "5.0.0"}
+    boundaries.pins.update({("mcp", MCP_ID): "4.0.0", ("skill", SKILL_ID): "5.0.0"})
     current_mcp = _component(resolved_version="4.0.0")
     current_skill = _component("skill", SKILL_ID, resolved_version="5.0.0", order=1)
     skill_listing = SimpleNamespace(id=SKILL_ID)
@@ -821,7 +867,7 @@ async def test_update_typed_components_refreshes_features_snapshot_and_response(
     assert agent.external_mcps == [{"name": "local", "command": "python", "args": ["main.py"], "env": {}, "url": None}]
     assert agent.latest_version.success_criteria == criteria.model_dump()
     assert agent.required_capabilities == ["mcp_servers"]
-    assert agent.inferred_supported_harnesses == ["kiro"]
+    assert agent.inferred_supported_harnesses == ["codex", "kiro"]
     assert db.delete.await_args_list[0].args[0] is old_mcp
     assert db.delete.await_args_list[1].args[0] is old_skill
     added = [call.args[0] for call in db.add.call_args_list]
@@ -838,8 +884,45 @@ async def test_update_typed_components_refreshes_features_snapshot_and_response(
     assert response.version == "1.3.0"
 
 
-async def test_update_typed_components_reports_validation_errors(boundaries, monkeypatch):
+@pytest.mark.parametrize("status", [AgentStatus.approved, AgentStatus.archived])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"prompt": "Rewritten"},
+        {"version_bump_type": "minor"},
+        {"components": [{"component_type": "mcp", "component_id": MCP_ID}]},
+        {"success_criteria": None},
+    ],
+)
+async def test_update_refuses_to_edit_an_approved_version_in_place(boundaries, monkeypatch, status, payload):
+    agent = _agent(status=status)
+    monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=agent))
+    db = _db()
+
+    with pytest.raises(HTTPException) as caught:
+        await crud.update_agent(str(AGENT_ID), AgentUpdateRequest(**payload), db=db, current_user=_user())
+
+    assert caught.value.status_code == 409
+    assert "observal agent release alice/review-agent" in caught.value.detail
+    assert agent.latest_version.version == "1.2.3"
+    assert agent.latest_version.prompt == "Review carefully"
+    db.execute.assert_not_awaited()
+    boundaries.attach.assert_not_awaited()
+
+
+async def test_update_still_edits_identity_fields_of_an_approved_agent(boundaries, monkeypatch):
     agent = _agent()
+    monkeypatch.setattr(crud, "_load_agent", AsyncMock(side_effect=[agent, agent]))
+    db = _db(_result(scalar=None))
+
+    await crud.update_agent(str(AGENT_ID), AgentUpdateRequest(category="security"), db=db, current_user=_user())
+
+    assert agent.category == "security"
+    db.commit.assert_awaited_once()
+
+
+async def test_update_typed_components_reports_validation_errors(boundaries, monkeypatch):
+    agent = _agent(status=AgentStatus.pending)
     monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=agent))
     boundaries.validate_components.return_value = [
         SimpleNamespace(component_type="skill", component_id=SKILL_ID, reason="not approved")
@@ -860,9 +943,8 @@ async def test_update_typed_components_reports_validation_errors(boundaries, mon
 async def test_update_legacy_mcp_links_only_replaces_mcp_components(boundaries, monkeypatch):
     old = _component()
     current = _component(resolved_version="9.0.0")
-    listing = SimpleNamespace(version="9.0.0")
-    boundaries.validate_mcps.return_value = [listing]
-    agent = _agent(components=[old])
+    boundaries.pins[("mcp", MCP_ID)] = "9.0.0"
+    agent = _agent(components=[old], status=AgentStatus.pending)
     monkeypatch.setattr(crud, "_load_agent", AsyncMock(side_effect=[agent, agent]))
     db = _db(_result(scalar_rows=[old]), _result(scalar_rows=[current]))
 
@@ -872,6 +954,13 @@ async def test_update_legacy_mcp_links_only_replaces_mcp_components(boundaries, 
         [MCP_ID], db, current_user=ANY, target_team_id=None, enforce_target=True
     )
     db.delete.assert_awaited_once_with(old)
+    boundaries.attach.assert_awaited_once_with(
+        db,
+        agent.latest_version.id,
+        [{"component_type": "mcp", "component_id": MCP_ID}],
+        previous=[old],
+        current_user=_user(),
+    )
     replacement = db.add.call_args.args[0]
     assert (replacement.component_type, replacement.component_id, replacement.resolved_version) == (
         "mcp",
@@ -907,7 +996,7 @@ async def test_update_requires_a_version_for_version_owned_fields(boundaries, mo
 
 
 async def test_update_rejects_unsafe_external_mcp(boundaries, monkeypatch):
-    monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=_agent()))
+    monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=_agent(status=AgentStatus.pending)))
     boundaries.validate_command.side_effect = ValueError("unsafe")
 
     with pytest.raises(HTTPException) as caught:
@@ -922,7 +1011,7 @@ async def test_update_rejects_unsafe_external_mcp(boundaries, monkeypatch):
 
 
 async def test_update_commit_failure_has_no_audit_or_response_reload(boundaries, monkeypatch):
-    agent = _agent()
+    agent = _agent(status=AgentStatus.pending)
     load = AsyncMock(return_value=agent)
     monkeypatch.setattr(crud, "_load_agent", load)
     db = _db()
@@ -1022,6 +1111,17 @@ async def test_restore_detects_active_identity_collision(boundaries, monkeypatch
 
     assert caught.value.status_code == 409
     assert caught.value.detail == "Agent 'alice/renamed-agent' already exists. Restore with a new name."
+
+
+async def test_restore_rejects_a_reserved_slug_as_bad_input(boundaries, monkeypatch):
+    monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=_agent(deleted_at=NOW)))
+    db = _db()
+
+    with pytest.raises(HTTPException) as caught:
+        await crud.restore_deleted_agent(str(AGENT_ID), AgentRestoreRequest(name="draft"), db=db, current_user=_user())
+
+    assert (caught.value.status_code, caught.value.detail) == (422, "Slug 'draft' is reserved")
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

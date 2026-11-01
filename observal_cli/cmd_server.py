@@ -48,6 +48,52 @@ def _is_json(output: OutputMode) -> bool:
     return output == "json"
 
 
+def _verified_service_states(orchestrator, *, running: bool, operation: str) -> list[dict[str, str]]:
+    """Read final embedded-service state and fail when it contradicts the requested lifecycle action."""
+    try:
+        statuses = orchestrator.status()
+    except Exception as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "The final embedded service state could not be verified.",
+            operation=operation,
+            resource="embedded services",
+            remediation="Run `observal server status --output json` and inspect the server logs.",
+            detail=repr(error),
+        )
+    expected = "running" if running else "stopped"
+    expected_services = {"postgres", "clickhouse", "redis", "api"}
+    states = (
+        [{"service": service, "status": status} for service, status in statuses.items()]
+        if isinstance(statuses, dict)
+        else []
+    )
+    if not isinstance(statuses, dict) or not expected_services.issubset(statuses):
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "The embedded service status response was incomplete.",
+            operation=operation,
+            resource="embedded services",
+            remediation="Run `observal server status --output json` and inspect the server logs.",
+            result={"expected": expected, "services": states},
+        )
+    verified = bool(statuses) and (
+        all(status == "running" for status in statuses.values())
+        if running
+        else not any(status == "running" for status in statuses.values())
+    )
+    if not verified:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            f"Embedded services did not reach the expected {expected} state.",
+            operation=operation,
+            resource="embedded services",
+            remediation="Inspect the returned service states and server logs, then retry.",
+            result={"expected": expected, "services": states},
+        )
+    return states
+
+
 @contextmanager
 def _quiet_output(output: OutputMode):
     """Suppress nested human progress while a command builds its JSON result."""
@@ -146,6 +192,9 @@ def start(
             detail=repr(error),
         )
 
+    services = (
+        _verified_service_states(orchestrator, running=True, operation="Start embedded server") if background else []
+    )
     if _is_json(output):
         output_json(
             {
@@ -155,6 +204,7 @@ def start(
                 "port": port,
                 "background": True,
                 "used_fallback_port": port != requested_port,
+                "services": services,
             }
         )
 
@@ -171,12 +221,24 @@ def stop(
         observal server stop
         observal server stop --output json
     """
-    from observal_cli.server.orchestrator import Orchestrator
+    from observal_cli.server.orchestrator import Orchestrator, ServiceError
 
-    with _quiet_output(output):
-        Orchestrator().stop_all()
+    orchestrator = Orchestrator()
+    try:
+        with _quiet_output(output):
+            orchestrator.stop_all()
+    except (ServiceError, RuntimeError, OSError) as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "The embedded server could not stop cleanly.",
+            operation="Stop embedded server",
+            resource="embedded services",
+            remediation="Inspect server status and logs, then retry.",
+            detail=repr(error),
+        )
+    services = _verified_service_states(orchestrator, running=False, operation="Stop embedded server")
     if _is_json(output):
-        output_json({"status": "stopped", "mode": "embedded"})
+        output_json({"status": "stopped", "mode": "embedded", "services": services})
 
 
 @server_app.command()
@@ -221,8 +283,20 @@ def restart(
             remediation="Check local dependencies and server logs, then retry.",
             detail=repr(error),
         )
+    services = (
+        _verified_service_states(orchestrator, running=True, operation="Restart embedded server") if background else []
+    )
     if _is_json(output):
-        output_json({"status": "restarted", "mode": "embedded", "host": host, "port": port, "background": True})
+        output_json(
+            {
+                "status": "restarted",
+                "mode": "embedded",
+                "host": host,
+                "port": port,
+                "background": True,
+                "services": services,
+            }
+        )
 
 
 @server_app.command()
@@ -549,6 +623,8 @@ def _get_health_url(compose_dir: Path) -> str:
 
     Reads LB_HOST_PORT (preferred) or API_HOST_PORT from .env to determine
     the correct port. Falls back to 8000 (standard API port) if neither is set.
+    Every shipped nginx.conf routes /health to the API's readiness check;
+    /readyz falls through to the web app there and would pass without the API.
     """
     optic.trace("compose_dir={}", compose_dir)
     env_file = _find_env_file(compose_dir)
@@ -562,7 +638,30 @@ def _get_health_url(compose_dir: Path) -> str:
             elif line.startswith("API_HOST_PORT="):
                 api_port = line.split("=", 1)[1].strip().strip('"') or None
     port = lb_port or api_port or "8000"
-    return f"http://localhost:{port}/readyz"
+    return f"http://localhost:{port}/health"
+
+
+def _refresh_load_balancer(compose_dir: Path) -> None:
+    """Restart nginx so it resolves the recreated API and web containers.
+
+    nginx resolves upstream hostnames once at startup, so after `up -d`
+    replaces the API container it keeps proxying to the old address.
+    Failures only warn: the health check that follows reports the outcome.
+    """
+    optic.trace("compose_dir={}", compose_dir)
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "restart", "observal-lb"],
+            cwd=compose_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        optic.warning("load balancer restart failed error={}", type(error).__name__)
+        return
+    if result.returncode != 0:
+        optic.warning("load balancer restart failed returncode={}", result.returncode)
 
 
 def _update_env_version(compose_dir: Path, version: str) -> None:
@@ -649,14 +748,14 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 ErrorCategory.NOT_FOUND,
                 "The target server image was not found.",
                 operation="Upgrade Docker server",
-                resource=f"ghcr.io/observal/observal-api:{target}",
+                resource=f"ghcr.io/agenticresourceregistry/observal-api:{target}",
                 remediation="Run observal server versions and choose an available version.",
             )
 
     if dry_run:
         console.print(f"[dim]Dry run: would upgrade v{current} → v{target}[/dim]")
-        console.print(f"[dim]  Pull: ghcr.io/observal/observal-api:{target}[/dim]")
-        console.print(f"[dim]  Pull: ghcr.io/observal/observal-web:{target}[/dim]")
+        console.print(f"[dim]  Pull: ghcr.io/agenticresourceregistry/observal-api:{target}[/dim]")
+        console.print(f"[dim]  Pull: ghcr.io/agenticresourceregistry/observal-web:{target}[/dim]")
         console.print(f"[dim]  Compose dir: {escape(str(compose_dir))}[/dim]")
         return {
             "status": "planned",
@@ -670,7 +769,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
     if not force:
         console.print(f"  Current: [dim]v{current}[/dim]")
         console.print(f"  Target:  [green]v{target}[/green]")
-        console.print(f"  Images:  [dim]ghcr.io/observal/observal-{{api,web}}:{target}[/dim]")
+        console.print(f"  Images:  [dim]ghcr.io/agenticresourceregistry/observal-{{api,web}}:{target}[/dim]")
         if not typer.confirm("\nProceed with server upgrade?"):
             raise typer.Abort()
 
@@ -739,6 +838,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 remediation="Inspect Docker Compose logs and retry.",
                 detail=f"docker_returncode={result.returncode}",
             )
+        _refresh_load_balancer(compose_dir)
 
         # Health check
         console.print("[blue]==>[/blue] Health check...")
@@ -766,6 +866,7 @@ def _server_upgrade(version: str | None, skip_backup: bool, dry_run: bool, force
                 capture_output=True,
                 timeout=300,
             )
+            _refresh_load_balancer(compose_dir)
             fail(
                 ErrorCategory.UNAVAILABLE,
                 "The upgraded server failed its health check.",
@@ -928,6 +1029,7 @@ def _server_rollback(from_backup: str | None, force: bool) -> dict:
                 remediation="Inspect Docker Compose logs before retrying.",
                 detail=f"docker_returncode={recreate.returncode}",
             )
+        _refresh_load_balancer(compose_dir)
 
         # Health check
         import time
@@ -1053,7 +1155,7 @@ def server_versions(
         )
     payload = {
         "current_version": None if current == "unknown" else current,
-        "image_repository": "ghcr.io/observal/observal-{api,web}",
+        "image_repository": "ghcr.io/agenticresourceregistry/observal-{api,web}",
         "versions": versions,
     }
     if _is_json(output):

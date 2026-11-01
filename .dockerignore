@@ -4,6 +4,7 @@
 
 # Version control
 **/.git
+.worktrees/
 
 # Python artifacts
 **/__pycache__
@@ -16,6 +17,7 @@ htmlcov/
 # Node.js artifacts
 **/node_modules
 **/.next
+web/dist
 
 # Documentation assets (screenshots not needed in images)
 LICENSE

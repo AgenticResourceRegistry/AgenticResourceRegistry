@@ -4,7 +4,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, ShieldAlert, ShieldCheck } from "lucide-react";
 
-import { PageHeader, PageIntro } from "@/components/layouts/page-header";
+import { PageHeader } from "@/components/layouts/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { TableSkeleton } from "@/components/shared/skeleton-layouts";
@@ -134,7 +134,6 @@ export default function SecurityEventsPage() {
     <>
       <PageHeader title="Security Events" breadcrumbs={[{ label: "Administration" }, { label: "Security" }]} />
       <div className="page-body mx-auto w-full">
-        <PageIntro eyebrow="Security operations" title="Security Events" subtitle="Investigate authentication, authorization, and policy activity." />
         <div className="space-y-5">
           {data && (
             <AdminMetricStrip>

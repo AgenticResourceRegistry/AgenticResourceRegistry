@@ -119,14 +119,12 @@ locals {
   enable_tls = var.enable_tls && var.domain_name != "" && var.route53_zone_id != ""
   app_url    = var.domain_name != "" ? "${local.enable_tls ? "https" : "http"}://${var.domain_name}" : "http://${aws_lb.app.dns_name}"
 
-  clickhouse_self_hosted = var.clickhouse_mode == "self_hosted"
-
   observability_prometheus_enabled = contains(["prometheus", "grafana"], var.observability_stack)
   observability_grafana_enabled    = var.observability_stack == "grafana"
-  bundled_grafana_available        = local.clickhouse_self_hosted && local.observability_grafana_enabled
+  bundled_grafana_available        = local.observability_grafana_enabled
 
   # Internal DNS name for ClickHouse
-  clickhouse_host_internal = local.clickhouse_self_hosted ? "clickhouse.${var.internal_dns_zone}" : ""
+  clickhouse_host_internal = "clickhouse.${var.internal_dns_zone}"
 
   ssm_prefix = "/${local.name}"
 }
@@ -137,15 +135,6 @@ data "aws_vpc" "vpc" {
 }
 
 # Cross-variable validation: subnets required when using BYO-VPC.
-resource "terraform_data" "observability_validation" {
-  lifecycle {
-    precondition {
-      condition     = var.observability_stack == "none" || local.clickhouse_self_hosted
-      error_message = "Bundled observability requires clickhouse_mode = self_hosted. Use your cloud provider observability stack when ClickHouse Cloud is enabled."
-    }
-  }
-}
-
 resource "terraform_data" "byovpc_validation" {
   count = local.should_create_vpc ? 0 : 1
 

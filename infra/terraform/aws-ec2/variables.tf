@@ -74,5 +74,5 @@ variable "observal_ref" {
 variable "observal_repo" {
   description = "Git repository URL"
   type        = string
-  default     = "https://github.com/Observal/Observal.git"
+  default     = "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git"
 }

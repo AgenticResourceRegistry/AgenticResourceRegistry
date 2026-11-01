@@ -97,8 +97,9 @@ export function parseMcpConfigJson(raw: string): { parsed?: ParsedMcpConfig; err
     // Derive framework
     if (result.command === "docker") {
       result.framework = "docker";
-      const lastNonFlag = [...result.args].reverse().find((a) => !a.startsWith("-"));
-      if (lastNonFlag) result.dockerImage = lastNonFlag;
+      // The image is the first positional after `docker run` options, not a trailing container arg.
+      const image = dockerImageFromArgs(result.args);
+      if (image) result.dockerImage = image;
     } else if (result.command === "python" || result.command === "python3") {
       result.framework = "python";
     } else if (result.command === "npx" || result.command === "node") {
@@ -245,4 +246,54 @@ function unwrapMcpConfig(cfg: Record<string, unknown>): { inner: Record<string, 
     if (inner.command || inner.url || inner.type) return { inner, serverName: keys[0] };
   }
   return { inner: cfg };
+}
+
+// `docker run` options that take a separate value argument. Mirrors observal_shared.mcp_analysis.
+const DOCKER_RUN_VALUE_FLAGS = new Set([
+  "-a", "--attach", "--add-host", "--annotation", "--blkio-weight", "--blkio-weight-device",
+  "--cap-add", "--cap-drop", "--cgroup-parent", "--cgroupns", "--cidfile", "--cpu-period", "--cpu-quota",
+  "--cpu-rt-period", "--cpu-rt-runtime", "-c", "--cpu-shares", "--cpus", "--cpuset-cpus", "--cpuset-mems",
+  "--detach-keys", "--device", "--device-cgroup-rule", "--device-read-bps", "--device-read-iops",
+  "--device-write-bps", "--device-write-iops", "--dns", "--dns-option", "--dns-search", "--domainname",
+  "--entrypoint", "-e", "--env", "--env-file", "--expose", "--gpus", "--group-add", "--health-cmd",
+  "--health-interval", "--health-retries", "--health-start-interval", "--health-start-period",
+  "--health-timeout", "-h", "--hostname", "--ip", "--ip6", "--ipc", "--isolation", "--kernel-memory",
+  "-l", "--label", "--label-file", "--link", "--link-local-ip", "--log-driver", "--log-opt",
+  "--mac-address", "-m", "--memory", "--memory-reservation", "--memory-swap", "--memory-swappiness",
+  "--mount", "--name", "--network", "--net", "--network-alias", "--net-alias", "--oom-score-adj", "--pid",
+  "--pids-limit", "--platform", "-p", "--publish", "--pull", "--restart", "--runtime", "--security-opt",
+  "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl", "--tmpfs", "--ulimit",
+  "-u", "--user", "--userns", "--uts", "-v", "--volume", "--volume-driver", "--volumes-from", "-w",
+  "--workdir",
+]);
+const DOCKER_SHORT_VALUE_FLAGS = new Set([...DOCKER_RUN_VALUE_FLAGS].filter((flag) => flag.length === 2).map((flag) => flag[1]));
+
+/** The image in `docker run [OPTIONS] IMAGE [COMMAND] [ARG...]`. Args may omit `run` and start with options. */
+export function dockerImageFromArgs(args: string[]): string | undefined {
+  let tokens = [...args];
+  if (tokens[0] === "container" && tokens[1] === "run") tokens = tokens.slice(2);
+  else if (tokens[0] === "run") tokens = tokens.slice(1);
+  else if (!tokens[0]?.startsWith("-")) return undefined;
+  for (let index = 0; index < tokens.length; ) {
+    const token = tokens[index];
+    if (token === "--") return tokens[index + 1];
+    if (token.startsWith("--")) {
+      index += token.includes("=") || !DOCKER_RUN_VALUE_FLAGS.has(token) ? 1 : 2;
+      continue;
+    }
+    if (DOCKER_RUN_VALUE_FLAGS.has(`-${token}`)) {
+      // A single-dash long flag such as -env (common in hand-written configs) takes a value.
+      index += 2;
+      continue;
+    }
+    if (token.startsWith("-") && token.length > 1) {
+      // Grouped short flags such as -it; a value flag takes the rest of the token or the next one.
+      const letters = token.slice(1);
+      const valueAt = [...letters].findIndex((letter) => DOCKER_SHORT_VALUE_FLAGS.has(letter));
+      index += valueAt === letters.length - 1 ? 2 : 1;
+      continue;
+    }
+    return token;
+  }
+  return undefined;
 }

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """OAuth 2.0 Device Authorization Grant (RFC 8628) endpoints.
@@ -27,7 +28,7 @@ import services.dynamic_settings as ds
 from api.deps import get_current_user, get_db
 from api.ratelimit import limiter
 from api.routes.auth import _issue_tokens
-from models.user import User
+from models.user import User, is_deleted_account
 from schemas.auth import (
     DeviceAuthRequest,
     DeviceAuthResponse,
@@ -132,6 +133,18 @@ async def _saml_configured(db: AsyncSession) -> bool:
 async def device_authorize(request: Request, req: DeviceAuthRequest = None, db: AsyncSession = Depends(get_db)):
     """Create a device authorization request. Returns device_code + user_code."""
     optic.debug("initiating device auth flow")
+    requested_provider = (req.provider or "").lower() if req and req.sso else ""
+    if requested_provider in ("google", "github"):
+        from api.routes.auth import is_github_oauth_configured, is_google_oauth_configured
+
+        configured = is_google_oauth_configured() if requested_provider == "google" else is_github_oauth_configured()
+        # Falling back to OIDC here would send a Google or GitHub user to an IdP
+        # where they have no account, and the device code would just expire.
+        if not configured:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{'Google' if requested_provider == 'google' else 'GitHub'} sign-in is not configured on this server",
+            )
     device_code = secrets.token_urlsafe(48)
     user_code = _generate_user_code()
     normalized_code = _normalize_user_code(user_code)
@@ -162,11 +175,17 @@ async def device_authorize(request: Request, req: DeviceAuthRequest = None, db: 
         next_param = quote(next_path, safe="")
         provider = (req.provider or "").lower()
         saml_configured = await _saml_configured(db)
-        from api.routes.auth import is_oidc_configured
+        from api.routes.auth import is_github_oauth_configured, is_google_oauth_configured, is_oidc_configured
 
         oidc_configured = is_oidc_configured()
+        # Google and GitHub come before the OIDC fallback because someone who signs in
+        # with them on the web usually has no account at the OIDC provider.
         if provider == "saml" and saml_configured:
             login_url = f"{frontend_url}/api/v1/sso/saml/login?next={next_param}"
+        elif provider == "google" and is_google_oauth_configured():
+            login_url = f"{frontend_url}/api/v1/auth/oauth/google/login?next={next_param}"
+        elif provider == "github" and is_github_oauth_configured():
+            login_url = f"{frontend_url}/api/v1/auth/oauth/github/login?next={next_param}"
         elif oidc_configured:
             login_url = f"{frontend_url}/api/v1/auth/oauth/login?next={next_param}"
         elif saml_configured:
@@ -234,7 +253,8 @@ async def device_token(request: Request, req: DeviceTokenRequest, db: AsyncSessi
 
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
-        if not user:
+        # An approval that predates the account's deletion never yields tokens.
+        if not user or is_deleted_account(user):
             return JSONResponse(status_code=400, content={"error": "expired_token"})
 
         # Clean up Redis keys

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from typing import TYPE_CHECKING
@@ -51,7 +52,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
         else:
             outcome = "client_error"
 
-        action = getattr(request.state, "audit_action", f"{request.method.lower()}.{request.url.path}")
+        # Share tokens are bearer credentials; never persist them in audit records.
+        audit_path = re.sub(r"(/agent-shares/)[^/]+", r"\1{token}", request.url.path)
+        action = getattr(request.state, "audit_action", f"{request.method.lower()}.{audit_path}")
         resource_type = getattr(request.state, "audit_resource_type", "")
         resource_id = getattr(request.state, "audit_resource_id", "")
         resource_name = getattr(request.state, "audit_resource_name", "")
@@ -62,7 +65,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
             event_id=event_id,
             request_id=request_id,
             http_method=request.method,
-            http_path=request.url.path,
+            http_path=audit_path,
             ip_address=ip,
             user_agent=request.headers.get("user-agent", "")[:256],
             sensitivity=sensitivity,

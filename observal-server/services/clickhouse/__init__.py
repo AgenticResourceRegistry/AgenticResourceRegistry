@@ -23,6 +23,7 @@ from services.clickhouse.client import (
 from services.clickhouse.insert import (
     _insert_webhook_deliveries,
     insert_audit_log,
+    insert_session_capabilities,
     insert_session_checkpoint,
     insert_session_events,
     refresh_session_summary,
@@ -62,6 +63,7 @@ __all__ = [
     "clickhouse_health",
     "init_clickhouse",
     "insert_audit_log",
+    "insert_session_capabilities",
     "insert_session_checkpoint",
     "insert_session_events",
     "query_existing_for_dedup",

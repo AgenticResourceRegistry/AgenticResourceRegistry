@@ -3,17 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
 
+# error_rate and latency_p99 are unimplemented stubs that always return 0, so
+# token_usage is the only metric the evaluator can actually act on.
+AlertMetric = Literal["token_usage"]
+AlertCondition = Literal["above", "below"]
+AlertTargetType = Literal["mcp", "agent", "all"]
+
 
 class AlertRuleCreate(BaseModel):
     name: str
-    metric: str  # error_rate | latency_p99 | token_usage
+    metric: AlertMetric
     threshold: float
-    condition: str  # above | below
-    target_type: str = "all"  # mcp | agent | all
+    condition: AlertCondition
+    target_type: AlertTargetType = "all"
     target_id: str = ""
     webhook_url: str = ""
 

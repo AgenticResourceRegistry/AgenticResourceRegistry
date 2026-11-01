@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Observal — GCP Terraform Module
+# Agentic Resource Registry — GCP Terraform Module
 
-Deploy a production-ready Observal instance on Google Cloud Platform.
+Deploy a production-ready Agentic Resource Registry instance on Google Cloud Platform.
 
 ## Architecture
 
@@ -61,10 +61,9 @@ After apply:
 
 Set `domain_name` and `dns_managed_zone_name` to enable the Global HTTPS Load Balancer with a managed SSL certificate. The module creates a DNS A record pointing to the LB IP.
 
-## ClickHouse Modes
+## ClickHouse
 
-- **self_hosted** (default): Deploys a GCE instance running ClickHouse, Grafana, and Prometheus via Docker Compose. Access via IAP SSH tunnel.
-- **cloud**: Supply `clickhouse_cloud_url` and `clickhouse_cloud_password` to use ClickHouse Cloud. No GCE instance is created.
+The module deploys a GCE instance running ClickHouse, Grafana, and Prometheus via Docker Compose. Access it through an IAP SSH tunnel.
 
 ## Accessing the Data Host
 

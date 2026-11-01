@@ -33,13 +33,13 @@ output "redis_host" {
 }
 
 output "data_host_internal_ip" {
-  description = "GCE data host internal IP. Empty when clickhouse_mode = 'cloud'."
-  value       = local.clickhouse_self_hosted ? google_compute_instance.data_host[0].network_interface[0].network_ip : ""
+  description = "GCE data host internal IP."
+  value       = google_compute_instance.data_host.network_interface[0].network_ip
 }
 
 output "data_host_ssh_command" {
   description = "IAP SSH command to access data host."
-  value       = local.clickhouse_self_hosted ? "gcloud compute ssh ${google_compute_instance.data_host[0].name} --zone=${var.region}-a --tunnel-through-iap" : ""
+  value       = "gcloud compute ssh ${google_compute_instance.data_host.name} --zone=${var.region}-a --tunnel-through-iap"
 }
 
 output "backups_bucket" {

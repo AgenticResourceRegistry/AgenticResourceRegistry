@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral coverage for mixed Registry component bulk submission."""
@@ -55,6 +55,7 @@ def test_dry_run_emits_parseable_json_without_http(tmp_path, boundaries):
         "submitted": 0,
         "skipped": 0,
         "errors": 0,
+        "partial": False,
         "dry_run": True,
         "results": [
             {"type": "skill", "name": "review", "status": "planned"},
@@ -101,11 +102,12 @@ def test_execute_submits_mixed_entries_and_reports_conflicts(tmp_path, boundarie
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert {key: payload[key] for key in ("total", "submitted", "skipped", "errors", "dry_run")} == {
+    assert {key: payload[key] for key in ("total", "submitted", "skipped", "errors", "partial", "dry_run")} == {
         "total": 3,
         "submitted": 2,
         "skipped": 1,
         "errors": 0,
+        "partial": False,
         "dry_run": False,
     }
     assert payload["results"][1]["error"] == {
@@ -153,6 +155,38 @@ def test_execute_submits_mixed_entries_and_reports_conflicts(tmp_path, boundarie
             resource="sandbox submission",
         ),
     ]
+
+
+def test_partial_json_batch_preserves_result_and_exits_nonzero(tmp_path, boundaries, monkeypatch):
+    import observal_cli.main as main
+
+    post, _get, _load = boundaries
+    path = _write_components(
+        tmp_path,
+        [
+            {"type": "skill", "name": "review", "description": "Review"},
+            {"type": "hook", "name": "guard", "description": "Guard"},
+        ],
+    )
+    post.side_effect = [
+        {"id": "skill-1", "qualified_name": "alice/review", "status": "pending"},
+        CliError(ErrorCategory.VALIDATION, "Invalid hook.", operation="Bulk submit components"),
+    ]
+    monkeypatch.setattr(main, "_migrate_legacy_mcp_configs", lambda: None)
+    monkeypatch.setattr(main, "_try_lockfile_migration", lambda: None)
+
+    result = runner.invoke(
+        main.app,
+        ["registry", "bulk", "submit", "--from-file", str(path), "--yes", "--output", "json"],
+    )
+
+    assert result.exit_code == 11
+    assert result.stderr == ""
+    payload = json.loads(result.stdout)
+    assert payload["partial"] is True
+    assert payload["submitted"] == 1
+    assert payload["errors"] == 1
+    assert [item["status"] for item in payload["results"]] == ["submitted", "error"]
 
 
 def test_default_output_renders_preview_and_results(tmp_path, boundaries, monkeypatch: pytest.MonkeyPatch):

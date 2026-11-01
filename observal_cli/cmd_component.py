@@ -19,6 +19,7 @@ from observal_cli.constants import VALID_HARNESSES
 from observal_cli.errors import ErrorCategory, fail
 from observal_cli.prompts import text_input
 from observal_cli.render import OutputMode, console, esc, output_json, relative_time, spinner, status_badge
+from observal_cli.review_display import print_review_link
 
 # ── Constants ──────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ def version_publish(
     version: str | None = typer.Option(None, "--version", "-v", help="Version to publish (e.g. 1.2.0)"),
     description: str = typer.Option(..., "--description", "-d", help="Short description of this version"),
     changelog: str | None = typer.Option(None, "--changelog", help="Changelog notes"),
+    message: str | None = typer.Option(None, "--message", help="Review revision note"),
     supported_harnesses: list[str] | None = typer.Option(
         None, "--harness", help="Supported harnesses (repeat for multiple)"
     ),
@@ -164,6 +166,8 @@ def version_publish(
     }
     if changelog is not None:
         payload["changelog"] = changelog
+    if message is not None:
+        payload["message"] = message
     if supported_harnesses:
         payload["supported_harnesses"] = supported_harnesses
     if extra_data is not None:
@@ -183,6 +187,7 @@ def version_publish(
         f"[green]✓ Version [bold]{esc(result.get('version', version))}[/bold] submitted for review![/green]"
         f"  Status: {status_badge(status)}"
     )
+    print_review_link(result)
 
 
 # ── version list ───────────────────────────────────────────────

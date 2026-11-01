@@ -1,6 +1,7 @@
 {
   "name": "observal-pi",
-  "version": "1.13.1",
+  "private": true,
+  "version": "1.17.0-dev.0",
   "type": "module",
   "description": "Observal session telemetry for Pi \u2014 zero-dependency extension that pushes session traces to your Observal server",
   "keywords": [
@@ -13,7 +14,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Observal/Observal.git",
+    "url": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git",
     "directory": "packages/pi-extension"
   },
   "pi": {
@@ -25,7 +26,7 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0"
   },
   "scripts": {
-    "test": "node --experimental-strip-types tests/acknowledged-delivery.test.ts"
+    "test": "node --experimental-strip-types tests/acknowledged-delivery.test.ts && node --experimental-strip-types tests/capability-attribution.test.ts && node --experimental-strip-types tests/delegated-attribution.test.ts && node --experimental-strip-types tests/token-refresh.test.ts && node --experimental-strip-types tests/layer-pin-collision.test.ts && node --experimental-strip-types tests/mcp-verification.test.ts && node --experimental-strip-types tests/agent-activation.test.ts && node --experimental-strip-types tests/skill-verification.test.ts && node --experimental-strip-types tests/hook-runner.test.ts && node --experimental-strip-types tests/stale-session-recovery.test.ts && node --experimental-strip-types tests/project-agent-attribution.test.ts"
   },
   "files": [
     "extensions/",

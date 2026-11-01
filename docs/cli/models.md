@@ -1,8 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal registry models`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry models"
+---
 
 Display the model catalog packaged for registered harnesses.
 
@@ -44,7 +45,7 @@ An empty catalog keeps the same object with an empty `models` array.
 
 ## Data source
 
-The command reads harness model JSON files packaged under `observal_shared/harness_models/`. It does not contact the Observal server.
+The command reads harness model JSON files packaged under `observal_shared/harness_models/`. It does not contact the Agentic Resource Registry server.
 
 An unknown harness is a usage error with exit code 2. JSON errors are written to stderr while stdout remains empty.
 

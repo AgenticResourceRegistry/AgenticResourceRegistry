@@ -110,6 +110,12 @@ def test_background_recovery_uses_adapter_sources_and_shared_drain(tmp_path: Pat
             assert home == tmp_path
             return sources
 
+        def should_capture_session(self, source, home=None):
+            return True
+
+        def related_session_sources(self, source, home=None):
+            return []
+
         def aged_recovery_final(self):
             return True
 
@@ -160,6 +166,9 @@ def test_reconcile_dry_run_json_has_no_network_or_human_output(tmp_path, monkeyp
         def discover_session_sources(self, since_hours):
             assert since_hours == 24
             return [source]
+
+        def related_session_sources(self, source):
+            return []
 
     monkeypatch.setattr(cmd_reconcile_cli, "load_config", lambda: {"user_id": "user", "server_url": "http://server"})
     monkeypatch.setattr(cmd_reconcile_cli, "ensure_loaded", lambda: None)
@@ -223,6 +232,12 @@ def test_reconcile_finalizes_fully_uploaded_unfinished_session(tmp_path, monkeyp
         def discover_session_sources(self, since_hours):
             return [source]
 
+        def related_session_sources(self, source):
+            return []
+
+        def session_extra_records(self, source, event, final):
+            return ()
+
     drain = MagicMock(return_value=True)
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _name: Adapter())
     monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (3, 1, False))
@@ -247,6 +262,12 @@ def test_reconcile_reports_permanent_rejection(tmp_path, monkeypatch):
     class Adapter:
         def discover_session_sources(self, since_hours):
             return [source]
+
+        def related_session_sources(self, source):
+            return []
+
+        def session_extra_records(self, source, event, final):
+            return ()
 
     def reject(_source, _cfg, **kwargs):
         kwargs["rejections"].append(("kiro", "session-1", 422))

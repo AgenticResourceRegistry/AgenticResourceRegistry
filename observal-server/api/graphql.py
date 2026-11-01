@@ -11,10 +11,11 @@ from collections.abc import AsyncGenerator
 import jwt
 import strawberry
 import structlog
-from starlette.requests import Request
+from starlette.requests import HTTPConnection
 
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 from services import dynamic_settings as ds
+from services.auth_header import bearer_token
 from services.jwt_service import decode_access_token
 from services.redis import subscribe
 
@@ -38,6 +39,8 @@ class SessionEvent:
 class ReviewEvent:
     listing_id: str
     action: str
+    number: int | None = None
+    state: str | None = None
 
 
 @strawberry.type
@@ -51,13 +54,59 @@ class Subscription:
                 yield SessionEvent(session_id=sid, event_name=data.get("event_name", ""))
 
     @strawberry.subscription
-    async def review_updated(self, listing_id: str | None = None) -> AsyncGenerator[ReviewEvent, None]:
-        channel = "reviews:updated"
+    async def review_updated(
+        self, info: strawberry.Info, listing_id: str | None = None, review_id: str | None = None
+    ) -> AsyncGenerator[ReviewEvent, None]:
+        if review_id:
+            import uuid
+
+            from api.deps import _authenticate_via_jwt
+            from database import async_session
+            from models.review import Review
+            from services.review.decisions import _own_work, _target
+            from services.teamspace import can_review, review_scope
+
+            try:
+                rid = uuid.UUID(review_id)
+            except (TypeError, ValueError):
+                raise ValueError("Valid review ID required") from None
+            # Browsers cannot put Authorization in WebSocket headers. graphql-ws
+            # sends it in connection_init; Strawberry attaches that payload to
+            # context *after* get_context_dep has run.
+            params = info.context.get("connection_params") or {}
+            authorization = params.get("authorization") if isinstance(params, dict) else None
+            authorization = authorization or info.context["request"].headers.get("authorization")
+            token = bearer_token(authorization)
+            if token is None:
+                raise ValueError("Authentication required")
+
+            async def is_allowed() -> bool:
+                async with async_session() as db:
+                    user = await _authenticate_via_jwt(token, db)
+                    review = await db.get(Review, rid)
+                    if user is None or review is None:
+                        return False
+                    subject, version = await _target(db, review)
+                    return can_review(subject, await review_scope(db, user)) or _own_work(subject, version, user.id)
+
+            if not await is_allowed():
+                raise ValueError("Review not found")
+            channel = f"review:{rid}:updated"
+        else:
+            channel = "reviews:updated"
         async for data in subscribe(channel):
+            if review_id and not await is_allowed():
+                # Also stop delivering after revocation, expiry or loss of scope.
+                return
             lid = data.get("listing_id", "")
             if listing_id and lid != listing_id:
                 continue
-            yield ReviewEvent(listing_id=lid, action=data.get("action", ""))
+            yield ReviewEvent(
+                listing_id=lid,
+                action=data.get("action", data.get("kind", "")),
+                number=data.get("number"),
+                state=data.get("state"),
+            )
 
 
 async def _resolve_user_context_from_request(request) -> dict:
@@ -77,9 +126,9 @@ async def _resolve_user_context_from_request(request) -> dict:
     auth: str | None = None
     if request is not None:
         auth = request.headers.get("authorization")
-    if not auth or not auth.startswith("Bearer "):
+    token = bearer_token(auth)
+    if token is None:
         return default
-    token = auth.removeprefix("Bearer ").strip()
     try:
         payload = decode_access_token(token)
     except jwt.InvalidTokenError:
@@ -122,7 +171,7 @@ def get_context(
     }
 
 
-async def get_context_dep(request: Request = None) -> dict:
+async def get_context_dep(request: HTTPConnection) -> dict:
     ctx = await _resolve_user_context_from_request(request)
     return get_context(user_id=ctx["user_id"], user_role=ctx["user_role"], trace_privacy=ctx["trace_privacy"])
 

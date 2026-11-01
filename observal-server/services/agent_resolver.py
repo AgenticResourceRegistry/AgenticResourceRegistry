@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Aryan Iyappan <aryaniyappan2006@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent composition resolver - looks up and validates all components for an agent."""
@@ -244,25 +245,6 @@ async def resolve_agent(
         components=components,
         errors=errors,
     )
-
-
-async def resolve_component_versions(components: list, db: AsyncSession) -> dict[tuple[str, uuid.UUID], str]:
-    """Resolve component refs to the current listing version string."""
-    by_type: dict[str, list[uuid.UUID]] = {}
-    for comp in components:
-        ctype = getattr(comp, "component_type", None) or comp.get("component_type")
-        cid = getattr(comp, "component_id", None) or comp.get("component_id")
-        if ctype in _LISTING_MODELS and cid is not None:
-            cid = uuid.UUID(str(cid))
-            by_type.setdefault(ctype, []).append(cid)
-
-    versions: dict[tuple[str, uuid.UUID], str] = {}
-    for comp_type, ids in by_type.items():
-        model = _LISTING_MODELS[comp_type]
-        rows = (await db.execute(select(model).where(model.id.in_(ids)))).scalars().all()
-        for listing in rows:
-            versions[(comp_type, listing.id)] = listing.version
-    return versions
 
 
 async def validate_component_ids(

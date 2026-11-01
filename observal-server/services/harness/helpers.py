@@ -16,8 +16,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import TYPE_CHECKING
 
+import yaml
 from loguru import logger as optic
 
+from observal_shared.agent_model import is_auto_model
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from schemas.constants import HARNESS_CAPABILITIES
 from services.shared.utils import registry_item_slug
@@ -27,13 +29,50 @@ if TYPE_CHECKING:
     from models.agent import Agent
 from services.config_generator import _build_mcp_context
 
-# Map from internal PascalCase event names to Kiro camelCase event names.
+# Map from internal PascalCase event names to legacy Kiro CLI 2.x camelCase
+# event names (inline agent hooks).
 _KIRO_EVENT_MAP = {
     "SessionStart": "agentSpawn",
     "UserPromptSubmit": "userPromptSubmit",
     "PreToolUse": "preToolUse",
     "PostToolUse": "postToolUse",
     "Stop": "stop",
+}
+
+# Map to the v1 standalone-hooks-file triggers used by Kiro IDE 1.0 / CLI 3.0.
+# Accepts both the internal PascalCase names and the legacy camelCase names so
+# hook components authored against either vocabulary keep working.
+_KIRO_V1_TRIGGER_MAP = {
+    "SessionStart": "SessionStart",
+    "agentSpawn": "SessionStart",
+    "UserPromptSubmit": "UserPromptSubmit",
+    "userPromptSubmit": "UserPromptSubmit",
+    "PreToolUse": "PreToolUse",
+    "preToolUse": "PreToolUse",
+    "PostToolUse": "PostToolUse",
+    "postToolUse": "PostToolUse",
+    "Stop": "Stop",
+    "stop": "Stop",
+    "agentStop": "Stop",
+    "PostFileSave": "PostFileSave",
+    "fileEdited": "PostFileSave",
+    "PostFileCreate": "PostFileCreate",
+    "fileCreated": "PostFileCreate",
+    "PostFileDelete": "PostFileDelete",
+    "fileDeleted": "PostFileDelete",
+    "PreTaskExec": "PreTaskExec",
+    "PostTaskExec": "PostTaskExec",
+}
+
+# v1 triggers whose matcher is evaluated; for every other trigger the matcher is
+# ignored by Kiro and must be omitted.
+_KIRO_V1_MATCHER_TRIGGERS = {
+    "PreToolUse",
+    "PostToolUse",
+    "UserPromptSubmit",
+    "PostFileSave",
+    "PostFileCreate",
+    "PostFileDelete",
 }
 
 # Session push hook command - reads JSONL incrementally, only needs 2 events.
@@ -93,6 +132,49 @@ def _claude_code_hooks_frontmatter_lines(
     return lines
 
 
+def _claude_code_hook_command(hook: dict) -> str:
+    """The exact command string a custom command hook is written with (Claude Code records it verbatim)."""
+    command = (hook.get("handler_config") or {}).get("command", "")
+    # Rewrite bare script filenames to the harness hooks directory path
+    script_filename = hook.get("script_filename")
+    if script_filename and command == script_filename:
+        command = f".claude/hooks/{script_filename}"
+    return command
+
+
+def _claude_code_hook_bindings(hook_configs: list[dict]) -> list[dict]:
+    """Where each custom command hook was written, so the CLI can verify it later.
+
+    HTTP hooks have no command and are not bound (they stay unverified).
+    """
+    bindings = []
+    for hook in hook_configs:
+        command = _claude_code_hook_command(hook) if hook.get("handler_type", "command") != "http" else ""
+        if hook.get("event") and command and hook.get("name"):
+            script = f".claude/hooks/{hook['script_filename']}" if hook.get("script_filename") else None
+            bindings.append({"name": hook["name"], "event": hook["event"], "command": command, "script": script})
+    return bindings
+
+
+class AliasCollisionError(ValueError):
+    """Two components would be written under the same local name."""
+
+
+def _yaml_double_quoted(value: str) -> str:
+    """``value`` as a one-line YAML double-quoted scalar that parses back to exactly ``value``.
+
+    Written by the YAML emitter, not JSON: JSON's surrogate-pair escapes for astral
+    characters (an emoji) do not round-trip through a YAML reader, and a raw Unicode
+    line separator would be folded. The emitter escapes those (``\\U0001F642``,
+    ``\\L``, ``\\P``), so Claude Code reads back the command the hook binding records.
+    """
+    text = yaml.safe_dump(value, default_style='"', allow_unicode=True, width=float("inf"))
+    text = text.removesuffix("\n")
+    if "\n" in text or yaml.safe_load(text) != value:
+        raise ValueError("value cannot be written as one YAML scalar")
+    return text
+
+
 def _custom_hook_matcher_lines(hook: dict) -> list[str]:
     """Build YAML lines for a single custom hook matcher group."""
     handler_type = hook.get("handler_type", "command")
@@ -108,12 +190,12 @@ def _custom_hook_matcher_lines(hook: dict) -> list[str]:
             f"          timeout: {timeout}",
         ]
     else:
-        command = handler_config.get("command", "")
-        # Rewrite bare script filenames to the harness hooks directory path
-        script_filename = hook.get("script_filename")
-        if script_filename and command == script_filename:
-            command = f".claude/hooks/{script_filename}"
-        lines = ["    - hooks:", "        - type: command", f'          command: "{command}"'] if command else []
+        command = _claude_code_hook_command(hook)
+        lines = (
+            ["    - hooks:", "        - type: command", f"          command: {_yaml_double_quoted(command)}"]
+            if command
+            else []
+        )
     return lines
 
 
@@ -204,8 +286,8 @@ def _model_name_to_frontmatter(model_name: str) -> str:
          'claude-opus-4-6-20250725'   -> 'opus'
          'gpt-4o'                     -> 'gpt-4o'  (passthrough)
     """
-    if not model_name:
-        return ""
+    if is_auto_model(model_name):
+        return ""  # "auto" leaves the choice to Claude Code's own default.
     lower = model_name.lower()
     for keyword, short in _MODEL_SHORT_NAMES.items():
         if keyword in lower:
@@ -335,6 +417,21 @@ def _build_sandbox_mcp_entry(sandbox_listings: dict, harness: str) -> dict:
     }
 
 
+DELEGATION_MCP_NAME = "observal-agents"
+
+
+def _build_delegation_mcp_entry(harness: str) -> dict:
+    """The observal-agents MCP server every pulled Agent gets (ADR 0002).
+
+    It lets the running agent find other approved agents and hand them a task.
+    ``python3 -m observal_cli`` is rewritten by ``observal agent pull`` to the
+    CLI's own interpreter, like the sandbox server. It carries no agent id: one
+    entry is shared by every agent pulled into the same project or user config.
+    """
+    args = ["-m", "observal_cli.delegation.mcp_server", "--harness", harness]
+    return {DELEGATION_MCP_NAME: {"command": "python3", "args": args, "env": {}}}
+
+
 def _build_mcp_configs(
     agent: Agent,
     harness: str,
@@ -342,6 +439,7 @@ def _build_mcp_configs(
     mcp_listings: dict | None = None,
     env_values: dict | None = None,
     header_values: dict | None = None,
+    component_aliases: dict[str, str] | None = None,
 ) -> dict:
     """Build MCP server configs from registry components + external MCPs.
 
@@ -388,7 +486,11 @@ def _build_mcp_configs(
         )
         entry = adapter.agent_mcp_entry(ctx)
         if entry is not None:
+            if ctx.name in mcp_configs:
+                raise AliasCollisionError("MCP aliases collide after final sanitization")
             mcp_configs[ctx.name] = entry
+            if component_aliases is not None:
+                component_aliases[str(comp.component_id)] = ctx.name
 
     for ext in agent.external_mcps or []:
         name = _sanitize_name(ext.get("name", ""))
@@ -399,6 +501,8 @@ def _build_mcp_configs(
         if isinstance(args, str):
             args = args.split()
         env = ext.get("env", {})
+        if name in mcp_configs:
+            raise AliasCollisionError("External MCP alias collides with registry component")
         mcp_configs[name] = {"command": cmd, "args": args, "env": env}
 
     _inject_agent_id(mcp_configs, str(agent.id))
@@ -408,6 +512,8 @@ def _build_mcp_configs(
 def _build_skill_configs(
     agent: Agent,
     skill_listings: dict | None = None,
+    *,
+    folder_names: dict | None = None,
 ) -> list[dict]:
     """Build skill metadata from registry skill components.
 
@@ -415,6 +521,7 @@ def _build_skill_configs(
     that harness-specific generators turn into skill files.
     """
     skill_listings = skill_listings or {}
+    folder_names = folder_names or {}
     skills: list[dict] = []
     local_names = _local_registry_names(skill_listings)
 
@@ -424,14 +531,16 @@ def _build_skill_configs(
         listing = skill_listings.get(comp.component_id)
         if not listing:
             continue
+        delivery_mode = getattr(listing, "delivery_mode", "git_fetch")
         skills.append(
             {
-                "name": _sanitize_name(local_names[comp.component_id]),
+                "name": folder_names.get(comp.component_id, _sanitize_name(local_names[comp.component_id])),
                 "description": getattr(listing, "description", "") or "",
                 "slash_command": getattr(listing, "slash_command", None),
                 "task_type": getattr(listing, "task_type", ""),
-                "git_url": getattr(listing, "git_url", None),
-                "git_ref": getattr(listing, "git_ref", None) or "main",
+                "delivery_mode": delivery_mode,
+                "git_url": getattr(listing, "git_url", None) if delivery_mode == "git_fetch" else None,
+                "git_ref": (getattr(listing, "git_ref", None) or "main") if delivery_mode == "git_fetch" else None,
                 "skill_path": getattr(listing, "skill_path", None) or "/",
                 "skill_md_content": getattr(listing, "skill_md_content", None),
                 "script_content": getattr(listing, "script_content", None),
@@ -479,6 +588,7 @@ def _build_hook_configs(
             "name": local_names[comp.component_id],
             "script_filename": getattr(listing, "script_filename", None),
             "script_content": getattr(listing, "script_content", None),
+            "tool_filter": getattr(listing, "tool_filter", None),
         }
         hooks.append(entry)
 
@@ -495,8 +605,18 @@ def _get_hook_scripts_dir(harness: str) -> str:
     return HARNESS_REGISTRY.get(harness, {}).get("hook_scripts_dir", "")
 
 
-def _merge_hook_components_into_config(hooks_content: dict, hook_configs: list[dict], harness: str) -> None:
-    """Merge user-submitted hook components into the harness hooks config dict (in-place)."""
+def _merge_hook_components_into_config(
+    hooks_content: dict,
+    hook_configs: list[dict],
+    harness: str,
+    script_command: str | None = None,
+) -> None:
+    """Merge user-submitted hook components into the harness hooks config dict (in-place).
+
+    ``script_command`` is a ``str.format`` template with a ``{filename}`` field for
+    harnesses that run a hook script from somewhere other than ``hook_scripts_dir``
+    relative to the working directory.
+    """
     from services.harness import ensure_loaded, get_adapter
 
     ensure_loaded()
@@ -505,6 +625,7 @@ def _merge_hook_components_into_config(hooks_content: dict, hook_configs: list[d
         raise ValueError(f"No adapter registered for harness: {harness!r}")
     events_map = _get_hook_events_map(harness)
     scripts_dir = _get_hook_scripts_dir(harness)
+    script_command = script_command or (f"{scripts_dir}/{{filename}}" if scripts_dir else None)
     hooks_dict = hooks_content.setdefault("hooks", {})
 
     for hc in hook_configs:
@@ -515,12 +636,12 @@ def _merge_hook_components_into_config(hooks_content: dict, hook_configs: list[d
         handler_config = hc.get("handler_config", {})
         command = handler_config.get("command", "")
         script_filename = hc.get("script_filename")
-        if not command and script_filename and scripts_dir:
-            command = f"{scripts_dir}/{script_filename}"
+        if not command and script_filename and script_command:
+            command = script_command.format(filename=script_filename)
         elif not command:
             continue
-        elif script_filename and scripts_dir:
-            command = f"{scripts_dir}/{script_filename}"
+        elif script_filename and script_command:
+            command = script_command.format(filename=script_filename)
 
         hooks_dict.setdefault(ide_event, []).append(adapter.format_hook_component(command))
 
@@ -536,6 +657,8 @@ def _collect_hook_script_files(hook_configs: list[dict], hook_listings: dict | N
         script_content = hc.get("script_content")
         script_filename = hc.get("script_filename")
         if script_content and script_filename:
+            if script_filename in (".", "..") or "/" in script_filename or "\\" in script_filename:
+                raise ValueError(f"Hook script filename must not contain path segments: {script_filename!r}")
             files.append(
                 {
                     "path": f"{scripts_dir}/{script_filename}",

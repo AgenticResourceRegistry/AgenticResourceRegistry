@@ -1,9 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Tanvi Reddy -->
+<!-- SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal - Azure Terraform Module
+# Agentic Resource Registry - Azure Terraform Module
 
-Deploy Observal to Azure using Container Apps, PostgreSQL Flexible Server, Azure Cache for Redis, and a self-hosted ClickHouse VM.
+Deploy Agentic Resource Registry to Azure using Container Apps, PostgreSQL Flexible Server, Azure Cache for Redis, and a self-hosted ClickHouse VM.
 
 ## Architecture
 
@@ -45,8 +45,8 @@ terraform apply -var-file=staging.tfvars
 # 3. Push images to ACR (after first apply creates the registry)
 ACR=$(terraform output -raw acr_login_server)
 az acr login --name $ACR
-docker tag ghcr.io/observal/observal-api:latest $ACR/observal-api:latest
-docker tag ghcr.io/observal/observal-web:latest $ACR/observal-web:latest
+docker tag ghcr.io/agenticresourceregistry/observal-api:latest $ACR/observal-api:latest
+docker tag ghcr.io/agenticresourceregistry/observal-web:latest $ACR/observal-web:latest
 docker push $ACR/observal-api:latest
 docker push $ACR/observal-web:latest
 
@@ -65,11 +65,9 @@ terraform output web_url
 | `staging.tfvars` | Cost-optimized, single replicas, smaller SKUs |
 | `prod.tfvars` | Zone-redundant PostgreSQL, HA Redis, autoscaling, larger VMs |
 
-## ClickHouse Modes
+## ClickHouse
 
-Set `clickhouse_mode`:
-- `"self_hosted"` (default) - Azure VM with managed disk. Cheapest option.
-- `"cloud"` - ClickHouse Cloud. Supply `clickhouse_cloud_url` and `clickhouse_cloud_password`.
+The module deploys ClickHouse on an Azure VM with a managed disk.
 
 ## Estimated Monthly Cost (Staging)
 

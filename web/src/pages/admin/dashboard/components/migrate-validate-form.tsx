@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useStartMigrationValidate } from "@/hooks/use-admin-api";
 import type { MigrationScope } from "@/lib/types/admin";
-import { ArtifactPicker, ScopeChoiceGroup } from "./migrate-form-fields";
+import { ArtifactPicker, artifactSelectionError, ScopeChoiceGroup } from "./migrate-form-fields";
 
 interface MigrateValidateFormProps {
 	onJobStarted: (jobId: string) => void;
@@ -15,9 +15,10 @@ export function MigrateValidateForm({ onJobStarted }: MigrateValidateFormProps) 
 	const [scope, setScope] = useState<MigrationScope>("both");
 	const [files, setFiles] = useState<File[]>([]);
 	const validateMutation = useStartMigrationValidate();
+	const selectionError = artifactSelectionError(files, scope);
 
 	const handleStart = () => {
-		if (files.length === 0) return;
+		if (selectionError) return;
 
 		const formData = new FormData();
 		files.forEach((file) => formData.append("files", file));
@@ -44,7 +45,9 @@ export function MigrateValidateForm({ onJobStarted }: MigrateValidateFormProps) 
 				<ScopeChoiceGroup name="validate-scope" value={scope} onChange={setScope} />
 			</div>
 
-			<Button type="button" className="w-full" onClick={handleStart} disabled={validateMutation.isPending || files.length === 0}>
+			{files.length > 0 && selectionError && <p className="text-xs text-destructive">{selectionError}</p>}
+
+			<Button type="button" className="w-full" onClick={handleStart} disabled={validateMutation.isPending || Boolean(selectionError)}>
 				{validateMutation.isPending ? "Starting validation..." : "Start validation"}
 			</Button>
 		</div>

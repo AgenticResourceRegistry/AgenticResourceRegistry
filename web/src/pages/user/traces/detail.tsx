@@ -6,7 +6,7 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, useCallback, useEffect, useMemo, createElement } from "react";
+import { useState, useCallback, useMemo, createElement } from "react";
 import { useParams } from "@tanstack/react-router";
 import { useSessionDetail, useSessionSubscription } from "@/hooks/use-api";
 import type {
@@ -52,14 +52,6 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { StepPath, type StepPathStep } from "@/components/ui/step-path";
-
-/**
- * How recently the newest event must have landed for the session to read as
- * still running. The step is labelled "In progress" either way, so the
- * distinction never rests on the accent colour or the pulse alone.
- */
-const LIVE_WINDOW_MS = 5 * 60_000;
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -1080,7 +1072,7 @@ function EventDetail({ event }: { event: RawSessionEvent }) {
 }
 
 const MCP_FIELD_LABELS: Record<string, string> = {
-	mcp_id: "MCP Server",
+	mcp_id: "MCP Client",
 	mcp_method: "Method",
 	mcp_latency_ms: "MCP Latency",
 	tool_schema_valid: "Schema Valid",
@@ -1941,16 +1933,21 @@ function SessionStats({
 				</div>
 			)}
 			{!stats.isCopilotCli && (
-				<div className="space-y-1">
-					<p className="text-2xs text-muted-foreground uppercase tracking-wide">
-						Models
-					</p>
-					<div className="flex flex-wrap gap-1">
-						{[...stats.models].map((m) => (
-							<Badge key={m}>{m.replace("claude-", "")}</Badge>
-						))}
+				<>
+					<div className="col-span-full">
+						<Separator />
 					</div>
-				</div>
+					<div className="col-span-full space-y-1">
+						<p className="text-2xs text-muted-foreground uppercase tracking-wide">
+							Models
+						</p>
+						<div className="flex flex-wrap gap-1">
+							{[...stats.models].map((m) => (
+								<Badge key={m}>{m.replace("claude-", "")}</Badge>
+							))}
+						</div>
+					</div>
+				</>
 			)}
 			{Object.keys(stats.tools).length > 0 && (
 				<div className="col-span-full space-y-1">
@@ -2047,13 +2044,13 @@ function SessionInfoTab({
 					<span>{serviceName || "unknown"}</span>
 					{(agentName || agentId) && (
 						<>
-							<span className="text-muted-foreground">Agent</span>
+							<span className="text-muted-foreground">Agent File</span>
 							<span>{agentName || agentId}</span>
 						</>
 					)}
 					{agentVersion && (
 						<>
-							<span className="text-muted-foreground">Agent Version</span>
+							<span className="text-muted-foreground">Agent File Version</span>
 							<span>v{agentVersion}</span>
 						</>
 					)}
@@ -2109,16 +2106,19 @@ export default function TraceDetailPage() {
 		() => session?.subagent_sessions ?? [],
 		[session],
 	);
+	const sessionTiming = useMemo(() => {
+		const timestampedEvents = events
+			.filter((event) => isRealTs(event.timestamp))
+			.sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
+		return {
+			first: timestampedEvents[0],
+			last: timestampedEvents.at(-1),
+		};
+	}, [events]);
 
 	const [expandedSet, setExpandedSet] = useState<Set<string>>(new Set());
 	const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
 	const [searchQuery, setSearchQuery] = useState("");
-	const [now, setNow] = useState(() => Date.now());
-
-	useEffect(() => {
-		const timer = globalThis.setInterval(() => setNow(Date.now()), 30_000);
-		return () => globalThis.clearInterval(timer);
-	}, []);
 
 	const toggleFilter = useCallback((key: string) => {
 		setActiveFilters((prev) => {
@@ -2149,36 +2149,6 @@ export default function TraceDetailPage() {
 		return counts;
 	}, [allDeduped]);
 
-
-	const executionPath = useMemo<StepPathStep[]>(() => {
-		const firstReal = events.find((e) => isRealTs(e.timestamp));
-		const lastReal = [...events].reverse().find((e) => isRealTs(e.timestamp));
-		const elapsed = lastReal
-			? now - new Date(lastReal.timestamp).getTime()
-			: Number.POSITIVE_INFINITY;
-		const live = elapsed >= 0 && elapsed < LIVE_WINDOW_MS;
-		const clock = (ts?: string) =>
-			ts
-				? new Date(ts).toLocaleTimeString([], {
-						hour: "2-digit",
-						minute: "2-digit",
-					})
-				: "—";
-		return [
-			{ label: "Started", value: clock(firstReal?.timestamp), state: "done" },
-			{ label: "Turns", value: String(tree.turns.length), state: "done" },
-			{
-				label: "Tool calls",
-				value: String(filterCounts.tools ?? 0),
-				state: "done",
-			},
-			{
-				label: live ? "In progress" : "Last event",
-				value: clock(lastReal?.timestamp),
-				state: live ? "current" : "done",
-			},
-		];
-	}, [events, tree.turns.length, filterCounts, now]);
 
 	// Visible turns after filtering
 	const visibleTurns = useMemo(() => {
@@ -2243,7 +2213,7 @@ export default function TraceDetailPage() {
 				) : (
 					<>
 						{/* Header info */}
-						<div className="animate-in flex flex-wrap items-center gap-x-6 gap-y-2">
+						<div className="animate-in grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
 							{session.service_name && (
 								<div>
 									<span className="text-xs text-muted-foreground block mb-0.5">
@@ -2252,39 +2222,30 @@ export default function TraceDetailPage() {
 									<span className="text-sm">{session.service_name}</span>
 								</div>
 							)}
-							{events.some((e) => isRealTs(e.timestamp)) && (
+							{sessionTiming.first && (
 								<div>
 									<span className="text-xs text-muted-foreground block mb-0.5">
 										First Event
 									</span>
 									<span className="text-sm tabular-nums">
-										{new Date(
-											events.find((e) => isRealTs(e.timestamp))!.timestamp,
-										).toLocaleString()}
+										{new Date(sessionTiming.first.timestamp).toLocaleString()}
 									</span>
 								</div>
 							)}
-							{events.length > 0 && (
-								<div>
-									<span className="text-xs text-muted-foreground block mb-0.5">
-										Duration
-									</span>
-									<span className="text-sm tabular-nums">
-										{(() => {
-											const fr = events.find((e) => isRealTs(e.timestamp));
-											const lr = [...events]
-												.reverse()
-												.find((e) => isRealTs(e.timestamp));
-											return fr && lr && fr !== lr
-												? formatDuration(
-														new Date(lr.timestamp).getTime() -
-															new Date(fr.timestamp).getTime(),
-													)
-												: "-";
-										})()}
-									</span>
-								</div>
-							)}
+							<div>
+								<span className="text-xs text-muted-foreground block mb-0.5">Duration</span>
+								<span className="text-sm tabular-nums">
+									{sessionTiming.first && sessionTiming.last && sessionTiming.first !== sessionTiming.last
+										? formatDuration(new Date(sessionTiming.last.timestamp).getTime() - new Date(sessionTiming.first.timestamp).getTime())
+										: "-"}
+								</span>
+							</div>
+							<div>
+								<span className="text-xs text-muted-foreground block mb-0.5">Last event</span>
+								<span className="text-sm tabular-nums">
+									{sessionTiming.last ? new Date(sessionTiming.last.timestamp).toLocaleString() : "-"}
+								</span>
+							</div>
 							<div>
 								<span className="text-xs text-muted-foreground block mb-0.5">
 									Turns
@@ -2302,16 +2263,6 @@ export default function TraceDetailPage() {
 							serviceName={session.service_name}
 						/>
 
-
-						{events.length > 0 && (
-							<StepPath
-								className="mb-5 mt-[25px]"
-								aria-label="Session execution path"
-								steps={executionPath}
-							/>
-						)}
-
-						<Separator />
 
 						{/* Tabbed content */}
 						{events.length === 0 ? (

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Cursor harness adapter."""
@@ -9,6 +10,8 @@ import json
 import time
 from pathlib import Path
 
+from observal_cli.discovery.adapter_support import RichAdapterScanner
+from observal_cli.discovery.models import AdapterDiscoveryResult, DiscoveryScope
 from observal_cli.harness import (
     DiscoveredMcp,
     HookSpec,
@@ -16,7 +19,8 @@ from observal_cli.harness import (
     SessionSource,
     register_adapter,
 )
-from observal_cli.harness.base import BaseAdapter
+from observal_cli.harness.base import BaseAdapter, inline_agent_prompt, parse_json_result
+from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest, HeadlessResult
 from observal_cli.shared.utils import extract_mcp_servers
 
 
@@ -24,6 +28,7 @@ class CursorAdapter(BaseAdapter):
     """Adapter for Cursor."""
 
     home_markers = (".cursor",)
+    headless_binary = "cursor-agent"
     managed_agent_profiles = (
         "user:agents/{name}.md",
         "project:.cursor/agents/{name}.md",
@@ -180,6 +185,44 @@ class CursorAdapter(BaseAdapter):
         except (json.JSONDecodeError, OSError):
             return ScanResult()
 
+    def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        home = home or Path.home()
+        return self._discover_cursor_root(home / ".cursor", DiscoveryScope.USER, home=home)
+
+    def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
+        return self._discover_cursor_root(
+            project_dir / ".cursor",
+            DiscoveryScope.PROJECT,
+            project_dir=project_dir,
+        )
+
+    def _discover_cursor_root(
+        self,
+        root: Path,
+        scope: DiscoveryScope,
+        *,
+        home: Path | None = None,
+        project_dir: Path | None = None,
+    ) -> AdapterDiscoveryResult:
+        scanner = RichAdapterScanner(
+            harness=self.harness_name,
+            scope=scope,
+            root=root,
+            home=home,
+            project_dir=project_dir,
+        )
+        source = "cursor:global" if scope is DiscoveryScope.USER else "cursor:project"
+        scanner.add_mcp_config(root / "mcp.json", source=source, description_prefix="Cursor MCP")
+        scanner.add_markdown_agents(root / "agents", source_prefix="Cursor agent")
+        scanner.add_skills(root / "skills", source="cursor:skills", prefix="Cursor skill")
+        hooks_file = root / "hooks.json"
+        hooks_data = scanner.read_json(hooks_file)
+        if hooks_data is not None:
+            scanner.add_hooks_mapping(
+                hooks_file, hooks_data.get("hooks", hooks_data), name_prefix="cursor", source=source
+            )
+        return scanner.finish()
+
     def get_hook_spec(self) -> HookSpec:
         return HookSpec(
             events=["tool_call", "tool_result"],
@@ -202,6 +245,31 @@ class CursorAdapter(BaseAdapter):
         from observal_cli.cmd_doctor import _cleanup_cursor
 
         return _cleanup_cursor(dry_run)
+
+    # ── Headless delegation ──────────────────────────────────
+
+    def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
+        # cursor-agent --help: -p/--print, --output-format json, --trust,
+        # --approve-mcps, --sandbox, --workspace. There is no agent flag, so the
+        # agent's instructions are inlined; the sandbox restricts the terminal.
+        argv = [
+            "cursor-agent",
+            "-p",
+            "--output-format",
+            "json",
+            "--trust",
+            "--approve-mcps",
+            "--sandbox",
+            "enabled",
+            "--workspace",
+            str(request.workdir),
+        ]
+        if request.model:
+            argv += ["--model", request.model]
+        return HeadlessPlan(argv=[*argv, "--", inline_agent_prompt(request)])
+
+    def parse_headless_output(self, plan: HeadlessPlan, stdout: str) -> HeadlessResult:
+        return parse_json_result(plan, stdout) or super().parse_headless_output(plan, stdout)
 
 
 register_adapter(CursorAdapter())

@@ -48,6 +48,26 @@ def dict_field(parsed: dict, key: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def token_count(usage: dict, key: str) -> int:
+    """Return a non-negative token count, or 0 for malformed transcript values."""
+    try:
+        return max(int(usage.get(key) or 0), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def uncached_input_tokens(input_tokens: int, *cache_tokens: int) -> int:
+    """Return *input_tokens* with the given cache read/write counts removed.
+
+    Observal stores ``input_tokens`` excluding cache reads and writes, as
+    Anthropic reports them. Harnesses that report OpenAI-style usage (Codex,
+    Copilot CLI, Goose) count cached tokens inside ``input_tokens`` and also
+    report them separately, so they must be subtracted to avoid counting them
+    twice. Clamped at zero because the counts come from untrusted transcripts.
+    """
+    return max(input_tokens - sum(cache_tokens), 0)
+
+
 def list_field(parsed: dict, key: str) -> list:
     """Return a content field as a list, or [] when it is any other type.
 
@@ -113,4 +133,69 @@ def basic_event(row: dict) -> dict:
             **({"credits": str(row["credits"])} if row.get("credits") else {}),
         },
         "service_name": row.get("harness", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Insight meta records
+# ---------------------------------------------------------------------------
+# ``services.insights.session_meta_extractor`` reads Pi-style records. Each
+# harness's ``meta_records`` converts its own lines into these shapes, so the
+# extractor never branches on transcript format.
+
+
+def meta_session(cwd: str, ts: str = "") -> dict:
+    """Session header carrying the project directory."""
+    return {"type": "session", "cwd": cwd, "timestamp": ts}
+
+
+def meta_time(ts: str) -> dict:
+    """A line with no message content that still bounds the session's time range."""
+    return {"type": "time", "timestamp": ts}
+
+
+def meta_user(ts: str, text: str) -> dict:
+    """A prompt the user typed."""
+    return {
+        "type": "message",
+        "timestamp": ts,
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    }
+
+
+def meta_assistant(ts: str, model: str = "") -> dict:
+    """One model response; harness normalisers append tool calls and set ``usage``."""
+    return {"type": "message", "timestamp": ts, "message": {"role": "assistant", "model": model, "content": []}}
+
+
+def meta_tool_call(name: str, tool_id: str, args: dict, kind: str = "") -> dict:
+    """A tool call block for :func:`meta_assistant` content.
+
+    ``kind`` names what the extractor measures (``write``, ``edit``, ``bash``,
+    ``subagent``) when the harness's own tool name differs; ``args`` then use the
+    Pi argument names (``path``, ``content``, ``edits`` of ``oldText``/``newText``,
+    ``command``).
+    """
+    block = {"type": "toolCall", "name": name, "id": tool_id, "arguments": args}
+    if kind:
+        block["kind"] = kind
+    return block
+
+
+def meta_usage(input_tokens: int, output_tokens: int, cache_read: int = 0, cache_write: int = 0) -> dict:
+    """Usage for :func:`meta_assistant`, with ``input`` excluding cache reads and writes."""
+    return {"input": input_tokens, "output": output_tokens, "cacheRead": cache_read, "cacheWrite": cache_write}
+
+
+def meta_tool_result(ts: str, tool_name: str, is_error: bool, text: str) -> dict:
+    """The result of one tool call."""
+    return {
+        "type": "message",
+        "timestamp": ts,
+        "message": {
+            "role": "toolResult",
+            "toolName": tool_name,
+            "isError": is_error,
+            "content": [{"type": "text", "text": text}],
+        },
     }

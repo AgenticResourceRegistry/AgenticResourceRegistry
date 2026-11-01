@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Annie Chiang <anniechiang.yn@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for observal_cli.cmd_doctor helpers."""
@@ -15,6 +16,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from observal_cli import pi_extension
 from observal_cli.cmd_doctor import (
     _check_antigravity,
     _check_claude_code,
@@ -53,6 +55,11 @@ from observal_cli.cmd_doctor import (
 from observal_cli.shared.utils import is_observal_hook_entry, is_observal_matcher_group
 from observal_shared.opencode_plugin_source import OPENCODE_PLUGIN_SOURCE
 
+# Fixed regardless of what observal-cli version this test environment actually
+# resolves (which varies across invocation contexts) - keeps Pi stale/current/newer
+# comparisons deterministic.
+CLI_VERSION = "2.0.0"
+
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -61,6 +68,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr("observal_cli.settings_reconciler.config.save", lambda updates: None)
     monkeypatch.setattr("observal_cli.lockfile.LOCKFILE_PATH", tmp_path / ".observal/lockfile.json")
     monkeypatch.setattr("observal_cli.lockfile._LOCKFILE_LOCK", tmp_path / ".observal/lockfile.lock")
+    monkeypatch.setattr(pi_extension, "get_current_version", lambda: CLI_VERSION)
     return tmp_path
 
 
@@ -82,6 +90,17 @@ def goose_home(isolated_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("APPDATA", raising=False)  # goose reads %APPDATA% on Windows
     (isolated_home / ".config/goose").mkdir(parents=True)
     return isolated_home
+
+
+def legacy_extension(tmp_path: Path) -> Path:
+    """An observal.ts an older CLI wrote: our header, older body, no manifest."""
+    extension = tmp_path / ".pi/agent/extensions/observal.ts"
+    extension.parent.mkdir(parents=True, exist_ok=True)
+    extension.write_text(
+        f"/**\n * {pi_extension._SIGNATURE}\n */\nconst old = true;\n",
+        encoding="utf-8",
+    )
+    return extension
 
 
 class TestHookIdentification:
@@ -139,6 +158,67 @@ class TestChecks:
 
         assert any("extensions/observal.ts" in warning for warning in warnings)
 
+    def test_pi_is_silent_when_local_install_is_current(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text(pi_extension.extension_source(), encoding="utf-8")
+        write_json(
+            tmp_path / ".pi/agent/extensions/.observal-extension.json",
+            {"managed": True, "version": CLI_VERSION},
+        )
+        warnings: list[str] = []
+
+        _check_pi([], warnings)
+
+        assert warnings == []
+
+    def test_pi_warns_when_local_install_is_stale(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("old content", encoding="utf-8")
+        write_json(
+            tmp_path / ".pi/agent/extensions/.observal-extension.json",
+            {"managed": True, "version": "0.0.1"},
+        )
+        warnings: list[str] = []
+
+        _check_pi([], warnings)
+
+        assert any("stale" in warning for warning in warnings)
+
+    def test_pi_is_silent_when_local_install_is_newer(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("future content", encoding="utf-8")
+        write_json(
+            tmp_path / ".pi/agent/extensions/.observal-extension.json",
+            {"managed": True, "version": "9999.0.0"},
+        )
+        warnings: list[str] = []
+
+        _check_pi([], warnings)
+
+        assert warnings == []
+        assert extension.read_text(encoding="utf-8") == "future content"
+
+    def test_pi_warns_that_a_pre_manifest_install_can_be_migrated(self, tmp_path: Path):
+        legacy_extension(tmp_path)
+        warnings: list[str] = []
+
+        _check_pi([], warnings)
+
+        assert any("older Observal CLI" in warning for warning in warnings)
+
+    def test_pi_warns_of_conflict_with_unmanaged_local_file(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("hand-written extension", encoding="utf-8")
+        warnings: list[str] = []
+
+        _check_pi([], warnings)
+
+        assert any("not managed by Observal" in warning for warning in warnings)
+
     def test_cursor_warns_when_hooks_file_missing(self, tmp_path: Path):
         (tmp_path / ".cursor").mkdir()
         warnings: list[str] = []
@@ -147,17 +227,30 @@ class TestChecks:
 
         assert any("Cursor session push hooks not installed" in warning for warning in warnings)
 
-    def test_codex_reports_disabled_hook_flag(self, tmp_path: Path):
+    @pytest.mark.parametrize("key", ["hooks", "codex_hooks"])
+    def test_codex_reports_hooks_turned_off_in_features(self, tmp_path: Path, key: str):
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text("codex_hooks = false\n", encoding="utf-8")
+        (codex_dir / "config.toml").write_text(f"[features]\n{key} = false\n", encoding="utf-8")
         issues: list[str] = []
         warnings: list[str] = []
 
         _check_codex(issues, warnings)
 
-        assert any("codex_hooks = false" in issue for issue in issues)
+        assert any("hooks are turned off under [features]" in issue for issue in issues)
         assert any("Codex session push hooks not installed" in warning for warning in warnings)
+
+    def test_codex_warns_about_the_stale_top_level_key(self, tmp_path: Path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        (codex_dir / "config.toml").write_text('codex_hooks = true\nmodel = "gpt-6"\n', encoding="utf-8")
+        issues: list[str] = []
+        warnings: list[str] = []
+
+        _check_codex(issues, warnings)
+
+        assert issues == []
+        assert any("top-level `codex_hooks` key is not a Codex setting" in warning for warning in warnings)
 
     def test_copilot_warns_when_vscode_exists_without_hooks(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
@@ -283,16 +376,32 @@ class TestPatchFunctions:
         assert "hooks" in read_json(settings_path)
         assert _patch_claude_code(dry_run=False) is False
 
-    def test_patch_kiro_skips_without_locked_agents(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_patch_kiro_writes_hooks_file_without_locked_agents(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Kiro fires the user-scope v1 hooks file for every session.
+
+        It therefore has to be installed even when the lockfile holds no usable
+        Kiro agents; otherwise the harness produces no telemetry at all.
+        """
         from observal_cli import config
 
         monkeypatch.setattr(config, "load", lambda: {"server_url": "http://localhost:80"})
         write_json(tmp_path / ".kiro/agents/default.json", {})
 
-        assert _patch_kiro(dry_run=False) is False
+        assert _patch_kiro(dry_run=False) is True
+        # Unlocked agent profiles are still left strictly alone.
         assert read_json(tmp_path / ".kiro/agents/default.json") == {}
 
+        hooks = read_json(tmp_path / ".kiro/hooks/observal.json")
+        assert hooks["version"] == "v1"
+        assert [h["trigger"] for h in hooks["hooks"]] == ["UserPromptSubmit", "Stop"]
+        # No locked agent means no attribution to bake in; Kiro resolves the
+        # active agent from session metadata anyway.
+        assert all("OBSERVAL_AGENT_ID" not in h["action"]["command"] for h in hooks["hooks"])
+
+        assert _patch_kiro(dry_run=False) is False
+
     def test_patch_kiro_repairs_locked_agent_uuid_hooks(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        import observal_cli.harness.kiro as kiro_adapter
         from observal_cli import config, lockfile
 
         agent_id = "00000000-0000-0000-0000-000000000123"
@@ -301,6 +410,9 @@ class TestPatchFunctions:
             "load",
             lambda: {"server_url": "http://localhost:80", "access_token": "test-token"},
         )
+        # Pin the hook format: whether the developer running the suite happens to
+        # have Kiro IDE installed must not decide what this test asserts.
+        monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: True)
         write_json(tmp_path / ".kiro/agents/test-agent.json", {"name": "test-agent", "hooks": {}})
         lockfile.upsert_agent(
             "kiro",
@@ -317,6 +429,30 @@ class TestPatchFunctions:
         assert commands
         assert all(agent_id in command for command in commands)
 
+    def test_patch_kiro_converges_with_multiple_user_agents(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Two user-scope agents share one hooks file; the second run is a no-op.
+
+        Regression: the file was rewritten once per locked agent with that
+        agent's OBSERVAL_AGENT_ID, so each agent clobbered the previous one and
+        patch reported a write on every run, forever.
+        """
+        from observal_cli import config, lockfile
+
+        monkeypatch.setattr(
+            config,
+            "load",
+            lambda: {"server_url": "http://localhost:80", "access_token": "test-token"},
+        )
+        for name, agent_id in (("agent-a", "id-a"), ("agent-b", "id-b")):
+            write_json(tmp_path / f".kiro/agents/{name}.json", {"name": name})
+            lockfile.upsert_agent("kiro", name=name, agent_id=agent_id, version="1.0.0", scope="user", local_name=name)
+
+        assert _patch_kiro(dry_run=False) is True
+        first = read_json(tmp_path / ".kiro/hooks/observal.json")
+
+        assert _patch_kiro(dry_run=False) is False
+        assert read_json(tmp_path / ".kiro/hooks/observal.json") == first
+
     def test_patch_cursor_writes_hooks_and_preserves_foreign_entries(self, tmp_path: Path):
         hooks_path = tmp_path / ".cursor/hooks.json"
         write_json(hooks_path, {"hooks": {"beforeSubmitPrompt": [{"command": "foreign"}]}})
@@ -328,27 +464,87 @@ class TestPatchFunctions:
         assert any("hooks.session_push --harness cursor" in command for command in commands)
         assert _patch_cursor(dry_run=False) is False
 
-    def test_patch_pi_installs_direct_extension_and_removes_legacy_package(self, tmp_path: Path):
-        from observal_cli.cmd_doctor import _pi_extension_source
-
-        settings = tmp_path / ".pi/agent/settings.json"
-        write_json(settings, {"packages": ["npm:@observal/pi-insights", "npm:observal-pi"]})
+    def test_patch_pi_installs_local_extension_and_manifest(self, tmp_path: Path):
+        (tmp_path / ".pi/agent").mkdir(parents=True)
 
         assert _patch_pi(dry_run=False) is True
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
-        assert extension.read_text() == _pi_extension_source()
-        assert read_json(settings)["packages"] == ["npm:@observal/pi-insights"]
+        manifest = tmp_path / ".pi/agent/extensions/.observal-extension.json"
+        assert extension.read_text(encoding="utf-8") == pi_extension.extension_source()
+        assert read_json(manifest) == {"managed": True, "version": CLI_VERSION}
         assert _patch_pi(dry_run=False) is False
 
-    def test_patch_codex_writes_hooks_and_enables_flag(self, tmp_path: Path):
+    def test_patch_pi_refreshes_a_stale_managed_install(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("old content", encoding="utf-8")
+        write_json(
+            tmp_path / ".pi/agent/extensions/.observal-extension.json",
+            {"managed": True, "version": "0.0.1"},
+        )
+
+        assert _patch_pi(dry_run=False) is True
+
+        assert extension.read_text(encoding="utf-8") == pi_extension.extension_source()
+        manifest = read_json(tmp_path / ".pi/agent/extensions/.observal-extension.json")
+        assert manifest["version"] == CLI_VERSION
+
+    def test_patch_pi_migrates_a_pre_manifest_install_and_keeps_a_backup(self, tmp_path: Path):
+        extension = legacy_extension(tmp_path)
+        previous = extension.read_text(encoding="utf-8")
+
+        assert _patch_pi(dry_run=False) is True
+
+        assert extension.read_text(encoding="utf-8") == pi_extension.extension_source()
+        assert extension.with_name("observal.ts.bak").read_text(encoding="utf-8") == previous
+        manifest = read_json(tmp_path / ".pi/agent/extensions/.observal-extension.json")
+        assert manifest == {"managed": True, "version": CLI_VERSION}
+        assert _patch_pi(dry_run=False) is False
+
+    def test_patch_pi_dry_run_migration_writes_nothing(self, tmp_path: Path):
+        extension = legacy_extension(tmp_path)
+        previous = extension.read_text(encoding="utf-8")
+
+        assert _patch_pi(dry_run=True) is True
+
+        assert extension.read_text(encoding="utf-8") == previous
+        assert not extension.with_name("observal.ts.bak").exists()
+
+    def test_patch_pi_never_overwrites_an_unmanaged_file(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("hand-written extension", encoding="utf-8")
+
+        assert _patch_pi(dry_run=False) is False
+
+        assert extension.read_text(encoding="utf-8") == "hand-written extension"
+        assert not (tmp_path / ".pi/agent/extensions/.observal-extension.json").exists()
+
+    def test_patch_pi_adopts_a_pre_manifest_install_without_rewriting_content(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text(pi_extension.extension_source(), encoding="utf-8")
+
+        assert _patch_pi(dry_run=False) is True
+
+        manifest = read_json(tmp_path / ".pi/agent/extensions/.observal-extension.json")
+        assert manifest == {"managed": True, "version": CLI_VERSION}
+        assert _patch_pi(dry_run=False) is False
+
+    def test_patch_codex_writes_hooks_and_drops_stale_flag(self, tmp_path: Path):
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
-        (codex_dir / "config.toml").write_text("codex_hooks = false\n", encoding="utf-8")
+        # Earlier patches wrote codex_hooks at the top level, where Codex never reads it.
+        (codex_dir / "config.toml").write_text(
+            'codex_hooks = true\nmodel = "gpt-6"\n\n[features]\ncodex_hooks = true\n', encoding="utf-8"
+        )
         write_json(codex_dir / "hooks.json", {"hooks": {"Stop": [{"hooks": [{"command": "foreign"}]}]}})
 
         assert _patch_codex(dry_run=False) is True
 
-        assert "codex_hooks = true" in (codex_dir / "config.toml").read_text(encoding="utf-8")
+        config_text = (codex_dir / "config.toml").read_text(encoding="utf-8")
+        assert config_text == 'model = "gpt-6"\n\n[features]\ncodex_hooks = true\n'
+        assert _patch_codex(dry_run=False) is False
         groups = read_json(codex_dir / "hooks.json")["hooks"]["Stop"]
         assert any(group.get("hooks", [{}])[0].get("command") == "foreign" for group in groups)
         assert any(
@@ -356,6 +552,16 @@ class TestPatchFunctions:
             for group in groups
             for hook in group.get("hooks", [])
         )
+
+    def test_patch_codex_leaves_codex_hooks_text_inside_a_multiline_string(self, tmp_path: Path):
+        codex_dir = tmp_path / ".codex"
+        codex_dir.mkdir()
+        original = 'notes = """\ncodex_hooks = true\n"""\nmodel = "gpt-6"\n'
+        (codex_dir / "config.toml").write_text(original, encoding="utf-8")
+
+        _patch_codex(dry_run=False)
+
+        assert (codex_dir / "config.toml").read_text(encoding="utf-8") == original
 
     def test_patch_copilot_writes_project_hooks_and_wrapper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
@@ -477,16 +683,31 @@ class TestCleanupFunctions:
 
         assert read_json(agent_path)["hooks"]["userPromptSubmit"] == [foreign]
 
-    def test_cleanup_pi_removes_direct_extension_and_legacy_package(self, tmp_path: Path):
+    def test_cleanup_pi_removes_a_managed_install(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        manifest = tmp_path / ".pi/agent/extensions/.observal-extension.json"
         extension.parent.mkdir(parents=True)
-        extension.write_text("extension")
-        settings = tmp_path / ".pi/agent/settings.json"
-        write_json(settings, {"packages": ["npm:observal-pi", "npm:@observal/pi-insights"]})
+        extension.write_text(pi_extension.extension_source(), encoding="utf-8")
+        write_json(manifest, {"managed": True, "version": CLI_VERSION})
 
         assert _cleanup_pi(dry_run=False) is True
         assert not extension.exists()
-        assert read_json(settings)["packages"] == ["npm:@observal/pi-insights"]
+        assert not manifest.exists()
+
+    def test_cleanup_pi_removes_a_pre_manifest_install(self, tmp_path: Path):
+        extension = legacy_extension(tmp_path)
+
+        assert _cleanup_pi(dry_run=False) is True
+
+        assert not extension.exists()
+
+    def test_cleanup_pi_leaves_an_unmanaged_file_untouched(self, tmp_path: Path):
+        extension = tmp_path / ".pi/agent/extensions/observal.ts"
+        extension.parent.mkdir(parents=True)
+        extension.write_text("hand-written extension", encoding="utf-8")
+
+        assert _cleanup_pi(dry_run=False) is False
+        assert extension.read_text(encoding="utf-8") == "hand-written extension"
 
     def test_cleanup_cursor_preserves_foreign_hooks(self, tmp_path: Path):
         hooks_path = tmp_path / ".cursor/hooks.json"
@@ -562,3 +783,227 @@ class TestCleanupFunctions:
 
         rules = read_json(hooks_path)["hooks"]
         assert rules == {"Stop": [{"hooks": [{"type": "command", "command": "foreign"}]}]}
+
+
+def test_login_with_claude_binary_installs_hooks_and_bundled_skills_in_fresh_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth, skill_installer
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
+
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+    assert not (tmp_path / ".claude").exists()
+
+    cmd_auth._post_login_setup()
+
+    claude_dir = tmp_path / ".claude"
+    assert ClaudeCodeAdapter().detect_hooks(claude_dir) == "installed"
+    for name in skill_installer._SKILL_DIRS:
+        source = skill_installer._SKILLS_BASE / name
+        target = claude_dir / "skills" / name
+        assert skill_installer._directory_hash(target) == skill_installer._directory_hash(source)
+    assert skill_installer.missing_observal_skill_harnesses(tmp_path) == []
+    assert not (tmp_path / ".pi").exists()
+
+
+def test_login_without_claude_does_not_create_claude_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+
+    assert not (tmp_path / ".claude").exists()
+    assert not (tmp_path / ".pi").exists()
+
+
+def test_login_preserves_foreign_claude_hooks_and_skills_on_repeat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo foreign"}]}]},
+                "permissions": {"allow": ["Read"]},
+            }
+        )
+    )
+    custom = tmp_path / ".claude/skills/custom/SKILL.md"
+    custom.parent.mkdir(parents=True)
+    custom.write_text("User-owned skill\n")
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+    merged = json.loads(settings.read_text())
+    assert merged["permissions"] == {"allow": ["Read"]}
+    assert {event for event in merged["hooks"]} == {"UserPromptSubmit", "Stop"}
+    assert any(h.get("command") == "echo foreign" for g in merged["hooks"]["Stop"] for h in g["hooks"])
+    assert custom.read_text() == "User-owned skill\n"
+    before = settings.read_bytes()
+    skill_mtime = (tmp_path / ".claude/skills/observal/SKILL.md").stat().st_mtime_ns
+
+    cmd_auth._post_login_setup()
+
+    assert settings.read_bytes() == before
+    assert (tmp_path / ".claude/skills/observal/SKILL.md").stat().st_mtime_ns == skill_mtime
+    assert custom.read_text() == "User-owned skill\n"
+
+
+def test_login_installs_two_claude_hooks_in_fresh_home_and_doctor_recognizes_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
+
+    monkeypatch.setattr(cmd_auth, "_install_observal_skill", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+
+    cmd_auth._post_login_setup()
+    settings = tmp_path / ".claude/settings.json"
+    payload = json.loads(settings.read_text())
+    assert set(payload["hooks"]) == {"UserPromptSubmit", "Stop"}
+    assert ClaudeCodeAdapter().detect_hooks(settings.parent) == "installed"
+    issues: list[str] = []
+    warnings: list[str] = []
+    _check_claude_code(issues, warnings)
+    assert not issues and not warnings
+    original = settings.read_bytes()
+    cmd_auth._post_login_setup()
+    assert settings.read_bytes() == original
+
+
+def test_login_does_not_instrument_claude_dir_created_only_by_bundled_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth
+
+    def install_skill():
+        (tmp_path / ".claude/skills/observal").mkdir(parents=True)
+
+    monkeypatch.setattr(cmd_auth, "_install_observal_skill", install_skill)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+
+    cmd_auth._post_login_setup()
+    assert not (tmp_path / ".claude/settings.json").exists()
+    issues: list[str] = []
+    warnings: list[str] = []
+    _check_claude_code(issues, warnings)
+    assert not warnings
+
+
+def test_doctor_warns_if_claude_installed_without_settings_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
+    warnings: list[str] = []
+    _check_claude_code([], warnings)
+    assert any("Claude Code session push hooks not installed" in warning for warning in warnings)
+
+
+def test_login_with_invalid_settings_still_installs_skills_without_overwriting_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from observal_cli import cmd_auth, skill_installer
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    settings.write_text("{ invalid")
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+
+    assert settings.read_text() == "{ invalid"
+    assert all((tmp_path / ".claude/skills" / name / "SKILL.md").is_file() for name in skill_installer._SKILL_DIRS)
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"hooks": None},
+        {"env": None},
+        {"hooks": {"Stop": None}},
+        {"hooks": {"Stop": ["unsupported group"]}},
+        {"hooks": {"Stop": [{"hooks": None}]}},
+        {"hooks": {"Stop": [{"hooks": ["unsupported handler"]}]}},
+        {"hooks": {"Stop": [{"hooks": [{"command": None}]}]}},
+    ],
+)
+def test_login_with_malformed_claude_hook_settings_continues_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: dict
+):
+    from observal_cli import cmd_auth, skill_installer
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    original = json.dumps(malformed)
+    settings.write_text(original)
+    pi_setup = MagicMock()
+    doctor = MagicMock()
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", pi_setup)
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", doctor)
+
+    cmd_auth._post_login_setup()
+
+    assert settings.read_text() == original
+    assert all((tmp_path / ".claude/skills" / name / "SKILL.md").is_file() for name in skill_installer._SKILL_DIRS)
+    pi_setup.assert_called_once()
+    doctor.assert_called_once()
+    issues: list[str] = []
+    _check_claude_code(issues, [])
+    assert any("settings.json" in issue for issue in issues)
+
+
+def test_login_preserves_unrelated_non_list_claude_hook_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    settings = tmp_path / ".claude/settings.json"
+    write_json(settings, {"hooks": {"Ignored": "not-a-list"}})
+    monkeypatch.setattr(cmd_auth.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+
+    assert read_json(settings)["hooks"]["Ignored"] == "not-a-list"
+    issues: list[str] = []
+    warnings: list[str] = []
+    _check_claude_code(issues, warnings)
+    assert not issues and not warnings
+
+
+def test_login_never_overwrites_invalid_claude_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from observal_cli import cmd_auth
+
+    settings = tmp_path / ".claude/settings.json"
+    settings.parent.mkdir()
+    settings.write_text("{ invalid")
+    monkeypatch.setattr(cmd_auth, "_install_observal_skill", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_install_or_check_pi_extension", MagicMock())
+    monkeypatch.setattr(cmd_auth, "_generate_initial_layer_snapshot", MagicMock())
+    monkeypatch.setattr("observal_cli.cmd_doctor.doctor", MagicMock())
+
+    cmd_auth._post_login_setup()
+    assert settings.read_text() == "{ invalid"

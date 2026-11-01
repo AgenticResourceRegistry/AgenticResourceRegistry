@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Comprehensive end-to-end tests for issue #434: first-class harness support.
@@ -19,6 +20,7 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,6 +29,7 @@ from typer.testing import CliRunner
 from observal_cli.cmd_pull import _dict_to_toml, _write_file
 from observal_cli.constants import HARNESS_CAPABILITIES, VALID_HARNESSES
 from observal_cli.main import app as cli_app
+from services.agent_lock import PinnedListing
 from services.harness import generate_agent_config
 from services.harness.helpers import _check_harness_compatibility
 
@@ -256,6 +259,45 @@ class TestGenerateCopilotConfig:
 
 
 class TestGenerateCopilotCliConfig:
+    def test_direct_pinned_skill_is_delivered_even_with_historical_git_coordinates(self):
+        listing_id = uuid.uuid4()
+        component = _make_component("skill", listing_id)
+        listing = SimpleNamespace(
+            id=listing_id,
+            name="Security Review",
+            namespace="acme",
+            slug="security-review",
+            delivery_mode="git_fetch",
+            git_url="https://example.test/old.git",
+            git_ref="main",
+            skill_md_content="OLD GIT",
+            description="Older listing",
+        )
+        selected = SimpleNamespace(
+            delivery_mode="registry_direct",
+            git_url="https://example.test/obsolete.git",
+            git_ref="old",
+            skill_md_content="---\nname: security-review\ndescription: Release\n---\nPinned body\n",
+            description="Pinned release",
+            task_type="general",
+            slash_command=None,
+            script_content=None,
+            script_filename=None,
+            skill_path="/",
+        )
+        agent = _make_agent(components=[component])
+
+        config = generate_agent_config(
+            agent, "copilot-cli", skill_listings={listing_id: PinnedListing(listing, selected)}
+        )
+        assert len(config["skill_components"]) == 1
+        skill = config["skill_components"][0]
+        assert skill["name"] == "security-review"
+        assert skill["delivery_mode"] == "registry_direct"
+        assert skill["git_url"] is None
+        assert skill["git_ref"] is None
+        assert skill["skill_md_content"] == selected.skill_md_content
+
     def test_rules_path(self):
         agent = _make_agent()
         cfg = generate_agent_config(agent, "copilot-cli")
@@ -264,7 +306,7 @@ class TestGenerateCopilotCliConfig:
     def test_mcp_config(self):
         agent = _make_agent()
         cfg = generate_agent_config(agent, "copilot-cli")
-        assert cfg["mcp_config"]["path"] == "~/.copilot/mcp-config.json"
+        assert cfg["mcp_config"]["path"] == ".mcp.json"
 
     def test_mcp_config_root_key_is_mcp_servers(self):
         ext = [{"name": "my-server", "command": "npx", "args": ["-y", "my-server"]}]
@@ -350,6 +392,8 @@ class TestGenerateOpenCodeConfig:
         cfg = generate_agent_config(agent, "opencode")
         assert "mcp" in cfg["mcp_config"]["content"]
         assert "my-server" in cfg["mcp_config"]["content"]["mcp"]
+        # OpenCode rewrites a project config without "$schema" whenever it starts.
+        assert cfg["mcp_config"]["content"]["$schema"] == "https://opencode.ai/config.json"
 
     def test_opencode_entries_have_type_local(self):
         ext = [{"name": "my-server", "command": "npx", "args": ["-y", "my-server"]}]
@@ -1348,7 +1392,22 @@ class TestMcpAuthHeadersInAgentPull:
             },
         ),
         ("cursor", {"version": 1, "hooks": {"preToolUse": [{"command": "python guard.py"}]}}),
-        ("kiro", {"hooks": {"preToolUse": [{"command": "python guard.py"}]}}),
+        (
+            # Kiro uses the standalone v1 hooks-file schema (IDE 1.0 / CLI 3.0);
+            # the legacy inline shape is hidden by the IDE.
+            "kiro",
+            {
+                "version": "v1",
+                "hooks": [
+                    {
+                        "name": "observal-pretooluse",
+                        "trigger": "PreToolUse",
+                        "action": {"type": "command", "command": "python guard.py"},
+                        "timeout": 10,
+                    }
+                ],
+            },
+        ),
         ("copilot", {"hooks": {"PreToolUse": [{"command": "python guard.py"}]}}),
         (
             "codex",

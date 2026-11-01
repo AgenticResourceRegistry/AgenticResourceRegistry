@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from observal_cli.harness import SessionSource
+    from observal_cli.telemetry_buffer import OutboxItem
 
 # ---------------------------------------------------------------------------
 # Offset / cursor state
@@ -104,8 +105,47 @@ def write_cursor(
 # ---------------------------------------------------------------------------
 
 
+# The server rejects a session line longer than this (ingest MAX_TEXT_LENGTH).
+MAX_LINE_CHARS = 1_048_576
+
+
+def _omit_long_strings(value, limit: int):
+    if isinstance(value, str):
+        return value if len(value) <= limit else f"[observal: {len(value)} characters omitted]"
+    if isinstance(value, list):
+        return [_omit_long_strings(item, limit) for item in value]
+    if isinstance(value, dict):
+        return {key: _omit_long_strings(item, limit) for key, item in value.items()}
+    return value
+
+
+def fit_line(line: str) -> str:
+    """Return *line* short enough for the server to accept.
+
+    A pasted image or a long thinking signature can push one transcript line past
+    the server's limit, which rejects the whole batch for good. Long string values
+    are replaced with a marker, longest first, so the line stays valid JSON with
+    its structure intact. Records are always read through this, so the session
+    hash covers exactly the lines that are sent.
+    """
+    if len(line) <= MAX_LINE_CHARS:
+        return line
+    try:
+        record = json.loads(line)
+    except ValueError:
+        record = None
+    if isinstance(record, (dict, list)):
+        limit = 65_536
+        while limit >= 64:
+            fitted = json.dumps(_omit_long_strings(record, limit), ensure_ascii=False, separators=(",", ":"))
+            if len(fitted) <= MAX_LINE_CHARS:
+                return fitted
+            limit //= 4
+    return json.dumps({"observal_omitted_characters": len(line)})
+
+
 def read_new_records(jsonl_path: Path, offset: int) -> tuple[list[str], list[int], int]:
-    """Read complete non-empty records and their absolute end-byte offsets."""
+    """Read complete non-empty records, fitted to the server's line limit, and their absolute end-byte offsets."""
     with open(jsonl_path, "rb") as file:
         file.seek(offset)
         raw = file.read()
@@ -123,7 +163,7 @@ def read_new_records(jsonl_path: Path, offset: int) -> tuple[list[str], list[int
         absolute_offset += len(encoded_line)
         line = encoded_line.rstrip(b"\r\n").decode("utf-8", errors="replace")
         if line.strip():
-            lines.append(line)
+            lines.append(fit_line(line))
             end_offsets.append(absolute_offset)
     return lines, end_offsets, complete_bytes
 
@@ -185,14 +225,52 @@ def load_config(home: Path | None = None) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+# Written next to config.json when the server rejects the stored refresh token
+# (revoked by a logout or password change, or expired). Holds a fingerprint of
+# that token, so hooks stop retrying it and a new login clears the state.
+AUTH_EXPIRED_FILE = "auth_expired"
+
+
+def _token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def login_expired(home: Path | None = None) -> bool:
+    """Whether hooks found the current login revoked or expired."""
+    config = load_config(home)
+    if not config or not config["refresh_token"]:
+        return False
+    marker = Path(config["_config_path"]).parent / AUTH_EXPIRED_FILE
+    try:
+        return marker.read_text().strip() == _token_fingerprint(config["refresh_token"])
+    except OSError:
+        return False
+
+
 def _refresh_access_token(server_url: str, refresh_token: str, config_path: str) -> str | None:
     """Use refresh_token to obtain a new access_token and persist it."""
     import httpx
+
+    marker = Path(config_path).parent / AUTH_EXPIRED_FILE
+    fingerprint = _token_fingerprint(refresh_token)
+    try:
+        if marker.read_text().strip() == fingerprint:
+            # Already rejected: retrying only burns the server's auth rate limit.
+            return None
+    except OSError:
+        pass
 
     url = f"{server_url.rstrip('/')}/api/v1/auth/token/refresh"
     try:
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(url, json={"refresh_token": refresh_token})
+            if resp.status_code == 401:
+                optic.warning("refresh token rejected; session delivery paused until `observal auth login`")
+                try:
+                    marker.write_text(fingerprint)
+                except OSError:
+                    pass
+                return None
             if resp.status_code >= 300:
                 return None
             data = resp.json()
@@ -380,6 +458,24 @@ def recover_cursor_from_server(
 
 
 MAX_CHUNK_SIZE = 500
+# Batch bytes stay under the server's default 10 MB request limit (MAX_REQUEST_SIZE_MB).
+MAX_BATCH_BYTES = 8 * 1024 * 1024
+
+
+def batch_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    """Split *lines* into ``(start, end)`` batches under both the line and the byte limit."""
+    ranges: list[tuple[int, int]] = []
+    start = size = 0
+    for index, line in enumerate(lines):
+        # Each line travels JSON-encoded inside the request body.
+        line_bytes = len(json.dumps(line, ensure_ascii=False).encode("utf-8"))
+        if index > start and (index - start >= MAX_CHUNK_SIZE or size + line_bytes > MAX_BATCH_BYTES):
+            ranges.append((start, index))
+            start, size = index, 0
+        size += line_bytes
+    if lines:
+        ranges.append((start, len(lines)))
+    return ranges
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +545,24 @@ def drain_outbox(
                 repairs.append((item.harness, item.session_id))
             return False
         if acknowledged_line < item.end_line:
+            if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
+                # The lines between the server checkpoint and this batch were quarantined
+                # or lost, so the checkpoint can never reach it. The server stored the
+                # batch; accept it instead of resending it forever ahead of every session.
+                write_cursor(
+                    item.checkpoint_key,
+                    item.end_offset,
+                    item.end_line + 1,
+                    finalized=item.final,
+                    home=home,
+                )
+                telemetry_buffer.accept_item(item.id, db_path=db_path)
+                log_error(
+                    f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
+                    f"past a checkpoint gap after line {acknowledged_line}",
+                    home=home,
+                )
+                continue
             return False
         if acknowledged_offset <= 0:
             acknowledged_offset = item.end_offset
@@ -469,6 +583,33 @@ def drain_outbox(
             db_path=db_path,
         )
     return True
+
+
+def _checkpoint_gap_is_permanent(
+    item: OutboxItem,
+    acknowledged_line: int,
+    acknowledgement: dict,
+    *,
+    db_path: Path | None = None,
+) -> bool:
+    """Whether the server stored a batch that its checkpoint can never reach."""
+    from observal_cli import telemetry_buffer
+
+    if item.end_line < item.start_line or acknowledged_line + 1 >= item.start_line:
+        return False
+    # The server counts lines it already had and ignorable records as skipped; both are stored.
+    handled = int(acknowledgement.get("ingested") or 0) + int(acknowledgement.get("skipped") or 0)
+    stored_whole_batch = handled == len(item.payload.get("lines") or [])
+    if int(acknowledgement.get("errors") or 0) or not stored_whole_batch:
+        return False
+    return not telemetry_buffer.holds_line(
+        destination=item.destination,
+        user_id=item.user_id,
+        harness=item.harness,
+        session_id=item.session_id,
+        line=acknowledged_line + 1,
+        db_path=db_path,
+    )
 
 
 def drain_session_source(
@@ -529,6 +670,10 @@ def drain_session_source(
     )
     session_hash, hashed_line_count = hash_session_source(source.path) if final else (None, None)
     lines, end_byte_offsets, bytes_read = read_new_records(source.path, byte_offset)
+    # Sources rebuilt from disk (recovery, reconcile) have no cwd. The payload's layer
+    # hash and the uploaded snapshot must both describe the project the transcript
+    # records; with none, build_payload sends no hash and nothing is uploaded.
+    cwd = source.cwd or (_recorded_cwd(lines, source.path) if hook_event in _DISK_EVENTS else "")
     if extra_records:
         lines.extend(extra_records)
         end_byte_offsets.extend([byte_offset + bytes_read] * len(extra_records))
@@ -543,20 +688,24 @@ def drain_session_source(
                 hook_event=hook_event,
                 line_count_before=line_count,
                 new_offset=byte_offset,
-                cwd=source.cwd,
+                cwd=cwd,
                 parent_session_id=source.parent_session_id,
                 session_jsonl=source.path,
                 harness=source.harness,
             )
             payload["harness"] = source.harness
             if extra_fields:
-                payload.update(extra_fields)
+                payload.update({key: value for key, value in extra_fields.items() if key != "layer_hash"})
             if final:
                 payload["final"] = True
                 payload["total_line_count"] = line_count
                 payload["total_offset"] = byte_offset
                 payload["session_hash"] = session_hash
                 payload["hashed_line_count"] = hashed_line_count
+            if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
+                _maybe_upload_layer_snapshot(
+                    destination, str(config["access_token"]), payload["layer_hash"], source.harness, cwd, config
+                )
             telemetry_buffer.enqueue(
                 payload,
                 destination=destination,
@@ -604,10 +753,10 @@ def drain_session_source(
     # Attribute trailing blank-line bytes to the last real record checkpoint.
     end_byte_offsets[-1] = byte_offset + bytes_read
 
-    for chunk_start in range(0, len(lines), MAX_CHUNK_SIZE):
-        chunk = lines[chunk_start : chunk_start + MAX_CHUNK_SIZE]
-        chunk_end_offsets = end_byte_offsets[chunk_start : chunk_start + MAX_CHUNK_SIZE]
-        is_last = chunk_start + MAX_CHUNK_SIZE >= len(lines)
+    for chunk_start, chunk_end in batch_ranges(lines):
+        chunk = lines[chunk_start:chunk_end]
+        chunk_end_offsets = end_byte_offsets[chunk_start:chunk_end]
+        is_last = chunk_end == len(lines)
         payload = build_payload(
             session_id=source.session_id,
             lines=chunk,
@@ -615,7 +764,7 @@ def drain_session_source(
             hook_event=hook_event,
             line_count_before=line_count + chunk_start,
             new_offset=byte_offset + bytes_read if is_last else chunk_end_offsets[-1],
-            cwd=source.cwd,
+            cwd=cwd,
             parent_session_id=source.parent_session_id,
             session_jsonl=source.path,
             harness=source.harness,
@@ -633,7 +782,11 @@ def drain_session_source(
             payload.pop("total_line_count", None)
             payload.pop("total_offset", None)
         if extra_fields:
-            payload.update(extra_fields)
+            payload.update({key: value for key, value in extra_fields.items() if key != "layer_hash"})
+        if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
+            _maybe_upload_layer_snapshot(
+                destination, str(config["access_token"]), payload["layer_hash"], source.harness, cwd, config
+            )
         telemetry_buffer.enqueue(
             payload,
             destination=destination,
@@ -677,6 +830,36 @@ def drain_session_source(
 # ---------------------------------------------------------------------------
 
 
+# Events whose sources are rebuilt from files on disk, without the live hook's cwd.
+_DISK_EVENTS = frozenset({"CrashRecovery", "Reconcile"})
+
+
+def _recorded_cwd(lines: list[str], session_jsonl: Path | None, scan_lines: int = 200) -> str:
+    """The absolute, existing project directory a transcript's records name, else ``""``."""
+    import json
+    import os
+
+    def first_cwd(raw_lines) -> str:
+        for raw in raw_lines:
+            try:
+                record = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            value = record.get("cwd") if isinstance(record, dict) else None
+            if isinstance(value, str) and os.path.isabs(value) and os.path.isdir(value):
+                return value
+        return ""
+
+    found = first_cwd(lines)
+    if found or session_jsonl is None:
+        return found
+    try:
+        with open(session_jsonl, encoding="utf-8", errors="replace") as handle:
+            return first_cwd(line for _, line in zip(range(scan_lines), handle, strict=False))
+    except OSError:
+        return ""
+
+
 def build_payload(
     session_id: str,
     lines: list[str],
@@ -694,8 +877,16 @@ def build_payload(
     Defaults harness telemetry to ``claude-code``; callers override ``payload["harness"]``
     for other harnesses.
     """
-    agent_id, agent_version = _resolve_agent(cwd, lines, session_jsonl, harness=harness)
-    layer_hash = _get_cached_layer_hash(session_id, cwd)
+    recovered_without_cwd = hook_event in _DISK_EVENTS and not cwd
+    if recovered_without_cwd:
+        # Recovery and reconcile rebuild sources from disk with no cwd. Hashing "no
+        # project" would describe only user-scope components, so use the project the
+        # transcript records, or send no hash (unknown coverage) rather than a wrong one.
+        cwd = _recorded_cwd(lines, session_jsonl)
+    agent_id, agent_version = _resolve_agent(
+        cwd, lines, session_jsonl, harness=harness, session_ids=(session_id, parent_session_id)
+    )
+    layer_hash = None if recovered_without_cwd and not cwd else _get_cached_layer_hash(session_id, cwd, harness)
     payload: dict = {
         "session_id": session_id,
         "harness": "claude-code",
@@ -707,28 +898,131 @@ def build_payload(
         "hook_event": hook_event,
         "parent_session_id": parent_session_id,
     }
+    capabilities = _capabilities_for_session(session_id, cwd, harness, session_jsonl)
+    if capabilities:
+        payload["capabilities_used"] = capabilities
     if hook_event == "Stop":
         payload["final"] = True
         payload["total_line_count"] = line_count_before + len(lines)
         payload["total_offset"] = new_offset
-        _evict_layer_hash_cache(session_id)
+        _evict_layer_hash_cache(session_id, cwd, harness)
     return payload
 
 
-# Per-session layer_hash cache: avoids re-scanning harness dirs on every chunk
-_layer_hash_cache: dict[str, str | None] = {}
+_TIMESTAMP_KEYS = ("timestamp", "ts", "time", "created_at", "createdAt", "start_time")
+_MAX_CAPABILITIES_PER_PUSH = 200
 
 
-def _get_cached_layer_hash(session_id: str, cwd: str) -> str | None:
-    """Return cached layer_hash for this session, computing once on first call."""
-    if session_id not in _layer_hash_cache:
-        _layer_hash_cache[session_id] = _compute_layer_hash_safe(cwd, "claude-code")
-    return _layer_hash_cache[session_id]
+_START_SCAN_LINES = 20
 
 
-def _evict_layer_hash_cache(session_id: str) -> None:
-    """Remove cached hash when session ends (Stop event)."""
-    _layer_hash_cache.pop(session_id, None)
+def _first_line_timestamp(session_jsonl: Path):
+    """The earliest timestamp among a transcript's first lines, if any.
+
+    Some harnesses open a transcript with a record that carries no timestamp
+    (a summary or snapshot line), so only the first line is not enough.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    found = []
+    try:
+        with session_jsonl.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = [handle.readline() for _ in range(_START_SCAN_LINES)]
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        for key in _TIMESTAMP_KEYS:
+            value = record.get(key)
+            if isinstance(value, int | float) and value > 0:
+                found.append(datetime.fromtimestamp(value / 1000 if value > 1e11 else value, tz=UTC))
+                break
+            if isinstance(value, str) and value:
+                try:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                found.append(parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC))
+                break
+    return min(found) if found else None
+
+
+def _session_started_at(session_jsonl: Path | None):
+    """When the session began, or ``None`` when that cannot be established.
+
+    Prefer the file's birth time where the platform records one, then the
+    transcript's own first timestamp. ``st_ctime`` is deliberately not used:
+    on Linux it moves with every write, which would silently drop uses from
+    the start of a long session.
+    """
+    from datetime import UTC, datetime
+
+    if session_jsonl is None:
+        return None
+    try:
+        birth = getattr(session_jsonl.stat(), "st_birthtime", None)
+        if birth:
+            return datetime.fromtimestamp(birth, tz=UTC)
+    except OSError:
+        pass
+    return _first_line_timestamp(session_jsonl)
+
+
+def _capabilities_for_session(session_id: str, cwd: str, harness: str, session_jsonl: Path | None) -> list[dict]:
+    """Capability-lock uses that belong to this session, shaped for ingest.
+
+    See ``capability_lock.for_session`` for the attribution rules. Best effort:
+    attribution is evidence, so a broken lock file never blocks telemetry.
+    """
+    try:
+        from observal_cli import capability_lock
+
+        matched = capability_lock.for_session(
+            session_id=session_id,
+            harness=harness,
+            cwd=cwd or None,
+            started_at=_session_started_at(session_jsonl),
+            has_transcript=session_jsonl is not None,
+        )
+        if not matched:
+            return []
+        confidence = {id(use): level for use, level in matched}
+        latest = capability_lock.dedupe_latest(use for use, _ in matched)
+        # The ingest contract caps the list; keep the most recent distinct uses.
+        latest = sorted(latest, key=lambda u: u.ts, reverse=True)[:_MAX_CAPABILITIES_PER_PUSH]
+        return [
+            payload | {"confidence": confidence[id(use)]}
+            for use, payload in zip(latest, capability_lock.to_payload(latest, confidence="window"), strict=True)
+        ]
+    except Exception as exc:
+        optic.debug("capability attribution skipped for {}: {}", session_id, exc)
+        return []
+
+
+# A detected mid-session transition makes later unattributable intervals unknown.
+_layer_hash_cache: dict[tuple[str, str, str], str | None] = {}
+
+
+def _get_cached_layer_hash(session_id: str, cwd: str, harness: str) -> str | None:
+    """Recheck each scoped session; never mix projects or harnesses sharing an ID."""
+    key = (session_id, cwd, harness)
+    current = _compute_layer_hash_safe(cwd, harness)
+    if key not in _layer_hash_cache:
+        _layer_hash_cache[key] = current
+    elif _layer_hash_cache[key] != current:
+        _layer_hash_cache[key] = None  # Sticky ambiguous transition.
+    return _layer_hash_cache[key]
+
+
+def _evict_layer_hash_cache(session_id: str, cwd: str, harness: str) -> None:
+    """Remove only the completed scoped session's hash on Stop."""
+    _layer_hash_cache.pop((session_id, cwd, harness), None)
 
 
 def _compute_layer_hash_safe(cwd: str, harness: str) -> str | None:
@@ -738,9 +1032,9 @@ def _compute_layer_hash_safe(cwd: str, harness: str) -> str | None:
     Returns None on any failure.
     """
     try:
-        from observal_cli.layer import compute_layer_hash
+        from observal_cli.layer import ensure_local_snapshot
 
-        return compute_layer_hash(harness=None, project_dir=cwd or None)
+        return ensure_local_snapshot(harness=None, project_dir=cwd or None)
     except Exception:
         return None
 
@@ -784,21 +1078,33 @@ def _maybe_upload_layer_snapshot(
             build_upload_payload,
             needs_upload,
             save_local_snapshot,
+            set_last_uploaded_hash,
+            was_uploaded_for,
         )
 
-        if not needs_upload(layer_hash):
+        # Build first, then compare: a changed pin cannot reuse the old advertised hash.
+        payload = build_upload_payload(project_dir=cwd or None)
+        user_id = str((config or {}).get("user_id") or "")
+        if payload["hash"] != layer_hash:
+            # The configuration changed after the session advertised its hash. The advertised hash cannot be
+            # uploaded (its files are gone), so the session has no snapshot; coverage reports it as such.
+            optic.warning("layer snapshot not uploaded: the configuration changed since the session started")
             return
-
-        # Build the full manifest with content
-        payload = build_upload_payload(harness, project_dir=cwd or None)
+        if not needs_upload(layer_hash) and was_uploaded_for(layer_hash, server_url, user_id):
+            return
 
         # POST to server
         import httpx
 
+        from observal_cli.client import _get_cli_version
+
         url = f"{server_url.rstrip('/')}/api/v1/layer-snapshots"
+        # The server's CLI/server parity check answers 426 to authenticated CLI requests
+        # without this header; unlike ingest, this path is not exempt.
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
+            "X-Observal-CLI-Version": _get_cli_version(),
         }
 
         with httpx.Client(timeout=10.0) as client:
@@ -806,9 +1112,10 @@ def _maybe_upload_layer_snapshot(
             if resp.status_code < 300:
                 # Save locally: same content as what server now has
                 save_local_snapshot(payload)
-                optic.debug("layer snapshot uploaded and saved locally: hash={}", layer_hash)
+                set_last_uploaded_hash(payload["hash"], server_url, user_id)
+                optic.debug("layer snapshot uploaded and saved locally: hash={}", payload["hash"])
             else:
-                optic.debug("layer snapshot upload failed: status={}", resp.status_code)
+                optic.warning("layer snapshot upload failed: status={}", resp.status_code)
     except Exception as e:
         optic.debug("layer snapshot upload skipped: {}", e)
 
@@ -818,11 +1125,17 @@ def _resolve_agent(
     lines: list[str],
     session_jsonl: Path | None,
     harness: str = "claude-code",
+    session_ids: tuple[str | None, ...] = (),
 ) -> tuple[str | None, str | None]:
-    """Resolve agent identity through the harness adapter, environment, and lockfile."""
+    """Resolve agent identity: delegated child first, then harness adapter, environment, and lockfile."""
     import os
 
+    from observal_cli.delegation.tasks import delegated_agent
     from observal_cli.harness import ensure_loaded, get_adapter
+
+    delegated = delegated_agent(cwd, session_ids)
+    if delegated:
+        return delegated
 
     ensure_loaded()
     adapter = get_adapter(harness)
@@ -845,6 +1158,15 @@ def _resolve_agent(
         if lockfile_entry is None:
             lockfile_entry = _lookup_lockfile_agent_by_id(env_agent_id)
         if lockfile_entry:
+            from observal_cli.lockfile import agent_entry_is_registry_backed
+
+            if not agent_entry_is_registry_backed(lockfile_entry):
+                optic.warning(
+                    "OBSERVAL_AGENT_ID={} is not registry-backed (status={}); leaving unattributed",
+                    env_agent_id,
+                    lockfile_entry.get("registry_status"),
+                )
+                return None, None
             return lockfile_entry.get("id"), lockfile_entry.get("version")
         optic.warning("OBSERVAL_AGENT_ID={} not found in lockfile (harness={})", env_agent_id, harness)
         return None, None
@@ -865,6 +1187,16 @@ def _resolve_agent(
     if not agent_name:
         agent_name = _parse_agent_from_lines(lines)
 
+    # 3. A subagent transcript names the agent definition it ran as. Only a pulled
+    # agent counts: built-in subagent types are not registry agents.
+    if not agent_name:
+        subagent_name = getattr(adapter, "session_subagent_name", lambda _path: None)(session_jsonl)
+        if subagent_name:
+            entry = _lookup_lockfile_agent(cwd, agent_name=subagent_name)
+            if entry is None:
+                return None, None
+            return entry.get("id") or entry.get("name"), entry.get("version")
+
     # Look up version from lockfile. Agent name is the reliable signal for per-agent hooks.
     lockfile_entry = _lookup_lockfile_agent(cwd, agent_name=agent_name) if cwd or agent_name else None
 
@@ -880,8 +1212,9 @@ def _resolve_agent(
                 version = lockfile_entry.get("version")
         return agent_id, version
 
-    # 3. No name from env/JSONL; fall back to lockfile entirely
-    if lockfile_entry:
+    # 4. No name from env/JSONL: harnesses that cannot name the agent fall back
+    # to the agent pulled into the session's directory.
+    if lockfile_entry and getattr(adapter, "attributes_by_directory", lambda: True)():
         return lockfile_entry.get("id") or lockfile_entry.get("name"), lockfile_entry.get("version")
 
     return None, None
@@ -898,7 +1231,7 @@ def _lookup_lockfile_agent_by_id(agent_id: str, harness: str | None = None) -> d
     return None
 
 
-def _lookup_lockfile_agent(cwd: str, agent_name: str | None = None) -> dict | None:
+def _lookup_lockfile_agent(cwd: str, agent_name: str | None = None, harness: str | None = None) -> dict | None:
     """Find the lockfile agent for a directory and optional agent name."""
     try:
         from observal_cli.lockfile import read_registry_lockfile
@@ -906,8 +1239,8 @@ def _lookup_lockfile_agent(cwd: str, agent_name: str | None = None) -> dict | No
 
         _, data = read_registry_lockfile()
         name_matches: list[dict] = []
-        for harness in get_valid_harnesses():
-            for agent in data.get("harnesses", {}).get(harness, {}).get("agents", []):
+        for candidate in (harness,) if harness else get_valid_harnesses():
+            for agent in data.get("harnesses", {}).get(candidate, {}).get("agents", []):
                 same_dir = bool(cwd) and agent.get("directory") == cwd
                 same_agent = agent_name and (agent.get("name") == agent_name or agent.get("id") == agent_name)
                 if agent_name:

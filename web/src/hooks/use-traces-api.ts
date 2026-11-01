@@ -91,3 +91,12 @@ export function useVersionDiff(
     queryFn: () => registry.getVersionDiff(agentId!, v1!, v2!),
   });
 }
+
+/** Which components an agent version pins behind their latest approved release. */
+export function useAgentVersionOutdated(agentId: string | undefined, version: string | null | undefined) {
+  return useQuery({
+    queryKey: ["agent-version-outdated", agentId, version],
+    enabled: !!agentId && !!version,
+    queryFn: () => registry.getVersionOutdated(agentId!, version!),
+  });
+}

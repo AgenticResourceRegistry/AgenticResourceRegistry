@@ -1,10 +1,12 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+<!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 # SPDX-License-Identifier: Apache-2.0
 name: observal-registry
 command: observal
-description: "Searches, recommends, bulk-submits, installs, edits, versions, archives, restores, transfers, and manages co-authors for Observal MCP servers, skills, hooks, prompts, and sandboxes. Use when the user wants to find components, publish one or many they control, install them into a harness, or manage their lifecycle."
-version: 2.3.0
+description: "Searches, recommends, bulk-submits, installs, forks, edits, versions, archives, restores, transfers, and manages co-authors for Observal MCP servers, skills, hooks, prompts, sandboxes, and registered remote A2A agents. Use when the user wants to find components, publish one or many they control, install them into a harness, or manage their lifecycle."
+version: 2.5.0
 owner: observal
 ---
 
@@ -28,8 +30,8 @@ owner: observal
 | User intent | Read |
 | --- | --- |
 | Find, inspect, recommend, or install components | [Discovery and installation](references/discovery-and-installation.md) |
-| Submit one component or a mixed bulk file | [Component submission](references/component-submission.md) |
-| Edit, version, archive, restore, transfer, or manage co-authors | [Registry lifecycle](references/registry-lifecycle.md) |
+| Submit one component or a mixed bulk file, or register a remote A2A agent | [Component submission](references/component-submission.md) |
+| Fork, edit, version, archive, restore, transfer, or manage co-authors | [Registry lifecycle](references/registry-lifecycle.md) |
 
 Read only the selected reference, and read it completely before executing.
 
@@ -40,6 +42,7 @@ Read only the selected reference, and read it completely before executing.
 - `personalized: false` means popularity fallback, not a personal recommendation.
 - Team members can see authorized private teamspace items. Use `TEAM_HANDLE/ITEM_SLUG` for direct references.
 - Draft, pending, rejected, and approved items have different edit behavior. Read status before mutating.
+- Forks copy only currently approved sources and approved releases into independent drafts. Do not disclose source identity if the API reports `forked_from.available: false`.
 - A successful submit can still be pending review. Report the returned status instead of saying it is published.
 - Bulk files are structurally validated before mutation. Inspect every per-entry result and verify uncertain retries by canonical identity.
 - Prefer an existing installed dependency or native CLI path. Do not invent wrappers or telemetry variables.

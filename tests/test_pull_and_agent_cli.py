@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -321,6 +322,97 @@ class TestPullClaudeCode:
         # No .claude/mcp.json should exist — Claude Code uses setup commands instead
         assert not (tmp_path / ".claude" / "mcp.json").exists()
 
+    def test_rewrites_frontmatter_hook_python_path(self, tmp_path: Path, monkeypatch):
+        """Frontmatter hooks must use this CLI's interpreter, including paths with spaces."""
+        monkeypatch.setattr(sys, "executable", "/tmp/Observal Tools/bin/python3")
+        snippet = _claude_code_snippet()
+        snippet["config_snippet"]["agent_profile"]["content"] = (
+            "---\n"
+            "name: my-agent\n"
+            "hooks:\n"
+            "  UserPromptSubmit:\n"
+            "    - hooks:\n"
+            "        - type: command\n"
+            '          command: "python3 -m observal_cli.hooks.session_push"\n'
+            "  Stop:\n"
+            "    - hooks:\n"
+            "        - type: command\n"
+            '          command: "python3 -m observal_cli.hooks.session_push"\n'
+            "---\n"
+        )
+        with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+            result = runner.invoke(
+                cli_app, ["agent", "pull", "abc123", "--harness", "claude-code", "--dir", str(tmp_path), "--no-prompt"]
+            )
+
+        assert result.exit_code == 0, result.output
+        content = (tmp_path / ".claude" / "agents" / "my-agent.md").read_text()
+        assert '"python3 -m' not in content
+        frontmatter, _, _body = content[4:].partition("\n---")
+        hooks = yaml.safe_load(frontmatter)["hooks"]
+        from observal_cli.shared import launcher
+
+        module = "observal_cli.hooks.session_push"
+        for event in ("UserPromptSubmit", "Stop"):
+            command = hooks[event][0]["hooks"][0]["command"]
+            if sys.platform == "win32":
+                assert command == launcher.windows_module_command(module)
+                continue
+            # This CLI's interpreter as one shell word, isolated from the project directory.
+            argv = shlex.split(command)
+            assert argv[argv.index(sys.executable) :] == [sys.executable, launcher.isolation_flag(), "-m", module]
+            assert command == launcher.posix_module_command(module)
+
+    def test_says_when_agent_reports_sessions(self, tmp_path: Path):
+        snippet = _claude_code_snippet()
+        snippet["config_snippet"]["agent_profile"]["content"] = (
+            "---\n"
+            "name: my-agent\n"
+            "hooks:\n"
+            "  Stop:\n"
+            "    - hooks:\n"
+            "        - type: command\n"
+            '          command: "python3 -m observal_cli.hooks.session_push"\n'
+            "---\n"
+        )
+        with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+            result = runner.invoke(
+                cli_app, ["agent", "pull", "abc123", "--harness", "claude-code", "--dir", str(tmp_path), "--no-prompt"]
+            )
+
+        assert result.exit_code == 0, result.output
+        output = _plain(result.output)
+        assert "Telemetry:" in output
+        assert "session hooks are present" in output
+        assert "http://localhost:8000" in output
+
+        with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+            dry_run = runner.invoke(
+                cli_app,
+                [
+                    "agent",
+                    "pull",
+                    "abc123",
+                    "--harness",
+                    "claude-code",
+                    "--dir",
+                    str(tmp_path),
+                    "--dry-run",
+                    "--no-prompt",
+                ],
+            )
+        assert dry_run.exit_code == 0, dry_run.output
+        assert "session hooks would be present after this pull" in _plain(dry_run.output)
+
+    def test_no_telemetry_line_without_session_hooks(self, tmp_path: Path):
+        with _patch_config(), _patch_get_agent(), _patch_post(_claude_code_snippet()):
+            result = runner.invoke(
+                cli_app, ["agent", "pull", "abc123", "--harness", "claude-code", "--dir", str(tmp_path), "--no-prompt"]
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Telemetry:" not in _plain(result.output)
+
 
 # ═══════════════════════════════════════════════════════════════
 # 3. Kiro format (agent_profile with ~/  path)
@@ -353,9 +445,9 @@ class TestPullKiro:
         assert data["name"] == "my-agent"
         assert data["tools"] == ["search"]
 
-    def test_rewrites_hook_python_path(self, tmp_path: Path):
-        """Hook commands should use sys.executable, not bare python3."""
-        snippet = {
+    @staticmethod
+    def _hooked_snippet() -> dict:
+        return {
             "config_snippet": {
                 "agent_profile": {
                     "path": "~/.kiro/agents/my-agent.json",
@@ -367,9 +459,57 @@ class TestPullKiro:
                             "stop": [{"command": "python3 -m observal_cli.hooks.kiro_session_push"}],
                         },
                     },
-                }
+                },
+                "hooks_config": {
+                    "path": ".kiro/hooks/observal.json",
+                    "content": {
+                        "version": "v1",
+                        "hooks": [
+                            {
+                                "name": "observal-session-push-stop",
+                                "trigger": "Stop",
+                                "action": {
+                                    "type": "command",
+                                    "command": "python3 -m observal_cli.hooks.session_push --harness kiro",
+                                },
+                            }
+                        ],
+                    },
+                },
             }
         }
+
+    def _pull(self, tmp_path: Path):
+        with _patch_config(), _patch_get_agent(), _patch_post(self._hooked_snippet()):
+            return runner.invoke(
+                cli_app,
+                [
+                    "agent",
+                    "pull",
+                    "abc123",
+                    "--harness",
+                    "kiro",
+                    "--dir",
+                    str(tmp_path),
+                    "--no-prompt",
+                    "--scope",
+                    "project",
+                ],
+            )
+
+    def test_strips_cli_only_tool_fields_a_stale_server_still_emits(self, tmp_path: Path):
+        """Repair profiles on pull, not just at generation time.
+
+        Kiro IDE 1.x ProfileLoader drops any profile carrying ``allowedTools``
+        or ``toolsSettings`` without ``permissions``, so the agent never reaches
+        the picker. The server no longer emits them, but a client talking to an
+        older server has to fix the profile locally.
+        """
+        snippet = self._hooked_snippet()
+        content = snippet["config_snippet"]["agent_profile"]["content"]
+        content["allowedTools"] = []
+        content["toolsSettings"] = {}
+
         with _patch_config(), _patch_get_agent(), _patch_post(snippet):
             result = runner.invoke(
                 cli_app,
@@ -386,6 +526,51 @@ class TestPullKiro:
                     "project",
                 ],
             )
+
+        assert result.exit_code == 0, result.output
+        data = json.loads((tmp_path / ".kiro" / "agents" / "my-agent.json").read_text())
+        assert "allowedTools" not in data
+        assert "toolsSettings" not in data
+        assert data["name"] == "my-agent"
+
+    def test_strips_inline_hooks_when_ide_can_read_the_standalone_file(self, tmp_path: Path, monkeypatch):
+        """Kiro IDE 1.0 loads inline-hooked agents but never fires the hooks."""
+        import observal_cli.harness.kiro as kiro_adapter
+
+        monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: False)
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        data = json.loads((tmp_path / ".kiro" / "agents" / "my-agent.json").read_text())
+        assert "hooks" not in data
+
+    def test_writes_standalone_v1_hooks_file(self, tmp_path: Path, monkeypatch):
+        """Telemetry hooks live in .kiro/hooks/observal.json, read by IDE and CLI 3.x."""
+        import observal_cli.harness.kiro as kiro_adapter
+
+        monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: False)
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        hooks_file = tmp_path / ".kiro" / "hooks" / "observal.json"
+        assert hooks_file.exists()
+        data = json.loads(hooks_file.read_text())
+        assert data["version"] == "v1"
+        triggers = {h["trigger"] for h in data["hooks"]}
+        assert triggers == {"UserPromptSubmit", "Stop"}
+        for hook in data["hooks"]:
+            command = hook["action"]["command"]
+            assert sys.executable in command, f"hook missing sys.executable: {command}"
+            # Shared across every agent in the scope, so no per-agent id.
+            assert "OBSERVAL_AGENT_ID" not in command
+            assert not command.startswith("python3 ")
+
+    def test_rewrites_hook_python_path(self, tmp_path: Path, monkeypatch):
+        """On legacy Kiro CLI 2.x, inline hooks stay and use sys.executable."""
+        import observal_cli.harness.kiro as kiro_adapter
+
+        monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: True)
+        result = self._pull(tmp_path)
 
         assert result.exit_code == 0, result.output
         agent = tmp_path / ".kiro" / "agents" / "my-agent.json"
@@ -463,6 +648,38 @@ class TestPullPi:
         skill = tmp_path / ".pi" / "agents" / "my-agent" / "skills" / "pi-skill" / "SKILL.md"
         assert skill.exists()
         assert "Pi Skill" in skill.read_text()
+
+    @pytest.mark.parametrize("extension_installed", [True, False])
+    def test_reports_sessions_follows_observal_extension(self, tmp_path: Path, monkeypatch, extension_installed: bool):
+        pi_dir = tmp_path / "pi-agent"
+        if extension_installed:
+            (pi_dir / "extensions").mkdir(parents=True)
+            (pi_dir / "extensions" / "observal.ts").write_text("// observal")
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(pi_dir))
+        project = tmp_path / "project"
+        project.mkdir()
+
+        with _patch_config(), _patch_get_agent(), _patch_post(_pi_snippet()):
+            result = runner.invoke(
+                cli_app,
+                [
+                    "agent",
+                    "pull",
+                    "abc123",
+                    "--harness",
+                    "pi",
+                    "--dir",
+                    str(project),
+                    "--no-prompt",
+                    "--scope",
+                    "project",
+                    "--output",
+                    "json",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["reports_sessions"] is extension_installed
 
 
 class TestPullOpenCode:
@@ -562,6 +779,90 @@ class TestPullMcpMerge:
 # ═══════════════════════════════════════════════════════════════
 
 
+class TestProjectMcpDestinations:
+    def test_goose_project_pull_with_mcp_fails_without_writes(self, tmp_path: Path, monkeypatch):
+        home, project = tmp_path / "home", tmp_path / "project"
+        home.mkdir()
+        project.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        snippet = {
+            "config_snippet": {
+                "agent_profile": {"path": ".agents/agents/my-agent.md", "content": "# My Agent"},
+                "mcp_config": {
+                    "path": "~/.config/goose/config.yaml",
+                    "content": {"extensions": {"example": {"cmd": "echo"}}},
+                },
+            }
+        }
+        for flag in ([], ["--dry-run"]):
+            with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+                result = runner.invoke(
+                    cli_app,
+                    [
+                        "agent",
+                        "pull",
+                        "abc123",
+                        "--harness",
+                        "goose",
+                        "--scope",
+                        "project",
+                        "--dir",
+                        str(project),
+                        "--no-prompt",
+                        *flag,
+                    ],
+                )
+            assert result.exit_code != 0
+            assert "Goose MCP extensions require a user-level config" in _plain(result.output).replace("\n", " ")
+            assert not list(project.iterdir())
+            assert not list(home.iterdir())
+
+    def test_copilot_cli_project_pull_writes_native_mcp_file(self, tmp_path: Path, monkeypatch):
+        home, project = tmp_path / "home", tmp_path / "project"
+        home.mkdir()
+        project.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        snippet = {
+            "config_snippet": {
+                "agent_profile": {"path": ".github/agents/my-agent.agent.md", "content": "# My Agent"},
+                "mcp_config": {
+                    "path": ".mcp.json",
+                    "content": {
+                        "mcpServers": {
+                            "example": {
+                                "type": "stdio",
+                                "command": "echo",
+                                "args": ["hello"],
+                                "tools": ["*"],
+                            }
+                        }
+                    },
+                },
+            }
+        }
+        for flag in (["--dry-run"], []):
+            with _patch_config(), _patch_get_agent(), _patch_post(snippet):
+                result = runner.invoke(
+                    cli_app,
+                    [
+                        "agent",
+                        "pull",
+                        "abc123",
+                        "--harness",
+                        "copilot-cli",
+                        "--dir",
+                        str(project),
+                        "--no-prompt",
+                        *flag,
+                    ],
+                )
+            assert result.exit_code == 0, result.output
+            if flag:
+                assert not (project / ".mcp.json").exists()
+        assert json.loads((project / ".mcp.json").read_text())["mcpServers"]["example"]["command"] == "echo"
+        assert not list(home.iterdir())
+
+
 class TestPullDryRun:
     def test_dry_run_does_not_write_files(self, tmp_path: Path):
         with _patch_config(), _patch_get_agent(), _patch_post(_cursor_snippet()):
@@ -635,7 +936,7 @@ class TestPullEdgeCases:
             _patch_config(),
             _patch_get_agent(),
             _patch_post(_codex_snippet()),
-            patch("observal_cli.cmd_pull.config.resolve_alias", return_value="real-uuid") as mock_resolve,
+            patch("observal_cli.config.resolve_alias", return_value="real-uuid") as mock_resolve,
         ):
             result = runner.invoke(
                 cli_app, ["agent", "pull", "@myagent", "--harness", "codex", "--dir", str(tmp_path), "--no-prompt"]
@@ -1032,7 +1333,7 @@ class TestAgentPublish:
         assert "new-agent-uuid" in result.output
         assert "observal agent pull tester/test-agent" in result.output
         # A public publish stays in the review queue, so the CLI must say so.
-        assert "an admin must approve it" in result.output
+        assert "review is required before publication" in result.output
 
         # Verify the POST payload
         call_args = mock_post_fn.call_args
@@ -1076,7 +1377,13 @@ class TestAgentPublish:
         search_results = [{"id": "existing-uuid", "name": "test-agent"}]
         put_result = {"id": "existing-uuid", "name": "test-agent"}
 
-        with _patch_config(), _patch_get(search_results) as mock_get_fn, _patch_put(put_result) as mock_put_fn:
+        # Search by name, then read the agent's status: --update amends an unpublished version in place.
+        detail = {"id": "existing-uuid", "name": "test-agent", "version": "1.0.0", "status": "pending"}
+        with (
+            _patch_config(),
+            patch("observal_cli.client.get", side_effect=[search_results, detail]) as mock_get_fn,
+            _patch_put(put_result) as mock_put_fn,
+        ):
             result = runner.invoke(
                 cli_app,
                 ["agent", "publish", "--dir", str(tmp_path), "--update"],
@@ -1086,10 +1393,10 @@ class TestAgentPublish:
         assert "Agent updated" in result.output
         assert "existing-uuid" in result.output
 
-        # Verify GET was called with search param
-        mock_get_fn.assert_called_once()
-        get_call = mock_get_fn.call_args
-        assert get_call[1].get("params", {}).get("search") == "test-agent"
+        # Verify the lookup searched by name, then read the matched agent's status
+        assert mock_get_fn.call_count == 2
+        assert mock_get_fn.call_args_list[0][1].get("params", {}).get("search") == "test-agent"
+        assert mock_get_fn.call_args_list[1][0][0] == "/api/v1/agents/existing-uuid"
 
         # Verify PUT was called with correct endpoint
         mock_put_fn.assert_called_once()

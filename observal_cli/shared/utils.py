@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared utility functions used across multiple CLI modules.
@@ -10,8 +11,10 @@ cmd_doctor.py, cmd_skill.py, and claude_code_hooks_spec.py live here instead.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 # ---------------------------------------------------------------------------
 # Name sanitization
@@ -264,13 +267,28 @@ def is_observal_hook_entry(entry: dict) -> bool:
     return any(m in cmd or m in url for m in _OBSERVAL_HOOK_MARKERS)
 
 
+def is_observal_agent_hook_group(group: object) -> bool:
+    """Whether a matcher group is an agent's gated hook placed by ``agent pull --hooks=settings``.
+
+    Such a group is a registry component the user opted into, not telemetry:
+    telemetry patching and cleanup must leave it alone (``agent pull`` owns it).
+    """
+    meta = group.get(OBSERVAL_METADATA_KEY) if isinstance(group, dict) else None
+    return isinstance(meta, dict) and meta.get("kind") == "agent-hook"
+
+
 def is_observal_matcher_group(group: dict) -> bool:
-    """Return True if a matcher group is Observal-managed.
+    """Return True if a matcher group is Observal-managed telemetry.
+
+    Agent hook groups (:func:`is_observal_agent_hook_group`) are not: they
+    belong to an installed agent and are reconciled only by ``agent pull``.
 
     Raises TypeError if *group* is not a dict.
     """
     if not isinstance(group, dict):
         raise TypeError(f"is_observal_matcher_group expects dict, got {type(group).__name__!r}")
+    if is_observal_agent_hook_group(group):
+        return False
     if OBSERVAL_METADATA_KEY in group:
         return True
     return any(is_observal_hook_entry(h) for h in group.get("hooks", []))
@@ -319,3 +337,26 @@ def first_content_line(content: str) -> str:
         if past_frontmatter and stripped and not stripped.startswith("#"):
             return stripped[:200]
     return ""
+
+
+def atomic_write(path: Path, content: str) -> None:
+    """Write `content` to `path` via a temporary file in the same directory.
+
+    The rename is atomic, so a reader never sees a half-written file, and an
+    existing file's mode is preserved. On failure the temporary file is removed
+    and the original is left untouched.
+    """
+    temporary: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing_mode = path.stat().st_mode if path.exists() else None
+        with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as file:
+            temporary = Path(file.name)
+            file.write(content)
+        if existing_mode is not None:
+            os.chmod(temporary, existing_mode)
+        temporary.replace(path)
+    except OSError:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise

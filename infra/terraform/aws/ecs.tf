@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 # ECS Fargate stack: api, web, worker, init.
@@ -37,7 +38,6 @@ locals {
 
   # Non-secret env vars passed to api/worker/init.
   app_environment = concat([
-    { name = "NEXT_PUBLIC_API_URL", value = local.app_url },
     { name = "JWT_KEY_DIR", value = "/tmp/keys" },
     ], var.demo_super_admin_email != "" ? [
     { name = "DEMO_SUPER_ADMIN_EMAIL", value = var.demo_super_admin_email },
@@ -48,6 +48,8 @@ locals {
     { name = "DEMO_REVIEWER_PASSWORD", value = var.demo_reviewer_password },
     { name = "DEMO_USER_EMAIL", value = var.demo_user_email },
     { name = "DEMO_USER_PASSWORD", value = var.demo_user_password },
+    ] : [], local.webhook_ingress_enabled ? [
+    { name = "WEBHOOK_PUBLIC_URL", value = local.webhook_public_url },
   ] : [])
 
   # Secrets injected by ECS at task start. Reference SSM Parameter Store ARNs.
@@ -217,7 +219,6 @@ resource "aws_ecs_task_definition" "web" {
       "printf 'server {\\n  listen 3000;\\n  root /usr/share/nginx/html;\\n  index index.html;\\n  location /assets/ {\\n    expires 1y;\\n    add_header Cache-Control \"public, immutable\" always;\\n  }\\n  location / {\\n    try_files $uri $uri/ /index.html;\\n  }\\n}\\n' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
     ]
     environment = [
-      { name = "NEXT_PUBLIC_API_URL", value = local.app_url },
       { name = "PORT", value = "3000" },
     ]
     healthCheck = {

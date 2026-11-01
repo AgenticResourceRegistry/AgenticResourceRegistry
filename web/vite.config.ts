@@ -20,12 +20,14 @@ export default defineConfig({
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(pkg.version),
   },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom", "@tanstack/react-router", "@tanstack/react-query"],
-          "vendor-ui": ["@radix-ui/react-dialog", "@radix-ui/react-dropdown-menu", "@radix-ui/react-popover", "@radix-ui/react-select", "@radix-ui/react-tabs", "@radix-ui/react-tooltip"],
-          "vendor-charts": ["recharts"],
+        codeSplitting: {
+          groups: [
+            { name: "vendor-react", test: /node_modules[\\/](react|react-dom|@tanstack[\\/]react-router|@tanstack[\\/]react-query)[\\/]/ },
+            { name: "vendor-ui", test: /node_modules[\\/]@radix-ui[\\/]react-(dialog|dropdown-menu|popover|select|tabs|tooltip)[\\/]/ },
+            { name: "vendor-charts", test: /node_modules[\\/]recharts[\\/]/ },
+          ],
         },
       },
     },
@@ -34,6 +36,15 @@ export default defineConfig({
     port: 3000,
     proxy: {
       "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        ws: true,
+      },
+      "/.well-known/ard.json": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/.well-known/ai-catalog.json": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },

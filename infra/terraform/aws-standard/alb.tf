@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 resource "aws_lb" "app" {
@@ -122,7 +122,7 @@ resource "aws_lb_listener_rule" "http_api" {
 
   condition {
     path_pattern {
-      values = ["/api/*", "/auth/*", "/readyz", "/healthz", "/health"]
+      values = ["/api/*", "/auth/*", "/readyz", "/healthz", "/health", "/.well-known/ard.json", "/.well-known/ai-catalog.json"]
     }
   }
 }
@@ -207,7 +207,7 @@ resource "aws_lb_listener_rule" "https_api" {
 
   condition {
     path_pattern {
-      values = ["/api/*", "/auth/*", "/readyz", "/healthz", "/health"]
+      values = ["/api/*", "/auth/*", "/readyz", "/healthz", "/health", "/.well-known/ard.json", "/.well-known/ai-catalog.json"]
     }
   }
 }

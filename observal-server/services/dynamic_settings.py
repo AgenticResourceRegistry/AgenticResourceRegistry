@@ -1,4 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Dynamic settings service: DB-backed runtime configuration with Redis cache.
@@ -325,11 +328,13 @@ DEFAULTS: dict[str, str] = {
     # Deployment
     "deployment.sso_only": "false",
     "deployment.public_registry_enabled": "false",
+    # Interface: the deprecated Leaderboard (tab, page, and API). Off by default.
+    "deployment.leaderboard_enabled": "false",
     "deployment.frontend_url": "http://localhost:3000",
     "deployment.public_url": "",
     "deployment.cors_origins": "http://localhost:3000",
-    # Optional aggregate usage reporting. Company identity and public URL are
-    # required before the sender will transmit anything.
+    # Aggregate usage reporting, on for new installations. Until a company name
+    # is set, reports identify the installation as unknown-<number>.
     "usage_ping.enabled": "true",
     "usage_ping.company_name": "",
     "usage_ping.frequency": "every_6_hours",
@@ -343,6 +348,15 @@ DEFAULTS: dict[str, str] = {
     "security.trace_privacy": "false",
     # Registry policy
     "registry.registered_agents_only": "false",
+    # Must be enabled only after all old API/worker processes are drained and
+    # complete-folder installers have been deployed. A new worker cannot make
+    # an old worker enforce skill review and delivery markers.
+    "registry.skill_folder_delivery_enabled": "false",
+    # Experimental features. Off by default; when off they are hidden everywhere, not just disabled.
+    "experimental.review_checks": "false",
+    # Registry forking: kill switch and per-user hourly creation limit.
+    "registry.fork.enabled": "true",
+    "registry.fork.max_per_user_per_hour": "30",
     # Application retention policy, separate from the ClickHouse TTL below
     "retention.enabled": "false",
     "retention.trace_days": "",
@@ -388,6 +402,17 @@ DEFAULTS: dict[str, str] = {
     "observability.log_format": "json",  # 'json' or 'console' (colorized). Requires restart.
     "observability.enable_openapi": "false",
     "observability.enable_metrics": "false",
+    # Discovery (ARD). The publisher domain is the first segment of every
+    # permanent identifier; it is pinned automatically the first time a real
+    # deployment.public_url is seen and changing it renames every identifier.
+    "discovery.publisher_domain": "",
+    # Delegation (ADR 0002). When on, every pulled Agent gets the observal-agents
+    # MCP server so it can find and hand tasks to other approved agents.
+    "discovery.delegation_enabled": "true",
+    # Comma-separated hosts whose Agent Cards may be fetched even though they
+    # resolve to private addresses (internal A2A agents). Plain http is allowed
+    # for these hosts only.
+    "discovery.a2a_private_hosts": "",
     # Misc
     "misc.harness_allowlist": "",
     "misc.default_harness": "",
@@ -408,9 +433,22 @@ SENSITIVE_KEYS: set[str] = {
 SETTING_FEATURES: dict[str, str] = {}
 
 SETTING_SUBTITLES: dict[str, str] = {
+    "registry.skill_folder_delivery_enabled": (
+        "Enable complete-folder skill review and installation only after upgrading and draining all API/worker processes, "
+        "migrating a restored database through the current head, and confirming supported CLI clients. "
+        "Keep off during mixed-version rollout; see docs/skill-folder-rollout.md."
+    ),
+    "experimental.review_checks": (
+        "Automated and external checks on review revisions. Experimental: behavior, settings and APIs may change "
+        "or be removed. When off, none of it appears in the UI or API."
+    ),
     "deployment.public_registry_enabled": (
         "Allow signed-out visitors to browse and install approved public registry content. "
         "Publishing, private data, telemetry, and administration still require authentication."
+    ),
+    "deployment.leaderboard_enabled": (
+        "Show the deprecated Leaderboard. Off by default: the tab, home page link, page, and leaderboard "
+        "API are unavailable to everyone. Ranking data is kept. The Leaderboard will be removed in a future release."
     ),
 }
 
@@ -479,6 +517,13 @@ def settings_schema() -> list[dict[str, Any]]:
 
 SECTIONS: list[dict[str, Any]] = [
     {
+        "id": "experimental",
+        "title": "Experimental",
+        "description": "Features that are not ready for general use. They are off by default and hidden while off.",
+        "icon": "flask",
+        "keys": [k for k in DEFAULTS if k.startswith("experimental.")],
+    },
+    {
         "id": "auth",
         "title": "Authentication",
         "description": "Authentication policy for public entry points.",
@@ -515,6 +560,13 @@ SECTIONS: list[dict[str, Any]] = [
         "description": "Share aggregate adoption data with Observal on a super-admin-selected schedule. No prompts, traces, source code, credentials, or user identities are included.",
         "icon": "activity",
         "keys": [k for k in DEFAULTS if k.startswith("usage_ping.")],
+    },
+    {
+        "id": "discovery",
+        "title": "Discovery",
+        "description": "Agentic Resource Discovery identifiers and agent delegation. The publisher domain is pinned from the public URL on first use; changing it renames every published identifier.",
+        "icon": "search",
+        "keys": [k for k in DEFAULTS if k.startswith("discovery.")],
     },
     {
         "id": "security",

@@ -1,4 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused coverage for the CLI lockfile store."""
@@ -7,9 +9,11 @@ from __future__ import annotations
 
 import builtins
 import hashlib
+import importlib
 import json
 import os
 import stat
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -134,6 +138,7 @@ def test_read_valid_lockfile_preserves_persisted_data(isolated_lockfile):
     ("payload", "message"),
     [
         ("{broken", "Cannot read"),
+        (b"\xff", "Cannot read"),
         ("[]", "Invalid lockfile structure"),
         (json.dumps({"lock_version": 2, "registries": []}), "Unsupported lockfile version"),
         (json.dumps({"lock_version": 2}), "Unsupported lockfile version"),
@@ -142,10 +147,20 @@ def test_read_valid_lockfile_preserves_persisted_data(isolated_lockfile):
 )
 def test_read_rejects_malformed_and_unsupported_data(isolated_lockfile, payload, message):
     isolated_lockfile.path.parent.mkdir(parents=True)
-    isolated_lockfile.path.write_text(payload, encoding="utf-8")
+    isolated_lockfile.path.write_bytes(payload if isinstance(payload, bytes) else payload.encode())
 
     with pytest.raises(RuntimeError, match=message):
         lockfile.read_lockfile()
+
+
+@pytest.mark.parametrize("payload", ["{broken", "[]", b"\xff"])
+def test_atomic_update_rejects_corrupt_lockfile_without_writing(isolated_lockfile, payload):
+    isolated_lockfile.path.parent.mkdir(parents=True)
+    original = payload if isinstance(payload, bytes) else payload.encode()
+    isolated_lockfile.path.write_bytes(original)
+    with pytest.raises(RuntimeError, match=r"Cannot read|Invalid lockfile structure"):
+        lockfile.update_lockfile(lambda data: data.update({"registries": {}}))
+    assert isolated_lockfile.path.read_bytes() == original
 
 
 def test_read_wraps_filesystem_errors(isolated_lockfile, monkeypatch):
@@ -257,6 +272,7 @@ def test_v1_migration_noops_for_missing_or_current_files(isolated_lockfile):
     assert isolated_lockfile.path.read_bytes() == before
 
 
+@pytest.mark.skipif(lockfile.fcntl is None, reason="flock is POSIX-only")
 def test_write_is_atomic_locked_and_respects_restrictive_umask(isolated_lockfile, monkeypatch):
     data = {"registries": {}}
     operations: list[int] = []
@@ -286,46 +302,83 @@ def test_write_is_atomic_locked_and_respects_restrictive_umask(isolated_lockfile
     assert stat.S_IMODE(isolated_lockfile.lock_path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(lockfile.fcntl is None, reason="flock is POSIX-only")
 def test_failed_temporary_write_is_cleaned_and_releases_lock(isolated_lockfile, monkeypatch):
     isolated_lockfile.path.parent.mkdir(parents=True)
     isolated_lockfile.path.write_text("original\n", encoding="utf-8")
-    temporary = isolated_lockfile.path.with_suffix(".tmp")
     operations: list[int] = []
     real_flock = lockfile.fcntl.flock
-    real_write_text = Path.write_text
+    real_fsync = lockfile.os.fsync
 
     def tracked_flock(fd, operation):
         operations.append(operation)
         return real_flock(fd, operation)
 
-    def partial_write(path, text, *args, **kwargs):
-        if path == temporary:
-            real_write_text(path, "partial", encoding="utf-8")
+    def partial_write(fd):
+        # The unique temporary file was written, but durability failed before
+        # replacement. No predictable .tmp filename or symlink target exists.
+        if stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError("disk full")
-        return real_write_text(path, text, *args, **kwargs)
+        return real_fsync(fd)
 
     with monkeypatch.context() as patcher:
         patcher.setattr(lockfile.fcntl, "flock", tracked_flock)
-        patcher.setattr(Path, "write_text", partial_write)
+        patcher.setattr(lockfile.os, "fsync", partial_write)
         with pytest.raises(OSError, match="disk full"):
             lockfile.write_lockfile({"registries": {}})
 
     assert isolated_lockfile.path.read_text(encoding="utf-8") == "original\n"
-    assert not temporary.exists()
+    assert not list(isolated_lockfile.path.parent.glob(".lockfile.*.tmp"))
     assert operations == [lockfile.fcntl.LOCK_EX, lockfile.fcntl.LOCK_UN]
 
     lockfile.write_lockfile({"registries": {}})
     assert raw_lockfile(isolated_lockfile)["lock_version"] == 2
 
 
+class FakeMsvcrt:
+    LK_LOCK = 1
+    LK_UNLCK = 0
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int]] = []
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None:
+        assert nbytes == 1
+        self.calls.append((mode, os.fstat(fd).st_size))
+
+
+def test_write_locks_with_msvcrt_where_fcntl_is_missing(isolated_lockfile, monkeypatch):
+    fake = FakeMsvcrt()
+    monkeypatch.setattr(lockfile, "fcntl", None)
+    monkeypatch.setattr(lockfile, "msvcrt", fake)
+
+    lockfile.write_lockfile({"registries": {}})
+
+    assert [mode for mode, _ in fake.calls] == [FakeMsvcrt.LK_LOCK, FakeMsvcrt.LK_UNLCK]
+    assert raw_lockfile(isolated_lockfile)["lock_version"] == 2
+
+
+def test_module_imports_without_fcntl(monkeypatch):
+    # Windows has no fcntl; importing the CLI must not fail there.
+    fake = FakeMsvcrt()
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    try:
+        reloaded = importlib.reload(lockfile)
+        assert reloaded.fcntl is None and reloaded.msvcrt is fake
+    finally:
+        monkeypatch.undo()
+        importlib.reload(lockfile)
+    assert lockfile.fcntl is not None or sys.platform == "win32"
+
+
 def test_failed_atomic_replace_keeps_original_and_removes_temporary(isolated_lockfile, monkeypatch):
     isolated_lockfile.path.parent.mkdir(parents=True)
     isolated_lockfile.path.write_text("original\n", encoding="utf-8")
-    temporary = isolated_lockfile.path.with_suffix(".tmp")
     real_replace = Path.replace
 
     def failed_replace(path, target):
-        if path == temporary:
+        if path.parent == isolated_lockfile.path.parent and path.name.startswith(".lockfile."):
             raise OSError("replace denied")
         return real_replace(path, target)
 
@@ -334,7 +387,7 @@ def test_failed_atomic_replace_keeps_original_and_removes_temporary(isolated_loc
         lockfile.write_lockfile({"registries": {}})
 
     assert isolated_lockfile.path.read_text(encoding="utf-8") == "original\n"
-    assert not temporary.exists()
+    assert not list(isolated_lockfile.path.parent.glob(".lockfile.*.tmp"))
 
 
 def test_write_propagates_parent_and_lock_file_failures(isolated_lockfile, monkeypatch):
@@ -365,6 +418,7 @@ def test_write_propagates_parent_and_lock_file_failures(isolated_lockfile, monke
     assert not isolated_lockfile.path.with_suffix(".tmp").exists()
 
 
+@pytest.mark.skipif(lockfile.fcntl is None, reason="flock is POSIX-only")
 def test_concurrent_writes_are_serialized_by_the_lock(isolated_lockfile, monkeypatch):
     first_inside_write = threading.Event()
     release_first = threading.Event()
@@ -374,8 +428,7 @@ def test_concurrent_writes_are_serialized_by_the_lock(isolated_lockfile, monkeyp
     exclusive_calls = 0
     write_calls = 0
     real_flock = lockfile.fcntl.flock
-    real_write_text = Path.write_text
-    temporary = isolated_lockfile.path.with_suffix(".tmp")
+    real_write = lockfile._write_locked
 
     def tracked_flock(fd, operation):
         nonlocal exclusive_calls
@@ -386,22 +439,21 @@ def test_concurrent_writes_are_serialized_by_the_lock(isolated_lockfile, monkeyp
                     second_attempted_lock.set()
         return real_flock(fd, operation)
 
-    def controlled_write(path, text, *args, **kwargs):
+    def controlled_write(data):
         nonlocal write_calls
-        if path == temporary:
-            with counter_lock:
-                write_calls += 1
-                call_number = write_calls
-            if call_number == 1:
-                first_inside_write.set()
-                if not release_first.wait(5):
-                    raise TimeoutError("first writer was not released")
-            else:
-                second_inside_write.set()
-        return real_write_text(path, text, *args, **kwargs)
+        with counter_lock:
+            write_calls += 1
+            call_number = write_calls
+        if call_number == 1:
+            first_inside_write.set()
+            if not release_first.wait(5):
+                raise TimeoutError("first writer was not released")
+        else:
+            second_inside_write.set()
+        return real_write(data)
 
     monkeypatch.setattr(lockfile.fcntl, "flock", tracked_flock)
-    monkeypatch.setattr(Path, "write_text", controlled_write)
+    monkeypatch.setattr(lockfile, "_write_locked", controlled_write)
     first = registry_data(isolated_lockfile, {}, "https://first.example.test")
     second = registry_data(isolated_lockfile, {}, "https://second.example.test")
 
@@ -419,7 +471,40 @@ def test_concurrent_writes_are_serialized_by_the_lock(isolated_lockfile, monkeyp
 
     assert second_inside_write.is_set()
     assert raw_lockfile(isolated_lockfile) == second
-    assert not temporary.exists()
+    assert not list(isolated_lockfile.path.parent.glob(".lockfile.*.tmp"))
+
+
+def test_legacy_upserts_cannot_erase_verified_standalone_or_agent_receipts(isolated_lockfile):
+    proof = {"target": "/tmp/verified-skill", "listing_id": "skill-1"}
+    data = registry_data(
+        isolated_lockfile,
+        {
+            "pi": {
+                "agents": [
+                    {
+                        "id": "agent-1",
+                        "version": "1.0.0",
+                        "scope": "user",
+                        "components": [
+                            {"type": "skill", "id": "skill-1", "folder_receipt": proof},
+                        ],
+                    }
+                ],
+                "standalone": [{"type": "skill", "id": "skill-1", "scope": "user", "folder_receipt": proof}],
+            },
+        },
+    )
+    lockfile.write_lockfile(data)
+    with pytest.raises(RuntimeError, match="verified skill folder"):
+        lockfile.upsert_standalone(
+            "pi", component_type="skill", name="skill-1", component_id="skill-1", version="2.0.0", scope="user"
+        )
+    with pytest.raises(RuntimeError, match="verified skill folders"):
+        lockfile.upsert_agent("pi", name="agent-1", agent_id="agent-1", version="2.0.0", scope="user")
+    assert (
+        raw_lockfile(isolated_lockfile)["registries"][isolated_lockfile.server_url]["harnesses"]["pi"]
+        == data["registries"][isolated_lockfile.server_url]["harnesses"]["pi"]
+    )
 
 
 def test_read_registry_section_creation_is_explicit_and_in_memory(isolated_lockfile):

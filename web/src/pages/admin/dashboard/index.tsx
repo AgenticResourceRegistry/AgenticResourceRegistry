@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -7,7 +8,7 @@ import { Suspense } from "react";
 import { useLocation, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { PageHeader, PageIntro } from "@/components/layouts/page-header";
+import { PageHeader } from "@/components/layouts/page-header";
 import { Button } from "@/components/ui/button";
 import { AdoptionTab } from "./components/adoption-tab";
 import { CostTab } from "./components/cost-tab";
@@ -63,9 +64,9 @@ function OnboardingWizard({ onDismiss }: { onDismiss: () => void }) {
             <li className="flex items-start gap-3">
               <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">3</span>
               <div>
-                <p className="text-sm font-medium">Categorize your agents</p>
+                <p className="text-sm font-medium">Categorize your Agent Files</p>
                 <p className="text-xs text-muted-foreground">
-                  In the Agent Builder, assign categories (Code Review, Testing, etc.) so the dashboard can group usage and costs.
+                  In the Agent File Builder, assign categories (Code Review, Testing, etc.) so the dashboard can group usage and costs.
                 </p>
               </div>
             </li>
@@ -223,48 +224,45 @@ function DashboardContent() {
         breadcrumbs={[{ label: "Administration" }, { label: "Dashboard" }]}
       />
       <div className="page-body mx-auto w-full">
-        <PageIntro
-          eyebrow="Executive overview"
-          title="AI Adoption Dashboard"
-          subtitle="Monitor usage, impact, and investment across your organization."
-        >
-          <div className="flex items-center gap-1 rounded-xl bg-surface-raised p-1" aria-label="Dashboard date range">
-            <Calendar className="ml-2 h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-            {RANGES.map((r) => (
-              <button
-                key={r.value}
-                onClick={() => handleRangeChange(r.value)}
-                aria-pressed={activeRange === r.value}
-                className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
-                  activeRange === r.value
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <ExportDropdown activeTab={activeTab} />
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </PageIntro>
-
         <div className="space-y-5">
           {showOnboarding && <OnboardingWizard onDismiss={handleDismissWizard} />}
 
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-            <div className="overflow-x-auto rounded-xl bg-surface-raised p-1">
-              <TabsList className="grid min-w-[720px] grid-cols-6 bg-transparent p-0 shadow-none">
-            <TabsTrigger value="adoption">AI Adoption</TabsTrigger>
-            <TabsTrigger value="cost">Cost Intelligence</TabsTrigger>
-            <TabsTrigger value="investments">Investments</TabsTrigger>
-            <TabsTrigger value="insights">AI Insights</TabsTrigger>
-            <TabsTrigger value="departments">Departments</TabsTrigger>
-            <TabsTrigger value="velocity">Velocity</TabsTrigger>
-              </TabsList>
+            <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+              <div className="min-w-0 flex-1 overflow-x-auto rounded-xl bg-surface-raised p-1">
+                <TabsList className="grid min-w-[720px] grid-cols-6 bg-transparent p-0 shadow-none">
+                  <TabsTrigger value="adoption">AI Adoption</TabsTrigger>
+                  <TabsTrigger value="cost">Cost Intelligence</TabsTrigger>
+                  <TabsTrigger value="investments">Investments</TabsTrigger>
+                  <TabsTrigger value="insights">AI Insights</TabsTrigger>
+                  <TabsTrigger value="departments">Departments</TabsTrigger>
+                  <TabsTrigger value="velocity">Velocity</TabsTrigger>
+                </TabsList>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
+                <div className="flex items-center gap-1 rounded-xl bg-surface-raised p-1" aria-label="Dashboard date range">
+                  <Calendar className="ml-2 h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  {RANGES.map((r) => (
+                    <button
+                      key={r.value}
+                      onClick={() => handleRangeChange(r.value)}
+                      aria-pressed={activeRange === r.value}
+                      className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                        activeRange === r.value
+                          ? "bg-card text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+                <ExportDropdown activeTab={activeTab} />
+                <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+                  <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                  Refresh
+                </Button>
+              </div>
             </div>
 
             <TabsContent value="adoption">

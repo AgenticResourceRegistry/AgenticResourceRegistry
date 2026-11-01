@@ -82,7 +82,7 @@ resource "aws_lb_target_group" "grafana" {
 resource "aws_lb_target_group_attachment" "grafana" {
   count            = local.bundled_grafana_available ? 1 : 0
   target_group_arn = aws_lb_target_group.grafana[0].arn
-  target_id        = aws_network_interface.data_host[0].private_ip
+  target_id        = aws_network_interface.data_host.private_ip
   port             = 3001
 }
 

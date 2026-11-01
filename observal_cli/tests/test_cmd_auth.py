@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E tests for the ``observal auth`` CLI commands.
@@ -150,6 +151,35 @@ class TestAuthLogin:
         assert saved_payload["refresh_token"] == "test-refresh-token"
         assert saved_payload["user_id"] == "user-uuid-1"
 
+    def test_login_drops_the_hooks_token_of_a_different_login(self) -> None:
+        """Hooks prefer api_key, so one left from another server or user would get every upload refused."""
+        from observal_cli import config
+
+        def login(server: str) -> None:
+            with ExitStack() as stack:
+                stack.enter_context(patch("observal_cli.cmd_auth.httpx.get", side_effect=_fake_get))
+                stack.enter_context(patch("observal_cli.cmd_auth.httpx.post", side_effect=_fake_post_login))
+                _patch_post_login_hooks(stack)
+                stack.enter_context(patch("observal_cli.cmd_auth.config.save", side_effect=config.save))
+                args = [
+                    "auth",
+                    "login",
+                    "--server",
+                    server,
+                    "--email",
+                    "test@example.com",
+                    "--password",
+                    "Sup3rSecret!Pw",
+                ]
+                result = runner.invoke(app, args)
+            assert result.exit_code == 0, result.output
+
+        config.save({"server_url": "http://localhost:8000", "user_id": "user-uuid-1", "api_key": "hooks"})
+        login("http://localhost:8000")
+        assert config.load_persisted()["api_key"] == "hooks"  # same server and user: still valid
+        login("http://other:8000")
+        assert "api_key" not in config.load_persisted()
+
     def test_login_strips_trailing_slash_from_server_url(self) -> None:
         """A trailing slash on ``--server`` must not propagate into the saved URL."""
         with ExitStack() as stack:
@@ -250,6 +280,12 @@ class TestAuthLogin:
 
 class TestAuthWhoami:
     """``observal auth whoami``."""
+
+    @pytest.fixture(autouse=True)
+    def _logged_in(self):
+        cfg = {"server_url": "http://localhost:8000", "access_token": "tok"}
+        with patch("observal_cli.cmd_auth.config.get_or_exit", return_value=cfg):
+            yield
 
     def test_whoami_outputs_email_and_role(self) -> None:
         """Default (table) output must contain the user's email and role."""

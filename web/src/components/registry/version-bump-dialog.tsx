@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
 import { useState, useMemo } from "react";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +38,15 @@ interface VersionBumpDialogProps {
   publishing: boolean;
   title?: string;
   description?: string;
+  /**
+   * Agent releases keep every component at the version the current release pins.
+   * When provided, the dialog lets the author move them to their latest approved
+   * releases instead.
+   */
+  refreshComponents?: {
+    checked: boolean;
+    onCheckedChange: (checked: boolean) => void;
+  };
 }
 
 export function VersionBumpDialog({
@@ -47,6 +58,7 @@ export function VersionBumpDialog({
   publishing,
   title = "Release New Version",
   description = "Choose how to bump the version for this release.",
+  refreshComponents,
 }: VersionBumpDialogProps) {
   const [selection, setSelection] = useState<BumpType>("patch");
 
@@ -112,6 +124,23 @@ export function VersionBumpDialog({
             </label>
           ))}
         </div>
+
+        {refreshComponents && (
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border px-4 py-3 transition-colors hover:bg-muted/50">
+            <Checkbox
+              className="mt-0.5"
+              checked={refreshComponents.checked}
+              onCheckedChange={(checked) => refreshComponents.onCheckedChange(checked === true)}
+              aria-label="Update components to their latest approved versions"
+            />
+            <span className="flex-1">
+              <span className="block text-sm font-medium">Update components to their latest approved versions</span>
+              <span className="block text-xs text-muted-foreground">
+                Otherwise every component keeps the version this Agent File currently pins.
+              </span>
+            </span>
+          </label>
+        )}
 
         <div className="rounded-md bg-muted/50 px-4 py-2.5 text-center">
           <span className="text-xs text-muted-foreground">New version: </span>

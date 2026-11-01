@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Re-checking who may still read an item.
@@ -32,7 +33,7 @@ from models.prompt import PromptListing
 from models.sandbox import SandboxListing
 from models.skill import SkillListing
 from models.team import TeamMembership
-from services.inbox.registry import SPECS, spec_for
+from services.inbox.registry import REVIEWER_AUDIENCE, SPECS, spec_for
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,7 +115,13 @@ def visible_filter(user: User):
     if can_see_private_listings(user):
         return true()
 
-    arms = [InboxItem.kind.in_(_NO_RECHECK_KINDS)]
+    audience = InboxItem.payload["audience"].as_string()
+    arms = [
+        and_(
+            InboxItem.kind.in_(_NO_RECHECK_KINDS),
+            or_(audience.is_(None), audience != REVIEWER_AUDIENCE),
+        )
+    ]
     for subject_type, model in _SUBJECT_MODELS.items():
         current = (
             select(model.id)
@@ -142,8 +149,9 @@ async def visible_to(db: AsyncSession, item: InboxItem, user: User) -> bool:
     """
     # A decision addressed to its own submitter reports what happened to work
     # they wrote. That stays theirs to read even if the listing has since moved
-    # somewhere they cannot follow.
-    if not spec_for(item.kind).recheck_visibility:
+    # somewhere they cannot follow. A reviewer's copy of the same kind is not
+    # theirs in that sense, so it is re-checked like any other item.
+    if not spec_for(item.kind).recheck_visibility and (item.payload or {}).get("audience") != REVIEWER_AUDIENCE:
         return True
 
     if can_see_private_listings(user):
