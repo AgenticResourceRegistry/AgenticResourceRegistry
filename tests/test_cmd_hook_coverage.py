@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -1113,3 +1114,152 @@ def test_install_sends_the_requested_version_and_records_what_was_installed(tmp_
         "1.0.0",
     )
     assert invalid.exit_code == 7
+
+
+@pytest.mark.parametrize("harness", ["kiro", "claude-code"])
+@pytest.mark.parametrize("existing_file", [True, False])
+def test_install_real_server_hook_formats_preserves_entries_and_refreshes_versions(
+    tmp_path, monkeypatch, harness, existing_file
+):
+    from types import SimpleNamespace
+
+    from services.hook_install_generator import generate_hook_install_config
+
+    listing = SimpleNamespace(**_hook_item(script_content="echo guard\n", script_filename="guard.sh"))
+    response = generate_hook_install_config(listing, harness, local_name="guard")
+    project = tmp_path / "project"
+    config_path = project / response["config_path"]
+    project.mkdir()
+    incoming = response["config_snippet"]["hooks"]
+    if harness == "kiro":
+        user = {"name": "user-stop", "trigger": "Stop", "action": {"type": "command", "command": "echo user"}}
+        stale = {**incoming[0], "action": {"type": "command", "command": "echo old"}}
+        original = {"other": True, "version": "v1", "hooks": [user, stale, stale]}
+    else:
+        event = next(iter(incoming))
+        user = {"command": "echo user"}
+        original = {"other": True, "hooks": {event: [user]}}
+    if existing_file:
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(json.dumps(original))
+    before = config_path.read_bytes() if existing_file else None
+    monkeypatch.setattr(hook.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(hook.client, "get", Mock(return_value=_hook_item()))
+    post = Mock(return_value=response)
+    monkeypatch.setattr(hook.client, "post", post)
+    upsert = Mock()
+    monkeypatch.setattr(lockfile, "upsert_standalone", upsert)
+    args = [
+        "registry",
+        "hook",
+        "install",
+        "alice/guard",
+        "--harness",
+        harness,
+        "--dir",
+        str(project),
+        "--output",
+        "json",
+    ]
+
+    raw = runner.invoke(app, [*args[:-2], "--raw"])
+    assert raw.exit_code == 0, raw.output
+    assert json.loads(raw.output) == response
+    assert (config_path.read_bytes() if config_path.exists() else None) == before
+    upsert.assert_not_called()
+    for _ in range(2):
+        installed = runner.invoke(app, args)
+        assert installed.exit_code == 0, installed.output
+    merged = json.loads(config_path.read_text())
+    if existing_file:
+        assert merged["other"] is True
+    retained = [user] if existing_file else []
+    if harness == "kiro":
+        assert merged["version"] == "v1"
+        assert merged["hooks"] == [*retained, *incoming]
+        assert "session_push" not in json.dumps(merged)
+    else:
+        assert merged["hooks"][event] == [*retained, *incoming[event]]
+    assert config_path.read_bytes() != before
+    script = project / response["files"][0]["path"]
+    assert script.read_text() == "echo guard\n"
+    assert upsert.call_count == 2
+
+    updated_listing = SimpleNamespace(**_hook_item(handler_config={"command": "echo updated", "timeout": 20}))
+    updated = generate_hook_install_config(updated_listing, harness, local_name="guard")
+    updated["version"] = "2.0.0"
+    post.return_value = updated
+    result = runner.invoke(app, [*args, "--version", "2.0.0"])
+    assert result.exit_code == 0, result.output
+    actual = json.loads(config_path.read_text())
+    if harness == "kiro":
+        assert actual["hooks"] == [*retained, *updated["config_snippet"]["hooks"]]
+    else:
+        assert actual["hooks"][event] == [*retained, *incoming[event], *updated["config_snippet"]["hooks"][event]]
+    assert upsert.call_args.kwargs["version"] == "2.0.0"
+    assert upsert.call_args.kwargs["requested_version"] == "2.0.0"
+
+
+@pytest.mark.parametrize("existing_hooks", [{}, None, "invalid", 1])
+def test_array_hook_install_rejects_incompatible_existing_shapes_before_any_writes(
+    tmp_path, monkeypatch, existing_hooks
+):
+    project = tmp_path / "project"
+    config_path = project / ".kiro/hooks/guard.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"hooks": existing_hooks, "other": "keep"}))
+    before = config_path.read_bytes()
+    response = {
+        "config_path": ".kiro/hooks/guard.json",
+        "config_snippet": {"version": "v1", "hooks": [{"name": "guard", "trigger": "Stop"}]},
+        "files": [{"path": ".kiro/hooks/guard.sh", "content": "echo guard"}],
+    }
+    monkeypatch.setattr(hook.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(hook.client, "get", Mock(return_value=_hook_item()))
+    monkeypatch.setattr(hook.client, "post", Mock(return_value=response))
+    result = runner.invoke(app, ["registry", "hook", "install", "guard", "--harness", "kiro", "--dir", str(project)])
+    assert result.exit_code == 7
+    assert config_path.read_bytes() == before
+    assert not (project / ".kiro/hooks/guard.sh").exists()
+    lockfile.upsert_standalone.assert_not_called()
+
+
+@pytest.mark.parametrize("entries", [[None], [{"name": []}], [{"name": ""}], [{"name": "x"}, {"name": "x"}]])
+def test_array_hook_install_rejects_ambiguous_incoming_names_before_any_writes(tmp_path, monkeypatch, entries):
+    project = tmp_path / "project"
+    response = {
+        "config_path": ".kiro/hooks/guard.json",
+        "config_snippet": {"version": "v1", "hooks": entries},
+        "files": [{"path": ".kiro/hooks/guard.sh", "content": "echo guard"}],
+    }
+    monkeypatch.setattr(hook.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(hook.client, "get", Mock(return_value=_hook_item()))
+    monkeypatch.setattr(hook.client, "post", Mock(return_value=response))
+    result = runner.invoke(app, ["registry", "hook", "install", "guard", "--harness", "kiro", "--dir", str(project)])
+    assert result.exit_code == 7
+    assert not project.exists()
+    lockfile.upsert_standalone.assert_not_called()
+
+
+def test_registry_hook_merge_is_pure_and_preserves_unrelated_entries():
+    import copy
+
+    from observal_cli.shared.hook_config import merge_hook_config
+
+    existing = {"version": "v1", "other": {"keep": True}, "hooks": [None, {"name": []}, {"name": "user"}]}
+    incoming = {"version": "v1", "hooks": [{"name": "guard", "action": {"command": "echo guard"}}]}
+    before = copy.deepcopy((existing, incoming))
+    actual = merge_hook_config(existing, incoming)
+    assert actual["hooks"] == [*existing["hooks"], *incoming["hooks"]]
+    assert actual["other"] == existing["other"]
+    assert (existing, incoming) == before
+    assert merge_hook_config(actual, incoming) == actual
+
+
+def test_registry_hook_mapping_merge_deduplicates_incoming_entries_without_mutation():
+    from observal_cli.shared.hook_config import merge_hook_config
+
+    existing = {"hooks": {"Stop": [{"command": "old"}]}}
+    incoming = {"hooks": {"Stop": [{"command": "new"}, {"command": "new"}]}}
+    assert merge_hook_config(existing, incoming) == {"hooks": {"Stop": [{"command": "old"}, {"command": "new"}]}}
+    assert existing == {"hooks": {"Stop": [{"command": "old"}]}}
