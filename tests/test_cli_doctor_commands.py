@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral coverage for the doctor CLI commands and untested state branches."""
@@ -816,10 +817,12 @@ class TestPatchStateEdges:
         monkeypatch.setattr(doctor_module, "ensure_loaded", MagicMock())
         monkeypatch.setattr(doctor_module, "get_adapter", MagicMock(return_value=adapter))
 
-        with pytest.raises(json.JSONDecodeError):
-            doctor_module._patch_kiro(dry_run=False)
-        assert "Missing locked profile" in _plain(capsys.readouterr().out)
-        adapter.rewrite_agent_profile.assert_not_called()
+        assert doctor_module._patch_kiro(dry_run=False) is True
+        output = _plain(capsys.readouterr().out)
+        assert "Missing locked profile" in output
+        assert "Skipping unreadable profile" in output
+        adapter.rewrite_agent_profile.assert_called_once_with({"hooks": {}}, agent_id="current-profile")
+        assert invalid.read_text() == "invalid"
 
     def test_cursor_missing_directory_and_invalid_file_dry_run_do_not_write(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

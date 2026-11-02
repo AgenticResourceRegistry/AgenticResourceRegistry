@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Focused boundary and behavior coverage for the agent pull command."""
@@ -89,6 +90,7 @@ def boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespa
     adapter.saved_model.return_value = None
     adapter.rewrite_hooks.side_effect = lambda content, agent_id: content
     adapter.rewrite_agent_profile.side_effect = lambda content, agent_id: content
+    adapter.merge_agent_profile.side_effect = lambda content, path: content
     adapter.allow_home_agent_profile.return_value = False
     adapter.prepare_mcp_setup_command.side_effect = lambda command, scope: (
         [*command[:3], "--scope", scope, *command[3:]] if command[:3] == ["claude", "mcp", "add"] else command
@@ -4250,3 +4252,52 @@ def test_pull_dummy_server_metadata_does_not_enter_debug_log(boundaries, tmp_pat
     from observal_cli.lockfile import LOCKFILE_PATH
 
     assert secret in LOCKFILE_PATH.read_text()
+
+
+@pytest.mark.parametrize("fixture", ["legacy-agent.json", "universal-agent.json"])
+@pytest.mark.parametrize("scope", ["project", "user"])
+def test_kiro_repull_preserves_local_hooks_and_profile_shape(
+    pull_app_boundary, registry, tmp_path, monkeypatch, isolated_home, fixture, scope
+):
+    from observal_cli.harness.kiro import KiroAdapter
+
+    monkeypatch.setenv("OBSERVAL_KIRO_CLI_VERSION", "2.35.0")
+    monkeypatch.setenv("OBSERVAL_KIRO_IDE", "0")
+    registry.get_adapter.return_value = KiroAdapter()
+    target = tmp_path / "project"
+    base = isolated_home if scope == "user" else target
+    profile_path = base / ".kiro/agents/reviewer.json"
+    profile_path.parent.mkdir(parents=True)
+    original = json.loads((Path(__file__).parent / "fixtures/kiro" / fixture).read_text())
+    profile_path.write_text(json.dumps(original))
+    before = profile_path.read_bytes()
+
+    def install(_path, body):
+        result = _install_result(body.get("version") or "1.1.0")
+        result["config_snippet"]["agent_profile"] = {
+            "path": "~/.kiro/agents/reviewer.json" if scope == "user" else ".kiro/agents/reviewer.json",
+            "content": {"name": "reviewer", "prompt": "Updated server prompt"},
+        }
+        return result
+
+    registry.post.side_effect = install
+    dry_run = _invoke(pull_app_boundary, target, "--scope", scope, "--dry-run", "--output", "json", harness="kiro")
+    assert dry_run.exit_code == 0, dry_run.output
+    assert profile_path.read_bytes() == before
+
+    first = _invoke(pull_app_boundary, target, "--scope", scope, "--output", "json", harness="kiro")
+    assert first.exit_code == 0, first.output
+    actual = json.loads(profile_path.read_text())
+    assert type(actual["hooks"]) is type(original["hooks"])
+    assert actual["prompt"] == "Updated server prompt"
+    if isinstance(actual["hooks"], list):
+        assert original["hooks"][1] in actual["hooks"]
+        assert actual["kiroUpgrade"] == original["kiroUpgrade"]
+        assert actual["permissions"] == original["permissions"]
+        assert actual["allowedTools"] == original["allowedTools"]
+    else:
+        assert original["hooks"]["stop"][1] in actual["hooks"]["stop"]
+
+    second = _invoke(pull_app_boundary, target, "--scope", scope, "--output", "json", harness="kiro")
+    assert second.exit_code == 0, second.output
+    assert json.loads(profile_path.read_text()) == actual

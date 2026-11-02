@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro harness adapter."""
@@ -31,6 +32,7 @@ from observal_cli.harness import (
 )
 from observal_cli.harness.base import BaseAdapter
 from observal_cli.harness.protocol import HeadlessPlan, HeadlessRequest
+from observal_cli.harness_specs.kiro_hooks_spec import iter_kiro_hooks
 from observal_cli.shared.utils import (
     _OBSERVAL_HOOK_MARKERS,
     extract_mcp_servers,
@@ -459,15 +461,13 @@ class KiroAdapter(BaseAdapter):
         for af in agent_profiles:
             try:
                 data = json.loads(af.read_text())
-                hooks = data.get("hooks", {})
-                for _evt, entries in hooks.items():
-                    if isinstance(entries, list) and any(
-                        any(m in h.get("command", "") for m in _OBSERVAL_HOOK_MARKERS)
-                        for h in entries
-                        if isinstance(h, dict)
-                    ):
-                        hooked += 1
-                        break
+                if not isinstance(data, dict):
+                    continue
+                if any(
+                    any(marker in hook.command for marker in _OBSERVAL_HOOK_MARKERS)
+                    for hook in iter_kiro_hooks(data.get("hooks"))
+                ):
+                    hooked += 1
             except (json.JSONDecodeError, OSError):
                 pass
         if hooked == len(agent_profiles):
@@ -488,7 +488,8 @@ class KiroAdapter(BaseAdapter):
             return False
         if not isinstance(data, dict):
             return False
-        return any(is_observal_v1_hook(h) for h in data.get("hooks") or [])
+        hooks = data.get("hooks")
+        return isinstance(hooks, list) and any(is_observal_v1_hook(h) for h in hooks)
 
     # ── Private scanning helpers ──────────────────────────────────
 
@@ -525,6 +526,8 @@ class KiroAdapter(BaseAdapter):
                     continue
                 try:
                     data = json.loads(agent_profile.read_text())
+                    if not isinstance(data, dict):
+                        continue
                     name = data.get("name", agent_profile.stem)
                     desc = data.get("description") or ""
                     model = data.get("model") or ""
@@ -554,19 +557,14 @@ class KiroAdapter(BaseAdapter):
                                 )
                             )
 
-                    agent_hooks = data.get("hooks", {})
-                    for event_name, event_handlers in agent_hooks.items():
-                        hook_name = f"kiro:{name}/{event_name}"
-                        handler_config = {}
-                        if isinstance(event_handlers, list) and event_handlers:
-                            handler_config = event_handlers[0] if isinstance(event_handlers[0], dict) else {}
+                    for hook in iter_kiro_hooks(data.get("hooks")):
                         hooks.append(
                             DiscoveredHook(
-                                name=hook_name,
-                                event=event_name,
-                                handler_type="command",
-                                handler_config=handler_config,
-                                description=f"Kiro hook: {event_name} on agent {name}",
+                                name=f"kiro:{name}/{hook.name or hook.trigger}",
+                                event=hook.trigger,
+                                handler_type=str(hook.handler.get("type") or "command"),
+                                handler_config=hook.handler,
+                                description=f"Kiro hook: {hook.trigger} on agent {name}",
                                 source=f"kiro:agent:{name}",
                             )
                         )
@@ -665,7 +663,8 @@ class KiroAdapter(BaseAdapter):
                 source=agent_source,
                 description_prefix=f"From Kiro agent: {name}",
             )
-            scanner.add_hooks_mapping(
+            self._add_kiro_hooks(
+                scanner,
                 agent_path,
                 data.get("hooks", {}),
                 name_prefix=f"kiro:{name}",
@@ -679,7 +678,8 @@ class KiroAdapter(BaseAdapter):
             if data is None:
                 continue
             if "hooks" in data:
-                scanner.add_hooks_mapping(
+                self._add_kiro_hooks(
+                    scanner,
                     hook_path,
                     data["hooks"],
                     name_prefix=f"kiro:{hook_path.stem}",
@@ -715,6 +715,67 @@ class KiroAdapter(BaseAdapter):
                 hook_path,
             )
         return scanner.finish()
+
+    @staticmethod
+    def _add_kiro_hooks(
+        scanner: RichAdapterScanner, path: Path, hooks: object, *, name_prefix: str, source: str
+    ) -> None:
+        if not isinstance(hooks, (dict, list)):
+            scanner.diagnostic(
+                DiagnosticCode.METADATA_MALFORMED, path, "Kiro hook collection must be an object or array"
+            )
+            return
+        for hook in iter_kiro_hooks(hooks):
+            safe_handler = redact_value(hook.handler)
+            scanner.add_component(
+                DiscoveredHook(
+                    name=redact_text(f"{name_prefix}/{hook.name or hook.trigger}"),
+                    event=redact_text(hook.trigger),
+                    handler_type=redact_text(str(hook.handler.get("type") or "command")),
+                    handler_config=safe_handler if isinstance(safe_handler, dict) else {},
+                    description=redact_text(f"Hook from {name_prefix}: {hook.trigger}"),
+                    source=source,
+                ),
+                path,
+            )
+
+    def merge_agent_profile(self, content: dict, path: Path) -> dict:
+        """Retain local hooks and V3 upgrade state on re-pull.
+
+        The server supplies the current prompt/model and installs Registry hook
+        components into standalone files. Inline hooks and permissions on disk
+        belong to the local profile; refresh only Observal's entries afterward.
+        """
+        from observal_cli.errors import ErrorCategory, fail
+
+        if not path.exists():
+            return content
+        try:
+            existing = json.loads(path.read_text())
+            if not isinstance(existing, dict):
+                raise ValueError("Kiro agent profile must be an object")
+            if "hooks" in existing and not isinstance(existing["hooks"], (dict, list)):
+                raise ValueError("Kiro profile hooks must be an object or array")
+        except ValueError as error:
+            fail(
+                ErrorCategory.VALIDATION,
+                "Cannot refresh an invalid Kiro agent profile.",
+                operation="Pull agent",
+                resource=str(path),
+                remediation="Repair the local profile and retry; its contents were not overwritten.",
+                detail=repr(error),
+            )
+        merged = dict(content)
+        for field in ("hooks", "permissions", "kiroUpgrade"):
+            if field in existing:
+                merged[field] = existing[field]
+        # Kiro's universal upgrade retains legacy tool fields alongside V3
+        # permissions. Dropping them changes its classification to V3-only.
+        if isinstance(existing.get("kiroUpgrade"), dict):
+            for field in ("allowedTools", "toolsSettings"):
+                if field in existing:
+                    merged[field] = existing[field]
+        return merged
 
     def rewrite_agent_profile(self, content: dict, agent_id: str) -> dict:
         from observal_cli.cmd_pull import _rewrite_kiro_agent_profile
