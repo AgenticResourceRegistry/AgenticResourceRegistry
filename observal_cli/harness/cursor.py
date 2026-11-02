@@ -224,9 +224,11 @@ class CursorAdapter(BaseAdapter):
         return scanner.finish()
 
     def get_hook_spec(self) -> HookSpec:
+        from observal_cli.harness_specs.cursor_hooks_spec import CURSOR_HOOK_EVENTS
+
         return HookSpec(
-            events=["tool_call", "tool_result"],
-            format="http",
+            events=list(CURSOR_HOOK_EVENTS),
+            format="command",
             markers=["observal", "OBSERVAL"],
         )
 

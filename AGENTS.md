@@ -26,7 +26,7 @@ Ten harnesses are registered in `packages/observal-shared/observal_shared/harnes
 |---|---|---|---|---|
 | Claude Code | yes | `claude-code` | hooks, mcp_servers, skills | no |
 | Kiro | yes | `kiro` | hooks, mcp_servers, skills | yes (9 specs) |
-| Cursor | no | `cursor` | hooks, mcp_servers | no |
+| Cursor | yes | `cursor` | hooks, mcp_servers | no |
 | Pi | no | `pi` | hooks, mcp_servers, skills | no |
 | Codex CLI | yes | `codex` | hooks, mcp_servers, skills | no |
 | Copilot | yes | `copilot-cli` (shared) | hooks, mcp_servers, skills, prompts | no |
@@ -35,7 +35,7 @@ Ten harnesses are registered in `packages/observal-shared/observal_shared/harnes
 | Antigravity | yes | `antigravity` | hooks, mcp_servers, skills | no |
 | Goose | yes | `goose` | hooks, mcp_servers, skills | no |
 
-Every harness now resolves a session parser, so `observal reconcile` works across all ten. Hook specs in `observal_cli/harness_specs/` exist for eight; Cursor and Pi have none. Only Kiro has harness-specific Playwright coverage.
+Every harness now resolves a session parser, so `observal reconcile` works across all ten. Hook specs in `observal_cli/harness_specs/` exist for nine; Pi has none. Only Kiro has harness-specific Playwright coverage.
 
 See `docs/adding-a-harness.md` for the complete guide to adding or promoting a harness.
 

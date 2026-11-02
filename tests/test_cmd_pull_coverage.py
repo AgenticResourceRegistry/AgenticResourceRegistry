@@ -216,15 +216,12 @@ def test_component_conflicts_report_only_other_agent_versions(monkeypatch: pytes
 
 def test_pin_hook_interpreter_is_idempotent_and_json_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cmd_pull.sys, "executable", r"C:\Users\ada\observal\python.exe")
-    source = json.dumps({"command": "python3 -m observal_cli.hooks.session_push --harness cursor"})
+    source = json.dumps({"command": "python3 -m observal_cli.hooks.cursor_session_push"})
 
     once = cmd_pull._pin_hook_interpreter(source)
 
     # Backslashes in the interpreter must neither break re.sub nor the JSON string.
-    assert (
-        json.loads(once)["command"]
-        == "C:/Users/ada/observal/python.exe -m observal_cli.hooks.session_push --harness cursor"
-    )
+    assert json.loads(once)["command"] == "C:/Users/ada/observal/python.exe -m observal_cli.hooks.cursor_session_push"
     assert cmd_pull._pin_hook_interpreter(once) == once
     assert (
         cmd_pull._pin_hook_interpreter("/opt/venv/bin/python3 -m observal_cli.x")
@@ -238,10 +235,10 @@ def test_pin_hook_interpreter_is_idempotent_and_json_safe(monkeypatch: pytest.Mo
 
 def test_pin_hook_interpreter_quotes_paths_with_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cmd_pull.sys, "executable", "/tmp/Observal Tools/bin/python3")
-    source = json.dumps({"command": "python3 -m observal_cli.hooks.session_push --harness cursor"})
+    source = json.dumps({"command": "python3 -m observal_cli.hooks.cursor_session_push"})
     result = cmd_pull._pin_hook_interpreter(source)
     command = json.loads(result)["command"]
-    assert command == "'/tmp/Observal Tools/bin/python3' -m observal_cli.hooks.session_push --harness cursor"
+    assert command == "'/tmp/Observal Tools/bin/python3' -m observal_cli.hooks.cursor_session_push"
     assert cmd_pull._pin_hook_interpreter(result) == result
 
 
