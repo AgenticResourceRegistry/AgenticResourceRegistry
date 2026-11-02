@@ -228,7 +228,10 @@ def test_multi_harness_patch_processes_remaining_targets_then_reports_failure(
     # A genuinely invalid other harness must not prevent Kiro from being patched.
     write_json(tmp_path / ".claude/settings.json", {"hooks": []})
     (tmp_path / ".kiro").mkdir()
-    monkeypatch.setattr("observal_cli.audit.emit_cli_audit", lambda *args, **kwargs: None)
+    from unittest.mock import Mock
+
+    audit = Mock()
+    monkeypatch.setattr("observal_cli.audit.emit_cli_audit", audit)
 
     with pytest.raises(CliError) as captured:
         cmd_doctor._patch_targets(["claude-code", "kiro"], dry_run=False, output="json")
@@ -238,6 +241,51 @@ def test_multi_harness_patch_processes_remaining_targets_then_reports_failure(
     assert result["changed"] is True
     assert "error" in result["targets"][0]
     assert result["targets"][1] == {"harness": "kiro", "changed": True}
+    audit.assert_called_once_with(
+        "doctor.patch", resource_type="harness", detail="harnesses=kiro, hooks=true", sensitivity="high"
+    )
+
+
+@pytest.mark.parametrize("failure", ["malformed", "permission", "missing"])
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_patch_keeps_project_hook_scope_when_profile_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, dry_run: bool
+) -> None:
+    project = tmp_path / "project"
+    profile = project / ".kiro/agents/fixture.json"
+    write_json(profile, {"hooks": {}})
+    lockfile.upsert_agent(
+        "kiro",
+        name="fixture",
+        agent_id="id-fixture",
+        version="1.0.0",
+        scope="project",
+        directory=str(project),
+        local_name="fixture",
+    )
+    if failure == "malformed":
+        profile.write_text("{broken")
+    elif failure == "missing":
+        profile.unlink()
+    else:
+        read_text = Path.read_text
+
+        def unreadable(path: Path, *args, **kwargs):
+            if path == profile:
+                raise PermissionError("synthetic read failure")
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", unreadable)
+    before = profile.read_bytes() if profile.exists() else None
+    hooks = project / ".kiro/hooks/observal.json"
+
+    assert cmd_doctor._patch_kiro(dry_run=dry_run) is (failure != "missing")
+
+    assert (profile.read_bytes() if profile.exists() else None) == before
+    assert hooks.exists() is (not dry_run and failure != "missing")
+    if hooks.exists():
+        assert json.loads(hooks.read_text()) == build_kiro_hooks_file()
+        assert cmd_doctor._patch_kiro(dry_run=False) is False
 
 
 @pytest.mark.parametrize("existing", ["{broken", "[]", '{"hooks": null}', '{"hooks": "invalid"}'])

@@ -830,7 +830,7 @@ def _patch_targets(targets: list[str], *, dry_run: bool, output: OutputMode | st
         emit_cli_audit(
             "doctor.patch",
             resource_type="harness",
-            detail=f"harnesses={','.join(targets)}, hooks=true",
+            detail=f"harnesses={','.join(row['harness'] for row in rows if 'error' not in row)}, hooks=true",
             sensitivity="high",
         )
     result = {"action": "patch", "dry_run": dry_run, "changed": changed, "targets": rows}
@@ -1462,6 +1462,8 @@ def _patch_kiro(dry_run: bool) -> bool:
             if not profile.exists():
                 rprint(f"  [yellow]Missing locked profile: {esc(profile)}[/yellow]")
                 continue
+            # Standalone hooks belong to the scope, not to readable profiles.
+            hook_dirs.add(profile.parent.parent)
             try:
                 current = _read_json_object(profile)
                 desired = adapter.rewrite_agent_profile(json.loads(json.dumps(current)), agent_id=agent_id)
@@ -1475,10 +1477,6 @@ def _patch_kiro(dry_run: bool) -> bool:
                 rprint(f"  {verb} {esc(profile)}")
                 if not dry_run:
                     atomic_write(profile, json.dumps(desired, indent=2) + "\n")
-
-            # The standalone v1 hooks file is what Kiro IDE 1.0 and CLI 3.0
-            # actually read. One file per scope, shared by every agent there.
-            hook_dirs.add(profile.parent.parent)
 
     # Kiro reads ~/.kiro/hooks/observal.json for *every* session, whichever agent
     # is active, so the user-scope file has to exist even when the lockfile holds
