@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Hook registry CLI commands."""
@@ -46,6 +47,7 @@ from observal_cli.render import (
     status_badge,
 )
 from observal_cli.review_display import print_draft_save, print_review_link
+from observal_cli.shared.hook_config import merge_hook_config
 
 hook_app = typer.Typer(
     help=(
@@ -659,29 +661,16 @@ def hook_install(
                 )
         else:
             existing = {}
-        incoming_hooks = config_snippet.get("hooks", {})
-        existing_hooks = existing.setdefault("hooks", {})
-        if not isinstance(incoming_hooks, dict) or not isinstance(existing_hooks, dict):
+        try:
+            existing = merge_hook_config(existing, config_snippet)
+        except ValueError as error:
             fail(
                 ErrorCategory.VALIDATION,
-                "The hook configuration has an invalid hooks object.",
+                str(error),
                 operation="Install hook",
                 resource=str(cfg_file),
                 remediation="Repair the hook configuration and retry.",
             )
-        for event_name, entries in incoming_hooks.items():
-            current = existing_hooks.setdefault(event_name, [])
-            if not isinstance(current, list) or not isinstance(entries, list):
-                fail(
-                    ErrorCategory.VALIDATION,
-                    "The hook configuration event entries must be arrays.",
-                    operation="Install hook",
-                    resource=str(cfg_file),
-                    remediation="Repair the hook configuration and retry.",
-                )
-            current.extend(entry for entry in entries if entry not in current)
-        if "version" in config_snippet:
-            existing["version"] = config_snippet["version"]
         config_content = _json.dumps(existing, indent=2) + "\n"
 
     write_context = redirect_stdout(StringIO()) if output == "json" else nullcontext()
