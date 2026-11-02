@@ -2744,7 +2744,38 @@ def write_install_snippet(
         # so they work regardless of which directory Kiro is launched from.
         agent_profile_allow_home = adapter.allow_home_agent_profile(is_user_scope)
         p = _resolve_path(agent_profile["path"], target_dir, allow_home=agent_profile_allow_home)
-        _localize_agent_profile(agent_profile, adapter, agent_id, path=p)
+        try:
+            _localize_agent_profile(agent_profile, adapter, agent_id, path=p)
+        except (CliError, OSError, ValueError) as error:
+            # Preparing a profile reads local state after earlier config writes.
+            # Keep these failures on the same partial-pull/rollback path as writes.
+            partial = _pull_failure_result(
+                written,
+                "prepare_agent_profile",
+                failed_path=str(p),
+                installation_tracked=False,
+                dry_run=dry_run,
+            )
+            if isinstance(error, CliError):
+                if error.result is None:
+                    error.result = partial
+                raise
+            category = (
+                ErrorCategory.PERMISSION
+                if isinstance(error, PermissionError)
+                else ErrorCategory.UNAVAILABLE
+                if isinstance(error, OSError)
+                else ErrorCategory.VALIDATION
+            )
+            fail(
+                category,
+                f"Could not prepare generated agent profile: {p}.",
+                operation="Pull agent",
+                resource=str(p),
+                remediation="Repair the local profile or its filesystem permissions, then retry.",
+                detail=repr(error),
+                result=partial,
+            )
         if dry_run:
             written.append((str(p), "would write"))
         else:

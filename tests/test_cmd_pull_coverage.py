@@ -4301,3 +4301,92 @@ def test_kiro_repull_preserves_local_hooks_and_profile_shape(
     second = _invoke(pull_app_boundary, target, "--scope", scope, "--output", "json", harness="kiro")
     assert second.exit_code == 0, second.output
     assert json.loads(profile_path.read_text()) == actual
+
+
+@pytest.mark.parametrize("scope", ["project", "user"])
+@pytest.mark.parametrize("failure", ["malformed", "permission", "io"])
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("managed_folders", [False, True])
+def test_kiro_profile_merge_failure_reports_prior_writes_and_recovers_folders(
+    pull_app_boundary, registry, tmp_path, monkeypatch, isolated_home, scope, failure, dry_run, managed_folders
+):
+    from observal_cli import managed_skill
+    from observal_cli.harness.kiro import KiroAdapter
+    from observal_cli.harness_specs.kiro_hooks_spec import build_kiro_hooks_file
+
+    monkeypatch.setenv("OBSERVAL_KIRO_CLI_VERSION", "2.35.0")
+    monkeypatch.setenv("OBSERVAL_KIRO_IDE", "0")
+    registry.get_adapter.return_value = KiroAdapter()
+    target = tmp_path / "project"
+    base = isolated_home if scope == "user" else target
+    profile_path = base / ".kiro/agents/reviewer.json"
+    hook_path = base / ".kiro/hooks/observal.json"
+    profile_path.parent.mkdir(parents=True)
+    original = "{broken" if failure == "malformed" else '{"name": "local", "hooks": []}'
+    profile_path.write_text(original)
+    read_text = Path.read_text
+
+    if failure != "malformed":
+
+        def unreadable(path, *args, **kwargs):
+            if path == profile_path:
+                error_type = PermissionError if failure == "permission" else OSError
+                raise error_type("synthetic private read failure")
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", unreadable)
+
+    def install(_path, body):
+        result = _folder_install_result() if managed_folders else _install_result(body.get("version") or "1.1.0")
+        prefix = "~/.kiro" if scope == "user" else ".kiro"
+        result["config_snippet"]["agent_profile"] = {
+            "path": prefix + "/agents/reviewer.json",
+            "content": {"name": "reviewer", "prompt": "Updated prompt"},
+        }
+        result["config_snippet"]["hooks_config"] = {
+            "path": prefix + "/hooks/observal.json",
+            "content": build_kiro_hooks_file(),
+        }
+        return result
+
+    registry.post.side_effect = install
+    proof = {"target": str(base / ".kiro/skills/demo"), "listing_id": "skill-1"}
+    outcome = {"action": "install"}
+    plan = [(object(), Path(proof["target"]), proof, {})]
+    transact = MagicMock(return_value=outcome)
+    rollback = MagicMock(return_value=[])
+    if managed_folders:
+        monkeypatch.setattr(cmd_pull, "_managed_agent_folders", lambda *_a, **_k: plan)
+        monkeypatch.setattr(managed_skill, "transact", transact)
+    monkeypatch.setattr(cmd_pull, "_rollback_managed_agent_state", rollback)
+
+    options = ["--scope", scope, "--output", "json"]
+    if dry_run:
+        options.append("--dry-run")
+    result = _invoke(pull_app_boundary, target, *options, harness="kiro")
+
+    assert result.exit_code == {"malformed": 7, "permission": 4, "io": 9}[failure], result.output
+    error = json.loads(result.stderr)["error"]
+    partial = error["result"]
+    assert partial["stage"] == "prepare_agent_profile"
+    assert partial["failed_path"] == str(profile_path)
+    assert partial["installation_tracked"] is False
+    assert partial["partial"] is (not dry_run)
+    assert partial["files"] == [{"path": str(hook_path), "status": "would write" if dry_run else "created"}]
+    assert read_text(profile_path) == original
+    assert hook_path.exists() is (not dry_run)
+    registry.upsert.assert_not_called()
+    assert "synthetic private read failure" not in result.stderr
+    if dry_run:
+        assert "reports_sessions" not in partial
+    else:
+        assert partial["reports_sessions"] is True
+    if managed_folders and not dry_run:
+        transact.assert_called_once()
+        rollback.assert_called_once()
+        assert rollback.call_args.args[0] == [(proof, outcome)]
+        assert partial["folder_recovery_errors"] == []
+        assert partial["non_folder_writes_may_remain"] is True
+    else:
+        rollback.assert_not_called()
+        transact.assert_not_called()
