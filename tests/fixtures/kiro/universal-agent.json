@@ -1,0 +1,51 @@
+{
+  "name": "fixture",
+  "description": "Sanitized hook format regression fixture",
+  "prompt": "Test agent",
+  "hooks": [
+    {
+      "name": "stop-0",
+      "trigger": "stop",
+      "action": {
+        "type": "command",
+        "command": "python -m observal_cli.hooks.session_push --harness kiro"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "stop-1",
+      "trigger": "stop",
+      "action": {
+        "type": "command",
+        "command": "echo user-stop"
+      },
+      "timeout": 20
+    },
+    {
+      "name": "userPromptSubmit-0",
+      "trigger": "userPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python -m observal_cli.hooks.session_push --harness kiro"
+      },
+      "timeout": 10
+    }
+  ],
+  "allowedTools": [],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "./**"
+        ],
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:3508a52024790e00677d94fc8ceae55c3ce0b6cccefef649c70d95d8bb343a8f",
+    "source": "sha256:484e319c5092e4bd9a18a7fd41e473f1e6fd9285d91b9bb9ca0810a2d43d95d3"
+  }
+}

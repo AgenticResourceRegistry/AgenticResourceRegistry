@@ -1,0 +1,12 @@
+{
+  "name": "fixture",
+  "description": "Sanitized hook format regression fixture",
+  "prompt": "Test agent",
+  "hooks": {
+    "stop": [
+      {"command": "python -m observal_cli.hooks.session_push --harness kiro", "timeout_ms": 10000},
+      {"command": "echo user-stop", "timeout_ms": 20000}
+    ],
+    "userPromptSubmit": [{"command": "python -m observal_cli.hooks.session_push --harness kiro", "timeout_ms": 10000}]
+  }
+}

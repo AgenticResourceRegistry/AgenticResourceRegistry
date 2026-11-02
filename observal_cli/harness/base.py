@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Base adapter with feature-flag gating from harness_Registry.
@@ -352,6 +353,10 @@ class BaseAdapter:
         return None
 
     def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
+        return content
+
+    def merge_agent_profile(self, content: dict, path: Path) -> dict:
+        """Preserve harness-owned local profile state before a pull rewrites it."""
         return content
 
     def rewrite_agent_profile(self, content: dict, agent_id: str) -> dict:

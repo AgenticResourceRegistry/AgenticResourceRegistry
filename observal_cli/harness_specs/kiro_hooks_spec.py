@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro harness hook specification for session JSONL push.
@@ -9,9 +10,9 @@ Two hook formats exist, and Observal has to speak both:
 
 * **Standalone v1 files** (``.kiro/hooks/*.json``) — introduced in Kiro IDE 1.0
   and CLI 3.0, read by *every* Kiro surface. Triggers are PascalCase.
-* **Inline agent hooks** (``hooks`` inside ``.kiro/agents/<name>.json``) — the
-  CLI 2.x format. Kiro IDE 1.0 loads such an agent normally but never fires the
-  hooks, so the agent is visible and silent.
+* **Agent hooks** (``hooks`` inside ``.kiro/agents/<name>.json``) — legacy
+  CLI 2.x event mappings or universal arrays produced by Kiro's V3 agent
+  upgrade. The reader accepts both without changing trigger spelling or units.
 
 Observal therefore writes the standalone file by default and only falls back to
 inline hooks when the machine has a legacy CLI 2.x and no IDE to read them.
@@ -25,7 +26,13 @@ session JSONL incrementally).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
 from observal_cli.shared.launcher import module_command
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # CLI 2.x inline trigger names.
 KIRO_HOOK_EVENTS = ("userPromptSubmit", "stop")
@@ -38,6 +45,52 @@ KIRO_V1_HOOK_NAME_PREFIX = "observal-session-push"
 
 # Basename of the standalone hooks file Observal owns.
 KIRO_V1_HOOK_FILENAME = "observal.json"
+
+
+@dataclass(frozen=True)
+class KiroHook:
+    """A hook read from either Kiro shape, with its executable handler flattened.
+
+    Trigger spelling is preserved: universal profiles may use camelCase while
+    standalone files use PascalCase. Timeout units are also preserved (legacy
+    ``timeout_ms`` versus universal ``timeout`` in seconds).
+    """
+
+    trigger: str
+    name: str
+    handler: dict[str, Any]
+
+    @property
+    def command(self) -> str:
+        value = self.handler.get("command")
+        return value if isinstance(value, str) else ""
+
+
+def iter_kiro_hooks(hooks: object) -> Iterator[KiroHook]:
+    """Read legacy event mappings and universal/standalone hook arrays.
+
+    Malformed values are ignored, not coerced into executable commands. This
+    reader never mutates profiles; writers must retain unknown user entries.
+    """
+    if isinstance(hooks, dict):
+        for trigger, entries in hooks.items():
+            if not isinstance(trigger, str) or not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if isinstance(entry, dict):
+                    yield KiroHook(trigger, "", dict(entry))
+    elif isinstance(hooks, list):
+        for entry in hooks:
+            if not isinstance(entry, dict):
+                continue
+            trigger, action = entry.get("trigger"), entry.get("action")
+            if not isinstance(trigger, str) or not trigger.strip() or not isinstance(action, dict):
+                continue
+            handler = dict(action)
+            if "timeout" in entry:
+                handler["timeout"] = entry["timeout"]
+            name = entry.get("name")
+            yield KiroHook(trigger, name if isinstance(name, str) else "", handler)
 
 
 def build_kiro_push_command(agent_id: str = "") -> str:
