@@ -84,6 +84,12 @@
       "kind": "exact",
       "label": "qwen3-coder-next",
       "provider": "kiro"
+    },
+    {
+      "id": "claude-opus-5.5",
+      "kind": "exact",
+      "label": "claude-opus-5.5",
+      "provider": "kiro"
     }
   ],
   "updated_at": "2026-06-21"

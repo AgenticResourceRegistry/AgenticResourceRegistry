@@ -41,6 +41,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- detect Kiro V3 reasoning models and durably upload companion model metadata as a fallback without changing source counts (#2023)
+
 - repair in-app help links that still point at the renamed core concepts doc
 - install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422

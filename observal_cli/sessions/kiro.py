@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro session file helpers.
@@ -103,6 +104,15 @@ def _read_kiro_session(session_jsonl: Path | None) -> dict | None:
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     return session if isinstance(session, dict) else None
+
+
+def read_kiro_session_model(session_jsonl: Path | None) -> str | None:
+    """Read only the companion model identifier, never upload the session object."""
+    session = _read_kiro_session(session_jsonl)
+    value = session.get("modelId") if session else None
+    if not isinstance(value, str) or not value.strip() or len(value) > 512:
+        return None
+    return value.strip()
 
 
 def _iter_ide_records(transcript: Path) -> list[dict]:
