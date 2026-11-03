@@ -124,8 +124,11 @@ def kiro_cli_engine(home: Path | None = None, cwd: Path | None = None) -> str | 
     override = os.environ.get("OBSERVAL_KIRO_ENGINE", "").strip().lower()
     if override:
         return override if override in {"v2", "v3"} else None
+    from observal_cli.sessions.kiro import kiro_home
+
+    config_root = kiro_home(home)
     home = home or Path.home()
-    paths = [(cwd or Path.cwd()) / ".kiro" / "settings" / "cli.json", home / ".kiro" / "settings" / "cli.json"]
+    paths = [(cwd or Path.cwd()) / ".kiro" / "settings" / "cli.json", config_root / "settings" / "cli.json"]
     for path in paths:
         try:
             if path.stat().st_size > 1024 * 1024:
@@ -193,13 +196,24 @@ class KiroAdapter(BaseAdapter):
     def harness_name(self) -> str:
         return "kiro"
 
+    def resolve_home_dir(self):
+        """Allow scanning to find a relocated CLI home instead of the static marker."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        return kiro_home() if os.environ.get("KIRO_HOME", "").strip() else None
+
+    def is_installed(self, home=None):
+        """Detect the same runtime root that session discovery and native Kiro use."""
+        from observal_cli.sessions.kiro import kiro_home
+
+        return kiro_home(home).exists()
+
     def resolve_session_source(self, event: dict[str, Any], home: Path | None = None) -> SessionSource | None:
         from observal_cli.sessions.kiro import find_kiro_jsonl, read_kiro_session_cwd, resolve_session_id
 
         session_id = resolve_session_id(event)
         if not session_id:
             return None
-        home = home or Path.home()
         path = find_kiro_jsonl(session_id, home=home)
         if path is None:
             return None
@@ -273,7 +287,9 @@ class KiroAdapter(BaseAdapter):
 
         if placement != "inline" or source.path is None or not is_ide_transcript(source.path):
             return True
-        scopes = [(home or Path.home()) / ".kiro"]
+        from observal_cli.sessions.kiro import kiro_home
+
+        scopes = [kiro_home(home)]
         if source.cwd:
             scopes.append(Path(source.cwd) / ".kiro")
         event_name = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
@@ -469,8 +485,9 @@ class KiroAdapter(BaseAdapter):
         return {}
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
-        home = home or Path.home()
-        kiro_dir = home / ".kiro"
+        from observal_cli.sessions.kiro import kiro_home
+
+        kiro_dir = kiro_home(home)
         if not kiro_dir.exists():
             return ScanResult()
         return self._scan_kiro_dir(kiro_dir)
@@ -499,8 +516,9 @@ class KiroAdapter(BaseAdapter):
             return ScanResult()
 
     def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
-        home = home or Path.home()
-        return self._discover_kiro_root(home / ".kiro", DiscoveryScope.USER, home=home)
+        from observal_cli.sessions.kiro import kiro_home
+
+        return self._discover_kiro_root(kiro_home(home), DiscoveryScope.USER, home=home or Path.home())
 
     def discover_project(self, project_dir: Path) -> AdapterDiscoveryResult:
         return self._discover_kiro_root(

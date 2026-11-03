@@ -22,6 +22,7 @@ so callers never need to know which surface produced the session.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 # Basename of the transcript the Kiro IDE writes inside each session directory.
@@ -31,18 +32,26 @@ _IDE_TRANSCRIPT_NAME = "messages.jsonl"
 _IDE_SESSION_NAME = "session.json"
 
 
+def kiro_home(home: Path | None = None) -> Path:
+    """Resolve CLI runtime storage; an explicit home keeps callers/tests isolated.
+
+    Observal auth and outbox still use the user's normal home. KIRO_HOME only
+    relocates Kiro resources, settings and transcripts for ambient CLI calls.
+    """
+    if home is not None:
+        return home / ".kiro"
+    override = os.environ.get("KIRO_HOME", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".kiro"
+
+
 def find_sessions_dir(home: Path | None = None) -> Path:
     """Return ~/.kiro/sessions/cli/ (the root of all Kiro CLI session JSONL files)."""
-    if home is None:
-        home = Path.home()
-    return home / ".kiro" / "sessions" / "cli"
+    return kiro_home(home) / "sessions" / "cli"
 
 
 def sessions_root(home: Path | None = None) -> Path:
     """Return ~/.kiro/sessions/, the parent of both the CLI and IDE layouts."""
-    if home is None:
-        home = Path.home()
-    return home / ".kiro" / "sessions"
+    return kiro_home(home) / "sessions"
 
 
 def is_ide_transcript(path: Path | None) -> bool:
@@ -79,9 +88,7 @@ def find_kiro_jsonl(session_id: str, home: Path | None = None) -> Path | None:
     """
     if not session_id:
         return None
-    if home is None:
-        home = Path.home()
-    path = home / ".kiro" / "sessions" / "cli" / f"{session_id}.jsonl"
+    path = find_sessions_dir(home) / f"{session_id}.jsonl"
     if path.exists():
         return path
     return find_kiro_ide_jsonl(session_id, home=home)
@@ -343,9 +350,7 @@ def read_kiro_credits(session_id: str, home: Path | None = None) -> float | None
     """
     if not session_id:
         return None
-    if home is None:
-        home = Path.home()
-    json_path = home / ".kiro" / "sessions" / "cli" / f"{session_id}.json"
+    json_path = find_sessions_dir(home) / f"{session_id}.json"
     if not json_path.exists():
         ide_transcript = find_kiro_ide_jsonl(session_id, home=home)
         return _read_ide_credits(ide_transcript) if ide_transcript else None
