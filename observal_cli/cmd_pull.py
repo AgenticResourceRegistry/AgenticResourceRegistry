@@ -990,6 +990,32 @@ def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: boo
     return "merged" if existed else "created"
 
 
+def _reconcile_hook_event_lists(section: dict, incoming: dict) -> None:
+    """Merge incoming hook event lists into *section* without losing user hooks.
+
+    Cursor's ``hooks.json`` maps an event name to a list of handlers. A plain
+    ``dict.update`` replaces those lists wholesale, so a pull would drop a
+    user-owned ``preToolUse`` deny hook and re-add Observal entries every time.
+
+    For every event that is a list on both sides: keep existing entries that
+    are not Observal-managed, then append each incoming entry once (matched by
+    value), so repeated pulls are idempotent.
+    """
+    from observal_cli.shared.utils import is_observal_hook_entry
+
+    for event, incoming_entries in incoming.items():
+        current = section.get(event)
+        if not isinstance(incoming_entries, list) or not isinstance(current, list):
+            section[event] = incoming_entries
+            continue
+        kept = [entry for entry in current if not (isinstance(entry, dict) and is_observal_hook_entry(entry))]
+        merged = list(kept)
+        for entry in incoming_entries:
+            if entry not in merged:
+                merged.append(entry)
+        section[event] = merged
+
+
 def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
     """Write content to a file path, creating parent dirs as needed.
 
@@ -1037,7 +1063,12 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
                 section = existing.setdefault(root_key, {})
                 if not isinstance(section, dict) or not isinstance(incoming_servers, dict):
                     raise ValueError(f"cannot merge non-object JSON section {root_key}: {path}")
-                section.update(incoming_servers)
+                if root_key == "hooks" and any(isinstance(v, list) for v in incoming_servers.values()):
+                    # Hook configs map event names to handler lists; a plain
+                    # update would drop user hooks and duplicate ours.
+                    _reconcile_hook_event_lists(section, incoming_servers)
+                else:
+                    section.update(incoming_servers)
                 for key, value in content.items():
                     if key != root_key and not isinstance(value, dict):
                         existing[key] = value
