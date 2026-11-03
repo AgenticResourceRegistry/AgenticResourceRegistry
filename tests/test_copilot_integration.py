@@ -807,6 +807,41 @@ class TestServerParseRows:
         assert len(events) == 1
         assert events[0]["event_name"] == "hook_toolresult"
 
+    def test_tool_call_id_correlates_interleaved_calls_from_one_agent(self):
+        from services.session_parsers.copilot_cli import parse_rows
+
+        rows = [
+            self._make_row("tool.call", name="read", toolCallId="call-1"),
+            self._make_row("tool.call", name="read", toolCallId="call-2"),
+            self._make_row("tool.result", output="second", toolCallId="call-2"),
+            self._make_row("tool.result", output="first", toolCallId="call-1"),
+        ]
+        events = parse_rows(rows)
+        assert len(events) == 2
+        assert [event["attributes"]["tool_use_id"] for event in events] == ["call-1", "call-2"]
+        assert [event["attributes"]["tool_response"] for event in events] == ["first", "second"]
+
+    def test_missing_tool_call_id_does_not_use_agent_id_as_invocation_id(self):
+        from services.session_parsers.copilot_cli import parse_rows
+
+        events = parse_rows([self._make_row("tool.call", name="read"), self._make_row("tool.result", name="read")])
+        assert [event["attributes"]["tool_use_id"] for event in events] == ["", ""]
+
+    def test_flat_tool_events_correlate_by_tool_call_id(self):
+        from services.session_parsers.copilot_cli import parse_rows
+
+        def flat_row(event_type: str, data: dict) -> dict:
+            return {"raw_line": json.dumps({"type": event_type, "data": data, "id": "agent-1"})}
+
+        rows = [
+            flat_row("tool.call", {"name": "read", "toolCallId": "call-1"}),
+            flat_row("tool.result", {"output": "done", "toolCallId": "call-1"}),
+        ]
+        events = parse_rows(rows)
+        assert len(events) == 1
+        assert events[0]["attributes"]["tool_use_id"] == "call-1"
+        assert events[0]["attributes"]["tool_response"] == "done"
+
     def test_user_message_maps_to_hook_userpromptsubmit(self):
         from services.session_parsers.copilot_cli import parse_rows
 

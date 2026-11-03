@@ -79,6 +79,7 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
+              - 'package.json'
               - '.github/workflows/ci.yml'
             # The extension's tests include Python/TypeScript parity checks against observal_cli.
             pi_extension:
@@ -280,6 +281,11 @@ jobs:
       - name: TypeScript typecheck
         if: needs.changes.outputs.web == 'true'
         run: pnpm run typecheck
+
+      - name: Trace tool count regression
+        if: needs.changes.outputs.web == 'true'
+        working-directory: .
+        run: pnpm run test:trace-tool-usage
 
 # ── Job 4b: Pi extension tests ────────────────────────────────────────────────
   pi-extension:
