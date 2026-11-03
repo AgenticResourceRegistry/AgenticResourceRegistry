@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Durable SQLite outbox for acknowledged session delivery.
@@ -135,7 +136,12 @@ def enqueue(
     """
     lines = payload.get("lines") or []
     metadata_only = not lines
-    if metadata_only and payload.get("total_credits") is None and not payload.get("final"):
+    if (
+        metadata_only
+        and payload.get("total_credits") is None
+        and not payload.get("session_model")
+        and not payload.get("final")
+    ):
         raise ValueError("empty session outbox payload must contain durable metadata")
     harness = str(payload.get("harness") or "")
     session_id = str(payload.get("session_id") or "")
@@ -179,7 +185,12 @@ def enqueue(
                     end_offset = max(session_outbox.end_offset, excluded.end_offset),
                     final = max(session_outbox.final, excluded.final),
                     payload = CASE
-                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
+                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN
+                            CASE WHEN json_extract(excluded.payload, '$.session_model') IS NULL
+                                      AND json_extract(session_outbox.payload, '$.session_model') IS NOT NULL
+                                 THEN json_set(excluded.payload, '$.session_model',
+                                               json_extract(session_outbox.payload, '$.session_model'))
+                                 ELSE excluded.payload END
                         ELSE session_outbox.payload
                     END
                 """,
