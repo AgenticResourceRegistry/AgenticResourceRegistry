@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro JSONL session parser.
@@ -38,7 +39,19 @@ import json
 import math
 from datetime import UTC, datetime
 
-from .base import basic_event, dict_field, list_field, load_line, pick_timestamp, str_field
+from .base import (
+    basic_event,
+    dict_field,
+    list_field,
+    load_line,
+    meta_assistant,
+    meta_time,
+    meta_tool_call,
+    meta_tool_result,
+    meta_user,
+    pick_timestamp,
+    str_field,
+)
 
 
 def parse_rows(rows: list[dict]) -> list[dict]:
@@ -460,6 +473,174 @@ def _extract_result_text(result_content: list) -> str:
                 if isinstance(sub, dict) and sub.get("type") == "text":
                     parts.append(str_field(sub, "text"))
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Insights normalization, shared by deterministic metrics and transcripts
+# ---------------------------------------------------------------------------
+
+
+def _insight_tool(name: str, tool_id: str, args: dict) -> dict:
+    """Keep the native name while mapping known Kiro operations to metric kinds."""
+    args = {key: value for key, value in args.items() if not key.startswith("__")}
+    kind = {"execute_bash": "bash", "fs_read": "read", "use_subagent": "subagent"}.get(name, name)
+    if name == "fs_write":
+        kind = "edit" if args.get("command") == "str_replace" else "write"
+        args.pop("command", None)  # This is an operation tag, not a shell command.
+    if kind == "write":
+        args = {**args, "content": args.get("content", args.get("file_text", ""))}
+    if kind == "edit":
+        args = {
+            **args,
+            "edits": [
+                {
+                    "oldText": args.get("oldStr", args.get("old_string", args.get("old_str", ""))),
+                    "newText": args.get("newStr", args.get("new_string", args.get("new_str", ""))),
+                }
+            ],
+        }
+    return meta_tool_call(name, tool_id, args, kind)
+
+
+def meta_records(entries: list[dict]) -> list[dict]:
+    """Normalize V2 and enveloped V3 records without inventing assistant messages.
+
+    Standalone V3 tool calls use `tool_calls` records. They contribute tool
+    metrics, but do not count as assistant replies. V2 timestamps are inherited
+    from the last timestamped prompt, as in the trace parser.
+    """
+    records: list[dict] = []
+    tool_names: dict[str, str] = {}
+    seen_tools: set[str] = set()
+    last_ts = ""
+
+    def tool(name: str, tool_id: str, args: dict) -> dict | None:
+        if tool_id and tool_id in seen_tools:
+            return None
+        if tool_id:
+            seen_tools.add(tool_id)
+            tool_names[tool_id] = name
+        return _insight_tool(name, tool_id, args)
+
+    for entry in entries:
+        payload = dict_field(entry, "payload")
+        ts = str_field(entry, "timestamp")
+        if payload:
+            last_ts = ts or last_ts
+            ptype = str_field(payload, "type")
+            if ptype == "user":
+                text = str_field(payload, "content")
+                if text.strip():
+                    records.append(meta_user(last_ts, text))
+            elif ptype == "assistant":
+                record = meta_assistant(last_ts, extract_usage(entry)["model"])
+                # Reasoning signatures and placeholder text are not assistant output.
+                text = str_field(payload, "content")
+                if str_field(payload, "operationType") != "Reasoning" and text.strip():
+                    record["message"]["content"].append({"type": "text", "text": text})
+                records.append(record)
+            elif ptype == "tool_call":
+                block = tool(
+                    str_field(payload, "toolName"), str_field(payload, "toolCallId"), dict_field(payload, "args")
+                )
+                if block:
+                    record = meta_assistant(last_ts)
+                    record["type"] = "tool_calls"
+                    record["message"]["content"].append(block)
+                    records.append(record)
+            elif ptype == "tool_result":
+                records.append(
+                    meta_tool_result(
+                        last_ts,
+                        tool_names.get(str_field(payload, "toolCallId"), "unknown"),
+                        payload.get("success") is False,
+                        str_field(payload, "content"),
+                    )
+                )
+            if last_ts:
+                records.append(meta_time(last_ts))
+            continue
+
+        data = dict_field(entry, "data")
+        epoch = dict_field(data, "meta").get("timestamp")
+        if isinstance(epoch, int | float) and not isinstance(epoch, bool):
+            converted = _epoch_to_clickhouse(epoch)
+            if converted:
+                last_ts = converted.replace(" ", "T") + "Z"
+        kind = str_field(entry, "kind")
+        content = list_field(data, "content")
+        if kind == "Prompt":
+            text = "\n".join(
+                str_field(item, "data") for item in content if isinstance(item, dict) and item.get("kind") == "text"
+            )
+            if text.strip():
+                records.append(meta_user(last_ts, text))
+        elif kind == "AssistantMessage":
+            record = meta_assistant(last_ts, extract_usage(entry)["model"])
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                value = item.get("data")
+                if item.get("kind") == "text":
+                    text = (
+                        value if isinstance(value, str) else str_field(value, "text") if isinstance(value, dict) else ""
+                    )
+                    if text.strip():
+                        record["message"]["content"].append({"type": "text", "text": text})
+                elif item.get("kind") == "toolUse" and isinstance(value, dict):
+                    block = tool(str_field(value, "name"), str_field(value, "toolUseId"), dict_field(value, "input"))
+                    if block:
+                        record["message"]["content"].append(block)
+            records.append(record)
+        elif kind == "ToolResults":
+            for item in content:
+                if not isinstance(item, dict) or item.get("kind") != "toolResult":
+                    continue
+                result = dict_field(item, "data")
+                records.append(
+                    meta_tool_result(
+                        last_ts,
+                        tool_names.get(str_field(result, "toolUseId"), "unknown"),
+                        result.get("status") == "error",
+                        _extract_result_text(list_field(result, "content")),
+                    )
+                )
+        if last_ts and kind in {"Prompt", "AssistantMessage", "ToolResults"}:
+            records.append(meta_time(last_ts))
+    return records
+
+
+def transcript_rows(rows: list[dict]) -> list[dict]:
+    """Expand mixed text/tool records into separate transcript lines, using the same normalization as metrics."""
+    entries = [entry for row in rows if (entry := load_line(row.get("raw_line", ""))) is not None]
+    formatted: list[dict] = []
+    for record in meta_records(entries):
+        message = dict_field(record, "message")
+        role = str_field(message, "role")
+        if role == "user":
+            formatted.append({"event_type": "user_prompt", "raw_line": record})
+        elif role == "assistant":
+            content = list_field(message, "content")
+            if any(block.get("type") == "text" for block in content):
+                formatted.append({"event_type": "assistant_text", "raw_line": record})
+            for block in content:
+                if block.get("type") == "toolCall":
+                    formatted.append(
+                        {
+                            "event_type": "tool_call",
+                            "tool_name": block["name"],
+                            "raw_line": {"message": {"content": [block]}},
+                        }
+                    )
+        elif role == "toolResult":
+            formatted.append(
+                {
+                    "event_type": "tool_result",
+                    "tool_name": str_field(message, "toolName"),
+                    "raw_line": {"isError": message.get("isError", False), "content": list_field(message, "content")},
+                }
+            )
+    return formatted
 
 
 # ---------------------------------------------------------------------------

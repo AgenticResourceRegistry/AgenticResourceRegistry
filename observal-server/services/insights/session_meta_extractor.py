@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Deterministic per-session metadata extraction from raw JSONL transcripts.
@@ -137,75 +138,10 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
         entry_type = entry.get("type", "")
         ts_str = entry.get("timestamp", "")
 
-        # Kiro format: {"version": "v1", "kind": "Prompt"|"AssistantMessage", "data": {...}}
-        entry_kind = entry.get("kind", "")
-        if entry_kind and not entry_type:
-            kiro_data = entry.get("data", {})
-            if isinstance(kiro_data, dict):
-                kiro_meta = kiro_data.get("meta") if isinstance(kiro_data.get("meta"), dict) else {}
-                epoch_s = kiro_meta.get("timestamp") if kiro_meta else None
-                if epoch_s:
-                    from datetime import UTC as _UTC
-
-                    kiro_ts = datetime.fromtimestamp(epoch_s, tz=_UTC).isoformat()
-                    if start_time is None or kiro_ts < start_time:
-                        start_time = kiro_ts
-                    if end_time is None or kiro_ts > end_time:
-                        end_time = kiro_ts
-
-                if entry_kind == "Prompt":
-                    user_message_count += 1
-                    total_messages += 1
-                    content = kiro_data.get("content", [])
-                    text_parts = [
-                        item.get("data", "")
-                        for item in content
-                        if isinstance(item, dict) and item.get("kind") == "text"
-                    ]
-                    if not first_prompt and text_parts:
-                        first_prompt = "\n".join(text_parts)[:200]
-                elif entry_kind == "AssistantMessage":
-                    assistant_message_count += 1
-                    total_messages += 1
-                    content = kiro_data.get("content", [])
-                    for item in content:
-                        if isinstance(item, dict) and item.get("kind") == "toolUse":
-                            tool_data = item.get("data", {})
-                            if isinstance(tool_data, dict):
-                                tool_name = tool_data.get("name", "unknown")
-                                tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
-                                # Extract file/lines info from tool input
-                                args = tool_data.get("input", {})
-                                if isinstance(args, dict):
-                                    file_path = args.get("path", "") or args.get("file_path", "")
-                                    if file_path:
-                                        ext = _ext(file_path)
-                                        lang = EXTENSION_TO_LANGUAGE.get(ext)
-                                        if lang:
-                                            languages[lang] = languages.get(lang, 0) + 1
-                                    if tool_name == "write" and file_path:
-                                        files_modified.add(file_path)
-                                        content_str = args.get("content", "")
-                                        if isinstance(content_str, str) and content_str:
-                                            lines_added += _count_newlines(content_str) + 1
-                                    elif tool_name == "edit" and file_path:
-                                        files_modified.add(file_path)
-                                        old = args.get("oldStr", "") or args.get("old_string", "")
-                                        new = args.get("newStr", "") or args.get("new_string", "")
-                                        if isinstance(old, str) and old:
-                                            lines_removed += _count_newlines(old) + 1
-                                        if isinstance(new, str) and new:
-                                            lines_added += _count_newlines(new) + 1
-                                    elif tool_name == "bash":
-                                        cmd = args.get("command", "")
-                                        if isinstance(cmd, str):
-                                            if "git commit" in cmd:
-                                                git_commits += 1
-                                            if "git push" in cmd:
-                                                git_pushes += 1
-                elif entry_kind == "ToolResults":
-                    total_messages += 1
-            continue
+        # Standalone native tool calls are not manufactured assistant replies.
+        tool_only = entry_type == "tool_calls"
+        if tool_only:
+            entry_type = "message"
 
         # Track time range (Claude Code / Pi format)
         if ts_str:
@@ -227,7 +163,8 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
             continue
 
         role = msg.get("role", "")
-        total_messages += 1
+        if not tool_only:
+            total_messages += 1
 
         # Parse timestamp for response time tracking
         msg_ts: float | None = None
@@ -246,8 +183,9 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
                 # Claude Code normaliser for its API error notices.
                 failed_response_count += 1
                 continue
-            assistant_message_count += 1
-            if msg_ts:
+            if not tool_only:
+                assistant_message_count += 1
+            if msg_ts and not tool_only:
                 last_assistant_ts = msg_ts
 
             # Token usage

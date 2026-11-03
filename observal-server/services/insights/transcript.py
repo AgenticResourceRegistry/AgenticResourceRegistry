@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Build readable session transcripts from ClickHouse session_events.
@@ -73,14 +74,18 @@ async def build_session_transcript(session: SessionKey) -> str:
     if not rows:
         return ""
 
-    transcript = _format_rows(rows)
+    transcript = _format_rows(rows, harness=session.harness)
     if len(transcript) <= MAX_TRANSCRIPT_CHARS:
         return transcript
     return await _summarize_transcript(session.session_id, transcript)
 
 
-def _format_rows(rows: list[dict]) -> str:
+def _format_rows(rows: list[dict], harness: str = "") -> str:
     """Parse raw_line JSONL rows and format as readable transcript."""
+    if harness:
+        from services.session_parsers import transcript_rows
+
+        rows = transcript_rows(harness, rows)
     lines: list[str] = []
 
     for row in rows:

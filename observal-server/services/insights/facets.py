@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Per-session facet extraction via LLM (Haiku).
@@ -19,6 +20,13 @@ from .scope import SessionKey
 logger = structlog.get_logger(__name__)
 
 FACET_VERSION = 1
+# Only Kiro transcripts changed; do not invalidate other harnesses' cached LLM work.
+_FACET_VERSIONS = {"kiro": 2}
+
+
+def facet_version(harness: str) -> int:
+    return _FACET_VERSIONS.get(harness, FACET_VERSION)
+
 
 FACET_PROMPT = """\
 Analyze this session and extract structured facets.
@@ -117,11 +125,11 @@ async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> 
         model.user_id == session.user_id,
         model.harness == session.harness,
         model.session_id == session.session_id,
-        model.facet_version == FACET_VERSION,
     )
     existing = (await db.execute(stmt)).scalar_one_or_none()
     if existing:
         existing.facets = facets
+        existing.facet_version = facet_version(session.harness)
         existing.extracted_at = datetime.now(UTC)
     else:
         db.add(
@@ -131,7 +139,7 @@ async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> 
                 harness=session.harness,
                 session_id=session.session_id,
                 agent_id=_uuid.UUID(agent_id) if agent_id else None,
-                facet_version=FACET_VERSION,
+                facet_version=facet_version(session.harness),
                 facets=facets,
             )
         )
@@ -147,16 +155,15 @@ async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[Sessi
 
     model = get_facets_model()
     stmt = select(model).where(
-        tuple_(model.project_id, model.user_id, model.harness, model.session_id).in_(
-            [session.as_tuple() for session in sessions]
+        tuple_(model.project_id, model.user_id, model.harness, model.session_id, model.facet_version).in_(
+            [(*session.as_tuple(), facet_version(session.harness)) for session in sessions]
         ),
-        model.facet_version == FACET_VERSION,
     )
     result = await db.execute(stmt)
     return {
         SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
         for row in result.scalars().all()
-        if row.facets
+        if row.facets and row.facet_version == facet_version(row.harness)
     }
 
 
