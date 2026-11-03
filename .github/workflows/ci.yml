@@ -79,6 +79,8 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
+              - 'tests/test_pull_command_copy.mjs'
+              - 'package.json'
               - '.github/workflows/ci.yml'
             # The extension's tests include Python/TypeScript parity checks against observal_cli.
             pi_extension:
@@ -280,6 +282,11 @@ jobs:
       - name: TypeScript typecheck
         if: needs.changes.outputs.web == 'true'
         run: pnpm run typecheck
+
+      - name: Pull command copy regression
+        if: needs.changes.outputs.web == 'true'
+        working-directory: .
+        run: pnpm run test:pull-command-copy
 
 # ── Job 4b: Pi extension tests ────────────────────────────────────────────────
   pi-extension:
