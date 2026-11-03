@@ -232,7 +232,8 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 continue
         except OSError:
             continue
-        recovery_final = default_recovery_final or adapter.session_finalization_pending(source, config, home=home)
+        finalization_pending = adapter.session_finalization_pending(source, config, home=home)
+        recovery_final = default_recovery_final or finalization_pending
         event = {"session_id": source.session_id, "hook_event_name": "CrashRecovery"}
         related_sources = adapter.related_session_sources(source, home=home)
         with adapter.session_delivery_guard(
@@ -242,7 +243,7 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 continue
             delivered = True
             offset, _line_count, finalized = read_cursor_state(source.checkpoint_key, home=home)
-            if offset >= stat.st_size and (finalized or not recovery_final):
+            if offset >= stat.st_size and (finalized or not recovery_final) and not finalization_pending:
                 continue
             event = {"session_id": source.session_id, "hook_event_name": "Stop"}
             # Scope is checked after the cheap cursor and age filters: deciding it

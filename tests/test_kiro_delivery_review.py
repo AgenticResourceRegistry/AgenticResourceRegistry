@@ -147,3 +147,39 @@ with kiro_delivery_guard(source,{}, {'server_url':'http://server','user_id':'use
             process.kill()
             process.wait()
         process.stdout.close()
+
+
+def test_pending_metadata_finalization_is_not_hidden_by_old_final_cursor(captured_stop, tmp_path, monkeypatch):
+    """A past final cursor cannot hide a new Stop intent carrying delayed companion credits."""
+    import os
+    import time
+
+    event, path, posts = captured_stop
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **k: False)
+    monkeypatch.setattr(session_push, "_wait_until_stable", lambda *a: None)
+    monkeypatch.setattr(
+        base,
+        "recover_cursor_from_server",
+        lambda source, cfg, **k: base.read_cursor(source.checkpoint_key, home=tmp_path),
+    )
+    session_push._run_hook(event, harness="kiro", home=tmp_path)
+    session_push._finalize_session("kiro", "session", str(tmp_path), home=tmp_path)
+    assert base.read_cursor_state("session", home=tmp_path)[2]
+    path.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "session_state": {
+                    "conversation_metadata": {
+                        "user_turn_metadatas": [{"metering_usage": [{"unit": "credit", "value": 3.0}]}]
+                    }
+                }
+            }
+        )
+    )
+    session_push._run_hook(event, harness="kiro", home=tmp_path)
+    # Capture metadata acknowledges successfully, but the failed child leaves explicit final intent.
+    assert base.read_cursor_state("session", home=tmp_path)[2]
+    os.utime(path, (time.time() - 300, time.time() - 300))
+    session_push._recover_sessions("kiro", home=tmp_path)
+    assert posts[-1]["final"] and posts[-1]["total_credits"] == 3.0
+    assert not list((tmp_path / ".observal/session-delivery").rglob("finalization.pending"))
