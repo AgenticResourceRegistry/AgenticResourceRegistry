@@ -711,11 +711,64 @@ class TestCleanupFunctions:
 
     def test_cleanup_cursor_preserves_foreign_hooks(self, tmp_path: Path):
         hooks_path = tmp_path / ".cursor/hooks.json"
-        write_json(hooks_path, {"hooks": {"stop": [{"command": "foreign"}, {"command": "cursor_session_push"}]}})
+        write_json(
+            hooks_path,
+            {
+                "hooks": {
+                    "stop": [
+                        {"command": "foreign"},
+                        {"command": "python3 -m observal_cli.hooks.cursor_session_push"},
+                    ]
+                }
+            },
+        )
 
         assert _cleanup_cursor(dry_run=False) is True
 
         assert read_json(hooks_path)["hooks"]["stop"] == [{"command": "foreign"}]
+
+    def test_cleanup_cursor_keeps_user_hooks_that_mention_session_push(self, tmp_path: Path):
+        """A user hook is not Observal just because its command says "session_push"."""
+        hooks_path = tmp_path / ".cursor/hooks.json"
+        user_hook = {"command": "my-policy-agent --session_push-check", "type": "command"}
+        observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+        write_json(
+            hooks_path,
+            {"hooks": {"stop": [user_hook, observal], "preToolUse": [user_hook]}},
+        )
+
+        assert _cleanup_cursor(dry_run=False) is True
+
+        state = read_json(hooks_path)["hooks"]
+        assert state["stop"] == [user_hook]
+        assert state["preToolUse"] == [user_hook]
+
+    def test_patch_cursor_keeps_user_pretooluse_deny_hook(self, tmp_path: Path):
+        """Patching must not drop a user's preToolUse deny hook."""
+        hooks_path = tmp_path / ".cursor/hooks.json"
+        # A real denial policy for pushing sessions - it merely mentions
+        # "session_push", which the old substring filter treated as Observal.
+        deny = {"command": "guard --deny-cmd session_push --deny rm -rf", "type": "command"}
+        write_json(hooks_path, {"hooks": {"preToolUse": [deny]}})
+
+        assert _patch_cursor(dry_run=False) is True
+
+        commands = [entry["command"] for entry in read_json(hooks_path)["hooks"]["preToolUse"]]
+        assert deny["command"] in commands
+        assert any("hooks.cursor_session_push" in command for command in commands)
+
+    def test_patch_cursor_is_idempotent_across_repeated_runs(self, tmp_path: Path):
+        """Repeated patches must not duplicate the Observal command."""
+        hooks_path = tmp_path / ".cursor/hooks.json"
+        hooks_path.parent.mkdir(parents=True)
+
+        assert _patch_cursor(dry_run=False) is True
+        assert _patch_cursor(dry_run=False) is False
+        assert _patch_cursor(dry_run=False) is False
+
+        for entries in read_json(hooks_path)["hooks"].values():
+            observal = [e for e in entries if "hooks.cursor_session_push" in e.get("command", "")]
+            assert len(observal) == 1
 
     def test_cleanup_codex_preserves_foreign_groups(self, tmp_path: Path):
         hooks_path = tmp_path / ".codex/hooks.json"

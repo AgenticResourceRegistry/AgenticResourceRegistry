@@ -1116,7 +1116,7 @@ def _cleanup_cursor(dry_run: bool) -> bool:
         cleaned = [
             h
             for h in entries
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
+            if not (isinstance(h, dict) and _is_observal_hook_entry(h))
         ]
         if len(cleaned) < len(entries):
             removed_events.append(f"{event} ({len(entries) - len(cleaned)} removed)")
@@ -1537,7 +1537,7 @@ def _patch_cursor(dry_run: bool) -> bool:
         cleaned = [
             h
             for h in current
-            if "cursor_session_push" not in h.get("command", "") and "session_push" not in h.get("command", "")
+            if not (isinstance(h, dict) and _is_observal_hook_entry(h))
         ]
         merged_hooks[event] = cleaned + desired_entries
 

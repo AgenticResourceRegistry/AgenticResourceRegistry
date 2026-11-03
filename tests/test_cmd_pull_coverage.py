@@ -4247,3 +4247,31 @@ def test_pull_dummy_server_metadata_does_not_enter_debug_log(boundaries, tmp_pat
     from observal_cli.lockfile import LOCKFILE_PATH
 
     assert secret in LOCKFILE_PATH.read_text()
+
+
+def test_pull_merge_keeps_a_user_pretooluse_deny_hook(tmp_path: Path) -> None:
+    """A pull must never drop a user-owned deny hook from a hook event list."""
+    path = tmp_path / "hooks.json"
+    deny = {"command": "guard --deny rm -rf", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [deny]}}))
+
+    observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+    assert cmd_pull._write_file(path, {"version": 1, "hooks": {"preToolUse": [observal]}}, merge_mcp=True) == "merged"
+
+    entries = json.loads(path.read_text())["hooks"]["preToolUse"]
+    assert deny in entries
+    assert observal in entries
+
+
+def test_pull_merge_is_idempotent_for_hook_event_lists(tmp_path: Path) -> None:
+    """Repeating the same pull must not duplicate either the user or Observal hook."""
+    path = tmp_path / "hooks.json"
+    user = {"command": "user-stop", "type": "command"}
+    observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"stop": [user]}}))
+    content = {"version": 1, "hooks": {"stop": [observal]}}
+
+    for _ in range(3):
+        cmd_pull._write_file(path, content, merge_mcp=True)
+
+    assert json.loads(path.read_text())["hooks"]["stop"] == [user, observal]
