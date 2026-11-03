@@ -310,10 +310,19 @@ def test_source_resume_during_ack_cannot_restore_final_cursor(session, monkeypat
         return acknowledge(url, token, payload, **kw)
 
     monkeypatch.setattr(base, "post_to_server_ack", resume_at_ack)
-    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    result = cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert result["finalized"] == 0, "A downgraded ACK is not finalization evidence"
     assert any(payload.get("final") for payload in posts), "Request was authoritative when sent"
     assert not base.read_cursor_state("session")[2]
     assert not list((home / ".observal/session-delivery").rglob("finalization.pending"))
+    import hashlib
+
+    final_receipt = hashlib.sha256(b"final").hexdigest() + ".json"
+    assert not list((home / ".observal/session-delivery").rglob(final_receipt))
+    monkeypatch.setattr(base, "post_to_server_ack", acknowledge)
+    stop(home)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert base.read_cursor_state("session")[2], "A fresh Stop can still finalize after supersession"
 
 
 def test_resume_cancels_queued_child_final_and_parent_final_cursor(session, monkeypatch):

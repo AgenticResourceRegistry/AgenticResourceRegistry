@@ -354,7 +354,14 @@ def _reconcile_source(adapter, source, cfg, result, dry_run, rejections, final, 
         session.update(status="rejected", http_status=source_rejections[-1][2])
         rprint(f"  [red]✗[/red] {esc(source.session_id)} rejected by server")
     elif delivered:
-        key = "pushed" if offset < size else "finalized" if final else "up_to_date"
+        superseded = (
+            final
+            and not read_cursor_state(source.checkpoint_key)[2]
+            and not adapter.session_reconciliation_final(source, cfg)
+        )
+        key = "pushed" if offset < size else "skipped" if superseded else "finalized" if final else "up_to_date"
+        if superseded:
+            session["reason"] = "finalization intent superseded"
         result[key] += 1
         session["status"] = key
         rprint(f"  [green]✓[/green] {esc(source.session_id)}")

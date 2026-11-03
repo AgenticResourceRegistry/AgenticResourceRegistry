@@ -237,9 +237,13 @@ def kiro_delivery_guard(
             yield attempt
         finally:
             _kiro_context.reset(token)
+        if final and require_final_intent and not kiro_finalization_pending(source, config, home):
+            pending.unlink(missing_ok=True)
+            reset_resumed_cursor()
         if superseded:
             reset_resumed_cursor()
-        if attempt.proceed and attempt.delivered:
+        completed = not final or all(read_cursor_state(item.checkpoint_key, home=home)[2] for item in finalizable)
+        if attempt.proceed and attempt.delivered and completed:
             receipt.parent.mkdir(parents=True, exist_ok=True)
             # The session lock makes this atomic to other readers; replace also
             # prevents a killed writer leaving a falsely successful partial receipt.
