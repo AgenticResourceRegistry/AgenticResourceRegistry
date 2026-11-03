@@ -135,6 +135,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal ops logs`: Live log viewer (open in a separate tab)
 - `observal ops telemetry`: Telemetry health commands
   - `observal ops telemetry status`: Check telemetry data flow status.
+- `observal ops export-trace`: Export sessions as OpenTelemetry traces (OTLP).
 - `observal ops feedback`: Show feedback for an MCP server or agent.
 - `observal ops rate`: Rate an MCP server, agent, or component.
 - `observal ops rate-delete`: Delete your review for an item.
