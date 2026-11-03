@@ -102,9 +102,12 @@ A foreground invocation of the real worker subsequently finalized that saved V3 
 `whoami` intermittently timed out, and the last fresh attempt failed the login precondition.
 PID monitoring was inconclusive. No native V3 completion or approval claim is made.
 
-A broad full-suite run started at `7858cc00` is being recorded separately; the final metadata
-edge correction landed during that run. It cannot be advertised as a final committed-tree
-full-suite pass. Native V3 completion and a clean final full-suite run remain approval gates.
+The broad full-suite run started at `7858cc00` finished: **11,583 passed, 71 skipped,
+4 failed** in 25m52s. Failures were leaderboard route lookup (also failed on unchanged base),
+two previously recorded package-setup/credential tests, and delegation dead-worker cleanup.
+The final metadata edge correction landed during that run and passed the subsequent
+823-test current-tree targeted run. This is not a clean final committed-tree full-suite pass.
+Native V3 completion and a clean final full-suite run remain approval gates.
 
 Evidence: `/tmp/kiro-2021-auditor-{before,final-targeted,full}.log`,
 `/tmp/kiro-2021-launcher-probe-{before,after}.log`,
