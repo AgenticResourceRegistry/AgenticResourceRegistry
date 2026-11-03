@@ -22,9 +22,12 @@ logger = structlog.get_logger(__name__)
 FACET_VERSION = 1
 # Only Kiro transcripts changed; do not invalidate other harnesses' cached LLM work.
 _FACET_VERSIONS = {"kiro": 2}
+# Five binds per key; leave ample room below asyncpg's 32,767-argument limit.
+_FACET_LOOKUP_BATCH_SIZE = 1000
 
 
 def facet_version(harness: str) -> int:
+    """Return the cache schema version for this harness without invalidating other harnesses."""
     return _FACET_VERSIONS.get(harness, FACET_VERSION)
 
 
@@ -154,17 +157,23 @@ async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[Sessi
     from sqlalchemy import select, tuple_
 
     model = get_facets_model()
-    stmt = select(model).where(
-        tuple_(model.project_id, model.user_id, model.harness, model.session_id, model.facet_version).in_(
-            [(*session.as_tuple(), facet_version(session.harness)) for session in sessions]
-        ),
-    )
-    result = await db.execute(stmt)
-    return {
-        SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
-        for row in result.scalars().all()
-        if row.facets and row.facet_version == facet_version(row.harness)
-    }
+    cached: dict[SessionKey, dict] = {}
+    for start in range(0, len(sessions), _FACET_LOOKUP_BATCH_SIZE):
+        batch = sessions[start : start + _FACET_LOOKUP_BATCH_SIZE]
+        stmt = select(model).where(
+            tuple_(model.project_id, model.user_id, model.harness, model.session_id, model.facet_version).in_(
+                [(*session.as_tuple(), facet_version(session.harness)) for session in batch]
+            ),
+        )
+        result = await db.execute(stmt)
+        cached.update(
+            {
+                SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
+                for row in result.scalars().all()
+                if row.facets and row.facet_version == facet_version(row.harness)
+            }
+        )
+    return cached
 
 
 def aggregate_facets(all_facets: list[dict]) -> dict:
