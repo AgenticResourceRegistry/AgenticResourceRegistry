@@ -7,7 +7,8 @@
 
 This is a technical checkpoint, **not a production-readiness or human-review sign-off**.
 Work was directed by the user and assisted by Pi 1.4.0. Human review remains pending.
-No PR was merged. The two new #2021 implementation commits are local, not pushed.
+No PR was merged. All #2021 commits remain local, not pushed.
+The original checkpoints below are superseded by the auditor corrections recorded next.
 
 Branch: `fix/kiro-engine-delivery`. Dependency/base: #2029 head `1626b67a`.
 The reviewed #2029 branch was not modified by this work.
@@ -62,6 +63,55 @@ Existing fix-series context, as previously published; PR status was not rechecke
 - No new `make rebuild` was completed for #2021. Tests used the existing OrbStack
   services with the changed local CLI; rebuilt-stack verification remains required.
 
+## Auditor corrections and current evidence
+
+Both reported correctness findings reproduced: **9 new regressions failed before fixes**.
+The namespace-only launcher probe also failed its new regression before correction.
+
+| Local commit | Correction |
+| --- | --- |
+| `da5fd74d` | Require v1 schema, enabled Python session-push actions and coverage of the current event before suppressing inline delivery. Doctor requires both Prompt and Stop for installed standalone health. 177 focused tests passed. |
+| `bbdf4510` | Capture receipts no longer suppress final-worker retries. Persist explicit Stop intent separately; aged recovery may finalize that intent, but not merely quiet Kiro sessions. Clear intent only after in-scope final cursors complete. 172 delivery/cross-harness tests passed. |
+| `c5b862db` | Probe hook/worker module resolution, not namespace-root importability. All 35 launcher tests passed, including the two auditor failures. |
+| `7858cc00` | Real concurrent capture/final interpreters and an HTTP peer accepting a record before losing its ACK. Both regressions passed. This is at-least-once network delivery requiring server deduplication. |
+| `06ca5a90` | A previously final cursor cannot hide a new pending Stop carrying changed companion metadata. Six finalization regressions passed. |
+
+Current-tree targeted validation: **823 passed**, including Kiro, doctor/pull, launchers,
+shared sessions/outbox/reconciliation and cross-harness delivery. A real killed interpreter
+releases its lock without committing a success receipt. Ruff/format/whitespace checks passed.
+The leaderboard route-lookup failure reproduced on unchanged #2029 base `1626b67a`
+using the same environment; it is not attributable to these changes.
+
+`make rebuild` completed with external source-overlay Dockerfiles/Compose configuration.
+The API source was rebuilt from this branch; the cached web base was reused. Initial startup
+failed because this worktree lacked `.env`; a temporary symlink to the original environment
+was used and removed. ClickHouse remained at 2 GiB. The dedicated test venv required a normal
+shared-package install: its editable hidden .pth was also skipped, so source fallback alone
+could not import `observal_shared`. This environment correction did not modify host Kiro.
+
+Unmodified generated hook commands and detached worker launchers passed rebuilt-API controls
+for V2 and V3 transcript layouts: final receipts, finalized cursors, delayed source records
+and credits, contiguous server checkpoints, source deduplication and completed Stop replay.
+These were constructed transcript controls, not native engine-execution proof.
+
+Native CLI 2.35.0 **V2 passed** with a real created/pulled agent, unchanged generated launchers,
+detached final cursor, credits and agent attribution. Native **V3 still failed completion**:
+its cursor stayed at 10 source lines without `finalized`; durable Stop intent remained.
+A foreground invocation of the real worker subsequently finalized that saved V3 source at
+16 lines. The detached cause is not established. Another V3 control reproduced the failure;
+`whoami` intermittently timed out, and the last fresh attempt failed the login precondition.
+PID monitoring was inconclusive. No native V3 completion or approval claim is made.
+
+A broad full-suite run started at `7858cc00` is being recorded separately; the final metadata
+edge correction landed during that run. It cannot be advertised as a final committed-tree
+full-suite pass. Native V3 completion and a clean final full-suite run remain approval gates.
+
+Evidence: `/tmp/kiro-2021-auditor-{before,final-targeted,full}.log`,
+`/tmp/kiro-2021-launcher-probe-{before,after}.log`,
+`/tmp/kiro-2021-generated-worker-live.log`, `/tmp/kiro-2021-native-unmodified.log`,
+`/tmp/kiro-2021-existing-source-diagnostic.log`, `/tmp/kiro-2021-native-pid-monitor.log`.
+The temporary scripts/private homes are not durable CI artifacts or share-ready logs.
+
 ## Environment changes and cleanup
 
 Tests used throwaway homes/projects and private read-only SQLite backups of Kiro's
@@ -79,11 +129,13 @@ before sharing. Local evidence paths are not durable CI artifacts.
 
 ## Outstanding review gates
 
-1. Diagnose detached finalization and verify actual completion, delayed records and credits.
-2. Add stronger concurrent capture/final-worker, hard-crash and ambiguous-ACK controls;
-   examine standalone-hook validity and `KIRO_HOME` handling.
-3. Resolve or establish baselines for launcher and leaderboard failures; rerun the final full suite.
-4. Rebuild OrbStack and repeat V2/V3 placement, retry and attribution controls.
+1. Diagnose native V3 detached finalization and verify actual completion. Constructed delayed-record/credit controls passed, not native V3 completion.
+2. Review new concurrent process, hard-kill and lost-ACK tests and standalone validation.
+   Examine explicit-intent cancellation across resumed turns and `KIRO_HOME` handling.
+3. Launcher failures are fixed; leaderboard failed on unchanged base. Record remaining
+   full-suite failures and rerun the final committed tree.
+4. Rebuilt API and native V2 controls passed. Complete native V3 placement/finalization
+   validation while preserving credentials and host configuration.
 5. Obtain human review. Rebase #2021 onto `main` after #2029 merges before publishing
    a clean, separate PR. The project-only doctor cleanup gap remains separately tracked.
 
