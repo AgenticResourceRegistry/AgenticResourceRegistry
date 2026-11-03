@@ -290,15 +290,12 @@ def cli_main() -> None:
     parser.add_argument("--exclude-session", default="")
     args = parser.parse_args()
     try:
-        if args.finalize_session or args.recover or args.drain_outbox:
-            ensure_loaded()
-            with get_adapter(args.harness).session_worker_lifecycle():
-                if args.finalize_session:
-                    _finalize_session(args.harness, args.finalize_session, args.cwd)
-                elif args.recover:
-                    _recover_sessions(args.harness, args.exclude_session)
-                else:
-                    _drain_pending()
+        if args.finalize_session:
+            _finalize_session(args.harness, args.finalize_session, args.cwd)
+        elif args.recover:
+            _recover_sessions(args.harness, args.exclude_session)
+        elif args.drain_outbox:
+            _drain_pending()
         else:
             main(harness=args.harness, placement=args.placement)
     except Exception as exc:

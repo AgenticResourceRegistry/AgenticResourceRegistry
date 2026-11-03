@@ -335,10 +335,6 @@ class HarnessAdapter(Protocol):
         """Whether recovery must finish an explicitly requested finalization."""
         ...
 
-    def session_worker_lifecycle(self):
-        """Context for bounded detached-worker lifecycle handling; normal signals by default."""
-        ...
-
     def session_worker_environment(self) -> dict[str, str]:
         """Return environment overrides for detached session workers."""
         ...

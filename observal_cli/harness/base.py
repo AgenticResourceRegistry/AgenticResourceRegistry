@@ -216,12 +216,6 @@ class BaseAdapter:
         """Whether recovery must finish an explicitly requested finalization."""
         return False
 
-    def session_worker_lifecycle(self):
-        """Context for bounded detached-worker lifecycle handling; normal signals by default."""
-        from contextlib import nullcontext
-
-        return nullcontext()
-
     def session_worker_environment(self) -> dict[str, str]:
         """Environment overrides needed by detached session delivery workers."""
         return {}

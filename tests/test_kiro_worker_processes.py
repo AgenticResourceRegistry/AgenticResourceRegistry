@@ -9,7 +9,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -140,84 +139,3 @@ def test_concurrent_capture_and_final_workers_complete_once(peer, tmp_path):
             if process.poll() is None:
                 process.kill()
                 process.wait()
-
-
-def test_final_worker_survives_kiro_shutdown_sigterm(peer, tmp_path):
-    """Send V3's observed SIGTERM during settling; real CLI finalization must still finish."""
-    import signal
-
-    if not hasattr(signal, "SIGALRM"):
-        pytest.skip("POSIX Kiro lifecycle guard")
-    url, state = peer
-    source = setup_home(tmp_path, url)
-    root = Path(__file__).resolve().parents[1]
-    ready = tmp_path / "settling"
-    env = {
-        **os.environ,
-        "HOME": str(tmp_path),
-        "USERPROFILE": str(tmp_path),
-        "PYTHONPATH": str(root) + os.pathsep + str(root / "packages/observal-shared"),
-    }
-    script = """import sys,time
-from pathlib import Path
-from observal_cli.hooks import session_push
-home=Path(sys.argv[1])
-def settle(path):
-    (home/'settling').touch()
-    time.sleep(2)
-session_push._wait_until_stable=settle
-sys.argv=['session_push','--harness','kiro','--finalize-session','session','--cwd',str(home)]
-session_push.cli_main()
-"""
-    process = subprocess.Popen(
-        [sys.executable, "-P", "-c", script, str(tmp_path)],
-        env=env,
-        cwd=tmp_path,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        deadline = time.monotonic() + 20
-        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert ready.exists(), "Worker never entered settling"
-        process.send_signal(signal.SIGTERM)
-        _, stderr = process.communicate(timeout=30)
-        assert process.returncode == 0, stderr[-300:]
-        assert base.read_cursor_state("session", home=tmp_path) == (source.stat().st_size, 1, True)
-        assert state["stored"] == {("session", 0)}
-        assert state["posts"][-1]["final"]
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        process.stderr.close()
-
-
-def test_worker_signal_guard_restores_handlers_and_has_deadline(monkeypatch):
-    """Shutdown immunity is time-bounded and does not leak into ordinary CLI or other harnesses."""
-    import signal
-
-    from observal_cli.harness import ensure_loaded, get_adapter
-
-    if not hasattr(signal, "SIGALRM"):
-        pytest.skip("POSIX Kiro lifecycle guard")
-    ensure_loaded()
-    previous_term = signal.getsignal(signal.SIGTERM)
-    previous_alarm = signal.getsignal(signal.SIGALRM)
-    alarms = []
-    monkeypatch.setattr(signal, "alarm", lambda seconds: alarms.append(seconds) or 0)
-    swallowed = []
-    with get_adapter("kiro").session_worker_lifecycle():
-        assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
-        try:
-            signal.getsignal(signal.SIGALRM)(signal.SIGALRM, None)
-        except Exception:
-            swallowed.append(True)
-        swallowed.append(True)
-    assert not swallowed
-    assert alarms == [90, 0]
-    assert signal.getsignal(signal.SIGTERM) == previous_term
-    assert signal.getsignal(signal.SIGALRM) == previous_alarm
-    with get_adapter("claude-code").session_worker_lifecycle():
-        assert signal.getsignal(signal.SIGTERM) == previous_term
