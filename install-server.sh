@@ -108,6 +108,23 @@ command -v curl >/dev/null 2>&1 || die "'curl' is required but not found."
 command -v docker >/dev/null 2>&1 || die "Docker is required. Install: https://docs.docker.com/get-docker/"
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required."
 
+INSTALL_DIR="${INSTALL_DIR%/}"
+[ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "." ] || die "Choose a dedicated install directory"
+PARENT=$(dirname "$INSTALL_DIR")
+BACKUP_ROOT="${INSTALL_DIR}.backups"
+MARKER="${INSTALL_DIR}.upgrade-in-progress"
+[ ! -L "$INSTALL_DIR" ] && [ ! -L "$BACKUP_ROOT" ] || die "Install or backup path is a symlink"
+[ ! -e "$MARKER" ] || die "Interrupted upgrade marker at $MARKER; inspect the backup and restore manually before retrying"
+[ ! -e "$INSTALL_DIR" ] || [ -d "$INSTALL_DIR" ] || die "Install path is not a directory"
+if [ -d "$INSTALL_DIR" ]; then
+    for protected in .env secrets; do
+        [ ! -L "$INSTALL_DIR/$protected" ] || die "Existing $protected is a symlink; inspect it before upgrading"
+    done
+    if [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ] && [ ! -f "$INSTALL_DIR/.env" ]; then
+        die "Existing nonempty install at $INSTALL_DIR has no regular .env; inspect it manually before retrying"
+    fi
+fi
+
 # ── Resolve version ──────────────────────────────────────────
 
 if [ "$VERSION" = "latest" ]; then
@@ -138,14 +155,6 @@ fi
 
 # ── Stage and preserve previous package ────────────────────
 
-INSTALL_DIR="${INSTALL_DIR%/}"
-[ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "." ] || die "Choose a dedicated install directory"
-PARENT=$(dirname "$INSTALL_DIR")
-BACKUP_ROOT="${INSTALL_DIR}.backups"
-MARKER="${INSTALL_DIR}.upgrade-in-progress"
-[ ! -L "$INSTALL_DIR" ] && [ ! -L "$BACKUP_ROOT" ] || die "Install or backup path is a symlink"
-[ ! -e "$MARKER" ] || die "Interrupted upgrade marker at $MARKER; inspect the backup and restore manually before retrying"
-
 USE_SUDO=0
 if [ ! -w "$PARENT" ]; then
     command -v sudo >/dev/null 2>&1 || die "Cannot write to $PARENT; run with suitable permissions"
@@ -155,6 +164,14 @@ fs() {
     if [ "$USE_SUDO" = 1 ]; then sudo "$@"; else "$@"; fi
 }
 fs mkdir -p "$PARENT"
+
+# Staging intentionally copies only runtime secrets and the generated user XML.
+# Tell the operator before asking for replacement approval: other edits to the
+# old package are not transferred to the new package.
+if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    warn "Only .env, secrets, and generated ClickHouse XML (if present) are copied into the staged package."
+    warn "All other old configuration stays in the backup; inspect and reapply it before cutover."
+fi
 
 if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
     if [ "$FORCE" = "1" ]; then
@@ -166,8 +183,6 @@ if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
         [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || die "Aborted."
     fi
 fi
-[ ! -e "$INSTALL_DIR" ] || [ -d "$INSTALL_DIR" ] || die "Install path is not a directory"
-
 STAGE=$(fs mktemp -d "${INSTALL_DIR}.stage.XXXXXX")
 if [ "$USE_SUDO" = 1 ]; then fs chown "$(id -u):$(id -g)" "$STAGE"; fi
 info "Unpacking to staging directory..."
@@ -184,6 +199,16 @@ if [ -d "$INSTALL_DIR" ]; then
             cp -a "$INSTALL_DIR/$protected" "$STAGE/$protected"
         fi
     done
+    # Setup generates this from the ClickHouse password secret, but staging
+    # deliberately never reruns setup on an existing configured installation.
+    users_dir="$INSTALL_DIR/clickhouse/users.d"
+    generated="$users_dir/generated-password.xml"
+    if [ -f "$INSTALL_DIR/.env" ] && { [ -e "$generated" ] || [ -L "$generated" ]; }; then
+        [ ! -L "$INSTALL_DIR/clickhouse" ] && [ ! -L "$users_dir" ] && [ ! -L "$generated" ] &&
+            [ -f "$generated" ] || die "Existing ClickHouse user configuration is not a regular file"
+        fs mkdir -p "$STAGE/clickhouse/users.d"
+        cp -a "$generated" "$STAGE/clickhouse/users.d/generated-password.xml"
+    fi
 fi
 
 # Keep the old directory intact as a sibling backup; moving directories on the
@@ -204,6 +229,18 @@ if ! fs mkdir "$MARKER"; then
 fi
 if [ -n "$BACKUP_DIR" ]; then fs mv "$INSTALL_DIR" "$BACKUP_DIR"; fi
 fs mv "$STAGE" "$INSTALL_DIR"
+
+# Published setup.sh archives may rewrite a preserved .env or start Compose.
+# Never delegate an existing configured installation to the downloaded script.
+if [ -n "$BACKUP_DIR" ] && [ -e "$BACKUP_DIR/.env" ]; then
+    fs rmdir "$MARKER"
+    info "Previous package and configuration retained at $BACKUP_DIR"
+    warn "Only .env, secrets, and generated ClickHouse XML (if present) were copied into the staged package."
+    warn "All other old configuration stays in the backup; inspect and reapply it before cutover."
+    warn "Package files were staged, but running services were NOT upgraded or migrated."
+    warn "Follow https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/skill-folder-rollout.md before starting the new stack."
+    exit 0
+fi
 
 # ── Run setup and restore on ordinary failure ───────────────
 

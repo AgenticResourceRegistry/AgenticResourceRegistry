@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal server"
 ---
@@ -128,20 +129,20 @@ Apply one non-interactively:
 observal server upgrade --version 1.2.3 --force --output json
 ```
 
-An upgrade validates the target version and image, acquires the server upgrade lock, creates a managed PostgreSQL backup unless `--skip-backup` is set, pulls images, atomically updates `OBSERVAL_VERSION`, recreates containers, and runs the configured health check. A failed health check requests the previous image version again and returns an unavailable error.
+An upgrade checks the **installed Compose file's** API and web images for the target version. It refuses a v1.15.x file still pointing at `ghcr.io/observal` when upgrading to a new-repository tag; stage the matching release package and follow the supervised rollout instead. After pulling images it backs up PostgreSQL unless `--skip-backup` is set, stops old writers, updates `OBSERVAL_VERSION`, starts the new images and checks health. If recreation or health fails, it tries to stop writers and requires manual recovery; it does **not** restart an old API against a possibly migrated database. Duplicate version entries and exported Compose-file, version, bind-address or host-port overrides are rejected; health checks use the configured bind address.
 
 JSON mutation requires `--force`; dry run does not.
 
 ## Docker rollback
 
 ```bash
-observal server rollback --force --output json
+observal server versions --output json  # identify the backup for this deployment
 observal server rollback \
   --from-backup ~/.observal/backups/v1.2.2-20260521T120000 \
   --force --output json
 ```
 
-Rollback accepts only backup directories under the managed backup root. It restores PostgreSQL, atomically restores the image version, recreates containers, and checks health.
+Rollback requires an explicit `--from-backup` under the managed root; choose a backup from the correct deployment and point in time. Before restoring PostgreSQL, it checks that the installed Compose file resolves to the backup version's API and web images in the **same** GHCR repository, and pulls them before touching PostgreSQL. If the registry is unavailable, the database is untouched; use a supervised recovery plan even if local images are cached. It stops writers, restores PostgreSQL, starts without pulling/building, and checks health; failed startup or health requires manual recovery. This is not an exact database downgrade, and an old-only tag cannot be restored through a new-only Compose file.
 
 **ClickHouse telemetry is not restored by this command.** JSON and human results state `clickhouse_restored: false`. Use [`observal server migrate`](/cli/migrate) for ClickHouse export and import.
 
