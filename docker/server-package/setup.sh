@@ -92,9 +92,10 @@ fi
 info "Observal Server Setup"
 prompt_with_default FRONTEND_URL "Frontend URL" "http://localhost:3000"
 prompt_with_default OBSERVAL_BIND_ADDRESS "HTTP bind address" "${previous_bind:-127.0.0.1}"
-if [ "$OBSERVAL_BIND_ADDRESS" != "127.0.0.1" ] && [ "$OBSERVAL_BIND_ADDRESS" != "::1" ]; then
-    warn "Remote HTTP is enabled. Put this listener behind TLS unless plaintext access is intentional."
-fi
+case "$OBSERVAL_BIND_ADDRESS" in
+    127.0.0.1 | ::1 | \[::1\]) ;;
+    *) warn "Remote HTTP is enabled. Put this listener behind TLS unless plaintext access is intentional." ;;
+esac
 prompt_with_default OBSERVABILITY_STACK "Observability stack (none, prometheus, grafana)" "none"
 case "$OBSERVABILITY_STACK" in
     none | prometheus | grafana) ;;
@@ -191,12 +192,43 @@ fi
 
 info "Starting Observal services"
 cd "$INSTALL_DIR"
-docker compose "${profile_args[@]}" "${compose_args[@]}" --env-file .env up -d --wait --wait-timeout 300
+# Bash 3.2 (the macOS default) treats an empty "${array[@]}" as unbound under set -u.
+docker compose ${profile_args[@]+"${profile_args[@]}"} "${compose_args[@]}" --env-file .env up -d --wait --wait-timeout 300
 
-docker compose "${profile_args[@]}" "${compose_args[@]}" restart observal-lb
+docker compose ${profile_args[@]+"${profile_args[@]}"} "${compose_args[@]}" restart observal-lb
 
 info "Observal is running"
 info "Dashboard: $FRONTEND_URL"
+# Compose uses the process environment before .env for interpolation.
+if [ "${API_HOST_PORT+x}" != x ]; then
+    API_HOST_PORT=$(env_value API_HOST_PORT)
+fi
+API_HOST_PORT="${API_HOST_PORT:-8000}"
+if [ "$API_HOST_PORT" = "0" ]; then
+    # Port 0 asks Docker to assign an ephemeral host port; report the real one.
+    published_port=$(docker compose ${profile_args[@]+"${profile_args[@]}"} "${compose_args[@]}" --env-file .env port observal-lb 80)
+    API_HOST_PORT="${published_port##*:}"
+    case "$API_HOST_PORT" in
+        "" | *[!0-9]*) die "Could not determine the published API port from docker compose port" ;;
+    esac
+fi
+case "$OBSERVAL_BIND_ADDRESS" in
+    \[*\])
+        BIND_HOST="${OBSERVAL_BIND_ADDRESS#\[}"
+        BIND_HOST="${BIND_HOST%\]}"
+        ;;
+    *) BIND_HOST="$OBSERVAL_BIND_ADDRESS" ;;
+esac
+case "$BIND_HOST" in
+    127.0.0.1 | 0.0.0.0 | :: | ::1) API_HOST="localhost" ;;
+    *:*) API_HOST="[$BIND_HOST]" ;;
+    *) API_HOST="$BIND_HOST" ;;
+esac
+info "Server URL on this machine: http://$API_HOST:$API_HOST_PORT"
+info "Health check: curl http://$API_HOST:$API_HOST_PORT/health"
+if [ "$BIND_HOST" = "0.0.0.0" ] || [ "$BIND_HOST" = "::" ]; then
+    warn "Remote clients must use this machine's hostname instead of localhost."
+fi
 info "HTTP bind address: $OBSERVAL_BIND_ADDRESS"
 info "Config: $ENV_FILE"
 printf '\nInitial administrator:\n  Email: %s\n  Password: %s\n  Password file: %s\n' \
