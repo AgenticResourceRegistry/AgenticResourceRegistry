@@ -8,11 +8,20 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from observal_cli.lockfile import _exclusive_lock
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from observal_cli.telemetry_buffer import OutboxItem
 
 
 @dataclass
@@ -22,6 +31,25 @@ class DeliveryAttempt:
     proceed: bool = True
     delivered: bool = False
     reason: str = ""
+    finalization_generation: str | None = None
+
+
+@dataclass
+class OutboxDelivery:
+    """A transport attempt may acknowledge records without retaining final authority."""
+
+    item: OutboxItem
+    final_allowed: Callable[[], bool] = lambda: True
+
+
+_kiro_context = ContextVar("kiro_final_delivery_context", default=None)
+
+
+def _outbox_lock_path(db_path=None):
+    """All lifecycle and transport owners acquire outbox before session locks."""
+    from observal_cli import telemetry_buffer
+
+    return Path(db_path or telemetry_buffer.DB_PATH).with_suffix(".delivery.lock")
 
 
 def serialized_outbox(function):
@@ -29,10 +57,7 @@ def serialized_outbox(function):
 
     @wraps(function)
     def run(*args, **kwargs):
-        from observal_cli import telemetry_buffer
-
-        path = Path(kwargs.get("db_path") or telemetry_buffer.DB_PATH)
-        with _exclusive_lock(path.with_suffix(".delivery.lock")):
+        with _exclusive_lock(_outbox_lock_path(kwargs.get("db_path"))):
             return function(*args, **kwargs)
 
     return run
@@ -90,6 +115,7 @@ def kiro_delivery_guard(
     final_requested=False,
     cancel_final_requested=False,
     require_final_intent=False,
+    expected_generation=None,
     finalizable=(),
     home=None,
 ):
@@ -111,17 +137,38 @@ def kiro_delivery_guard(
     phase_key = hashlib.sha256(phase.encode()).hexdigest()
     receipt = root / key / (phase_key + ".json")
     # Lock files stay in place: unlinking an actively held lock would split ownership.
-    with _exclusive_lock(root / (key + ".lock")):
+    with _exclusive_lock(_outbox_lock_path()), _exclusive_lock(root / (key + ".lock")):
         pending = directory / "finalization.pending"
         if cancel_final_requested:
             pending.unlink(missing_ok=True)
-        if final and require_final_intent and not kiro_finalization_pending(source, config, home=home):
+        if (
+            final
+            and require_final_intent
+            and (
+                not kiro_finalization_pending(source, config, home=home)
+                or (
+                    expected_generation is not None
+                    and expected_generation != kiro_finalization_generation(source, config, home)
+                )
+            )
+        ):
             yield DeliveryAttempt(proceed=False, reason="finalization intent superseded")
             return
         if final_requested and finalizable:
             directory.mkdir(parents=True, exist_ok=True)
             temporary = pending.with_suffix(".tmp")
-            temporary.write_text(json.dumps({"prompt_fingerprint": _prompt_fingerprint(source)}))
+            anchor = _prompt_fingerprint(source)
+            try:
+                intent = json.loads(pending.read_text())
+            except (OSError, ValueError):
+                intent = {}
+            if (
+                not isinstance(intent, dict)
+                or intent.get("prompt_fingerprint") != anchor
+                or not intent.get("generation")
+            ):
+                intent = {"prompt_fingerprint": anchor, "generation": uuid4().hex}
+            temporary.write_text(json.dumps(intent))
             temporary.chmod(0o600)
             temporary.replace(pending)
         paths = set()
@@ -136,7 +183,15 @@ def kiro_delivery_guard(
             except OSError:
                 signatures.append([str(path), None])
         fingerprint = hashlib.sha256(
-            json.dumps([event, signatures, final], sort_keys=True, default=str).encode()
+            json.dumps(
+                [
+                    {key: value for key, value in event.items() if key != "_observal_finalization_generation"},
+                    signatures,
+                    final,
+                ],
+                sort_keys=True,
+                default=str,
+            ).encode()
         ).hexdigest()
         try:
             previous = json.loads(receipt.read_text())
@@ -145,11 +200,16 @@ def kiro_delivery_guard(
         from observal_cli.sessions.base import read_cursor_state, write_cursor
 
         def reset_resumed_cursor():
-            offset, lines, finalized = read_cursor_state(source.checkpoint_key, home=home)
-            if finalized:
-                write_cursor(source.checkpoint_key, offset, lines, home=home, preserve_finalized=False)
+            for item in [source, *related]:
+                offset, lines, finalized = read_cursor_state(item.checkpoint_key, home=home)
+                if finalized:
+                    write_cursor(item.checkpoint_key, offset, lines, home=home, preserve_finalized=False)
 
-        if cancel_final_requested:
+        superseded = cancel_final_requested or (
+            pending.exists() and not kiro_finalization_pending(source, config, home)
+        )
+        if superseded:
+            pending.unlink(missing_ok=True)
             reset_resumed_cursor()
 
         def cursor_signature(item):
@@ -159,9 +219,25 @@ def kiro_delivery_guard(
             return list(cursor if final else cursor[:2])
 
         state = {"fingerprint": fingerprint, "cursors": [cursor_signature(item) for item in [source, *related]]}
-        attempt = DeliveryAttempt(proceed=previous != state)
-        yield attempt
-        if cancel_final_requested:
+        attempt = DeliveryAttempt(
+            proceed=previous != state,
+            finalization_generation=kiro_finalization_generation(source, config, home) if final_requested else None,
+        )
+        context = None
+        if final and kiro_finalization_pending(source, config, home):
+            intent = json.loads(pending.read_text())
+            context = {
+                **intent,
+                "checkpoint_key": source.checkpoint_key,
+                "source_path": str(source.path),
+                "checkpoints": [item.checkpoint_key for item in [source, *related]],
+            }
+        token = _kiro_context.set(context)
+        try:
+            yield attempt
+        finally:
+            _kiro_context.reset(token)
+        if superseded:
             reset_resumed_cursor()
         if attempt.proceed and attempt.delivered:
             receipt.parent.mkdir(parents=True, exist_ok=True)
@@ -181,3 +257,76 @@ def kiro_delivery_guard(
             and all(read_cursor_state(item.checkpoint_key, home=home)[2] for item in finalizable)
         ):
             pending.unlink(missing_ok=True)
+
+
+def kiro_outbox_context(source):
+    """Capture the active guarded parent generation for a final parent or child batch."""
+    context = _kiro_context.get()
+    return dict(context) if context and source.checkpoint_key in context["checkpoints"] else None
+
+
+@contextmanager
+def kiro_outbox_guard(item, config, *, home=None, db_path=None):
+    """Serialize queued sends/ACKs with resume and irreversibly downgrade stale finals.
+
+    The local envelope survives source loss and binds a batch to its particular Stop,
+    not just to a future Stop with identical prompt bytes. It never reaches the API.
+    Source prompts are checked before sending and again at ACK because the harness
+    can append a prompt before its hook acquires this lock.
+    """
+    from observal_cli import telemetry_buffer
+    from observal_cli.sessions.base import read_cursor_state, write_cursor
+
+    home = home or Path.home()
+    context = item.delivery_context
+    scoped = isinstance(context, dict)
+    source = SimpleNamespace(
+        checkpoint_key=context.get("checkpoint_key", item.checkpoint_key) if scoped else item.checkpoint_key,
+        path=Path(context["source_path"]) if scoped and isinstance(context.get("source_path"), str) else None,
+    )
+    directory = _session_directory(source, config, home)
+    pending = directory / "finalization.pending"
+    requires_authority = item.final or scoped
+
+    def final_allowed():
+        if not requires_authority:
+            return True
+        try:
+            intent = json.loads(pending.read_text())
+        except (OSError, ValueError):
+            intent = None
+        valid = (
+            scoped
+            and isinstance(intent, dict)
+            and isinstance(context.get("generation"), str)
+            and context["generation"] == intent.get("generation")
+            and context.get("prompt_fingerprint") == intent.get("prompt_fingerprint")
+            and kiro_finalization_pending(source, config, home)
+        )
+        if not valid:
+            if scoped and isinstance(intent, dict) and intent.get("generation") == context.get("generation"):
+                pending.unlink(missing_ok=True)
+            keys = set(context.get("checkpoints", ())) if scoped else set()
+            keys.update([source.checkpoint_key, item.checkpoint_key])
+            for key in keys:
+                offset, lines, finalized = read_cursor_state(key, home=home)
+                if finalized:
+                    write_cursor(key, offset, lines, home=home, preserve_finalized=False)
+        return bool(valid)
+
+    # A lifecycle guard holds these same reentrant locks, in this same order.
+    with _exclusive_lock(_outbox_lock_path(db_path)), _exclusive_lock(directory.parent / (directory.name + ".lock")):
+        if not final_allowed() and (item.final or item.payload.get("final")):
+            item = telemetry_buffer.supersede_final(item, db_path=db_path)
+        yield OutboxDelivery(item, final_allowed)
+
+
+def kiro_finalization_generation(source, config, home=None):
+    """Snapshot the scheduled Stop identity; an absent identity cannot adopt a later Stop."""
+    if not kiro_finalization_pending(source, config, home):
+        return ""
+    pending = _session_directory(source, config, home or Path.home()) / "finalization.pending"
+    try:
+        return str(json.loads(pending.read_text()).get("generation") or "")
+    except (OSError, ValueError):
+        return ""

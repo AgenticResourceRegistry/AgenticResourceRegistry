@@ -208,3 +208,189 @@ def test_rejected_child_delivery_keeps_parent_intent_retryable(session, monkeypa
     cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
     assert base.read_cursor_state("session__sub__child")[2]
     assert not list((home / ".observal/session-delivery").rglob("finalization.pending"))
+
+
+def test_offline_final_resume_reconnect_keeps_cursor_non_final(session, monkeypatch):
+    """A pre-group outbox drain must not acknowledge superseded finalization."""
+    home, path, config, posts, workers = session
+    stop(home)
+    acknowledge = base.post_to_server_ack
+    monkeypatch.setattr(base, "post_to_server_ack", lambda *a, **k: None)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert any(item.final for item in telemetry_buffer.pending(destination="http://server", user_id="user"))
+    session_push._run_hook({"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home)
+    assert not list((home / ".observal/session-delivery").rglob("finalization.pending"))
+    assert not base.read_cursor_state("session")[2]
+    posts.clear()
+    monkeypatch.setattr(base, "post_to_server_ack", acknowledge)
+    assert base.drain_outbox(config, home=home)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert not any(payload.get("final") for payload in posts)
+    assert not base.read_cursor_state("session")[2]
+
+
+def test_queued_final_records_survive_source_resume_before_hook(session, monkeypatch):
+    """Supersession strips final metadata but keeps every offline-captured source record."""
+    home, path, config, posts, workers = session
+    stop(home)
+    late = json.dumps({"id": "late", "payload": {"type": "assistant", "content": "captured offline"}})
+    with path.open("a") as stream:
+        stream.write(late + "\n")
+    acknowledge = base.post_to_server_ack
+    monkeypatch.setattr(base, "post_to_server_ack", lambda *a, **k: None)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    with path.open("a") as stream:
+        stream.write(json.dumps({"id": "resume", "payload": {"type": "user", "content": "next turn"}}) + "\n")
+    posts.clear()
+    monkeypatch.setattr(base, "post_to_server_ack", acknowledge)
+    assert base.drain_outbox(config, home=home)
+    assert any(late in payload["lines"] for payload in posts)
+    assert not any(payload.get("final") for payload in posts)
+    assert not base.read_cursor_state("session")[2]
+
+
+def test_waiting_v2_worker_cannot_finalize_resumed_session(session, monkeypatch):
+    """A retained worker validates Stop authority after settling, even for its Stop event."""
+    home, path, config, posts, workers = session
+    v2 = home / ".kiro/sessions/cli/session.jsonl"
+    v2.parent.mkdir(parents=True)
+    v2.write_text('{"kind":"Prompt","data":{"content":[]}}\n')
+    stop(home)
+    assert workers
+
+    def settle(_path):
+        session_push._run_hook(
+            {"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home
+        )
+
+    monkeypatch.setattr(session_push, "_wait_until_stable", settle)
+    posts.clear()
+    session_push._finalize_session("kiro", "session", "", home=home)
+    assert not any(payload.get("final") for payload in posts)
+    assert not base.read_cursor_state("session")[2]
+
+
+def test_new_stop_does_not_reauthorize_an_old_queued_generation(session, monkeypatch):
+    """Even identical prompt bytes cannot revive a canceled batch under a subsequent Stop."""
+    home, path, config, posts, workers = session
+    stop(home)
+    acknowledge = base.post_to_server_ack
+    monkeypatch.setattr(base, "post_to_server_ack", lambda *a, **k: None)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    old = telemetry_buffer.pending(destination="http://server", user_id="user")[0].delivery_context
+    session_push._run_hook({"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home)
+    stop(home)
+    pending = next((home / ".observal/session-delivery").rglob("finalization.pending"))
+    assert json.loads(pending.read_text())["generation"] != old["generation"]
+    posts.clear()
+    monkeypatch.setattr(base, "post_to_server_ack", acknowledge)
+    assert base.drain_outbox(config, home=home)
+    assert not any(payload.get("final") for payload in posts)
+    assert not base.read_cursor_state("session")[2]
+    assert pending.exists(), "An old queued batch cannot cancel the newer Stop"
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert posts[-1]["final"]
+    assert base.read_cursor_state("session")[2]
+
+
+@pytest.mark.parametrize("new_records", [False, True])
+def test_source_resume_during_ack_cannot_restore_final_cursor(session, monkeypatch, new_records):
+    """A source prompt preceding its hook is checked again at ACK, including metadata-only final."""
+    home, path, config, posts, workers = session
+    stop(home)
+    if new_records:
+        with path.open("a") as stream:
+            stream.write(json.dumps({"id": "late", "payload": {"type": "assistant", "content": "late"}}) + "\n")
+    acknowledge = base.post_to_server_ack
+
+    def resume_at_ack(url, token, payload, **kw):
+        if payload.get("final"):
+            with path.open("a") as stream:
+                stream.write(json.dumps({"id": "resumed", "payload": {"type": "user", "content": "next"}}) + "\n")
+        return acknowledge(url, token, payload, **kw)
+
+    monkeypatch.setattr(base, "post_to_server_ack", resume_at_ack)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert any(payload.get("final") for payload in posts), "Request was authoritative when sent"
+    assert not base.read_cursor_state("session")[2]
+    assert not list((home / ".observal/session-delivery").rglob("finalization.pending"))
+
+
+def test_resume_cancels_queued_child_final_and_parent_final_cursor(session, monkeypatch):
+    """Partial group ACKs cannot leave either parent or child final after resumption."""
+    home, path, config, posts, workers = session
+    child = path.parent / "sub-executions/child.jsonl"
+    child.parent.mkdir()
+    child.write_text(json.dumps({"id": "reply", "payload": {"type": "assistant", "content": "child"}}) + "\n")
+    stop(home)
+    acknowledge = base.post_to_server_ack
+    monkeypatch.setattr(
+        base,
+        "post_to_server_ack",
+        lambda url, token, payload, **kw: (
+            None if payload["session_id"] == "child" else acknowledge(url, token, payload, **kw)
+        ),
+    )
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    assert base.read_cursor_state("session")[2]
+    assert not base.read_cursor_state("session__sub__child")[2]
+    session_push._run_hook({"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home)
+    posts.clear()
+    monkeypatch.setattr(base, "post_to_server_ack", acknowledge)
+    assert base.drain_outbox(config, home=home)
+    assert not any(payload.get("final") for payload in posts)
+    assert not base.read_cursor_state("session")[2]
+    assert not base.read_cursor_state("session__sub__child")[2]
+
+
+def test_waiting_v2_worker_cannot_adopt_a_newer_stop(session, monkeypatch):
+    """An old worker's generation remains superseded even when a new Stop exists after settling."""
+    home, path, config, posts, workers = session
+    v2 = home / ".kiro/sessions/cli/session.jsonl"
+    v2.parent.mkdir(parents=True)
+    v2.write_text('{"kind":"Prompt","data":{"content":[]}}\n')
+    stop(home)
+
+    def settle(_path):
+        session_push._run_hook(
+            {"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home
+        )
+        stop(home)
+
+    monkeypatch.setattr(session_push, "_wait_until_stable", settle)
+    posts.clear()
+    session_push._finalize_session("kiro", "session", "", home=home)
+    assert not any(payload.get("final") for payload in posts)
+    assert not base.read_cursor_state("session")[2]
+    assert list((home / ".observal/session-delivery").rglob("finalization.pending"))
+
+
+def test_legacy_outbox_final_without_generation_keeps_records_but_not_finality(session):
+    """Migrating an old SQLite outbox cannot invent Stop authority for its final batches."""
+    import sqlite3
+
+    home, path, config, posts, workers = session
+    stop(home)
+    payload = {
+        "harness": "kiro",
+        "session_id": "session",
+        "start_offset": 2,
+        "lines": ['{"id":"legacy"}'],
+        "end_byte_offsets": [path.stat().st_size + 16],
+        "final": True,
+        "total_offset": path.stat().st_size + 16,
+        "total_line_count": 3,
+        "session_hash": "old",
+        "hashed_line_count": 3,
+    }
+    telemetry_buffer.enqueue(payload, destination="http://server", user_id="user")
+    with sqlite3.connect(telemetry_buffer.DB_PATH) as conn:
+        conn.execute("ALTER TABLE session_outbox DROP COLUMN delivery_context")
+    posts.clear()
+    assert base.drain_outbox(config, home=home)
+    assert posts[-1]["lines"] == payload["lines"]
+    assert not posts[-1].get("final")
+    assert not any(
+        key in posts[-1] for key in ("session_hash", "total_line_count", "hashed_line_count", "total_offset")
+    )
+    assert not base.read_cursor_state("session")[2]

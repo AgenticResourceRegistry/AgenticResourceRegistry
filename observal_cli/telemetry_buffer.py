@@ -48,6 +48,7 @@ class OutboxItem:
     final: bool
     payload: dict
     attempts: int
+    delivery_context: dict | None = None
 
 
 def _path(db_path: Path | None) -> Path:
@@ -95,6 +96,11 @@ def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> 
             )
             """
         )
+        # Recheck under a write transaction: concurrent first opens must not race ALTER.
+        if "delivery_context" not in {row[1] for row in conn.execute("PRAGMA table_info(session_outbox)")}:
+            conn.execute("BEGIN IMMEDIATE")
+            if "delivery_context" not in {row[1] for row in conn.execute("PRAGMA table_info(session_outbox)")}:
+                conn.execute("ALTER TABLE session_outbox ADD COLUMN delivery_context TEXT")
         conn.commit()
         page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
         conn.execute(f"PRAGMA max_page_count = {max(1, max_bytes // page_size)}")
@@ -127,6 +133,7 @@ def enqueue(
     checkpoint_key: str | None = None,
     db_path: Path | None = None,
     max_bytes: int = MAX_OUTBOX_BYTES,
+    delivery_context: dict | None = None,
 ) -> int:
     """Persist one source batch and return its durable row ID.
 
@@ -171,13 +178,17 @@ def enqueue(
                 """
                 INSERT INTO session_outbox (
                     destination, user_id, harness, session_id, checkpoint_key,
-                    start_line, end_line, end_offset, final, payload, records_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_line, end_line, end_offset, final, payload, records_hash, delivery_context
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(destination, user_id, harness, session_id, start_line, end_line)
                 DO UPDATE SET
                     checkpoint_key = excluded.checkpoint_key,
                     end_offset = max(session_outbox.end_offset, excluded.end_offset),
                     final = max(session_outbox.final, excluded.final),
+                    delivery_context = CASE
+                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.delivery_context
+                        ELSE session_outbox.delivery_context
+                    END,
                     payload = CASE
                         WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
                         ELSE session_outbox.payload
@@ -192,6 +203,7 @@ def enqueue(
                     int(final),
                     serialized,
                     records_hash,
+                    json.dumps(delivery_context) if delivery_context is not None else None,
                 ),
             )
             conn.commit()
@@ -234,7 +246,7 @@ def pending(
             "WHERE destination = ? AND user_id = ? GROUP BY harness, session_id) "
             "SELECT item.id, item.destination, item.user_id, item.harness, item.session_id, "
             "item.checkpoint_key, item.start_line, item.end_line, item.end_offset, item.final, "
-            "item.payload, item.attempts "
+            "item.payload, item.attempts, item.delivery_context "
             "FROM session_outbox AS item JOIN firsts "
             "ON firsts.harness = item.harness AND firsts.session_id = item.session_id "
             "WHERE item.destination = ? AND item.user_id = ? "
@@ -255,6 +267,7 @@ def pending(
                 final=bool(row[9]),
                 payload=json.loads(row[10]),
                 attempts=int(row[11]),
+                delivery_context=json.loads(row[12]) if row[12] is not None else None,
             )
             for row in rows
         ]
@@ -422,3 +435,22 @@ def stats(*, db_path: Path | None = None) -> dict:
         }
     finally:
         conn.close()
+
+
+def supersede_final(item: OutboxItem, *, db_path: Path | None = None) -> OutboxItem:
+    """Durably remove final semantics without changing queued source records or credits."""
+    from dataclasses import replace
+
+    payload = dict(item.payload)
+    for key in ("final", "total_line_count", "total_offset", "session_hash", "hashed_line_count"):
+        payload.pop(key, None)
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE session_outbox SET final = 0, payload = ? WHERE id = ?",
+            (json.dumps(payload, separators=(",", ":"), ensure_ascii=False), item.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return replace(item, final=False, payload=payload)

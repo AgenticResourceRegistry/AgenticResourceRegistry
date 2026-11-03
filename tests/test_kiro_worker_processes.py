@@ -104,10 +104,13 @@ def test_accepted_request_with_lost_ack_retries_without_receipt(peer, tmp_path, 
     assert list((tmp_path / ".observal/session-delivery").rglob("*.json"))
 
 
-def test_concurrent_capture_and_final_workers_complete_once(peer, tmp_path):
+def test_concurrent_capture_and_final_workers_complete_once(peer, tmp_path, monkeypatch):
     """Independent capture/final interpreters complete the final cursor without duplicate final POSTs."""
     url, state = peer
     source = setup_home(tmp_path, url)
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / ".observal/telemetry_buffer.db")
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **k: False)
+    session_push._run_hook({"session_id": "session", "hook_event_name": "Stop"}, harness="kiro", home=tmp_path)
     root = Path(__file__).resolve().parents[1]
     env = {
         **os.environ,
@@ -126,9 +129,7 @@ def test_concurrent_capture_and_final_workers_complete_once(peer, tmp_path):
     )
     processes.append(capture)
     try:
-        capture.communicate(
-            json.dumps({"session_id": "session", "hook_event_name": "UserPromptSubmit"}).encode(), timeout=30
-        )
+        capture.communicate(json.dumps({"session_id": "session", "hook_event_name": "Stop"}).encode(), timeout=30)
         for process in processes:
             assert process.wait(timeout=30) == 0
         assert base.read_cursor_state("session", home=tmp_path) == (source.stat().st_size, 1, True)
@@ -196,6 +197,61 @@ session_push.cli_main()
         assert len(scheduled) == 2
         assert len(state["posts"]) == 1
         assert pending[0].exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def test_real_waiting_v2_worker_exits_without_finalizing_after_resume(peer, tmp_path, monkeypatch):
+    """A separate interpreter waiting on source settling cannot bypass prompt cancellation."""
+    import time
+
+    url, state = peer
+    setup_home(tmp_path, url)
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / ".observal/telemetry_buffer.db")
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **k: False)
+    session_push._run_hook({"session_id": "session", "hook_event_name": "Stop"}, harness="kiro", home=tmp_path)
+    root = Path(__file__).resolve().parents[1]
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "KIRO_HOME": str(tmp_path / ".kiro"),
+        "PYTHONPATH": str(root) + os.pathsep + str(root / "packages/observal-shared"),
+    }
+    script = """import sys,time
+from pathlib import Path
+from observal_cli.hooks import session_push
+home=Path(sys.argv[1])
+def settle(path):
+    (home/'settling').touch()
+    deadline=time.monotonic()+20
+    while not (home/'release').exists():
+        if time.monotonic()>deadline: raise RuntimeError('release timeout')
+        time.sleep(.02)
+session_push._wait_until_stable=settle
+session_push._finalize_session('kiro','session',str(home),home=home)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-P", "-c", script, str(tmp_path)],
+        env=env,
+        cwd=tmp_path,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not (tmp_path / "settling").exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert (tmp_path / "settling").exists()
+        session_push._run_hook(
+            {"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=tmp_path
+        )
+        (tmp_path / "release").touch()
+        assert process.wait(timeout=20) == 0
+        assert not any(payload.get("final") for payload in state["posts"])
+        assert not base.read_cursor_state("session", home=tmp_path)[2]
     finally:
         if process.poll() is None:
             process.kill()

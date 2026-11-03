@@ -313,10 +313,29 @@ class KiroAdapter(BaseAdapter):
             final=final,
             final_requested=requested,
             cancel_final_requested=event_name.lower() == "userpromptsubmit",
-            require_final_intent=final and event_name in ("Reconcile", "CrashRecovery"),
+            require_final_intent=final,
+            expected_generation=event.get("_observal_finalization_generation"),
             finalizable=finalizable,
             home=home,
         )
+
+    def session_outbox_context(self, source, config, home=None):
+        """Bind every queued final source, including children, to its guarded parent Stop."""
+        from observal_cli.sessions.delivery_guard import kiro_outbox_context
+
+        return kiro_outbox_context(source)
+
+    def session_outbox_guard(self, item, config, *, home=None, db_path=None):
+        """Reject superseded final semantics even in a public command's pre-group drain."""
+        from observal_cli.sessions.delivery_guard import kiro_outbox_guard
+
+        return kiro_outbox_guard(item, config, home=home, db_path=db_path)
+
+    def session_finalization_generation(self, source, config, home=None):
+        """A retained V2 worker may finish only the Stop that scheduled it."""
+        from observal_cli.sessions.delivery_guard import kiro_finalization_generation
+
+        return kiro_finalization_generation(source, config, home)
 
     def reconcile_only_finalization(self, source):
         """V3/IDE hook descendants are killed at shutdown; finish via foreground reconcile."""

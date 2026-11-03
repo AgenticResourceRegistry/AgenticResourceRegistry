@@ -63,13 +63,20 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
     is_final = adapter.is_session_final(event)
     reconcile_only = adapter.reconcile_only_finalization(source)
     with adapter.session_delivery_guard(source, event, config, related=related_sources, home=home) as attempt:
+        final_worker_args = (
+            ("--finalization-generation", attempt.finalization_generation)
+            if attempt.finalization_generation is not None
+            else ()
+        )
         if not attempt.proceed:
             optic.debug("duplicate {} capture skipped for session={}", harness, source.session_id)
             if is_final and not reconcile_only:
                 # Capture succeeded previously, but a child may have failed to
                 # launch or died. The separate final guard suppresses completed
                 # finalization, not the Stop capture receipt.
-                _spawn_worker("--finalize-session", source.session_id, "--cwd", source.cwd, harness=harness)
+                _spawn_worker(
+                    "--finalize-session", source.session_id, "--cwd", source.cwd, *final_worker_args, harness=harness
+                )
             return
         hook_event = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
         deferred = adapter.defer_session_delivery()
@@ -122,6 +129,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
                 source.session_id,
                 "--cwd",
                 source.cwd,
+                *final_worker_args,
                 harness=harness,
             )
         else:
@@ -165,7 +173,9 @@ def _wait_until_stable(path: Path) -> None:
             time.sleep(_STABLE_INTERVAL_SECONDS)
 
 
-def _finalize_session(harness: str, session_id: str, cwd: str, home: Path | None = None) -> None:
+def _finalize_session(
+    harness: str, session_id: str, cwd: str, home: Path | None = None, generation: str | None = None
+) -> None:
     ensure_loaded()
     adapter = get_adapter(harness)
     source = adapter.resolve_session_source(
@@ -175,11 +185,18 @@ def _finalize_session(harness: str, session_id: str, cwd: str, home: Path | None
     config = load_config(home=home)
     if source is None or config is None or source.path is None:
         return
+    if generation is None:
+        generation = adapter.session_finalization_generation(source, config, home=home)
     related_sources = adapter.related_session_sources(source, home=home)
     for item in [source, *related_sources]:
         if item.path is not None and adapter.should_capture_session(item, home=home):
             _wait_until_stable(item.path)
-    event = {"session_id": session_id, "cwd": cwd, "hook_event_name": "Stop"}
+    event = {
+        "session_id": session_id,
+        "cwd": cwd,
+        "hook_event_name": "Stop",
+        "_observal_finalization_generation": generation,
+    }
     with adapter.session_delivery_guard(
         source, event, config, related=related_sources, final=True, home=home
     ) as attempt:
@@ -290,6 +307,7 @@ def cli_main() -> None:
     parser.add_argument("--harness", default="claude-code")
     parser.add_argument("--placement", choices=("inline", "standalone"), default="")
     parser.add_argument("--finalize-session", default="")
+    parser.add_argument("--finalization-generation", default=None)
     parser.add_argument("--cwd", default="")
     parser.add_argument("--recover", action="store_true")
     parser.add_argument("--drain-outbox", action="store_true")
@@ -298,7 +316,7 @@ def cli_main() -> None:
     args = parser.parse_args()
     try:
         if args.finalize_session:
-            _finalize_session(args.harness, args.finalize_session, args.cwd)
+            _finalize_session(args.harness, args.finalize_session, args.cwd, generation=args.finalization_generation)
         elif args.recover:
             _recover_sessions(args.harness, args.exclude_session)
         elif args.drain_outbox:

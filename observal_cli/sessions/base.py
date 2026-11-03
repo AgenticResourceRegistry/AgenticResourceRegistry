@@ -517,74 +517,81 @@ def drain_outbox(
         limit=1,
         db_path=db_path,
     ):
-        item = items[0]
-        try:
-            acknowledgement = post_batch(item.payload, config)
-        except PermanentIngestRejectionError as exc:
-            quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
-            if rejections is not None:
-                rejections.append((item.harness, item.session_id, exc.status_code))
-            log_error(
-                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
-                home=home,
-            )
-            continue
-        if acknowledgement is None:
-            telemetry_buffer.record_attempt(item.id, db_path=db_path)
-            return False
-        acknowledged_line = int(acknowledgement["acknowledged_line"])
-        acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
-        repair_from_line = acknowledgement.get("repair_from_line")
-        if isinstance(repair_from_line, int):
-            write_cursor(
-                item.checkpoint_key,
-                acknowledged_offset,
-                repair_from_line,
-                home=home,
-                preserve_finalized=False,
-            )
-            telemetry_buffer.accept_item(item.id, db_path=db_path)
-            if repairs is not None:
-                repairs.append((item.harness, item.session_id))
-            return False
-        if acknowledged_line < item.end_line:
-            if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
-                # The lines between the server checkpoint and this batch were quarantined
-                # or lost, so the checkpoint can never reach it. The server stored the
-                # batch; accept it instead of resending it forever ahead of every session.
-                write_cursor(
-                    item.checkpoint_key,
-                    item.end_offset,
-                    item.end_line + 1,
-                    finalized=item.final,
-                    home=home,
-                )
-                telemetry_buffer.accept_item(item.id, db_path=db_path)
+        from observal_cli.harness import ensure_loaded, get_adapter
+
+        ensure_loaded()
+        adapter = get_adapter(items[0].harness)
+        with adapter.session_outbox_guard(items[0], config, home=home, db_path=db_path) as delivery:
+            item = delivery.item
+            try:
+                acknowledgement = post_batch(item.payload, config)
+            except PermanentIngestRejectionError as exc:
+                quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+                if rejections is not None:
+                    rejections.append((item.harness, item.session_id, exc.status_code))
                 log_error(
-                    f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
-                    f"past a checkpoint gap after line {acknowledged_line}",
+                    f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
                     home=home,
                 )
                 continue
-            return False
-        if acknowledged_offset <= 0:
-            acknowledged_offset = item.end_offset
-        write_cursor(
-            item.checkpoint_key,
-            acknowledged_offset,
-            acknowledged_line + 1,
-            finalized=item.final,
-            home=home,
-        )
-        telemetry_buffer.acknowledge(
-            destination=destination,
-            user_id=user_id,
-            harness=item.harness,
-            session_id=item.session_id,
-            acknowledged_line=acknowledged_line,
-            include_metadata=item.end_line < item.start_line,
-            db_path=db_path,
-        )
+            if acknowledgement is None:
+                telemetry_buffer.record_attempt(item.id, db_path=db_path)
+                return False
+            acknowledged_line = int(acknowledgement["acknowledged_line"])
+            acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
+            repair_from_line = acknowledgement.get("repair_from_line")
+            if isinstance(repair_from_line, int):
+                write_cursor(
+                    item.checkpoint_key,
+                    acknowledged_offset,
+                    repair_from_line,
+                    home=home,
+                    preserve_finalized=False,
+                )
+                telemetry_buffer.accept_item(item.id, db_path=db_path)
+                if repairs is not None:
+                    repairs.append((item.harness, item.session_id))
+                return False
+            if acknowledged_line < item.end_line:
+                if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
+                    # The lines between the server checkpoint and this batch were quarantined
+                    # or lost, so the checkpoint can never reach it. The server stored the
+                    # batch; accept it instead of resending it forever ahead of every session.
+                    write_cursor(
+                        item.checkpoint_key,
+                        item.end_offset,
+                        item.end_line + 1,
+                        finalized=item.final and delivery.final_allowed(),
+                        preserve_finalized=delivery.final_allowed(),
+                        home=home,
+                    )
+                    telemetry_buffer.accept_item(item.id, db_path=db_path)
+                    log_error(
+                        f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
+                        f"past a checkpoint gap after line {acknowledged_line}",
+                        home=home,
+                    )
+                    continue
+                return False
+            if acknowledged_offset <= 0:
+                acknowledged_offset = item.end_offset
+            write_cursor(
+                item.checkpoint_key,
+                acknowledged_offset,
+                acknowledged_line + 1,
+                finalized=item.final and delivery.final_allowed(),
+                preserve_finalized=delivery.final_allowed(),
+                home=home,
+            )
+            telemetry_buffer.acknowledge(
+                destination=destination,
+                user_id=user_id,
+                harness=item.harness,
+                session_id=item.session_id,
+                acknowledged_line=acknowledged_line,
+                include_metadata=item.end_line < item.start_line,
+                db_path=db_path,
+            )
     return True
 
 
@@ -648,6 +655,13 @@ def drain_session_source(
             )
         )
 
+    delivery_context = None
+    if final:
+        from observal_cli.harness import ensure_loaded, get_adapter
+
+        ensure_loaded()
+        delivery_context = get_adapter(source.harness).session_outbox_context(source, config, home=home)
+
     # A transient pre-drain failure never prevents new local records from being spooled.
     if not spool_only:
         drain_outbox(config, home=home, db_path=db_path, post=post, rejections=rejections)
@@ -705,6 +719,10 @@ def drain_session_source(
                 payload["total_offset"] = byte_offset
                 payload["session_hash"] = session_hash
                 payload["hashed_line_count"] = hashed_line_count
+            else:
+                # build_payload's Stop defaults must not finalize capture-only metadata.
+                for key in ("final", "total_line_count", "total_offset"):
+                    payload.pop(key, None)
             if not spool_only and post is None and payload.get("layer_hash") and config.get("access_token"):
                 _maybe_upload_layer_snapshot(
                     destination, str(config["access_token"]), payload["layer_hash"], source.harness, cwd, config
@@ -715,6 +733,7 @@ def drain_session_source(
                 user_id=user_id,
                 checkpoint_key=source.checkpoint_key,
                 db_path=db_path,
+                delivery_context=delivery_context,
             )
         if spool_only:
             return True
@@ -743,12 +762,12 @@ def drain_session_source(
                 rejections=rejections,
                 _repair_attempts=_repair_attempts + 1,
             )
-        if bytes_read or (final and delivered and not source_was_rejected()):
+        # Finality is owned by the authority-checked outbox ACK, not a caller's stale request.
+        if bytes_read:
             write_cursor(
                 source.checkpoint_key,
                 byte_offset,
                 line_count,
-                finalized=final and delivered,
                 home=home,
             )
         return delivered and not source_was_rejected()
@@ -796,6 +815,7 @@ def drain_session_source(
             user_id=user_id,
             checkpoint_key=source.checkpoint_key,
             db_path=db_path,
+            delivery_context=delivery_context,
         )
 
     if spool_only:
