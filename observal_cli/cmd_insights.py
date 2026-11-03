@@ -206,9 +206,24 @@ def insights_activity(
             f"  Observed calls: {data.get('observed_calls', 0) if coverage.get('usage_rate_denominator_sessions') else 'not measured'}"
         )
     elif kind == "skill":
-        loads = data.get("confirmed_loads", 0) if coverage.get("usage_rate_denominator_sessions") else "not measured"
+        loads = data.get("confirmed_loads")
+        load_label = (
+            ("not recorded" if loads is None else loads)
+            if coverage.get("usage_rate_denominator_sessions")
+            else "not measured"
+        )
         invocations = data.get("invocations")
-        rprint(f"  Confirmed loads: {loads}  Invocations: {invocations if invocations is not None else 'not recorded'}")
+        codex_only = set(data.get("harness_distribution") or {}) == {"codex"}
+        invocation_label = (
+            "Codex selections"
+            if codex_only
+            else "Invocations / selections"
+            if "codex" in (data.get("harness_distribution") or {})
+            else "Invocations"
+        )
+        rprint(
+            f"  Confirmed loads: {load_label}  {invocation_label}: {invocations if invocations is not None else 'not recorded'}"
+        )
     else:
         runs = (
             data.get("sessions_with_recorded_run", 0)
@@ -265,11 +280,20 @@ def insights_sessions(
         source = row.get("source_state", "available")
         if row.get("projection_state") != "complete" or source != "available":
             signal = "not measured"
+        elif component[0] == "mcp" and row.get("usage_measurable") is not True:
+            # A completed projection can have an unattributed native call;
+            # observed_calls=0 is then not evidence of no use.
+            signal = "not measured (unknown)"
         elif component[0] == "mcp":
             signal = f"{row.get('observed_calls', 0)} calls"
         elif component[0] == "skill":
             invocations = row.get("invocations")
-            signal = f"{row.get('confirmed_loads', 0)} loads; invocations: {invocations if invocations is not None else 'not recorded'}"
+            loads = row.get("confirmed_loads")
+            label = "Codex selections" if row.get("harness") == "codex" else "invocations"
+            signal = (
+                f"loads: {loads if loads is not None else 'not recorded'}; "
+                f"{label}: {invocations if invocations is not None else 'not recorded'}"
+            )
         elif row.get("eligibility") != "eligible":
             signal = f"not eligible ({row.get('eligibility', 'unknown')})"
         else:
@@ -805,6 +829,7 @@ def _render_skill_report(data: dict) -> None:
     coverage = data.get("coverage") or {}
     reasons = coverage.get("reasons") or []
     measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
+    codex_only = set(metrics.get("harness_distribution") or {}) == {"codex"}
     rprint(f"[bold]{esc(data.get('component_name') or 'Skill')} Insights[/bold]")
     rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
     _render_interpretation(data.get("narrative") or {})
@@ -812,7 +837,7 @@ def _render_skill_report(data: dict) -> None:
         ("Present sessions", str(metrics.get("present_sessions", 0))),
         ("Sessions with a confirmed load", _skill_count(metrics, "loaded_sessions", measured, False)),
         (
-            "Sessions with an invocation",
+            "Sessions with a Codex selection" if codex_only else "Sessions with an invocation",
             _skill_count(metrics, "invoked_sessions", measured, "invoked_not_recorded_on_some_harnesses" in reasons),
         ),
         (
@@ -824,6 +849,8 @@ def _render_skill_report(data: dict) -> None:
     )
     for label, value in rows:
         rprint(f"  {label}: {esc(value)}")
+    if "codex" in (metrics.get("harness_distribution") or {}):
+        rprint("  [dim]Native Codex skill selection is not a separately confirmed load or proof of reliance.[/dim]")
     if measured and metrics.get("load_attempts"):
         rprint(f"  [dim]{metrics['load_attempts']} load attempts failed or had no confirmed result (not loads).[/dim]")
     for label, values in (

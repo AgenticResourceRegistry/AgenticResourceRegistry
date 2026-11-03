@@ -79,6 +79,62 @@ test.describe("Component Insights report", () => {
     });
   }
 
+  test("Codex skill selection is not presented as a confirmed load", async ({ page }, testInfo) => {
+    const codex = {
+      ...base,
+      component_type: "skill",
+      metrics: {
+        present_sessions: 5, present_users: 1, available_sessions: 5, loaded_sessions: null,
+        confirmed_loads: null, load_attempts: null, invoked_sessions: 1, invocations: 1,
+        harness_distribution: { codex: 5 }, version_distribution: { "0.1.0": 5 },
+      },
+      coverage: {
+        ...coverage,
+        presence: { present_sessions: 5, present_users: 1, eligible_sessions: 5 },
+        projection: { projection_complete_sessions: 5, projection_pending_sessions: 0, projection_failed_sessions: 0, unsupported_present_sessions: 0 },
+        evidence: { candidate_facts: 6, attributed_facts: 6, collision_facts: 0, unmatched_facts: 0, unknown_load_results: 0 },
+        usage_rate_denominator_sessions: 5,
+        reasons: [],
+        limitations: ["loads_not_recorded: Codex does not record attributable skill loads"],
+      },
+      narrative: { summary: "A native Codex skill selection was recorded, not a separately confirmed skill load." },
+    };
+    // Keep credentials on loopback, including when a disposable Vite server is used.
+    await page.route("**/*", (route) => ["localhost", "127.0.0.1"].includes(new URL(route.request().url()).hostname) ? route.fallback() : route.abort());
+    if (process.env.E2E_API_ORIGIN) {
+      const api = new URL(process.env.E2E_API_ORIGIN);
+      if (!["localhost", "127.0.0.1"].includes(api.hostname)) throw new Error("E2E API must be loopback");
+      await page.route("**/api/**", async (route) => {
+        const target = new URL(route.request().url());
+        target.host = api.host;
+        const response = await route.fetch({ url: target.href });
+        await route.fulfill({ response });
+      });
+    }
+    await loginToWebUI(page);
+    await page.route("**/api/v1/insights/reports/report-fixture", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify(codex),
+    }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/insights/report-fixture");
+    const evidence = page.getByRole("region", { name: "Evidence" });
+    await expect(evidence.getByText("Codex selections")).toBeVisible();
+    await expect(evidence.getByText("Not recorded").first()).toBeVisible();
+    await expect(evidence).toContainText("Native Codex skill selection; not a separately confirmed load");
+    await page.getByText("Detailed skill evidence").click();
+    const details = page.locator("details").filter({ hasText: "Detailed skill evidence" });
+    await expect(details.getByText("Native Codex selections")).toBeVisible();
+    await expect(details.locator("dt").filter({ hasText: "Unknown load results" }).locator("..").getByText("Not recorded")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Attribution coverage" })).toContainText("5 of 5 verified-present sessions processed.");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.locator("main.overflow-y-auto").evaluate((main) => { main.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath("codex-skill-mobile.png") });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.locator("main.overflow-y-auto").evaluate((main) => { main.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath("codex-skill-desktop.png") });
+  });
+
   test("a component report leads with the reading, what to look at and the session comparison", async ({ page }, testInfo) => {
     const side = { sessions: 40, sampled: 30, analyzed: 20, achieved: 6, not_achieved: 14, unclear: 0, satisfied: 5, dissatisfied: 9, with_friction: 12, blocking_friction: 3, tool_failed: 8, friction_types: [["tool_failed", 8]] };
     const narrative = {
