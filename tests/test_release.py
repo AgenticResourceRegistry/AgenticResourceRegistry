@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
@@ -297,6 +298,26 @@ def test_release_workflow_signs_and_verifies_tags_before_push():
     assert "predates signed-tag enforcement" not in tag_job
     assert "existing tags cannot be replaced" in tag_job
     assert "release.yml@$GITHUB_REF" in tag_job
+
+
+def test_cli_binary_bundles_skill_tree_and_smokes_startup():
+    import yaml
+
+    from observal_cli.skill_installer import _SKILL_DIRS, _bundled_sources
+
+    spec = (ROOT / "observal_cli/pyinstaller.spec").read_text()
+    assert '(str(cli_dir / "skills"), "observal_cli/skills")' in spec
+    sources = _bundled_sources()
+    assert set(sources) == set(_SKILL_DIRS)
+    assert set(sources) == {path.name for path in (ROOT / "observal_cli/skills").iterdir() if path.is_dir()}
+    for source in sources.values():
+        assert (source / "SKILL.md").is_file()
+        assert list((source / "references").glob("*.md")), f"Missing bundled references in {source}"
+
+    steps = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]["cli-binaries"]["steps"]
+    smoke = next(step for step in steps if step.get("name") == "Smoke-test binary")
+    assert "--version" in smoke["run"]
+    assert "config path --output json" in smoke["run"]
 
 
 def test_server_release_package_contains_no_generated_secrets_or_tls_overlay():
