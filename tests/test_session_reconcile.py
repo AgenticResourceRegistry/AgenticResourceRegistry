@@ -105,7 +105,9 @@ def test_background_recovery_uses_adapter_sources_and_shared_drain(tmp_path: Pat
         SessionSource("claude-code", "finished", finished_source),
     ]
 
-    class Adapter:
+    from observal_cli.harness.base import BaseAdapter
+
+    class Adapter(BaseAdapter):
         def discover_session_sources(self, home=None):
             assert home == tmp_path
             return sources

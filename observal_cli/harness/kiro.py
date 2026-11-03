@@ -262,6 +262,27 @@ class KiroAdapter(BaseAdapter):
 
         return sources
 
+    def accepts_session_hook(self, source, event, placement="", home=None):
+        """Prefer standalone delivery for an observed V3/IDE transcript, not a saved default.
+
+        Inline-only V3 installations still work. V2 overrides retain their inline
+        route, and older commands without placement tags use the durable guard.
+        """
+        from observal_cli.sessions.kiro import is_ide_transcript
+
+        if placement != "inline" or source.path is None or not is_ide_transcript(source.path):
+            return True
+        scopes = [(home or Path.home()) / ".kiro"]
+        if source.cwd:
+            scopes.append(Path(source.cwd) / ".kiro")
+        return not any(self._v1_hooks_installed(scope) for scope in scopes)
+
+    def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
+        """Deduplicate acknowledged Kiro hooks across both placements and workers."""
+        from observal_cli.sessions.delivery_guard import kiro_delivery_guard
+
+        return kiro_delivery_guard(source, event, config, related=related, final=final, home=home)
+
     def session_extra_records(
         self,
         source: SessionSource,

@@ -323,6 +323,14 @@ class HarnessAdapter(Protocol):
         """Resolve a harness hook payload to its local session source."""
         ...
 
+    def accepts_session_hook(self, source, event, placement="", home=None):
+        """Allow hooks by default; adapters can select a runtime-capable placement."""
+        ...
+
+    def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
+        """Coordinate lifecycle delivery and expose whether a duplicate should proceed."""
+        ...
+
     def session_worker_environment(self) -> dict[str, str]:
         """Return environment overrides for detached session workers."""
         ...

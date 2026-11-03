@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
+from observal_cli.sessions.delivery_guard import serialized_outbox
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -483,6 +485,7 @@ def batch_ranges(lines: list[str]) -> list[tuple[int, int]]:
 # ---------------------------------------------------------------------------
 
 
+@serialized_outbox
 def drain_outbox(
     config: dict,
     *,

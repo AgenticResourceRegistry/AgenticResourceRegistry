@@ -33,79 +33,88 @@ _STABLE_CHECKS = 2
 _RECOVERY_MIN_AGE_SECONDS = 120
 
 
-def main(home: Path | None = None, harness: str = "claude-code") -> None:
+def main(home: Path | None = None, harness: str = "claude-code", placement: str = "") -> None:
     """Read one hook payload from stdin without ever breaking the harness."""
     try:
         raw = sys.stdin.read()
         event = json.loads(raw)
         if isinstance(event, dict):
-            _run_hook(event, harness=harness, home=home)
+            _run_hook(event, harness=harness, home=home, placement=placement)
     except Exception as exc:
         optic.error("session push crashed (swallowed to protect harness): {}", exc)
 
 
-def _run_hook(event: dict, *, harness: str, home: Path | None = None) -> None:
+def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement: str = "") -> None:
     ensure_loaded()
     adapter = get_adapter(harness)
     source = adapter.resolve_session_source(event, home=home)
     if source is None:
         optic.debug("{} hook did not resolve a session source", harness)
         return
+    if not adapter.accepts_session_hook(source, event, placement=placement, home=home):
+        optic.debug("{} hook skipped for the alternate runtime placement", harness)
+        return
     config = load_config(home=home)
     if config is None:
         optic.warning("no Observal config found - session source remains local")
         return
 
-    hook_event = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
-    is_final = adapter.is_session_final(event)
-    deferred = adapter.defer_session_delivery()
-    # Scope is decided per source. Related transcripts are handled separately
-    # so delegated work is not lost when it lives outside the parent JSONL.
-    delivered = True
-    if adapter.should_capture_session(source, home=home):
-        delivered = drain_session_source(
-            source,
-            config,
-            hook_event=hook_event,
-            final=False,
-            extra_fields=adapter.session_extra_fields(source, event, is_final, home=home),
-            extra_records=adapter.session_extra_records(source, event, is_final, home=home),
-            spool_only=deferred,
-            home=home,
-        )
-    else:
-        optic.trace("{} session {} is out of scope; not capturing", harness, source.session_id)
-    for related in adapter.related_session_sources(source, home=home):
-        if not adapter.should_capture_session(related, home=home):
-            continue
-        delivered = (
-            drain_session_source(
-                related,
+    related_sources = adapter.related_session_sources(source, home=home)
+    with adapter.session_delivery_guard(source, event, config, related=related_sources, home=home) as attempt:
+        if not attempt.proceed:
+            optic.debug("duplicate {} hook skipped for session={}", harness, source.session_id)
+            return
+        hook_event = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
+        is_final = adapter.is_session_final(event)
+        deferred = adapter.defer_session_delivery()
+        # Scope is decided per source. Related transcripts are handled separately
+        # so delegated work is not lost when it lives outside the parent JSONL.
+        delivered = True
+        if adapter.should_capture_session(source, home=home):
+            delivered = drain_session_source(
+                source,
                 config,
                 hook_event=hook_event,
                 final=False,
-                extra_fields=adapter.session_extra_fields(related, event, is_final, home=home),
-                extra_records=adapter.session_extra_records(related, event, is_final, home=home),
+                extra_fields=adapter.session_extra_fields(source, event, is_final, home=home),
+                extra_records=adapter.session_extra_records(source, event, is_final, home=home),
                 spool_only=deferred,
                 home=home,
             )
-            and delivered
-        )
-    if not delivered:
-        log_error(f"session_push: durable records pending for {harness} session {source.session_id}", home=home)
-    if deferred:
-        _spawn_worker("--drain-outbox", harness=harness)
+        else:
+            optic.trace("{} session {} is out of scope; not capturing", harness, source.session_id)
+        for related in adapter.related_session_sources(source, home=home):
+            if not adapter.should_capture_session(related, home=home):
+                continue
+            delivered = (
+                drain_session_source(
+                    related,
+                    config,
+                    hook_event=hook_event,
+                    final=False,
+                    extra_fields=adapter.session_extra_fields(related, event, is_final, home=home),
+                    extra_records=adapter.session_extra_records(related, event, is_final, home=home),
+                    spool_only=deferred,
+                    home=home,
+                )
+                and delivered
+            )
+        if not delivered:
+            log_error(f"session_push: durable records pending for {harness} session {source.session_id}", home=home)
+        if deferred:
+            _spawn_worker("--drain-outbox", harness=harness)
 
-    if is_final:
-        _spawn_worker(
-            "--finalize-session",
-            source.session_id,
-            "--cwd",
-            source.cwd,
-            harness=harness,
-        )
-    else:
-        _spawn_worker("--recover", "--exclude-session", source.session_id, harness=harness)
+        if is_final:
+            _spawn_worker(
+                "--finalize-session",
+                source.session_id,
+                "--cwd",
+                source.cwd,
+                harness=harness,
+            )
+        else:
+            _spawn_worker("--recover", "--exclude-session", source.session_id, harness=harness)
+        attempt.delivered = delivered
 
 
 def _spawn_worker(*args: str, harness: str) -> None:
@@ -152,33 +161,44 @@ def _finalize_session(harness: str, session_id: str, cwd: str, home: Path | None
     config = load_config(home=home)
     if source is None or config is None or source.path is None:
         return
+    related_sources = adapter.related_session_sources(source, home=home)
+    for item in [source, *related_sources]:
+        if item.path is not None and adapter.should_capture_session(item, home=home):
+            _wait_until_stable(item.path)
     event = {"session_id": session_id, "cwd": cwd, "hook_event_name": "Stop"}
-    if adapter.should_capture_session(source, home=home):
-        _wait_until_stable(source.path)
-        drain_session_source(
-            source,
-            config,
-            hook_event="Stop",
-            final=True,
-            extra_fields=adapter.session_extra_fields(source, event, True, home=home),
-            recover_from_server=True,
-            home=home,
-        )
-    for related in adapter.related_session_sources(source, home=home):
-        if not adapter.should_capture_session(related, home=home):
-            continue
-        if related.path is not None:
-            _wait_until_stable(related.path)
-        drain_session_source(
-            related,
-            config,
-            hook_event="Stop",
-            final=True,
-            extra_fields=adapter.session_extra_fields(related, event, True, home=home),
-            extra_records=adapter.session_extra_records(related, event, True, home=home),
-            recover_from_server=True,
-            home=home,
-        )
+    with adapter.session_delivery_guard(
+        source, event, config, related=related_sources, final=True, home=home
+    ) as attempt:
+        if not attempt.proceed:
+            return
+        delivered = True
+        if adapter.should_capture_session(source, home=home):
+            delivered = drain_session_source(
+                source,
+                config,
+                hook_event="Stop",
+                final=True,
+                extra_fields=adapter.session_extra_fields(source, event, True, home=home),
+                recover_from_server=True,
+                home=home,
+            )
+        for related in adapter.related_session_sources(source, home=home):
+            if not adapter.should_capture_session(related, home=home):
+                continue
+            delivered = (
+                drain_session_source(
+                    related,
+                    config,
+                    hook_event="Stop",
+                    final=True,
+                    extra_fields=adapter.session_extra_fields(related, event, True, home=home),
+                    extra_records=adapter.session_extra_records(related, event, True, home=home),
+                    recover_from_server=True,
+                    home=home,
+                )
+                and delivered
+            )
+        attempt.delivered = delivered
 
 
 def _drain_pending(home: Path | None = None) -> None:
@@ -205,41 +225,54 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 continue
         except OSError:
             continue
-        offset, _line_count, finalized = read_cursor_state(source.checkpoint_key, home=home)
-        if offset >= stat.st_size and (finalized or not recovery_final):
-            continue
-        event = {"session_id": source.session_id, "hook_event_name": "Stop"}
-        # Scope is checked after the cheap cursor and age filters: deciding it
-        # reads the transcript, and this scan walks every session on disk.
-        if adapter.should_capture_session(source, home=home):
-            drain_session_source(
-                source,
-                config,
-                hook_event="CrashRecovery",
-                final=recovery_final,
-                extra_fields=adapter.session_extra_fields(source, event, recovery_final, home=home),
-                recover_from_server=True,
-                home=home,
-            )
-        # Recover separately stored delegated work alongside the parent.
-        for related in adapter.related_session_sources(source, home=home):
-            if not adapter.should_capture_session(related, home=home):
+        event = {"session_id": source.session_id, "hook_event_name": "CrashRecovery"}
+        related_sources = adapter.related_session_sources(source, home=home)
+        with adapter.session_delivery_guard(
+            source, event, config, related=related_sources, final=recovery_final, home=home
+        ) as attempt:
+            if not attempt.proceed:
                 continue
-            drain_session_source(
-                related,
-                config,
-                hook_event="CrashRecovery",
-                final=recovery_final,
-                extra_fields=adapter.session_extra_fields(related, event, recovery_final, home=home),
-                extra_records=adapter.session_extra_records(related, event, recovery_final, home=home),
-                recover_from_server=True,
-                home=home,
-            )
+            delivered = True
+            offset, _line_count, finalized = read_cursor_state(source.checkpoint_key, home=home)
+            if offset >= stat.st_size and (finalized or not recovery_final):
+                continue
+            event = {"session_id": source.session_id, "hook_event_name": "Stop"}
+            # Scope is checked after the cheap cursor and age filters: deciding it
+            # reads the transcript, and this scan walks every session on disk.
+            if adapter.should_capture_session(source, home=home):
+                delivered = drain_session_source(
+                    source,
+                    config,
+                    hook_event="CrashRecovery",
+                    final=recovery_final,
+                    extra_fields=adapter.session_extra_fields(source, event, recovery_final, home=home),
+                    recover_from_server=True,
+                    home=home,
+                )
+            # Recover separately stored delegated work alongside the parent.
+            for related in adapter.related_session_sources(source, home=home):
+                if not adapter.should_capture_session(related, home=home):
+                    continue
+                delivered = (
+                    drain_session_source(
+                        related,
+                        config,
+                        hook_event="CrashRecovery",
+                        final=recovery_final,
+                        extra_fields=adapter.session_extra_fields(related, event, recovery_final, home=home),
+                        extra_records=adapter.session_extra_records(related, event, recovery_final, home=home),
+                        recover_from_server=True,
+                        home=home,
+                    )
+                    and delivered
+                )
+            attempt.delivered = delivered
 
 
 def cli_main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--harness", default="claude-code")
+    parser.add_argument("--placement", choices=("inline", "standalone"), default="")
     parser.add_argument("--finalize-session", default="")
     parser.add_argument("--cwd", default="")
     parser.add_argument("--recover", action="store_true")
@@ -255,7 +288,7 @@ def cli_main() -> None:
         elif args.drain_outbox:
             _drain_pending()
         else:
-            main(harness=args.harness)
+            main(harness=args.harness, placement=args.placement)
     except Exception as exc:
         optic.error("session worker crashed: {}", exc)
     finally:

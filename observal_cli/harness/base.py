@@ -200,6 +200,18 @@ class BaseAdapter:
         """Read the entry a pull wrote; by default the pull output is the installed config."""
         return self.read_installed_mcp(scope, directory, alias)
 
+    def accepts_session_hook(self, source, event, placement="", home=None):
+        """Allow hooks by default; adapters can select a runtime-capable placement."""
+        return True
+
+    def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
+        """Permit normal delivery; adapters may coordinate duplicate lifecycle hooks."""
+        from contextlib import nullcontext
+
+        from observal_cli.sessions.delivery_guard import DeliveryAttempt
+
+        return nullcontext(DeliveryAttempt())
+
     def session_worker_environment(self) -> dict[str, str]:
         """Environment overrides needed by detached session delivery workers."""
         return {}
