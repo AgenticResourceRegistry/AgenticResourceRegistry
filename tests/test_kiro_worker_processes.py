@@ -139,3 +139,64 @@ def test_concurrent_capture_and_final_workers_complete_once(peer, tmp_path):
             if process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+def test_killed_final_worker_preserves_stop_intent_and_capture_replay(peer, tmp_path, monkeypatch):
+    """SIGKILL during final settling leaves explicit intent and permits retry without recapture."""
+    import signal
+    import time
+
+    url, state = peer
+    source = setup_home(tmp_path, url)
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    scheduled = []
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **k: scheduled.append(a) or True)
+    event = {"session_id": "session", "hook_event_name": "Stop"}
+    session_push._run_hook(event, harness="kiro", home=tmp_path)
+    pending = list((tmp_path / ".observal/session-delivery").rglob("finalization.pending"))
+    assert len(pending) == 1
+    root = Path(__file__).resolve().parents[1]
+    ready = tmp_path / "settling"
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "USERPROFILE": str(tmp_path),
+        "PYTHONPATH": str(root) + os.pathsep + str(root / "packages/observal-shared"),
+    }
+    script = """import sys,time
+from pathlib import Path
+from observal_cli.hooks import session_push
+home=Path(sys.argv[1])
+def settle(path):
+    (home/'settling').touch()
+    time.sleep(120)
+session_push._wait_until_stable=settle
+sys.argv=['session_push','--harness','kiro','--finalize-session','session','--cwd',str(home)]
+session_push.cli_main()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-P", "-c", script, str(tmp_path)],
+        env=env,
+        cwd=tmp_path,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), "Worker never entered settling"
+        process.kill()
+        exit_status = process.wait(timeout=10)
+        if sys.platform != "win32":
+            assert exit_status == -signal.SIGKILL
+        assert base.read_cursor_state("session", home=tmp_path) == (source.stat().st_size, 1, False)
+        assert pending[0].exists()
+        session_push._run_hook(event, harness="kiro", home=tmp_path)
+        assert len(scheduled) == 2
+        assert len(state["posts"]) == 1
+        assert pending[0].exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
