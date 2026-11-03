@@ -20,10 +20,22 @@ intents from an independent terminal:
 observal reconcile --harness kiro --since 24 --output json
 ```
 
+If Kiro was launched with a relocated runtime root, the independent terminal must use
+**the same `KIRO_HOME` value** (and the same Observal authentication home). For example:
+
+```bash
+KIRO_HOME=/absolute/path/used/by/kiro observal reconcile --harness kiro --since 24 --output json
+```
+
+The bare command does not inherit environment variables from another terminal and may
+otherwise discover the wrong runtime root. This manual V3/IDE workflow still needs human
+approval; it is not automatic background finalization.
+
 Kiro hooks capture records and persist Stop intent, but do not claim automatic V3 final
 completion. Reconcile sends late records and credits and finalizes only the stopped source
 group. Quiet/permission-paused sessions without a matching Stop remain non-final. A resumed
-prompt cancels old authority. Verify the local finalized cursor and emptied intent/outbox;
+prompt cancels old authority, including queued final semantics and waiting V2 workers.
+Queued records and credits remain deliverable without finalizing the resumed session. Verify the local finalized cursor and emptied intent/outbox;
 a scheduled child or successful capture is not finalization evidence.
 
 Preview first when scope is uncertain:
