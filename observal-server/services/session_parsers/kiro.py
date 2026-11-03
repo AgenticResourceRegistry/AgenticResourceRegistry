@@ -526,6 +526,7 @@ def meta_records(entries: list[dict]) -> list[dict]:
     last_ts = ""
 
     def tool(name: str, tool_id: str, args: dict) -> dict | None:
+        """Normalize each identified tool call once and remember its name for result attribution."""
         if tool_id and tool_id in seen_tools:
             return None
         if tool_id:
@@ -533,6 +534,10 @@ def meta_records(entries: list[dict]) -> list[dict]:
             tool_names[tool_id] = name
         return _insight_tool(name, tool_id, args)
 
+    # The CLI appends an injected sub-execution prompt; process it before its reply.
+    entries = sorted(
+        entries, key=lambda entry: 0 if dict_field(entry, "payload").get("_observalSubExecutionPrompt") else 1
+    )
     for entry in entries:
         payload = dict_field(entry, "payload")
         ts = str_field(entry, "timestamp")
