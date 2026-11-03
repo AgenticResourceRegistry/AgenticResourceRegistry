@@ -299,6 +299,50 @@ class KiroAdapter(BaseAdapter):
             home=home,
         )
 
+    def session_worker_lifecycle(self):
+        """Survive V3 shutdown's SIGTERM sweep, with a hard 90-second worker budget.
+
+        Kiro terminates even reparented, new-session hook descendants when chat
+        exits. Final delivery deliberately needs those post-Stop records. The
+        guard is limited to worker entry points, not ordinary hook capture.
+        SIGINT/SIGKILL remain available; the deadline leaves durable work retryable.
+        """
+        import signal
+        from contextlib import contextmanager
+
+        from loguru import logger as optic
+
+        class WorkerBudgetExpired(BaseException):
+            """Bypass transport exception handlers so the worker deadline cannot be swallowed."""
+
+        @contextmanager
+        def lifecycle():
+            if not hasattr(signal, "SIGALRM"):
+                yield
+                return
+            previous_term = signal.getsignal(signal.SIGTERM)
+            previous_alarm_handler = signal.getsignal(signal.SIGALRM)
+
+            def deadline(_signum, _frame):
+                raise WorkerBudgetExpired()
+
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGALRM, deadline)
+            started = time.monotonic()
+            previous_alarm = signal.alarm(90)
+            try:
+                yield
+            except WorkerBudgetExpired:
+                optic.warning("Kiro session worker exceeded its lifecycle budget; durable work remains retryable")
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGTERM, previous_term)
+                signal.signal(signal.SIGALRM, previous_alarm_handler)
+                if previous_alarm:
+                    signal.alarm(max(1, previous_alarm - int(time.monotonic() - started)))
+
+        return lifecycle()
+
     def session_finalization_pending(self, source, config, home=None):
         """Recover an explicit Stop request without finalizing permission-paused sessions."""
         from observal_cli.sessions.delivery_guard import kiro_finalization_pending
