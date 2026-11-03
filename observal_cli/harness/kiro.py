@@ -59,7 +59,7 @@ def kiro_cli_major(home: Path | None = None) -> int | None:
     if override:
         match = _KIRO_VERSION_RE.search(override)
         return int(match.group(1)) if match else None
-    exe = shutil.which("kiro-cli") or shutil.which("kiro")
+    exe = shutil.which("kiro-cli")
     if not exe:
         return None
     try:
@@ -114,23 +114,64 @@ def strip_ide_hostile_fields(content: dict) -> list[str]:
     return removed
 
 
+def kiro_cli_engine(home: Path | None = None, cwd: Path | None = None) -> str | None:
+    """Read the saved chat engine; binary major is only the default fallback.
+
+    A future launch flag is unknowable at installation time. Use this for the
+    default surface's health, not for removing V2-compatible profile hooks.
+    """
+    override = os.environ.get("OBSERVAL_KIRO_ENGINE", "").strip().lower()
+    if override:
+        return override if override in {"v2", "v3"} else None
+    home = home or Path.home()
+    paths = [(cwd or Path.cwd()) / ".kiro" / "settings" / "cli.json", home / ".kiro" / "settings" / "cli.json"]
+    for path in paths:
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                continue
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            value = data.get("chat.agentEngine")
+            if value in ("v2", "v3"):
+                return value
+    # The native default can change within CLI major 2. Ask only the CLI,
+    # without launching chat or guessing from an IDE executable.
+    if not os.environ.get("OBSERVAL_KIRO_CLI_VERSION"):
+        exe = shutil.which("kiro-cli")
+        if exe:
+            try:
+                proc = subprocess.run(
+                    [exe, "settings", "chat.agentEngine"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=cwd,
+                    env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)},
+                )
+                match = re.search(r"^\s*(v[23])(?:\s|$)", proc.stdout)
+                if proc.returncode == 0 and match:
+                    return match.group(1)
+            except (OSError, subprocess.SubprocessError):
+                pass
+    major = kiro_cli_major(home)
+    return ("v3" if major >= 3 else "v2") if major is not None else None
+
+
 def use_inline_hooks(home: Path | None = None) -> bool:
-    """Return True when this machine still needs CLI 2.x inline agent hooks.
+    """Whether the configured default chat engine needs inline hooks."""
+    return kiro_cli_engine(home) == "v2"
 
-    Inline hooks are the only format a Kiro CLI 2.x understands. The standalone
-    ``.kiro/hooks/*.json`` file replaced them in IDE 1.0 and CLI 3.0, so this
-    turns on the legacy format purely by CLI version.
 
-    Having the IDE installed is deliberately *not* a reason to withhold them.
-    The IDE and the CLI are separate surfaces that can coexist, and a machine
-    with IDE 1.x alongside CLI 2.x needs both formats at once: the standalone
-    file for the IDE, inline hooks for the CLI. Gating on the IDE meant such
-    machines got neither usable format on the CLI side and silently stopped
-    reporting CLI sessions. Inline hooks cost the IDE nothing - it loads an
-    agent carrying them and simply never fires them.
+def needs_inline_compatibility_hooks(home: Path | None = None) -> bool:
+    """Retain profile hooks when CLI 2.x can be launched with a V2 override.
+
+    Both placements are deliberate on those binaries, even with a V3 default;
+    acknowledgement-aware session guards prevent duplicate effective delivery.
     """
     major = kiro_cli_major(home)
-    return major is not None and major < 3
+    return (major is not None and major < 3) or use_inline_hooks(home)
 
 
 class KiroAdapter(BaseAdapter):
@@ -447,9 +488,10 @@ class KiroAdapter(BaseAdapter):
         alone would show a healthy status for a surface that is in fact silent.
         Such a machine is judged on its inline hooks instead.
         """
-        v1_readable = not use_inline_hooks() or kiro_ide_installed()
-        if v1_readable and self._v1_hooks_installed(config_dir):
-            return "installed"
+        if self._v1_hooks_installed(config_dir):
+            v1_readable = kiro_cli_engine() != "v2" or kiro_ide_installed()
+            if v1_readable:
+                return "installed"
 
         agents_dir = config_dir / "agents"
         if not agents_dir.is_dir():

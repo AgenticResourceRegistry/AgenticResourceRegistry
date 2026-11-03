@@ -1079,7 +1079,7 @@ def _rewrite_kiro_agent_profile(content: dict, agent_id: str | None = None) -> d
     Telemetry hooks normally live in the standalone ``.kiro/hooks/observal.json``
     file, which every Kiro surface reads. Kiro IDE 1.0 loads an agent carrying
     inline ``hooks`` but never fires them, so Observal's inline hooks are
-    stripped here and only re-added when ``use_inline_hooks`` selects them.
+    stripped here and only re-added when ``needs_inline_compatibility_hooks`` selects them.
     Existing universal array profiles stay arrays; legacy profiles stay event
     mappings. Unknown user entries are preserved in either shape.
 
@@ -1091,7 +1091,7 @@ def _rewrite_kiro_agent_profile(content: dict, agent_id: str | None = None) -> d
     server generates bare ``python3``, which won't find ``observal_cli`` when it
     is installed in a project-local virtual environment.
     """
-    from observal_cli.harness.kiro import strip_ide_hostile_fields, use_inline_hooks
+    from observal_cli.harness.kiro import needs_inline_compatibility_hooks, strip_ide_hostile_fields
     from observal_cli.harness_specs.kiro_hooks_spec import build_kiro_hooks, is_observal_v1_hook, iter_kiro_hooks
 
     hooks = content.get("hooks", {})
@@ -1101,10 +1101,10 @@ def _rewrite_kiro_agent_profile(content: dict, agent_id: str | None = None) -> d
     strip_ide_hostile_fields(content)
 
     # Keep the profile's shape and every unrelated entry. Hook placement is
-    # still chosen by use_inline_hooks; engine selection is a separate concern.
+    # still chosen by needs_inline_compatibility_hooks; engine selection is a separate concern.
     if isinstance(hooks, list):
         cleaned_array = [entry for entry in hooks if not is_observal_v1_hook(entry)]
-        if use_inline_hooks():
+        if needs_inline_compatibility_hooks():
             for hook in iter_kiro_hooks(build_kiro_hooks(agent_id=agent_id or "")):
                 name = f"observal-session-push-{hook.trigger.lower()}"
                 cleaned_array.append(
@@ -1122,7 +1122,7 @@ def _rewrite_kiro_agent_profile(content: dict, agent_id: str | None = None) -> d
         if kept:
             cleaned_hooks[event] = kept
 
-    if use_inline_hooks():
+    if needs_inline_compatibility_hooks():
         for event, desired_entries in build_kiro_hooks(agent_id=agent_id or "").items():
             existing = cleaned_hooks.get(event, [])
             if not isinstance(existing, list):

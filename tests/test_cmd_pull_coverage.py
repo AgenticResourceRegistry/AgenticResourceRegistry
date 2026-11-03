@@ -928,7 +928,7 @@ def test_rewrite_kiro_agent_profile_strips_inline_hooks_for_ide(monkeypatch: pyt
     """Kiro IDE 1.0 hides agents carrying a `hooks` field, so Observal's go away."""
     import observal_cli.harness.kiro as kiro_adapter
 
-    monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: False)
+    monkeypatch.setattr(kiro_adapter, "needs_inline_compatibility_hooks", lambda *_a, **_k: False)
 
     assert cmd_pull._rewrite_kiro_agent_profile(_kiro_profile_with_hooks(), agent_id="agent-1") == {
         "hooks": {
@@ -944,7 +944,7 @@ def test_rewrite_kiro_agent_profile_drops_hooks_key_when_only_observal(
     """An agent with nothing but Observal hooks must end up with no `hooks` key at all."""
     import observal_cli.harness.kiro as kiro_adapter
 
-    monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: False)
+    monkeypatch.setattr(kiro_adapter, "needs_inline_compatibility_hooks", lambda *_a, **_k: False)
     content = {"name": "a", "hooks": {"stop": [{"command": "python -m observal_cli.hooks.session_push"}]}}
 
     assert cmd_pull._rewrite_kiro_agent_profile(content, agent_id="agent-1") == {"name": "a"}
@@ -957,7 +957,7 @@ def test_rewrite_kiro_agent_profile_keeps_inline_hooks_on_legacy_cli(
     import observal_cli.harness.kiro as kiro_adapter
     import observal_cli.harness_specs.kiro_hooks_spec as spec
 
-    monkeypatch.setattr(kiro_adapter, "use_inline_hooks", lambda *_a, **_k: True)
+    monkeypatch.setattr(kiro_adapter, "needs_inline_compatibility_hooks", lambda *_a, **_k: True)
     build = MagicMock(
         return_value={
             "stop": [{"command": "new stop"}],

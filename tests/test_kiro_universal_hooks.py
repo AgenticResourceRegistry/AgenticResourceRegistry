@@ -139,7 +139,7 @@ def test_doctor_warns_instead_of_crashing_on_malformed_hooks(tmp_path: Path, hoo
 def test_rewrite_preserves_profile_shape_user_hooks_and_upgrade_state(
     profile: dict, inline: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("observal_cli.harness.kiro.use_inline_hooks", lambda: inline)
+    monkeypatch.setattr("observal_cli.harness.kiro.needs_inline_compatibility_hooks", lambda: inline)
     before = copy.deepcopy(profile)
 
     rewritten = cmd_pull._rewrite_kiro_agent_profile(profile, agent_id="agent-123")
@@ -158,7 +158,7 @@ def test_rewrite_preserves_profile_shape_user_hooks_and_upgrade_state(
 
 @pytest.mark.parametrize("inline", [True, False])
 def test_rewrite_keeps_unknown_array_entries(inline: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("observal_cli.harness.kiro.use_inline_hooks", lambda: inline)
+    monkeypatch.setattr("observal_cli.harness.kiro.needs_inline_compatibility_hooks", lambda: inline)
     unknown = [None, "unknown", {"name": [], "action": "unknown"}]
     profile = {"hooks": copy.deepcopy(unknown)}
     result = cmd_pull._rewrite_kiro_agent_profile(profile, agent_id="agent-123")

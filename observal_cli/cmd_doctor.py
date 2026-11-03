@@ -387,6 +387,12 @@ def _check_kiro(issues: list, warnings: list):
     from observal_cli.harness_specs.kiro_hooks_spec import iter_kiro_hooks
 
     optic.trace("issues={}, warnings={}", issues, warnings)
+    from observal_cli.harness import get_adapter
+
+    config_dir = Path.home() / ".kiro"
+    if config_dir.is_dir() and get_adapter("kiro").detect_hooks(config_dir) == "installed":
+        rprint("  [green]Acknowledged session hooks installed for the configured Kiro surface[/green]")
+        return
     agents_dir = Path.home() / ".kiro" / "agents"
     if not agents_dir.is_dir():
         rprint("  [dim]No ~/.kiro/agents/ found[/dim]")
