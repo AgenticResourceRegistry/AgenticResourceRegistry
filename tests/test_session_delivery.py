@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -171,6 +172,233 @@ def test_payload_rejection_status_is_permanent(monkeypatch, status_code: int):
 
     with pytest.raises(base.PermanentIngestRejectionError):
         base.post_to_server_ack("http://server", "token", {"session_id": "bad", "lines": []})
+
+
+def test_ingest_422_reports_field_and_limit_without_echoing_input(monkeypatch, tmp_path: Path):
+    import httpx
+
+    secret = "sensitive transcript content"
+    response = httpx.Response(
+        422,
+        json={
+            "detail": [
+                {
+                    "type": "value_error",
+                    "loc": ["body", "lines"],
+                    "msg": "Value error, session lines must be at most 1048576 characters",
+                    "input": [secret],
+                }
+            ]
+        },
+    )
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: Client())
+    with pytest.raises(base.PermanentIngestRejectionError) as rejected:
+        base.post_to_server_ack("http://server", "token", {"session_id": "bad", "lines": [secret]})
+    assert "body.lines: value_error" in str(rejected.value)
+    assert "1048576 characters" in str(rejected.value)
+    assert secret not in str(rejected.value)
+
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "bad", "lines": [secret], "start_offset": 0},
+        destination="http://server",
+        user_id="user",
+        db_path=db,
+    )
+    assert base.drain_outbox(
+        config(),
+        db_path=db,
+        home=tmp_path,
+        post=lambda payload, _config: base.post_to_server_ack("http://server", "token", payload),
+    )
+    reason = json.loads(db.with_suffix(".rejected.jsonl").read_text())["reason"]
+    assert "body.lines: value_error" in reason
+    assert secret not in reason
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        [
+            {
+                "type": "value_error",
+                "loc": ["body", "capabilities_used", 0, "kind"],
+                "msg": "unknown capability kind: secret",
+            }
+        ],
+        [{"type": "value_error", "loc": ["body", "secret\nvalue"], "msg": "secret"}],
+        [{"type": "value_error", "loc": ["body", "customsecret"], "msg": "secret"}],
+        "secret",
+    ],
+)
+def test_ingest_422_detail_never_exposes_untrusted_values(detail):
+    import httpx
+
+    parsed = base._safe_ingest_validation_detail(httpx.Response(422, json={"detail": detail}))
+    assert "secret" not in (parsed or "")
+
+
+@pytest.mark.parametrize(
+    ("kind", "message", "location", "forbidden"),
+    [
+        ("secret_payload", "secret", ["body", "lines"], "secret_payload"),
+        (
+            "value_error",
+            "Value error, session lines must be at most 987654321 characters",
+            ["body", "lines"],
+            "987654321",
+        ),
+        (
+            "value_error",
+            "Value error, session lines must be at most 1048576 characters",
+            ["body", "session_id"],
+            "1048576",
+        ),
+        ("private\ntranscript", "secret", ["body", "lines"], "private"),
+        (
+            "value_error",
+            "Value error, end_byte_offsets must contain one value per source line: secret",
+            ["body"],
+            "secret",
+        ),
+    ],
+)
+def test_ingest_422_never_copies_untrusted_type_or_limit(kind, message, location, forbidden):
+    import httpx
+
+    parsed = base._safe_ingest_validation_detail(
+        httpx.Response(422, json={"detail": [{"type": kind, "loc": location, "msg": message, "input": "secret"}]})
+    )
+    assert forbidden not in (parsed or "")
+    assert "secret" not in (parsed or "")
+
+
+@pytest.mark.parametrize("detail", [{"type": "secret"}, [None], [{"type": "value_error", "loc": ["body", {}]}]])
+def test_ingest_422_malformed_detail_has_no_diagnostic(detail):
+    import httpx
+
+    assert base._safe_ingest_validation_detail(httpx.Response(422, json={"detail": detail})) is None
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"end_byte_offsets": [1]}, "end_byte_offsets mismatch"),
+        ({"session_hash": "digest"}, "hashed_line_count required"),
+    ],
+)
+def test_real_ingest_422_distinguishes_model_errors_without_leaking_lines(extra, expected):
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from loguru import logger as optic
+
+    from api import deps
+    from api.routes import ingest
+    from models.user import UserRole
+
+    app = FastAPI()
+    app.include_router(ingest.router)
+    app.dependency_overrides[deps.get_current_user] = lambda: MagicMock(role=UserRole.user)
+    private_line = "private transcript secret"
+    log_messages = []
+    sink = optic.add(lambda message: log_messages.append(str(message)))
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/ingest/session", json={"session_id": "session", "lines": [private_line, "another"], **extra}
+            )
+        detail = base._safe_ingest_validation_detail(response)
+    finally:
+        optic.remove(sink)
+
+    assert response.status_code == 422
+    assert detail == f"body: value_error ({expected})"
+    assert private_line not in detail
+    assert private_line not in "".join(log_messages)
+
+
+def test_real_ingest_422_reports_only_validated_line_limit():
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from api import deps
+    from api.routes import ingest
+    from models.user import UserRole
+
+    app = FastAPI()
+    app.include_router(ingest.router)
+    app.dependency_overrides[deps.get_current_user] = lambda: MagicMock(role=UserRole.user)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/ingest/session",
+            json={"session_id": "session", "lines": ["private" + "x" * ingest.MAX_TEXT_LENGTH]},
+        )
+
+    assert response.status_code == 422
+    assert (
+        base._safe_ingest_validation_detail(response)
+        == "body.lines: value_error (session lines must be at most 1048576 characters)"
+    )
+
+
+def test_ingest_422_skips_oversized_error_body():
+    import httpx
+
+    response = httpx.Response(422, content=b"x" * (32 * 1024 * 1024 + 1))
+    assert base._safe_ingest_validation_detail(response) is None
+
+
+def test_malformed_422_still_quarantines_and_drains_next_session(monkeypatch, tmp_path: Path):
+    import httpx
+
+    db = tmp_path / "outbox.db"
+    for session_id in ("bad", "good"):
+        telemetry_buffer.enqueue(
+            {"harness": "claude-code", "session_id": session_id, "lines": ["line"], "start_offset": 0},
+            destination="http://server",
+            user_id="user",
+            db_path=db,
+        )
+    malformed = b'{"detail":' + b"[" * 10_000 + b"0" + b"]" * 10_000 + b"}"
+    posted = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, _url, json, **_kwargs):
+            posted.append(json["session_id"])
+            if json["session_id"] == "bad":
+                return httpx.Response(422, content=malformed)
+            return httpx.Response(200, json={"acknowledged_line": 0, "acknowledged_offset": 4})
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: Client())
+    assert base.drain_outbox(
+        config(),
+        db_path=db,
+        home=tmp_path,
+        post=lambda payload, _config: base.post_to_server_ack("http://server", "token", payload),
+    )
+    assert posted == ["bad", "good"]
+    assert telemetry_buffer.stats(db_path=db)["failed"] == 1
 
 
 def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_path: Path):
