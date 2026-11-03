@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest service.
@@ -16,6 +17,7 @@ import hashlib
 import uuid as _uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import orjson
 import xxhash
@@ -40,6 +42,11 @@ from services.session_parsers.kiro import extract_usage as _usage_kiro
 # ---------------------------------------------------------------------------
 
 
+def _model_value(*values: object) -> object:
+    """Use the first present model without hiding malformed falsey source values."""
+    return next((value for value in values if value is not None and value != ""), "")
+
+
 def _usage_claude_code(parsed: dict) -> dict:
     """Claude Code / Cursor: usage.input_tokens, usage.output_tokens, etc."""
     msg = parsed.get("message", {})
@@ -49,7 +56,7 @@ def _usage_claude_code(parsed: dict) -> dict:
         "output_tokens": int(usage.get("output_tokens") or 0),
         "cache_read_tokens": int(usage.get("cache_read_input_tokens") or 0),
         "cache_write_tokens": int(usage.get("cache_creation_input_tokens") or 0),
-        "model": str(msg.get("model") or parsed.get("model") or ""),
+        "model": _model_value(msg.get("model"), parsed.get("model")),
     }
 
 
@@ -62,7 +69,7 @@ def _usage_pi(parsed: dict) -> dict:
         "output_tokens": int(usage.get("output") or 0),
         "cache_read_tokens": int(usage.get("cacheRead") or 0),
         "cache_write_tokens": int(usage.get("cacheWrite") or 0),
-        "model": str(msg.get("model") or ""),
+        "model": _model_value(msg.get("model")),
     }
 
 
@@ -95,7 +102,7 @@ def _usage_goose(parsed: dict) -> dict:
         "output_tokens": token_count(usage, "outputTokens"),
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,
-        "model": str(inference.get("resolvedModel") or inference.get("requestedModel") or ""),
+        "model": _model_value(inference.get("resolvedModel"), inference.get("requestedModel")),
     }
 
 
@@ -158,7 +165,7 @@ def _copilot_usage(data: dict) -> dict:
         "output_tokens": token_count(data, "outputTokens"),
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,
-        "model": str(data.get("model") or ""),
+        "model": _model_value(data.get("model")),
     }
 
 
@@ -235,7 +242,40 @@ def _extract_usage_tokens(parsed: dict, harness: str = "claude-code") -> dict:
     Dispatches to per-harness extractor. Falls back to Claude Code format.
     """
     extractor = _USAGE_EXTRACTORS.get(harness, _usage_claude_code)
-    return extractor(parsed)
+    usage = extractor(parsed)
+    # ClickHouse stores these fields as Int32; isolate an overflowing source
+    # record before it can poison the insert of otherwise valid rows.
+    for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+        value = usage[key]
+        if type(value) is not int or not 0 <= value <= 2_147_483_647:
+            raise ValueError("token count outside ClickHouse Int32 range")
+    usage["model"] = _ch_string(usage["model"], "model")
+    return usage
+
+
+def _ch_string(value: object, field: str, *, nullable: bool = False) -> str | None:
+    if nullable and value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"invalid ClickHouse string field: {field}")
+    return value
+
+
+def _ch_timestamp(value: object) -> str:
+    """Validate DateTime64(3, UTC) before batching with other source rows."""
+    if not isinstance(value, str):
+        raise ValueError("invalid ClickHouse timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        parsed = parsed.astimezone(UTC)
+        # DateTime64's supported calendar begins at 1900 and ends in 2299.
+        if not 1900 <= parsed.year <= 2299:
+            raise ValueError("timestamp outside DateTime64 range")
+        return parsed.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("invalid ClickHouse timestamp") from exc
 
 
 def _extract_uuid(parsed: dict, harness: str = "claude-code") -> tuple[str | None, str | None]:
@@ -390,6 +430,7 @@ class IntegrityResult:
     server_hash: str | None = None
     repair_from_line: int | None = None
     repair_offset: int = 0
+    reconciled_offset: bool = False
 
 
 async def ingest_session_lines(
@@ -439,6 +480,12 @@ async def ingest_session_lines(
 
     if end_byte_offsets is not None and len(end_byte_offsets) != len(lines or []):
         raise ValueError("end_byte_offsets must contain one value per source line")
+    if type(start_offset) is not int or not 0 <= start_offset <= 4_294_967_295 - max(len(lines or []) - 1, 0):
+        raise ValueError("source line offset outside ClickHouse UInt32 range")
+    if end_byte_offsets is not None and any(
+        type(offset) is not int or not 0 <= offset <= 18_446_744_073_709_551_615 for offset in end_byte_offsets
+    ):
+        raise ValueError("source byte offset outside ClickHouse UInt64 range")
 
     if not lines:
         extra = get_extra_rows(harness, session_id, project_id, user_id, agent_id, agent_version, total_credits)
@@ -477,8 +524,6 @@ async def ingest_session_lines(
     classify_fn, preview_fn, tool_info_fn = get_classifier(harness)
     last_real_ts: str | None = None
 
-    from datetime import UTC, datetime
-
     for i, (raw_line, line_hash) in enumerate(zip(lines, line_hashes, strict=True)):
         line_offset = start_offset + i
         if line_offset in existing and line_offset not in repair_offsets:
@@ -487,6 +532,13 @@ async def ingest_session_lines(
 
         parsed: dict = {}
         rendered = 1
+        empty_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "model": "",
+        }
         try:
             candidate = orjson.loads(raw_line)
             if not isinstance(candidate, dict):
@@ -496,41 +548,44 @@ async def ingest_session_lines(
             if event_type is None:
                 event_type = "_ignored"
                 rendered = 0
+            ts = extract_timestamp(harness, parsed)
+            timestamp = (
+                _ch_timestamp(ts) if ts is not None else last_real_ts or _ch_timestamp(datetime.now(UTC).isoformat())
+            )
+            preview = _ch_string(preview_fn(parsed, event_type) if rendered else "", "content_preview")
+            tool_name, tool_id = tool_info_fn(parsed) if rendered else (None, None)
+            tool_name = _ch_string(tool_name, "tool_name", nullable=True)
+            tool_id = _ch_string(tool_id, "tool_id", nullable=True)
+            uuid, parent_uuid = _extract_uuid(parsed, harness)
+            uuid = _ch_string(uuid, "uuid", nullable=True)
+            parent_uuid = _ch_string(parent_uuid, "parent_uuid", nullable=True)
+            event_type = _ch_string(event_type, "event_type")
+            usage = _extract_usage_tokens(parsed, harness)
+            if ts is not None:
+                last_real_ts = timestamp
+            if not rendered:
                 skipped += 1
-        except (orjson.JSONDecodeError, ValueError) as exc:
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError, OverflowError) as exc:
+            # Only malformed source values are accounted as parse errors; internal failures propagate.
+            # Exception text and raw transcripts can contain credentials.
             optic.warning(
-                "session_ingest_parse_error: session={}, offset={}, error={}, line_preview={}",
+                "session ingest source error: session={}, offset={}, kind={}",
                 session_id,
                 line_offset,
-                str(exc),
-                repr(raw_line[:200]),
+                type(exc).__name__,
             )
             event_type = "_parse_error"
             rendered = 0
             errors += 1
-
-        if parsed:
-            ts = extract_timestamp(harness, parsed)
-            if ts is not None:
-                last_real_ts = ts
-            timestamp = ts or last_real_ts or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        else:
             timestamp = last_real_ts or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-        preview = redact_secrets(preview_fn(parsed, event_type)) if rendered else ""
-        tool_name, tool_id = tool_info_fn(parsed) if rendered else (None, None)
-        uuid, parent_uuid = _extract_uuid(parsed, harness) if parsed else (None, None)
-        usage = (
-            _extract_usage_tokens(parsed, harness)
-            if parsed
-            else {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-                "model": "",
-            }
-        )
+            preview = ""
+            tool_name, tool_id = None, None
+            uuid, parent_uuid = None, None
+            usage = empty_usage
+        # Redaction is internal processing, not source parsing: never acknowledge on failure.
+        if rendered:
+            preview = redact_secrets(preview)
+        encoded_line = raw_line.encode("utf-8", errors="replace")
         rows.append(
             {
                 "session_id": session_id,
@@ -543,7 +598,7 @@ async def ingest_session_lines(
                 "line_offset": line_offset,
                 "source_end_offset": byte_offsets[i],
                 "line_hash": line_hash,
-                "source_sha256": hashlib.sha256(raw_line.encode("utf-8", errors="replace")).hexdigest(),
+                "source_sha256": hashlib.sha256(encoded_line).hexdigest(),
                 "is_source_record": 1,
                 "rendered": rendered,
                 "event_type": event_type,
@@ -553,8 +608,8 @@ async def ingest_session_lines(
                 "tool_name": tool_name,
                 "tool_id": tool_id,
                 "content_preview": preview,
-                "content_length": len(raw_line.encode("utf-8", errors="replace")),
-                "raw_line": redact_secrets(raw_line.encode("utf-8", errors="replace").decode("utf-8")),
+                "content_length": len(encoded_line),
+                "raw_line": redact_secrets(encoded_line.decode("utf-8")),
                 "credits": 0.0,
                 "parent_session_id": parent_session_id,
                 **usage,
@@ -628,7 +683,7 @@ async def check_session_integrity(
     user_id: str,
     harness: str,
     expected_line_count: int,
-    expected_offset: int,
+    expected_offset: int | None,
     acknowledged_line: int | None = None,
     acknowledged_offset: int | None = None,
     expected_hash: str | None = None,
@@ -640,7 +695,8 @@ async def check_session_integrity(
             session_id, project_id, user_id, harness
         )
     expected_line = expected_line_count - 1
-    offset_ok = expected_offset == 0 or acknowledged_offset == 0 or acknowledged_offset == expected_offset
+    # None is the legacy offset-less audit; an explicit zero is a real EOF.
+    offset_ok = expected_offset is None or acknowledged_offset == 0 or acknowledged_offset == expected_offset
     server_hash = None
     repair_from_line = acknowledged_line + 1 if acknowledged_line < expected_line else None
     manifest: list[tuple[int, int, str]] = []
@@ -667,6 +723,38 @@ async def check_session_integrity(
         elif server_hash != expected_hash:
             repair_from_line = 0 if repair_from_line is None else min(repair_from_line, 0)
 
+    # The final hash covers file records only; harness-added suffix records
+    # still need to be present and accounted for at the last file byte offset.
+    # Blank-byte growth *or shrinkage* can change that offset without changing
+    # any file record hash. Never reconcile an unauthenticated or gapped prefix.
+    hash_count = expected_line_count if hashed_line_count is None else hashed_line_count
+    suffix = manifest[hash_count:] if 0 <= hash_count <= expected_line_count else []
+    complete_manifest = (
+        0 <= hash_count <= expected_line_count <= 4_294_967_295
+        and len(manifest) == expected_line_count
+        and all(
+            line_offset == index and 0 <= end_offset <= 18_446_744_073_709_551_615
+            for index, (line_offset, end_offset, _) in enumerate(manifest)
+        )
+        and (hash_count > 0 or (expected_line_count > 0 and expected_hash == hashlib.sha256(b"").hexdigest()))
+        # The suffix was written at the *former* file end. A replay may have
+        # updated only file rows, so it need not match the current prefix end.
+        and (not suffix or all(end_offset == suffix[0][1] for _, end_offset, _ in suffix))
+    )
+    reconciled_offset = (
+        not offset_ok
+        and repair_from_line is None
+        and expected_hash is not None
+        and server_hash == expected_hash
+        and acknowledged_line == expected_line
+        and complete_manifest
+        # A prior final audit may already have rebased this checkpoint without
+        # changing source rows. Require a bounded checkpoint, not equality with
+        # the stale suffix position in the source manifest.
+        and 0 <= acknowledged_offset <= 18_446_744_073_709_551_615
+        and expected_offset is not None
+        and 0 <= expected_offset <= 18_446_744_073_709_551_615
+    )
     repair_offset = 0
     if repair_from_line and manifest:
         repair_offset = next(
@@ -675,12 +763,13 @@ async def check_session_integrity(
         )
 
     return IntegrityResult(
-        ok=acknowledged_line == expected_line and offset_ok and repair_from_line is None,
+        ok=acknowledged_line == expected_line and (offset_ok or reconciled_offset) and repair_from_line is None,
         acknowledged_line=acknowledged_line,
         acknowledged_offset=acknowledged_offset,
         expected_line=expected_line,
-        expected_offset=expected_offset,
+        expected_offset=expected_offset if expected_offset is not None else 0,
         server_hash=server_hash,
         repair_from_line=repair_from_line,
         repair_offset=repair_offset,
+        reconciled_offset=reconciled_offset,
     )
