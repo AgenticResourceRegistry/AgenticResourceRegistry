@@ -115,6 +115,44 @@ Evidence: `/tmp/kiro-2021-auditor-{before,final-targeted,full}.log`,
 `/tmp/kiro-2021-existing-source-diagnostic.log`, `/tmp/kiro-2021-native-pid-monitor.log`.
 The temporary scripts/private homes are not durable CI artifacts or share-ready logs.
 
+## Native V3 worker termination: follow-up findings
+
+The termination mechanism is now measured, rather than inferred from scheduling:
+
+- Private stderr capture preserved the generated hook commands and worker argv.
+  The final worker entered successfully, then disappeared without an exit marker
+  or Python traceback before its 2-second settling delay completed.
+- Independent macOS kqueue process observation, with diagnostic code removed,
+  measured **SIGTERM / exit -15** after roughly **0.36 seconds** in native V3.
+- A bounded SIGTERM-immunity experiment (`46b2cc7b`) passed the limited signal
+  regression and 85 focused tests, but native V3 then terminated the worker with
+  **SIGKILL / exit -9** after roughly **one second**. It did not fix completion.
+- Process observation confirmed the worker already had its own process group
+  and was reparented to PID 1. Removing Kiro-related environment variables also
+  failed to prevent termination. These temporary experiments were removed.
+- `e2ac9f94` removed the ineffective signal guard and associated contracts/tests,
+  preserving normal operator termination. No signal-immunity change remains.
+- `3ea34d80` adds a real final-worker SIGKILL regression: the non-final cursor and
+  explicit Stop intent survive; capture replay retries without another source POST.
+  The focused recovery group passed 18 tests; the latest broad targeted tree passed
+  **824 tests**. Ruff/format/whitespace checks passed.
+
+This establishes external signal termination during native V3 shutdown, not the
+exact signal-sender PID/callsite. A new session/process group alone is insufficient.
+The automatic finalizer needs execution ownership outside Kiro's cleanup boundary,
+or a deliberately separate reconciliation path. Do not replace this with more
+signal ignoring or claim native completion. Resumed-turn intent cancellation,
+custom `KIRO_HOME`, clean final full-suite validation and human review remain gates.
+
+New evidence: `/tmp/kiro-2021-native-worker-stderr.log`,
+`/tmp/kiro-2021-native-kqueue.log`, `/tmp/kiro-2021-native-kqueue-fixed.log`,
+`/tmp/kiro-2021-native-groups.log`, `/tmp/kiro-2021-native-env-experiment.log`,
+`/tmp/kiro-2021-{sigterm-before,lifecycle-focused,killed-final-worker,diagnosis-targeted}.log`.
+Native private directories: `kiro-2021-native-live-{pbcat6n8,gu4apda3,te6y0flw,2e_e6xja,ho4aclgc}`.
+All owned synthetic agents/session rows and copied auth/config files were cleaned up;
+temporary draft settings restored. API returned HTTP 200; ClickHouse stayed at 2 GiB.
+Nothing pushed, published or merged. No new final full-suite pass is claimed.
+
 ## Environment changes and cleanup
 
 Tests used throwaway homes/projects and private read-only SQLite backups of Kiro's
