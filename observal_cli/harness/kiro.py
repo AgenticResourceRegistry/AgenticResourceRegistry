@@ -359,6 +359,7 @@ class KiroAdapter(BaseAdapter):
         final: bool,
         home: Path | None = None,
     ) -> dict[str, Any]:
+        """Collect bounded companion model metadata and available lifetime credits for durable delivery."""
         from observal_cli.sessions.kiro import read_kiro_credits, read_kiro_session_model
 
         fields: dict[str, Any] = {}
