@@ -376,6 +376,7 @@ async def get_session(
     ),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
+    """Render one scoped session while keeping synthetic rows out of the live source cursor."""
     optic.trace("session_id={}, after_offset={}", session_id, after_offset)
     is_admin = _has_admin_trace_access(current_user)
     identity_params: dict[str, str] = {"param_sid": session_id}
@@ -475,8 +476,10 @@ async def get_session(
             except Exception:
                 optic.opt(exception=True).warning("Agent name resolution failed")
 
-    # Companion metadata uses a reserved offset, not a position in the live transcript.
-    source_offsets = [int(r.get("line_offset", 0)) for r in rows if r.get("event_type") != "kiro_session_model"]
+    # Neither synthetic row's reserved offset is a position in the live transcript.
+    source_offsets = [
+        int(r.get("line_offset", 0)) for r in rows if r.get("event_type") not in {"kiro_session_model", "kiro_credits"}
+    ]
     max_offset = max(source_offsets) if source_offsets else (after_offset or 0)
 
     # Parse raw events through the session parser for rich rendering
