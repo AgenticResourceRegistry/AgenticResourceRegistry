@@ -212,6 +212,10 @@ class BaseAdapter:
 
         return nullcontext(DeliveryAttempt())
 
+    def session_finalization_pending(self, source, config, home=None):
+        """Whether recovery must finish an explicitly requested finalization."""
+        return False
+
     def session_worker_environment(self) -> dict[str, str]:
         """Environment overrides needed by detached session delivery workers."""
         return {}

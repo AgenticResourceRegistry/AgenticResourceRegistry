@@ -60,12 +60,17 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
         return
 
     related_sources = adapter.related_session_sources(source, home=home)
+    is_final = adapter.is_session_final(event)
     with adapter.session_delivery_guard(source, event, config, related=related_sources, home=home) as attempt:
         if not attempt.proceed:
-            optic.debug("duplicate {} hook skipped for session={}", harness, source.session_id)
+            optic.debug("duplicate {} capture skipped for session={}", harness, source.session_id)
+            if is_final:
+                # Capture succeeded previously, but a child may have failed to
+                # launch or died. The separate final guard suppresses completed
+                # finalization, not the Stop capture receipt.
+                _spawn_worker("--finalize-session", source.session_id, "--cwd", source.cwd, harness=harness)
             return
         hook_event = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
-        is_final = adapter.is_session_final(event)
         deferred = adapter.defer_session_delivery()
         # Scope is decided per source. Related transcripts are handled separately
         # so delegated work is not lost when it lives outside the parent JSONL.
@@ -117,7 +122,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
         attempt.delivered = delivered
 
 
-def _spawn_worker(*args: str, harness: str) -> None:
+def _spawn_worker(*args: str, harness: str) -> bool:
     try:
         from observal_cli.shared.launcher import module_subprocess
 
@@ -131,8 +136,10 @@ def _spawn_worker(*args: str, harness: str) -> None:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        return True
     except Exception as exc:
-        optic.trace("could not spawn {} session worker: {}", harness, exc)
+        optic.warning("could not spawn {} session worker: {}", harness, exc)
+        return False
 
 
 def _wait_until_stable(path: Path) -> None:
@@ -214,7 +221,7 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
     if config is None:
         return
     drain_outbox(config, home=home)
-    recovery_final = adapter.aged_recovery_final()
+    default_recovery_final = adapter.aged_recovery_final()
     now = time.time()
     for source in adapter.discover_session_sources(home=home):
         if source.session_id == exclude_session or source.path is None:
@@ -225,6 +232,7 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 continue
         except OSError:
             continue
+        recovery_final = default_recovery_final or adapter.session_finalization_pending(source, config, home=home)
         event = {"session_id": source.session_id, "hook_event_name": "CrashRecovery"}
         related_sources = adapter.related_session_sources(source, home=home)
         with adapter.session_delivery_guard(

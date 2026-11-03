@@ -63,7 +63,7 @@ def test_duplicate_hook_skips_metadata_post_and_worker_but_new_turn_runs(tmp_pat
         base, "post_to_server_ack", lambda _url, _token, payload, **kw: posts.append(payload) or ack(payload)
     )
     monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **k: workers.append(a))
-    event = {"session_id": "session", "hook_event_name": "Stop"}
+    event = {"session_id": "session", "hook_event_name": "UserPromptSubmit"}
     session_push._run_hook(event, harness="kiro", home=tmp_path)
     session_push._run_hook(event, harness="kiro", home=tmp_path)
     assert len(posts) == len(workers) == 1
@@ -149,11 +149,11 @@ def test_runtime_placement_uses_transcript_not_saved_engine(tmp_path, monkeypatc
     legacy.write_text("{}\n")
     source = SessionSource("kiro", "session", v3, str(project))
     monkeypatch.setenv("OBSERVAL_KIRO_ENGINE", "v2")
-    assert adapter.accepts_session_hook(source, {}, "inline", tmp_path)
+    assert adapter.accepts_session_hook(source, {"hook_event_name": "Stop"}, "inline", tmp_path)
     hooks = project / ".kiro/hooks"
     hooks.mkdir(parents=True)
     (hooks / "observal.json").write_text(json.dumps(build_kiro_hooks_file()))
-    assert not adapter.accepts_session_hook(source, {}, "inline", tmp_path)
+    assert not adapter.accepts_session_hook(source, {"hook_event_name": "Stop"}, "inline", tmp_path)
     assert adapter.accepts_session_hook(source, {}, "standalone", tmp_path)
     assert adapter.accepts_session_hook(source, {}, "", tmp_path)
     monkeypatch.setenv("OBSERVAL_KIRO_ENGINE", "v3")

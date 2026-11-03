@@ -284,7 +284,26 @@ class KiroAdapter(BaseAdapter):
         """Deduplicate acknowledged Kiro hooks across both placements and workers."""
         from observal_cli.sessions.delivery_guard import kiro_delivery_guard
 
-        return kiro_delivery_guard(source, event, config, related=related, final=final, home=home)
+        requested = not final and self.is_session_final(event)
+        finalizable = tuple(
+            item for item in [source, *related] if (requested or final) and self.should_capture_session(item, home=home)
+        )
+        return kiro_delivery_guard(
+            source,
+            event,
+            config,
+            related=related,
+            final=final,
+            final_requested=requested,
+            finalizable=finalizable,
+            home=home,
+        )
+
+    def session_finalization_pending(self, source, config, home=None):
+        """Recover an explicit Stop request without finalizing permission-paused sessions."""
+        from observal_cli.sessions.delivery_guard import kiro_finalization_pending
+
+        return kiro_finalization_pending(source, config, home=home)
 
     def session_extra_records(
         self,

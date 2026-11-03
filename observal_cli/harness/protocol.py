@@ -331,6 +331,10 @@ class HarnessAdapter(Protocol):
         """Coordinate lifecycle delivery and expose whether a duplicate should proceed."""
         ...
 
+    def session_finalization_pending(self, source, config, home=None):
+        """Whether recovery must finish an explicitly requested finalization."""
+        ...
+
     def session_worker_environment(self) -> dict[str, str]:
         """Return environment overrides for detached session workers."""
         ...

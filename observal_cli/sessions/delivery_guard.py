@@ -37,8 +37,22 @@ def serialized_outbox(function):
     return run
 
 
+def _session_directory(source, config: dict, home: Path) -> Path:
+    """Use an opaque, destination/user-scoped session identity for intent and receipts."""
+    identity = [config.get("server_url", "").rstrip("/"), config.get("user_id", ""), source.checkpoint_key]
+    key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+    return home / ".observal" / "session-delivery" / key
+
+
+def kiro_finalization_pending(source, config: dict, home=None) -> bool:
+    """Only an explicit durable Stop intent permits aged Kiro recovery to finalize."""
+    return (_session_directory(source, config, home or Path.home()) / "finalization.pending").is_file()
+
+
 @contextmanager
-def kiro_delivery_guard(source, event: dict, config: dict, *, related=(), final=False, home=None):
+def kiro_delivery_guard(
+    source, event: dict, config: dict, *, related=(), final=False, final_requested=False, finalizable=(), home=None
+):
     """Serialize a Kiro session group and skip only an unchanged, acknowledged attempt.
 
     Receipt identities include destination and user, and contain hashes rather than
@@ -47,9 +61,8 @@ def kiro_delivery_guard(source, event: dict, config: dict, *, related=(), final=
     immediately following duplicate can retry the durable outbox.
     """
     home = home or Path.home()
-    identity = [config.get("server_url", "").rstrip("/"), config.get("user_id", ""), source.checkpoint_key]
-    key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
-    root = home / ".observal" / "session-delivery"
+    directory = _session_directory(source, config, home)
+    root, key = directory.parent, directory.name
     phase = (
         "final"
         if final
@@ -59,6 +72,10 @@ def kiro_delivery_guard(source, event: dict, config: dict, *, related=(), final=
     receipt = root / key / (phase_key + ".json")
     # Lock files stay in place: unlinking an actively held lock would split ownership.
     with _exclusive_lock(root / (key + ".lock")):
+        pending = directory / "finalization.pending"
+        if final_requested and finalizable:
+            directory.mkdir(parents=True, exist_ok=True)
+            pending.touch(mode=0o600)
         paths = set()
         for item in [source, *related]:
             if item.path is not None:
@@ -79,8 +96,13 @@ def kiro_delivery_guard(source, event: dict, config: dict, *, related=(), final=
             previous = None
         from observal_cli.sessions.base import read_cursor_state
 
-        cursors = [read_cursor_state(item.checkpoint_key, home=home) for item in [source, *related]]
-        state = {"fingerprint": fingerprint, "cursors": [list(cursor) for cursor in cursors]}
+        def cursor_signature(item):
+            cursor = read_cursor_state(item.checkpoint_key, home=home)
+            # Finalization is separate progress; its flag must not invalidate an
+            # otherwise acknowledged capture of the same bytes and metadata.
+            return list(cursor if final else cursor[:2])
+
+        state = {"fingerprint": fingerprint, "cursors": [cursor_signature(item) for item in [source, *related]]}
         attempt = DeliveryAttempt(proceed=previous != state)
         yield attempt
         if attempt.proceed and attempt.delivered:
@@ -88,7 +110,16 @@ def kiro_delivery_guard(source, event: dict, config: dict, *, related=(), final=
             # The session lock makes this atomic to other readers; replace also
             # prevents a killed writer leaving a falsely successful partial receipt.
             temporary = receipt.with_suffix(".tmp")
-            state["cursors"] = [list(read_cursor_state(item.checkpoint_key, home=home)) for item in [source, *related]]
+            state["cursors"] = [cursor_signature(item) for item in [source, *related]]
             temporary.write_text(json.dumps(state))
             temporary.chmod(0o600)
             temporary.replace(receipt)
+        # Capture acknowledgements never clear finalization intent. A worker
+        # must finish all in-scope cursors; launch success is not completion.
+        if (
+            final
+            and (attempt.delivered or not attempt.proceed)
+            and finalizable
+            and all(read_cursor_state(item.checkpoint_key, home=home)[2] for item in finalizable)
+        ):
+            pending.unlink(missing_ok=True)
