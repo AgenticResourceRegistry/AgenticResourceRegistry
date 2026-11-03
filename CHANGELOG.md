@@ -43,6 +43,7 @@ All notable changes to this project will be documented in this file.
 
 - accept Kiro universal array hooks across doctor, scan, inventory, and agent profile rewrites; preserve user hooks and skip unreadable profiles (#2015, #2024)
 - install and refresh array-based Kiro registry hook files without duplicating named entries or replacing unrelated hooks (#2020)
+- detect Kiro V3 reasoning models and durably upload companion model metadata as a fallback without changing source counts (#2023)
 
 - repair in-app help links that still point at the renamed core concepts doc
 - install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks

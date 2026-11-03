@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro JSONL session parser.
@@ -55,6 +56,15 @@ def parse_rows(rows: list[dict]) -> list[dict]:
     # Maps toolUseId -> index in events list for merge-on-result
     tool_use_index: dict[str, int] = {}
     latest_model = ""
+    fallback_model = ""
+    for row in rows:
+        record = load_line(row.get("raw_line") or "") or {}
+        if record.get("kind") == "KiroSessionModel":
+            fallback_model = (
+                normalize_model_id(row.get("session_model"))
+                or normalize_model_id(dict_field(record, "data").get("modelId"))
+                or fallback_model
+            )
 
     # A sub-execution's prompt is supplied by the client rather than read from
     # the transcript, so it arrives appended and would otherwise sort after the
@@ -102,14 +112,16 @@ def parse_rows(rows: list[dict]) -> list[dict]:
         jsonl_ts = _epoch_to_clickhouse(epoch_s) if epoch_s else None
         ts = pick_timestamp(jsonl_ts, row_ts, ingested_at)
 
+        if kind == "KiroSessionModel":
+            continue  # Companion metadata is not a user-visible event.
         if kind == "KiroCredits":
             # Synthetic row written by kiro_session_push with lifetime credits.
             row_credits = row.get("credits") or data.get("credits")
             credits = _as_credits(row_credits)
             if row_credits and credits is not None:
                 attributes = {"credits": str(row_credits)}
-                if latest_model:
-                    attributes["model"] = latest_model
+                if latest_model or fallback_model:
+                    attributes["model"] = latest_model or fallback_model
                 events.append(
                     {
                         "timestamp": ts,
@@ -467,12 +479,20 @@ def _extract_result_text(result_content: list) -> str:
 # ---------------------------------------------------------------------------
 
 
+def normalize_model_id(value: object) -> str:
+    """Remove Kiro's transport prefix without resolving or guessing `auto`."""
+    if not isinstance(value, str):
+        return ""
+    return value.strip().removeprefix("qdev::")
+
+
 def extract_usage(parsed: dict) -> dict:
     """Extract Kiro's model from CLI assistant blocks (no token counts in JSONL).
 
     The Claude Code usage extractor reads ``message.model``; Kiro's CLI puts
-    ``modelId`` inside each content block's ``data`` instead. IDE records may
-    carry a model on the payload, but must never be interpreted as Claude rows.
+    ``modelId`` inside each content block's ``data`` instead. V3 reasoning records
+    carry ``reasoningModelId``; older IDE records may carry ``modelId``.
+    Neither is interpreted as Claude usage or resolved from ``auto``.
     """
     model = ""
     if parsed.get("kind") == "AssistantMessage":
@@ -482,11 +502,11 @@ def extract_usage(parsed: dict) -> dict:
                 continue
             block = item.get("data")
             if isinstance(block, dict):
-                model = str_field(block, "modelId") or model
+                model = normalize_model_id(block.get("modelId")) or model
     else:
         payload = parsed.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "assistant":
-            model = str_field(payload, "modelId")
+            model = normalize_model_id(payload.get("reasoningModelId")) or normalize_model_id(payload.get("modelId"))
     return {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -509,17 +529,40 @@ def extra_ingest_rows(
     agent_version: str | None,
     harness: str,
     total_credits: float | None,
+    session_model: str | None = None,
 ) -> list[dict]:
     """Return Kiro-specific extra rows to write after the main ingest loop.
 
     Stores a single ``kiro_credits`` row at line_offset=0xFFFFFFFF so the
     sessions list query can aggregate ``sum(credits)`` per session.
     ReplacingMergeTree deduplication makes repeated inserts idempotent.
-    Returns an empty list when no credits are available.
+    Companion models use a separate reserved offset and are not rendered or
+    counted as source lines. Observed transcript models always take priority.
+    Returns an empty list when neither credits nor model metadata are available.
     """
+    rows: list[dict] = []
+    model = normalize_model_id(session_model)
+    if model:
+        rows.append(
+            {
+                "session_id": session_id,
+                "project_id": project_id,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "agent_version": agent_version,
+                "harness": harness,
+                "line_offset": 0xFFFFFFFE,
+                "event_type": "kiro_session_model",
+                "timestamp": "1970-01-01 00:00:00.000",
+                "model": model,
+                "rendered": 0,
+                "raw_line": json.dumps({"kind": "KiroSessionModel", "data": {"modelId": model}}),
+            }
+        )
     if total_credits is None or total_credits <= 0:
-        return []
+        return rows
     return [
+        *rows,
         {
             "session_id": session_id,
             "project_id": project_id,
@@ -540,5 +583,5 @@ def extra_ingest_rows(
             "content_length": 0,
             "raw_line": json.dumps({"kind": "KiroCredits", "credits": total_credits}),
             "credits": total_credits,
-        }
+        },
     ]

@@ -360,16 +360,21 @@ class KiroAdapter(BaseAdapter):
         final: bool,
         home: Path | None = None,
     ) -> dict[str, Any]:
-        from observal_cli.sessions.kiro import read_kiro_credits
+        from observal_cli.sessions.kiro import read_kiro_credits, read_kiro_session_model
 
+        fields: dict[str, Any] = {}
+        model = read_kiro_session_model(source.path)
+        if model:
+            fields["session_model"] = model
         attempts = 5 if final else 1
         for attempt in range(attempts):
             credits = read_kiro_credits(source.session_id, home=home)
             if credits is not None:
-                return {"total_credits": credits}
+                fields["total_credits"] = credits
+                return fields
             if attempt < attempts - 1:
                 time.sleep(0.5 * (attempt + 1))
-        return {}
+        return fields
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         home = home or Path.home()

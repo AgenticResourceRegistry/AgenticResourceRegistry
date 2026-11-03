@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -64,24 +65,28 @@ IDENTITY_SQL_ADMIN = (
 )
 MAIN_SQL = (
     "SELECT line_offset, timestamp, event_type, content_preview, tool_name, tool_id, uuid, parent_uuid, "
-    "content_length, harness, agent_id, agent_version, raw_line, raw_line_truncated, credits, ingested_at "
+    "content_length, harness, agent_id, agent_version, raw_line, raw_line_truncated, credits, ingested_at, "
+    "(SELECT anyLast(model) FROM session_stats_agg FINAL WHERE session_id = {sid:String} "
+    "AND project_id = {pid:String} AND user_id = {uid:String} AND harness = {harness:String}) AS session_model "
     "FROM session_events FINAL WHERE session_id = {sid:String} AND project_id = {pid:String} "
-    "AND user_id = {uid:String} AND harness = {harness:String} AND rendered = 1 ORDER BY line_offset ASC "
+    "AND user_id = {uid:String} AND harness = {harness:String} AND (rendered = 1 OR event_type = 'kiro_session_model') ORDER BY line_offset ASC "
     "SETTINGS max_final_threads = 4, do_not_merge_across_partitions_select_final = 1"
 )
 SUB_SQL = (
     "SELECT session_id, timestamp, event_type, content_preview, tool_name, tool_id, uuid, parent_uuid, "
     "content_length, harness, raw_line, raw_line_truncated, credits, ingested_at, line_offset "
     "FROM session_events FINAL WHERE parent_session_id = {sid:String} AND project_id = {pid:String} "
-    "AND user_id = {uid:String} AND harness = {harness:String} AND rendered = 1 "
+    "AND user_id = {uid:String} AND harness = {harness:String} AND (rendered = 1 OR event_type = 'kiro_session_model') "
     "ORDER BY session_id, line_offset ASC SETTINGS max_final_threads = 4, "
     "do_not_merge_across_partitions_select_final = 1"
 )
 MAIN_SQL_OFFSET = MAIN_SQL.replace(
-    "AND rendered = 1 ORDER BY", "AND rendered = 1 AND line_offset > {offset:UInt32} ORDER BY"
+    "AND (rendered = 1 OR event_type = 'kiro_session_model') ORDER BY",
+    "AND (rendered = 1 OR event_type = 'kiro_session_model') AND line_offset > {offset:UInt32} ORDER BY",
 )
 SUB_SQL_OFFSET = SUB_SQL.replace(
-    "AND rendered = 1 ORDER BY", "AND rendered = 1 AND line_offset > {offset:UInt32} ORDER BY"
+    "AND (rendered = 1 OR event_type = 'kiro_session_model') ORDER BY",
+    "AND (rendered = 1 OR event_type = 'kiro_session_model') AND line_offset > {offset:UInt32} ORDER BY",
 )
 SUMMARY_SQL_USER = (
     "SELECT count() AS total, countIf(toDate(last_event_time) = today()) AS today_sessions FROM (   "
@@ -684,6 +689,8 @@ async def test_session_detail_parses_events_subagents_and_agent_name(monkeypatch
             "raw_line": "parent two",
         },
     ]
+    # A durable model header must not hide later live source lines behind its reserved offset.
+    parent_rows.append({"line_offset": 0xFFFFFFFE, "event_type": "kiro_session_model", "harness": "kiro"})
     child_b = {
         "session_id": "child-b",
         "line_offset": 1,
