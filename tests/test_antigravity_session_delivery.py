@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -111,7 +112,9 @@ def test_public_reconcile_uses_shared_drain(tmp_path: Path, monkeypatch):
         lambda *args, **kwargs: calls.append((args, kwargs)) or True,
     )
 
-    result = cmd_reconcile_cli._reconcile_harness("antigravity", {}, 24, False)
+    result = cmd_reconcile_cli._reconcile_harness(
+        "antigravity", {}, False, cmd_reconcile_cli._discover_candidates("antigravity", 24)
+    )
 
     assert result["pushed"] == 1
     assert result["sessions"] == [{"session_id": "session", "status": "pushed", "bytes_new": 3}]
