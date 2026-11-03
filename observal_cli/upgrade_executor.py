@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -140,7 +141,7 @@ def _install_binary(
             timeout=15,
             headers={"Accept": "application/vnd.github+json"},
         )
-    if resp.status_code != 200:
+    if resp.status_code != HTTPStatus.OK:
         rprint(f"[red]Release v{target_version} not found on GitHub.[/red]")
         raise typer.Exit(1)
 
@@ -169,10 +170,11 @@ def _fetch_checksums(assets: dict[str, str]) -> dict[str, str]:
     checksums: dict[str, str] = {}
     if "checksums.txt" in assets:
         ck_resp = httpx.get(assets["checksums.txt"], timeout=15, follow_redirects=True)
-        if ck_resp.status_code == 200:
+        if ck_resp.status_code == HTTPStatus.OK:
+            expected_checksum_parts = 2
             for line in ck_resp.text.strip().splitlines():
                 parts = line.split()
-                if len(parts) == 2:
+                if len(parts) == expected_checksum_parts:
                     checksums[parts[1]] = parts[0]
     return checksums
 
@@ -182,7 +184,7 @@ def _download_binary(download_url: str, spinner, artifact_name: str) -> bytes:
     with spinner(f"Downloading {artifact_name}..."):
         bin_resp = httpx.get(download_url, timeout=120, follow_redirects=True)
 
-    if bin_resp.status_code != 200:
+    if bin_resp.status_code != HTTPStatus.OK:
         rprint("[red]Download failed.[/red]")
         raise typer.Exit(1)
 
