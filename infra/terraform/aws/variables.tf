@@ -52,6 +52,12 @@ variable "internal_dns_zone" {
   default     = "observal.internal"
 }
 
+variable "enable_flow_logs" {
+  description = "Enable VPC flow logs when Terraform manages the VPC."
+  type        = bool
+  default     = true
+}
+
 # ── DNS / TLS ──────────────────────────────────────────────────────────────
 
 variable "domain_name" {
