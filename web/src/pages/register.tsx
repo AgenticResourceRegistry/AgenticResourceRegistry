@@ -11,6 +11,7 @@ import { safeNext } from "@/lib/safe-next";
 import { isValidNamespace } from "@/lib/registry-name";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { Button } from "@/components/ui/button";
+import { DEFAULT_REGISTRY_NAME } from "@/components/registry/registry-mark";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -34,7 +35,7 @@ function RegisterContent() {
   const [alreadyAuthed] = useState(
     () => typeof window !== "undefined" && !!sessionStorage.getItem("observal_access_token"),
   );
-  const appName = brandingAppName || "Observal";
+  const appName = brandingAppName || DEFAULT_REGISTRY_NAME;
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
