@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -275,7 +276,9 @@ class KiroAdapter(BaseAdapter):
         scopes = [(home or Path.home()) / ".kiro"]
         if source.cwd:
             scopes.append(Path(source.cwd) / ".kiro")
-        return not any(self._v1_hooks_installed(scope) for scope in scopes)
+        event_name = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
+        trigger = {"stop": "Stop", "userpromptsubmit": "UserPromptSubmit"}.get(event_name.lower())
+        return trigger is None or not any(trigger in self._v1_hook_events(scope) for scope in scopes)
 
     def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
         """Deduplicate acknowledged Kiro hooks across both placements and workers."""
@@ -509,17 +512,18 @@ class KiroAdapter(BaseAdapter):
         alone would show a healthy status for a surface that is in fact silent.
         Such a machine is judged on its inline hooks instead.
         """
-        if self._v1_hooks_installed(config_dir):
-            v1_readable = kiro_cli_engine() != "v2" or kiro_ide_installed()
-            if v1_readable:
-                return "installed"
+        events = self._v1_hook_events(config_dir)
+        v1_readable = bool(events) and (kiro_cli_engine() != "v2" or kiro_ide_installed())
+        if v1_readable and events == {"Stop", "UserPromptSubmit"}:
+            return "installed"
+        standalone_status = "partial" if v1_readable else "missing"
 
         agents_dir = config_dir / "agents"
         if not agents_dir.is_dir():
-            return "missing"
+            return standalone_status
         agent_profiles = [f for f in agents_dir.glob("*.json") if f.stem != "kiro_default"]
         if not agent_profiles:
-            return "missing"
+            return standalone_status
         hooked = 0
         for af in agent_profiles:
             try:
@@ -535,24 +539,56 @@ class KiroAdapter(BaseAdapter):
                 pass
         if hooked == len(agent_profiles):
             return "installed"
-        return "partial" if hooked > 0 else "missing"
+        return "partial" if hooked > 0 else standalone_status
 
     @staticmethod
-    def _v1_hooks_installed(config_dir: Path) -> bool:
-        from observal_cli.harness_specs.kiro_hooks_spec import (
-            KIRO_V1_HOOK_FILENAME,
-            is_observal_v1_hook,
-        )
+    def _v1_hook_events(config_dir: Path) -> set[str]:
+        """Return only lifecycle triggers backed by enabled session-push commands.
 
-        hooks_file = config_dir / "hooks" / KIRO_V1_HOOK_FILENAME
+        Ownership is useful for rewriting, not proof of delivery. Require the v1
+        schema, a command action, and a Python launch of the session-push module.
+        This is structural health, not proof that a binary or network is available.
+        """
+        from observal_cli.harness_specs.kiro_hooks_spec import KIRO_V1_HOOK_FILENAME
+
         try:
-            data = json.loads(hooks_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            return False
-        if not isinstance(data, dict):
-            return False
+            data = json.loads((config_dir / "hooks" / KIRO_V1_HOOK_FILENAME).read_text())
+        except (ValueError, OSError):
+            return set()
+        if not isinstance(data, dict) or data.get("version") != "v1" or data.get("enabled") is False:
+            return set()
         hooks = data.get("hooks")
-        return isinstance(hooks, list) and any(is_observal_v1_hook(h) for h in hooks)
+        if not isinstance(hooks, list):
+            return set()
+        events = set()
+        for hook in hooks:
+            if not isinstance(hook, dict) or hook.get("enabled") is False or hook.get("disabled") is True:
+                continue
+            trigger, action = hook.get("trigger"), hook.get("action")
+            if trigger not in ("Stop", "UserPromptSubmit") or not isinstance(action, dict):
+                continue
+            command = action.get("command")
+            if action.get("type") != "command" or not isinstance(command, str) or not command.strip():
+                continue
+            try:
+                argv = shlex.split(command)
+            except ValueError:
+                continue
+            if argv and argv[0] == "env":
+                argv.pop(0)
+            while argv and re.match(r"^[A-Za-z_]\w*=", argv[0]):
+                argv.pop(0)
+            if not argv or not re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", re.split(r"[/\\]", argv[0])[-1]):
+                continue
+            module = "observal_cli.hooks.session_push"
+            module_launch = any(argv[i : i + 2] == ["-m", module] for i in range(1, len(argv)))
+            bootstrap_launch = any(
+                argv[i] == "-c" and re.search(r"runpy\.run_module\(['\"]" + re.escape(module) + r"['\"]", argv[i + 1])
+                for i in range(1, len(argv) - 1)
+            )
+            if module_launch or bootstrap_launch:
+                events.add(trigger)
+        return events
 
     # ── Private scanning helpers ──────────────────────────────────
 
