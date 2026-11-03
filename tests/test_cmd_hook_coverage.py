@@ -1121,6 +1121,7 @@ def test_install_sends_the_requested_version_and_records_what_was_installed(tmp_
 def test_install_real_server_hook_formats_preserves_entries_and_refreshes_versions(
     tmp_path, monkeypatch, harness, existing_file
 ):
+    """Install real server formats and converge while preserving user entries and refreshing versions."""
     from types import SimpleNamespace
 
     from services.hook_install_generator import generate_hook_install_config
@@ -1204,6 +1205,7 @@ def test_install_real_server_hook_formats_preserves_entries_and_refreshes_versio
 def test_array_hook_install_rejects_incompatible_existing_shapes_before_any_writes(
     tmp_path, monkeypatch, existing_hooks
 ):
+    """Refuse incompatible existing hook shapes before writing scripts or configuration."""
     project = tmp_path / "project"
     config_path = project / ".kiro/hooks/guard.json"
     config_path.parent.mkdir(parents=True)
@@ -1226,6 +1228,7 @@ def test_array_hook_install_rejects_incompatible_existing_shapes_before_any_writ
 
 @pytest.mark.parametrize("entries", [[None], [{"name": []}], [{"name": ""}], [{"name": "x"}, {"name": "x"}]])
 def test_array_hook_install_rejects_ambiguous_incoming_names_before_any_writes(tmp_path, monkeypatch, entries):
+    """Reject ambiguous incoming hook names during no-write preflight."""
     project = tmp_path / "project"
     response = {
         "config_path": ".kiro/hooks/guard.json",
@@ -1242,6 +1245,7 @@ def test_array_hook_install_rejects_ambiguous_incoming_names_before_any_writes(t
 
 
 def test_registry_hook_merge_is_pure_and_preserves_unrelated_entries():
+    """Refresh owned array entries without mutating inputs or unrelated configuration."""
     import copy
 
     from observal_cli.shared.hook_config import merge_hook_config
@@ -1257,6 +1261,7 @@ def test_registry_hook_merge_is_pure_and_preserves_unrelated_entries():
 
 
 def test_registry_hook_mapping_merge_deduplicates_incoming_entries_without_mutation():
+    """Retain dictionary append/dedup behavior without changing either input."""
     from observal_cli.shared.hook_config import merge_hook_config
 
     existing = {"hooks": {"Stop": [{"command": "old"}]}}
