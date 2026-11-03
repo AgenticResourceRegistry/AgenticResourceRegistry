@@ -21,6 +21,7 @@ class DeliveryAttempt:
 
     proceed: bool = True
     delivered: bool = False
+    reason: str = ""
 
 
 def serialized_outbox(function):
@@ -44,14 +45,53 @@ def _session_directory(source, config: dict, home: Path) -> Path:
     return home / ".observal" / "session-delivery" / key
 
 
+def _prompt_fingerprint(source):
+    """Hash source prompt boundaries, never store prompt content in Stop intent."""
+    if source.path is None:
+        return None
+    digest = hashlib.sha256()
+    try:
+        with source.path.open() as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                payload = record.get("payload")
+                if record.get("kind") == "Prompt" or (isinstance(payload, dict) and payload.get("type") == "user"):
+                    digest.update(line.strip().encode())
+                    digest.update(b"\n")
+    except (OSError, UnicodeError):
+        return None
+    return digest.hexdigest()
+
+
 def kiro_finalization_pending(source, config: dict, home=None) -> bool:
-    """Only an explicit durable Stop intent permits aged Kiro recovery to finalize."""
-    return (_session_directory(source, config, home or Path.home()) / "finalization.pending").is_file()
+    """Only an explicit Stop matching the current prompt sequence permits final recovery."""
+    path = _session_directory(source, config, home or Path.home()) / "finalization.pending"
+    try:
+        intent = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    anchor = _prompt_fingerprint(source)
+    return isinstance(intent, dict) and anchor is not None and intent.get("prompt_fingerprint") == anchor
 
 
 @contextmanager
 def kiro_delivery_guard(
-    source, event: dict, config: dict, *, related=(), final=False, final_requested=False, finalizable=(), home=None
+    source,
+    event: dict,
+    config: dict,
+    *,
+    related=(),
+    final=False,
+    final_requested=False,
+    cancel_final_requested=False,
+    require_final_intent=False,
+    finalizable=(),
+    home=None,
 ):
     """Serialize a Kiro session group and skip only an unchanged, acknowledged attempt.
 
@@ -73,9 +113,17 @@ def kiro_delivery_guard(
     # Lock files stay in place: unlinking an actively held lock would split ownership.
     with _exclusive_lock(root / (key + ".lock")):
         pending = directory / "finalization.pending"
+        if cancel_final_requested:
+            pending.unlink(missing_ok=True)
+        if final and require_final_intent and not kiro_finalization_pending(source, config, home=home):
+            yield DeliveryAttempt(proceed=False, reason="finalization intent superseded")
+            return
         if final_requested and finalizable:
             directory.mkdir(parents=True, exist_ok=True)
-            pending.touch(mode=0o600)
+            temporary = pending.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"prompt_fingerprint": _prompt_fingerprint(source)}))
+            temporary.chmod(0o600)
+            temporary.replace(pending)
         paths = set()
         for item in [source, *related]:
             if item.path is not None:
@@ -94,7 +142,15 @@ def kiro_delivery_guard(
             previous = json.loads(receipt.read_text())
         except (OSError, ValueError):
             previous = None
-        from observal_cli.sessions.base import read_cursor_state
+        from observal_cli.sessions.base import read_cursor_state, write_cursor
+
+        def reset_resumed_cursor():
+            offset, lines, finalized = read_cursor_state(source.checkpoint_key, home=home)
+            if finalized:
+                write_cursor(source.checkpoint_key, offset, lines, home=home, preserve_finalized=False)
+
+        if cancel_final_requested:
+            reset_resumed_cursor()
 
         def cursor_signature(item):
             cursor = read_cursor_state(item.checkpoint_key, home=home)
@@ -105,6 +161,8 @@ def kiro_delivery_guard(
         state = {"fingerprint": fingerprint, "cursors": [cursor_signature(item) for item in [source, *related]]}
         attempt = DeliveryAttempt(proceed=previous != state)
         yield attempt
+        if cancel_final_requested:
+            reset_resumed_cursor()
         if attempt.proceed and attempt.delivered:
             receipt.parent.mkdir(parents=True, exist_ok=True)
             # The session lock makes this atomic to other readers; replace also

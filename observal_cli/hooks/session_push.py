@@ -61,10 +61,11 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
 
     related_sources = adapter.related_session_sources(source, home=home)
     is_final = adapter.is_session_final(event)
+    reconcile_only = adapter.reconcile_only_finalization(source)
     with adapter.session_delivery_guard(source, event, config, related=related_sources, home=home) as attempt:
         if not attempt.proceed:
             optic.debug("duplicate {} capture skipped for session={}", harness, source.session_id)
-            if is_final:
+            if is_final and not reconcile_only:
                 # Capture succeeded previously, but a child may have failed to
                 # launch or died. The separate final guard suppresses completed
                 # finalization, not the Stop capture receipt.
@@ -81,7 +82,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
                 config,
                 hook_event=hook_event,
                 final=False,
-                extra_fields=adapter.session_extra_fields(source, event, is_final, home=home),
+                extra_fields=adapter.session_extra_fields(source, event, is_final and not reconcile_only, home=home),
                 extra_records=adapter.session_extra_records(source, event, is_final, home=home),
                 spool_only=deferred,
                 home=home,
@@ -109,7 +110,13 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
         if deferred:
             _spawn_worker("--drain-outbox", harness=harness)
 
-        if is_final:
+        if reconcile_only:
+            if is_final:
+                optic.info(
+                    "Kiro Stop recorded for session={}; finish with observal reconcile --harness kiro",
+                    source.session_id,
+                )
+        elif is_final:
             _spawn_worker(
                 "--finalize-session",
                 source.session_id,

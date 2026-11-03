@@ -26,7 +26,7 @@ Read [Recovery workflows](references/recovery-workflows.md) completely before ex
 
 ## Decision rules
 
-- Healthy telemetry does not need routine reconciliation.
+- Healthy telemetry does not need routine reconciliation, except the documented Kiro V3/IDE Stop-finalization step after chat exits.
 - Reconcile repairs missed local session delivery. It does not replace hook or extension installation.
 - Upgrade, downgrade, and rollback are distinct requests. Do not substitute one for another.
 - Local fallback is allowed only after JSON reports `error.category: unavailable` with exit code `9`, or `error.category: authentication` with operation `Load authenticated CLI configuration` and exit code `3`. The user must still request local files.

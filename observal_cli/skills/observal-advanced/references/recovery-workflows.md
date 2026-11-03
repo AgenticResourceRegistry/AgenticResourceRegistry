@@ -11,7 +11,20 @@
 
 ## Reconcile missed sessions
 
-Use only when telemetry status or the user identifies sessions missed by automatic delivery.
+Use when telemetry status or the user identifies sessions missed by automatic delivery.
+Kiro V3/IDE finalization is a separate, deliberate reconciliation step: its hook owner
+terminates detached children at shutdown. After the chat exits, finish recorded Stop
+intents from an independent terminal:
+
+```bash
+observal reconcile --harness kiro --since 24 --output json
+```
+
+Kiro hooks capture records and persist Stop intent, but do not claim automatic V3 final
+completion. Reconcile sends late records and credits and finalizes only the stopped source
+group. Quiet/permission-paused sessions without a matching Stop remain non-final. A resumed
+prompt cancels old authority. Verify the local finalized cursor and emptied intent/outbox;
+a scheduled child or successful capture is not finalization evidence.
 
 Preview first when scope is uncertain:
 

@@ -285,6 +285,7 @@ class KiroAdapter(BaseAdapter):
         from observal_cli.sessions.delivery_guard import kiro_delivery_guard
 
         requested = not final and self.is_session_final(event)
+        event_name = str(event.get("hook_event_name") or event.get("hookEventName") or event.get("event") or "")
         finalizable = tuple(
             item for item in [source, *related] if (requested or final) and self.should_capture_session(item, home=home)
         )
@@ -295,9 +296,21 @@ class KiroAdapter(BaseAdapter):
             related=related,
             final=final,
             final_requested=requested,
+            cancel_final_requested=event_name.lower() == "userpromptsubmit",
+            require_final_intent=final and event_name in ("Reconcile", "CrashRecovery"),
             finalizable=finalizable,
             home=home,
         )
+
+    def reconcile_only_finalization(self, source):
+        """V3/IDE hook descendants are killed at shutdown; finish via foreground reconcile."""
+        from observal_cli.sessions.kiro import is_ide_transcript
+
+        return is_ide_transcript(source.path)
+
+    def session_reconciliation_final(self, source, config, home=None):
+        """Only an explicit Stop authorizes Kiro finalization, never inactivity alone."""
+        return self.session_finalization_pending(source, config, home=home)
 
     def session_finalization_pending(self, source, config, home=None):
         """Recover an explicit Stop request without finalizing permission-paused sessions."""

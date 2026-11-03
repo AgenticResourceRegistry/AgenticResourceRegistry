@@ -212,6 +212,14 @@ class BaseAdapter:
 
         return nullcontext(DeliveryAttempt())
 
+    def reconcile_only_finalization(self, source):
+        """Whether this source must finish outside its hook owner's process tree."""
+        return False
+
+    def session_reconciliation_final(self, source, config, home=None):
+        """Whether explicit reconciliation may finalize this source group."""
+        return True
+
     def session_finalization_pending(self, source, config, home=None):
         """Whether recovery must finish an explicitly requested finalization."""
         return False

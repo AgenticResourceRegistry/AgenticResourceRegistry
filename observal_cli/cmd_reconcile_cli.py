@@ -23,6 +23,7 @@ from observal_cli.sessions.base import (
     read_cursor_state,
     recover_cursor_from_server,
 )
+from observal_cli.sessions.delivery_guard import DeliveryAttempt
 
 
 def _value(value):
@@ -172,13 +173,21 @@ def _reconcile_harness(
             detail=repr(error),
         )
 
-    # Kiro IDE stores delegated work in separate transcripts; reconcile both
-    # the parent conversation and its children, as the live hook does.
-    candidates = [candidate for source in sources for candidate in (source, *adapter.related_session_sources(source))]
+    # Preserve source-group ownership while reconciling separately stored children.
+    seen = set()
+    groups = []
+    for source in sources:
+        candidates = []
+        for candidate in (source, *adapter.related_session_sources(source)):
+            if candidate.checkpoint_key not in seen:
+                seen.add(candidate.checkpoint_key)
+                candidates.append(candidate)
+        if candidates:
+            groups.append((source, candidates))
 
     result = {
         "harness": harness,
-        "discovered": len(candidates),
+        "discovered": sum(len(candidates) for _source, candidates in groups),
         "pushed": 0,
         "finalized": 0,
         "queued": 0,
@@ -197,111 +206,164 @@ def _reconcile_harness(
 
     rprint(f"[cyan]{esc(harness)}: scanning sessions...[/cyan]")
     rejections = rejections if rejections is not None else []
-    for source in candidates:
-        session = {"session_id": source.session_id, "status": "skipped", "bytes_new": 0}
-        if source.path is None:
-            result["skipped"] += 1
-            session["reason"] = "source path unavailable"
-            result["sessions"].append(session)
-            continue
-        try:
-            size = source.path.stat().st_size
-        except OSError as error:
-            result["errors"] += 1
-            session.update(status="error", reason=type(error).__name__)
-            result["sessions"].append(session)
-            rprint(f"  [red]✗[/red] {esc(source.session_id)} could not be read")
-            continue
+    for parent, candidates in groups:
+        related = tuple(candidate for candidate in candidates if candidate is not parent)
+        final = adapter.session_reconciliation_final(parent, cfg)
+        event = {"session_id": parent.session_id, "hook_event_name": "Reconcile"}
+        guard = (
+            nullcontext(DeliveryAttempt())
+            if dry_run
+            else adapter.session_delivery_guard(
+                parent,
+                event,
+                cfg,
+                related=related,
+                final=final,
+            )
+        )
+        with guard as attempt:
+            if not attempt.proceed:
+                for candidate in candidates:
+                    key = "skipped" if attempt.reason else "up_to_date"
+                    result[key] += 1
+                    session = {"session_id": candidate.session_id, "status": key, "bytes_new": 0}
+                    if attempt.reason:
+                        session["reason"] = attempt.reason
+                    result["sessions"].append(session)
+                continue
+            pending = adapter.session_finalization_pending(parent, cfg)
+            delivered = True
+            for candidate in candidates:
+                delivered = (
+                    _reconcile_source(
+                        adapter,
+                        candidate,
+                        cfg,
+                        result,
+                        dry_run,
+                        rejections,
+                        final,
+                        pending,
+                    )
+                    and delivered
+                )
+            attempt.delivered = delivered
+    return result
 
-        local_offset, _line_count, finalized = read_cursor_state(source.checkpoint_key)
-        bytes_new = max(size - local_offset, 0)
-        session["bytes_new"] = bytes_new
-        if dry_run:
-            if bytes_new:
-                result["would_push"] += 1
-                session["status"] = "would_push"
-                rprint(f"  [dim]Would push:[/dim] {esc(source.session_id)} ({bytes_new} bytes new)")
-            elif not finalized:
-                result["would_finalize"] += 1
-                session["status"] = "would_finalize"
-                rprint(f"  [dim]Would finalize:[/dim] {esc(source.session_id)}")
-            else:
-                result["up_to_date"] += 1
-                session["status"] = "up_to_date"
-            result["sessions"].append(session)
-            continue
 
-        if finalized and local_offset >= size:
+def _reconcile_source(adapter, source, cfg, result, dry_run, rejections, final, pending_finalization):
+    """Reconcile one source while its parent group's delivery guard is held."""
+    session = {"session_id": source.session_id, "status": "skipped", "bytes_new": 0}
+    if source.path is None:
+        result["skipped"] += 1
+        session["reason"] = "source path unavailable"
+        result["sessions"].append(session)
+        return False
+    try:
+        size = source.path.stat().st_size
+    except OSError as error:
+        result["errors"] += 1
+        session.update(status="error", reason=type(error).__name__)
+        result["sessions"].append(session)
+        rprint(f"  [red]✗[/red] {esc(source.session_id)} could not be read")
+        return False
+
+    if not adapter.should_capture_session(source):
+        result["skipped"] += 1
+        session["reason"] = "outside collection scope"
+        result["sessions"].append(session)
+        return True
+
+    local_offset, _line_count, finalized = read_cursor_state(source.checkpoint_key)
+    bytes_new = max(size - local_offset, 0)
+    session["bytes_new"] = bytes_new
+    if dry_run:
+        if bytes_new:
+            result["would_push"] += 1
+            session["status"] = "would_push"
+            rprint(f"  [dim]Would push:[/dim] {esc(source.session_id)} ({bytes_new} bytes new)")
+        elif final and (not finalized or pending_finalization):
+            result["would_finalize"] += 1
+            session["status"] = "would_finalize"
+            rprint(f"  [dim]Would finalize:[/dim] {esc(source.session_id)}")
+        else:
             result["up_to_date"] += 1
             session["status"] = "up_to_date"
-            result["sessions"].append(session)
-            continue
-
-        try:
-            recovered = recover_cursor_from_server(source, cfg)
-        except (OSError, sqlite3.Error) as error:
-            fail(
-                ErrorCategory.UNAVAILABLE,
-                "Could not update the local session checkpoint.",
-                operation="Reconcile local sessions",
-                resource=source.session_id,
-                remediation="Check local state storage and retry.",
-                detail=repr(error),
-            )
-        if recovered is None:
-            result["errors"] += 1
-            session.update(status="checkpoint_mismatch", reason="server checkpoint does not match local source")
-            result["sessions"].append(session)
-            rprint(f"  [yellow]↻[/yellow] {esc(source.session_id)} checkpoint does not match local source")
-            continue
-        offset, _line_count = recovered
-        session["bytes_new"] = max(size - offset, 0)
-        rejections_before = len(rejections)
-        try:
-            delivered = drain_session_source(
-                source,
-                cfg,
-                hook_event="Reconcile",
-                final=True,
-                extra_records=adapter.session_extra_records(source, {"event": "Reconcile"}, True),
-                rejections=rejections,
-            )
-        except sqlite3.Error as error:
-            fail(
-                ErrorCategory.UNAVAILABLE,
-                "Could not write to the durable session outbox.",
-                operation="Reconcile local sessions",
-                resource="session outbox",
-                remediation="Check local storage and retry.",
-                detail=repr(error),
-            )
-        except OSError as error:
-            result["errors"] += 1
-            session.update(status="error", reason=type(error).__name__)
-            result["sessions"].append(session)
-            rprint(f"  [red]✗[/red] {esc(source.session_id)} could not be queued")
-            continue
-
-        source_rejections = [
-            rejection
-            for rejection in rejections[rejections_before:]
-            if rejection[0] == harness and rejection[1] == source.session_id
-        ]
-        if source_rejections:
-            result["rejected"] += len(source_rejections)
-            session.update(status="rejected", http_status=source_rejections[-1][2])
-            rprint(f"  [red]✗[/red] {esc(source.session_id)} rejected by server")
-        elif delivered:
-            key = "pushed" if offset < size else "finalized"
-            result[key] += 1
-            session["status"] = key
-            rprint(f"  [green]✓[/green] {esc(source.session_id)}")
-        else:
-            result["queued"] += 1
-            session["status"] = "queued"
-            rprint(f"  [yellow]↻[/yellow] {esc(source.session_id)} queued for retry")
         result["sessions"].append(session)
-    return result
+        return True
+
+    if finalized and local_offset >= size and not pending_finalization:
+        result["up_to_date"] += 1
+        session["status"] = "up_to_date"
+        result["sessions"].append(session)
+        return True
+
+    try:
+        recovered = recover_cursor_from_server(source, cfg)
+    except (OSError, sqlite3.Error) as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Could not update the local session checkpoint.",
+            operation="Reconcile local sessions",
+            resource=source.session_id,
+            remediation="Check local state storage and retry.",
+            detail=repr(error),
+        )
+    if recovered is None:
+        result["errors"] += 1
+        session.update(status="checkpoint_mismatch", reason="server checkpoint does not match local source")
+        result["sessions"].append(session)
+        rprint(f"  [yellow]↻[/yellow] {esc(source.session_id)} checkpoint does not match local source")
+        return False
+    offset, _line_count = recovered
+    session["bytes_new"] = max(size - offset, 0)
+    rejections_before = len(rejections)
+    try:
+        delivered = drain_session_source(
+            source,
+            cfg,
+            hook_event="Reconcile",
+            final=final,
+            extra_fields=adapter.session_extra_fields(source, {"event": "Reconcile"}, final),
+            extra_records=adapter.session_extra_records(source, {"event": "Reconcile"}, final),
+            rejections=rejections,
+        )
+    except sqlite3.Error as error:
+        fail(
+            ErrorCategory.UNAVAILABLE,
+            "Could not write to the durable session outbox.",
+            operation="Reconcile local sessions",
+            resource="session outbox",
+            remediation="Check local storage and retry.",
+            detail=repr(error),
+        )
+    except OSError as error:
+        result["errors"] += 1
+        session.update(status="error", reason=type(error).__name__)
+        result["sessions"].append(session)
+        rprint(f"  [red]✗[/red] {esc(source.session_id)} could not be queued")
+        return False
+
+    source_rejections = [
+        rejection
+        for rejection in rejections[rejections_before:]
+        if rejection[0] == source.harness and rejection[1] == source.session_id
+    ]
+    if source_rejections:
+        result["rejected"] += len(source_rejections)
+        session.update(status="rejected", http_status=source_rejections[-1][2])
+        rprint(f"  [red]✗[/red] {esc(source.session_id)} rejected by server")
+    elif delivered:
+        key = "pushed" if offset < size else "finalized" if final else "up_to_date"
+        result[key] += 1
+        session["status"] = key
+        rprint(f"  [green]✓[/green] {esc(source.session_id)}")
+    else:
+        result["queued"] += 1
+        session["status"] = "queued"
+        rprint(f"  [yellow]↻[/yellow] {esc(source.session_id)} queued for retry")
+    result["sessions"].append(session)
+    return bool(delivered) and not source_rejections
 
 
 def register_reconcile(app: typer.Typer) -> None:
