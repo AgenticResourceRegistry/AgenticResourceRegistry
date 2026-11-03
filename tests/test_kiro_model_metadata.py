@@ -31,6 +31,7 @@ from tests.test_session_ingest import external_calls as external_calls
     ],
 )
 def test_reasoning_model_is_normalized_without_guessing(model, expected):
+    """Normalize valid reasoning identifiers while preserving honest auto and unknown values."""
     native = Path(__file__).parent / "fixtures/kiro/v3-messages.jsonl"
     records = [json.loads(raw) for raw in native.read_text().splitlines()]
     line = next(record for record in records if record.get("payload", {}).get("operationType") == "Reasoning")
@@ -40,6 +41,7 @@ def test_reasoning_model_is_normalized_without_guessing(model, expected):
 
 
 def test_reasoning_model_precedes_payload_model_and_v2_stays_supported():
+    """Prefer V3 reasoning evidence while retaining older payload and V2 model fields."""
     assert (
         extract_usage({"payload": {"type": "assistant", "reasoningModelId": "qdev::", "modelId": "known"}})["model"]
         == "known"
@@ -72,6 +74,7 @@ def test_reasoning_model_precedes_payload_model_and_v2_stays_supported():
     ],
 )
 def test_companion_model_only_transports_a_bounded_identifier(tmp_path, value, expected):
+    """Transport only a bounded companion model identifier, never unrelated session data."""
     from observal_cli.sessions.kiro import read_kiro_session_model
 
     path = tmp_path / "messages.jsonl"
@@ -86,6 +89,7 @@ def test_companion_model_only_transports_a_bounded_identifier(tmp_path, value, e
 
 
 def test_adapter_metadata_survives_source_removal_and_retry(tmp_path, monkeypatch):
+    """Deliver queued model evidence after source files disappear and an initial send fails."""
     transcript = tmp_path / "messages.jsonl"
     transcript.write_text('{"payload":{"type":"user","content":"hello"}}\n')
     transcript.with_name("session.json").write_text(json.dumps({"modelId": "auto", "secret": "private"}))
@@ -108,6 +112,7 @@ def test_adapter_metadata_survives_source_removal_and_retry(tmp_path, monkeypatc
     posted = []
 
     def post(payload, _config):
+        """Record the retry payload and return a successful delivery acknowledgement."""
         posted.append(payload)
         return {"acknowledged_line": 0, "acknowledged_offset": 55}
 
@@ -117,6 +122,7 @@ def test_adapter_metadata_survives_source_removal_and_retry(tmp_path, monkeypatc
 
 
 def test_metadata_only_outbox_does_not_require_credits_or_final(tmp_path):
+    """Allow durable model-only batches without requiring credits or finalization."""
     db = tmp_path / "outbox.db"
     payload = {"harness": "kiro", "session_id": "s", "start_offset": 0, "lines": [], "session_model": "auto"}
     telemetry_buffer.enqueue(payload, destination="http://server", user_id="u", db_path=db)
@@ -128,6 +134,7 @@ def test_metadata_only_outbox_does_not_require_credits_or_final(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ingest_fallback_is_not_a_source_record_or_counted_event(external_calls):
+    """Keep fallback model rows outside rendered/source counts and preserve parent attribution."""
     from services.session_ingest import ingest_session_lines
 
     result = await ingest_session_lines(
@@ -151,6 +158,7 @@ async def test_ingest_fallback_is_not_a_source_record_or_counted_event(external_
 
 
 def test_trace_credits_prefer_observed_model_to_companion_fallback():
+    """Use observed or canonical model evidence before the companion fallback in credit traces."""
     fallback = {"raw_line": json.dumps({"kind": "KiroSessionModel", "data": {"modelId": "auto"}})}
     reasoning = {
         "raw_line": json.dumps(
@@ -175,6 +183,7 @@ def test_trace_credits_prefer_observed_model_to_companion_fallback():
 
 @pytest.mark.asyncio
 async def test_summary_uses_metadata_only_when_no_observed_model(monkeypatch):
+    """Ensure the canonical summary expression prioritizes observed source models."""
     from services.clickhouse import insert
 
     query = AsyncMock(return_value=Mock(raise_for_status=Mock()))
@@ -186,6 +195,7 @@ async def test_summary_uses_metadata_only_when_no_observed_model(monkeypatch):
 
 
 def test_api_bounds_model_metadata_and_catalog_has_observed_model():
+    """Bound API model metadata and register the reported explicit model identifier."""
     from pydantic import ValidationError
 
     from api.routes.ingest import SessionIngestRequest
@@ -198,6 +208,7 @@ def test_api_bounds_model_metadata_and_catalog_has_observed_model():
 
 
 def test_final_requeue_keeps_already_durable_model_when_companion_is_gone(tmp_path):
+    """Retain queued model evidence when a later final payload lacks the companion value."""
     db = tmp_path / "outbox.db"
     first = {"harness": "kiro", "session_id": "s", "start_offset": 0, "lines": ["line"], "session_model": "auto"}
     final = {key: value for key, value in first.items() if key != "session_model"} | {"final": True}

@@ -671,7 +671,11 @@ async def test_incremental_session_detail_uses_offset_for_parent_and_subagents(m
 
 
 @pytest.mark.asyncio
-async def test_session_detail_parses_events_subagents_and_agent_name(monkeypatch):
+@pytest.mark.parametrize(
+    "synthetic_types", [(), ("kiro_session_model",), ("kiro_credits",), ("kiro_session_model", "kiro_credits")]
+)
+async def test_session_detail_parses_events_subagents_and_agent_name(monkeypatch, synthetic_types):
+    """Render scoped parent/child events without using synthetic offsets as source progress."""
     identity = {"project_id": "project-a", "user_id": str(USER_ID), "harness": "kiro"}
     parent_rows = [
         {
@@ -689,8 +693,11 @@ async def test_session_detail_parses_events_subagents_and_agent_name(monkeypatch
             "raw_line": "parent two",
         },
     ]
-    # A durable model header must not hide later live source lines behind its reserved offset.
-    parent_rows.append({"line_offset": 0xFFFFFFFE, "event_type": "kiro_session_model", "harness": "kiro"})
+    # Neither reserved synthetic offset represents progress through the transcript.
+    for kind in synthetic_types:
+        parent_rows.append(
+            {"line_offset": 0xFFFFFFFF if kind == "kiro_credits" else 0xFFFFFFFE, "event_type": kind, "harness": "kiro"}
+        )
     child_b = {
         "session_id": "child-b",
         "line_offset": 1,
