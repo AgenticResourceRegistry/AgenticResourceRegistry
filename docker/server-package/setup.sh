@@ -180,20 +180,21 @@ DEMO_USER_EMAIL=$DEMO_USER_EMAIL
 EOF
 chmod 600 "$ENV_FILE"
 
+# Keep the argv array nonempty: Bash 3.2 (macOS default) treats an empty
+# array expansion as unbound under set -u.
 compose_args=(-f docker-compose.yml)
-profile_args=()
 if [ "$OBSERVABILITY_STACK" != "none" ]; then
     compose_args+=(-f docker-compose.observability.yml)
 fi
 if [ "$OBSERVABILITY_STACK" = "grafana" ]; then
-    profile_args+=(--profile grafana)
+    compose_args=(--profile grafana "${compose_args[@]}")
 fi
 
 info "Starting Observal services"
 cd "$INSTALL_DIR"
-docker compose "${profile_args[@]}" "${compose_args[@]}" --env-file .env up -d --wait --wait-timeout 300
+docker compose "${compose_args[@]}" --env-file .env up -d --wait --wait-timeout 300
 
-docker compose "${profile_args[@]}" "${compose_args[@]}" restart observal-lb
+docker compose "${compose_args[@]}" restart observal-lb
 
 info "Observal is running"
 info "Dashboard: $FRONTEND_URL"
