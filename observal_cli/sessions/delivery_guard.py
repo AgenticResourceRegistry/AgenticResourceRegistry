@@ -312,13 +312,20 @@ def kiro_outbox_guard(item, config, *, home=None, db_path=None):
     from observal_cli.sessions.base import read_cursor_state, write_cursor
 
     home = home or Path.home()
-    context = item.delivery_context
-    scoped = isinstance(context, dict)
-    source = SimpleNamespace(
-        checkpoint_key=context.get("checkpoint_key", item.checkpoint_key) if scoped else item.checkpoint_key,
-        path=Path(context["source_path"]) if scoped and isinstance(context.get("source_path"), str) else None,
-    )
-    directory = _session_directory(source, config, home)
+
+    def authority_scope(candidate):
+        """Derive both the authority source and claim identity from one row snapshot."""
+        envelope = candidate.delivery_context
+        is_scoped = isinstance(envelope, dict)
+        authority_source = SimpleNamespace(
+            checkpoint_key=envelope.get("checkpoint_key", candidate.checkpoint_key)
+            if is_scoped
+            else candidate.checkpoint_key,
+            path=Path(envelope["source_path"]) if is_scoped and isinstance(envelope.get("source_path"), str) else None,
+        )
+        return envelope, is_scoped, authority_source, _session_directory(authority_source, config, home)
+
+    context, scoped, source, directory = authority_scope(item)
     pending = directory / "finalization.pending"
     requires_authority = item.final or scoped
 
@@ -349,21 +356,31 @@ def kiro_outbox_guard(item, config, *, home=None, db_path=None):
                     write_cursor(key, offset, lines, home=home, preserve_finalized=False)
         return bool(valid)
 
-    # Retain the parent's reentrant claim through ACK, not the outbox-wide lock.
-    with _transport_claim(directory.parent / (directory.name + ".lock"), db_path=db_path) as acquired:
-        if not acquired:
-            yield OutboxDelivery(None)
+    # Refresh before authority side effects. A Stop can upgrade an unscoped candidate
+    # to a delegated final, in which case the refreshed parent's claim must replace it.
+    with ExitStack() as claims:
+        while True:
+            claimed_directory = directory
+            acquired = claims.enter_context(
+                _transport_claim(directory.parent / (directory.name + ".lock"), db_path=db_path)
+            )
+            if not acquired:
+                yield OutboxDelivery(None)
+                return
+            item = telemetry_buffer.get_item(item.id, db_path=db_path)
+            if item is None:
+                yield OutboxDelivery(None)
+                return
+            context, scoped, source, directory = authority_scope(item)
+            pending = directory / "finalization.pending"
+            requires_authority = item.final or scoped
+            if directory != claimed_directory:
+                claims.close()
+                continue
+            if not final_allowed() and (item.final or item.payload.get("final")):
+                item = telemetry_buffer.supersede_final(item, db_path=db_path)
+            yield OutboxDelivery(item, final_allowed)
             return
-        item = telemetry_buffer.get_item(item.id, db_path=db_path)
-        if item is None:
-            yield OutboxDelivery(None)
-            return
-        context = item.delivery_context
-        scoped = isinstance(context, dict)
-        requires_authority = item.final or scoped
-        if not final_allowed() and (item.final or item.payload.get("final")):
-            item = telemetry_buffer.supersede_final(item, db_path=db_path)
-        yield OutboxDelivery(item, final_allowed)
 
 
 def kiro_finalization_generation(source, config, home=None):

@@ -47,7 +47,9 @@ Transport holds a scoped session/group claim through send and ACK, not the outbo
 lock. Competing drains retry busy groups without resending their rows. Kiro lifecycle
 claims preserve Stop intent; they are not skipped merely because unrelated transport
 is busy. Candidates are refreshed after claiming so accepted rows cannot revoke a
-completed cursor. Verify these properties with the concurrency regressions in
+completed cursor. Refresh the authority source too, and reacquire the parent claim if
+the refreshed envelope changes group identity. Capture-only credit updates must retain
+a queued final payload and its Stop-generation envelope until authority is validated. Verify these properties with the concurrency regressions in
 `tests/test_kiro_coderabbit_review.py`.
 
 ## Live validation matrix

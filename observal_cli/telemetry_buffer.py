@@ -187,11 +187,19 @@ def enqueue(
                     end_offset = max(session_outbox.end_offset, excluded.end_offset),
                     final = max(session_outbox.final, excluded.final),
                     delivery_context = CASE
-                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.delivery_context
+                        WHEN excluded.final = 1
+                            OR (session_outbox.final = 0 AND excluded.end_line < excluded.start_line)
+                        THEN excluded.delivery_context
                         ELSE session_outbox.delivery_context
                     END,
                     payload = CASE
-                        WHEN excluded.final = 1 OR excluded.end_line < excluded.start_line THEN excluded.payload
+                        WHEN excluded.final = 1
+                            OR (session_outbox.final = 0 AND excluded.end_line < excluded.start_line)
+                        THEN excluded.payload
+                        WHEN session_outbox.final = 1
+                            AND json_extract(excluded.payload, '$.total_credits') IS NOT NULL
+                        THEN json_set(session_outbox.payload, '$.total_credits',
+                            json_extract(excluded.payload, '$.total_credits'))
                         ELSE session_outbox.payload
                     END
                 """,

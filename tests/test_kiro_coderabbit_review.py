@@ -331,3 +331,105 @@ def test_multi_target_patch_reports_target_errors_without_json_pollution(monkeyp
     else:
         assert "Malformed hook configuration" not in text
     assert error.value.result["targets"][0]["error"] == "Malformed hook configuration"
+
+
+@pytest.mark.parametrize("child", [False, True], ids=["parent", "delegated-child"])
+def test_refreshed_final_candidate_uses_current_authority_source(tmp_path, monkeypatch, child):
+    """An unscoped candidate upgraded by Stop must claim and validate the refreshed parent."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from observal_cli.lockfile import _exclusive_lock
+
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    parent_path = tmp_path / "messages.jsonl"
+    parent_path.write_text(json.dumps({"payload": {"type": "user", "content": "pending"}}) + "\n")
+    parent = SessionSource("kiro", "parent", parent_path)
+    target = parent
+    related = []
+    if child:
+        child_path = tmp_path / "child.jsonl"
+        child_path.write_text("{}\n")
+        target = SessionSource("kiro", "child", child_path, parent_session_id="parent")
+        related = [target]
+    config = {"server_url": "http://peer", "user_id": "user"}
+    capture = {"harness": "kiro", "session_id": target.session_id, "start_offset": 1, "lines": [], "total_credits": 0.5}
+    kwargs = {
+        "destination": config["server_url"],
+        "user_id": config["user_id"],
+        "checkpoint_key": target.checkpoint_key,
+    }
+    telemetry_buffer.enqueue(capture, **kwargs)
+    (candidate,) = telemetry_buffer.pending(destination=config["server_url"], user_id=config["user_id"])
+    finalizable = [parent, *related]
+    with delivery_guard.kiro_delivery_guard(
+        parent,
+        {"hook_event_name": "Stop"},
+        config,
+        final_requested=True,
+        finalizable=finalizable,
+        related=related,
+        home=tmp_path,
+    ):
+        pass
+    with delivery_guard.kiro_delivery_guard(
+        parent,
+        {"hook_event_name": "Reconcile"},
+        config,
+        final=True,
+        require_final_intent=True,
+        finalizable=finalizable,
+        related=related,
+        home=tmp_path,
+    ):
+        context = delivery_guard.kiro_outbox_context(target)
+        telemetry_buffer.enqueue(
+            {**capture, "final": True, "total_offset": target.path.stat().st_size, "total_line_count": 1},
+            delivery_context=context,
+            **kwargs,
+        )
+    assert candidate.delivery_context is None
+    parent_dir = delivery_guard._session_directory(parent, config, tmp_path)
+
+    def competing_claim():
+        """Observe parent claim ownership in a different thread, avoiding same-thread reentry."""
+        with _exclusive_lock(parent_dir.parent / (parent_dir.name + ".lock"), blocking=False) as acquired:
+            return acquired
+
+    with delivery_guard.kiro_outbox_guard(candidate, config, home=tmp_path) as delivery:
+        assert delivery.item.final and delivery.final_allowed()
+        assert (parent_dir / "finalization.pending").exists()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(competing_claim).result(timeout=2) is False
+
+
+@pytest.mark.parametrize("metadata_only", [False, True])
+def test_capture_credit_update_preserves_queued_final_envelope(tmp_path, metadata_only):
+    """New capture credits merge into final evidence without losing its Stop generation."""
+    payload = {
+        "harness": "kiro",
+        "session_id": "session",
+        "start_offset": 0,
+        "lines": [] if metadata_only else ["{}"],
+        "end_byte_offsets": [] if metadata_only else [3],
+        "final": True,
+        "total_offset": 3,
+        "total_line_count": 1,
+        "session_hash": "final-hash",
+        "hashed_line_count": 1,
+        "total_credits": 1,
+    }
+    context = {"generation": "queued-stop", "checkpoint_key": "session", "source_path": "/synthetic/messages.jsonl"}
+    kwargs = {"destination": "http://peer", "user_id": "user", "db_path": tmp_path / "outbox.db"}
+    row_id = telemetry_buffer.enqueue(payload, delivery_context=context, **kwargs)
+    capture = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"final", "total_offset", "total_line_count", "session_hash", "hashed_line_count"}
+    }
+    capture["total_credits"] = 2.5
+    assert telemetry_buffer.enqueue(capture, **kwargs) == row_id
+    (item,) = telemetry_buffer.pending(**kwargs)
+    assert item.final and item.payload["final"]
+    assert item.delivery_context == context
+    assert item.payload == {**payload, "total_credits": 2.5}
+    assert item.end_offset == 3
