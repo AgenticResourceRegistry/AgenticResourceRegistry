@@ -8,6 +8,8 @@
 User-directed, Pi-assisted work. **No human-review or production-readiness sign-off.**
 Branch `fix/kiro-engine-delivery` remains stacked on #2029 head `1626b67a`.
 Nothing pushed, published or merged; the reviewed #2029 branch was not changed.
+The user requested publication after live validation. Final human diff/PR-text review
+and manual-workflow approval remain publication gates under `AI_POLICY.md`.
 
 **Native V3 completion is now proven through independent foreground reconciliation,
 not an automatic hook-spawned finalizer.** This deliberately changes the workflow:
@@ -45,11 +47,68 @@ paths cover the inter-check source transition and a rejected sample that cannot 
 or preserve an old final flag. Sampling once removes contradictory decisions, not all
 atomicity gaps with external transcript writers. Ruff/format/whitespace checks passed.
 `make rebuild` completed via the existing external overlays; temporary root `.env` symlink
-removed, API HTTP 200. No new native or full-suite run claimed. Prior native evidence
-remains happy-path only. Independent re-review and human approval of manual V3/IDE
-reconciliation remain pending; nothing pushed, published or merged.
+removed, API HTTP 200. At that checkpoint, native evidence remained happy-path only.
+The subsequent publication-validation pass below adds native resume/offline evidence
+and a full-suite run. Independent re-review and human workflow approval remain pending.
 
 Evidence: `/tmp/kiro-2021-ack-decision-{before,focused,targeted,rebuild}.log`.
+
+## Publication validation on the committed implementation
+
+Implementation `f4ee9baa`, documentation head `6bb0df3c`, no production-code changes
+in this pass. Rebuilt branch API on OrbStack, Python CLI 3.13.3, native Kiro CLI 2.35.0.
+
+- Native V2/V3 in **both project and user scopes**: created/pulled agents, native upgrade,
+  unchanged generated launchers, foreground reconciliation, final cursors, attribution,
+  positive credits, contiguous byte/line checkpoints and replay passed.
+- Native V3 `--resume-id` while final batches received HTTP 503s: new Stop generation,
+  stale-final downgrade, reconnect, actual API acceptance with withheld ACK, deduplicated
+  retry and exact ClickHouse source-record counts passed in both scopes.
+- **Eleven controlled transcript/process cases** used generated launchers and actual
+  OrbStack ingestion: killed V2 worker/unchanged Stop retry; waiting-worker cancellation;
+  delayed records/credits; custom runtime home, inventory/discovery and quiet non-final
+  state; dual-placement deduplication; dry-run; partial standalone coverage; parent/child
+  partial failure, resume and attribution; completed-source resume before its hook;
+  real doctor/patch/repeat/cleanup preserving user state; normal ACK-time resume;
+  permanent-gap ACK after pre-send supersession; legacy SQLite migration; source deletion.
+  Related assertions share cases. These are constructed controls, **not native IDE GUI
+  or native ACK-inter-check race proof**. Both inter-check races remain covered by the
+  four regression cases; one sample is not atomicity with external transcript writers.
+- Full `make test`: **11,609 passed, 71 skipped, 5 failed** in 545.81s, plus two passing
+  subtests. Four failures reproduce on unchanged #2029 base `1626b67a`:
+  `test_a_dead_workers_child_and_worktree_are_cleaned_up`,
+  `test_both_leaderboard_routes_are_gated`,
+  `test_server_package_headless_setup_uses_safe_defaults`,
+  `test_server_package_replacement_preserves_existing_credentials`.
+  `test_pull_common_prefix_impossible_suffix_skips_reverse_scans` passed isolated
+  (**1 passed in 2.15s**), without code changes. No all-green full-suite claim.
+- Earlier committed-tree targeted validation remains **849 passed**. Production and
+  regression diffs reviewed by Pi; no human line-by-line review attestation.
+- Native and final controlled runs report cleanup errors `[]`. Earlier private matrix
+  attempts corrected test assertions/CLI confirmation/quoting and exercised API final
+  integrity repair. Two attempts exceeded the runner window during individual-row
+  cleanup; exact owned-ID batched cleanup verified all four telemetry tables empty and
+  removed copied configs. Final matrix exited successfully with batched cleanup.
+  No production workaround or unrelated fix was introduced.
+
+Reproduce the full run from this worktree with the dedicated venv and required packages:
+
+```bash
+PATH="$PWD/.venv/bin:$PATH" UV_NO_SYNC=1 \
+  PYTHONPATH="$PWD:$PWD/packages/observal-shared:$PWD/observal-server" make test
+```
+
+Private evidence (privacy review required before sharing):
+`/tmp/kiro-2021-native-publication.log` and `/tmp/kiro-2021-native-user-publication.log`.
+Native runs `kiro-2021-native-live-djbtwlgp` and `kiro-2021-native-live-z24ia2o7`.
+Controlled final run `kiro-2021-publication-matrix-a6cgl5zz`,
+`/tmp/kiro-2021-publication-matrix.log`;
+`/tmp/kiro-2021-publication-{full,prefix-rerun,base-failures}.log`.
+Proposed template body: `/tmp/kiro-2021-pr-description.md`.
+
+**#2029 must merge first.** It remains open at `1626b67a`. Publication was requested,
+but complete human diff/PR-text review and manual-workflow approval are not attested.
+Independent clearance remains pending. No push, PR or merge in this pass.
 
 ## Reviewable local checkpoints
 
@@ -131,9 +190,10 @@ was broken. Private scripts/logs are outside Git and require privacy review befo
 
 Human review and independent re-review must approve the **explicit V3/IDE reconciliation workflow**, adapter/group
 coordination, source prompt authority and custom-runtime-home scope. This is not an automatic
-background-runner solution. Global installer relocation is not newly attested. A clean
-full-suite rerun may still be requested before publication. After #2029 merges, rebase onto
-updated `main` and verify the #2021-only diff. No PR publication or merge without approval.
+background-runner solution. Global installer relocation is not newly attested. The final
+implementation-tree full-suite run is recorded above with its failures. After #2029 merges,
+rebase onto updated `main` and verify the #2021-only diff. No publication or merge without
+the required human approval.
 The pre-existing project-only doctor cleanup gap remains separate.
 
 Prior published fixes, status not rechecked in this step: #2029 (#2015/#2016/#2024),
