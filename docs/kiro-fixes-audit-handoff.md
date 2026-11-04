@@ -58,6 +58,13 @@ Rebuild the local stack with `make rebuild` before exercising runtime changes.
 Preserve host credentials, unrelated profiles and user hooks. Use isolated homes,
 synthetic registry agents and unique session IDs; remove only owned test data afterward.
 
+On macOS, changing native Kiro's `HOME` does not safely isolate Keychain access. Stop
+if missing-keychain dialogs appear; never reset the host keychain for a test. Keep the
+native OS home intact and separate the hook interpreter's test authentication home in
+the validation harness. Document and remove any temporary interpreter bootstrap; it
+is test infrastructure, not a supported product authentication override. Do not infer
+forensic host-auth-state preservation from an isolated SQLite copy.
+
 Validate native Kiro V2 and V3 in both project and user scopes with unchanged generated
 launchers. Keep native engine evidence separate from constructed transcript or fault
 controls. In particular, constructed V3 layouts are not native IDE GUI evidence.
