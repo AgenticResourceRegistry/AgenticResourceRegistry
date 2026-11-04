@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from observal_cli import telemetry_buffer
 from observal_cli.harness import ensure_loaded, get_adapter
@@ -119,8 +120,17 @@ def post(payload,config):
 base.drain_outbox({'server_url':'http://server','user_id':'user'},db_path=Path(sys.argv[1]),home=Path(sys.argv[2]),post=post)
 """
     ready = tmp_path / "ready"
+    root = Path(__file__).resolve().parents[1]
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(root) + os.pathsep + str(root / "packages/observal-shared"),
+    }
     processes = [
-        subprocess.Popen([sys.executable, "-c", script, str(db), str(tmp_path), str(log), str(ready)], env=os.environ)
+        subprocess.Popen(
+            [sys.executable, "-P", "-c", script, str(db), str(tmp_path), str(log), str(ready)],
+            env=env,
+            cwd=tmp_path,
+        )
         for _ in range(2)
     ]
     try:

@@ -4,6 +4,7 @@
 """Regression evidence for the #2021 auditor's delivery-health findings."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -127,8 +128,17 @@ with kiro_delivery_guard(source,{}, {'server_url':'http://server','user_id':'use
     print('locked',flush=True)
     time.sleep(120)
 """
+    root = Path(__file__).resolve().parents[1]
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(root) + os.pathsep + str(root / "packages/observal-shared"),
+    }
     process = subprocess.Popen(
-        [sys.executable, "-c", script, str(tmp_path)], env=os.environ, stdout=subprocess.PIPE, text=True
+        [sys.executable, "-P", "-c", script, str(tmp_path)],
+        env=env,
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        text=True,
     )
     try:
         assert process.stdout.readline().strip() == "locked"
