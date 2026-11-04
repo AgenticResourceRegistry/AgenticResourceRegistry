@@ -38,6 +38,7 @@ def session(tmp_path, monkeypatch):
     posts, workers = [], []
 
     def acknowledge(_url, _token, payload, **kwargs):
+        """Record the request and acknowledge source ranges or metadata-only completion."""
         posts.append(payload)
         return {
             "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
@@ -259,6 +260,7 @@ def test_waiting_v2_worker_cannot_finalize_resumed_session(session, monkeypatch)
     assert workers
 
     def settle(_path):
+        """Resume the session during settling before the old worker validates its authority."""
         session_push._run_hook(
             {"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home
         )
@@ -304,6 +306,7 @@ def test_source_resume_during_ack_cannot_restore_final_cursor(session, monkeypat
     acknowledge = base.post_to_server_ack
 
     def resume_at_ack(url, token, payload, **kw):
+        """Append a resumed prompt only after an authoritative final request was sent."""
         if payload.get("final"):
             with path.open("a") as stream:
                 stream.write(json.dumps({"id": "resumed", "payload": {"type": "user", "content": "next"}}) + "\n")
@@ -361,6 +364,7 @@ def test_waiting_v2_worker_cannot_adopt_a_newer_stop(session, monkeypatch):
     stop(home)
 
     def settle(_path):
+        """Resume the session during settling before the old worker validates its authority."""
         session_push._run_hook(
             {"session_id": "session", "hook_event_name": "UserPromptSubmit"}, harness="kiro", home=home
         )
@@ -430,14 +434,17 @@ def test_standalone_ack_uses_one_coherent_authority_sample(session, monkeypatch,
     samples, writes = [], []
 
     def append_resume():
+        """Write a new prompt boundary without invoking its capture hook."""
         with path.open("a") as stream:
             stream.write(json.dumps({"id": "resumed", "payload": {"type": "user", "content": "next"}}) + "\n")
 
     @contextmanager
     def instrumented_guard(*args, **kwargs):
+        """Observe authority sampling while retaining the real delivery guard."""
         with guard(*args, **kwargs) as delivery:
 
             def sample():
+                """Simulate a prompt transition between successive authority reads."""
                 if not samples and resume_before_sample:
                     append_resume()
                 allowed = delivery.final_allowed()
@@ -453,6 +460,7 @@ def test_standalone_ack_uses_one_coherent_authority_sample(session, monkeypatch,
     write = base.write_cursor
 
     def capture_write(*args, **kwargs):
+        """Record explicit finality arguments before delegating to the real cursor writer."""
         if "finalized" in kwargs:
             writes.append((kwargs["finalized"], kwargs["preserve_finalized"]))
         return write(*args, **kwargs)

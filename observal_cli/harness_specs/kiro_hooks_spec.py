@@ -62,6 +62,7 @@ class KiroHook:
 
     @property
     def command(self) -> str:
+        """Return only a string command without coercing malformed handler values."""
         value = self.handler.get("command")
         return value if isinstance(value, str) else ""
 

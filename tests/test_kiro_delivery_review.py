@@ -31,6 +31,7 @@ def captured_stop(tmp_path, monkeypatch):
     posts = []
 
     def acknowledge(_url, _token, payload, **kwargs):
+        """Acknowledge synthetic batches at their actual source byte boundaries."""
         posts.append(payload)
         return {
             "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,

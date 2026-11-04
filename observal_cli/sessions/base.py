@@ -520,7 +520,16 @@ def drain_outbox(
         from observal_cli.harness import ensure_loaded, get_adapter
 
         ensure_loaded()
-        adapter = get_adapter(items[0].harness)
+        try:
+            adapter = get_adapter(items[0].harness)
+        except KeyError as exc:
+            item = items[0]
+            quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+            log_error(
+                f"quarantined unknown harness {item.harness} session {item.session_id} batch at {quarantine_path}",
+                home=home,
+            )
+            continue
         with adapter.session_outbox_guard(items[0], config, home=home, db_path=db_path) as delivery:
             item = delivery.item
             try:
@@ -650,6 +659,7 @@ def drain_session_source(
         return False
 
     def source_was_rejected() -> bool:
+        """Check whether this source encountered a permanent ingest rejection during drainage."""
         return bool(
             rejections
             and any(

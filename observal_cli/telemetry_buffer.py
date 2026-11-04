@@ -56,6 +56,7 @@ def _path(db_path: Path | None) -> Path:
 
 
 def _connect(db_path: Path | None = None, max_bytes: int = MAX_OUTBOX_BYTES) -> sqlite3.Connection:
+    """Open and migrate the local durable outbox without changing API payload fields."""
     path = _path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:

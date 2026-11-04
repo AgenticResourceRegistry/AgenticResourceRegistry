@@ -57,6 +57,7 @@ def serialized_outbox(function):
 
     @wraps(function)
     def run(*args, **kwargs):
+        """Serialize this drain with other owners of the same outbox database."""
         with _exclusive_lock(_outbox_lock_path(kwargs.get("db_path"))):
             return function(*args, **kwargs)
 
@@ -76,7 +77,7 @@ def _prompt_fingerprint(source):
         return None
     digest = hashlib.sha256()
     try:
-        with source.path.open() as stream:
+        with source.path.open("rb") as stream:
             for line in stream:
                 try:
                     record = json.loads(line)
@@ -86,7 +87,7 @@ def _prompt_fingerprint(source):
                     continue
                 payload = record.get("payload")
                 if record.get("kind") == "Prompt" or (isinstance(payload, dict) and payload.get("type") == "user"):
-                    digest.update(line.strip().encode())
+                    digest.update(line.strip())
                     digest.update(b"\n")
     except (OSError, UnicodeError):
         return None
@@ -200,6 +201,7 @@ def kiro_delivery_guard(
         from observal_cli.sessions.base import read_cursor_state, write_cursor
 
         def reset_resumed_cursor():
+            """Clear finality when prompt boundaries changed since the last acknowledged capture."""
             for item in [source, *related]:
                 offset, lines, finalized = read_cursor_state(item.checkpoint_key, home=home)
                 if finalized:
@@ -213,6 +215,7 @@ def kiro_delivery_guard(
             reset_resumed_cursor()
 
         def cursor_signature(item):
+            """Fingerprint parent and child cursors for acknowledgement-aware duplicate detection."""
             cursor = read_cursor_state(item.checkpoint_key, home=home)
             # Finalization is separate progress; its flag must not invalidate an
             # otherwise acknowledged capture of the same bytes and metadata.
@@ -293,6 +296,7 @@ def kiro_outbox_guard(item, config, *, home=None, db_path=None):
     requires_authority = item.final or scoped
 
     def final_allowed():
+        """Revalidate the queued Stop generation and revoke superseded cursor finality."""
         if not requires_authority:
             return True
         try:

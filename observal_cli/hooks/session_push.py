@@ -45,6 +45,7 @@ def main(home: Path | None = None, harness: str = "claude-code", placement: str 
 
 
 def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement: str = "") -> None:
+    """Capture an accepted hook while preserving explicit, generation-bound Stop intent."""
     ensure_loaded()
     adapter = get_adapter(harness)
     source = adapter.resolve_session_source(event, home=home)
@@ -138,6 +139,7 @@ def _run_hook(event: dict, *, harness: str, home: Path | None = None, placement:
 
 
 def _spawn_worker(*args: str, harness: str) -> bool:
+    """Launch a detached interpreter; launch success does not establish delivery completion."""
     try:
         from observal_cli.shared.launcher import module_subprocess
 
@@ -176,6 +178,7 @@ def _wait_until_stable(path: Path) -> None:
 def _finalize_session(
     harness: str, session_id: str, cwd: str, home: Path | None = None, generation: str | None = None
 ) -> None:
+    """Finalize settled sources only while the scheduled Stop generation remains authoritative."""
     ensure_loaded()
     adapter = get_adapter(harness)
     source = adapter.resolve_session_source(
@@ -239,6 +242,7 @@ def _drain_pending(home: Path | None = None) -> None:
 
 
 def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None = None) -> None:
+    """Retry aged sources and explicit pending finalization without closing quiet Kiro sessions."""
     ensure_loaded()
     adapter = get_adapter(harness)
     config = load_config(home=home)
@@ -303,6 +307,7 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
 
 
 def cli_main() -> None:
+    """Dispatch capture, outbox drainage, recovery or generation-bound finalization."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--harness", default="claude-code")
     parser.add_argument("--placement", choices=("inline", "standalone"), default="")

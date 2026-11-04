@@ -209,6 +209,7 @@ class KiroAdapter(BaseAdapter):
         return kiro_home(home).exists()
 
     def resolve_session_source(self, event: dict[str, Any], home: Path | None = None) -> SessionSource | None:
+        """Resolve the native transcript and attribution within the active Kiro runtime root."""
         from observal_cli.sessions.kiro import find_kiro_jsonl, read_kiro_session_cwd, resolve_session_id
 
         session_id = resolve_session_id(event)
@@ -504,6 +505,7 @@ class KiroAdapter(BaseAdapter):
         return {}
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
+        """Scan installed Kiro resources in the resolved user runtime root."""
         from observal_cli.sessions.kiro import kiro_home
 
         kiro_dir = kiro_home(home)
@@ -535,6 +537,7 @@ class KiroAdapter(BaseAdapter):
             return ScanResult()
 
     def discover_home(self, home: Path | None = None) -> AdapterDiscoveryResult:
+        """Discover user-scoped resources without assuming the default Kiro home."""
         from observal_cli.sessions.kiro import kiro_home
 
         return self._discover_kiro_root(kiro_home(home), DiscoveryScope.USER, home=home or Path.home())
@@ -788,6 +791,7 @@ class KiroAdapter(BaseAdapter):
         home: Path | None = None,
         project_dir: Path | None = None,
     ) -> AdapterDiscoveryResult:
+        """Collect resources and diagnostics from one explicitly scoped Kiro root."""
         scanner = RichAdapterScanner(
             harness=self.harness_name,
             scope=scope,
@@ -888,6 +892,7 @@ class KiroAdapter(BaseAdapter):
     def _add_kiro_hooks(
         scanner: RichAdapterScanner, path: Path, hooks: object, *, name_prefix: str, source: str
     ) -> None:
+        """Normalize hook formats into redacted discovery records without coercing bad metadata."""
         if not isinstance(hooks, (dict, list)):
             scanner.diagnostic(
                 DiagnosticCode.METADATA_MALFORMED, path, "Kiro hook collection must be an object or array"
