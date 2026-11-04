@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
+import time
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -38,7 +38,7 @@ class DeliveryAttempt:
 class OutboxDelivery:
     """A transport attempt may acknowledge records without retaining final authority."""
 
-    item: OutboxItem
+    item: OutboxItem | None
     final_allowed: Callable[[], bool] = lambda: True
 
 
@@ -52,16 +52,43 @@ def _outbox_lock_path(db_path=None):
     return Path(db_path or telemetry_buffer.DB_PATH).with_suffix(".delivery.lock")
 
 
-def serialized_outbox(function):
-    """Keep one process in the pending-item/send/acknowledge loop for each outbox."""
+@contextmanager
+def _transport_claim(path, *, db_path=None, wait=False):
+    """Acquire a group under the outbox lock, but never hold that lock during HTTP.
 
-    @wraps(function)
-    def run(*args, **kwargs):
-        """Serialize this drain with other owners of the same outbox database."""
-        with _exclusive_lock(_outbox_lock_path(kwargs.get("db_path"))):
-            return function(*args, **kwargs)
+    Nonblocking group acquisition prevents lock-order cycles when a lifecycle owner
+    drains another group's rows. Workers may retry busy rows; hooks retain Stop intent.
+    """
+    while True:
+        stack = ExitStack()
+        with _exclusive_lock(_outbox_lock_path(db_path)):
+            acquired = stack.enter_context(_exclusive_lock(path, blocking=False))
+        if acquired:
+            break
+        stack.close()
+        if not wait:
+            yield False
+            return
+        time.sleep(0.01)
+    try:
+        yield True
+    finally:
+        stack.close()
 
-    return run
+
+@contextmanager
+def ordinary_outbox_guard(item, config, *, home=None, db_path=None):
+    """Claim one ordinary session and refresh its candidate before transport."""
+    from observal_cli import telemetry_buffer
+
+    identity = [item.destination, item.user_id, item.harness, item.session_id]
+    key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+    path = _outbox_lock_path(db_path).with_suffix(".sessions") / (key + ".lock")
+    with _transport_claim(path, db_path=db_path) as acquired:
+        if not acquired:
+            yield OutboxDelivery(None)
+            return
+        yield OutboxDelivery(telemetry_buffer.get_item(item.id, db_path=db_path))
 
 
 def _session_directory(source, config: dict, home: Path) -> Path:
@@ -138,7 +165,7 @@ def kiro_delivery_guard(
     phase_key = hashlib.sha256(phase.encode()).hexdigest()
     receipt = root / key / (phase_key + ".json")
     # Lock files stay in place: unlinking an actively held lock would split ownership.
-    with _exclusive_lock(_outbox_lock_path()), _exclusive_lock(root / (key + ".lock")):
+    with _transport_claim(root / (key + ".lock"), wait=True):
         pending = directory / "finalization.pending"
         if cancel_final_requested:
             pending.unlink(missing_ok=True)
@@ -322,8 +349,18 @@ def kiro_outbox_guard(item, config, *, home=None, db_path=None):
                     write_cursor(key, offset, lines, home=home, preserve_finalized=False)
         return bool(valid)
 
-    # A lifecycle guard holds these same reentrant locks, in this same order.
-    with _exclusive_lock(_outbox_lock_path(db_path)), _exclusive_lock(directory.parent / (directory.name + ".lock")):
+    # Retain the parent's reentrant claim through ACK, not the outbox-wide lock.
+    with _transport_claim(directory.parent / (directory.name + ".lock"), db_path=db_path) as acquired:
+        if not acquired:
+            yield OutboxDelivery(None)
+            return
+        item = telemetry_buffer.get_item(item.id, db_path=db_path)
+        if item is None:
+            yield OutboxDelivery(None)
+            return
+        context = item.delivery_context
+        scoped = isinstance(context, dict)
+        requires_authority = item.final or scoped
         if not final_allowed() and (item.final or item.payload.get("final")):
             item = telemetry_buffer.supersede_final(item, db_path=db_path)
         yield OutboxDelivery(item, final_allowed)

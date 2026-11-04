@@ -43,6 +43,13 @@ PYTHONPATH="$PWD:$PWD/packages/observal-shared:$PWD/observal-server" \
 Process tests must pass explicit source paths to their child interpreters rather than
 relying on the caller's working directory or an inherited `PYTHONPATH`.
 
+Transport holds a scoped session/group claim through send and ACK, not the outbox-wide
+lock. Competing drains retry busy groups without resending their rows. Kiro lifecycle
+claims preserve Stop intent; they are not skipped merely because unrelated transport
+is busy. Candidates are refreshed after claiming so accepted rows cannot revoke a
+completed cursor. Verify these properties with the concurrency regressions in
+`tests/test_kiro_coderabbit_review.py`.
+
 ## Live validation matrix
 
 Rebuild the local stack with `make rebuild` before exercising runtime changes.
@@ -55,6 +62,8 @@ controls. In particular, constructed V3 layouts are not native IDE GUI evidence.
 
 - Verify engine selection, standalone per-event coverage and V2 inline compatibility.
 - Check custom `KIRO_HOME` consistently in discovery, doctor, patch and cleanup.
+  Missing or empty profile directories must not hide incomplete coverage or prevent
+  owned standalone-hook cleanup.
 - Verify attribution, late records and credits, final cursors, checkpoints and replay.
 - Resume while final batches are offline. A newer Stop must not reauthorize old batches.
 - Withhold the ACK after actual server acceptance, then reconnect. Retry must preserve

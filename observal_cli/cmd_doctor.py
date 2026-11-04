@@ -396,13 +396,13 @@ def _check_kiro(issues: list, warnings: list):
     if status == "installed":
         rprint("  [green]Acknowledged session hooks installed for the configured Kiro surface[/green]")
         return
+    if status in {"partial", "missing"}:
+        warnings.append(
+            "Kiro acknowledged session hooks are missing or incomplete. "
+            "Run `observal doctor patch --harness kiro` to repair the configured surface."
+        )
     agents_dir = config_dir / "agents"
     if not agents_dir.is_dir():
-        if status in {"partial", "missing"}:
-            warnings.append(
-                "Kiro acknowledged session hooks are missing or incomplete. "
-                "Run `observal doctor patch --harness kiro` to repair the configured surface."
-            )
         rprint(f"  [dim]No Kiro agents directory found: {esc(agents_dir)}[/dim]")
         return
 
@@ -851,6 +851,10 @@ def _patch_targets(targets: list[str], *, dry_run: bool, output: OutputMode | st
         )
     result = {"action": "patch", "dry_run": dry_run, "changed": changed, "targets": rows}
     if failures:
+        if output != OutputMode.json:
+            for row in rows:
+                if "error" in row:
+                    rprint(f"  [red]{esc(row['harness'])}: {esc(row['error'])}[/red]")
         fail(
             failures[0].category,
             "Doctor patch could not patch every selected harness.",
@@ -1005,8 +1009,8 @@ def _cleanup_kiro(dry_run: bool) -> bool:
     rprint("[cyan]Kiro[/cyan]")
     agents_dir = kiro_home() / "agents"
     if not agents_dir.is_dir():
-        rprint("  [dim]No ~/.kiro/agents/ found - skipping[/dim]")
-        return False
+        rprint(f"  [dim]No Kiro agents directory found: {esc(agents_dir)} - skipping profiles[/dim]")
+        return _cleanup_kiro_hook_files(dry_run)
 
     changed = False
     for agent_profile in sorted(agents_dir.glob("*.json")):

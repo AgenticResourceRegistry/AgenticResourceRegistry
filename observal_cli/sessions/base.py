@@ -19,8 +19,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger as optic
 
-from observal_cli.sessions.delivery_guard import serialized_outbox
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -485,7 +483,6 @@ def batch_ranges(lines: list[str]) -> list[tuple[int, int]]:
 # ---------------------------------------------------------------------------
 
 
-@serialized_outbox
 def drain_outbox(
     config: dict,
     *,
@@ -532,6 +529,9 @@ def drain_outbox(
             continue
         with adapter.session_outbox_guard(items[0], config, home=home, db_path=db_path) as delivery:
             item = delivery.item
+            if item is None:
+                # A busy claim or stale candidate is retried by the next drain.
+                return False
             try:
                 acknowledgement = post_batch(item.payload, config)
             except PermanentIngestRejectionError as exc:

@@ -254,24 +254,41 @@ def pending(
             "ORDER BY (item.end_line < item.start_line), firsts.first_id, item.start_line, item.id LIMIT ?",
             (destination.rstrip("/"), user_id, destination.rstrip("/"), user_id, limit),
         ).fetchall()
-        return [
-            OutboxItem(
-                id=int(row[0]),
-                destination=row[1],
-                user_id=row[2],
-                harness=row[3],
-                session_id=row[4],
-                checkpoint_key=row[5],
-                start_line=int(row[6]),
-                end_line=int(row[7]),
-                end_offset=int(row[8]),
-                final=bool(row[9]),
-                payload=json.loads(row[10]),
-                attempts=int(row[11]),
-                delivery_context=json.loads(row[12]) if row[12] is not None else None,
-            )
-            for row in rows
-        ]
+        return [_outbox_item(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _outbox_item(row) -> OutboxItem:
+    """Decode one SQLite row without changing its local authority envelope."""
+    return OutboxItem(
+        id=int(row[0]),
+        destination=row[1],
+        user_id=row[2],
+        harness=row[3],
+        session_id=row[4],
+        checkpoint_key=row[5],
+        start_line=int(row[6]),
+        end_line=int(row[7]),
+        end_offset=int(row[8]),
+        final=bool(row[9]),
+        payload=json.loads(row[10]),
+        attempts=int(row[11]),
+        delivery_context=json.loads(row[12]) if row[12] is not None else None,
+    )
+
+
+def get_item(item_id: int, *, db_path: Path | None = None) -> OutboxItem | None:
+    """Refresh a candidate after obtaining its transport claim; an accepted row is absent."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, destination, user_id, harness, session_id, checkpoint_key, "
+            "start_line, end_line, end_offset, final, payload, attempts, delivery_context "
+            "FROM session_outbox WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        return _outbox_item(row) if row is not None else None
     finally:
         conn.close()
 

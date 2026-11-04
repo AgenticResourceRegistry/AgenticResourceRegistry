@@ -327,14 +327,17 @@ class TestHarnessDiagnosisState:
 
         assert issues == [f"{settings}: not valid JSON."]
 
-    def test_kiro_empty_directory_and_current_profile_have_no_warning(
+    def test_kiro_empty_directory_and_prompt_only_profile_warn(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ):
+        """An existing directory or one prompt hook is not complete session coverage."""
         agents = tmp_path / ".kiro" / "agents"
         agents.mkdir(parents=True)
 
-        doctor_module._check_kiro([], [])
+        empty_warnings: list[str] = []
+        doctor_module._check_kiro([], empty_warnings)
         assert "No Kiro agent configs found" in _plain(capsys.readouterr().out)
+        assert any("missing or incomplete" in warning for warning in empty_warnings)
 
         (agents / "broken.json").write_text("invalid", encoding="utf-8")
         _write_json(
@@ -350,7 +353,7 @@ class TestHarnessDiagnosisState:
 
         doctor_module._check_kiro([], warnings)
 
-        assert warnings == []
+        assert any("missing or incomplete" in warning for warning in warnings)
 
     def test_pi_source_failure_is_an_issue(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / ".pi" / "agent").mkdir(parents=True)

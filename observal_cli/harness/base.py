@@ -218,11 +218,9 @@ class BaseAdapter:
 
     def session_outbox_guard(self, item, config, *, home=None, db_path=None):
         """Permit ordinary delivery; adapters can validate queued final authority through ACK."""
-        from contextlib import nullcontext
+        from observal_cli.sessions.delivery_guard import ordinary_outbox_guard
 
-        from observal_cli.sessions.delivery_guard import OutboxDelivery
-
-        return nullcontext(OutboxDelivery(item))
+        return ordinary_outbox_guard(item, config, home=home, db_path=db_path)
 
     def reconcile_only_finalization(self, source):
         """Whether this source must finish outside its hook owner's process tree."""

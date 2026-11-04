@@ -66,7 +66,8 @@ def test_unknown_outbox_harness_does_not_block_registered_batches(tmp_path, monk
 
 
 @pytest.mark.parametrize("engine", ["v2", "v3"])
-def test_doctor_warns_for_unusable_standalone_without_agents(tmp_path, monkeypatch, engine):
+@pytest.mark.parametrize("agents_directory", [False, True], ids=["no-agents-directory", "empty-agents-directory"])
+def test_doctor_warns_for_unusable_standalone_without_agents(tmp_path, monkeypatch, engine, agents_directory):
     """A configured surface lacking complete hook coverage cannot silently look healthy."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("KIRO_HOME", raising=False)
@@ -75,6 +76,8 @@ def test_doctor_warns_for_unusable_standalone_without_agents(tmp_path, monkeypat
     monkeypatch.setenv("OBSERVAL_KIRO_IDE", "0")
     root = tmp_path / ".kiro"
     (root / "hooks").mkdir(parents=True)
+    if agents_directory:
+        (root / "agents").mkdir()
     data = build_kiro_hooks_file()
     if engine == "v3":
         data["hooks"] = data["hooks"][:1]
@@ -85,7 +88,8 @@ def test_doctor_warns_for_unusable_standalone_without_agents(tmp_path, monkeypat
     assert any("Kiro" in warning and "doctor patch --harness kiro" in warning for warning in warnings)
 
 
-def test_doctor_lifecycle_uses_custom_runtime_root(tmp_path, monkeypatch):
+@pytest.mark.parametrize("agents_directory", [False, True])
+def test_doctor_lifecycle_uses_custom_runtime_root(tmp_path, monkeypatch, agents_directory):
     """Patch, health and cleanup agree with discovery without touching the default root."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     custom = tmp_path / "relocated-kiro"
@@ -94,7 +98,9 @@ def test_doctor_lifecycle_uses_custom_runtime_root(tmp_path, monkeypatch):
     monkeypatch.setenv("OBSERVAL_KIRO_CLI_VERSION", "2.35.0")
     monkeypatch.setenv("OBSERVAL_KIRO_IDE", "0")
     monkeypatch.setattr("observal_cli.lockfile.read_registry_lockfile", lambda: ("server", {}))
-    (custom / "agents").mkdir(parents=True)
+    custom.mkdir()
+    if agents_directory:
+        (custom / "agents").mkdir()
     (custom / "hooks").mkdir()
     user = {"name": "user-kept", "trigger": "Stop", "action": {"type": "command", "command": "echo kept"}}
     config = build_kiro_hooks_file()
@@ -114,3 +120,214 @@ def test_doctor_lifecycle_uses_custom_runtime_root(tmp_path, monkeypatch):
     assert cmd_doctor._cleanup_kiro(False)
     assert json.loads(file.read_text())["hooks"] == [user]
     assert default_file.read_bytes() == original
+
+
+def assert_outbox_lock_available(db, tmp_path):
+    """A separate interpreter must acquire the database lock while a send is active."""
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    script = """import sys
+from pathlib import Path
+from observal_cli.lockfile import _exclusive_lock
+with _exclusive_lock(Path(sys.argv[1])):
+    print('available', flush=True)
+"""
+    result = subprocess.run(
+        [sys.executable, "-P", "-c", script, str(delivery_guard._outbox_lock_path(db))],
+        env={**os.environ, "PYTHONPATH": str(root) + os.pathsep + str(root / "packages/observal-shared")},
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
+    )
+    assert result.stdout.strip() == "available"
+
+
+def test_network_send_does_not_hold_outbox_wide_lock(tmp_path):
+    """Transport claims serialize a session, not unrelated hooks using the same database."""
+    db = tmp_path / "outbox.db"
+    config = {"server_url": "http://peer", "user_id": "user"}
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 0,
+            "lines": ["{}"],
+            "end_byte_offsets": [3],
+        },
+        destination=config["server_url"],
+        user_id=config["user_id"],
+        db_path=db,
+    )
+
+    def send(payload, cfg):
+        assert_outbox_lock_available(db, tmp_path)
+        return {"acknowledged_line": 0, "acknowledged_offset": 3}
+
+    assert base.drain_outbox(config, home=tmp_path, db_path=db, post=send)
+
+
+def test_lifecycle_claim_does_not_hold_outbox_wide_lock(tmp_path, monkeypatch):
+    """A Kiro lifecycle claim retains session authority without locking all HTTP drainage."""
+    db = tmp_path / "outbox.db"
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", db)
+    path = tmp_path / "messages.jsonl"
+    path.write_text("{}\n")
+    source = SessionSource("kiro", "session", path)
+    with delivery_guard.kiro_delivery_guard(
+        source, {}, {"server_url": "http://peer", "user_id": "user"}, home=tmp_path
+    ):
+        assert_outbox_lock_available(db, tmp_path)
+
+
+def test_busy_transport_claim_returns_without_resending(tmp_path):
+    """A competing drain cannot send a row currently owned by another thread."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    db = tmp_path / "outbox.db"
+    config = {"server_url": "http://peer", "user_id": "user"}
+    telemetry_buffer.enqueue(
+        {
+            "harness": "claude-code",
+            "session_id": "session",
+            "start_offset": 0,
+            "lines": ["{}"],
+            "end_byte_offsets": [3],
+        },
+        destination=config["server_url"],
+        user_id=config["user_id"],
+        db_path=db,
+    )
+    sending, release = Event(), Event()
+
+    def slow_send(payload, cfg):
+        sending.set()
+        assert release.wait(10)
+        return {"acknowledged_line": 0, "acknowledged_offset": 3}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(base.drain_outbox, config, home=tmp_path, db_path=db, post=slow_send)
+        try:
+            assert sending.wait(5)
+            competitor = pool.submit(
+                base.drain_outbox,
+                config,
+                home=tmp_path,
+                db_path=db,
+                post=lambda *args: pytest.fail("Duplicate send"),
+            )
+            assert competitor.result(timeout=2) is False
+        finally:
+            release.set()
+        assert owner.result(timeout=5)
+
+
+def test_busy_other_session_keeps_kiro_stop_durable(tmp_path, monkeypatch):
+    """An unrelated in-flight batch cannot stall a V3 hook or discard its Stop intent."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from observal_cli.hooks import session_push
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("KIRO_HOME", raising=False)
+    db = tmp_path / "outbox.db"
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", db)
+    monkeypatch.setattr(base, "_maybe_upload_layer_snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(session_push, "_spawn_worker", lambda *a, **k: False)
+    config = {"server_url": "http://peer", "user_id": "user", "access_token": "dummy"}
+    cfg = tmp_path / ".observal/config.json"
+    cfg.parent.mkdir()
+    cfg.write_text(json.dumps(config))
+    path = tmp_path / ".kiro/sessions/workspace/session/messages.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"payload": {"type": "user", "content": "pending"}}) + "\n")
+    path.with_name("session.json").write_text(json.dumps({"workspacePaths": [str(tmp_path)]}))
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "other", "start_offset": 0, "lines": ["{}"], "end_byte_offsets": [3]},
+        destination=config["server_url"],
+        user_id=config["user_id"],
+        db_path=db,
+    )
+    sending, release = Event(), Event()
+
+    def slow_send(payload, cfg):
+        sending.set()
+        assert release.wait(10)
+        return {
+            "acknowledged_line": payload["start_offset"] + len(payload["lines"]) - 1,
+            "acknowledged_offset": payload.get("end_byte_offsets", [0])[-1],
+        }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(base.drain_outbox, config, home=tmp_path, db_path=db, post=slow_send)
+        try:
+            assert sending.wait(5)
+            hook = pool.submit(
+                session_push._run_hook,
+                {"session_id": "session", "hook_event_name": "Stop"},
+                harness="kiro",
+                home=tmp_path,
+            )
+            hook.result(timeout=2)
+            assert list((tmp_path / ".observal/session-delivery").rglob("finalization.pending"))
+            assert any(
+                item.session_id == "session"
+                for item in telemetry_buffer.pending(
+                    destination=config["server_url"], user_id=config["user_id"], db_path=db
+                )
+            )
+        finally:
+            release.set()
+        assert owner.result(timeout=5)
+
+
+def test_stale_kiro_candidate_does_not_revoke_completed_cursor(tmp_path, monkeypatch):
+    """Refreshing an accepted candidate must precede any final-authority side effects."""
+    monkeypatch.setattr(telemetry_buffer, "DB_PATH", tmp_path / "outbox.db")
+    config = {"server_url": "http://peer", "user_id": "user"}
+    telemetry_buffer.enqueue(
+        {
+            "harness": "kiro",
+            "session_id": "session",
+            "start_offset": 0,
+            "lines": ["{}"],
+            "end_byte_offsets": [3],
+            "final": True,
+        },
+        destination=config["server_url"],
+        user_id=config["user_id"],
+    )
+    (item,) = telemetry_buffer.pending(destination=config["server_url"], user_id=config["user_id"])
+    telemetry_buffer.accept_item(item.id)
+    base.write_cursor("session", 3, 1, finalized=True, home=tmp_path)
+    with delivery_guard.kiro_outbox_guard(item, config, home=tmp_path) as delivery:
+        assert delivery.item is None
+    assert base.read_cursor_state("session", home=tmp_path) == (3, 1, True)
+
+
+@pytest.mark.parametrize("output", ["table", "json"])
+def test_multi_target_patch_reports_target_errors_without_json_pollution(monkeypatch, capsys, output):
+    """Human errors identify their target; machine errors keep those details structured."""
+    from observal_cli.errors import CliError, ErrorCategory
+
+    def patch(target, *args):
+        """Simulate one failed adapter followed by a successful unchanged adapter."""
+        if target == "kiro":
+            raise CliError(ErrorCategory.VALIDATION, "Malformed hook configuration", operation="Doctor patch")
+        return False
+
+    monkeypatch.setattr(cmd_doctor, "_adapter_change", patch)
+    with pytest.raises(CliError) as error:
+        cmd_doctor._patch_targets(["kiro", "claude-code"], dry_run=True, output=output)
+    text = capsys.readouterr().out
+    if output == "table":
+        assert "kiro" in text and "Malformed hook configuration" in text
+    else:
+        assert "Malformed hook configuration" not in text
+    assert error.value.result["targets"][0]["error"] == "Malformed hook configuration"
