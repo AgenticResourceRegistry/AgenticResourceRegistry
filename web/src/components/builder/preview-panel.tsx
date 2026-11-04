@@ -282,7 +282,7 @@ export function PreviewPanel({
 				Telemetry hooks and environment variables are configured during
 				installation via{" "}
 				<code className="font-[family-name:var(--font-mono)]">
-					observal pull
+					observal agent pull
 				</code>
 				.
 			</p>
@@ -295,7 +295,7 @@ export function PreviewPanel({
 						<DialogDescription>
 							Exact files written by{" "}
 							<code className="font-[family-name:var(--font-mono)]">
-								observal pull
+								observal agent pull
 							</code>
 							. Server URLs are placeholders.
 						</DialogDescription>

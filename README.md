@@ -160,7 +160,7 @@ This authenticates with your server, detects your harness, installs telemetry ho
 Once logged in, run `/observal` inside your harness and it takes the wheel. Pull agents, submit resources, browse the registry, run diagnostics:
 
 ```
-/observal pull security-auditor
+/observal agent pull security-auditor
 /observal scan
 /observal doctor
 ```
