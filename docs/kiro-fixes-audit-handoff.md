@@ -5,11 +5,13 @@
 
 ## Current status
 
-User-directed, Pi-assisted work. **No human-review or production-readiness sign-off.**
+User-directed, Pi-assisted work. **No complete-code-review or production-readiness sign-off.**
 Branch `fix/kiro-engine-delivery` remains stacked on #2029 head `1626b67a`.
 Nothing pushed, published or merged; the reviewed #2029 branch was not changed.
-The user requested publication after live validation. Final human diff/PR-text review
-and manual-workflow approval remain publication gates under `AI_POLICY.md`.
+The user reviewed the PR description and saved evidence through `038a21ab`, finding no
+new technical blocker, but did not independently repeat the runs. Complete human diff
+review and manual-workflow approval are not attested. After #2029 merges, rebase onto
+updated `main` and verify the #2021-only diff **before publishing**.
 
 **Native V3 completion is now proven through independent foreground reconciliation,
 not an automatic hook-spawned finalizer.** This deliberately changes the workflow:
@@ -106,9 +108,20 @@ Controlled final run `kiro-2021-publication-matrix-a6cgl5zz`,
 `/tmp/kiro-2021-publication-{full,prefix-rerun,base-failures}.log`.
 Proposed template body: `/tmp/kiro-2021-pr-description.md`.
 
-**#2029 must merge first.** It remains open at `1626b67a`. Publication was requested,
-but complete human diff/PR-text review and manual-workflow approval are not attested.
-Independent clearance remains pending. No push, PR or merge in this pass.
+**#2029 must merge first.** At the last status check it remained open at `1626b67a`.
+After it merges, rebase onto updated `main` and verify the #2021-only diff before
+publishing. No push, PR or merge in this pass.
+
+### PR-text review through `038a21ab`
+
+The user confirmed technical accuracy against the saved native project/user-scope,
+eleven-case OrbStack and full-suite evidence, without independently repeating the runs.
+No new technical blocker was reported; `038a21ab` changes documentation only. Both
+requested text improvements were applied to `/tmp/kiro-2021-pr-description.md`:
+explicit independent-terminal commands, matching Observal authentication home,
+non-automatic V3/IDE finalization, quiet-session Stop requirements, and dependency
+rebase/diff verification **before publication**, not merely before merge. This evidence
+review is not a complete human code-review or production-readiness attestation.
 
 ## Reviewable local checkpoints
 
