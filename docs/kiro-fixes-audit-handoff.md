@@ -32,6 +32,25 @@ V3/IDE hooks capture records and persist explicit Stop authority. They do not sp
 finalizers that native shutdown kills. V2 retains its existing background path.
 Quiet/permission-paused Kiro sessions without a matching Stop remain non-final.
 
+## Latest ACK-decision correction
+
+Re-review through `15b4c236` found that two mutable authority evaluations could write
+`finalized=True, preserve_finalized=False`. Reproduced in both contiguous and permanent-gap
+standalone ACK paths. `f4ee9baa` fixes this with **one local authority sample per cursor
+write**, shared by both arguments. No new locks, schema or lifecycle changes.
+
+Four regression cases failed before the fix; current committed-tree targeted suite:
+**849 passed in 153.51s**, including 120 focused delivery/recovery/process tests. Both ACK
+paths cover the inter-check source transition and a rejected sample that cannot finalize
+or preserve an old final flag. Sampling once removes contradictory decisions, not all
+atomicity gaps with external transcript writers. Ruff/format/whitespace checks passed.
+`make rebuild` completed via the existing external overlays; temporary root `.env` symlink
+removed, API HTTP 200. No new native or full-suite run claimed. Prior native evidence
+remains happy-path only. Independent re-review and human approval of manual V3/IDE
+reconciliation remain pending; nothing pushed, published or merged.
+
+Evidence: `/tmp/kiro-2021-ack-decision-{before,focused,targeted,rebuild}.log`.
+
 ## Reviewable local checkpoints
 
 | Commit | Change |
@@ -49,6 +68,7 @@ Quiet/permission-paused Kiro sessions without a matching Stop remain non-final.
 | `119cb3a1` | Generation-bound queued final authority and V2 workers; record-preserving durable downgrade, send/ACK validation, consistent outbox-before-session lock ordering, capture-only metadata kept non-final. |
 | `b54ae938` | Worker-routing test verifies the actual scheduled Stop generation. |
 | `1b39dc76` | Superseded ACKs cannot create completion receipts or report finalized; fresh Stop remains eligible. |
+| `f4ee9baa` | One coherent ACK authority decision supplies both cursor-finality arguments in both ACK paths. |
 
 Inspect `git diff 56b4c24f..1b39dc76` for the resume-safety fixes,
 `git diff 715d9a64..ec9e748b` for the redesign, or
