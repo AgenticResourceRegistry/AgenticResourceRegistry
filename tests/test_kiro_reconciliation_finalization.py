@@ -403,3 +403,73 @@ def test_legacy_outbox_final_without_generation_keeps_records_but_not_finality(s
         key in posts[-1] for key in ("session_hash", "total_line_count", "hashed_line_count", "total_offset")
     )
     assert not base.read_cursor_state("session")[2]
+
+
+@pytest.mark.parametrize("gap_path", [False, True], ids=["contiguous-ack", "permanent-gap-ack"])
+@pytest.mark.parametrize("resume_before_sample", [False, True], ids=["inter-check-transition", "already-superseded"])
+def test_standalone_ack_uses_one_coherent_authority_sample(session, monkeypatch, gap_path, resume_before_sample):
+    """Never combine final=True from one authority sample with preserve=False from another."""
+    from contextlib import contextmanager
+    from dataclasses import replace
+
+    from observal_cli.harness import get_adapter
+
+    home, path, config, posts, workers = session
+    stop(home)
+    with path.open("a") as stream:
+        stream.write(json.dumps({"id": "late", "payload": {"type": "assistant", "content": "queued"}}) + "\n")
+    monkeypatch.setattr(base, "post_to_server_ack", lambda *a, **k: None)
+    cmd_reconcile_cli._reconcile_harness("kiro", config, 24, False)
+    (item,) = telemetry_buffer.pending(destination="http://server", user_id="user")
+    assert item.final and item.start_line == 2
+    # Also verify that a rejected authority sample cannot preserve an older final flag.
+    offset, lines = base.read_cursor("session")
+    base.write_cursor("session", offset, lines, finalized=True)
+    adapter = get_adapter("kiro")
+    guard = adapter.session_outbox_guard
+    samples, writes = [], []
+
+    def append_resume():
+        with path.open("a") as stream:
+            stream.write(json.dumps({"id": "resumed", "payload": {"type": "user", "content": "next"}}) + "\n")
+
+    @contextmanager
+    def instrumented_guard(*args, **kwargs):
+        with guard(*args, **kwargs) as delivery:
+
+            def sample():
+                if not samples and resume_before_sample:
+                    append_resume()
+                allowed = delivery.final_allowed()
+                samples.append(allowed)
+                if len(samples) == 1 and not resume_before_sample:
+                    # A second read sees False: the original code wrote (True, False).
+                    # One sampled decision does not promise atomicity with transcript writers.
+                    append_resume()
+                return allowed
+
+            yield replace(delivery, final_allowed=sample)
+
+    write = base.write_cursor
+
+    def capture_write(*args, **kwargs):
+        if "finalized" in kwargs:
+            writes.append((kwargs["finalized"], kwargs["preserve_finalized"]))
+        return write(*args, **kwargs)
+
+    monkeypatch.setattr(adapter, "session_outbox_guard", instrumented_guard)
+    monkeypatch.setattr(base, "write_cursor", capture_write)
+    acknowledgement = {
+        "acknowledged_line": 0 if gap_path else item.end_line,
+        "acknowledged_offset": item.end_offset,
+        "ingested": len(item.payload["lines"]),
+    }
+    # Standalone/pre-group drain, deliberately without a lifecycle guard to repair the flag.
+    assert base.drain_outbox(config, home=home, post=lambda *a: acknowledgement)
+    assert len(writes) == 1
+    assert writes[0][0] == writes[0][1], "Contradictory finality arguments restored a superseded final cursor"
+    assert samples == [not resume_before_sample]
+    assert base.read_cursor_state("session") == (item.end_offset, item.end_line + 1, samples[0])
+    if resume_before_sample:
+        assert not list((home / ".observal/session-delivery").rglob("finalization.pending"))
+    assert not telemetry_buffer.pending(destination="http://server", user_id="user")

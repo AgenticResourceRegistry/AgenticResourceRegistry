@@ -557,12 +557,13 @@ def drain_outbox(
                     # The lines between the server checkpoint and this batch were quarantined
                     # or lost, so the checkpoint can never reach it. The server stored the
                     # batch; accept it instead of resending it forever ahead of every session.
+                    final_allowed = delivery.final_allowed()
                     write_cursor(
                         item.checkpoint_key,
                         item.end_offset,
                         item.end_line + 1,
-                        finalized=item.final and delivery.final_allowed(),
-                        preserve_finalized=delivery.final_allowed(),
+                        finalized=item.final and final_allowed,
+                        preserve_finalized=final_allowed,
                         home=home,
                     )
                     telemetry_buffer.accept_item(item.id, db_path=db_path)
@@ -575,12 +576,13 @@ def drain_outbox(
                 return False
             if acknowledged_offset <= 0:
                 acknowledged_offset = item.end_offset
+            final_allowed = delivery.final_allowed()
             write_cursor(
                 item.checkpoint_key,
                 acknowledged_offset,
                 acknowledged_line + 1,
-                finalized=item.final and delivery.final_allowed(),
-                preserve_finalized=delivery.final_allowed(),
+                finalized=item.final and final_allowed,
+                preserve_finalized=final_allowed,
                 home=home,
             )
             telemetry_buffer.acknowledge(
