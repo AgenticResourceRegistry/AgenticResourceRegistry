@@ -7,11 +7,13 @@
 
 User-directed, Pi-assisted work. **No complete-code-review or production-readiness sign-off.**
 Branch `fix/kiro-engine-delivery` remains stacked on #2029 head `1626b67a`.
-Nothing pushed, published or merged; the reviewed #2029 branch was not changed.
+The reviewed #2029 branch was not changed. The user explicitly authorized opening
+the #2021 PR now for CodeRabbit review, superseding the earlier wait-to-publish gate.
+No merge authorized.
 The user reviewed the PR description and saved evidence through `038a21ab`, finding no
 new technical blocker, but did not independently repeat the runs. Complete human diff
 review and manual-workflow approval are not attested. After #2029 merges, rebase onto
-updated `main` and verify the #2021-only diff **before publishing**.
+updated `main` and verify the #2021-only diff **before merging this PR**.
 
 **Native V3 completion is now proven through independent foreground reconciliation,
 not an automatic hook-spawned finalizer.** This deliberately changes the workflow:
@@ -223,3 +225,12 @@ Prior evidence: `/tmp/kiro-2021-reconcile-{before,focused,full,isolated,targeted
 `/tmp/kiro-2021-reconcile-rebuild-retry.log`. Native private run:
 `kiro-2021-native-live-mf_eexi4`. Earlier signal evidence:
 `/tmp/kiro-2021-native-{worker-stderr,kqueue,kqueue-fixed,groups,env-experiment}.log`.
+
+## Publication timing override
+
+After the PR-text review, the user explicitly instructed opening the PR now and then
+running CodeRabbit. This supersedes the earlier pre-publication dependency gate, not
+the merge dependency: **#2029 must merge first**, followed by rebase onto updated main
+and verification of the #2021-only diff before merge. No human complete-code-review
+or production-readiness sign-off is inferred. Confirmed CodeRabbit findings will be
+fixed and validated; review status and PR URL will be recorded after creation.
