@@ -445,6 +445,12 @@ def _without_message_echoes(entries: list[dict]) -> list[dict]:
                 previous = None
             else:
                 previous = index, identity
+        elif entry.get("type") == "turn_context" or (
+            entry.get("type") == "event_msg"
+            and str_field(dict_field(entry, "payload"), "type") in ("task_started", "task_complete")
+        ):
+            # Explicit turns separate identical prompts; token metadata does not.
+            previous = None
         elif entry.get("type") == "response_item":
             # Tools and non-message response items separate model inputs/outputs.
             previous = None
