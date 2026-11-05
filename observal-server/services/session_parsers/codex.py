@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from unicodedata import decimal
 
 from .base import (
     basic_event,
@@ -349,9 +350,10 @@ def _tool_text(payload: dict) -> str:
 
 
 def _shell_command(text: str) -> str:
+    """Read JSON shell arguments or retain the raw freeform command."""
     try:
         args = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return text
     if not isinstance(args, dict):
         return text
@@ -381,6 +383,7 @@ def _patch_edits(text: str) -> list[dict]:
 
 
 def _meta_tool_call(payload: dict) -> dict:
+    """Normalize a Codex call into measured shell, patch or subagent work."""
     name = str_field(payload, "name")
     text = _tool_text(payload)
     edits = _patch_edits(text)
@@ -392,7 +395,7 @@ def _meta_tool_call(payload: dict) -> dict:
         return meta_tool_call(name, str_field(payload, "call_id"), {}, "subagent")
     try:
         args = json.loads(text) if text else {}
-    except ValueError:
+    except (ValueError, RecursionError):
         args = {}
     return meta_tool_call(name, str_field(payload, "call_id"), args if isinstance(args, dict) else {})
 
@@ -454,13 +457,14 @@ def _tool_error(payload: dict, text: str) -> bool:
         return True
     try:
         output = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         output = None
     if isinstance(output, dict) and (
         output.get("error") or output.get("success") is False or output.get("status") in ("error", "failed")
     ):
         return True
-    return any(int(code) != 0 for code in _EXIT_CODE.findall(text))
+    # Preserve signed/zero-padded Unicode digits matched by \d without unbounded int conversion.
+    return any(any(decimal(digit) for digit in code.lstrip("-")) for code in _EXIT_CODE.findall(text))
 
 
 def transcript_rows(rows: list[dict]) -> list[dict]:
@@ -496,7 +500,7 @@ def transcript_rows(rows: list[dict]) -> list[dict]:
                 else:
                     try:
                         value = json.loads(text)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         value = text
                 normalized.append({"event_type": "tool_call", "tool_name": name, "raw_line": {"input": value}})
             elif kind in ("function_call_output", "custom_tool_call_output"):
