@@ -264,3 +264,41 @@ def test_deeply_nested_tool_arguments_do_not_abort_insights(tool):
     entry = item({"type": "function_call", "name": tool, "call_id": "c1", "arguments": "[" * 10000 + "0" + "]" * 10000})
     assert f"[Tool: {tool}]" in _format_rows([{"raw_line": json.dumps(entry)}], harness="codex")
     assert extract_session_meta("session", [json.dumps(entry)], "codex")["tool_counts"] == {tool: 1}
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        item({"model": "test-model"}, "turn_context"),
+        item({"type": "task_started"}, "event_msg"),
+        item({"type": "task_complete"}, "event_msg"),
+    ],
+    ids=["turn-context", "task-started", "task-complete"],
+)
+@pytest.mark.parametrize("echo_first", [False, True])
+def test_explicit_turn_boundary_preserves_repeated_prompt(boundary, echo_first):
+    """Equal text across a turn boundary is a new prompt, not a cross-format echo."""
+    from services.insights.transcript import _format_rows
+
+    response = message("user", "Run tests")
+    event = item({"type": "user_message", "message": "Run tests"}, "event_msg")
+    first, second = (event, response) if echo_first else (response, event)
+    entries = [first, boundary, second]
+    assert (
+        _format_rows([{"raw_line": json.dumps(e)} for e in entries], harness="codex")
+        == "[User]: Run tests\n[User]: Run tests"
+    )
+    assert extract_session_meta("session", [json.dumps(e) for e in entries], "codex")["user_message_count"] == 2
+
+
+@pytest.mark.parametrize("echo_first", [False, True])
+def test_token_metadata_does_not_break_echo_matching(echo_first):
+    """Usage metadata between paired message representations does not duplicate a prompt."""
+    from services.insights.transcript import _format_rows
+
+    response = message("user", "Run tests")
+    event = item({"type": "user_message", "message": "Run tests"}, "event_msg")
+    first, second = (event, response) if echo_first else (response, event)
+    entries = [first, item({"type": "token_count", "info": {}}, "event_msg"), second]
+    assert _format_rows([{"raw_line": json.dumps(e)} for e in entries], harness="codex") == "[User]: Run tests"
+    assert extract_session_meta("session", [json.dumps(e) for e in entries], "codex")["user_message_count"] == 1
