@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """ClickHouse subpackage.
 
@@ -23,6 +24,8 @@ from services.clickhouse.client import (
 from services.clickhouse.insert import (
     _insert_webhook_deliveries,
     insert_audit_log,
+    insert_forward_deliveries,
+    insert_forward_state,
     insert_session_capabilities,
     insert_session_checkpoint,
     insert_session_events,
@@ -31,8 +34,14 @@ from services.clickhouse.insert import (
 from services.clickhouse.migrations import run_clickhouse_migrations
 from services.clickhouse.query import (
     query_existing_for_dedup,
+    query_forward_candidates,
+    query_forward_lag,
+    query_forward_state,
+    query_last_forward_delivery,
     query_recent_events,
     query_session_checkpoint,
+    query_session_first_event,
+    query_session_rows,
     query_session_source_manifest,
     query_source_records_after,
 )
@@ -63,12 +72,20 @@ __all__ = [
     "clickhouse_health",
     "init_clickhouse",
     "insert_audit_log",
+    "insert_forward_deliveries",
+    "insert_forward_state",
     "insert_session_capabilities",
     "insert_session_checkpoint",
     "insert_session_events",
     "query_existing_for_dedup",
+    "query_forward_candidates",
+    "query_forward_lag",
+    "query_forward_state",
+    "query_last_forward_delivery",
     "query_recent_events",
     "query_session_checkpoint",
+    "query_session_first_event",
+    "query_session_rows",
     "query_session_source_manifest",
     "query_source_records_after",
     "refresh_session_summary",

@@ -149,6 +149,7 @@
           "integrations/goose",
           "integrations/kiro",
           "integrations/opencode",
+          "integrations/opentelemetry-forwarding",
           "integrations/pi"
         ]
       },

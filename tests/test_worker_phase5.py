@@ -103,6 +103,7 @@ class TestWorkerSettings:
             "cron:backfill_layer_components": 7,
             "cron:backfill_component_activity": 7,
             "cron:replay_activity_revision": 12 * 24 * 7,
+            "cron:sweep_otlp_forwarding": 60 * 24 * 7,
         }
 
         week_start = datetime(2026, 1, 5, tzinfo=UTC)  # a Monday

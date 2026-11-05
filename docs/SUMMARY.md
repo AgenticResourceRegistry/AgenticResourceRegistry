@@ -5,6 +5,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Table of contents
@@ -88,6 +89,7 @@
 * [Goose](integrations/goose.md)
 * [Kiro](integrations/kiro.md)
 * [OpenCode](integrations/opencode.md)
+* [OpenTelemetry forwarding](integrations/opentelemetry-forwarding.md)
 * [Pi](integrations/pi.md)
 
 ## Reference
