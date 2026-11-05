@@ -1019,7 +1019,11 @@ def _cleanup_kiro(dry_run: bool) -> bool:
             for event, entries in list(hooks.items()):
                 if not isinstance(entries, list):
                     continue
-                cleaned = [e for e in entries if not isinstance(e, dict) or not _is_observal_hook_entry(e)]
+                cleaned = [
+                    e
+                    for e in entries
+                    if not isinstance(e, dict) or not _is_observal_hook_entry(e, include_generic_marker=False)
+                ]
                 if len(cleaned) < len(entries):
                     agent_changed = True
                     if not dry_run:
@@ -1029,11 +1033,16 @@ def _cleanup_kiro(dry_run: bool) -> bool:
                             del hooks[event]
 
         if agent_changed:
+            if not dry_run:
+                try:
+                    atomic_write(agent_profile, json.dumps(agent_data, indent=2) + "\n")
+                except OSError as error:
+                    optic.warning("Cannot write Kiro profile {}: {}", agent_profile, error)
+                    rprint(f"  [yellow]Cannot write profile: {esc(agent_profile)}[/yellow]")
+                    continue
             changed = True
             verb = "Would clean" if dry_run else "Cleaned"
             rprint(f"  {verb} {esc(agent_profile)}")
-            if not dry_run:
-                atomic_write(agent_profile, json.dumps(agent_data, indent=2) + "\n")
 
     # Standalone hooks are independent of whether any agent profile still exists.
     if _cleanup_kiro_hook_files(dry_run):
