@@ -18,6 +18,16 @@ CLICKHOUSE_DB = _parsed.path.strip("/") or "default"
 CLICKHOUSE_USER = _parsed.username or "default"
 CLICKHOUSE_PASSWORD = _parsed.password or ""
 
+
+def credential_headers() -> dict[str, str]:
+    """ClickHouse credentials as headers, never URL parameters.
+
+    ``raise_for_status`` puts the full request URL in its message, and callers log that message, so a
+    password in the query string ended up in logs and in the support bundle.
+    """
+    return {"X-ClickHouse-User": CLICKHOUSE_USER, "X-ClickHouse-Key": CLICKHOUSE_PASSWORD}
+
+
 _client: httpx.AsyncClient | None = None
 
 
@@ -46,7 +56,7 @@ def _get_client() -> httpx.AsyncClient:
     retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
     reraise=True,
 )
-async def _query(sql: str, params: dict | None = None, *, data: str | None = None):
+async def _query(sql: str, params: dict | None = None, *, data: str | None = None, timeout: float | None = None):
     """Execute a ClickHouse query via HTTP.
 
     Args:
@@ -57,16 +67,15 @@ async def _query(sql: str, params: dict | None = None, *, data: str | None = Non
         data: Optional body content appended after the SQL, separated by a
             newline.  Used for ``INSERT ... FORMAT JSONEachRow`` where each
             line in *data* is a JSON object.
+        timeout: Optional per-request timeout for maintenance operations that
+            wait for acknowledged ClickHouse mutations; defaults to the pool's
+            configured timeout.
     """
     _t0 = time.perf_counter()
     from services.clickhouse._settings import DEFAULT_QUERY_SETTINGS, _resource_overrides
 
     client = _get_client()
-    query_params: dict[str, str] = {
-        "database": CLICKHOUSE_DB,
-        "user": CLICKHOUSE_USER,
-        "password": CLICKHOUSE_PASSWORD,
-    }
+    query_params: dict[str, str] = {"database": CLICKHOUSE_DB}
     query_params.update(DEFAULT_QUERY_SETTINGS)
     if _resource_overrides:
         query_params.update(_resource_overrides)
@@ -77,7 +86,10 @@ async def _query(sql: str, params: dict | None = None, *, data: str | None = Non
     optic.trace("executing ClickHouse query (body_len={}, has_data={})", len(body), data is not None)
 
     try:
-        resp = await client.post(CLICKHOUSE_HTTP, content=body, params=query_params)
+        request_timeout = {"timeout": timeout} if timeout is not None else {}
+        resp = await client.post(
+            CLICKHOUSE_HTTP, content=body, params=query_params, headers=credential_headers(), **request_timeout
+        )
         _elapsed = (time.perf_counter() - _t0) * 1000
         if resp.status_code >= 400:
             optic.warning(

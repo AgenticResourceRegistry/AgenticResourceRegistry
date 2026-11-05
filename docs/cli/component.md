@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# `observal registry version`
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry version"
+---
 
 Publish and inspect versioned releases for MCP servers, skills, hooks, prompts, and sandboxes.
 
@@ -69,5 +70,5 @@ JSON returns the direct paginated server object with `items`, `total`, `page`, a
 
 ## Related
 
-* [`observal registry`](registry.md): component management
-* [`observal outdated`](outdated.md): compare installed and latest versions
+* [`observal registry`](/cli/registry): component management
+* [`observal outdated`](/cli/outdated): compare installed and latest versions

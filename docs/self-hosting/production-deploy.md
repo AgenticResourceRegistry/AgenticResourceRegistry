@@ -1,15 +1,16 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Production deployment"
+---
 
-# Production deployment
+Deploy Agentic Resource Registry as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
 
-Deploy Observal as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
-
-**End state:** a fully managed Observal install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
+**End state:** a fully managed Agentic Resource Registry install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
 
 ## When to use this vs. single-node
 
-| | [Single-node](single-node-deploy.md) | Production (this guide) |
+| | [Single-node](/self-hosting/single-node-deploy) | Production (this guide) |
 |---|---|---|
 | **Best for** | Small/mid teams, internal use, POCs | Enterprise, SLA-bound, high-traffic |
 | **Infra** | 1 VM, any cloud or on-prem | ~100 managed cloud resources |
@@ -24,7 +25,7 @@ Deploy Observal as a distributed, highly available stack on AWS or GCP using Ter
 
 ## Choose your cloud
 
-Observal ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
+Agentic Resource Registry ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
 
 ### AWS
 
@@ -70,13 +71,13 @@ flowchart TB
 | Backups | S3 + RDS snapshots | Lifecycle: Standard → IA → Glacier → expire |
 | DNS | Route 53 | Optional; works without a custom domain |
 
-**Full walkthrough:** [AWS deployment with Terraform](aws-terraform.md)
+**Full walkthrough:** [AWS deployment with Terraform](/self-hosting/aws-terraform)
 
 **Quick start:**
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal/infra/terraform/aws
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry/infra/terraform/aws
 
 # Configure
 cp terraform.tfvars.example terraform.tfvars
@@ -142,12 +143,12 @@ flowchart TB
 | DNS | Cloud DNS | Optional |
 | Shell access | IAP SSH tunnel | No public SSH, no SSH keys |
 
-**Full walkthrough:** [GCP deployment with Terraform](gcp-terraform.md)
+**Full walkthrough:** [GCP deployment with Terraform](/self-hosting/gcp-terraform)
 
 **Quick start:**
 
 ```bash
-cd Observal/infra/terraform/gcp
+cd AgenticResourceRegistry/infra/terraform/gcp
 
 # Enable required APIs
 gcloud services enable \
@@ -271,14 +272,14 @@ Applies to both clouds. See the cloud-specific guides for implementation details
 - [ ] Set up alerting on database CPU, memory, and 5xx error rates
 - [ ] Attach a WAF to the load balancer
 - [ ] Enable Redis transit encryption
-- [ ] Configure [SSO](authentication.md) (SAML or OIDC)
-- [ ] Test the [backup and restore](backup-and-restore.md) procedure end-to-end
+- [ ] Configure [SSO](/self-hosting/authentication) (SAML or OIDC)
+- [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 - [ ] Replace the GitHub tarball pull in the data host bootstrap with an artifact you control
 
 ## Next
 
-- [AWS deployment with Terraform](aws-terraform.md) — full AWS walkthrough
-- [GCP deployment with Terraform](gcp-terraform.md) — full GCP walkthrough
-- [Configuration](configuration.md) — environment variables reference
-- [Upgrades](upgrades.md) — upgrade and rollback procedures
-- [Backup and restore](backup-and-restore.md) — detailed restore procedures
+- [AWS deployment with Terraform](/self-hosting/aws-terraform) — full AWS walkthrough
+- [GCP deployment with Terraform](/self-hosting/gcp-terraform) — full GCP walkthrough
+- [Configuration](/self-hosting/configuration) — environment variables reference
+- [Upgrades](/self-hosting/upgrades) — upgrade and rollback procedures
+- [Backup and restore](/self-hosting/backup-and-restore) — detailed restore procedures

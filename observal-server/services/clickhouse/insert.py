@@ -213,7 +213,11 @@ async def insert_forward_deliveries(records: list[dict]) -> None:
 async def refresh_session_summary(session_id: str, project_id: str, user_id: str, harness: str) -> None:
     """Replace one session summary from canonical deduplicated rows."""
     sql = (
-        "INSERT INTO session_stats_agg "
+        "INSERT INTO session_stats_agg ("
+        "project_id, session_id, agent_id, agent_version, user_id, parent_session_id, harness, layer_hash, "
+        "first_event_time, last_event_time, event_count, prompt_count, tool_call_count, tool_result_count, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_credits, model, "
+        "summary_version, updated_at, last_source_ingest_at) "
         "SELECT project_id, session_id, "
         "coalesce(anyIf(agent_id, agent_id IS NOT NULL AND agent_id != ''), '') AS agent_id, "
         "coalesce(anyIf(agent_version, agent_version IS NOT NULL AND agent_version != ''), '') AS agent_version, "
@@ -228,7 +232,10 @@ async def refresh_session_summary(session_id: str, project_id: str, user_id: str
         "sumIf(cache_read_tokens, rendered = 1) AS cache_read_tokens, "
         "sumIf(cache_write_tokens, rendered = 1) AS cache_write_tokens, max(credits) AS total_credits, "
         "anyLastIf(model, rendered = 1 AND model != '') AS model, "
-        "toUInt64(toUnixTimestamp64Milli(now64(3))) AS summary_version, now64(3) AS updated_at "
+        # The legacy MV also writes to this ReplacingMergeTree with millisecond
+        # versions. Our canonical refresh must always win, even in the same ms.
+        "toUInt64(toUnixTimestamp64Micro(now64(6))) AS summary_version, now64(3) AS updated_at, "
+        "maxIf(ingested_at, is_source_record = 1 AND rendered = 1) AS last_source_ingest_at "
         "FROM session_events FINAL WHERE project_id = {pid:String} AND user_id = {uid:String} "
         "AND harness = {harness:String} AND session_id = {sid:String} "
         "GROUP BY project_id, session_id, user_id, harness"
@@ -292,15 +299,18 @@ async def insert_session_capabilities(
 
 
 async def insert_layer_snapshot(row: dict):
-    """Insert a single layer snapshot row into ClickHouse."""
+    """Insert a snapshot durably before the upload route re-reads it for extraction."""
     optic.trace("inserting layer snapshot: hash={}", row.get("hash", "?"))
-    sql = (
-        "INSERT INTO layer_snapshots (hash, project_id, user_id, harness, content, "
-        "file_count, total_size, lockfile_hash) FORMAT JSONEachRow"
-    )
+    columns = "hash, project_id, user_id, harness, content, file_count, total_size, lockfile_hash"
+    if "uploaded_at" in row:
+        columns += ", uploaded_at"
+    sql = f"INSERT INTO layer_snapshots ({columns}) FORMAT JSONEachRow"
     try:
-        r = await _client._query(sql, data=_dumps(row))
+        # ClickHouse may buffer async inserts after acknowledging the request.
+        # Without this, the immediate extractor sees no snapshot and publishes
+        # nothing until a retry or the daily backfill (observed on a live upload).
+        r = await _client._query(sql, {"wait_for_async_insert": "1"}, data=_dumps(row))
         r.raise_for_status()
     except Exception as e:
-        optic.error("failed to insert layer snapshot: {}", e)
+        optic.error("failed to insert layer snapshot: {}", type(e).__name__)
         raise

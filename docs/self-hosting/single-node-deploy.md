@@ -1,15 +1,16 @@
-<!-- SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Single-node deployment"
+---
 
-# Single-node deployment
+Run the full Agentic Resource Registry stack on a single VM with Docker Compose. Best for teams of up to ~50 users, internal tools, evaluations, and any deployment where simplicity matters more than multi-AZ redundancy.
 
-Run the full Observal stack on a single VM with Docker Compose. Best for teams of up to ~50 users, internal tools, evaluations, and any deployment where simplicity matters more than multi-AZ redundancy.
-
-**End state:** Observal running behind TLS on one server, with automated backups to S3-compatible storage, surviving reboots, and upgradable in under a minute.
+**End state:** Agentic Resource Registry running behind TLS on one server, with automated backups to S3-compatible storage, surviving reboots, and upgradable in under a minute.
 
 ## When to use this vs. the Terraform module
 
-| | Single-node (this guide) | [Production Terraform](aws-terraform.md) |
+| | Single-node (this guide) | [Production Terraform](/self-hosting/aws-terraform) |
 |---|---|---|
 | **Best for** | Small/mid teams, internal use, POCs | Enterprise, SLA-bound, high-traffic |
 | **Infra** | 1 VM, any cloud or on-prem | ~100 managed AWS resources |
@@ -72,7 +73,7 @@ Everything runs as Docker containers on a single host. The nginx LB routes traff
 | 1–10 users | `t3.medium` (2 vCPU / 4 GB) | ~$30/mo |
 | 10–30 users | `t3.large` (2 vCPU / 8 GB) | ~$60/mo |
 | 30–50 users | `t3.xlarge` (4 vCPU / 16 GB) | ~$120/mo |
-| 50+ users | Consider the [Terraform module](aws-terraform.md) | ~$255/mo |
+| 50+ users | Consider the [Terraform module](/self-hosting/aws-terraform) | ~$255/mo |
 
 ClickHouse is the memory consumer. If you run out, increase `CLICKHOUSE_MEMORY_LIMIT` before resizing the VM.
 
@@ -116,8 +117,8 @@ docker compose version
 ## Step 3: Clone and configure
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry
 cp .env.example .env
 ```
 
@@ -147,11 +148,11 @@ sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PASSWORD|" .env
 sed -i "s|^CLICKHOUSE_PASSWORD=.*|CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD|" .env
 ```
 
-> SAML SSO, audit logs, and executive dashboards are included in the open-source distribution. See [Configuration](configuration.md). For mounted credentials and private keys, use the documented [`NAME_FILE` inputs](configuration.md#secret-files) instead of placing secret contents in `.env`.
+> SAML SSO, audit logs, and executive dashboards are included in the open-source distribution. See [Configuration](/self-hosting/configuration). For mounted credentials and private keys, use the documented [`NAME_FILE` inputs](/self-hosting/configuration#secret-files) instead of placing secret contents in `.env`.
 
 ## Step 4: Set up TLS
 
-This guide uses the source Compose stack. Every `localhost:80` example below refers to that stack's nginx load balancer. Do not expose its HTTP listener directly to remote clients. For downloadable server-package bindings, see [Requirements](requirements.md#tls--https).
+This guide uses the source Compose stack. Every `localhost:80` example below refers to that stack's nginx load balancer. Do not expose its HTTP listener directly to remote clients. For downloadable server-package bindings, see [Requirements](/self-hosting/requirements#tls--https).
 
 ### Option A: Caddy (simplest — automatic HTTPS)
 
@@ -190,7 +191,7 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
 Set up auto-renewal:
 
 ```bash
-echo "0 3 * * * certbot renew --quiet && docker compose -f /home/ubuntu/Observal/docker/docker-compose.yml -f /home/ubuntu/Observal/docker/docker-compose.production.yml restart observal-lb" | sudo tee -a /etc/crontab
+echo "0 3 * * * certbot renew --quiet && docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.production.yml restart observal-lb" | sudo tee -a /etc/crontab
 ```
 
 ### Option C: Behind a cloud load balancer
@@ -200,7 +201,7 @@ If your VM sits behind an AWS ALB, GCP HTTPS LB, or Cloudflare, terminate TLS th
 ## Step 5: Start the stack
 
 ```bash
-cd ~/Observal
+cd ~/AgenticResourceRegistry
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
@@ -236,7 +237,7 @@ Test it:
 ```bash
 sudo reboot
 # After reconnecting:
-docker compose -f ~/Observal/docker/docker-compose.yml ps
+docker compose -f ~/AgenticResourceRegistry/docker/docker-compose.yml ps
 # All services should be running
 ```
 
@@ -252,7 +253,7 @@ set -euo pipefail
 
 BACKUP_DIR="/opt/observal-backups"
 DATE=$(date +%Y%m%d-%H%M)
-COMPOSE="docker compose -f /home/ubuntu/Observal/docker/docker-compose.yml"
+COMPOSE="docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml"
 
 # Postgres
 $COMPOSE exec -T observal-db pg_dump -U postgres observal | gzip > "$BACKUP_DIR/pg-$DATE.sql.gz"
@@ -282,17 +283,17 @@ echo "0 3 * * * root /opt/observal-backups/backup.sh >> /var/log/observal-backup
 For ClickHouse (weekly, since it's larger):
 
 ```bash
-echo "0 4 * * 0 root docker compose -f /home/ubuntu/Observal/docker/docker-compose.yml exec -T observal-clickhouse clickhouse-client --password \$CLICKHOUSE_PASSWORD --query \"BACKUP DATABASE observal TO Disk('backups', 'weekly-\$(date +\%Y\%m\%d).zip')\" >> /var/log/observal-backup.log 2>&1" | sudo tee /etc/cron.d/observal-ch-backup
+echo "0 4 * * 0 root docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml exec -T observal-clickhouse clickhouse-client --password \$CLICKHOUSE_PASSWORD --query \"BACKUP DATABASE observal TO Disk('backups', 'weekly-\$(date +\%Y\%m\%d).zip')\" >> /var/log/observal-backup.log 2>&1" | sudo tee /etc/cron.d/observal-ch-backup
 ```
 
-See [Backup and restore](backup-and-restore.md) for detailed restore procedures.
+See [Backup and restore](/self-hosting/backup-and-restore) for detailed restore procedures.
 
 ## Step 8: First login
 
 Install the CLI on your local machine:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
 Log in:
@@ -313,14 +314,14 @@ observal auth status
 ## Upgrades
 
 ```bash
-cd ~/Observal
+cd ~/AgenticResourceRegistry
 git fetch --tags
 git checkout v1.5.0    # or whatever version
 
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
-The Compose init service applies migrations before API startup. See [Upgrades](upgrades.md) for rollback procedures.
+The Compose init service applies migrations before API startup. See [Upgrades](/self-hosting/upgrades) for rollback procedures.
 
 Or use the CLI:
 
@@ -347,12 +348,12 @@ Access Grafana at `http://your-server:3001` when the Grafana profile is enabled.
 For basic alerting without Grafana, add a health check cron:
 
 ```bash
-echo "*/5 * * * * root curl -fsS http://localhost/health > /dev/null || echo 'Observal health check failed' | mail -s 'ALERT: Observal down' ops@yourcompany.com" | sudo tee /etc/cron.d/observal-health
+echo "*/5 * * * * root curl -fsS http://localhost/health > /dev/null || echo 'Agentic Resource Registry health check failed' | mail -s 'ALERT: Agentic Resource Registry down' ops@yourcompany.com" | sudo tee /etc/cron.d/observal-health
 ```
 
 ## Security hardening
 
-The [security assurance case](../security/assurance-case.md) describes the deployment trust boundaries and residual risks.
+The [security assurance case](/security/assurance-case) describes the deployment trust boundaries and residual risks.
 
 Before exposing to the internet:
 
@@ -360,7 +361,7 @@ Before exposing to the internet:
 - [ ] Set a strong `SECRET_KEY`
 - [ ] Restrict SSH access (key-only, no password auth)
 - [ ] Configure a firewall (`ufw allow 80,443/tcp && ufw enable`)
-- [ ] Set up [SSO](authentication.md) if available
+- [ ] Set up [SSO](/self-hosting/authentication) if available
 - [ ] Enable automatic security updates (`sudo apt install unattended-upgrades`)
 - [ ] Bind database ports to localhost only (already done in `docker-compose.yml` via `127.0.0.1:` prefix)
 
@@ -373,11 +374,11 @@ When you outgrow a single node:
 | API response times increasing | Increase `API_WORKERS` in `.env` (default 2), or bump to a bigger VM |
 | ClickHouse queries slow | Increase `CLICKHOUSE_MEMORY_LIMIT` or move to a bigger VM |
 | Disk filling up | Reduce `DATA_RETENTION_DAYS`, add a bigger disk, or move ClickHouse data to a separate volume |
-| Need HA / zero downtime deploys | Migrate to the [Terraform module](aws-terraform.md) |
+| Need HA / zero downtime deploys | Migrate to the [Terraform module](/self-hosting/aws-terraform) |
 
 ## Next
 
-- [Configuration](configuration.md) — all environment variables
-- [Backup and restore](backup-and-restore.md) — detailed restore procedures
-- [Upgrades](upgrades.md) — safe upgrade and rollback flow
-- [Troubleshooting](troubleshooting.md) — common issues
+- [Configuration](/self-hosting/configuration) — all environment variables
+- [Backup and restore](/self-hosting/backup-and-restore) — detailed restore procedures
+- [Upgrades](/self-hosting/upgrades) — safe upgrade and rollback flow
+- [Troubleshooting](/self-hosting/troubleshooting) — common issues

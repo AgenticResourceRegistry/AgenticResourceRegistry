@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Observal CLI Installer for Windows (PowerShell 5.1+)
-# Usage: irm https://raw.githubusercontent.com/Observal/Observal/main/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
 #
 # Environment variable overrides:
 #   OBSERVAL_VERSION=latest    Version to install (e.g. v0.6.0)
@@ -16,7 +16,7 @@ function Install-ObservalCli {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is very slow with the progress bar on
 
-    $GitHubRepo = 'Observal/Observal'
+    $GitHubRepo = 'AgenticResourceRegistry/AgenticResourceRegistry'
 
     function Write-Info([string]$Message) { Write-Host '==> ' -ForegroundColor Blue -NoNewline; Write-Host $Message }
     function Write-Warn([string]$Message) { Write-Host 'WARN: ' -ForegroundColor Yellow -NoNewline; Write-Host $Message }

@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -22,7 +22,7 @@ observal discover inspect urn:air:... --output json
 observal discover use urn:air:... --output json
 ```
 
-Skills and prompts load into the current session; other kinds return the install command below as `next_step`. The `observal` skill's Discovery reference covers the fields in detail.
+Skills and prompts load into the current session; MCP servers, hooks, and agents return the install command below as `next_step`. Sandboxes have no install command: their `next_step` is `observal agent add sandbox <uuid>`, which only edits a local `observal-agent.yaml`. The `observal` skill's Discovery reference covers the fields in detail.
 
 For kind-specific browsing and filters, use the registry list commands. Start broad with natural-language search, then narrow only when needed.
 
@@ -77,6 +77,9 @@ observal registry recommend dismiss skill NAMESPACE/SLUG --action not_relevant -
 Choose the exact harness and scope before writing files.
 
 ```bash
+observal registry mcp install NAMESPACE/SLUG --harness claude-code --apply --dir ./project --scope project --no-prompt --output json
+observal registry mcp install NAMESPACE/SLUG --harness claude-code --apply --dir ./project --scope user --version 2.1.0 --no-prompt --output json
+# Without --apply, MCP install only generates a snippet and does not track a local install.
 observal registry mcp install NAMESPACE/SLUG --harness kiro --no-prompt --output json
 observal registry mcp install NAMESPACE/SLUG --harness cursor --version 2.1.0 --no-prompt --output json
 observal registry skill install NAMESPACE/SLUG --harness claude-code --scope project --output json
@@ -91,7 +94,7 @@ observal registry hook install NAMESPACE/SLUG --harness claude-code --platform d
 observal registry hook install NAMESPACE/SLUG --harness claude-code --version 1.0.0 --dir . --output json
 ```
 
-Use raw output only when the user explicitly asks for a config snippet or raw response:
+Tracked `--apply` MCP installs currently support Claude Code only and require both `--dir` and `--scope`; other harnesses retain snippet-only installs. A snippet does not prove installed identity or observed use. Use raw output only when the user explicitly asks for a config snippet or raw response:
 
 ```bash
 observal registry mcp install NAMESPACE/SLUG --harness claude-code --raw

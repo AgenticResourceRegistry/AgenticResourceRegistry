@@ -372,6 +372,8 @@ async def _run_import(
         result["rows_inserted"] = import_result.rows_inserted
         result["rows_skipped"] = import_result.rows_skipped
         result["tables_skipped"] = []
+        if import_result.warnings:
+            result["warnings"] = import_result.warnings
         schema_version = None
 
     if data_scope in (MigrationScope.clickhouse, MigrationScope.both):

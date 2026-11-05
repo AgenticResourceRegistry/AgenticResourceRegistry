@@ -111,12 +111,6 @@ class TestAdapterRegistry:
 
         assert get_adapter("pi").detect_hooks(tmp_path) == "installed"
 
-    def test_pi_detect_hooks_recognizes_configured_npm_package(self, tmp_path):
-        settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"packages": ["npm:observal-pi"]}), encoding="utf-8")
-
-        assert get_adapter("pi").detect_hooks(tmp_path) == "installed"
-
 
 class TestManagedLayerFiles:
     """Test adapter-owned layer source attribution."""

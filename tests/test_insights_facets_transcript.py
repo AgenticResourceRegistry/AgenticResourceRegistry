@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,8 +11,11 @@ import pytest
 
 
 def _meta(session_id: str, duration: int, tool_count: int) -> dict:
+    from services.insights.scope import SessionKey
+
     return {
         "session_id": session_id,
+        "session_key": SessionKey("default", "user-1", "pi", session_id),
         "total_messages": 3,
         "duration_seconds": duration,
         "input_tokens": 0,
@@ -42,6 +46,42 @@ def _meta(session_id: str, duration: int, tool_count: int) -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    ("raw", "prompt"),
+    [
+        ({"type": "event_msg", "payload": {"type": "user_message", "message": "fix the tests"}}, "fix the tests"),
+        (
+            {
+                "kind": "Prompt",
+                "data": {"content": [{"kind": "text", "data": "inspect"}, {"kind": "text", "data": "tests"}]},
+            },
+            "inspect tests",
+        ),
+        ({"payload": {"type": "user", "content": "review this patch"}}, "review this patch"),
+        ({"message": {"content": [{"type": "text", "text": "ordinary prompt"}]}}, "ordinary prompt"),
+    ],
+)
+def test_transcript_preserves_classified_codex_and_kiro_prompts(raw, prompt):
+    from services.insights.transcript import _format_rows
+
+    rows = [{"event_type": "user_prompt", "tool_name": "", "raw_line": json.dumps(raw), "content_preview": ""}]
+    assert _format_rows(rows) == f"[User]: {prompt}"
+
+
+def test_transcript_falls_back_to_normalized_preview_only_for_prompts():
+    from services.insights.transcript import _format_rows
+
+    rows = [
+        {
+            "event_type": "user_prompt",
+            "raw_line": json.dumps({"type": "event_msg"}),
+            "content_preview": "ingested text",
+        },
+        {"event_type": "system", "raw_line": "{}", "content_preview": "not a prompt"},
+    ]
+    assert _format_rows(rows) == "[User]: ingested text"
+
+
 @pytest.mark.asyncio
 async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypatch):
     import services.dynamic_settings as ds
@@ -65,7 +105,7 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
     top_metas = [_meta(f"top-{i}", duration=1000 - i, tool_count=2) for i in range(50)]
     metas = [*top_metas, _meta("cached-low", duration=1, tool_count=0)]
 
-    load_cached = AsyncMock(return_value={"cached-low": cached_facet})
+    load_cached = AsyncMock(return_value={metas[-1]["session_key"]: cached_facet})
     monkeypatch.setattr(generator, "extract_all_session_metas", AsyncMock(return_value=metas))
     monkeypatch.setattr(generator, "load_cached_facets_batch", load_cached)
     monkeypatch.setattr(generator, "build_session_transcript", AsyncMock(return_value=""))
@@ -80,9 +120,46 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
         db=SimpleNamespace(),
     )
 
-    assert "cached-low" in load_cached.await_args.args[0]
+    assert metas[-1]["session_key"] in load_cached.await_args.args[0]
     assert report["facets_summary"]["sessions_with_facets"] == 1
     assert report["facets_summary"]["goal_categories"] == [("fix_bug", 1)]
+
+
+@pytest.mark.asyncio
+async def test_build_session_transcript_reads_codex_and_kiro_rows(monkeypatch):
+    from services.insights import transcript
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "data": [
+                    {"event_type": "user_prompt", "raw_line": json.dumps(raw), "content_preview": ""}
+                    for raw in (
+                        {"type": "event_msg", "payload": {"type": "user_message", "message": "Codex task"}},
+                        {"kind": "Prompt", "data": {"content": [{"kind": "text", "data": "Kiro task"}]}},
+                    )
+                ]
+            }
+
+    from services.insights.scope import SessionKey
+
+    session = SessionKey("default", "user-1", "codex", "local-session")
+
+    async def query(sql, params):
+        assert "content_preview" in sql
+        assert params == {
+            "param_project_id": "default",
+            "param_user_id": "user-1",
+            "param_harness": "codex",
+            "param_sid": "local-session",
+        }
+        return Response()
+
+    monkeypatch.setattr(transcript, "get_query", lambda: query)
+    assert await transcript.build_session_transcript(session) == "[User]: Codex task\n[User]: Kiro task"
 
 
 @pytest.mark.asyncio
@@ -122,9 +199,58 @@ async def test_build_session_transcript_summarizes_long_sessions(monkeypatch):
     monkeypatch.setattr(transcript, "get_call_model", lambda: call_model)
     monkeypatch.setattr(ds, "get", AsyncMock(return_value=None))
 
-    result = await transcript.build_session_transcript("session-123456")
+    from services.insights.scope import SessionKey
+
+    result = await transcript.build_session_transcript(SessionKey("default", "user-1", "pi", "session-123456"))
 
     assert summaries
     assert "[Long session summarized]" in result
     assert "summary 1" in result
     assert "[...truncated...]" not in result
+
+
+@pytest.mark.asyncio
+async def test_extract_facets_batch_never_uses_db_concurrently(monkeypatch):
+    import asyncio
+
+    from services.insights import generator
+
+    class SingleUseSession:
+        """Raises like an AsyncSession when two tasks use it at once."""
+
+        def __init__(self) -> None:
+            self.busy = False
+            self.stored: list[str] = []
+
+        async def store(self, session_id: str) -> None:
+            if self.busy:
+                raise RuntimeError("concurrent operations are not permitted")
+            self.busy = True
+            await asyncio.sleep(0)
+            self.stored.append(session_id)
+            self.busy = False
+
+    async def extract(session_id: str, _transcript: str, _meta: dict) -> dict:
+        await asyncio.sleep(0)
+        return {"brief_summary": session_id}
+
+    async def store(session, _agent_id: str, _facets: dict, db) -> None:
+        await db.store(session.session_id)
+
+    monkeypatch.setattr(generator, "extract_facets", extract)
+    monkeypatch.setattr(generator, "store_facets", store)
+
+    db = SingleUseSession()
+    from services.insights.scope import SessionKey
+
+    transcripts = {SessionKey("default", "user-1", "pi", f"s{i}"): "transcript" for i in range(14)}
+    facets = await generator._extract_facets_batch(
+        transcripts=transcripts,
+        session_metas={},
+        agent_id="",
+        db=db,
+        max_concurrent=5,
+    )
+
+    assert set(facets) == set(transcripts)
+    assert sorted(db.stored) == sorted(key.session_id for key in transcripts)

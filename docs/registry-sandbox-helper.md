@@ -1,7 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Sandbox helper
+---
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Sandbox helper"
+---
 
 Use sandbox components when an agent needs a reviewed runtime for running commands through an MCP tool.
 

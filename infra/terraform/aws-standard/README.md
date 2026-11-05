@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Observal AWS Standard Module
+# Agentic Resource Registry AWS Standard Module
 
-Single-account, cost-optimized Terraform deployment for Observal on AWS. Runs the full stack (API, web frontend, background workers, Postgres, Redis, ClickHouse, Grafana, Prometheus) on two EC2 instances — one ECS EC2 cluster node for containers and one data-tier host for stateful services.
+Single-account, cost-optimized Terraform deployment for Agentic Resource Registry on AWS. Runs the full stack (API, web frontend, background workers, Postgres, Redis, ClickHouse, Grafana, Prometheus) on two EC2 instances — one ECS EC2 cluster node for containers and one data-tier host for stateful services.
 
 ## Architecture
 
@@ -74,5 +74,5 @@ With `alb_scheme = "internal"`, github.com and gitlab.com cannot deliver the web
 
 ## SPDX
 
-SPDX-FileCopyrightText: 2026 Observal
+SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 SPDX-License-Identifier: Apache-2.0

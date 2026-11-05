@@ -1,12 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "AWS deployment with Terraform"
+---
 
-# AWS deployment with Terraform
+End state: an Agentic Resource Registry install running in your own AWS account, fronted by an Application Load Balancer with HTTPS, with managed Postgres + Redis, ECS Fargate for the stateless app tier, and a single EC2 host for ClickHouse. Prometheus and Grafana are optional through `observability_stack`.
 
-End state: an Observal install running in your own AWS account, fronted by an Application Load Balancer with HTTPS, with managed Postgres + Redis, ECS Fargate for the stateless app tier, and a single EC2 host for ClickHouse. Prometheus and Grafana are optional through `observability_stack`.
-
-This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Observal, use [Docker Compose setup](docker-compose.md) instead.
+This is the recommended path for enterprise self-hosting on AWS. If you only want to evaluate Agentic Resource Registry, use [Docker Compose setup](/self-hosting/docker-compose) instead.
 
 ## What gets provisioned
 
@@ -16,7 +17,7 @@ A single `terraform apply` creates:
 * **Application Load Balancer** with HTTPS (ACM certificate, DNS-validated) when you supply a domain; HTTP-only otherwise. Path-based rules: `/api/*` → api service, optional `/grafana/*` → Grafana, default → web
 * **ECS Fargate cluster** running:
   * `api` (FastAPI): 2 tasks by default, autoscales 2–10 on CPU
-  * `web` (Next.js): 2 tasks by default, autoscales 2–6 on CPU
+  * `web` (Vite): 2 tasks by default, autoscales 2–6 on CPU
   * `worker` (arq background jobs): 1 task by default, autoscales 1–5 on CPU
   * `init` (one-shot migrations + seeds): runs as a Fargate `RunTask` whenever `image_tag` changes
 * **RDS Postgres 16**: Multi-AZ on `prod`, encrypted, automated daily backups, Performance Insights, Enhanced Monitoring, log exports
@@ -37,15 +38,15 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 | Terraform ≥ 1.6                                                                                                                         | `brew install terraform` or use [tenv](https://tofuutils.github.io/tenv/)  |
 | AWS CLI v2                                                                                                                              | `brew install awscli` - also used by the one-shot init task runner         |
 | [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | shell access into the data host                                            |
-| IAM principal with sufficient rights                                                                                                    | see [Required IAM permissions](aws-terraform.md#required-iam-permissions)  |
+| IAM principal with sufficient rights                                                                                                    | see [Required IAM permissions](/self-hosting/aws-terraform#required-iam-permissions)  |
 | (Optional) Route 53 hosted zone                                                                                                         | required for HTTPS on a custom domain                                      |
-| (Recommended) S3 bucket + DynamoDB table                                                                                                | remote Terraform state - see [Remote state](aws-terraform.md#remote-state) |
+| (Recommended) S3 bucket + DynamoDB table                                                                                                | remote Terraform state - see [Remote state](/self-hosting/aws-terraform#remote-state) |
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/Observal/Observal.git
-cd Observal/infra/terraform/aws
+git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+cd AgenticResourceRegistry/infra/terraform/aws
 
 # 1. Authenticate to AWS (any of these works)
 export AWS_PROFILE=observal-prod
@@ -68,9 +69,9 @@ First-time apply takes 12–15 minutes. RDS provisioning dominates. When it fini
 terraform output app_url
 ```
 
-Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Observal login page.
+Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Agentic Resource Registry login page.
 
-A ready-to-apply call of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/Observal/Observal/blob/main/infra/terraform/aws/examples/minimal/README.md).
+A ready-to-apply call of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/minimal/README.md).
 
 ## Configuration
 
@@ -156,14 +157,14 @@ For high-throughput installs (>100 trace events/sec sustained), bump `data_insta
 deployment_mode     = "enterprise"   # SSO-only login
 data_retention_days = 90             # ClickHouse TTL; 0 to disable
 log_retention_days  = 30             # CloudWatch log group retention
-image_tag           = "v1.4.0"       # specific Observal release; "latest" pulls main
+image_tag           = "v1.4.0"       # specific Agentic Resource Registry release; "latest" pulls main
 ```
 
-See [Configuration](configuration.md) for the meaning of each application setting.
+See [Configuration](/self-hosting/configuration) for the meaning of each application setting.
 
 ### Bring Your Own VPC
 
-Deploy Observal into an existing VPC rather than having Terraform create a new one. Use this when you have Transit Gateway, shared-services VPCs, compliance requirements, or peered networks.
+Deploy Agentic Resource Registry into an existing VPC rather than having Terraform create a new one. Use this when you have Transit Gateway, shared-services VPCs, compliance requirements, or peered networks.
 
 ```hcl
 # Use an existing VPC
@@ -195,11 +196,11 @@ ecs_security_group_id = "sg-0abc1234def56789b"
 
 The ALB SG must allow inbound TCP 80/443 from your desired CIDRs. The ECS SG must allow inbound TCP 8000 and 3000 from the ALB SG, with outbound to all.
 
-A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/Observal/Observal/blob/main/infra/terraform/aws/examples/byovpc/README.md).
+A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/byovpc/README.md).
 
 ### Git webhooks on a private install
 
-[MCP repository sync](../use-cases/mcp-repo-sync.md) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Observal, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
+[MCP repository sync](/use-cases/mcp-repo-sync) publishes a new MCP version as soon as GitHub or GitLab sends a webhook. With `alb_scheme = "internal"`, github.com and gitlab.com cannot reach Agentic Resource Registry, so nothing syncs. Turn on the webhook endpoint to fix that without opening the rest of the install:
 
 ```hcl
 alb_scheme             = "internal"
@@ -230,7 +231,7 @@ Things to know:
 
 ## Required IAM permissions
 
-The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](aws-terraform.md#hardened-iam-policy).
+The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](/self-hosting/aws-terraform#hardened-iam-policy).
 
 | Service                             | Managed policy                    |
 | ----------------------------------- | --------------------------------- |
@@ -298,7 +299,7 @@ aws ssm get-parameter --with-decryption \
 
 The Terraform run generates and stores `DB_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SECRET_KEY`, and `GRAFANA_ADMIN_PASSWORD`, plus pre-built `DATABASE_URL`, `REDIS_URL`, and `CLICKHOUSE_URL` connection strings. ECS injects these into tasks at start; you never paste them in.
 
-### Upgrade to a new Observal release
+### Upgrade to a new Agentic Resource Registry release
 
 ```hcl
 # terraform.tfvars
@@ -382,8 +383,8 @@ The defaults are safe but conservative. Before pointing real traffic at this:
 * [ ] Add CloudWatch alarms on RDS `CPUUtilization`, `FreeableMemory`, ECS service CPU, ALB `HTTPCode_Target_5XX_Count`
 * [ ] Attach AWS WAF to the ALB
 * [ ] Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
-* [ ] Configure Observal SSO. See [Authentication and SSO](authentication.md)
-* [ ] Test the [backup and restore](backup-and-restore.md) procedure end-to-end
+* [ ] Configure Agentic Resource Registry SSO. See [Authentication and SSO](/self-hosting/authentication)
+* [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
 * [ ] Replace the GitHub tarball download in `user-data.sh.tftpl` with an artifact URL you control
 
 ## Troubleshooting
@@ -417,4 +418,4 @@ To re-run by hand: `$(terraform output -raw init_run_task_command)`.
 
 **RDS storage is full.** `max_allocated_storage` autoscales up to 500 GB by default. Raise `db_max_allocated_storage_gb` if you have heavier audit-log volume.
 
-For application-level issues (login fails, traces missing) see [Troubleshooting](troubleshooting.md).
+For application-level issues (login fails, traces missing) see [Troubleshooting](/self-hosting/troubleshooting).

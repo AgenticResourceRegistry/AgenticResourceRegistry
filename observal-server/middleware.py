@@ -28,6 +28,10 @@ DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:3000"
 DEFAULT_MAX_REQUEST_SIZE_MB = "10"
 DEFAULT_MAX_SKILL_REQUEST_SIZE_MB = "10"
 DEFAULT_MAX_MIGRATION_REQUEST_SIZE_MB = "6144"
+# A snapshot contains at most 5 MiB of file content, plus bounded pins and drift.
+# Do not inherit MAX_REQUEST_SIZE_MB: operators may raise that for other routes.
+MAX_LAYER_SNAPSHOT_REQUEST_BYTES = 10 * 1024 * 1024
+LAYER_SNAPSHOT_UPLOAD_PATH = "/api/v1/layer-snapshots"
 SKILL_AUTHORING_PATHS = frozenset({"/api/v1/skills/submit", "/api/v1/skills/draft", "/api/v1/skills/folder-drafts"})
 MIGRATION_UPLOAD_PATHS = frozenset(
     {
@@ -73,11 +77,13 @@ class RequestSizeLimitMiddleware:
         max_request_size_bytes: int,
         max_migration_request_size_bytes: int,
         max_skill_request_size_bytes: int | None = None,
+        max_layer_snapshot_request_size_bytes: int = MAX_LAYER_SNAPSHOT_REQUEST_BYTES,
     ):
         self.app = app
         self.max_request_size_bytes = max_request_size_bytes
         self.max_migration_request_size_bytes = max_migration_request_size_bytes
         self.max_skill_request_size_bytes = max_skill_request_size_bytes or max_request_size_bytes
+        self.max_layer_snapshot_request_size_bytes = max_layer_snapshot_request_size_bytes
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -89,6 +95,8 @@ class RequestSizeLimitMiddleware:
         request_limit = (
             self.max_migration_request_size_bytes
             if request_path in MIGRATION_UPLOAD_PATHS
+            else self.max_layer_snapshot_request_size_bytes
+            if request_path == LAYER_SNAPSHOT_UPLOAD_PATH and scope.get("method") == "POST"
             else self.max_skill_request_size_bytes
             if request_path in SKILL_AUTHORING_PATHS
             or (request_path.startswith("/api/v1/skills/") and request_path.endswith("/draft"))
@@ -168,11 +176,12 @@ class CacheControlMiddleware:
                 headers = dict(message.get("headers", []))
                 cache_header = headers.get(b"x-fastapi-cache", b"").decode()
                 if cache_header == "HIT" or (scope["method"] == "GET" and cache_header == "MISS"):
-                    extra = [
-                        (b"cache-control", f"public, max-age={ds.get_sync_int('data.cache_ttl_default', 30)}".encode())
+                    msg_headers = [
+                        (key, value) for key, value in message.get("headers", []) if key.lower() != b"cache-control"
                     ]
-                    msg_headers = list(message.get("headers", []))
-                    msg_headers.extend(extra)
+                    msg_headers.append(
+                        (b"cache-control", f"private, max-age={ds.get_sync_int('data.cache_ttl_default', 30)}".encode())
+                    )
                     message = {**message, "headers": msg_headers}
             await send(message)
 
@@ -267,14 +276,24 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
         except InvalidVersion:
             pass
 
-    install_command = f"observal self {direction} --version {server_ver}"
+    try:
+        unpublished = Version(server_ver).is_devrelease
+    except InvalidVersion:
+        unpublished = False
+    if unpublished:
+        # Development builds are not on PyPI; they are built from main.
+        install_command = (
+            'uv tool install --force "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"'
+        )
+    else:
+        install_command = f"observal self {direction} --version {server_ver}"
+    guidance = f"Run: {install_command}"
+
     shown_cli_version = cli_ver_str or "unknown"
     return JSONResponse(
         status_code=426,
         content={
-            "detail": (
-                f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. Run: {install_command}"
-            ),
+            "detail": f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. {guidance}",
             "server_version": server_ver,
             "cli_version": cli_ver_str,
             "install_command": install_command,

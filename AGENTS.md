@@ -8,13 +8,13 @@
 
 Internal context for contributors and AI coding agents. Use `README.md` for the public API reference, `SETUP.md` for environment setup, and `docs/adding-a-harness.md` for harness integration.
 
-## What Observal is
+## What Agentic Resource Registry is
 
-Observal is an agent-centric registry and observability platform for AI coding agents. Users interact with it three ways:
+Agentic Resource Registry is a self-hosted, Apache 2.0 registry for sharing coding agent resources. Users interact with it three ways:
 
 1. **CLI** (`observal`): pull agents, sca harnesses, submit components, manage the server
 2. **Web UI** (`web/`): browse the registry, view traces, manage users, admin dashboard
-3. **Observal skill** (bundled, auto-installed on login): lets the LLM inside any harness drive Observal commands directly (e.g. "create an agent that uses the github MCP")
+3. **Agentic Resource Registry skill** (bundled, auto-installed on login): lets the LLM inside any harness drive Agentic Resource Registry commands directly (e.g. "create an agent that uses the github MCP")
 
 Agents are the primary entity. Each agent bundles 5 component types: MCP servers, skills, hooks, prompts, and sandboxes. When a user runs `observal agent pull <agent>`, the platform resolves all components and writes harness-specific config files.
 
@@ -25,7 +25,7 @@ Ten harnesses are registered in `packages/observal-shared/observal_shared/harnes
 | Harness | Hook spec | Session parser | Capabilities | Harness-specific e2e |
 |---|---|---|---|---|
 | Claude Code | yes | `claude-code` | hooks, mcp_servers, skills | no |
-| Kiro | yes | `kiro` | hooks, mcp_servers | yes (9 specs) |
+| Kiro | yes | `kiro` | hooks, mcp_servers, skills | yes (9 specs) |
 | Cursor | no | `cursor` | hooks, mcp_servers | no |
 | Pi | no | `pi` | hooks, mcp_servers, skills | no |
 | Codex CLI | yes | `codex` | hooks, mcp_servers, skills | no |
@@ -66,7 +66,7 @@ observal-server/       FastAPI server
 
 
 web/                   Vite 8 SPA / React 19 / TanStack Router (see web/AGENTS.md)
-packages/pi-extension/ Pi telemetry extension (npm: observal-pi)
+packages/pi-extension/ Pi telemetry extension (bundled into the CLI)
 docker/                Docker Compose stack (10 services)
 fuzz/                  Atheris fuzz targets + OSS-Fuzz project config mirror
 tests/                 pytest (174 files)
@@ -181,9 +181,9 @@ observal
 
 REST at `/api/v1/`. GraphQL at `/api/v1/graphql` (read-only telemetry layer with subscriptions).
 
-Key route files: `ard.py`, `ard_imports.py` (remote A2A agents), `auth.py`, `mcp.py`, `skill.py`, `hook.py`, `prompt.py`, `sandbox.py`, `review.py`, `feedback.py`, `dashboard.py`, `insights.py`, `reconcile.py`, `ingest.py`, `telemetry.py`, `alert.py`, `config.py`, `sessions.py`, `device_auth.py`, `jwks.py`, `component_source.py`, `component_versions.py`, `agent_versions.py`, `bulk.py`, `support.py`, `preview.py`, `audit.py`, `registry_models.py`.
+Key route files: `ard.py`, `ard_imports.py` (remote A2A agents), `auth.py`, `mcp.py`, `skill.py`, `skill_files.py`, `hook.py`, `prompt.py`, `sandbox.py`, `feedback.py`, `dashboard.py`, `insights.py`, `ingest.py`, `telemetry.py`, `alert.py`, `config.py`, `sessions.py`, `device_auth.py`, `jwks.py`, `component_source.py`, `component_versions.py`, `agent_versions.py`, `bulk.py`, `support.py`, `preview.py`, `audit.py`, `registry.py`.
 
-Sub-packages: `agent/` (crud, install, draft), `admin/` (enterprise_settings, users, org, retention).
+Sub-packages: `agent/` (crud, install, draft), `admin/` (enterprise_settings, users, retention), `reviews/` (detail, threads, submissions, actions).
 
 ## Database architecture
 
@@ -251,7 +251,7 @@ Loguru-based. `observal ops logs` streams `~/.observal/logs/dev.log`.
 - Import: `from loguru import logger as optic`
 - Format: `optic.debug("msg: x={}", x)` (positional only, never f-strings)
 - **Never pass `exc_info=`.** Loguru ignores it, so the traceback is silently dropped and `exc_info` lands in `extra` as a literal. Use `optic.exception(...)` or `optic.opt(exception=True).error(...)`.
-- **Avoid structlog-style keyword args** (`optic.info("event_name", key=value)`). Loguru does not interpolate them into the message; they land in `record["extra"]`. The stderr and file sinks render `{message}` only, so those values are invisible in `docker logs` and `dev.log` — only the ring-buffer sink (SSE `/admin/logs/stream`, support bundle) retains them. About 30 legacy call sites still do this (`jobs/catalog.py`, `services/dynamic_settings.py`, `services/insights/self_learn.py`, `services/strategic_insights.py`, `api/routes/{dashboard,insights}.py`); convert them when you touch them, don't add new ones.
+- **Avoid structlog-style keyword args** (`optic.info("event_name", key=value)`). Loguru does not interpolate them into the message; they land in `record["extra"]`. The stderr and file sinks render `{message}` only, so those values are invisible in `docker logs` and `dev.log` — only the ring-buffer sink (SSE `/admin/logs/stream`, support bundle) retains them. The legacy call sites have been converted to positional formatting; format arguments positionally and never add new keyword-arg calls.
 - Never log secrets, tokens, keys, JWT payloads. Log IDs and counts only.
 - Log format (console/json) configured via `observability.log_format` dynamic setting.
 - `logging_config.py` configures a separate structlog pipeline used by parts of the insights engine. Loguru (`optic`) is the default for new code.

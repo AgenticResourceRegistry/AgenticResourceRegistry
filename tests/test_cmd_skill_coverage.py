@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
@@ -217,7 +217,7 @@ def test_parse_frontmatter_valid_invalid_and_missing_yaml(monkeypatch):
 
 
 def test_submit_existing_draft(monkeypatch):
-    post = Mock(return_value={"id": "skill-1"})
+    post = Mock(return_value={"id": "skill-1", "review_number": 42, "review_url": "/review/42"})
     resolve = Mock(return_value="resolved-draft")
     monkeypatch.setattr(skill.client, "post", post)
     monkeypatch.setattr(skill.client, "resolve_registry_reference", resolve)
@@ -227,6 +227,22 @@ def test_submit_existing_draft(monkeypatch):
     assert "Draft submitted for review" in submitted.output
     resolve.assert_called_once_with("skill", "alice/draft")
     post.assert_called_once_with("/api/v1/skills/resolved-draft/submit")
+    assert "Review #42: /review/42" in submitted.output
+    post.reset_mock()
+    resubmitted = runner.invoke(
+        app,
+        [
+            "registry",
+            "skill",
+            "submit",
+            "--submit",
+            "alice/draft",
+            "--message",
+            "Clarified & fixed",
+        ],
+    )
+    assert resubmitted.exit_code == 0, resubmitted.output
+    post.assert_called_once_with("/api/v1/skills/resolved-draft/submit?message=Clarified%20%26%20fixed")
 
 
 def test_submit_rejects_draft_and_existing_draft_together(monkeypatch):
@@ -886,6 +902,7 @@ def test_install_command_registry_direct_tracks_project_metadata(monkeypatch):
         version_id=None,
         digest=None,
         requested_version="2.0.0",
+        skill_integrity=None,
     )
 
 
@@ -1178,7 +1195,7 @@ def test_symlink_failure_is_not_suppressed(tmp_path, monkeypatch):
 
 def test_edit_flags_acquire_lock_and_send_updates(monkeypatch):
     monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
-    post = Mock(return_value={})
+    post = Mock(return_value={"status": "locked", "revision": "current-revision"})
     put = Mock(return_value={"name": "new-name", "status": "draft"})
     monkeypatch.setattr(skill.client, "post", post)
     monkeypatch.setattr(skill.client, "put", put)
@@ -1217,6 +1234,7 @@ def test_edit_flags_acquire_lock_and_send_updates(monkeypatch):
             "task_type": "testing",
             "git_url": "https://github.com/acme/new",
             "git_ref": "v2",
+            "observed_revision": "current-revision",
         },
     )
 
@@ -1225,6 +1243,8 @@ def test_edit_from_file_and_file_failures(tmp_path, monkeypatch):
     resolve = Mock(return_value="resolved")
     monkeypatch.setattr(skill.client, "resolve_registry_reference", resolve)
     monkeypatch.setattr(skill.client, "post", Mock(return_value={}))
+    # Submission under review is covered in test_draft_review_cli; this test is about file handling.
+    monkeypatch.setattr(skill, "submit_edit_under_review", lambda kind, plural, resolved, result: result)
     put = Mock(return_value={"name": "file-edit", "status": "pending"})
     monkeypatch.setattr(skill.client, "put", put)
     updates = {"name": "file-edit", "description": "From file"}
@@ -1458,7 +1478,114 @@ def test_skill_install_json_reports_local_write(tmp_path, monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["write_performed"] is True
     assert payload["installed_path"] == str(installed)
+    assert upsert.call_args.kwargs["skill_integrity"] is None
+    assert any("unverified" in warning for warning in payload["warnings"])
     upsert.assert_called_once()
+
+
+def test_standalone_claude_skill_install_records_active_fingerprint_and_detects_edit(tmp_path, monkeypatch):
+    from observal_cli import layer
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    listing = _skill_item()
+    skill_info = {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "name": "Review Skill",
+        "version": "1.0.0",
+        "delivery_mode": "registry_direct",
+        "skill_md_content": "# Review",
+    }
+    monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(skill.client, "get", Mock(return_value=listing))
+    monkeypatch.setattr(skill.client, "post", Mock(return_value={"config_snippet": {"skill": skill_info}}))
+    monkeypatch.setattr(lockfile, "local_registry_name", Mock(return_value="review-skill"))
+    upsert = Mock()
+    monkeypatch.setattr(lockfile, "upsert_standalone", upsert)
+    result = runner.invoke(
+        app, ["registry", "skill", "install", "alice/review", "--harness", "claude-code", "--output", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    installed = home / ".claude" / "skills" / "review-skill" / "SKILL.md"
+    fingerprint = layer.skill_file_fingerprint(installed)
+    assert upsert.call_args.kwargs["skill_integrity"] == fingerprint
+    entry = {
+        "type": "skill",
+        "id": skill_info["id"],
+        "name": "Review Skill",
+        "version": "1.0.0",
+        "scope": "user",
+        "local_name": "review-skill",
+        "skill_integrity": fingerprint,
+    }
+    registry = {"harnesses": {"claude-code": {"agents": [], "standalone": [entry]}}}
+    manifest = {"claude-code": layer.build_layer_manifest("claude-code", str(tmp_path), registry_data=registry)}
+    assert (
+        layer._compute_drift(registry, manifest, project_dir=str(tmp_path))["skill_verifications"][0]["status"]
+        == "verified"
+    )
+    installed.write_text("# Edited")
+    manifest = {"claude-code": layer.build_layer_manifest("claude-code", str(tmp_path), registry_data=registry)}
+    assert (
+        layer._compute_drift(registry, manifest, project_dir=str(tmp_path))["skill_verifications"][0]["status"]
+        == "drifted"
+    )
+
+
+def test_managed_standalone_skill_records_bundle_fingerprint_atomically(tmp_path, monkeypatch):
+    import base64
+
+    from observal_cli import managed_skill
+    from tests.test_managed_skill import bundle
+
+    reviewed = bundle("version-1")
+    response = {
+        "listing_id": reviewed.listing_id,
+        "version_id": reviewed.version_id,
+        "digest": reviewed.digest,
+        "skill_file_path": reviewed.skill_file_path,
+        "files": [
+            {
+                "path": item.path,
+                "content": base64.b64encode(item.content).decode(),
+                "sha256": item.sha256,
+                "size": item.size,
+                "mode": f"{item.mode:04o}",
+                "version_id": item.version_id,
+            }
+            for item in reviewed.files
+        ],
+    }
+    monkeypatch.setattr(lockfile, "current_registry_url", lambda: "https://example.org")
+    seen = []
+
+    def transact(_bundle, target, _proof, *, record, **_kwargs):
+        data = {}
+        record(data)
+        seen.append((target, data))
+        return {"action": "install"}
+
+    monkeypatch.setattr(managed_skill, "transact", transact)
+    installed, _ = skill._install_managed_folder(
+        response,
+        {"version": "1.0", "version_id": reviewed.version_id, "digest": reviewed.digest},
+        {"namespace": "alice", "slug": "example"},
+        "pi",
+        "project",
+        str(tmp_path),
+        reviewed.listing_id,
+        None,
+        upgrade=False,
+        check=False,
+        backup_root=None,
+    )
+    assert installed == seen[0][0] / "SKILL.md"
+    entry = seen[0][1]["registries"]["https://example.org"]["harnesses"]["pi"]["standalone"][0]
+    expected = next(item.sha256 for item in reviewed.files if item.path == "SKILL.md")
+    assert entry["skill_integrity"] == f"sha256-{expected}"
+    assert entry["folder_receipt"]["version_id"] == reviewed.version_id
 
 
 def test_skill_install_does_not_record_failed_write(monkeypatch):
@@ -1478,9 +1605,28 @@ def test_skill_install_does_not_record_failed_write(monkeypatch):
     upsert.assert_not_called()
 
 
+def test_skill_edit_preserves_explicit_revision_from_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(skill.client, "post", Mock(return_value={"revision": "newer-revision"}))
+    monkeypatch.setattr(skill, "submit_edit_under_review", lambda kind, plural, resolved, result: result)
+    put = Mock(return_value={"id": "skill-1", "name": "review", "status": "pending"})
+    monkeypatch.setattr(skill.client, "put", put)
+    updates = tmp_path / "updates.json"
+    updates.write_text(json.dumps({"description": "Fix", "observed_revision": "older-revision"}))
+
+    result = runner.invoke(
+        app, ["registry", "skill", "edit", "skill-1", "--from-file", str(updates), "--output", "json"]
+    )
+    assert result.exit_code == 0, result.stderr
+    put.assert_called_once_with(
+        "/api/v1/skills/resolved/draft", {"description": "Fix", "observed_revision": "older-revision"}
+    )
+
+
 def test_skill_edit_json_returns_server_result(monkeypatch):
     monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="resolved"))
     monkeypatch.setattr(skill.client, "post", Mock(return_value={}))
+    monkeypatch.setattr(skill, "submit_edit_under_review", lambda kind, plural, resolved, result: result)
     monkeypatch.setattr(
         skill.client,
         "put",
@@ -1514,3 +1660,34 @@ def test_skill_validation_uses_stable_exit_code(arguments, monkeypatch):
 
     assert result.exit_code == 7
     get.assert_not_called()
+
+
+def test_kiro_skill_install_writes_user_skill_and_script(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="skill-id"))
+    monkeypatch.setattr(skill.client, "get", Mock(return_value=_skill_item()))
+    post = Mock(
+        return_value={
+            "config_snippet": {
+                "skill": {
+                    "id": "skill-id",
+                    "name": "Review Skill",
+                    "version": "1.2.3",
+                    "delivery_mode": "registry_direct",
+                    "skill_md_content": "---\nname: review-skill\ndescription: Review\n---\n# Review\n",
+                    "script_content": "print('review')\n",
+                    "script_filename": "run.py",
+                }
+            }
+        }
+    )
+    monkeypatch.setattr(skill.client, "post", post)
+    monkeypatch.setattr(lockfile, "upsert_standalone", Mock())
+
+    result = runner.invoke(app, ["registry", "skill", "install", "alice/review-skill", "--harness", "kiro"])
+
+    assert result.exit_code == 0, result.output
+    assert (home / ".kiro/skills/review-skill/SKILL.md").read_text().endswith("# Review\n")
+    assert (home / ".kiro/skills/review-skill/scripts/run.py").read_text() == "print('review')\n"
+    assert post.call_args.args[1]["harness"] == "kiro"

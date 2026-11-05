@@ -85,6 +85,9 @@ async def test_dynamic_secret_files_stay_external_and_saml_files_are_paired(tmp_
         saml_key = tmp_path / "saml.key"
         saml_key.write_text("private-key")
 
+        # Ignore a developer checkout's .env; this case tests explicit file settings.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("OAUTH_CLIENT_SECRET", raising=False)
         monkeypatch.setenv("OAUTH_CLIENT_SECRET_FILE", str(oauth_secret))
         ds.load_external_settings()
         assert ds.is_externally_managed("oauth.client_secret")

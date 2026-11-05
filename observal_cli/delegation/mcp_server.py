@@ -70,6 +70,11 @@ TOOLS: list[dict] = [
                 "agent": {"type": "string", "description": "Identifier from find_agents (urn:air:...)."},
                 "message": {"type": "string", "description": "The complete task brief, or your reply."},
                 "task_id": {"type": "string", "description": "Only to reply to a task waiting for input."},
+                "harness": {
+                    "type": "string",
+                    "description": "Harness to run a registry agent in. Omit it to use your own harness; "
+                    "pass it only when the delegation names the harnesses to choose from.",
+                },
                 "wait_seconds": {
                     "type": "integer",
                     "minimum": 0,
@@ -192,6 +197,7 @@ class Server:
                 task = service.start(
                     agent,
                     str(args.get("message") or ""),
+                    harness=str(args.get("harness") or "").strip() or None,
                     parent_harness=self.harness,
                     parent_agent_id=self.parent_id,
                     wait_seconds=wait,
@@ -231,9 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--parent-id", default=None, help="UUID of the agent that owns this server")
     args = parser.parse_args(argv)
 
-    import os
-
-    harness = args.harness or os.environ.get("OBSERVAL_HARNESS") or None
+    harness = args.harness or service.caller_harness()
     # One observal-agents entry is shared by every agent in a project or user config, so the parent
     # is not baked into it: a delegated child runs as its own agent (OBSERVAL_AGENT_ID, or its workspace).
     parent_id = args.parent_id or service.parent_agent_id()

@@ -10,6 +10,9 @@ from pydantic import BaseModel, field_validator
 from models.mcp import ListingStatus
 from schemas.constants import (
     VALID_PROMPT_CATEGORIES,
+    ListingName,
+    ListingOwner,
+    ListingVersion,
     RecommendedFlag,
     Visibility,
     make_harness_list_validator,
@@ -19,10 +22,11 @@ from schemas.fork import ForkProvenance
 
 
 class PromptSubmitRequest(BaseModel):
-    name: str
-    version: str
+    name: ListingName
+    version: ListingVersion
+    message: str | None = None
     description: str
-    owner: str
+    owner: ListingOwner
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     category: str
@@ -37,10 +41,10 @@ class PromptSubmitRequest(BaseModel):
 
 
 class PromptDraftRequest(BaseModel):
-    name: str
-    version: str = "0.1.0"
+    name: ListingName
+    version: ListingVersion = "0.1.0"
     description: str = ""
-    owner: str = ""
+    owner: ListingOwner = ""
     team_id: uuid.UUID | None = None
     visibility: Visibility = "public"
     category: str = "general"
@@ -54,10 +58,10 @@ class PromptDraftRequest(BaseModel):
 
 
 class PromptUpdateRequest(BaseModel):
-    name: str | None = None
-    version: str | None = None
+    name: ListingName | None = None
+    version: ListingVersion | None = None
     description: str | None = None
-    owner: str | None = None
+    owner: ListingOwner | None = None
     team_id: uuid.UUID | None = None
     visibility: Visibility | None = None
     category: str | None = None
@@ -72,6 +76,10 @@ class PromptListingResponse(BaseModel):
     forked_from: ForkProvenance | None = None
     fork_count: int = 0
     warnings: list[str] = []
+    review_number: int | None = None
+    review_url: str | None = None
+    # Set when a draft save pushed a new revision to the open review.
+    review_revision: int | None = None
     id: uuid.UUID
     name: str
     namespace: str

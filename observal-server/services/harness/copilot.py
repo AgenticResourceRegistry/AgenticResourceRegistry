@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from observal_shared.harness_registry import HARNESS_REGISTRY
 from services.harness import BaseHarnessAdapter, ConfigContext, McpConfigContext, register_adapter
-from services.harness.helpers import _generate_prompt_files, _generate_skill
+from services.harness.helpers import _generate_prompt_files, _generate_skill, _yaml_double_quoted
 
 
 class CopilotAdapter(BaseHarnessAdapter):
@@ -54,7 +54,7 @@ class CopilotAdapter(BaseHarnessAdapter):
         frontmatter_lines = [
             "---",
             f"name: {safe_name}",
-            f'description: "{agent_desc}"',
+            f"description: {_yaml_double_quoted(agent_desc)}",
             "target: vscode",
             "tools: ['*']",
             "---",

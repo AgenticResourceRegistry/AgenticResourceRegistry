@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Subramania Raja <dhanpraja231@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 import uuid
@@ -16,6 +17,7 @@ from api.deps import (
     check_listing_visibility_async,
     get_db,
     get_registry_user,
+    hidden_unapproved_listing,
     require_role,
 )
 from models.agent import Agent
@@ -46,6 +48,9 @@ async def _visible_listing(db: AsyncSession, listing_type: str, listing_id: uuid
         raise HTTPException(status_code=400, detail=f"Unknown listing type: {listing_type}")
     listing = await db.scalar(select(model).where(model.id == listing_id))
     if not listing or not await check_listing_visibility_async(listing, current_user, db):
+        raise HTTPException(status_code=404, detail="Listing not found")
+    # Agents gate non-approved listings in their own routes; components match GET /{type}/{id}.
+    if model is not Agent and await hidden_unapproved_listing(listing, current_user, db):
         raise HTTPException(status_code=404, detail="Listing not found")
     return listing
 
@@ -93,7 +98,11 @@ async def create_feedback(
     optic.debug("feedback create: user={}, listing={}", current_user.id, req.listing_id)
 
     # Validate listing exists and is visible to the caller.
-    await _visible_listing(db, req.listing_type, req.listing_id, current_user)
+    listing = await _visible_listing(db, req.listing_type, req.listing_id, current_user)
+    authors = {getattr(listing, "submitted_by", None), getattr(listing, "created_by", None)}
+    authors |= {str(a) for a in getattr(listing, "co_authors", None) or []}
+    if current_user.id in authors or str(current_user.id) in authors:
+        raise HTTPException(status_code=403, detail="You cannot review your own listing")
 
     # Enforce one review per user per listing
     existing = await db.scalar(

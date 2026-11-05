@@ -1,9 +1,10 @@
-<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "OpenTelemetry forwarding"
+---
 
-# OpenTelemetry forwarding
-
-Observal can forward every stored session record to one or more OTLP/HTTP
+Agentic Resource Registry can forward every stored session record to one or more OTLP/HTTP
 destinations as it arrives: an OpenTelemetry Collector, Grafana, Datadog,
 Elastic, or any backend that accepts OTLP logs. Each stored transcript line
 becomes one OTLP log record, so nothing is reshaped or dropped on the way.
@@ -18,11 +19,11 @@ when it comes back.
 | OTLP field | Value |
 | --- | --- |
 | Resource `service.name` | The harness, for example `claude-code` |
-| `timeUnixNano` / `observedTimeUnixNano` | When the record happened / when Observal stored it |
-| `body` | The stored line, after Observal's secret redaction. Only with `include_content` |
-| `traceId` | Derived from the root session ID, the same trace an [OpenTelemetry export](opentelemetry-export.md) uses |
+| `timeUnixNano` / `observedTimeUnixNano` | When the record happened / when Agentic Resource Registry stored it |
+| `body` | The stored line, after Agentic Resource Registry's secret redaction. Only with `include_content` |
+| `traceId` | Derived from the root session ID, the same trace an [OpenTelemetry export](/integrations/opentelemetry-export) uses |
 | `session.id`, `observal.line_offset`, `observal.line_hash` | Which record this is. A destination can de-duplicate on these three |
-| `observal.event_type`, `observal.uuid`, `observal.parent_uuid` | Observal's classification and the transcript's own links |
+| `observal.event_type`, `observal.uuid`, `observal.parent_uuid` | Agentic Resource Registry's classification and the transcript's own links |
 | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.response.model` | Tool and model, when the record has them |
 | `observal.usage.*` | Token counts as stored on the record. Some harnesses repeat one response's usage on every line, so don't sum these |
 | `user.id`, `gen_ai.agent.id`, `observal.agent.version` | Who ran the session, with which agent |
@@ -81,7 +82,7 @@ the list keeps each destination's original start point.
   a crash can repeat a chunk; de-duplicate on `session.id`,
   `observal.line_offset` and `observal.line_hash` if that matters.
 - **Replays.** If a client's integrity check finds a session's stored lines
-  are wrong, Observal re-reads them from the client. Records sent before the
+  are wrong, Agentic Resource Registry re-reads them from the client. Records sent before the
   repair are sent again with `observal.forward.replay = true`.
 
 ## Check forwarding status
@@ -97,5 +98,5 @@ headers.
 ## Langfuse and LangSmith
 
 Langfuse and LangSmith accept traces, not logs. Use an
-[OpenTelemetry export](opentelemetry-export.md) for them today; forwarding
+[OpenTelemetry export](/integrations/opentelemetry-export) for them today; forwarding
 traces is planned.

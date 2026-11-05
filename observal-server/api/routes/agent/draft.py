@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Agent draft workflow routes: save, update, start/cancel edit, submit."""
-
-from datetime import UTC, datetime
 
 from fastapi import Depends, HTTPException
 from loguru import logger as optic
@@ -20,13 +19,12 @@ from models.user import User, UserRole
 from schemas.agent import AgentCreateRequest, AgentResponse, AgentUpdateRequest
 from services.config_generator import validate_mcp_command
 from services.editing_lock import _is_lock_expired, acquire_edit_lock, release_edit_lock
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
-from services.inbox import sources as inbox
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_fork import provenance_for
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.teamspace import (
     is_admin,
-    publish_auto_approves_for_entity,
     resolve_publish_target,
     review_publication_to_public,
     team_membership,
@@ -194,8 +192,10 @@ async def save_draft(
         components = all_crefs_draft
         external_mcps = version.external_mcps
 
-    version.required_capabilities = infer_required_features(_DraftProxy(), skill_listings=skill_listings_map_draft)
-    version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(version, _DraftProxy(), skill_listings=skill_listings_map_draft)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     await db.flush()
     from services.agent_lock import lock_agent_version
@@ -211,6 +211,7 @@ async def save_draft(
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
+        warnings=harness_warnings,
     )
 
 
@@ -229,12 +230,19 @@ async def update_draft(
     perm = get_effective_agent_permission(agent, current_user)
     if perm not in ("owner", "edit"):
         raise HTTPException(status_code=403, detail="Not the agent owner or editor")
-    if agent.status not in (AgentStatus.draft, AgentStatus.rejected, AgentStatus.pending):
-        raise HTTPException(status_code=400, detail="Only draft, rejected, or pending agents can be edited")
-
     version = agent.latest_version
     if not version:
         raise HTTPException(status_code=400, detail="Agent has no version to update")
+    await lock_review_for_edit(db, "agent", version)
+    if agent.status not in (
+        AgentStatus.draft,
+        AgentStatus.rejected,
+        AgentStatus.pending,
+        AgentStatus.changes_requested,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Only draft, rejected, pending, or changes-requested agents can be edited"
+        )
 
     # Moving an item between teamspaces is a separate operation and must never
     # ride along on a draft save.
@@ -272,10 +280,8 @@ async def update_draft(
     # approved yet and the call cannot currently fire. It stays as an invariant guard:
     # every site that writes is_private must route a private-to-public transition back
     # through review, so loosening the status gate above can never open that bypass.
-    if await review_publication_to_public(agent, current_user, db, was_private=was_private):
-        await inbox.on_review_requested(
-            db, agent, subject_type="agent", actor_id=current_user.id, version=agent.version
-        )
+    # The re-review notifies its own requested reviewers; nobody else is fanned out to.
+    await review_publication_to_public(agent, current_user, db, was_private=was_private)
 
     if req.version_bump_type and req.version is None:
         from services.versioning import bump_version
@@ -342,8 +348,9 @@ async def update_draft(
         # Components already on this draft keep their pins unless a version is named.
         await attach_pinned_components(db, version_id, req.components, previous=old_comps, current_user=current_user)
 
-    # Re-infer harness features only when components or external_mcps changed
-    if req.components is not None or req.external_mcps is not None:
+    # Re-infer harness features when components, external_mcps or the declared harnesses changed
+    harness_warnings: list[str] = []
+    if req.components is not None or req.external_mcps is not None or req.supported_harnesses is not None:
         if not agent.latest_version:
             raise HTTPException(status_code=400, detail="Agent has no version to update features on")
         current_comps_draft = (
@@ -361,10 +368,12 @@ async def update_draft(
             components = current_comps_draft
             external_mcps = version.external_mcps
 
-        version.required_capabilities = infer_required_features(
-            _DraftUpdateProxy(), skill_listings=skill_listings_map_draft_update
-        )
-        version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+        try:
+            harness_warnings = apply_harness_inference(
+                version, _DraftUpdateProxy(), skill_listings=skill_listings_map_draft_update
+            )
+        except NoCompatibleHarnessError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     # Don't allow saving over another user's active lock
     if version.is_editing and version.editing_by != current_user.id and not _is_lock_expired(version.editing_since):
@@ -387,15 +396,19 @@ async def update_draft(
 
     await lock_agent_version(db, agent, version)
     version.yaml_snapshot = await build_yaml_snapshot(version, db)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = await push_draft_edit(db, "agent", agent, version, current_user.id)
 
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
-    return _agent_to_response(
+    response = _agent_to_response(
         agent,
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
+        warnings=harness_warnings,
     )
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.post("/{agent_id}/start-edit")
@@ -414,7 +427,12 @@ async def start_edit_agent(
     version = agent.latest_version
     if not version:
         raise HTTPException(status_code=400, detail="Agent has no version")
-    if version.status not in (AgentStatus.pending, AgentStatus.draft, AgentStatus.rejected):
+    if version.status not in (
+        AgentStatus.pending,
+        AgentStatus.draft,
+        AgentStatus.rejected,
+        AgentStatus.changes_requested,
+    ):
         raise HTTPException(status_code=400, detail=f"Cannot edit: agent version is '{version.status.value}'")
     # Re-fetch with row-level lock to prevent TOCTOU race
     version = (
@@ -449,6 +467,7 @@ async def cancel_edit_agent(
 @router.post("/{agent_id}/submit", response_model=AgentResponse)
 async def submit_draft(
     agent_id: str,
+    message: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
@@ -460,7 +479,12 @@ async def submit_draft(
     perm = get_effective_agent_permission(agent, current_user)
     if perm not in ("owner", "edit"):
         raise HTTPException(status_code=403, detail="Not the agent owner or editor")
-    if agent.status not in (AgentStatus.draft, AgentStatus.rejected):
+    if agent.status not in (
+        AgentStatus.draft,
+        AgentStatus.rejected,
+        AgentStatus.pending,
+        AgentStatus.changes_requested,
+    ):
         raise HTTPException(status_code=400, detail="Agent is not a draft")
     if not agent.description:
         raise HTTPException(status_code=400, detail="Description is required before submitting")
@@ -498,17 +522,12 @@ async def submit_draft(
 
         agent.latest_version.yaml_snapshot = await build_yaml_snapshot(agent.latest_version, db)
 
-    if await publish_auto_approves_for_entity(agent, current_user, db):
-        agent.status = AgentStatus.approved
-        agent.latest_version.reviewed_by = current_user.id
-        agent.latest_version.reviewed_at = datetime.now(UTC)
-    else:
-        agent.status = AgentStatus.pending
-    if agent.latest_version:
-        # Refresh the lock on submit; an auto-approved submit freezes it here.
-        from services.agent_lock import lock_agent_version
+    if agent.latest_version is None:
+        raise HTTPException(status_code=400, detail="Agent has no version")
+    from services.agent_lock import lock_agent_version
 
-        await lock_agent_version(db, agent, agent.latest_version)
+    await lock_agent_version(db, agent, agent.latest_version)
+    review = await submit_for_review(db, "agent", agent, agent.latest_version, current_user.id, message=message)
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
     name_map = await _resolve_component_names(agent.components, db)
@@ -528,7 +547,7 @@ async def submit_draft(
         created_by_email=current_user.email,
         created_by_username=current_user.username,
         forked_from=await provenance_for(agent, current_user, db) if agent.is_fork else None,
-    )
+    ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 from api.routes.agent_versions import agent_version_router  # noqa: E402

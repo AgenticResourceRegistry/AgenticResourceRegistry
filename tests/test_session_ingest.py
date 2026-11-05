@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral coverage for canonical session ingestion."""
@@ -16,6 +17,7 @@ import pytest
 import xxhash
 
 from services import session_ingest
+from services.clickhouse.insert import _dumps
 from services.secrets_redactor import REDACTED
 from tests.test_antigravity_session_parser import USER_PROMPT as ANTIGRAVITY_USER_PROMPT
 from tests.test_claude_code_session_parser import (
@@ -395,6 +397,22 @@ async def test_batch_normalizes_relationships_timestamps_usage_tools_and_result_
     external_calls.refresh.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, "claude-code")
 
 
+async def test_lone_surrogate_does_not_abort_other_session_lines(external_calls):
+    malformed = '{"type":"user","message":"\ud800"}'
+    valid = CLAUDE_USER_PROMPT
+
+    result = await _ingest([malformed, valid])
+
+    assert result == session_ingest.IngestResult(ingested=1, skipped=0, errors=1)
+    rows = external_calls.insert.await_args.args[0]
+    assert [row["event_type"] for row in rows] == ["_parse_error", "user_prompt"]
+    assert rows[0]["content_length"] == len(malformed.encode("utf-8", errors="replace"))
+    assert rows[0]["source_sha256"] == hashlib.sha256(malformed.encode("utf-8", errors="replace")).hexdigest()
+    assert rows[0]["raw_line"] == malformed.encode("utf-8", errors="replace").decode("utf-8")
+    assert '"event_type":"_parse_error"' in _dumps(rows[0])
+    external_calls.refresh.assert_awaited_once()
+
+
 async def test_identity_metadata_and_source_accounting_survive_redaction(external_calls):
     canonical_agent = "8a11c861-45a9-4416-bc4f-d9d1586419f2"
     external_calls.resolve_agent.side_effect = None
@@ -443,6 +461,49 @@ async def test_identity_metadata_and_source_accounting_survive_redaction(externa
     assert REDACTED in row["raw_line"]
     assert row["content_length"] == len(line.encode())
     assert row["source_sha256"] == hashlib.sha256(line.encode()).hexdigest()
+
+
+async def test_kiro_cli_model_id_is_persisted_on_assistant_row(external_calls):
+    line = json.dumps(
+        {
+            "kind": "AssistantMessage",
+            "data": {
+                "content": [
+                    {"kind": "text", "data": {"text": "hello", "modelId": "claude-opus-5.5"}},
+                    {"kind": "toolUse", "data": {"toolUseId": "t1", "name": "read", "modelId": "claude-opus-5.5"}},
+                ]
+            },
+        }
+    )
+    await _ingest([line], harness="kiro")
+
+    row = external_calls.insert.await_args.args[0][0]
+    assert row["model"] == "claude-opus-5.5"
+    assert row["input_tokens"] == row["output_tokens"] == 0
+    external_calls.refresh.assert_awaited_once_with(SESSION_ID, PROJECT_ID, USER_ID, "kiro")
+
+
+async def test_kiro_model_extractor_ignores_malformed_blocks_and_does_not_invent_auto(external_calls):
+    line = json.dumps({"kind": "Prompt", "data": {"content": [{"kind": "text", "data": "hello"}]}})
+    await _ingest([line], harness="kiro")
+    assert external_calls.insert.await_args.args[0][0]["model"] == ""
+
+
+async def test_kiro_tool_lines_keep_prompt_time_in_event_timeline(external_calls):
+    prompt = json.dumps(
+        {"kind": "Prompt", "data": {"meta": {"timestamp": 1_767_225_600}, "content": [{"kind": "text", "data": "hi"}]}}
+    )
+    tool = json.dumps(
+        {
+            "kind": "AssistantMessage",
+            "data": {"content": [{"kind": "toolUse", "data": {"name": "read", "toolUseId": "t1"}}]},
+        }
+    )
+    await _ingest([prompt, tool], harness="kiro")
+
+    rows = external_calls.insert.await_args.args[0]
+    assert rows[0]["timestamp"] == rows[1]["timestamp"] == "2026-01-01 00:00:00.000"
+    assert all(row["is_source_record"] == 1 for row in rows)
 
 
 async def test_empty_kiro_input_writes_only_credit_metadata(external_calls):
@@ -866,6 +927,9 @@ class _FakeResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        return SimpleNamespace(all=lambda: [] if self.value is None else [self.value])
+
 
 class _FakeSession:
     def __init__(self, value=None, error: Exception | None = None):
@@ -1120,3 +1184,46 @@ async def test_integrity_rewinds_to_zero_for_content_hash_mismatch(external_call
     assert result.repair_offset == 0
     assert result.expected_line == 0
     assert result.expected_offset == 11
+
+
+async def test_agent_name_resolves_only_when_one_live_agent_has_it(monkeypatch):
+    """Two namespaces may share a name; guessing would credit sessions to the wrong team's agent."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from models.agent import Agent
+    from models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    def agent(name, namespace, *, deleted=False):
+        return Agent(
+            id=uuid.uuid4(),
+            name=name,
+            namespace=namespace,
+            slug=name,
+            owner=namespace,
+            created_by=uuid.uuid4(),
+            deleted_at=datetime.now(UTC) if deleted else None,
+        )
+
+    shared_a, shared_b = agent("reviewer", "team-a"), agent("reviewer", "team-b")
+    recreated, replaced = agent("linter", "team-a"), agent("linter", "team-a-old", deleted=True)
+    unique = agent("planner", "team-a")
+    async with sessions() as db:
+        db.add_all([shared_a, shared_b, recreated, replaced, unique])
+        await db.commit()
+
+    redis = SimpleNamespace(get=AsyncMock(return_value=None), setex=AsyncMock())
+    monkeypatch.setattr("services.redis.get_redis", lambda: redis)
+    monkeypatch.setattr("database.async_session", sessions)
+    try:
+        assert await session_ingest._resolve_agent_id("reviewer") == "reviewer"  # ambiguous: left as the name
+        assert await session_ingest._resolve_agent_id("linter") == str(recreated.id)  # deleted twin ignored
+        assert await session_ingest._resolve_agent_id("planner") == str(unique.id)
+    finally:
+        await engine.dispose()

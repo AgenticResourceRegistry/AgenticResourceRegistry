@@ -3,7 +3,7 @@
 
 # Governance
 
-This document explains who makes decisions in Observal, how people take on more responsibility, and how we handle disagreements. The current Maintainers are listed in [MAINTAINERS.md](MAINTAINERS.md).
+This document explains who makes decisions in Agentic Resource Registry, how people take on more responsibility, and how we handle disagreements. The current Maintainers are listed in [MAINTAINERS.md](MAINTAINERS.md).
 
 ## Principles
 

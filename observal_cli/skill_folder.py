@@ -286,9 +286,7 @@ def validate_bundle(
         raise BundleValidationError(f"Cannot extract folder name from skill_file_path: {skill_file_path}")
 
     optic.debug(
-        "Bundle validated: listing_id={}, version_id={}, files={}, size={}",
-        listing_id,
-        version_id,
+        "Bundle validated: files={}, size={}",
         len(validated_files),
         total_size,
     )
@@ -459,7 +457,7 @@ def install_folder_bundle(
     Raises:
         BundleInstallError: If installation fails
     """
-    optic.info("Installing skill folder bundle to {}", target_dir)
+    optic.info("Installing skill folder bundle")
 
     # Never follow a pre-existing symlink in the destination hierarchy, even
     # when installing a folder for the first time.
@@ -510,7 +508,7 @@ def install_folder_bundle(
                 raise BundleInstallError(f"Target exists and no confirmed backup specified: {target_dir}")
             backup_path = backup_dir
             target_dir.rename(backup_path)
-            optic.debug("Backed up existing skill to {}", backup_path)
+            optic.debug("Backed up existing skill")
 
         # Atomic swap: rename stage to target
         try:
@@ -525,7 +523,7 @@ def install_folder_bundle(
             raise BundleInstallError(f"Failed to install skill folder: {e}") from e
 
         # Retain confirmed backups for explicit recovery, including after success.
-        optic.info("Skill folder installed successfully: {}", target_dir)
+        optic.info("Skill folder installed successfully")
         return target_dir / SKILL_MD_NAME
 
     except BundleInstallError:
@@ -639,7 +637,7 @@ def capture_directory(
     Raises:
         DirectoryCaptureError: If capture fails
     """
-    optic.debug("Capturing directory: {}", source_dir)
+    optic.debug("Capturing skill directory")
 
     if not source_dir.is_dir():
         raise DirectoryCaptureError(f"Not a directory: {source_dir}")

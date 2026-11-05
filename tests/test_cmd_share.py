@@ -149,6 +149,9 @@ def test_share_open_pulls_with_argument_array_not_shell(monkeypatch, tmp_path):
     )
     run = MagicMock(return_value=MagicMock(returncode=0))
     monkeypatch.setattr(cmd_share.subprocess, "run", run)
+    from observal_cli.shared import launcher
+
+    monkeypatch.setattr(launcher, "importable_in_isolation", lambda: True)
 
     result = runner.invoke(
         app,
@@ -157,9 +160,10 @@ def test_share_open_pulls_with_argument_array_not_shell(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     command = run.call_args.args[0]
-    assert command[:4] == [sys.executable, "-m", "observal_cli", "agent"]
-    assert command[4:6] == ["pull", "11111111-1111-4111-8111-111111111111"]
-    assert run.call_args.kwargs == {"check": False}
+    # -I keeps the project directory and any inherited PYTHONPATH off sys.path.
+    assert command[:5] == [sys.executable, "-I", "-m", "observal_cli", "agent"]
+    assert command[5:7] == ["pull", "11111111-1111-4111-8111-111111111111"]
+    assert set(run.call_args.kwargs) == {"check", "env"} and run.call_args.kwargs["check"] is False
 
 
 def test_share_expiry_is_bounded_before_network_call():

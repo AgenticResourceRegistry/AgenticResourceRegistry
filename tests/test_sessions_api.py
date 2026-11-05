@@ -32,26 +32,27 @@ LIST_SQL_FILTERED = (
     "SELECT session_id, if(first_event_time > '2020-01-01 00:00:00' AND first_event_time < "
     "'2099-01-01 00:00:00',    first_event_time, last_event_time) AS first_event_time, "
     "if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) AS last_event_time, "
-    "(if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) > now() - INTERVAL "
+    "(if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) > now() - INTERVAL "
     "5 MINUTE) AS is_active, prompt_count, 0                   AS api_request_count, tool_result_count, "
     "input_tokens        AS total_input_tokens, output_tokens       AS total_output_tokens, "
     "cache_read_tokens   AS total_cache_read_tokens, cache_write_tokens  AS total_cache_write_tokens, "
     "total_credits, model, harness, agent_id, agent_version, user_id FROM session_stats_agg FINAL "
     "WHERE session_id != '' AND parent_session_id = '' AND prompt_count > 0 AND user_id = {uid:String} "
-    "AND last_event_time > now() - INTERVAL 365 DAY AND harness = {platform:String} "
-    "AND user_id IN ({user_0:String}, {user_1:String}) ORDER BY last_event_time DESC LIMIT 25 OFFSET 10"
+    "AND if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) > now() - INTERVAL 365 DAY AND harness = {platform:String} "
+    "AND user_id IN ({user_0:String}, {user_1:String}) ORDER BY "
+    "if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) DESC LIMIT 25 OFFSET 10"
 )
 LIST_SQL_UNFILTERED = (
     "SELECT session_id, if(first_event_time > '2020-01-01 00:00:00' AND first_event_time < "
     "'2099-01-01 00:00:00',    first_event_time, last_event_time) AS first_event_time, "
     "if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) AS last_event_time, "
-    "(if(last_event_time < '2099-01-01 00:00:00', last_event_time, first_event_time) > now() - INTERVAL "
+    "(if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) > now() - INTERVAL "
     "5 MINUTE) AS is_active, prompt_count, 0                   AS api_request_count, tool_result_count, "
     "input_tokens        AS total_input_tokens, output_tokens       AS total_output_tokens, "
     "cache_read_tokens   AS total_cache_read_tokens, cache_write_tokens  AS total_cache_write_tokens, "
     "total_credits, model, harness, agent_id, agent_version, user_id FROM session_stats_agg FINAL "
     "WHERE session_id != '' AND parent_session_id = '' AND prompt_count > 0 "
-    "ORDER BY last_event_time DESC LIMIT 50 OFFSET 0"
+    "ORDER BY if(harness = 'kiro', greatest(last_event_time, last_source_ingest_at), last_event_time) DESC LIMIT 50 OFFSET 0"
 )
 IDENTITY_SQL_USER = (
     "SELECT project_id, user_id, harness FROM session_events FINAL WHERE session_id = {sid:String} "
@@ -236,6 +237,24 @@ async def test_list_query_uses_exact_filters_pagination_and_parameters(monkeypat
         "param_user_0": "u1",
         "param_user_1": "u2",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("Kiro", "kiro"), ("Pi", "pi"), ("Claude Code", "claude-code"), ("claude-code", "claude-code")],
+)
+async def test_list_query_accepts_harness_id_or_display_name(monkeypatch, platform, expected):
+    query = AsyncMock(return_value=[])
+    monkeypatch.setattr(sessions, "_ch_json", query)
+
+    await sessions._list_sessions_query(platform=platform, user_ids=None, days=None, is_admin=True, uid="admin")
+    assert query.await_args.args[1]["param_platform"] == expected
+
+
+def test_harness_id_takes_precedence_over_another_harness_display_name(monkeypatch):
+    monkeypatch.setattr(sessions, "_PLATFORM_NAMES", {"first": "second", "second": "Second harness"})
+    assert sessions._harness_id("SeCoNd") == "second"
 
 
 @pytest.mark.asyncio
@@ -489,7 +508,7 @@ async def test_list_sessions_name_lookup_failures_use_safe_fallbacks(monkeypatch
 async def test_list_sessions_status_filter_only_removes_inactive_rows(monkeypatch, status, expected):
     rows = [
         {"session_id": "active", "user_id": "", "harness": "opencode", "is_active": 1},
-        {"session_id": "idle", "user_id": "", "harness": "codex-cli", "is_active": 0},
+        {"session_id": "idle", "user_id": "", "harness": "codex", "is_active": 0},
     ]
     monkeypatch.setattr(sessions, "_list_sessions_query", AsyncMock(return_value=rows))
     session_factory = MagicMock(side_effect=AssertionError("database should not be opened"))
@@ -507,7 +526,7 @@ async def test_list_sessions_status_filter_only_removes_inactive_rows(monkeypatc
     )
 
     assert [row["session_id"] for row in result] == expected
-    assert [row["platform"] for row in rows] == ["OpenCode", "Codex CLI"]
+    assert [row["platform"] for row in rows] == ["OpenCode", "Codex"]
     session_factory.assert_not_called()
 
 

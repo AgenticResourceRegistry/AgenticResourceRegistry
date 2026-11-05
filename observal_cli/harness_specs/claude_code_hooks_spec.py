@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Declarative hook specification for Claude Code settings.
@@ -19,31 +20,11 @@ Bump HOOKS_SPEC_VERSION whenever the hook definitions change.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
+from observal_cli.shared.launcher import module_command
 from observal_cli.shared.utils import OBSERVAL_METADATA_KEY
 
 # Bump this when hook definitions change.
-HOOKS_SPEC_VERSION = "11"
-
-
-# Parent of the observal_cli package directory
-_PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
-
-
-def _python_cmd() -> str:
-    """Return python command with PYTHONPATH set if needed."""
-    try:
-        import importlib.util
-
-        if importlib.util.find_spec("observal_cli") is not None:
-            return sys.executable
-    except Exception:
-        pass
-    if sys.platform == "win32":
-        return f'set "PYTHONPATH={_PKG_ROOT}" && {sys.executable}'
-    return f"PYTHONPATH={_PKG_ROOT} {sys.executable}"
+HOOKS_SPEC_VERSION = "13"
 
 
 def get_desired_hooks() -> dict[str, list[dict]]:
@@ -53,7 +34,7 @@ def get_desired_hooks() -> dict[str, list[dict]]:
     push hook which reads the JSONL file incrementally.
     """
     meta = {OBSERVAL_METADATA_KEY: {"version": HOOKS_SPEC_VERSION}}
-    cmd = f"{_python_cmd()} -m observal_cli.hooks.session_push --harness claude-code"
+    cmd = f"{module_command('observal_cli.hooks.session_push')} --harness claude-code"
 
     hook_group: list[dict] = [{**meta, "hooks": [{"type": "command", "command": cmd}]}]
 

@@ -35,6 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git xmlsec1 && 
 
 WORKDIR /app
 
+# appuser has no home directory, so keep migration artifacts and the upload
+# spool on /data (the apidata volume) for every deployment, not just dev compose.
+ENV MIGRATION_ARTIFACT_ROOT=/data/migration_artifacts
+
 COPY --from=builder --chown=appuser:appgroup /app/.venv /app/.venv
 COPY --chown=appuser:appgroup observal-server/ .
 COPY --chown=appuser:appgroup docker/entrypoint.sh /app/entrypoint.sh

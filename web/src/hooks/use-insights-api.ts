@@ -13,6 +13,7 @@
 
 import {
   useQuery,
+  useInfiniteQuery,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -109,6 +110,45 @@ export function useDeleteFeedback() {
 
 // ── Insights ───────────────────────────────────────────────────────
 
+export function useComponentInsightReports(type: string, id: string, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ["insights", "component-reports", type, id],
+    initialPageParam: null as { created_at: string; id: string } | null,
+    queryFn: ({ pageParam }) => insights.componentReports(type, id, pageParam ?? undefined),
+    getNextPageParam: (page) => page.length === 20
+      ? { created_at: page[page.length - 1].created_at, id: page[page.length - 1].id }
+      : undefined,
+    enabled: enabled && !!id,
+    refetchInterval: (query) => query.state.data?.pages.some((page) => page.some((report) => report.status === "pending" || report.status === "running")) ? 3000 : false,
+  });
+}
+
+export function useGenerateComponentInsight() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { type: string; id: string; periodDays?: number; versionId?: string }) =>
+      insights.generateComponent(vars.type, vars.id, vars.periodDays, vars.versionId),
+    onSuccess: (_report, vars) => {
+      void qc.invalidateQueries({ queryKey: ["insights", "component-reports", vars.type, vars.id] });
+      toast.success("Component report queued");
+    },
+    onError: (error: Error) => {
+      // The API returns structured coverage when no verified-present session exists.
+      // Never show its raw JSON as a toast or suggest that unknown history means zero use.
+      if ((error as Error & { status?: number }).status === 422) {
+        try {
+          const detail: unknown = JSON.parse(error.message);
+          if (detail && typeof detail === "object" && "message" in detail && detail.message === "No verified present sessions") {
+            toast.error("No verified-present sessions for this component. Missing installation evidence cannot establish presence or zero use. Check activity coverage; if the matching historical evidence does not exist, run a new session with a verified install.");
+            return;
+          }
+        } catch { /* Other validation errors retain their normal message. */ }
+      }
+      toast.error(error.message || "Could not queue component report");
+    },
+  });
+}
+
 export function useInsightsStatus(enabled = true) {
   return useQuery({
     queryKey: ["insights", "status"],
@@ -158,6 +198,7 @@ export function useLegacyInsightReport(reportId: string) {
   return useQuery({
     queryKey: ["insights", "legacy-report", reportId],
     queryFn: () => insights.getReportById(reportId),
+    refetchInterval: (query) => ["pending", "running"].includes(query.state.data?.status ?? "") ? 3000 : false,
   });
 }
 

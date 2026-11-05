@@ -18,19 +18,18 @@ from fastapi import HTTPException, Response
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api.routes import agent_versions, component_versions, registry, review, skill, skill_files
+from api.routes import component_versions, registry, skill, skill_files
 from api.routes._skill_lock import lock_skill_version
 from api.routes.agent.install import install_agent
 from models.agent import Agent, AgentStatus, AgentVersion
 from models.agent_component import AgentComponent
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from models.team import TeamMembership, TeamRole
-from models.user import User, UserRole
-from schemas.agent import AgentInstallRequest, AgentVersionReviewRequest
-from schemas.component_version import VersionPublishRequest, VersionReviewRequest
+from models.user import User
+from schemas.agent import AgentInstallRequest
+from schemas.component_version import VersionPublishRequest
 from schemas.skill import SkillCandidateDraftRequest
 from schemas.skill_resources import SkillDraftRebaseRequest, SkillFileOperations
 from services.agent_lock import lock_agent_version
@@ -53,7 +52,7 @@ async def pg_store():
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
         yield async_sessionmaker(engine, expire_on_commit=False), engine
     finally:
         await engine.dispose()
@@ -133,54 +132,6 @@ async def test_author_snapshot_refuses_pointer_advanced_during_listing_lock(pg_s
                 select(SkillVersion.id).where(SkillVersion.listing_id == listing_id, SkillVersion.version == "1.4.0")
             )
         ) is None
-
-
-async def test_legacy_review_rechecks_pending_count_after_author_lock_wait(pg_store):
-    maker, engine = pg_store
-    async with maker() as db:
-        owner = await ds.user(db)
-        reviewer = await ds.user(db, role=UserRole.admin)
-        listing = await ds.skill(db, owner, status=ListingStatus.pending)
-        await db.commit()
-        listing_id, version_id, owner_id, reviewer_id = listing.id, listing.latest_version_id, owner.id, reviewer.id
-
-    async with maker() as writer, maker() as reviewing:
-        stale = (await reviewing.execute(select(SkillListing).where(SkillListing.id == listing_id))).scalar_one()
-        assert [version.id for version in stale.versions if version.status == ListingStatus.pending] == [version_id]
-        await lock_skill_version(writer, listing_id, version_id)
-        owner = await writer.get(User, owner_id)
-        await ds.add_skill_version(
-            writer,
-            await writer.get(SkillListing, listing_id),
-            owner,
-            version="1.3.0",
-            status=ListingStatus.pending,
-            set_latest=False,
-        )
-        await writer.flush()
-        attempted = asyncio.Event()
-
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def observe_review_lock(_conn, _cursor, statement, _params, _context, _many):
-            if "skill_listings.id" in statement and "FOR UPDATE" in statement.upper():
-                attempted.set()
-
-        reviewer = await reviewing.get(User, reviewer_id)
-        task = asyncio.create_task(review._lock_skill_decision(reviewing, stale, reviewer, stale.versions[0]))
-        try:
-            await asyncio.wait_for(attempted.wait(), timeout=5)
-            await asyncio.sleep(0.15)
-            assert not task.done(), "legacy review must wait for author to publish the new pending version"
-            await writer.commit()
-            with pytest.raises(HTTPException, match="Select an exact pending skill version") as blocked:
-                await asyncio.wait_for(task, timeout=5)
-            assert blocked.value.status_code == 409
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            await writer.rollback()
-            await reviewing.rollback()
 
 
 async def test_selected_install_waits_for_private_transition_and_refuses_stale_public_read(pg_store):
@@ -542,268 +493,6 @@ async def test_privatization_waits_for_inflight_selected_install(pg_store):
                 await asyncio.gather(task, return_exceptions=True)
             await installer.rollback()
             await writer.rollback()
-
-
-async def test_review_waits_for_writer_and_reloads_resource_bytes(pg_store, monkeypatch):
-    maker, engine = pg_store
-    async with maker() as db:
-        admin = await ds.user(db, role=UserRole.admin)
-        listing = await ds.skill(db, admin, status=ListingStatus.pending)
-        await db.commit()
-        listing_id = listing.id
-
-    async with maker() as reviewer, maker() as author:
-        stale = (await reviewer.execute(select(SkillListing).where(SkillListing.id == listing_id))).scalar_one()
-        assert stale.latest_version.extra_files == []
-        monkeypatch.setattr(review, "_find_listing", AsyncMock(return_value=("skill", stale)))
-        await lock_skill_version(author, listing_id, stale.latest_version_id)
-        version = (await author.execute(select(SkillVersion).where(SkillVersion.listing_id == listing_id))).scalar_one()
-        version.extra_files = [{"path": "assets/data.txt", "content": "unreviewed"}]
-        await author.flush()
-
-        lock_attempted = asyncio.Event()
-
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def observe_lock(_conn, _cursor, statement, _params, _context, _many):
-            if "skill_listings.latest_version_id" in statement and "FOR UPDATE" in statement.upper():
-                lock_attempted.set()
-
-        task = asyncio.create_task(review.approve(str(listing_id), reviewer, admin))
-        try:
-            await asyncio.wait_for(lock_attempted.wait(), timeout=5)
-            await asyncio.sleep(0.15)
-            assert not task.done(), "review must wait at the writer's listing lock"
-            await author.commit()
-            with pytest.raises(HTTPException) as exc:
-                await asyncio.wait_for(task, timeout=5)
-            assert exc.value.status_code == 409
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            await author.rollback()
-            await reviewer.rollback()
-
-    async with maker() as db:
-        row = (await db.execute(select(SkillVersion).where(SkillVersion.listing_id == listing_id))).scalar_one()
-        assert row.status == ListingStatus.pending
-        assert row.extra_files == [{"path": "assets/data.txt", "content": "unreviewed"}]
-
-
-async def test_exact_review_waits_for_withdrawn_version_and_refuses_old_observation(pg_store):
-    maker, engine = pg_store
-    async with maker() as db:
-        author = await ds.user(db)
-        reviewer = await ds.user(db, role=UserRole.reviewer)
-        listing = await ds.skill(db, author, status=ListingStatus.pending)
-        version = (await db.execute(select(SkillVersion).where(SkillVersion.listing_id == listing.id))).scalar_one()
-        original_revision = skill_content_revision(listing, version)
-        await db.commit()
-        listing_id, version_id = listing.id, version.id
-
-    async with maker() as author_db, maker() as reviewer_db:
-        await lock_skill_version(author_db, listing_id, version_id)
-        lock_attempted = asyncio.Event()
-
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def observe_lock(_conn, _cursor, statement, _params, _context, _many):
-            if "skill_listings.latest_version_id" in statement and "FOR UPDATE" in statement.upper():
-                lock_attempted.set()
-
-        task = asyncio.create_task(
-            review.decide_skill_version(
-                str(listing_id),
-                version_id,
-                VersionReviewRequest(action="approve", observed_revision=original_revision),
-                reviewer_db,
-                reviewer,
-            )
-        )
-        try:
-            await asyncio.wait_for(lock_attempted.wait(), timeout=5)
-            await asyncio.sleep(0.15)
-            assert not task.done()
-            version = await author_db.get(SkillVersion, version_id)
-            version.review_epoch = 1
-            version.status = ListingStatus.draft
-            version.content_revision = skill_content_revision(listing, version)
-            await author_db.commit()
-            with pytest.raises(HTTPException) as blocked:
-                await asyncio.wait_for(task, timeout=5)
-            assert blocked.value.status_code == 422
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            await author_db.rollback()
-            await reviewer_db.rollback()
-    async with maker() as db:
-        version = await db.get(SkillVersion, version_id)
-        assert version.status == ListingStatus.draft and version.review_epoch == 1
-
-
-async def test_candidate_review_waits_for_new_approved_base_and_rejects_stale_ancestry(pg_store):
-    maker, engine = pg_store
-    async with maker() as db:
-        author = await ds.user(db)
-        reviewer = await ds.user(db, role=UserRole.reviewer)
-        listing = await ds.skill(db, author, status=ListingStatus.approved)
-        base_id = listing.latest_version_id
-        candidate = await ds.add_skill_version(
-            db, listing, author, version="3.0.0", status=ListingStatus.pending, set_latest=False
-        )
-        candidate.base_version_id = base_id
-        candidate.base_revision = skill_content_revision(listing, await db.get(SkillVersion, base_id))
-        candidate.content_revision = skill_content_revision(listing, candidate)
-        revision, listing_id, candidate_id = candidate.content_revision, listing.id, candidate.id
-        successor = await ds.add_skill_version(
-            db, listing, author, version="2.0.0", status=ListingStatus.approved, set_latest=False
-        )
-        await db.commit()
-        successor_id = successor.id
-
-    async with maker() as author_db, maker() as reviewer_db:
-        await lock_skill_version(author_db, listing_id, successor_id)
-        listing = await author_db.get(SkillListing, listing_id)
-        listing.latest_version_id = successor_id
-        await author_db.flush()
-        lock_attempted = asyncio.Event()
-
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def observe_lock(_conn, _cursor, statement, _params, _context, _many):
-            if "skill_listings.latest_version_id" in statement and "FOR UPDATE" in statement.upper():
-                lock_attempted.set()
-
-        task = asyncio.create_task(
-            review.decide_skill_version(
-                str(listing_id),
-                candidate_id,
-                VersionReviewRequest(action="approve", observed_revision=revision),
-                reviewer_db,
-                reviewer,
-            )
-        )
-        try:
-            await asyncio.wait_for(lock_attempted.wait(), timeout=5)
-            await asyncio.sleep(0.15)
-            assert not task.done()
-            await author_db.commit()
-            with pytest.raises(HTTPException) as stale:
-                await asyncio.wait_for(task, timeout=5)
-            assert stale.value.status_code == 409
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            await author_db.rollback()
-            await reviewer_db.rollback()
-    async with maker() as db:
-        listing = await db.get(SkillListing, listing_id)
-        candidate = await db.get(SkillVersion, candidate_id)
-        assert listing.latest_version_id == successor_id
-        assert candidate.status == ListingStatus.pending
-
-
-async def test_public_agent_review_waits_for_concurrent_skill_privatization(pg_store):
-    maker, engine = pg_store
-    async with maker() as db:
-        author = await ds.user(db)
-        reviewer = await ds.user(db, role=UserRole.reviewer)
-        team = await ds.team_with_member(db, author)
-        listing = await ds.skill(db, author, team_id=team.id)
-        agent = await ds.agent(db, author, status=AgentStatus.pending, components=[("skill", listing.id, listing.name)])
-        await db.commit()
-        skill_id, skill_version_id, agent_id = listing.id, listing.latest_version_id, agent.id
-
-    async with maker() as author_db, maker() as reviewer_db:
-        await lock_skill_version(author_db, skill_id, skill_version_id)
-        listing = await author_db.get(SkillListing, skill_id)
-        listing.is_private = True
-        await author_db.flush()
-        share_attempted = asyncio.Event()
-
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def observe_share(_conn, _cursor, statement, _params, _context, _many):
-            if "skill_listings.is_private" in statement and "FOR SHARE" in statement.upper():
-                share_attempted.set()
-
-        task = asyncio.create_task(review.approve_agent(agent_id, None, reviewer_db, reviewer))
-        try:
-            await asyncio.wait_for(share_attempted.wait(), timeout=5)
-            await asyncio.sleep(0.15)
-            assert not task.done()
-            await author_db.commit()
-            with pytest.raises(HTTPException) as blocked:
-                await asyncio.wait_for(task, timeout=5)
-            assert blocked.value.status_code == 422
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            await author_db.rollback()
-            await reviewer_db.rollback()
-    async with maker() as db:
-        version = (await db.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id))).scalar_one()
-        assert version.status == AgentStatus.pending
-
-
-@pytest.mark.parametrize("decision_route", ["review", "version"])
-async def test_public_agent_review_rechecks_skill_status_after_listing_lock_wait(pg_store, monkeypatch, decision_route):
-    maker, engine = pg_store
-    # If the race is missed, allow the route to finish rather than failing
-    # because this narrow fixture intentionally omits inbox/Redis tables.
-    monkeypatch.setattr(review.inbox, "on_review_decided", AsyncMock(return_value=1))
-    monkeypatch.setattr(review, "invalidate_namespace", AsyncMock())
-    monkeypatch.setattr(review, "redis_publish", AsyncMock())
-    async with maker() as db:
-        author = await ds.user(db)
-        reviewer = await ds.user(db, role=UserRole.reviewer)
-        listing = await ds.skill(db, author)
-        agent = await ds.agent(db, author, status=AgentStatus.pending, components=[("skill", listing.id, listing.name)])
-        await db.commit()
-        skill_id, skill_version_id, agent_id = listing.id, listing.latest_version_id, agent.id
-
-    async with maker() as writer, maker() as reviewer_db:
-        await lock_skill_version(writer, skill_id, skill_version_id)
-        version = await writer.get(SkillVersion, skill_version_id)
-        version.status = ListingStatus.pending
-        version.requires_global_review = True
-        await writer.flush()
-        share_attempted = asyncio.Event()
-
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def observe_share(_conn, _cursor, statement, _params, _context, _many):
-            if "skill_listings.is_private" in statement and "FOR SHARE" in statement.upper():
-                share_attempted.set()
-
-        decision = (
-            review.approve_agent(agent_id, None, reviewer_db, reviewer)
-            if decision_route == "review"
-            else agent_versions._review_agent_version(
-                str(agent_id), "3.1.0", AgentVersionReviewRequest(action="approve"), reviewer_db, reviewer
-            )
-        )
-        task = asyncio.create_task(decision)
-        try:
-            await asyncio.wait_for(share_attempted.wait(), timeout=5)
-            await asyncio.sleep(0.15)
-            assert not task.done()
-            await writer.commit()
-            with pytest.raises(HTTPException) as blocked:
-                await asyncio.wait_for(task, timeout=5)
-            assert blocked.value.status_code == 422
-            assert any(
-                item["status"] == "pending_public_review" for item in blocked.value.detail["blocking_components"]
-            )
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            await writer.rollback()
-            await reviewer_db.rollback()
-    async with maker() as db:
-        agent_version = (await db.execute(select(AgentVersion).where(AgentVersion.agent_id == agent_id))).scalar_one()
-        assert agent_version.status == AgentStatus.pending
 
 
 async def test_agent_publication_waits_for_concurrent_skill_privatization(pg_store):

@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /** Registry rankings based exclusively on live leaderboard data. */
 
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Search, Users } from "lucide-react";
+import { AlertTriangle, Search, Users } from "lucide-react";
 import { PageHeader } from "@/components/layouts/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
@@ -19,6 +21,7 @@ import {
   SegmentedControl,
 } from "@/components/registry/registry-primitives";
 import { useComponentLeaderboard, useLeaderboard } from "@/hooks/use-api";
+import { LEADERBOARD_DEPRECATION_NOTICE } from "@/lib/leaderboard";
 import { registryItemPath, type RegistryRouteType } from "@/lib/registry-name";
 import { compactNumber } from "@/lib/utils";
 import type { LeaderboardWindow } from "@/lib/types";
@@ -176,7 +179,7 @@ export default function LeaderboardPage() {
   }, [componentLeaderboard, leaderboard, topTab]);
 
   const featuredItem = rankings[0];
-  const entityLabel = isAgents ? "Agent" : "Component";
+  const entityLabel = isAgents ? "Agent File" : "Component";
 
   return (
     <>
@@ -189,10 +192,17 @@ export default function LeaderboardPage() {
       />
 
       <div className="page-body w-full mx-auto space-y-0">
+        <div
+          role="status"
+          className="mb-4 flex items-start gap-3 rounded-md border border-warning/40 bg-warning/10 px-4 py-3"
+        >
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+          <p className="text-sm text-foreground">{LEADERBOARD_DEPRECATION_NOTICE}</p>
+        </div>
         <div className="mb-4 flex flex-wrap items-center gap-2.5">
           <SegmentedControl
             options={[
-              { value: "agents", label: "Agents" },
+              { value: "agents", label: "Agent Files" },
               { value: "components", label: "Components" },
             ]}
             value={topTab}

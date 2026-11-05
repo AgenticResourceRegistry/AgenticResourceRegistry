@@ -1,12 +1,13 @@
-<!-- SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal server migrate"
+---
 
-# `observal server migrate`
+Move PostgreSQL registry data and ClickHouse telemetry between Agentic Resource Registry deployments.
 
-Move PostgreSQL registry data and ClickHouse telemetry between Observal deployments.
-
-Migration uses the supplied database connections directly. Local shell and database access are the authorization boundary; the command does not authenticate against a configured Observal API.
+Migration uses the supplied database connections directly. Local shell and database access are the authorization boundary; the command does not authenticate against a configured Agentic Resource Registry API.
 
 Install the optional dependency first:
 

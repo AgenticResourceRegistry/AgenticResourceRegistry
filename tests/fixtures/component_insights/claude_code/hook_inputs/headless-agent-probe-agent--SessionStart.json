@@ -1,0 +1,8 @@
+{
+ "agent_type": "probe-agent",
+ "cwd": "/home/fixture/project",
+ "hook_event_name": "SessionStart",
+ "session_id": "fixture-session_id",
+ "source": "startup",
+ "transcript_path": "/home/fixture/.claude/projects/-home-fixture-project/transcript_path.jsonl"
+}

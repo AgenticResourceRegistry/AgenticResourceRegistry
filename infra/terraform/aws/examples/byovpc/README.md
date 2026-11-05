@@ -1,9 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Bring Your Own VPC Example
 
-Deploy Observal into an existing VPC instead of having Terraform create one.
+Deploy Agentic Resource Registry into an existing VPC instead of having Terraform create one.
 
 ## Prerequisites
 

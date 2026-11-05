@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Component source CRUD and sync endpoints."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -139,7 +141,7 @@ async def trigger_sync(
     source.sync_status = "syncing"
     await db.commit()
 
-    result = sync_source(source.url, source.component_type)
+    result = await asyncio.to_thread(sync_source, source.url, source.component_type)
 
     source.last_synced_at = datetime.now(UTC)
     if result.success:

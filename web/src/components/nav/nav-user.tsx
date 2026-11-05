@@ -91,27 +91,28 @@ export function NavUser({ user }: NavUserProps) {
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          onClick={async () => {
-            try {
-              const token = sessionStorage.getItem("observal_access_token");
-              const refreshToken = localStorage.getItem("observal_refresh_token");
-              if (token) {
-                await fetch("/api/v1/auth/logout", {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    refresh_token: refreshToken || undefined,
-                  }),
-                });
-              }
-            } catch {
-              // Best-effort — proceed with client-side cleanup regardless
-            }
+          onClick={() => {
+            // Clear the local session first so an in-flight refresh cannot restore it, then
+            // revoke on the server with the credentials captured beforehand (best effort).
+            const token = sessionStorage.getItem("observal_access_token");
+            const refreshToken = localStorage.getItem("observal_refresh_token");
             clearSession();
             router.navigate({ to: "/login" });
+            if (token) {
+              void fetch("/api/v1/auth/logout", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  refresh_token: refreshToken || undefined,
+                }),
+                keepalive: true,
+              }).catch(() => {
+                // Best-effort: the local session is already gone.
+              });
+            }
           }}
         >
           <LogOut className="mr-2 h-4 w-4" />

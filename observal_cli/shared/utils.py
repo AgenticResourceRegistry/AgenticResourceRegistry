@@ -267,13 +267,28 @@ def is_observal_hook_entry(entry: dict) -> bool:
     return any(m in cmd or m in url for m in _OBSERVAL_HOOK_MARKERS)
 
 
+def is_observal_agent_hook_group(group: object) -> bool:
+    """Whether a matcher group is an agent's gated hook placed by ``agent pull --hooks=settings``.
+
+    Such a group is a registry component the user opted into, not telemetry:
+    telemetry patching and cleanup must leave it alone (``agent pull`` owns it).
+    """
+    meta = group.get(OBSERVAL_METADATA_KEY) if isinstance(group, dict) else None
+    return isinstance(meta, dict) and meta.get("kind") == "agent-hook"
+
+
 def is_observal_matcher_group(group: dict) -> bool:
-    """Return True if a matcher group is Observal-managed.
+    """Return True if a matcher group is Observal-managed telemetry.
+
+    Agent hook groups (:func:`is_observal_agent_hook_group`) are not: they
+    belong to an installed agent and are reconciled only by ``agent pull``.
 
     Raises TypeError if *group* is not a dict.
     """
     if not isinstance(group, dict):
         raise TypeError(f"is_observal_matcher_group expects dict, got {type(group).__name__!r}")
+    if is_observal_agent_hook_group(group):
+        return False
     if OBSERVAL_METADATA_KEY in group:
         return True
     return any(is_observal_hook_entry(h) for h in group.get("hooks", []))

@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -57,7 +57,7 @@ observal registry prompt edit NAMESPACE/SLUG --template 'New template body' --ou
 observal registry sandbox edit NAMESPACE/SLUG --image python:3.12-slim --output json
 ```
 
-Verify the returned status and version. On an edit-lock conflict, do not overwrite blindly. Wait or ask the current editor to release it.
+Verify the returned status and version. When the item has an open review, the edit is pushed to it as a new revision automatically: the response carries `review_number` and `review_revision`, and reviewers see the change at once (approvals on earlier revisions follow the review's stale-approval policy). While the item is pending or has changes requested, `edit` also submits the change as the author's resubmission, which answers requested changes (the web edit form and `agent edit` do the same). On an edit-lock conflict, do not overwrite blindly. Wait or ask the current editor to release it.
 
 ## Publish a version
 
@@ -72,7 +72,7 @@ observal registry version publish sandbox NAMESPACE/SLUG --version 1.1.0 --descr
 observal registry version list mcp NAMESPACE/SLUG --output json
 ```
 
-Report review status separately from version creation.
+Version publication accepts `--message 'Why this revision changes'`. The response contains `review_number` and `review_url`; open it with `observal review show N`, inspect threads and the gate, then report review status separately from version creation.
 
 ## Skill folder version management
 

@@ -30,7 +30,30 @@ _version_enforced: bool = False
 _EXEMPT_SUBCOMMANDS = frozenset({"self", "server"})
 _OPTIONAL_AUTH = ContextVar("observal_optional_auth", default=False)
 _PUBLIC_POST = ContextVar("observal_public_post", default=False)
+# Set only while agent pull handles supplied MCP credentials. Logging must not
+# include reflected names/versions in request paths during that invocation.
+_pull_reporting_secrets: ContextVar[set[str] | None] = ContextVar("pull_reporting_secrets", default=None)
 _QueryParams = dict | list[tuple[str, str]]
+
+
+class _PullHTTPXFilter(logging.Filter):
+    """HTTPX and httpcore can log reflected URLs and response headers during pull."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _pull_reporting_secrets.get()
+
+
+# Logger filters do not apply to child records propagated to a parent logger.
+# httpcore uses these explicit names for sync and async HTTP/1.1, HTTP/2 and proxies.
+for _http_logger_name in (
+    "httpx",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+):
+    logging.getLogger(_http_logger_name).addFilter(_PullHTTPXFilter())
 
 
 def _get_cli_version() -> str:
@@ -94,7 +117,39 @@ def _safe_detail(response: httpx.Response) -> str | None:
         return None
     # FastAPI errors use ``detail``; ARD routes use ``{"errorCode", "message"}``.
     detail = (data.get("detail") or data.get("message")) if isinstance(data, dict) else None
+    if isinstance(detail, list):
+        detail = _validation_detail(detail)
     return detail.strip()[:500] if isinstance(detail, str) and detail.strip() else None
+
+
+def _validation_detail(items: list) -> str | None:
+    """FastAPI's 422 ``detail`` list as ``field: message`` lines.
+
+    Only ``loc`` and ``msg`` (or a component check's ``reason``) are used; ``input``
+    (an echo of the submitted value) and ``ctx`` are never shown.
+    """
+    lines = []
+    for item in items[:3]:
+        if not isinstance(item, dict):
+            continue
+        reason = item.get("reason")
+        message = reason.removeprefix("Value error, ") if isinstance(reason, str) else item.get("msg")
+        if not isinstance(message, str):
+            continue
+        location = [str(part) for part in item.get("loc") or [] if part != "body"]
+        lines.append(f"{'.'.join(location)}: {message}" if location else message)
+    if len(items) > 3 and lines:
+        lines.append(f"(and {len(items) - 3} more)")
+    return "; ".join(lines) or None
+
+
+def _install_command(response: httpx.Response) -> str | None:
+    """The fix command a 426 response carries, if any."""
+    try:
+        command = response.json().get("install_command")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return None
+    return command if isinstance(command, str) and command else None
 
 
 def _browse_remediation(path: str) -> str:
@@ -125,7 +180,7 @@ def _handle_error(
     resource: str | None = None,
 ) -> None:
     """Convert an HTTP status into the stable CLI error contract."""
-    optic.trace("error={}, path={}", error, path)
+    optic.trace("HTTP request returned an error")
     response = error.response
     code = response.status_code
     detail = _safe_detail(response)
@@ -136,6 +191,38 @@ def _handle_error(
         "http_status": code,
         "detail": repr(error),
     }
+
+    if code == 422 and path.startswith("/api/v1/insights/components/") and path.endswith("/generate"):
+        try:
+            payload = response.json()
+            problem = payload.get("detail") if isinstance(payload, dict) else None
+        except (ValueError, UnicodeDecodeError):
+            problem = None
+        if isinstance(problem, dict) and problem.get("message") == "No verified present sessions":
+            coverage = problem.get("coverage")
+            presence = coverage.get("presence") if isinstance(coverage, dict) else None
+            presence = presence if isinstance(presence, dict) else {}
+            counts = ", ".join(
+                f"{label}: {presence[key]}"
+                for key, label in (
+                    ("eligible_sessions", "eligible"),
+                    ("legacy_hash_sessions", "legacy hashes"),
+                    ("snapshot_missing_sessions", "missing snapshots"),
+                    ("mapping_pending_sessions", "mapping pending"),
+                    ("mapping_failed_sessions", "mapping failed"),
+                )
+                if type(presence.get(key)) is int and presence[key] > 0
+            )
+            fail(
+                ErrorCategory.VALIDATION,
+                "No verified-present sessions for this component" + (f" ({counts})." if counts else "."),
+                remediation=(
+                    "Check component activity and coverage; run a new session with the exact verified install. "
+                    "Legacy Agent traces alone do not prove component presence."
+                ),
+                result={"coverage": coverage} if isinstance(coverage, dict) else None,
+                **context,
+            )
 
     if code == 401:
         fail(
@@ -169,7 +256,11 @@ def _handle_error(
         fail(
             ErrorCategory.VERSION,
             detail or "The CLI and server versions are incompatible.",
-            remediation="Install the CLI version required by the server.",
+            remediation=(
+                f"Run {_install_command(response)}, then retry."
+                if _install_command(response)
+                else "Run observal self upgrade --force --output json, then retry."
+            ),
             **context,
         )
     if code == 429:
@@ -216,7 +307,7 @@ def _handle_timeout(
     detail: str | None = None,
 ) -> None:
     """Convert a timeout into the stable CLI error contract."""
-    optic.trace("path={}", path)
+    optic.trace("HTTP request timed out")
     timeout = config.get_timeout()
     fail(
         ErrorCategory.UNAVAILABLE,
@@ -278,7 +369,7 @@ def _request_with_retry(
     retried after a transient response because their server state may be
     unknown.
     """
-    optic.trace("method={}, url={}", method, url)
+    optic.trace("HTTP method={}", method)
     timeout = config.get_timeout()
     func = getattr(httpx, method)
 
@@ -293,7 +384,17 @@ def _request_with_retry(
     elif json is not None:
         kwargs["json"] = json
 
-    safe_url = urlunparse(urlparse(url)._replace(netloc=urlparse(url).hostname or ""))
+    # Pull metadata may reflect a supplied credential in the URL path. Keep
+    # ordinary request diagnostics unchanged outside that reporting boundary.
+    redact_path = bool(_pull_reporting_secrets.get())
+    safe_url = urlunparse(
+        urlparse(url)._replace(
+            netloc=urlparse(url).hostname or "",
+            path="" if redact_path else urlparse(url).path,
+            query="" if redact_path else urlparse(url).query,
+            fragment="" if redact_path else urlparse(url).fragment,
+        )
+    )
     optic.debug("{} {}", method.upper(), safe_url)
     t0 = time.monotonic()
 
@@ -334,6 +435,14 @@ def resolve_registry_reference(item_type: str, reference: str) -> str:
         "prompts": "prompt",
         "sandboxes": "sandbox",
     }.get(item_type, item_type)
+    if not reference.strip():
+        # A blank reference would build /api/v1/<type>s/ and surface as an opaque 307.
+        fail(
+            ErrorCategory.USAGE,
+            f"The {item_type} reference is empty.",
+            operation=f"Resolve {item_type} reference",
+            remediation=f"Pass a {item_type} name such as namespace/slug, a UUID, an @alias, or a list row number.",
+        )
     resolved = (
         config.resolve_alias(reference, expected_type=item_type)
         if reference.isdigit()
@@ -505,7 +614,7 @@ def get(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, params={}", path, params)
+    optic.trace("GET request")
     operation, resource = _error_context(
         operation,
         resource,
@@ -532,7 +641,7 @@ def get_text(
     resource: str | None = None,
 ) -> str:
     """GET a text response, optionally enforcing its media type."""
-    optic.trace("path={}, params={}, content_type={}", path, params, content_type)
+    optic.trace("request with content_type={}", content_type)
     operation, resource = _error_context(
         operation,
         resource,
@@ -599,7 +708,7 @@ def get_with_headers(
     resource: str | None = None,
 ) -> tuple[dict, dict[str, str]]:
     """Like ``get()``, but also returns response headers with lowercase keys."""
-    optic.trace("path={}, params={}", path, params)
+    optic.trace("GET request with response headers")
     operation, resource = _error_context(
         operation,
         resource,
@@ -625,7 +734,7 @@ def post(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, has_json_data={}", path, json_data is not None)
+    optic.trace("POST request has_json_data={}", json_data is not None)
     operation, resource = _error_context(
         operation,
         resource,
@@ -667,7 +776,7 @@ def put(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, has_json_data={}", path, json_data is not None)
+    optic.trace("PUT request has_json_data={}", json_data is not None)
     operation, resource = _error_context(
         operation,
         resource,
@@ -685,7 +794,7 @@ def patch(
     operation: str | None = None,
     resource: str | None = None,
 ) -> dict:
-    optic.trace("path={}, has_json_data={}", path, json_data is not None)
+    optic.trace("PATCH request has_json_data={}", json_data is not None)
     operation, resource = _error_context(
         operation,
         resource,
@@ -697,7 +806,7 @@ def patch(
 
 
 def delete(path: str, *, operation: str | None = None, resource: str | None = None) -> dict:
-    optic.trace("path={}", path)
+    optic.trace("DELETE request")
     operation, resource = _error_context(
         operation,
         resource,

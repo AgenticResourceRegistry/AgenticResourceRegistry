@@ -1,10 +1,11 @@
-<!-- SPDX-FileCopyrightText: 2026 Nithin-Bhargav-07 <gaddamnithinbhargav@gmail.com> -->
-<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Nithin-Bhargav-07 <gaddamnithinbhargav@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal registry skill"
+---
 
-# `observal registry skill`
-
-Submit, browse, review, install, and safely update versioned skill folders, as well as Git-backed and historical single-file skills. See the [complete skill folder workflow](../skill-folder-workflow.md) for the owner-to-reviewer-to-consumer journey and rollout requirements.
+Submit, browse, review, install, and safely update versioned skill folders, as well as Git-backed and historical single-file skills. See the [complete skill folder workflow](/skill-folder-workflow) for the owner-to-reviewer-to-consumer journey and rollout requirements.
 
 ## Commands
 
@@ -52,7 +53,7 @@ observal registry skill submit \
   --output json
 ```
 
-For a new complete folder, use `observal registry skill submit --from-dir ./my-skill --name my-skill --description "My skill"`. To advance an approved listing, use `fork` (reviewed direct base) or `import-folder` (reviewed Git/historical direct base), then `observal registry skill replace-files my-skill --version-id UUID --from-dir ./my-skill --revision OBSERVED_REVISION` as needed. The [folder workflow](../skill-folder-workflow.md) covers exact-base selection, sensitive/excluded file acknowledgments, review, and immutable releases. JSON mode never prompts; supply all required inputs explicitly.
+For a new complete folder, use `observal registry skill submit --from-dir ./my-skill --name my-skill --description "My skill"`. To advance an approved listing, use `fork` (reviewed direct base) or `import-folder` (reviewed Git/historical direct base), then `observal registry skill replace-files my-skill --version-id UUID --from-dir ./my-skill --revision OBSERVED_REVISION` as needed. The [folder workflow](/skill-folder-workflow) covers exact-base selection, sensitive/excluded file acknowledgments, review, and immutable releases. JSON mode never prompts; supply all required inputs explicitly.
 
 Valid task types are `code-review`, `code-generation`, `testing`, `documentation`, `debugging`, `refactoring`, `deployment`, `security-audit`, `performance`, and `general`.
 
@@ -89,7 +90,7 @@ observal registry skill install acme/review-skill --harness pi --raw
 
 JSON output performs the installation unless no-write is selected. It reports `write_performed` and `installed_path`. Raw mode emits only the generated config and performs no write. Lockfile state is recorded only after the skill content is written successfully. A complete folder install requires the server's default-off delivery gate, a compatible client, and a POSIX filesystem (Linux/macOS or WSL on its Linux filesystem). Native Windows managed folder installation, upgrades, backup restoration, and pinned Agent folder pulls are not supported; they fail closed rather than attempting an unsafe partial swap. The other CLI workflows and existing Git/single-file installations are not subject to this folder-swap restriction. Pin an approved `--version` for reproducible installs; omitting it follows the latest release. A managed folder is never replaced silently: first use `--check-upgrade` for a no-write preview, then `--upgrade` to verify every installed byte and mode, retain a private backup and update its receipt. `--backup-root DIR` must be private, ignored by Git when inside a worktree, outside skill discovery roots, and on the target filesystem. Cross-mode Git/single-file installs cannot erase existing folder receipts.
 
-The command fails if the harness lacks skill support, the source cannot be installed, the destination is unowned or locally edited, or installed state cannot be recorded. See [verified updates and recovery](../skill-folder-workflow.md#verified-managed-update-and-recovery) before restoring a backup.
+The command fails if the harness lacks skill support, the source cannot be installed, the destination is unowned or locally edited, or installed state cannot be recorded. See [verified updates and recovery](/skill-folder-workflow#verified-managed-update-and-recovery) before restoring a backup.
 
 ## Edit
 
@@ -102,5 +103,5 @@ Edit-lock conflicts preserve conflict exit code 6. Invalid fields and files use 
 
 ## Related
 
-* [`observal registry`](registry.md): complete registry reference
-* [`observal agent`](agent.md): attach skills to agents
+* [`observal registry`](/cli/registry): complete registry reference
+* [`observal agent`](/cli/agent): attach skills to agents

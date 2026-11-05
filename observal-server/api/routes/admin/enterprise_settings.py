@@ -13,7 +13,7 @@ import litellm
 from fastapi import Depends, HTTPException
 from loguru import logger as optic
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import services.dynamic_settings as ds
@@ -67,6 +67,11 @@ async def _lift_otlp_pauses(stored: str) -> None:
         await clear_pauses([destination.id for destination in parse_destinations(stored)])
     except Exception as exc:
         optic.warning("could not lift otlp destination pauses: {}", exc)
+
+
+def _require_dedicated_review_policy_route(key: str) -> None:
+    if key == "review.policy" or key.startswith("review.policy.team."):
+        raise HTTPException(status_code=409, detail="Use the dedicated review-policy endpoint")
 
 
 def _require_usage_ping_super_admin(key: str, current_user: User) -> None:
@@ -239,6 +244,7 @@ async def get_setting(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.debug("admin setting get")
+    _require_dedicated_review_policy_route(key)
     if key in ds.FILE_ONLY_KEYS:
         raise HTTPException(status_code=404, detail="Setting not found")
     externally_managed = ds.is_externally_managed(key)
@@ -267,6 +273,7 @@ async def upsert_setting(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.trace("key={}", key)
+    _require_dedicated_review_policy_route(key)
     _require_usage_ping_super_admin(key, current_user)
     if key in ds.FILE_ONLY_KEYS:
         raise HTTPException(status_code=409, detail="Setting can only be managed through dedicated files")
@@ -293,14 +300,6 @@ async def upsert_setting(
         value = value.lower()
         if value not in {"true", "false"}:
             raise HTTPException(status_code=422, detail="Usage reporting must be true or false")
-        if value == "true":
-            company_name = (await ds.get("usage_ping.company_name")).strip()
-            public_url = (await ds.get("deployment.public_url")).strip()
-            if not company_name or not public_url:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Company name and deployment public URL are required before enabling usage reporting",
-                )
     elif key == OTLP_DESTINATIONS_KEY:
         value = await _prepare_otlp_destinations(value)
 
@@ -371,6 +370,7 @@ async def delete_setting(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.trace("key={}", key)
+    _require_dedicated_review_policy_route(key)
     _require_usage_ping_super_admin(key, current_user)
     if ds.is_externally_managed(key):
         raise HTTPException(status_code=409, detail="Setting is externally managed by a secret file")
@@ -476,49 +476,101 @@ class _PurgeTracesInsightsResponse(BaseModel):
     deleted_meta_cache: int | None = None
 
 
+# Mutations run synchronously (mutations_sync=2) so success means the rows are
+# gone, not merely scheduled. Large tables can take a while.
+_PURGE_MUTATION_TIMEOUT = 600.0
+
+
 @router.post("/settings/danger/purge-traces-insights", response_model=_PurgeTracesInsightsResponse)
 async def purge_traces_and_insights(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
-    """Danger-zone purge: delete all deployment telemetry and insight reports."""
+    """Danger-zone purge: delete all deployment telemetry and insight reports.
+
+    Success is reported only when every ClickHouse delete completed. Any
+    failed table makes the whole action fail (502) after the PostgreSQL
+    insight data is removed; rerunning the purge is safe.
+    """
     optic.warning("danger purge traces+insights requested by user={}", current_user.id)
     project_id = DEFAULT_PROJECT_ID
 
     from services.clickhouse.client import _query as ch_query
 
-    clickhouse_tables = ["session_events", "session_stats_agg"]
+    # Session telemetry and the activity projected from it. Kept:
+    # - layer_snapshots and their component mappings (layer_components,
+    #   layer_component_extractions): configuration identity, not session
+    #   content. Senders cache "already uploaded" per hash, so deleting either
+    #   would leave later sessions on that hash without verified attribution
+    #   until a scheduled backfill ran.
+    # - session_checkpoints, as before (existing sender-resume behavior).
+    clickhouse_tables = [
+        "session_events",
+        "session_stats_agg",
+        "session_capabilities",
+        "component_activity",
+        "component_activity_publications",
+    ]
+    failed_tables: list[str] = []
     for table in clickhouse_tables:
         try:
-            await ch_query(
+            response = await ch_query(
                 f"ALTER TABLE {table} DELETE WHERE project_id = {{project_id:String}}",
-                {"param_project_id": project_id},
+                {"param_project_id": project_id, "mutations_sync": "2"},
+                timeout=_PURGE_MUTATION_TIMEOUT,
             )
+            if response.status_code != 200:
+                failed_tables.append(table)
+                optic.warning("danger purge failed for ClickHouse table {}: HTTP {}", table, response.status_code)
         except Exception as e:
-            optic.warning("danger purge failed for ClickHouse table {}: {}", table, e)
+            failed_tables.append(table)
+            optic.warning("danger purge failed for ClickHouse table {}: {}", table, type(e).__name__)
 
     agent_ids_stmt = select(Agent.id)
-    report_result = await db.execute(delete(InsightReport).where(InsightReport.agent_id.in_(agent_ids_stmt)))
+    # Component reports and facets have no agent_id; an agent_id filter alone
+    # would silently keep them.
+    report_result = await db.execute(
+        delete(InsightReport).where(
+            or_(
+                InsightReport.agent_id.in_(agent_ids_stmt),
+                (InsightReport.subject_type == "component") & (InsightReport.project_id == project_id),
+            )
+        )
+    )
     facets_result = await db.execute(
-        delete(InsightSessionFacets).where(InsightSessionFacets.agent_id.in_(agent_ids_stmt))
+        delete(InsightSessionFacets).where(
+            or_(InsightSessionFacets.agent_id.in_(agent_ids_stmt), InsightSessionFacets.project_id == project_id)
+        )
     )
     meta_result = await db.execute(delete(InsightSessionMeta).where(InsightSessionMeta.agent_id.in_(agent_ids_stmt)))
     cache_result = await db.execute(delete(InsightMetaCache).where(InsightMetaCache.agent_id.in_(agent_ids_stmt)))
     await db.commit()
 
+    complete = not failed_tables
     await emit_security_event(
         SecurityEvent(
             event_type=EventType.SETTING_CHANGED,
             severity=Severity.CRITICAL,
-            outcome="success",
+            outcome="success" if complete else "failure",
             actor_id=str(current_user.id),
             actor_email=current_user.email,
             actor_role=current_user.role.value,
             target_id="danger.purge_traces_insights",
             target_type="danger_zone",
-            detail="Purged deployment telemetry traces/session data and insight reports",
+            detail=(
+                "Purged deployment telemetry traces/session data and insight reports"
+                if complete
+                else "Partial purge: insight reports removed; ClickHouse deletion failed for "
+                + ", ".join(failed_tables)
+            ),
         )
     )
+    if not complete:
+        raise HTTPException(
+            status_code=502,
+            # Kept under the web client's 200-character error display limit.
+            detail="Purge incomplete; run it again. Insight reports were removed. Failed: " + ", ".join(failed_tables),
+        )
 
     return _PurgeTracesInsightsResponse(
         project_id=project_id,

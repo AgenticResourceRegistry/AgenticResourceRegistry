@@ -1,0 +1,8 @@
+{
+ "cwd": "/home/fixture/project",
+ "hook_event_name": "SessionStart",
+ "model": "eu.anthropic.claude-opus-4-6-v1",
+ "session_id": "fixture-session_id",
+ "source": "startup",
+ "transcript_path": "/home/fixture/.claude/projects/-home-fixture-project/transcript_path.jsonl"
+}

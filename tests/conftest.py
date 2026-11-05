@@ -31,3 +31,28 @@ def _isolated_capability_lock(tmp_path, monkeypatch):
     from observal_cli import capability_lock
 
     monkeypatch.setattr(capability_lock, "LOCK_PATH", tmp_path / "capability_lock.jsonl")
+
+
+@pytest.fixture
+def no_open_review(monkeypatch):
+    """For route tests that mock the database: no review is open for a draft save to update.
+
+    Draft saves push a new revision to an open review (services.review.cutover). A mocked
+    session cannot answer that lookup, so these tests state there is nothing to push to.
+    """
+    from unittest.mock import AsyncMock
+
+    import services.review.cutover as cutover
+
+    monkeypatch.setattr(cutover, "_draft_already_under_review", AsyncMock(return_value=None))
+    for module in (
+        "api.routes.mcp",
+        "api.routes.hook",
+        "api.routes.prompt",
+        "api.routes.sandbox",
+        "api.routes.skill",
+        "api.routes.skill_files",
+        "api.routes.agent.draft",
+        "api.routes.agent.crud",
+    ):
+        monkeypatch.setattr(f"{module}.push_draft_edit", AsyncMock(return_value=None))

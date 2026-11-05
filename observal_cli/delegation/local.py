@@ -301,7 +301,11 @@ def run(
                 if proc.returncode != 0
                 else f"{harness} returned no answer and made no changes."
             )
-            return tasks.set_status(task, tasks.STATE_FAILED, result.error or tail or fallback)
+            detail = result.error or tail
+            if detail:
+                # The harness's own login, quota or model error, which must not read as Observal's.
+                detail = f"{harness}, the harness the agent ran in, reported: {detail}"
+            return tasks.set_status(task, tasks.STATE_FAILED, detail or fallback)
         return tasks.set_status(
             task, tasks.STATE_COMPLETED, "Done." if not patch else "Done. Proposed changes attached."
         )

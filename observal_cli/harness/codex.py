@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -52,6 +53,7 @@ class CodexAdapter(BaseAdapter):
 
     home_markers = (".codex",)
     headless_binary = "codex"
+    caller_env_markers = ("CODEX_THREAD_ID",)
     managed_agent_profiles = ("user:agents/{name}.toml", "project:.codex/agents/{name}.toml")
     managed_mcp_files = ("user:config.toml",)
 
@@ -64,9 +66,75 @@ class CodexAdapter(BaseAdapter):
         match = re.search(r"([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$", path.stem)
         return match.group(1) if match else path.stem
 
+    def session_worker_environment(self) -> dict[str, str]:
+        """Keep Codex's relative home anchored to the hook's working directory."""
+        codex_home = os.environ.get("CODEX_HOME")
+        if codex_home and not Path(codex_home).expanduser().is_absolute():
+            return {"CODEX_HOME": str(Path(codex_home).expanduser().resolve())}
+        return {}
+
+    @staticmethod
+    def _sessions_root(home: Path | None) -> Path:
+        # Explicit home is used by isolated consumers/tests. Production hooks pass None.
+        codex_home = (
+            (home / ".codex")
+            if home is not None
+            else Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+        )
+        return (codex_home / "sessions").resolve()
+
+    @staticmethod
+    def _session_meta(path: Path) -> dict:
+        """Return the payload of the rollout's first line, the ``session_meta`` record."""
+        try:
+            with path.open(encoding="utf-8") as rollout:
+                record = json.loads(rollout.readline())
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(record, dict) or record.get("type") != "session_meta":
+            return {}
+        payload = record.get("payload")
+        return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def _parent_thread_id(cls, path: Path) -> str | None:
+        parent = cls._session_meta(path).get("parent_thread_id")
+        return parent if isinstance(parent, str) and parent else None
+
+    def attributes_by_directory(self) -> bool:
+        # Pulled agents run as subagents, which write their own rollouts; the
+        # parent session in that folder is the user's own Codex session.
+        return False
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        if session_jsonl is None:
+            return None
+        meta = self._session_meta(session_jsonl)
+        role = meta.get("agent_role")
+        if meta.get("thread_source") != "subagent" or not isinstance(role, str) or not role:
+            return None
+        return role
+
+    def resolve_session_agent_identity(self, session_jsonl: Path | None, cwd: str) -> tuple[str | None, str | None]:
+        """Credit only the rollout's own pulled subagent role.
+
+        Always answers, so recovery never falls back to the caller's
+        OBSERVAL_AGENT_* env, the hook's cwd, or another harness's agents.
+        """
+        from observal_cli.sessions.base import _lookup_lockfile_agent
+
+        role = self.session_subagent_name(session_jsonl)
+        if not role:
+            return None, None
+        rollout_cwd = self._session_meta(session_jsonl).get("cwd")
+        rollout_cwd = rollout_cwd if isinstance(rollout_cwd, str) else ""
+        entry = _lookup_lockfile_agent(rollout_cwd, agent_name=role, harness="codex")
+        if not entry:
+            return None, None
+        return entry.get("id") or entry.get("name"), entry.get("version")
+
     def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
-        home = home or Path.home()
-        root = home / ".codex" / "sessions"
+        root = self._sessions_root(home)
         if not root.is_dir():
             return None
         session_id = str(event.get("session_id") or event.get("thread_id") or "")
@@ -84,6 +152,7 @@ class CodexAdapter(BaseAdapter):
             self._session_id(path),
             path,
             cwd=str(event.get("cwd") or ""),
+            parent_session_id=self._parent_thread_id(path),
         )
 
     def discover_session_sources(
@@ -91,8 +160,7 @@ class CodexAdapter(BaseAdapter):
         home: Path | None = None,
         since_hours: int = 168,
     ) -> list[SessionSource]:
-        home = home or Path.home()
-        root = home / ".codex" / "sessions"
+        root = self._sessions_root(home)
         if not root.is_dir():
             return []
         cutoff = time.time() - since_hours * 3600
@@ -106,6 +174,7 @@ class CodexAdapter(BaseAdapter):
                             self.harness_name,
                             self._session_id(path),
                             path,
+                            parent_session_id=self._parent_thread_id(path),
                         )
                     )
             except OSError:

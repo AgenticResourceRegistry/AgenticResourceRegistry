@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Observal — GCP Terraform Module
+# Agentic Resource Registry — GCP Terraform Module
 
-Deploy a production-ready Observal instance on Google Cloud Platform.
+Deploy a production-ready Agentic Resource Registry instance on Google Cloud Platform.
 
 ## Architecture
 

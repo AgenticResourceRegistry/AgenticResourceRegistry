@@ -1,10 +1,8 @@
-<!--
-SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
-SPDX-License-Identifier: Apache-2.0
--->
-
-
-# Trusted Proxies & Network Security
+---
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Trusted Proxies & Network Security"
+---
 
 If you're behind a load balancer or reverse proxy, you MUST configure trusted proxies or rate limiting will break — all traffic will appear to come from a single IP (the proxy's), triggering limits for your entire deployment at once.
 
@@ -44,7 +42,7 @@ Add Cloudflare's published IP ranges (see `https://www.cloudflare.com/ips/`):
 
 ## Verify it works
 
-After saving, check that Observal resolves the correct client IP:
+After saving, check that Agentic Resource Registry resolves the correct client IP:
 
 ```bash
 curl -s https://observal.yourcompany.com/api/health/ip \
@@ -58,9 +56,9 @@ Also check the audit log: **Settings > Audit Log** should show distinct IPs for 
 
 ## Field Reference
 
-### Trusted Proxy IPs {#trusted-proxy-ips}
+### Trusted Proxy IPs
 
-A list of IP addresses or CIDR ranges that Observal trusts to set forwarding headers (`X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`).
+A list of IP addresses or CIDR ranges that Agentic Resource Registry trusts to set forwarding headers (`X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`).
 
 **Affects:** IP resolution for rate limiting, audit logs, and access controls. Only IPs in this list are trusted to pass `X-Forwarded-For`. Traffic from unlisted IPs uses the TCP source address directly, ignoring forwarding headers.
 
@@ -85,15 +83,15 @@ A list of IP addresses or CIDR ranges that Observal trusts to set forwarding hea
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| All users show same IP in audit logs | Proxy IP not trusted; Observal records proxy IP as client | Add proxy's IP to trusted list |
+| All users show same IP in audit logs | Proxy IP not trusted; Agentic Resource Registry records proxy IP as client | Add proxy's IP to trusted list |
 | Rate limits trigger for the whole office at once | Same as above — all traffic appears from one IP | Add proxy's IP to trusted list |
 | Rate limits don't work at all | Trusted list is too broad (e.g., `0.0.0.0/0`) | Narrow to actual proxy IPs only |
-| Users get `403 Untrusted proxy` | Client's IP is in a range Observal doesn't recognize | Check if a new proxy/LB was added without updating this list |
+| Users get `403 Untrusted proxy` | Client's IP is in a range Agentic Resource Registry doesn't recognize | Check if a new proxy/LB was added without updating this list |
 
 
-## SSRF Protection {#ssrf-protection}
+## SSRF Protection
 
-Server-Side Request Forgery (SSRF) protection prevents Observal from making outbound requests to internal/private networks when processing user-supplied URLs (webhook destinations, IdP metadata URLs, custom API base URLs).
+Server-Side Request Forgery (SSRF) protection prevents Agentic Resource Registry from making outbound requests to internal/private networks when processing user-supplied URLs (webhook destinations, IdP metadata URLs, custom API base URLs).
 
 **Settings:**
 
@@ -126,7 +124,7 @@ Server-Side Request Forgery (SSRF) protection prevents Observal from making outb
 | IdP metadata fetch fails | Metadata URL is internal | Add IdP hostname to allow-list |
 | "DNS rebinding detected" error | DNS returned a private IP on re-resolution | Legitimate if the host is internal — allow-list it; suspicious if the domain is external — investigate |
 
-#### Allow Internal Git URLs {#allow-internal-git-urls}
+#### Allow Internal Git URLs
 
 Whether agent and component definitions can reference Git repositories on private/internal networks.
 

@@ -20,16 +20,21 @@ import subprocess
 import sys
 import tomllib
 from contextlib import nullcontext, redirect_stdout
+from dataclasses import replace
+from functools import wraps
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlsplit, urlunsplit
 
+import click
+import httpx
 import typer
 import yaml
 from loguru import logger as optic
 from packaging.version import InvalidVersion, Version
-from rich import print as rprint
+from rich import print as rich_print
+from rich.markup import escape as escape_markup
 
 from observal_cli import client, config
 from observal_cli.constants import VALID_HARNESSES
@@ -37,12 +42,459 @@ from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
-from observal_cli.render import OutputMode, esc, output_json, spinner
-from observal_shared.harness_registry import get_scope_aware_harnesses
+from observal_cli.render import OutputMode, spinner
+from observal_cli.render import esc as render_esc
+from observal_shared.harness_registry import HARNESS_REGISTRY, get_scope_aware_harnesses
 
 # Hook script names used as placeholders in server-generated agent configs.
 # Resolved to absolute paths client-side before writing to disk.
 _HOOK_SCRIPT_NAMES = ("observal-hook.sh", "observal-stop-hook.sh")
+
+# Reporting only: never apply this to install inputs, generated files or subprocess argv.
+_pull_secrets = client._pull_reporting_secrets
+
+
+class _MaskedText(str):
+    """Tracks only placeholders created by this reporting pass, not source text."""
+
+    def __new__(cls, value: str, protected: tuple[tuple[int, int], ...]):
+        instance = super().__new__(cls, value)
+        instance.protected = protected
+        return instance
+
+
+def _mask_values(value: str, secrets: set[str] | None) -> str:
+    ordered = sorted((secret for secret in (secrets or ()) if secret), key=len, reverse=True)
+    if not ordered:
+        return value
+
+    # Each source character can be literal, Rich/JSON escaped, or URL encoded
+    # (including double encoding). Memoize (character, input offset) states:
+    # overlapping backslash alternatives otherwise make a regex exponential.
+    def alternatives(secret: str) -> list[tuple[tuple[str, bool], ...]]:
+        result = []
+        for char in secret:
+            choices = {(char, False)}
+            json_choice = json.dumps(char, ensure_ascii=True)[1:-1]
+            if json_choice != char:
+                choices.add((json_choice, json_choice.startswith(r"\u")))
+            if char in {"'", '"'}:
+                # Python repr escapes the quote used to delimit a message.
+                choices.add(("\\" + char, False))
+                # repr of a JSON-escaped quote has three backslashes.
+                choices.add(("\\" * 3 + char, False))
+            if char == "[":
+                choices.add((r"\[", False))
+            if char == "/":
+                # JSON permits escaping slashes even though json.dumps does not.
+                choices.add((r"\/", False))
+            if char == " ":
+                # quote_plus encodes a space as +; another encoding pass
+                # turns that + into %2B. A literal + in the same position is
+                # indistinguishable from a form-encoded space: fail closed and
+                # mask the whole matching credential rather than leak it.
+                # Never decode the whole source: unrelated pluses stay intact.
+                choices.update({("+", False), ("%2b", True), ("%252b", True)})
+            if ord(char) < 128:
+                choices.update({(f"%{ord(char):02x}", True), (f"%25{ord(char):02x}", True)})
+                choices.add((f"\\u{ord(char):04x}", True))
+            else:
+                encoded = "".join(f"%{byte:02x}" for byte in char.encode("utf-8"))
+                choices.update({(encoded, True), (encoded.replace("%", "%25"), True)})
+            # repr(error) doubles backslashes already present in reflected JSON
+            # escapes. Include those spellings per character so mixed raw, URL,
+            # JSON, and repr-escaped fragments still share the bounded matcher.
+            choices.update(
+                (choice.replace("\\", "\\\\"), fold_hex)
+                for choice, fold_hex in tuple(choices)
+                if choice.startswith("\\") and len(choice) > 1
+            )
+            result.append(tuple(sorted(choices, key=lambda choice: len(choice[0]), reverse=True)))
+        return result
+
+    patterns = [alternatives(secret) for secret in ordered]
+    size = len(value)
+
+    def match(parts: list[tuple[tuple[str, bool], ...]], start: int, cache: dict[tuple[int, int], int]) -> int:
+        # Explicit postorder traversal avoids both backtracking and recursion
+        # limits for long credentials. -1 means no full match from this state.
+        root = (0, start)
+        stack = [(root, False)]
+        while stack:
+            state, ready = stack.pop()
+            if state in cache:
+                continue
+            index, offset = state
+            if index == len(parts):
+                cache[state] = offset
+                continue
+            following = []
+            for choice, fold_hex in parts[index]:
+                end = offset + len(choice)
+                if end <= size and (
+                    value[offset:end].casefold() == choice.casefold() if fold_hex else value.startswith(choice, offset)
+                ):
+                    following.append((index + 1, end))
+            if ready:
+                cache[state] = max((cache[child] for child in following), default=-1)
+            else:
+                stack.append((state, True))
+                stack.extend((child, False) for child in following if child not in cache)
+        return cache[root]
+
+    # Reverse bit-parallel DP: bit i means i secret characters can be matched
+    # from this offset. A ring retains only the offsets needed by the longest
+    # single-character encoding. This proves which starts can match before the
+    # (more expensive) forward walk, even for long overlapping near-misses.
+    # Group identical alternatives into bit masks so repeated characters do
+    # not turn each input position into a walk over the whole credential.
+    # A match must begin with an alternative for the first secret character.
+    # Build the warning's character set once; most supplied credentials cannot
+    # even start in an unrelated warning, so they need no full reverse scan.
+    input_chars = set(value)
+    folded_input_starts = {char.casefold()[0] for char in input_chars}
+    folded_value: str | None = None
+    possible = []
+    for parts in patterns:
+        if not any(
+            (choice.casefold()[0] in folded_input_starts if fold_hex else choice[0] in input_chars)
+            for choice, fold_hex in parts[0]
+        ):
+            continue
+        # A full match must contain a spelling of its final two characters.
+        # Test this necessary condition before scanning every warning position
+        # for each credential with a common first character. Only a bounded
+        # pair of alternatives is materialized; never decode the warning.
+        tail = parts[-2:]
+        tail_choices = (
+            ((a + b, fold_a or fold_b) for a, fold_a in tail[0] for b, fold_b in tail[1])
+            if len(tail) == 2
+            else iter(tail[0])
+        )
+        attainable = False
+        for spelling, folded in tail_choices:
+            if folded:
+                if folded_value is None:
+                    folded_value = value.casefold()
+                if spelling.casefold() in folded_value:
+                    attainable = True
+                    break
+            elif spelling in value:
+                attainable = True
+                break
+        if not attainable:
+            continue
+        masks: dict[tuple[str, bool], int] = {}
+        max_width = 1
+        for index, choices in enumerate(reversed(parts)):
+            for choice, fold_hex in choices:
+                masks[choice, fold_hex] = masks.get((choice, fold_hex), 0) | (1 << index)
+                max_width = max(max_width, len(choice))
+        # Raw alternatives include literal characters and escaped brackets.
+        # Index encoded alternatives
+        # by their full folded spelling rather than their shared '%' / '\\'
+        # prefix. Even four-byte Unicode codepoints sharing the first two bytes
+        # then need only one hash lookup per encoding width at each offset.
+        literal: dict[str, list[tuple[str, int]]] = {}
+        folded: dict[int, dict[str, int]] = {}
+        for (choice, fold_hex), mask in masks.items():
+            if fold_hex:
+                by_width = folded.setdefault(len(choice), {})
+                key = choice.casefold()
+                by_width[key] = by_width.get(key, 0) | mask
+            else:
+                literal.setdefault(choice[0], []).append((choice, mask))
+        states = [0] * (max_width + 1)
+        states[size % len(states)] = 1  # Empty suffix at end of input.
+        starts = bytearray(size)
+        full = 1 << len(parts)
+        for offset in range(size - 1, -1, -1):
+            bits = 1  # The empty suffix can start at every offset.
+            char = value[offset]
+            for choice, mask in literal.get(char, ()):
+                end = offset + len(choice)
+                if end <= size and value.startswith(choice, offset):
+                    bits |= (states[end % len(states)] & mask) << 1
+            for width, by_spelling in folded.items():
+                end = offset + width
+                if end <= size:
+                    mask = by_spelling.get(value[offset:end].casefold(), 0)
+                    if mask:
+                        bits |= (states[end % len(states)] & mask) << 1
+            states[offset % len(states)] = bits
+            if bits & full:
+                starts[offset] = 1
+        possible.append((parts, starts))
+    output = []
+    protected = []
+    source_protected = iter(value.protected if isinstance(value, _MaskedText) else ())
+    next_protected = next(source_protected, None)
+    output_size = 0
+    cursor = 0
+    while cursor < size:
+        if next_protected is not None and cursor == next_protected[0]:
+            output.append(value[cursor : next_protected[1]])
+            protected.append((output_size, output_size + next_protected[1] - cursor))
+            output_size += next_protected[1] - cursor
+            cursor = next_protected[1]
+            next_protected = next(source_protected, None)
+            continue
+        end = -1
+        for parts, starts in possible:
+            if starts[cursor]:
+                # Only attainable starts need the forward walk to select the
+                # longest encoding; no per-start graph is kept in memory.
+                end = match(parts, cursor, {})
+                if end != -1:
+                    break
+        if end == -1:
+            output.append(value[cursor])
+            output_size += 1
+            cursor += 1
+        else:
+            # A match must not consume an internally generated placeholder.
+            if next_protected is not None and end > next_protected[0]:
+                output.append(value[cursor])
+                output_size += 1
+                cursor += 1
+                continue
+            output.append("<secret>")
+            protected.append((output_size, output_size + len("<secret>")))
+            output_size += len("<secret>")
+            cursor = end
+    return _MaskedText("".join(output), tuple(protected))
+
+
+def _safe_text(value: str) -> str:
+    return _mask_values(value, _pull_secrets.get())
+
+
+def esc(value) -> str:
+    """Escape labels for Rich; rprint masks the assembled text before parsing it."""
+    return _escape_preescaped("" if value is None else str(value))
+
+
+def _escape_preescaped(value: str) -> str:
+    return "".join(
+        part if part.startswith(r"\[") else render_esc(part) for part in re.split(r"((?<!\\)\\\[[^\]]+\])", value)
+    )
+
+
+# Only CLI-owned schema paths are exempt from key masking. Unknown nested maps
+# can have server-provided keys and must be treated as data, even for short secrets.
+_REPORT_KEYS = {
+    "output": frozenset(
+        {
+            "agent",
+            "project_lock",
+            "lock",
+            "harness",
+            "scope",
+            "dry_run",
+            "target_directory",
+            "files",
+            "warnings",
+            "setup_commands",
+            "reports_sessions",
+        }
+    ),
+    "agent": frozenset({"id", "qualified_name", "version", "latest_version", "resolved_from", "local_name"}),
+    "lock": frozenset({"status", "digest", "components", "problems"}),
+    "components": frozenset({"type", "name", "id", "version", "version_id", "digest", "qualified_name", "source"}),
+    "files": frozenset({"path", "status"}),
+    "inputs": frozenset({"kind", "name", "component"}),
+    "setup_commands": frozenset({"command", "executable", "status", "return_code"}),
+    "result": frozenset(
+        {
+            "invalid_input_kind",
+            "component",
+            "needs_input",
+            "inputs",
+            "partial",
+            "stage",
+            "files",
+            "setup_commands",
+            "failed_path",
+            "failed_skills",
+            "folder_recovery_errors",
+            "installation_tracked",
+            "committed_folders",
+            "non_folder_writes_may_remain",
+            "reports_sessions",
+            "dry_run",
+            "active_agent_persisted",
+        }
+    ),
+}
+_REPORT_CHILDREN = {
+    "files": "files",
+    "inputs": "inputs",
+    "setup_commands": "setup_commands",
+    "agent": "agent",
+    "lock": "lock",
+    "components": "components",
+}
+
+
+def _safe_data(value, schema: str | None = None):
+    if isinstance(value, str):
+        return _safe_text(value)
+    if isinstance(value, dict):
+        return {
+            key
+            if key in _REPORT_KEYS.get(schema, ())
+            else _safe_text(key)
+            if isinstance(key, str)
+            else key: _safe_data(item, _REPORT_CHILDREN.get(key) if key in _REPORT_KEYS.get(schema, ()) else None)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_data(item, schema) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        # A server may reflect a numeric credential as a JSON number. Preserve
+        # its type unless its serialized spelling contains a tracked secret.
+        serialized = json.dumps(value)
+        return "<secret>" if _safe_text(serialized) != serialized else value
+    # JSON's default=str would stringify unknown objects *after* sanitization.
+    return _safe_text(str(value))
+
+
+_RICH_TAGS = frozenset(
+    f"[{tag}]"
+    for tag in (
+        "bold",
+        "cyan",
+        "dim",
+        "green",
+        "red",
+        "yellow",
+        "bold green",
+        "bold yellow",
+        "/bold",
+        "/cyan",
+        "/dim",
+        "/green",
+        "/red",
+        "/yellow",
+        "/bold green",
+        "/bold yellow",
+    )
+)
+
+
+def _safe_markup(text: str) -> str:
+    # Mask the entire string before looking for markup: secrets can span '[' or ']'.
+    # If a short secret also occurs in an authored tag, render escaped plain text.
+    secrets = _pull_secrets.get() or ()
+    masked = _safe_text(text)
+    if any(secret and any(secret in tag for tag in _RICH_TAGS) for secret in secrets):
+        return _escape_preescaped(masked)
+    return "".join(
+        part if part in _RICH_TAGS or part.startswith(r"\[") else escape_markup(part)
+        for part in re.split(r"((?<!\\)\[[^\]]+\]|(?<!\\)\\\[[^\]]+\])", masked)
+    )
+
+
+def rprint(*values, **kwargs):
+    rich_print(*(_safe_markup(value) if isinstance(value, str) else value for value in values), **kwargs)
+
+
+def output_json(value):
+    """Render pull's schema-aware, redacted report without the generic JSON sink."""
+    # Sanitize individual values before serialization, including unknown server
+    # fields and objects that would otherwise be stringified by default=str.
+    print(json.dumps(_safe_data(value, "output"), ensure_ascii=False, indent=2))
+
+
+def _safe_error(error: CliError) -> CliError:
+    return replace(
+        error,
+        message=_safe_text(error.message),
+        operation=_safe_text(error.operation),
+        resource=_safe_text(error.resource) if error.resource is not None else None,
+        remediation=_safe_text(error.remediation) if error.remediation is not None else None,
+        request_id=_safe_text(error.request_id) if error.request_id is not None else None,
+        detail=_safe_text(error.detail) if error.detail is not None else None,
+        result=_safe_data(error.result, "result"),
+    )
+
+
+def _reporting_boundary(callback):
+    @wraps(callback)
+    def wrapped(*args, **kwargs):
+        token = _pull_secrets.set(set())
+        try:
+            return callback(*args, **kwargs)
+        except CliError as error:
+            raise _safe_error(error) from None
+        except Exception as error:
+            # Exception messages may transform supplied values in ways the
+            # bounded reporting matcher cannot anticipate. Never render their
+            # text (including repr) in debug mode when secrets were supplied.
+            has_secrets = bool(_pull_secrets.get())
+            detail = type(error).__name__ if has_secrets else _safe_text(repr(error))
+            if isinstance(error, httpx.HTTPStatusError):
+                from observal_cli.errors import http_status_category
+
+                status = error.response.status_code
+                failure = CliError(
+                    http_status_category(status),
+                    f"The server rejected the operation with HTTP {status}.",
+                    operation="Pull agent",
+                    resource="Agentic Resource Registry server",
+                    remediation="Check the request and server health, then retry.",
+                    request_id=_safe_text(error.response.headers["x-request-id"])
+                    if "x-request-id" in error.response.headers
+                    else None,
+                    http_status=status,
+                    detail=detail,
+                )
+            elif isinstance(error, httpx.RequestError):
+                failure = CliError(
+                    ErrorCategory.UNAVAILABLE,
+                    "The network operation failed.",
+                    operation="Pull agent",
+                    resource="Agentic Resource Registry service",
+                    remediation="Check network connectivity and service health, then retry.",
+                    detail=detail,
+                )
+            elif isinstance(error, click.UsageError):
+                failure = CliError(
+                    ErrorCategory.USAGE,
+                    "Invalid pull arguments.",
+                    operation="Pull agent",
+                    remediation="Check the command arguments and retry.",
+                    detail=type(error).__name__,
+                )
+            else:
+                category = (
+                    ErrorCategory.PERMISSION
+                    if isinstance(error, PermissionError)
+                    else ErrorCategory.NOT_FOUND
+                    if isinstance(error, FileNotFoundError)
+                    else ErrorCategory.UNAVAILABLE
+                    if isinstance(error, TimeoutError)
+                    else ErrorCategory.UNEXPECTED
+                )
+                failure = CliError(
+                    category,
+                    "The agent pull could not complete.",
+                    operation="Pull agent",
+                    remediation="Retry with --debug for additional diagnostics.",
+                    detail=detail,
+                )
+            raise failure from None
+        finally:
+            _pull_secrets.reset(token)
+
+    return wrapped
+
+
+def _secret_password_input(label: str) -> str:
+    value = password_input(_safe_markup(label))
+    if value and (secrets := _pull_secrets.get()) is not None:
+        secrets.add(value)
+    return value
 
 
 def _component_conflicts(harness: str, agent_name: str, components: list[dict]) -> list[str]:
@@ -342,7 +794,7 @@ def _collect_mcp_env_vars(
                         rprint(f"  [green]\u2713[/green] {esc(ev['name'])} [dim](from --env)[/dim]")
                     else:
                         desc = f" [dim]({esc(ev['description'])})[/dim]" if ev.get("description") else ""
-                        val = password_input(f"  {esc(ev['name'])}{desc}")
+                        val = _secret_password_input(f"  {esc(ev['name'])}{desc}")
                         mcp_env[ev["name"]] = val
 
             if optional:
@@ -353,7 +805,7 @@ def _collect_mcp_env_vars(
                         rprint(f"  [green]\u2713[/green] {esc(ev['name'])} [dim](from --env)[/dim]")
                     else:
                         desc = f" [dim]({esc(ev['description'])})[/dim]" if ev.get("description") else ""
-                        val = password_input(f"  {esc(ev['name'])}{desc} (press Enter to skip)")
+                        val = _secret_password_input(f"  {esc(ev['name'])}{desc} (press Enter to skip)")
                         if val:
                             mcp_env[ev["name"]] = val
 
@@ -413,7 +865,7 @@ def _collect_mcp_headers(
                         rprint(f"  [green]\u2713[/green] {esc(h['name'])} [dim](from --header)[/dim]")
                     else:
                         desc = f" [dim]({esc(h['description'])})[/dim]" if h.get("description") else ""
-                        val = password_input(f"  {esc(h['name'])}{desc}")
+                        val = _secret_password_input(f"  {esc(h['name'])}{desc}")
                         mcp_hdrs[h["name"]] = val
 
             if optional:
@@ -424,7 +876,7 @@ def _collect_mcp_headers(
                         rprint(f"  [green]\u2713[/green] {esc(h['name'])} [dim](from --header)[/dim]")
                     else:
                         desc = f" [dim]({esc(h['description'])})[/dim]" if h.get("description") else ""
-                        val = password_input(f"  {esc(h['name'])}{desc} (press Enter to skip)")
+                        val = _secret_password_input(f"  {esc(h['name'])}{desc} (press Enter to skip)")
                         if val:
                             mcp_hdrs[h["name"]] = val
 
@@ -478,20 +930,24 @@ def _merge_toml_text(existing_text: str, content: dict, root_key: str) -> str:
     if not isinstance(incoming, dict) or not isinstance(existing_section, dict):
         raise ValueError(f"TOML section {root_key} must be a mapping")
 
-    lines = existing_text.splitlines(keepends=True)
-    for name in set(incoming).intersection(existing_section):
-        header = f"[{root_key}.{name}]"
-        start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
-        if start is None:
-            raise ValueError(f"cannot safely update existing TOML table {header}")
-        end = start + 1
-        while end < len(lines) and not lines[end].lstrip().startswith("["):
-            end += 1
-        del lines[start:end]
+    # Drop each replaced server's table and every sub-table under it ([root.name.env] and so on),
+    # or the dotted keys written below would redefine them and produce invalid TOML.
+    replaced = tuple(f"{root_key}.{name}" for name in set(incoming).intersection(existing_section))
+    lines = []
+    skipping = False
+    for line in existing_text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            header = stripped.lstrip("[").split("]", 1)[0].strip()
+            skipping = any(header == name or header.startswith(f"{name}.") for name in replaced)
+        if not skipping:
+            lines.append(line)
 
     existing = "".join(lines).rstrip()
     rendered = _dict_to_toml(content).rstrip()
-    return f"{existing}\n\n{rendered}\n" if existing else f"{rendered}\n"
+    merged = f"{existing}\n\n{rendered}\n" if existing else f"{rendered}\n"
+    tomllib.loads(merged)  # never write a file Codex cannot parse
+    return merged
 
 
 def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: bool, merge: bool) -> str:
@@ -542,7 +998,7 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
 
     Returns a human-readable status string ("created", "updated", "merged").
     """
-    optic.trace("path={}, len={}", path, len(str(content)))
+    optic.trace("writing generated file (bytes={})", len(str(content)))
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
 
@@ -831,7 +1287,7 @@ def _resolve_path(raw_path: str, target_dir: Path, *, allow_home: bool = False) 
     Raises typer.Exit if the resolved path escapes *target_dir* (and home
     expansion is not permitted).
     """
-    optic.trace("raw_path={}, target_dir={}", raw_path, target_dir)
+    optic.trace("resolving generated file path")
     if raw_path.startswith("~/") or raw_path.startswith("~\\"):
         if allow_home:
             return Path(raw_path).expanduser().resolve()
@@ -932,6 +1388,26 @@ def _locked_version_detail(
         )
 
 
+def _require_supported_harness(harness: str, supported: list[str], *, allow: bool, label: str) -> None:
+    """Refuse, before any prompt, a harness the agent version does not list as supported.
+
+    The server refuses too; checking here first keeps the user from typing MCP secrets for an
+    install that will not happen. An empty list puts no limit on harnesses.
+    """
+    if allow or not supported or harness in supported:
+        return
+    fail(
+        ErrorCategory.VALIDATION,
+        f"Agent {label} does not support {harness}; it supports {', '.join(supported)}.",
+        operation="Pull agent",
+        resource="harness",
+        remediation=(
+            f"Pull it for a supported harness (--harness {supported[0]}), or add --allow-unsupported-harness "
+            "to install it anyway; some components may be missing or not loaded."
+        ),
+    )
+
+
 def _target_version(
     *, requested: str | None, upgrade: bool, project_locked: dict | None, installed: dict | None
 ) -> tuple[str | None, str]:
@@ -972,8 +1448,121 @@ def _installed_components(lock: dict, planned: list[dict]) -> list[dict]:
     ]
 
 
+def _record_hook_bindings(
+    snippet: dict,
+    lock_components: list[dict],
+    target_dir: Path,
+    is_user_scope: bool,
+    *,
+    gated: dict | None = None,
+    settings_display: str = "",
+) -> list[str]:
+    """Record where each pinned hook was written, so a later snapshot can verify it.
+
+    ``hook_command`` and ``hook_event`` are exactly what the agent file contains
+    (the harness records the command verbatim when the hook runs). The agent
+    file and script are stored as layer display paths; ``hook_integrity`` is the
+    written script's fingerprint, or the command's when there is no script.
+
+    ``gated`` (component local name -> ``agent_hooks.AgentHook``) marks hooks
+    placed in ``settings_display`` behind the agent gate: their recorded command
+    is the gated command (what Claude Code records), with the original kept so
+    verification can require that the agent file no longer carries it.
+    """
+    import hashlib
+
+    from observal_cli.agent_hooks import GATED_PLACEMENT
+    from observal_cli.layer import skill_file_fingerprint
+
+    bindings = {b.get("name"): b for b in snippet.get("hook_bindings") or [] if isinstance(b, dict)}
+    profile = snippet.get("agent_profile") or {}
+    profile_path = profile.get("path") if isinstance(profile, dict) else None
+    config = ""
+    if isinstance(profile_path, str):
+        config = (
+            f"user:{profile_path[len('~/.claude/') :]}"
+            if profile_path.startswith("~/.claude/")
+            else f"project:{profile_path}"
+        )
+    warnings: list[str] = []
+    for component in lock_components:
+        if component.get("type") != "hook" or not component.get("local_name"):
+            continue
+        binding = bindings.get(component["local_name"])
+        if not binding or not config:
+            continue  # HTTP or unbound hooks stay unverified
+        script = binding.get("script")
+        if script:
+            fingerprint = skill_file_fingerprint(_resolve_path(script, target_dir, allow_home=is_user_scope))
+            if not fingerprint:
+                warnings.append("Installed hook script could not be fingerprinted; its presence will be unverified.")
+                continue
+        else:
+            fingerprint = f"sha256-{hashlib.sha256(binding['command'].encode()).hexdigest()}"
+        for key in [key for key in component if key.startswith("hook_")]:
+            del component[key]  # a stale placement from an earlier pull must not survive
+        component.update(
+            hook_event=binding["event"],
+            hook_command=binding["command"],
+            hook_agent=binding.get("agent") or "",
+            hook_config=config,
+            hook_script=f"project:{script}" if script else "",
+            hook_integrity=fingerprint,
+        )
+        hook = (gated or {}).get(component["local_name"])
+        if hook is not None:
+            if hook.event != binding["event"] or hook.command != binding["command"]:
+                raise ValueError("gated hook does not match its binding")
+            component.update(
+                hook_command=hook.gated,
+                hook_config=settings_display,
+                hook_placement=GATED_PLACEMENT,
+                hook_original_command=hook.command,
+                hook_agent_profile=config,
+                hook_gate_python=sys.executable,
+            )
+    return warnings
+
+
+def _fingerprint_written_skills(
+    snippet: dict, lock_components: list[dict], target_dir: Path, is_user_scope: bool
+) -> list[str]:
+    """Record ``skill_integrity`` for each pinned skill from the SKILL.md this pull wrote.
+
+    The written file (a Pi profile's copy, for example) is what a later session
+    snapshot must match before the skill counts as verified-present. A skill
+    whose file cannot be read is left without a fingerprint, so it stays
+    unverified rather than guessed. Returns warnings for the caller to show.
+    """
+    from observal_cli.cmd_skill import _sanitize_name
+    from observal_cli.layer import skill_file_fingerprint
+
+    written = {}
+    for sc in snippet.get("skill_components") or []:
+        if not isinstance(sc, dict):
+            continue
+        if isinstance(sc.get("path"), str):
+            written[_sanitize_name(sc.get("name", ""))] = _resolve_path(
+                sc["path"], target_dir, allow_home=is_user_scope
+            )
+        elif isinstance(sc.get("installed_skill_md"), str):
+            # Written where the installer chose (Claude Code: .agents/skills, linked into .claude/skills).
+            written[_sanitize_name(sc.get("name", ""))] = Path(sc["installed_skill_md"])
+    warnings: list[str] = []
+    for component in lock_components:
+        if component.get("type") != "skill" or not component.get("local_name"):
+            continue
+        path = written.get(component["local_name"])
+        fingerprint = skill_file_fingerprint(path) if path else None
+        if fingerprint:
+            component["skill_integrity"] = fingerprint
+        else:
+            warnings.append("Installed skill could not be fingerprinted; its presence will be unverified.")
+    return warnings
+
+
 def _progress(output: OutputMode | str, message: str | None = None):
-    return nullcontext() if output == "json" else spinner(message)
+    return nullcontext() if output == "json" else spinner(_safe_text(message) if message is not None else message)
 
 
 def _pull_failure_result(
@@ -1008,6 +1597,7 @@ def _valid_setup_command(command: object) -> bool:
 
 # Setup-command flags whose value carries an MCP header or environment value.
 _MASKED_SETUP_FLAGS = {"-H": ": ", "--header": ": ", "-e": "=", "--env": "="}
+_SENSITIVE_SETUP_FLAGS = {"--token", "--password", "--api-key"}
 
 
 def _redact_url(argument: str) -> str:
@@ -1019,29 +1609,47 @@ def _redact_url(argument: str) -> str:
     return urlunsplit((parts.scheme, host, parts.path, "<redacted>" if parts.query else "", ""))
 
 
-def _display_setup_command(command: list[str]) -> list[str]:
-    """Return a setup command with header, environment and URL credentials masked for output."""
+def _display_setup_command(command: list[str], *, secret_values: set[str] | None = None) -> list[str]:
+    """Return a separate reporting argv; never alter the executable command."""
     shown: list[str] = []
     separator = None
+    mask_next = False
     for argument in command:
-        if argument == "--":
+        contains_supplied_value = any(value and value in argument for value in (secret_values or ()))
+        structural_value = False
+        if mask_next:
+            argument = "<secret>"
+            mask_next = False
+        elif argument == "--":
             separator = None
         elif separator is not None and separator in argument:
+            structural_value = True
             argument = f"{argument.split(separator, 1)[0]}{separator}<secret>"
         else:
             separator = _MASKED_SETUP_FLAGS.get(argument)
-            argument = _redact_url(argument)
+            mask_next = argument.lower() in _SENSITIVE_SETUP_FLAGS
+            if argument.lower().startswith(tuple(flag + "=" for flag in _SENSITIVE_SETUP_FLAGS)):
+                argument = argument.split("=", 1)[0] + "=<secret>"
+            elif argument.lower().startswith("bearer "):
+                argument = "Bearer <secret>"
+            else:
+                argument = _redact_url(argument)
+        if structural_value:
+            argument = _mask_values(argument, secret_values)
+        elif contains_supplied_value:
+            argument = "<secret>"
         shown.append(argument)
     return shown
 
 
-def _run_reset_commands(commands: list, *, cwd: Path | None) -> None:
+def _run_reset_commands(commands: list, *, cwd: Path | None, adapter, scope: str) -> None:
     """Best-effort cleanup before setup commands; a failure means nothing was there to reset."""
     for command in commands:
         if not _valid_setup_command(command):
             continue
         try:
-            subprocess.run(command, capture_output=True, text=True, timeout=60, cwd=cwd)
+            native_command = adapter.prepare_mcp_setup_command(command, scope)
+            subprocess.run(native_command, capture_output=True, text=True, timeout=60, cwd=cwd)
         except (OSError, subprocess.SubprocessError):
             continue
 
@@ -1117,7 +1725,6 @@ def _parse_model_overrides(values: list[str]) -> tuple[str | None, dict[str, str
 
     Returns ``(default_value, per_harness_overrides)``.
     """
-    optic.trace("values={}", values)
     default: str | None = None
     overrides: dict[str, str] = {}
     for raw in values or []:
@@ -1242,13 +1849,186 @@ def _collect_install_options(
     return opts
 
 
+# Server-emitted launchers name a bare python3, which rarely imports an installed
+# observal_cli but does import one from the working directory (often a project).
+# They are rewritten to this CLI's interpreter, isolated with -I when it imports
+# observal_cli on its own, else with -P and an explicit PYTHONPATH set to the
+# package root (observal_cli.shared.launcher). On Windows they use the shell-neutral
+# form instead: a quoted interpreter with -I, and the package root set from -c code.
+_BARE_LAUNCHER = re.compile(r"(?<![/\\\w.-])python3? -m observal_cli\.")
+_BARE_LAUNCHER_MODULE = re.compile(r"(?<![/\\\w.-])python3? -m (observal_cli(?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
+
+
+def rewrite_launcher_command(command: str) -> str:
+    """Rewrite bare ``python3 -m observal_cli.`` launchers inside one shell command string."""
+    from observal_cli.shared.launcher import isolation_flag, posix_prefix, windows_module_command
+
+    if sys.platform == "win32":
+        return _BARE_LAUNCHER_MODULE.sub(lambda match: windows_module_command(match[1]), command)
+    return _BARE_LAUNCHER.sub(lambda _m: f"{posix_prefix()} {isolation_flag()} -m observal_cli.", command)
+
+
+def rewrite_launchers_in_strings(value):
+    """Apply ``rewrite_launcher_command`` to every string inside JSON-like content (never to its text)."""
+    if isinstance(value, dict):
+        return {key: rewrite_launchers_in_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [rewrite_launchers_in_strings(item) for item in value]
+    return rewrite_launcher_command(value) if isinstance(value, str) else value
+
+
+def _hook_commands(hooks: object) -> list:
+    """Every ``command`` value inside a Claude Code-style ``hooks`` mapping."""
+    found = []
+    for groups in hooks.values() if isinstance(hooks, dict) else ():
+        for group in groups if isinstance(groups, list) else ():
+            for hook in (group.get("hooks") or []) if isinstance(group, dict) else ():
+                if isinstance(hook, dict) and "command" in hook:
+                    found.append(hook)
+    return found
+
+
+_COMMAND_LINE = re.compile(r"^(?P<lead>\s*(?:-\s+)?command:\s*)(?P<value>.+?)\s*$")
+
+
+_MCP_SERVER_KEYS = ("mcp-servers", "mcpServers")
+
+
+def _frontmatter_mcp_launcher(entry: object) -> dict | None:
+    """The rewritten MCP entry if it launches observal_cli through a bare interpreter, else None.
+
+    The fallback package root goes into the argv (``env PYTHONPATH=...``, or
+    ``-I -c`` code on Windows), not an ``env:`` key, so it does not depend on the
+    harness reading one.
+    """
+    if not isinstance(entry, dict):
+        return None
+    argv = [entry.get("command"), *(entry.get("args") or [])] if isinstance(entry.get("args") or [], list) else []
+    if not argv or not all(isinstance(item, str) for item in argv):
+        return None
+    rewritten = rewrite_observal_interpreter(argv)
+    if rewritten == argv:
+        return None
+    return {**entry, "command": rewritten[0], "args": rewritten[1:]}
+
+
+def _top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
+    """Line range of a top-level ``key:`` mapping and its indented children."""
+    for start, line in enumerate(lines):
+        if line.rstrip() == f"{key}:":
+            end = start + 1
+            while end < len(lines) and (not lines[end].strip() or lines[end][:1] in (" ", "\t")):
+                end += 1
+            return start, end
+    return None
+
+
+def _rewrite_mcp_block(lines: list[str], key: str, servers: dict) -> list[str]:
+    """Re-emit only the changed server entries of a ``key:`` block, values as JSON (valid YAML)."""
+    span = _top_level_block(lines, key)
+    if span is None:
+        return lines
+    start, end = span
+    out = lines[: start + 1]
+    index = start + 1
+    while index < end:
+        line = lines[index]
+        indent = len(line) - len(line.lstrip(" "))
+        name = line.strip()[:-1] if line.strip().endswith(":") else None
+        block_end = index + 1
+        while block_end < end and (
+            not lines[block_end].strip() or len(lines[block_end]) - len(lines[block_end].lstrip(" ")) > indent
+        ):
+            block_end += 1
+        replacement = servers.get(name) if name is not None else None
+        if replacement is None:
+            out.extend(lines[index:block_end])
+        else:
+            out.append(line)
+            out.extend(
+                f"{' ' * (indent + 2)}{field}: {json.dumps(value, ensure_ascii=False)}"
+                for field, value in replacement.items()
+            )
+        index = block_end
+    return out + lines[end:]
+
+
+def rewrite_frontmatter_hook_launchers(text: str) -> str:
+    """Rewrite bare observal_cli launchers in a profile's YAML frontmatter, and nowhere else.
+
+    Only hook ``command`` values and MCP server entries (``mcp-servers`` /
+    ``mcpServers``) that launch ``observal_cli`` are rewritten; the body and
+    every other value are left alone. Rewritten values are written as JSON,
+    which is valid YAML for any interpreter path. If the result does not parse
+    to exactly the original with only those values changed, the profile is
+    returned unchanged.
+    """
+    import yaml
+
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---", 4)
+    if end == -1:
+        return text
+    head, rest = text[4:end], text[end:]
+    try:
+        original = yaml.safe_load(head)
+    except yaml.YAMLError:
+        return text
+    if not isinstance(original, dict):
+        return text
+    expected = json.loads(json.dumps(original))
+    targets = {hook["command"] for hook in _hook_commands(original.get("hooks")) if isinstance(hook["command"], str)}
+    targets = {command for command in targets if rewrite_launcher_command(command) != command}
+    servers: dict[str, dict[str, dict]] = {}
+    for key in _MCP_SERVER_KEYS:
+        block = original.get(key)
+        for name, entry in block.items() if isinstance(block, dict) else ():
+            replacement = _frontmatter_mcp_launcher(entry)
+            if replacement is not None and isinstance(name, str):
+                servers.setdefault(key, {})[name] = replacement
+                expected[key][name] = json.loads(json.dumps(replacement))
+    if not targets and not servers:
+        return text
+    lines = head.split("\n")
+    for index, line in enumerate(lines):
+        match = _COMMAND_LINE.match(line)
+        if not match:
+            continue
+        try:
+            value = yaml.safe_load(match["value"])
+        except yaml.YAMLError:
+            continue
+        if value in targets:
+            lines[index] = match["lead"] + json.dumps(rewrite_launcher_command(value), ensure_ascii=False)
+    for key, replacements in servers.items():
+        lines = _rewrite_mcp_block(lines, key, replacements)
+    new_head = "\n".join(lines)
+    try:
+        rewritten = yaml.safe_load(new_head)
+    except yaml.YAMLError:
+        return text
+    for hook in _hook_commands(expected.get("hooks")):
+        if hook["command"] in targets:
+            hook["command"] = rewrite_launcher_command(hook["command"])
+    if rewritten != expected:
+        return text
+    return "---\n" + new_head + rest
+
+
 def rewrite_observal_interpreter(value):
     """Point server-emitted ``python3 -m observal_cli.<module>`` launchers at this CLI's interpreter.
 
     Handles MCP entries (``command`` + ``args``) and argv lists such as
     ``claude mcp add`` setup commands. A bare ``python3`` rarely has
     ``observal_cli`` importable when the CLI was installed with uv or pipx.
+    The rewritten launcher runs with ``-P``, and with ``PYTHONPATH`` (an MCP
+    entry's ``env``, or ``env PYTHONPATH=...`` in argv) when needed.
     """
+    from observal_cli.shared.launcher import isolation_flag, pythonpath_env, windows_module_argv
+
+    extra_env = pythonpath_env()
+    flag = isolation_flag()
     if isinstance(value, dict):
         out = {key: rewrite_observal_interpreter(item) for key, item in value.items()}
         args = out.get("args")
@@ -1260,19 +2040,84 @@ def rewrite_observal_interpreter(value):
             and str(args[1]).startswith("observal_cli.")
         ):
             out["command"] = sys.executable
+            out["args"] = [flag, *args]
+            if extra_env:
+                env = out.get("env") if isinstance(out.get("env"), dict) else {}
+                out["env"] = {**env, **extra_env}
         return out
     if isinstance(value, list):
         items = [rewrite_observal_interpreter(item) for item in value]
-        for index in range(len(items) - 2):
+        index = 0
+        while index < len(items) - 2:
             if (
                 items[index] in ("python3", "python")
                 and items[index + 1] == "-m"
                 and isinstance(items[index + 2], str)
                 and items[index + 2].startswith("observal_cli.")
             ):
-                items[index] = sys.executable
+                if sys.platform == "win32":
+                    # No `env` program on Windows: -I, with the package root set from -c when needed.
+                    launcher = windows_module_argv(items[index + 2])
+                    items[index : index + 3] = launcher
+                    index += len(launcher) - 1
+                else:
+                    prefix = [f"{key}={val}" for key, val in extra_env.items()]
+                    launcher = [*(["env", *prefix] if prefix else []), sys.executable, flag]
+                    items[index : index + 1] = launcher
+                    index += len(launcher) - 1
+            index += 1
         return items
     return value
+
+
+def _localize_hooks_content(content, adapter, agent_id: str):
+    """A hooks config with resolved hook script paths and launchers on this CLI's interpreter."""
+    if isinstance(content, str):
+        return _pin_hook_interpreter(_resolve_hook_paths(content))
+    if isinstance(content, dict):
+        # Resolve hook paths inside JSON content (command fields)
+        raw = _resolve_hook_paths(json.dumps(content))
+        # Launchers are rewritten in the parsed strings, so no interpreter path can break the JSON.
+        return adapter.rewrite_hooks(rewrite_launchers_in_strings(json.loads(raw)), agent_id=agent_id)
+    return content
+
+
+def _localize_agent_profile(agent_profile: dict, adapter, agent_id: str) -> None:
+    """Point an agent profile's Observal launchers at this CLI's interpreter, in place."""
+    if isinstance(agent_profile.get("content"), dict):
+        agent_profile["content"] = adapter.rewrite_agent_profile(agent_profile["content"], agent_id=agent_id)
+    elif isinstance(agent_profile.get("content"), str):
+        # Claude Code and other markdown agents carry their hooks in frontmatter. Isolated
+        # launchers first; any launcher that rewrite declines (a YAML block scalar, say)
+        # is then pinned to this interpreter rather than left bare.
+        agent_profile["content"] = _pin_agent_profile_hooks(
+            rewrite_frontmatter_hook_launchers(_resolve_hook_paths(agent_profile["content"]))
+        )
+
+
+def localize_install_snippet(snippet: dict, *, adapter, agent_id: str) -> dict:
+    """An agent install snippet as ``agent pull`` would write it, without writing anything.
+
+    The server cannot know which interpreter has ``observal_cli`` installed, so
+    it names a bare ``python3`` (``python`` on Windows) in telemetry hooks and
+    in the sandbox and delegation MCP servers. A snippet printed for the user
+    to copy (``observal agent install``) gets the same rewrites a pull applies:
+    this CLI's interpreter with its isolation flag, resolved hook script paths
+    and the harness adapter's hook and profile rewrites. The input is not
+    modified.
+    """
+    import copy
+
+    if not isinstance(snippet, dict):
+        return snippet
+    localized = rewrite_observal_interpreter(copy.deepcopy(snippet))
+    hooks_cfg = localized.get("hooks_config")
+    if isinstance(hooks_cfg, dict) and "content" in hooks_cfg:
+        hooks_cfg["content"] = _localize_hooks_content(hooks_cfg["content"], adapter, agent_id)
+    agent_profile = localized.get("agent_profile")
+    if isinstance(agent_profile, dict):
+        _localize_agent_profile(agent_profile, adapter, agent_id)
+    return localized
 
 
 def _preflight_existing_managed_skill_paths(
@@ -1581,11 +2426,19 @@ def _rollback_managed_agent_folders(applied: list[tuple[dict, dict]]) -> list[st
                 with lockfile._exclusive_lock(lockfile.CONFIG_DIR / f"skill-{key}.lock"):
                     managed_skill.verify_tree(target, proof)
 
-                    def remove(data: dict, target: Path = target, proof: dict = proof) -> None:
+                    def remove(
+                        data: dict,
+                        target: Path = target,
+                        proof: dict = proof,
+                        missing_prior: dict | None = outcome.get("missing_prior"),
+                    ) -> None:
                         matches = managed_skill._records(data, target)
                         if len(matches) != 1 or matches[0][1].get("folder_receipt") != proof:
                             raise RuntimeError("Receipt changed; cannot remove initial folder")
-                        matches[0][1].pop("folder_receipt")
+                        if missing_prior is not None:
+                            matches[0][1]["folder_receipt"] = missing_prior
+                        else:
+                            matches[0][1].pop("folder_receipt")
 
                     lockfile.update_lockfile(remove)
                     shutil.rmtree(target)
@@ -1622,6 +2475,23 @@ def _rollback_managed_agent_state(
     return errors
 
 
+def _preflight_project_mcp_config(snippet: dict, *, harness: str, is_user_scope: bool) -> None:
+    """Do not silently relocate a user-only MCP config into an unread project path."""
+    spec = HARNESS_REGISTRY[harness]
+    if is_user_scope or spec["mcp_install_mode"] != "user_only":
+        return
+    config = snippet.get("mcp_config")
+    if isinstance(config, dict) and config.get("path") and config.get("content"):
+        name = spec["display_name"]
+        fail(
+            ErrorCategory.VALIDATION,
+            f"{name} MCP extensions require a user-level config; project scope cannot install them.",
+            operation="Pull agent",
+            resource=f"{name} MCP configuration",
+            remediation="Pull with --scope user, or use an Agent without MCP extensions for project scope.",
+        )
+
+
 def write_install_snippet(
     snippet: dict,
     *,
@@ -1632,6 +2502,7 @@ def write_install_snippet(
     is_user_scope: bool,
     dry_run: bool = False,
     quiet: bool = False,
+    secret_values: set[str] | None = None,
     skill_bundles: list[dict] | None = None,
     lock: dict | None = None,
 ) -> tuple[list[tuple[str, str]], list[str]]:
@@ -1646,6 +2517,7 @@ def write_install_snippet(
     the folder bundle installer. Legacy components without a matching bundle
     fall back to git or single-file registry_direct installs.
     """
+    _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
     written: list[tuple[str, str]] = []  # (path, status)
 
     def tracked_write(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
@@ -1662,8 +2534,12 @@ def write_install_snippet(
 
     def tracked_skill_install(skill_name: str, installer, **kwargs):
         try:
-            with redirect_stdout(StringIO()) if quiet else nullcontext():
-                return installer(**kwargs)
+            captured = StringIO()
+            with redirect_stdout(captured):
+                installed = installer(**kwargs)
+            if not quiet:
+                print(_mask_values(captured.getvalue(), secret_values), end="")
+            return installed
         except CliError as error:
             if error.result is None:
                 error.result = _pull_failure_result(
@@ -1835,15 +2711,7 @@ def write_install_snippet(
     hooks_cfg = snippet.get("hooks_config")
     if hooks_cfg and isinstance(hooks_cfg, dict) and "path" in hooks_cfg:
         p = _resolve_path(hooks_cfg["path"], target_dir, allow_home=is_user_scope)
-        content = hooks_cfg["content"]
-        if isinstance(content, str):
-            content = _pin_hook_interpreter(_resolve_hook_paths(content))
-        elif isinstance(content, dict):
-            # Resolve hook paths inside JSON content (command fields)
-            raw = json.dumps(content)
-            raw = _pin_hook_interpreter(_resolve_hook_paths(raw))
-            content = json.loads(raw)
-            content = adapter.rewrite_hooks(content, agent_id=agent_id)
+        content = _localize_hooks_content(hooks_cfg["content"], adapter, agent_id)
         if dry_run:
             written.append((str(p), "would write"))
         else:
@@ -1855,11 +2723,7 @@ def write_install_snippet(
     if agent_profile:
         # Rewrite hook commands to use the current Python interpreter
         # so they work regardless of which directory Kiro is launched from.
-        if isinstance(agent_profile.get("content"), dict):
-            agent_profile["content"] = adapter.rewrite_agent_profile(agent_profile["content"], agent_id=agent_id)
-        elif isinstance(agent_profile.get("content"), str):
-            # Claude Code and other markdown agents carry their hooks in frontmatter.
-            agent_profile["content"] = _pin_agent_profile_hooks(_resolve_hook_paths(agent_profile["content"]))
+        _localize_agent_profile(agent_profile, adapter, agent_id)
         agent_profile_allow_home = adapter.allow_home_agent_profile(is_user_scope)
         p = _resolve_path(agent_profile["path"], target_dir, allow_home=agent_profile_allow_home)
         if dry_run:
@@ -1998,8 +2862,358 @@ def write_install_snippet(
                 failed_skills.append(sc_name)
                 if not quiet:
                     rprint(f"[red]✗ Failed to install skill '{esc(sc_name)}'.[/red] No content available.")
+        if result_path and not sc.get("path"):
+            # No server-given path: the installer chose the location. Remember the
+            # SKILL.md it wrote so the pull can fingerprint it (_fingerprint_written_skills).
+            sc["installed_skill_md"] = str(Path(result_path) / "SKILL.md")
 
     return written, failed_skills
+
+
+def _validate_hook_flags(harness: str, hooks: str | None, on_unknown: str | None, force_hooks: bool) -> None:
+    """Reject agent-hook placement flags that do not apply, before any network call."""
+    from observal_cli.agent_hooks import ON_UNKNOWN, PLACEMENTS
+
+    if hooks is not None and hooks not in PLACEMENTS:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Unknown hook placement: {hooks}.",
+            operation="Pull agent",
+            resource="--hooks",
+            remediation="Use --hooks=frontmatter or --hooks=settings.",
+        )
+    if on_unknown is not None and on_unknown not in ON_UNKNOWN:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Unknown --on-unknown policy: {on_unknown}.",
+            operation="Pull agent",
+            resource="--on-unknown",
+            remediation="Use --on-unknown=skip or --on-unknown=run.",
+        )
+    if (hooks is not None or on_unknown is not None or force_hooks) and harness != "claude-code":
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Harness {harness} does not support agent hook placement.",
+            operation="Pull agent",
+            resource="agent hook placement",
+            remediation="Remove --hooks, --on-unknown and --force-hooks, or select claude-code.",
+        )
+    if on_unknown is not None and hooks == "frontmatter":
+        fail(
+            ErrorCategory.VALIDATION,
+            "--on-unknown applies only to hooks placed in settings.json.",
+            operation="Pull agent",
+            resource="--on-unknown",
+            remediation="Remove --on-unknown, or use --hooks=settings.",
+        )
+
+
+def _resolve_hook_placement(
+    harness: str,
+    hooks: str | None,
+    on_unknown: str | None,
+    installed: dict | None,
+    existing: str | None = None,
+) -> tuple[str, str, list[str]]:
+    """(placement, on-unknown policy, warnings) for this pull; an earlier choice is kept.
+
+    The choice is remembered in the local lockfile (``installed``), and also
+    found in settings.json itself (``existing``: the policy of gated hooks this
+    agent already owns there), so a teammate's committed settings or a failed
+    lockfile write never silently moves the hooks back. The opt-in is offered
+    only on POSIX. On an untested Claude Code version it is allowed with a
+    warning: hook evidence from that version is reported as unverified, so a
+    Claude Code update never blocks a pull.
+    """
+    from observal_cli import agent_hooks
+
+    if harness != "claude-code":
+        return "frontmatter", "skip", []
+    previous = installed if isinstance(installed, dict) else {}
+    recorded = previous.get("hook_placement") == "settings"
+    remembered = recorded or existing is not None
+    placement = hooks or ("settings" if remembered else "frontmatter")
+    if placement != "settings":
+        if on_unknown is not None:
+            fail(
+                ErrorCategory.VALIDATION,
+                "--on-unknown applies only to hooks placed in settings.json.",
+                operation="Pull agent",
+                resource="--on-unknown",
+                remediation="Add --hooks=settings, or remove --on-unknown.",
+            )
+        return "frontmatter", "skip", []
+    remembered_policy = previous.get("hook_on_unknown") if recorded else existing
+    policy = on_unknown or (remembered_policy if remembered_policy in agent_hooks.ON_UNKNOWN else "skip")
+    found: list[str] = []
+    if hooks is None and not recorded:
+        found.append(
+            "Found this agent's gated hooks in settings.json; keeping them there. "
+            "Pull with --hooks=frontmatter to move them back to the agent file."
+        )
+    if sys.platform == "win32":
+        fail(
+            ErrorCategory.VALIDATION,
+            "Agent hooks in settings.json are not supported on Windows.",
+            operation="Pull agent",
+            resource="agent hook placement",
+            remediation="Pull with --hooks=frontmatter.",
+        )
+    version = agent_hooks.claude_code_version()
+    if agent_hooks.is_tested_version(version):
+        return "settings", policy, found
+    # Never blocks: hook evidence from an untested version is reported as unverified
+    # by the server instead, so the opt-in keeps working when Claude Code updates.
+    seen = f"Claude Code {version}" if version else "no Claude Code version (is `claude` on PATH?)"
+    return (
+        "settings",
+        policy,
+        [
+            *found,
+            f"Gated agent hooks were tested only with Claude Code {agent_hooks.tested_range()}; found {seen}. "
+            "They may not run as expected, and their Component Insights evidence is reported as unverified "
+            "until this version is tested; pull with --hooks=frontmatter to move them back.",
+        ],
+    )
+
+
+def _agent_hook_request(
+    snippet: dict,
+    lock_components: list[dict],
+    *,
+    placement: str,
+    on_unknown: str,
+    scope: str,
+    target_dir: Path,
+    installed: dict | None,
+    force: bool,
+):
+    """The settings.json agent-hook request for a Claude Code pull, or None when there is nothing to manage.
+
+    In frontmatter placement the request is empty, so a reconcile only removes
+    groups this agent owned from an earlier ``--hooks=settings`` pull.
+    """
+    from observal_cli import agent_hooks
+
+    profile = snippet.get("agent_profile") or {}
+    profile_path = profile.get("path") if isinstance(profile, dict) else None
+    agent = Path(profile_path).stem if isinstance(profile_path, str) and profile_path.endswith(".md") else ""
+    previous = installed if isinstance(installed, dict) else {}
+    remembered = previous.get("hook_placement") == "settings"
+    owners = tuple(
+        name
+        for name in (previous.get("hook_gate_agent") if remembered else None,)
+        if agent_hooks.valid_agent_name(name) and name != agent
+    )
+    path, display = agent_hooks.settings_location(scope, target_dir)
+    hooks: list = []
+    if placement == "settings":
+        if snippet.get("hook_placement") != "settings":
+            fail(
+                ErrorCategory.VERSION,
+                "This Observal server does not support placing agent hooks in settings.json.",
+                operation="Pull agent",
+                resource="agent hook placement",
+                remediation="Upgrade the Observal server, or pull with --hooks=frontmatter.",
+            )
+        bindings = [b for b in snippet.get("hook_bindings") or [] if isinstance(b, dict)]
+        if not agent_hooks.valid_agent_name(agent) or any(b.get("agent") != agent for b in bindings):
+            fail(
+                ErrorCategory.VALIDATION,
+                "The agent's hooks cannot be tied to its Claude Code agent name.",
+                operation="Pull agent",
+                resource="agent hook placement",
+                remediation="Pull with --hooks=frontmatter.",
+            )
+        try:
+            hooks = agent_hooks.build_agent_hooks(agent, bindings, lock_components, on_unknown)
+        except ValueError as error:
+            fail(
+                ErrorCategory.VALIDATION,
+                str(error),
+                operation="Pull agent",
+                resource="agent hook placement",
+                remediation="Pull with --hooks=frontmatter, and report the agent to its publisher.",
+            )
+    elif not agent_hooks.valid_agent_name(agent):
+        return None
+    return agent_hooks.AgentHookRequest(
+        placement=placement,
+        on_unknown=on_unknown,
+        path=path,
+        display=display,
+        agent=agent,
+        hooks=tuple(hooks),
+        owners=owners,
+        force=force,
+    )
+
+
+def _plan_agent_hooks(request, *, remembered: bool, dry_run: bool):
+    """Plan before writing anything; refuse invalid settings and (outside a dry run) conflicts."""
+    from observal_cli import agent_hooks
+
+    try:
+        plan = request.plan()
+    except agent_hooks.SettingsError as error:
+        if request.placement != "settings" and not remembered:
+            return None  # nothing of this agent's can be there; leave the file alone
+        fail(
+            ErrorCategory.CONFLICT,
+            f"{request.path}: {error}",
+            operation="Pull agent",
+            resource=str(request.path),
+            remediation="Fix settings.json (it must be a JSON object), then pull again. Nothing was written.",
+        )
+    return plan
+
+
+def _agent_hook_conflict_warnings(request, plan) -> list[str]:
+    """Edited Observal-owned groups are left exactly as the user made them; the rest of the pull continues.
+
+    Each stays in settings.json and keeps running as edited, but is not updated
+    and verifies as drifted, so Component Insights does not count it.
+    """
+    if plan is None or not plan.conflicts:
+        return []
+    edited = ", ".join(f"{item['event']} ({item['component_id'] or 'unknown component'})" for item in plan.conflicts)
+    return [
+        f"{len(plan.conflicts)} Observal-owned agent hook(s) in {request.path} were edited locally and were left "
+        f"as they are: {edited}. They were not updated, and Component Insights does not count them. Pass "
+        '--force-hooks to replace them with the agent\'s hooks, or delete their "_observal" key to keep them '
+        "as your own hooks."
+    ]
+
+
+def _apply_agent_hooks(
+    request, written: list[tuple[str, str]], setup_results: list[dict], *, reports_sessions: bool = False
+):
+    """Re-plan from a fresh read and write settings.json atomically, before the lockfile.
+
+    If the lockfile write then fails, the next pull recovers ownership from the
+    groups' ``_observal`` metadata.
+    """
+    from observal_cli import agent_hooks
+
+    def failure(stage: str) -> dict:
+        return _pull_failure_result(
+            written,
+            stage,
+            setup_results=setup_results,
+            installation_tracked=False,
+            reports_sessions=reports_sessions,
+        )
+
+    try:
+        plan = request.plan()
+    except agent_hooks.SettingsError as error:
+        fail(
+            ErrorCategory.CONFLICT,
+            f"{request.path}: {error}",
+            operation="Pull agent",
+            resource=str(request.path),
+            remediation="Fix settings.json (it must be a JSON object), then pull again.",
+            result=failure("write_agent_hooks"),
+        )
+    if plan.changed:
+        try:
+            agent_hooks.write_settings(request.path, plan.data)
+        except OSError as error:
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                f"Could not write {request.path}.",
+                operation="Pull agent",
+                resource=str(request.path),
+                remediation="Check the file's permissions, then pull again.",
+                detail=repr(error),
+                result=failure("write_agent_hooks"),
+            )
+        written.append((str(request.path), "created" if plan.original is None else "updated"))
+    return plan
+
+
+def _agent_hooks_relevant(request, plan) -> bool:
+    """Whether this pull placed, moved or found agent hooks in settings.json worth reporting."""
+    if request is None or plan is None:
+        return False
+    return request.placement == "settings" or bool(plan.removed or plan.conflicts)
+
+
+def _agent_hooks_output(request, plan, startup_ms: float | None) -> dict:
+    from observal_cli.agent_hooks import BLOCKING_EVENTS
+
+    return {
+        "placement": request.placement,
+        "on_unknown": request.on_unknown if request.placement == "settings" else None,
+        **plan.summary(),
+        "hooks": [
+            {
+                "name": hook.name,
+                "event": hook.event,
+                "component_id": hook.component_id,
+                "command": hook.gated,
+                "timeout": "unchanged (Claude Code default)",
+                "can_block": hook.event in BLOCKING_EVENTS,
+            }
+            for hook in request.hooks
+        ],
+        "gate_startup_ms": startup_ms,
+    }
+
+
+def _render_agent_hooks(request, plan, startup_ms: float | None, *, dry_run: bool, http_hooks: int) -> None:
+    """Human-readable plan: the settings.json diff, cost and caveats."""
+    from observal_cli.agent_hooks import BLOCKING_EVENTS
+
+    if request.placement != "settings" and not (plan.removed or plan.conflicts):
+        return
+    title = (
+        "Agent hooks in settings.json" if request.placement == "settings" else "Agent hooks restored to the agent file"
+    )
+    rprint(f"\n[bold]{title}[/bold] ({esc(str(request.path))}):")
+    names = {hook.component_id: hook.name for hook in request.hooks}
+    verb = ("would add", "would remove") if dry_run else ("added", "removed")
+    for item in plan.added:
+        rprint(f"  [green]+ {verb[0]}[/green] {esc(item['event'])}: {esc(item['name'])}")
+    for item in plan.removed:
+        label = names.get(item["component_id"]) or item["component_id"] or "unknown component"
+        suffix = " (edited, replaced with --force-hooks)" if item.get("edited") else ""
+        rprint(f"  [red]- {verb[1]}[/red] {esc(item['event'])}: {esc(label)}{esc(suffix)}")
+    for item in plan.kept:
+        rprint(f"  [dim]= unchanged {esc(item['event'])}: {esc(item['name'])}[/dim]")
+    for item in plan.conflicts:
+        label = names.get(item["component_id"]) or item["component_id"] or "unknown component"
+        rprint(
+            f"  [yellow]! edited locally[/yellow] {esc(item['event'])}: {esc(label)} "
+            "[dim](kept; --force-hooks replaces it)[/dim]"
+        )
+    if request.placement != "settings":
+        return
+    if request.hooks:
+        cost = f"{startup_ms:g} ms" if startup_ms is not None else "not measured"
+        rprint(f"  Gate startup on this machine: {esc(cost)} per hook, on every matching event, even when")
+        rprint("  the agent is not active. Hooks on one event run in parallel. Timeouts are unchanged:")
+        per_event: dict[str, int] = {}
+        for hook in request.hooks:
+            per_event[hook.event] = per_event.get(hook.event, 0) + 1
+        for event, count in sorted(per_event.items()):
+            rprint(f"    {esc(event)}: {count} gated hook{'s' if count != 1 else ''}, timeout Claude Code default")
+        blocking = sorted({hook.name for hook in request.hooks if hook.event in BLOCKING_EVENTS})
+        if blocking and request.on_unknown == "skip":
+            rprint(
+                f"  [yellow]⚠[/yellow]  {esc(', '.join(blocking))} can block an action. If Claude Code ever sends hook "
+                "input the gate does not recognize, the hook is skipped (--on-unknown skip) and cannot block; "
+                "--on-unknown run runs it instead, in every session."
+            )
+    rprint(
+        "  [yellow]⚠[/yellow]  The agent file no longer lists these hooks; scripts that read its hooks: "
+        "section will not find them. Pull with --hooks=frontmatter to move them back."
+    )
+    if http_hooks:
+        rprint(
+            f"  [dim]{http_hooks} HTTP hook(s) have no command to gate and stay in the agent file "
+            "(interactive sessions only).[/dim]"
+        )
 
 
 def _install_skill_bundle(
@@ -2093,6 +3307,7 @@ def _install_skill_bundle(
 
 def register_pull(app: typer.Typer):
     @app.command("pull")
+    @_reporting_boundary
     def pull(
         agent_id: str = typer.Argument(..., help="Agent ID, name, row number, or @alias"),
         harness: str = typer.Option(
@@ -2141,6 +3356,33 @@ def register_pull(app: typer.Typer):
                 "Defaults to the OBSERVAL_STRICT environment variable."
             ),
         ),
+        hooks: str | None = typer.Option(
+            None,
+            "--hooks",
+            help=(
+                "Claude Code only: where the agent's hooks go. 'frontmatter' (default) keeps them in the agent "
+                "file, where Claude Code runs them only in interactive sessions; 'settings' moves them into "
+                "settings.json behind an agent gate so they also run headless. Remembered for later pulls."
+            ),
+        ),
+        on_unknown: str | None = typer.Option(
+            None,
+            "--on-unknown",
+            help=(
+                "With --hooks=settings: what a gated hook does when Claude Code's hook input is unrecognized, "
+                "'skip' (default, keeps agent isolation) or 'run'."
+            ),
+        ),
+        force_hooks: bool = typer.Option(
+            False,
+            "--force-hooks",
+            help="Replace or remove Observal-owned agent hooks in settings.json that were edited locally.",
+        ),
+        allow_unsupported_harness: bool = typer.Option(
+            False,
+            "--allow-unsupported-harness",
+            help="Install even when the agent version does not list --harness as supported (warns)",
+        ),
         output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
     ):
         """Fetch agent config and write harness files to disk.
@@ -2160,17 +3402,29 @@ def register_pull(app: typer.Typer):
         back to their latest version with a warning; use --strict, or set
         OBSERVAL_STRICT=1, to refuse instead. The flag wins over the variable.
 
+        The harness must be one the agent version lists as supported; pass
+        --allow-unsupported-harness to install for another one anyway.
+
         Use --env KEY=VALUE and --header Header-Name=value only for non-secret
         settings because command arguments are visible to other processes. For
         credentials, omit --no-prompt and enter values interactively. When
         --no-prompt is set, prompts are skipped and only flag values are used.
 
+        Claude Code runs hooks from an agent file only in interactive
+        sessions. --hooks=settings moves the agent's command hooks into
+        settings.json, each wrapped by a gate that runs it only while that
+        agent is active, headless included (POSIX only; untested Claude Code
+        versions warn). Preview with --dry-run first; --hooks=frontmatter moves
+        them back.
+
         Examples:
           observal agent pull my-agent --harness claude-code --no-prompt
           observal agent pull my-agent --harness claude-code --no-prompt --upgrade
           observal agent pull my-agent --harness cursor --version 1.2.0 --strict
+          observal agent pull my-agent --harness claude-code --hooks=settings --dry-run
         """
         harness, scope, version = _validate_pull_inputs(harness, scope, version)
+        _validate_hook_flags(harness, hooks, on_unknown, force_hooks)
         if output == "json" and not no_prompt:
             fail(
                 ErrorCategory.VALIDATION,
@@ -2189,6 +3443,9 @@ def register_pull(app: typer.Typer):
             )
         env_overrides = _parse_assignments(env, "environment variable")
         header_overrides = _parse_assignments(header, "header")
+        secrets = _pull_secrets.get()
+        assert secrets is not None
+        secrets.update(value for value in (*env_overrides.values(), *header_overrides.values()) if value)
         model_default, model_overrides = _parse_model_overrides(model or [])
         unused_model_harnesses = set(model_overrides) - {harness}
         if unused_model_harnesses:
@@ -2266,20 +3523,23 @@ def register_pull(app: typer.Typer):
         )
         agent_uuid = str(agent_detail.get("id", resolved))
         locked_entry = None if is_user_scope else _project_locked_agent(target_dir, qualified_name, agent_uuid)
+        installed_entry = _installed_agent(harness, agent_uuid, options, target_dir)
         version, resolved_from = _target_version(
             requested=version,
             upgrade=upgrade,
             project_locked=locked_entry,
-            installed=_installed_agent(harness, agent_uuid, options, target_dir),
+            installed=installed_entry,
         )
 
         # MCP env vars and headers come from the versions that will be installed
         plan = agent_detail
+        supported = agent_detail.get("supported_harnesses") or []
         if version:
             with _progress(output, f"Fetching agent version {version}..."):
                 version_detail = _locked_version_detail(
                     resolved, version, resolved_from, qualified_name=qualified_name, directory=target_dir
                 )
+            supported = version_detail.get("supported_harnesses", supported) or []
             plan = {
                 "component_links": [
                     {
@@ -2292,6 +3552,13 @@ def register_pull(app: typer.Typer):
                 ]
             }
 
+        _require_supported_harness(
+            harness,
+            list(supported),
+            allow=allow_unsupported_harness,
+            label=f"{qualified_name} {version or agent_detail.get('version', '')}".strip(),
+        )
+
         spec_cache: dict = {}
         missing_inputs: list[dict[str, str]] = []
         env_values = _collect_mcp_env_vars(
@@ -2301,6 +3568,7 @@ def register_pull(app: typer.Typer):
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
         )
+        secrets.update(value for values in env_values.values() for value in values.values() if value)
         header_values = _collect_mcp_headers(
             plan,
             no_prompt=no_prompt,
@@ -2308,6 +3576,7 @@ def register_pull(app: typer.Typer):
             spec_cache=spec_cache,
             missing_inputs=missing_inputs,
         )
+        secrets.update(value for values in header_values.values() for value in values.values() if value)
         if missing_inputs:
             fail(
                 ErrorCategory.VALIDATION,
@@ -2342,6 +3611,20 @@ def register_pull(app: typer.Typer):
             )
         options["local_name"] = local_name
 
+        existing_hooks = None
+        if harness == "claude-code" and hooks is None:
+            from observal_cli.agent_hooks import existing_placement, expected_agent_name, settings_location
+
+            existing_hooks = existing_placement(
+                settings_location(options.get("scope", "project"), target_dir)[0],
+                expected_agent_name(local_name),
+            )
+        hook_placement, hook_on_unknown, hook_warnings = _resolve_hook_placement(
+            harness, hooks, on_unknown, installed_entry, existing_hooks
+        )
+        if hook_placement == "settings":
+            options["hook_placement"] = "settings"
+
         planned_components = [
             {
                 "type": link.get("component_type", "unknown"),
@@ -2373,6 +3656,8 @@ def register_pull(app: typer.Typer):
                 install_body["version"] = version
             if strict:
                 install_body["strict"] = True
+            if allow_unsupported_harness:
+                install_body["allow_unsupported_harness"] = True
             result = client.post_public(
                 f"/api/v1/agents/{resolved}/install",
                 install_body,
@@ -2415,6 +3700,42 @@ def register_pull(app: typer.Typer):
             lock_warnings.append(mismatch)
 
         snippet = result.get("config_snippet", {})
+        # Selected-version aliases come from the generator after final sanitization.
+        # Old servers have no proof of per-component aliases, so keep their
+        # legacy lock entries unverified rather than deriving keys from slugs.
+        if isinstance(result.get("component_pins"), list):
+            pinned_by_id = {
+                str(pin.get("id")): pin for pin in result["component_pins"] if isinstance(pin, dict) and pin.get("id")
+            }
+            for component in lock_components:
+                pin = pinned_by_id.get(str(component.get("id")))
+                if not pin:
+                    continue
+                # Keep the server's locked version UUID, digest and lock source;
+                # the component pin response supplies the actual installed alias.
+                component["name"] = pin.get("name") or component.get("name", "")
+                component["local_name"] = pin.get("local_name", "")
+                component["scope"] = options.get("scope", "project")
+                component["qualified_name"] = pin.get("qualified_name") or component.get("qualified_name", "")
+                if not isinstance(lock.get("components"), list):
+                    component["version"] = pin.get("version")
+                elif component.get("version") != pin.get("version"):
+                    fail(
+                        ErrorCategory.CONFLICT,
+                        "Server component pin disagrees with the install lock.",
+                        operation="Pull agent",
+                        resource="component installation",
+                        remediation="Update the server before installing this agent.",
+                    )
+            aliases = [pin["local_name"] for pin in lock_components if pin["type"] == "mcp" and pin["local_name"]]
+            if len(aliases) != len(set(aliases)):
+                fail(
+                    ErrorCategory.CONFLICT,
+                    "MCP aliases collide after generation.",
+                    operation="Pull agent",
+                    resource="harness MCP aliases",
+                    remediation="Rename the conflicting component and retry.",
+                )
         if not snippet:
             fail(
                 ErrorCategory.UNAVAILABLE,
@@ -2425,6 +3746,7 @@ def register_pull(app: typer.Typer):
             )
 
         snippet = rewrite_observal_interpreter(snippet)
+        _preflight_project_mcp_config(snippet, harness=harness, is_user_scope=is_user_scope)
         from observal_cli import managed_skill
 
         try:
@@ -2460,6 +3782,33 @@ def register_pull(app: typer.Typer):
                     resource=qualified_name,
                     remediation="Keep the pinned folder release or perform an explicit manual migration first.",
                 )
+
+        # Agent hooks in settings.json (Claude Code): planned before any file is written,
+        # so invalid settings or locally edited Observal groups refuse the pull cleanly.
+        hook_request = None
+        hook_plan = None
+        if harness == "claude-code":
+            hook_request = _agent_hook_request(
+                snippet,
+                lock_components,
+                placement=hook_placement,
+                on_unknown=hook_on_unknown,
+                scope=options.get("scope", "project"),
+                target_dir=target_dir,
+                installed=installed_entry,
+                force=force_hooks,
+            )
+        remembered_settings = existing_hooks is not None or (
+            isinstance(installed_entry, dict) and installed_entry.get("hook_placement") == "settings"
+        )
+        if hook_request is not None:
+            hook_plan = _plan_agent_hooks(hook_request, remembered=remembered_settings, dry_run=dry_run)
+        gated_hooks = {hook.name: hook for hook in hook_request.hooks} if hook_request is not None else {}
+        gate_startup_ms = None
+        if dry_run and hook_request is not None and hook_request.hooks:
+            from observal_cli.agent_hooks import measure_gate_startup
+
+            gate_startup_ms = measure_gate_startup()
 
         def disclose_telemetry() -> None:
             if output != "json" and not dry_run:
@@ -2559,7 +3908,7 @@ def register_pull(app: typer.Typer):
                 )
                 fail(
                     ErrorCategory.CONFLICT,
-                    "Could not safely install pinned Agent skill folders before config writes.",
+                    f"Could not safely install pinned Agent skill folders before config writes: {error}",
                     operation="Pull agent",
                     resource="agent skills",
                     remediation="Inspect the reported destination and retained backups; do not delete an unowned folder.",
@@ -2588,6 +3937,7 @@ def register_pull(app: typer.Typer):
                 is_user_scope=is_user_scope,
                 dry_run=dry_run,
                 quiet=output == "json",
+                secret_values=secrets,
                 lock=lock,
             )
             if not dry_run:
@@ -2635,16 +3985,21 @@ def register_pull(app: typer.Typer):
                         is_user_scope=is_user_scope,
                     )
                 )
-                error.result["reports_sessions"] = _reports_written_sessions(paths)
+                error.result["reports_sessions"] = (
+                    _reports_written_sessions(paths) or adapter.reports_sessions_outside_pull()
+                )
                 if error.result["reports_sessions"]:
                     disclose_telemetry()
             raise
+
+        if dry_run and hook_plan is not None and hook_plan.changed:
+            written.append((str(hook_request.path), "would write"))
 
         reports_sessions = (
             _reports_sessions(snippet, target_dir=target_dir, is_user_scope=is_user_scope, dry_run=True)
             if dry_run
             else _reports_written_sessions([path for path, _status in written])
-        )
+        ) or adapter.reports_sessions_outside_pull()
         if reports_sessions:
             disclose_telemetry()
 
@@ -2686,41 +4041,66 @@ def register_pull(app: typer.Typer):
             )
 
         warnings_list = (
-            lock_warnings + conflict_warnings + list(result.get("warnings") or []) + (snippet.get("_warnings") or [])
+            lock_warnings
+            + conflict_warnings
+            + hook_warnings
+            + list(result.get("warnings") or [])
+            + (snippet.get("_warnings") or [])
         )
+        if dry_run and hook_request is not None:
+            warnings_list.extend(_agent_hook_conflict_warnings(hook_request, hook_plan))
 
         # Run required harness registration before recording the pull as installed.
         setup_results: list[dict] = []
         setup_failures: list[str] = []
         setup_cmds = snippet.get("mcp_setup_commands") or []
         # Local-scope registrations (Claude Code) belong to the directory they run in.
-        setup_cwd = target_dir if target_dir.is_dir() else None
         if setup_cmds and not dry_run:
-            _run_reset_commands(snippet.get("mcp_reset_commands") or [], cwd=setup_cwd)
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                fail(
+                    ErrorCategory.UNAVAILABLE,
+                    "Could not prepare target directory for MCP setup.",
+                    operation="Pull agent",
+                    resource=str(target_dir),
+                    remediation="Check directory permissions.",
+                    detail=repr(error),
+                )
+            setup_cwd = target_dir.resolve()
+            _run_reset_commands(
+                snippet.get("mcp_reset_commands") or [],
+                cwd=setup_cwd,
+                adapter=adapter,
+                scope=options.get("scope", "project"),
+            )
             for command in setup_cmds:
+                # Never expose command arguments: MCP setup may carry secrets.
                 if not _valid_setup_command(command):
                     setup_results.append({"command": [], "status": "failed", "return_code": None})
                     setup_failures.append("invalid setup command")
                     continue
-                shown = _display_setup_command(command)
+                shown = _display_setup_command(command, secret_values=secrets)
+                executable = shown[0] if shown[0] != "<secret>" else "setup executable"
                 try:
-                    process = subprocess.run(command, capture_output=True, text=True, timeout=60, cwd=setup_cwd)
+                    setup_command = adapter.prepare_mcp_setup_command(command, options.get("scope", "project"))
+                    process = subprocess.run(setup_command, capture_output=True, text=True, timeout=60, cwd=setup_cwd)
                 except FileNotFoundError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} not found")
+                    setup_failures.append(f"{executable} not found")
                     continue
                 except subprocess.TimeoutExpired:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} timed out")
+                    setup_failures.append(f"{executable} timed out")
                     continue
                 except OSError:
                     setup_results.append({"command": shown, "status": "failed", "return_code": None})
-                    setup_failures.append(f"{command[0]} could not start")
+                    setup_failures.append(f"{executable} could not start")
                     continue
                 status = "completed" if process.returncode == 0 else "failed"
                 setup_results.append({"command": shown, "status": status, "return_code": process.returncode})
                 if process.returncode != 0:
-                    setup_failures.append(f"{command[0]} exited with code {process.returncode}")
+                    setup_failures.append(f"{executable} exited with code {process.returncode}")
         elif setup_cmds:
             for command in setup_cmds:
                 if not _valid_setup_command(command):
@@ -2728,7 +4108,11 @@ def register_pull(app: typer.Typer):
                     setup_failures.append("invalid setup command")
                 else:
                     setup_results.append(
-                        {"command": _display_setup_command(command), "status": "would_run", "return_code": None}
+                        {
+                            "command": _display_setup_command(command, secret_values=secrets),
+                            "status": "would_run",
+                            "return_code": None,
+                        }
                     )
 
         if setup_failures:
@@ -2764,6 +4148,46 @@ def register_pull(app: typer.Typer):
         project_lock_path: Path | None = None
         if not dry_run:
             agent_version = installed_version
+            from observal_cli.layer import verify_installed_mcp
+
+            if hook_request is not None and hook_plan is not None:
+                hook_plan = _apply_agent_hooks(hook_request, written, setup_results, reports_sessions=reports_sessions)
+                warnings_list.extend(_agent_hook_conflict_warnings(hook_request, hook_plan))
+
+            warnings_list.extend(_fingerprint_written_skills(snippet, lock_components, target_dir, is_user_scope))
+            warnings_list.extend(
+                _record_hook_bindings(
+                    snippet,
+                    lock_components,
+                    target_dir,
+                    is_user_scope,
+                    gated=gated_hooks if hook_plan is not None else None,
+                    settings_display=hook_request.display if hook_request is not None else "",
+                )
+            )
+            warnings_list.extend(adapter.bind_pulled_hooks(snippet, lock_components, target_dir, is_user_scope))
+
+            # The MCP file this pull wrote (a Pi profile's mcp.json, for example).
+            mcp_cfg = snippet.get("mcp_config")
+            written_mcp_config = (
+                _resolve_path(mcp_cfg["path"], target_dir, allow_home=is_user_scope)
+                if isinstance(mcp_cfg, dict) and isinstance(mcp_cfg.get("path"), str)
+                else None
+            )
+            for component in lock_components:
+                if component.get("type") != "mcp" or not component.get("local_name"):
+                    continue
+                status, fingerprint = verify_installed_mcp(
+                    harness,
+                    options.get("scope", "project"),
+                    str(target_dir),
+                    component["local_name"],
+                    written_config=written_mcp_config,
+                )
+                if status == "verified" and fingerprint:
+                    component["mcp_integrity"] = fingerprint
+                else:
+                    warnings_list.append("Installed MCP entry could not be verified; attribution will be unavailable.")
 
             from observal_cli.lockfile import upsert_agent
 
@@ -2785,6 +4209,14 @@ def register_pull(app: typer.Typer):
                         "lock_digest": lock.get("digest"),
                         "lock_status": lock.get("status"),
                     }
+                    if hook_placement == "settings" and hook_request is not None and hook_plan is not None:
+                        metadata.update(
+                            {
+                                "hook_placement": "settings",
+                                "hook_on_unknown": hook_on_unknown,
+                                "hook_gate_agent": hook_request.agent,
+                            }
+                        )
                     _sync_managed_agent_lock(
                         harness=harness,
                         scope=options.get("scope", "project"),
@@ -2809,6 +4241,15 @@ def register_pull(app: typer.Typer):
                         local_name=local_name,
                         lock_digest=lock.get("digest"),
                         lock_status=lock.get("status"),
+                        **(
+                            {
+                                "hook_placement": "settings",
+                                "hook_on_unknown": hook_on_unknown,
+                                "hook_gate_agent": hook_request.agent,
+                            }
+                            if hook_placement == "settings" and hook_request is not None and hook_plan is not None
+                            else {}
+                        ),
                     )
             except (OSError, RuntimeError) as error:
                 recovery = _rollback_managed_agent_state(
@@ -2901,7 +4342,9 @@ def register_pull(app: typer.Typer):
                 warnings_list.append("Local layer snapshot could not be refreshed; run `observal doctor`.")
 
             try:
-                adapter.persist_active_agent(str(agent_uuid), agent_detail.get("name", resolved), agent_version)
+                adapter.persist_active_agent(
+                    str(agent_uuid), agent_detail.get("name", resolved), agent_version, is_user_scope=is_user_scope
+                )
             except (OSError, RuntimeError) as error:
                 fail(
                     ErrorCategory.UNAVAILABLE,
@@ -2958,6 +4401,11 @@ def register_pull(app: typer.Typer):
                     "warnings": warnings_list,
                     "setup_commands": setup_results,
                     "reports_sessions": reports_sessions,
+                    **(
+                        {"agent_hooks": _agent_hooks_output(hook_request, hook_plan, gate_startup_ms)}
+                        if _agent_hooks_relevant(hook_request, hook_plan)
+                        else {}
+                    ),
                 }
             )
             return
@@ -3014,6 +4462,19 @@ def register_pull(app: typer.Typer):
                     f"  [dim]{esc(component['type'])}[/dim] {esc(component.get('qualified_name') or component['name'])}"
                     f" [cyan]v{esc(component.get('version') or '?')}[/cyan]"
                 )
+        if _agent_hooks_relevant(hook_request, hook_plan):
+            gated_names = {hook.name for hook in hook_request.hooks}
+            _render_agent_hooks(
+                hook_request,
+                hook_plan,
+                gate_startup_ms,
+                dry_run=dry_run,
+                http_hooks=sum(
+                    1
+                    for component in lock_components
+                    if component.get("type") == "hook" and component.get("local_name") not in gated_names
+                ),
+            )
         if warnings_list:
             rprint("")
             for warning in warnings_list:

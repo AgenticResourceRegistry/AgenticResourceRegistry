@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from models.base import Base
 class ListingStatus(str, enum.Enum):
     draft = "draft"
     pending = "pending"
+    changes_requested = "changes_requested"
     approved = "approved"
     rejected = "rejected"
     archived = "archived"
@@ -44,9 +46,6 @@ class McpListing(Base):
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True
-    )
-    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("component_bundles.id"), nullable=True
     )
     submitted_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     co_authors: Mapped[list] = mapped_column(JSON, default=list)

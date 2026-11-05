@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import json as _json
-import os
 import re
 import shutil
 import sys
@@ -598,10 +597,11 @@ def logout(
         OutputMode, typer.Option("--output", "-o", help="Output format: table or json")
     ] = OutputMode.table,
 ):
-    """Clear saved credentials.
+    """Attempt to sign out everywhere and clear saved credentials.
 
-    Revokes the remote session when possible, then removes local access and
-    refresh tokens. Remote revocation failure never blocks local cleanup.
+    Revokes every session for this account when possible (CLI, hooks, web),
+    then removes local access and refresh tokens. Remote revocation failure
+    never blocks local cleanup.
 
     Examples:
         observal auth logout
@@ -774,7 +774,9 @@ def change_password(
         OutputMode, typer.Option("--output", "-o", help="Output format: table or json")
     ] = OutputMode.table,
 ):
-    """Change your password.
+    """Change your password and sign out every other session.
+
+    This CLI stays signed in with the fresh tokens the server returns.
 
     Both modes read OBSERVAL_CURRENT_PASSWORD and OBSERVAL_NEW_PASSWORD,
     including their FILE forms. Human mode prompts for missing values; JSON
@@ -834,6 +836,11 @@ def change_password(
             {"current_password": current, "new_password": new_password},
         )
     payload = result or {"changed": True}
+    if code := payload.pop("exchange_code", None):
+        # The server signed out every session, including the hooks token; keep this CLI on the fresh pair.
+        session = client.post("/api/v1/auth/exchange", {"code": code}, operation="Change password")
+        config.save({"access_token": session["access_token"], "refresh_token": session.get("refresh_token", "")})
+        config.remove("api_key")
     if _is_json(output):
         output_json(payload)
     else:
@@ -1280,7 +1287,7 @@ def _normalize_config_value(key: str, value: str) -> object:
                 "update_check_repo must use owner/repository format.",
                 operation="Update CLI configuration",
                 resource=key,
-                remediation="Provide a value such as Observal/Observal or an empty string.",
+                remediation="Provide a value such as AgenticResourceRegistry/AgenticResourceRegistry or an empty string.",
             )
         return normalized
     return normalized
@@ -1485,7 +1492,17 @@ def register_config(app: typer.Typer):
 
 
 def _post_login_setup():
-    """Post-login setup: install skills and the Pi extension unconditionally, then run doctor."""
+    """Install bundled integrations and instrument an existing Claude Code installation."""
+    # Bundled skill installation may create ~/.claude even when Claude Code isn't installed.
+    claude_detected = (Path.home() / ".claude").is_dir() or shutil.which("claude") is not None
+    if claude_detected:
+        try:
+            from observal_cli.cmd_doctor import _patch_claude_code
+
+            _patch_claude_code(dry_run=False)
+        except (OSError, ValueError, RuntimeError) as error:
+            rprint(f"[yellow]Could not install Claude Code session hooks: {error}[/yellow]")
+            rprint("  Run [bold]observal doctor patch --harness claude-code[/bold] manually.")
     _install_observal_skill()
     _install_or_check_pi_extension()
     _generate_initial_layer_snapshot()
@@ -1582,9 +1599,8 @@ def _install_observal_skill():
 def _install_or_check_pi_extension():
     """Install or refresh the bundled Pi telemetry extension when Pi is detected.
 
-    Runs unconditionally (no prompt), mirroring skill install. An npm-configured
-    install is left untouched (only reported if stale). Never blocks login -
-    failures are printed and swallowed.
+    Runs unconditionally (no prompt), mirroring skill install. Never blocks
+    login - failures are printed and swallowed.
     """
     try:
         from observal_cli import pi_extension
@@ -1592,10 +1608,7 @@ def _install_or_check_pi_extension():
         status = pi_extension.check_status()
         if status.state == pi_extension.NOT_DETECTED:
             return
-        if status.action == "dedupe":
-            # Deleting a file mid-login is too surprising; doctor patch does it.
-            rprint(f"[yellow]{esc(status.message)}[/yellow]")
-        elif status.action in ("install", "refresh", "migrate", "restore"):
+        if status.action in ("install", "refresh", "migrate", "restore"):
             result = pi_extension.install_or_refresh(dry_run=False, status=status)
             verb = {"install": "Installed", "refresh": "Updated", "migrate": "Migrated", "restore": "Restored"}[
                 status.action
@@ -1618,12 +1631,17 @@ def _run_doctor_patch(ide_name: str):
     """Run 'observal doctor patch --harness <name>' as a subprocess."""
     optic.trace("ide_name={}", ide_name)
     import subprocess
-    import sys
+
+    from observal_cli.shared.launcher import module_subprocess
 
     try:
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        # -X utf8: -I ignores PYTHONIOENCODING, and the output is decoded as UTF-8 below.
+        command, env = module_subprocess(
+            "observal_cli.main", "doctor", "patch", "--harness", ide_name, options=("-X", "utf8")
+        )
+        env["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
-            [sys.executable, "-m", "observal_cli.main", "doctor", "patch", "--harness", ide_name],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",

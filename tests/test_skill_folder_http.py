@@ -113,7 +113,7 @@ async def test_http_selected_skill_needs_capability_and_deliberate_rollout(monke
             assert before_rollout.status_code == 409
             assert before_rollout.json() == {"detail": CONTRACT["refusals"]["not_rolled_out_standalone"]["detail"]}
             monkeypatch.setattr("services.dynamic_settings.get_bool", AsyncMock(return_value=True))
-            unsupported = await client.post(url, json={**opted, "harness": "kiro"})
+            unsupported = await client.post(url, json={**opted, "harness": "cursor"})
             assert unsupported.status_code == 409
             assert unsupported.json() == {"detail": CONTRACT["refusals"]["unsupported_skills_harness"]["detail"]}
             selected = await client.post(url, json=opted)

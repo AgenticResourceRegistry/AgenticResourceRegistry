@@ -18,7 +18,10 @@ push session JSONL incrementally to the server.
 
 import hashlib
 import json
+import re
+import shutil
 import sys
+import tomllib
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -116,6 +119,7 @@ def doctor(
         checks = (
             ("Observal config", _check_observal_config),
             ("Claude Code", _check_claude_code),
+            ("Claude Code agent hooks", _check_claude_code_agent_hooks),
             ("Kiro", _check_kiro),
             ("Pi", _check_pi),
             ("Cursor", _check_cursor),
@@ -251,33 +255,60 @@ def _check_observal_config(issues: list, warnings: list):
             issues.append(f"Cannot reach Observal server at {server_url}: {e}")
 
 
+def _valid_claude_hook_entries(hooks: dict) -> bool:
+    """Validate traversed groups; leave unrelated non-list events untouched."""
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            if event in ("UserPromptSubmit", "Stop"):
+                return False
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                return False
+            handlers = group.get("hooks", [])
+            if not isinstance(handlers, list):
+                return False
+            for handler in handlers:
+                if (
+                    not isinstance(handler, dict)
+                    or not isinstance(handler.get("command", ""), str)
+                    or not isinstance(handler.get("url", ""), str)
+                ):
+                    return False
+    return True
+
+
 def _check_claude_code(issues: list, warnings: list):
     optic.trace("issues={}, warnings={}", issues, warnings)
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
         rprint("  [dim]No ~/.claude/settings.json found[/dim]")
+        if shutil.which("claude") or (settings_path.parent / "projects").is_dir():
+            warnings.append(
+                "Claude Code session push hooks not installed. "
+                "Run `observal doctor patch --harness claude-code` to inject them."
+            )
         return
 
     data = _load_json(settings_path)
     if data is None:
         issues.append(f"{settings_path}: not valid JSON.")
         return
+    if not isinstance(data.get("hooks", {}), dict) or not isinstance(data.get("env", {}), dict):
+        issues.append(f"{settings_path}: hooks and env must be JSON objects.")
+        return
+    if not _valid_claude_hook_entries(data.get("hooks", {})):
+        issues.append(f"{settings_path}: hooks contain malformed event entries.")
+        return
 
     if data.get("disableAllHooks"):
         issues.append(f"{settings_path}: `disableAllHooks` is true. Observal hooks will not fire.")
 
-    # Check if session push hooks are installed
-    hooks = data.get("hooks", {})
-    has_session_push = False
-    for event in ("UserPromptSubmit", "Stop"):
-        groups = hooks.get(event, [])
-        for g in groups:
-            for h in g.get("hooks", []):
-                if "observal_cli.hooks.session_push" in h.get("command", ""):
-                    has_session_push = True
-                    break
+    # Require both session delivery events, not merely one installed hook.
+    from observal_cli.harness.claude_code import ClaudeCodeAdapter
 
-    if not has_session_push:
+    hooks = data.get("hooks", {})
+    if ClaudeCodeAdapter().detect_hooks(settings_path.parent) != "installed":
         warnings.append(
             "Claude Code session push hooks not installed. "
             "Run `observal doctor patch --harness claude-code` to inject them."
@@ -299,6 +330,56 @@ def _check_claude_code(issues: list, warnings: list):
         warnings.append(
             "Legacy Observal hooks detected (old hook scripts). "
             "Run `observal doctor cleanup --harness claude-code` to remove them."
+        )
+
+
+def _check_claude_code_agent_hooks(issues: list, warnings: list):
+    """Agents pulled with --hooks=settings: tested Claude Code version and a working gate interpreter.
+
+    A warning after an untested Claude Code upgrade is not proof the gate still
+    behaves: the gate depends on recorded hook-input behaviour.
+    """
+    from observal_cli import agent_hooks
+    from observal_cli.lockfile import read_registry_lockfile
+
+    try:
+        _, registry = read_registry_lockfile()
+    except (OSError, RuntimeError):
+        rprint("  [dim]Lockfile unreadable; agent hooks not checked[/dim]")
+        return
+    section = registry.get("harnesses", {}).get("claude-code", {}) if isinstance(registry, dict) else {}
+    agents = section.get("agents") if isinstance(section, dict) else None
+    gated = [
+        agent
+        for agent in (agents if isinstance(agents, list) else [])
+        if isinstance(agent, dict) and agent.get("hook_placement") == "settings"
+    ]
+    if not gated:
+        rprint("  [dim]No agent hooks placed in settings.json[/dim]")
+        return
+    version = agent_hooks.claude_code_version()
+    if not agent_hooks.is_tested_version(version):
+        found = f"Claude Code {version}" if version else "no Claude Code version"
+        warnings.append(
+            f"{len(gated)} agent(s) have hooks gated in settings.json, which were tested only with Claude Code "
+            f"{agent_hooks.tested_range()}; found {found}. They may not run as expected. "
+            "Pull them with --hooks=frontmatter to move the hooks back to the agent file."
+        )
+    missing = sorted(
+        {
+            str(agent.get("name") or agent.get("id") or "?")
+            for agent in gated
+            for component in (agent.get("components") if isinstance(agent.get("components"), list) else [])
+            if isinstance(component, dict)
+            and component.get("hook_placement") == agent_hooks.GATED_PLACEMENT
+            and isinstance(component.get("hook_gate_python"), str)
+            and not Path(component["hook_gate_python"]).exists()
+        }
+    )
+    if missing:
+        warnings.append(
+            f"Gated agent hooks point at a Python interpreter that no longer exists (agents: {', '.join(missing)}). "
+            "Pull those agents again to refresh the hooks."
         )
 
 
@@ -338,13 +419,10 @@ def _check_kiro(issues: list, warnings: list):
 
 
 def _check_pi(issues: list, warnings: list):
-    """Check whether the Pi telemetry extension (npm or local) is current."""
+    """Check whether the Pi telemetry extension is current."""
     optic.debug("_check_pi")
     try:
         status = pi_extension.check_status()
-    except json.JSONDecodeError:
-        issues.append(f"{pi_extension.settings_path()}: not valid JSON.")
-        return
     except (OSError, ValueError, TypeError) as exc:
         issues.append(f"Pi telemetry extension: {exc}")
         return
@@ -421,14 +499,52 @@ def _check_codex(issues: list, warnings: list):
             "Codex session push hooks not installed. Run `observal doctor patch --harness codex` to inject them."
         )
 
-    # Check codex_hooks flag
     if config_path.exists():
         try:
-            content = config_path.read_text()
-            if "codex_hooks = false" in content:
-                issues.append(f"{config_path}: `codex_hooks = false`. Observal hooks will not fire.")
+            content = config_path.read_text(encoding="utf-8")
         except OSError as error:
             issues.append(f"{config_path}: cannot read Codex configuration: {error}")
+        else:
+            if _codex_hooks_disabled(content):
+                issues.append(f"{config_path}: hooks are turned off under [features]. Observal hooks will not fire.")
+            if _without_stale_codex_hooks_key(content) != content:
+                warnings.append(
+                    f"{config_path}: the top-level `codex_hooks` key is not a Codex setting, so Codex warns on "
+                    "every run. Run `observal doctor patch --harness codex` to remove it."
+                )
+
+
+def _codex_hooks_disabled(config_text: str) -> bool:
+    """Return whether Codex config turns hooks off.
+
+    Hooks are on by default since they became stable. ``[features].hooks`` turns them
+    off, and Codex still reads the older name ``codex_hooks`` in that table.
+    """
+    try:
+        features = tomllib.loads(config_text).get("features")
+    except tomllib.TOMLDecodeError:
+        return False
+    if not isinstance(features, dict):
+        return False
+    return features.get("hooks") is False or features.get("codex_hooks") is False
+
+
+def _without_stale_codex_hooks_key(config_text: str) -> str:
+    """Drop the top-level ``codex_hooks`` key that earlier ``doctor patch`` runs wrote.
+
+    Codex never read it there: the flag only exists under ``[features]``.
+    """
+    try:
+        has_key = "codex_hooks" in tomllib.loads(config_text)
+    except tomllib.TOMLDecodeError:
+        has_key = False
+    if not has_key:
+        # Nothing to drop; also never rewrite a file we cannot parse or text inside a multiline string.
+        return config_text
+    first_table = re.search(r"^\s*\[", config_text, re.MULTILINE)
+    head_end = first_table.start() if first_table else len(config_text)
+    head = re.sub(r"^codex_hooks\s*=.*(?:\n|$)", "", config_text[:head_end], flags=re.MULTILINE)
+    return head + config_text[head_end:]
 
 
 def _check_copilot(issues: list, warnings: list):
@@ -965,9 +1081,7 @@ def _cleanup_kiro_hook_file(hooks_dir: Path, dry_run: bool) -> bool:
 def _cleanup_pi(dry_run: bool) -> bool:
     """Remove an Observal-managed local Pi extension install.
 
-    Never touches an npm:observal-pi registration (that's the user's own
-    choice, not something Observal installed) and never touches a local
-    file that isn't Observal-managed.
+    Never touches a local file that isn't Observal-managed.
     """
     rprint("[cyan]Pi[/cyan]")
     changed = pi_extension.remove(dry_run=dry_run)
@@ -1263,7 +1377,16 @@ def _patch_claude_code(dry_run: bool) -> bool:
     rprint("[cyan]Claude Code - session push hooks[/cyan]")
 
     settings_path = Path.home() / ".claude" / "settings.json"
-    if not settings_path.exists():
+    if settings_path.exists():
+        current = _load_json(settings_path)
+        if (
+            current is None
+            or not isinstance(current.get("hooks", {}), dict)
+            or not isinstance(current.get("env", {}), dict)
+            or not _valid_claude_hook_entries(current.get("hooks", {}))
+        ):
+            raise ValueError(f"Cannot patch invalid Claude Code settings: {settings_path}")
+    else:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
     desired_hooks = get_desired_hooks()
@@ -1368,7 +1491,6 @@ def _patch_kiro_hook_file(config_dir: Path, dry_run: bool) -> bool:
 def _patch_cursor(dry_run: bool) -> bool:
     """Install session push hooks into ~/.cursor/hooks.json."""
     optic.trace("dry_run={}", dry_run)
-    import sys
 
     rprint("[cyan]Cursor - session push hooks[/cyan]")
 
@@ -1378,8 +1500,11 @@ def _patch_cursor(dry_run: bool) -> bool:
         return False
 
     # Use the current interpreter (from the observal CLI's venv) so that
-    # httpx and other dependencies are available when Cursor fires the hook.
-    cmd = f"{sys.executable} -m observal_cli.hooks.session_push --harness cursor"
+    # httpx and other dependencies are available when Cursor fires the hook,
+    # with PYTHONPATH when it cannot import observal_cli on its own.
+    from observal_cli.shared.launcher import module_command
+
+    cmd = f"{module_command('observal_cli.hooks.session_push')} --harness cursor"
 
     desired = {
         "version": 1,
@@ -1472,12 +1597,11 @@ _PI_ACTION_VERBS = {
     "adopt": ("Would record install metadata for", "Recorded install metadata for"),
     "migrate": ("Would migrate", "Migrated"),
     "restore": ("Would restore", "Restored"),
-    "dedupe": ("Would remove the duplicate", "Removed the duplicate"),
 }
 
 
 def _patch_pi(dry_run: bool) -> bool:
-    """Install or refresh the bundled telemetry extension, when npm isn't configured."""
+    """Install or refresh the bundled telemetry extension."""
     optic.trace("dry_run={}", dry_run)
     rprint("[cyan]Pi - session telemetry extension[/cyan]")
 
@@ -1488,10 +1612,6 @@ def _patch_pi(dry_run: bool) -> bool:
     if not result.changed:
         if status.state == pi_extension.NOT_DETECTED:
             rprint("  [dim]No ~/.pi/agent/ directory - skipping[/dim]")
-        elif status.state in (pi_extension.NPM_CURRENT, pi_extension.NPM_UNPINNED, pi_extension.NPM_STALE):
-            rprint("  [dim]npm:observal-pi is configured - Observal does not install a local extension[/dim]")
-            if status.message:
-                rprint(f"  [yellow]{esc(status.message)}[/yellow]")
         elif status.state == pi_extension.UNMANAGED:
             rprint(f"  [yellow]{esc(status.message)}[/yellow]")
         else:
@@ -1506,17 +1626,11 @@ def _patch_pi(dry_run: bool) -> bool:
         rprint(f"  [dim]{kept} the previous file at {esc(backup)}[/dim]")
     if not dry_run and action != "adopt":
         rprint("  [dim]Restart pi or run /reload to activate[/dim]")
-    if action == "dedupe" and not dry_run:
-        # The duplicate warning absorbed any stale-npm reminder. Now that the
-        # local copy is gone, re-read the state so that reminder still lands.
-        remaining = pi_extension.check_status()
-        if remaining.message:
-            rprint(f"  [yellow]{esc(remaining.message)}[/yellow]")
     return True
 
 
 def _patch_codex(dry_run: bool) -> bool:
-    """Install session push hooks into ~/.codex/hooks.json and enable codex_hooks flag."""
+    """Install session push hooks into ~/.codex/hooks.json."""
     optic.debug("_patch_codex: dry_run={}", dry_run)
     from observal_cli.harness_specs.codex_hooks_spec import build_codex_hooks
 
@@ -1550,16 +1664,15 @@ def _patch_codex(dry_run: bool) -> bool:
             needs_update = True
             break
 
-    # Also check if codex_hooks flag needs enabling
-    needs_flag = False
-    if config_path.exists():
-        content = config_path.read_text()
-        if "codex_hooks" not in content or "codex_hooks = false" in content:
-            needs_flag = True
-    else:
-        needs_flag = True
+    config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    cleaned_config = _without_stale_codex_hooks_key(config_text)
+    if _codex_hooks_disabled(config_text):
+        rprint(
+            f"  [yellow]Hooks are turned off under {esc('[features]')} in {esc(config_path)}; "
+            "Observal hooks will not fire.[/yellow]"
+        )
 
-    if not needs_update and not needs_flag:
+    if not needs_update and cleaned_config == config_text:
         rprint("  [dim]Already up to date[/dim]")
         return False
 
@@ -1586,22 +1699,11 @@ def _patch_codex(dry_run: bool) -> bool:
         verb = "Would install" if dry_run else "Installed"
         rprint(f"  {verb} hooks in {esc(hooks_path)}")
 
-    # Enable codex_hooks flag in config.toml
-    if needs_flag:
+    if cleaned_config != config_text:
         if not dry_run:
-            codex_dir.mkdir(parents=True, exist_ok=True)
-            if config_path.exists():
-                content = config_path.read_text()
-                if "codex_hooks = false" in content:
-                    content = content.replace("codex_hooks = false", "codex_hooks = true")
-                elif "codex_hooks" not in content:
-                    content = f"codex_hooks = true\n{content}"
-                atomic_write(config_path, content)
-            else:
-                atomic_write(config_path, "codex_hooks = true\n")
-
-        verb = "Would enable" if dry_run else "Enabled"
-        rprint(f"  {verb} codex_hooks flag in {esc(config_path)}")
+            atomic_write(config_path, cleaned_config)
+        verb = "Would remove" if dry_run else "Removed"
+        rprint(f"  {verb} the stale codex_hooks key from {esc(config_path)}")
 
     return True
 

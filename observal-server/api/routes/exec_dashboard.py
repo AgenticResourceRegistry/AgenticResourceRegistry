@@ -511,7 +511,7 @@ class TopAgentScored(BaseModel):
 
 @router.get("/top-agents", response_model=list[TopAgentScored])
 async def get_top_agents(
-    limit: int = Query(10, le=50),
+    limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
@@ -1124,7 +1124,7 @@ class DeveloperBreakdownResponse(BaseModel):
 
 @router.get("/developer-breakdown", response_model=DeveloperBreakdownResponse)
 async def get_developer_breakdown(
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ):

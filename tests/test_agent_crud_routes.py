@@ -31,7 +31,10 @@ from schemas.agent import (
     SuccessCriteria,
     SuccessMetric,
 )
+from services import harness_capability_inference as inference
 from services.teamspace import PublishTarget
+
+pytestmark = pytest.mark.usefixtures("no_open_review")
 
 NOW = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
 USER_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
@@ -180,6 +183,8 @@ def _result(*, scalar=None, scalar_rows: list | None = None, rows: list | None =
 def _db(*results):
     db = MagicMock()
     db.execute = AsyncMock(side_effect=list(results))
+    db.scalar = AsyncMock(return_value=None)
+    db.refresh = AsyncMock()
     db.add = MagicMock()
     db.delete = AsyncMock()
     db.flush = AsyncMock()
@@ -274,14 +279,16 @@ def boundaries(monkeypatch):
     statuses = AsyncMock(return_value={})
     validate_mcps = AsyncMock(return_value=[])
     identity_exists = AsyncMock(return_value=False)
+    submit = AsyncMock(return_value=SimpleNamespace(number=42))
 
     monkeypatch.setattr(crud, "datetime", _FixedDateTime)
+    monkeypatch.setattr(crud, "submit_for_review", submit)
     monkeypatch.setattr(crud, "resolve_publish_target", publish_target)
     monkeypatch.setattr(crud, "emit_registry_event", emit)
     monkeypatch.setattr(crud, "invalidate_namespace", invalidate)
     monkeypatch.setattr(crud, "validate_mcp_command", validate_command)
-    monkeypatch.setattr(crud, "infer_required_features", MagicMock(return_value=["mcp_servers"]))
-    monkeypatch.setattr(crud, "compute_supported_harnesses", MagicMock(return_value=["kiro"]))
+    monkeypatch.setattr(inference, "infer_required_features", MagicMock(return_value=["mcp_servers"]))
+    monkeypatch.setattr(inference, "compute_supported_harnesses", MagicMock(return_value=["codex", "kiro"]))
     monkeypatch.setattr(crud, "_resolve_component_names", names)
     monkeypatch.setattr(crud, "_resolve_component_identities", identities)
     monkeypatch.setattr(crud, "_resolve_component_statuses", statuses)
@@ -310,6 +317,7 @@ def boundaries(monkeypatch):
         statuses=statuses,
         validate_mcps=validate_mcps,
         identity_exists=identity_exists,
+        submit=submit,
     )
 
 
@@ -421,12 +429,14 @@ async def test_create_team_agent_with_typed_components_maps_response_and_audit(b
         TEAM_ID,
         True,
     )
-    assert version.status == AgentStatus.approved
-    assert version.reviewed_by == USER_ID
-    assert version.reviewed_at == NOW
+    assert version.status == AgentStatus.pending
+    assert version.reviewed_by is None
+    assert version.reviewed_at is None
+    assert response.review_number == 42 and response.review_url == "/review/42"
+    boundaries.submit.assert_awaited_once_with(db, "agent", new_agent, version, USER_ID)
     assert version.success_criteria == criteria.model_dump()
     assert version.required_capabilities == ["mcp_servers"]
-    assert version.inferred_supported_harnesses == ["kiro"]
+    assert version.inferred_supported_harnesses == ["codex", "kiro"]
     assert [(link.component_type, link.resolved_version, link.order_index) for link in links] == [
         ("mcp", "2.0.0", 0),
         ("skill", "3.0.0", 1),
@@ -857,7 +867,7 @@ async def test_update_typed_components_refreshes_features_snapshot_and_response(
     assert agent.external_mcps == [{"name": "local", "command": "python", "args": ["main.py"], "env": {}, "url": None}]
     assert agent.latest_version.success_criteria == criteria.model_dump()
     assert agent.required_capabilities == ["mcp_servers"]
-    assert agent.inferred_supported_harnesses == ["kiro"]
+    assert agent.inferred_supported_harnesses == ["codex", "kiro"]
     assert db.delete.await_args_list[0].args[0] is old_mcp
     assert db.delete.await_args_list[1].args[0] is old_skill
     added = [call.args[0] for call in db.add.call_args_list]
@@ -1101,6 +1111,17 @@ async def test_restore_detects_active_identity_collision(boundaries, monkeypatch
 
     assert caught.value.status_code == 409
     assert caught.value.detail == "Agent 'alice/renamed-agent' already exists. Restore with a new name."
+
+
+async def test_restore_rejects_a_reserved_slug_as_bad_input(boundaries, monkeypatch):
+    monkeypatch.setattr(crud, "_load_agent", AsyncMock(return_value=_agent(deleted_at=NOW)))
+    db = _db()
+
+    with pytest.raises(HTTPException) as caught:
+        await crud.restore_deleted_agent(str(AGENT_ID), AgentRestoreRequest(name="draft"), db=db, current_user=_user())
+
+    assert (caught.value.status_code, caught.value.detail) == (422, "Slug 'draft' is reserved")
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

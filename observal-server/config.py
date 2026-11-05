@@ -43,8 +43,9 @@ class Settings(BaseSettings):
     JWT_KEY_DIR: str = "~/.observal/keys"
     JWT_KEY_PASSWORD: str | None = None
 
-    # Outbound Git authentication
+    # Outbound Git authentication. No host receives the shared token by default.
     GIT_CLONE_TOKEN: str | None = None
+    GIT_CLONE_TOKEN_HOSTS: str = ""  # comma-separated exact HTTPS hostnames (optionally host:port)
 
     # Public base URL GitHub uses to reach /api/v1/webhooks/* when the rest of the
     # deployment is private (for example a dedicated webhook load balancer).

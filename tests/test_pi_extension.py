@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for observal_cli.pi_extension: the npm/local install state machine."""
+"""Tests for observal_cli.pi_extension: the local install state machine."""
 
 from __future__ import annotations
 
@@ -61,80 +61,6 @@ class TestCheckStatus:
         assert status.state == pi_extension.NOT_INSTALLED
         assert status.action == "install"
 
-    def test_npm_string_entry_pinned_and_current_skips_local(self, tmp_path: Path):
-        write_json(
-            tmp_path / ".pi/agent/settings.json",
-            {"packages": [f"npm:observal-pi@{CLI_VERSION}"]},
-        )
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_CURRENT
-        assert status.action is None
-
-    def test_npm_dict_entry_is_recognized(self, tmp_path: Path):
-        write_json(
-            tmp_path / ".pi/agent/settings.json",
-            {"packages": [{"source": f"npm:observal-pi@{CLI_VERSION}"}]},
-        )
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_CURRENT
-
-    def test_npm_unpinned_entry_is_not_flagged_stale(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_UNPINNED
-        assert status.message is None
-
-    def test_npm_pinned_older_than_cli_is_stale(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi@0.0.1"]})
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_STALE
-        assert "pi update npm:observal-pi" in status.message
-        assert status.action is None  # never installs locally, even though stale
-
-    def test_npm_with_tracked_local_leftover_is_a_duplicate(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": [f"npm:observal-pi@{CLI_VERSION}"]})
-        extension = pi_extension.extension_path(tmp_path)
-        extension.parent.mkdir(parents=True)
-        extension.write_text(pi_extension.extension_source(), encoding="utf-8")
-        write_json(pi_extension.manifest_path(tmp_path), {"managed": True, "version": CLI_VERSION})
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_DUPLICATE
-        assert status.action == "dedupe"
-        assert "sent twice" in status.message
-
-    def test_npm_with_untracked_observal_leftover_is_a_duplicate(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        write_legacy_install(tmp_path)
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_DUPLICATE
-        assert status.action == "dedupe"
-
-    def test_npm_duplicate_recognized_by_manifest_when_header_is_gone(self, tmp_path: Path):
-        # The header match is only a fallback. A tracked install whose body no
-        # longer carries it is still ours, on the manifest's word alone.
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = pi_extension.extension_path(tmp_path)
-        extension.parent.mkdir(parents=True)
-        extension.write_text("// header removed by hand\nconst x = 1;\n", encoding="utf-8")
-        write_json(pi_extension.manifest_path(tmp_path), {"managed": True, "version": CLI_VERSION})
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_DUPLICATE
-        assert status.action == "dedupe"
-
     def test_a_file_that_is_not_utf8_is_left_alone(self, tmp_path: Path):
         # Everything Observal ships is UTF-8, so an undecodable file is someone
         # else's. It must be reported, not raise, and never be written to.
@@ -160,35 +86,6 @@ class TestCheckStatus:
 
         assert status.state == pi_extension.DRIFTED
         assert status.action == "restore"
-
-    def test_npm_with_foreign_local_file_is_not_a_duplicate(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = pi_extension.extension_path(tmp_path)
-        extension.parent.mkdir(parents=True)
-        extension.write_text("someone else's extension", encoding="utf-8")
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_UNPINNED
-        assert status.action is None
-
-    def test_duplicate_message_also_carries_the_stale_npm_reminder(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi@0.0.1"]})
-        write_legacy_install(tmp_path)
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NPM_DUPLICATE
-        assert "sent twice" in status.message
-        assert "pi update npm:observal-pi" in status.message
-
-    def test_unrelated_npm_packages_do_not_trigger_npm_mode(self, tmp_path: Path):
-        (tmp_path / ".pi/agent").mkdir(parents=True)
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:@observal/pi-insights"]})
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.state == pi_extension.NOT_INSTALLED
 
     def test_local_adopts_pre_manifest_install_when_content_matches(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
@@ -241,17 +138,6 @@ class TestCheckStatus:
         status = pi_extension.check_status(home=tmp_path)
 
         assert status.state == pi_extension.MIGRATABLE
-
-    def test_npm_mode_removes_rather_than_migrates_a_local_file(self, tmp_path: Path):
-        # npm still wins in the sense that matters: Observal never adopts or
-        # refreshes the local copy as an install. It removes it as a duplicate.
-        write_legacy_install(tmp_path)
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-
-        status = pi_extension.check_status(home=tmp_path)
-
-        assert status.action == "dedupe"
-        assert status.action != "migrate"
 
     def test_local_manifest_stale_reports_both_versions(self, tmp_path: Path):
         extension = tmp_path / ".pi/agent/extensions/observal.ts"
@@ -311,14 +197,6 @@ class TestCheckStatus:
 
         assert status.state == pi_extension.UNMANAGED
 
-    def test_invalid_settings_json_raises(self, tmp_path: Path):
-        settings = tmp_path / ".pi/agent/settings.json"
-        settings.parent.mkdir(parents=True)
-        settings.write_text("[]", encoding="utf-8")  # valid JSON, not an object
-
-        with pytest.raises(ValueError):
-            pi_extension.check_status(home=tmp_path)
-
 
 class TestInstallOrRefresh:
     def test_creates_parent_directories_on_first_install(self, tmp_path: Path):
@@ -341,14 +219,6 @@ class TestInstallOrRefresh:
 
         assert result.changed is True
         assert result.action == "install"
-        assert not pi_extension.extension_path(tmp_path).exists()
-
-    def test_noop_when_npm_is_configured(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-
-        result = pi_extension.install_or_refresh(dry_run=False, home=tmp_path)
-
-        assert (result.changed, result.action) == (False, None)
         assert not pi_extension.extension_path(tmp_path).exists()
 
     def test_noop_when_file_is_unmanaged(self, tmp_path: Path):
@@ -421,51 +291,6 @@ class TestInstallOrRefresh:
 
         extensions_dir = pi_extension.extension_path(tmp_path).parent
         assert [path.name for path in extensions_dir.glob("*.ts")] == ["observal.ts"]
-
-    def test_dedupe_removes_the_local_copy_and_keeps_a_backup(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = write_legacy_install(tmp_path)
-        write_json(pi_extension.manifest_path(tmp_path), {"managed": True, "version": CLI_VERSION})
-        previous = extension.read_text(encoding="utf-8")
-        backup = pi_extension.backup_path(tmp_path)
-
-        result = pi_extension.install_or_refresh(dry_run=False, home=tmp_path)
-
-        assert (result.changed, result.action) == (True, "dedupe")
-        assert not extension.exists()
-        assert not pi_extension.manifest_path(tmp_path).exists()
-        assert backup.read_text(encoding="utf-8") == previous
-
-    def test_dedupe_dry_run_removes_nothing(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = write_legacy_install(tmp_path)
-
-        result = pi_extension.install_or_refresh(dry_run=True, home=tmp_path)
-
-        assert (result.changed, result.action) == (True, "dedupe")
-        assert extension.exists()
-        assert not pi_extension.backup_path(tmp_path).exists()
-
-    def test_dedupe_leaves_npm_configuration_intact(self, tmp_path: Path):
-        settings = tmp_path / ".pi/agent/settings.json"
-        write_json(settings, {"packages": ["npm:observal-pi"], "other": "kept"})
-        write_legacy_install(tmp_path)
-
-        pi_extension.install_or_refresh(dry_run=False, home=tmp_path)
-
-        assert read_json(settings) == {"packages": ["npm:observal-pi"], "other": "kept"}
-        assert pi_extension.check_status(home=tmp_path).state == pi_extension.NPM_UNPINNED
-
-    def test_dedupe_never_touches_a_foreign_file(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = pi_extension.extension_path(tmp_path)
-        extension.parent.mkdir(parents=True)
-        extension.write_text("do not touch", encoding="utf-8")
-
-        result = pi_extension.install_or_refresh(dry_run=False, home=tmp_path)
-
-        assert (result.changed, result.action) == (False, None)
-        assert extension.read_text(encoding="utf-8") == "do not touch"
 
     def test_restore_rewrites_the_drifted_file_and_keeps_a_backup(self, tmp_path: Path):
         extension = pi_extension.extension_path(tmp_path)
@@ -566,13 +391,6 @@ class TestRemove:
         assert pi_extension.remove(dry_run=False, home=tmp_path) is True
         assert not extension.exists()
 
-    def test_removes_a_leftover_local_copy_in_npm_mode(self, tmp_path: Path):
-        write_json(tmp_path / ".pi/agent/settings.json", {"packages": ["npm:observal-pi"]})
-        extension = write_legacy_install(tmp_path)
-
-        assert pi_extension.remove(dry_run=False, home=tmp_path) is True
-        assert not extension.exists()
-
     def test_removing_a_pre_manifest_install_keeps_a_backup(self, tmp_path: Path):
         extension = write_legacy_install(tmp_path)
         previous = extension.read_text(encoding="utf-8")
@@ -606,13 +424,6 @@ class TestRemove:
         backups = list(extension.parent.glob("observal.ts.bak*"))
         assert backups and backups[0].read_text(encoding="utf-8") == edited
 
-    def test_leaves_npm_configuration_alone(self, tmp_path: Path):
-        settings = tmp_path / ".pi/agent/settings.json"
-        write_json(settings, {"packages": ["npm:observal-pi"]})
-
-        assert pi_extension.remove(dry_run=False, home=tmp_path) is False
-        assert read_json(settings)["packages"] == ["npm:observal-pi"]
-
     def test_leaves_unmanaged_file_alone(self, tmp_path: Path):
         extension = pi_extension.extension_path(tmp_path)
         extension.parent.mkdir(parents=True)
@@ -629,21 +440,3 @@ class TestRemove:
 
         assert pi_extension.remove(dry_run=True, home=tmp_path) is True
         assert extension.exists()
-
-
-class TestIsNpmConfigured:
-    def test_false_when_settings_file_is_absent(self, tmp_path: Path):
-        assert pi_extension.is_npm_configured(tmp_path) is False
-
-    def test_true_for_string_and_dict_entries(self, tmp_path: Path):
-        write_json(tmp_path / "settings.json", {"packages": [{"source": "npm:observal-pi@1.0.0"}]})
-        assert pi_extension.is_npm_configured(tmp_path) is True
-
-    def test_false_for_unrelated_packages(self, tmp_path: Path):
-        write_json(tmp_path / "settings.json", {"packages": ["npm:@observal/pi-insights"]})
-        assert pi_extension.is_npm_configured(tmp_path) is False
-
-    def test_false_when_settings_json_is_invalid(self, tmp_path: Path):
-        settings = tmp_path / "settings.json"
-        settings.write_text("{ not json", encoding="utf-8")
-        assert pi_extension.is_npm_configured(tmp_path) is False

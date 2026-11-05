@@ -3,7 +3,7 @@
 
 # AI Policy
 
-Observal welcomes the use of AI coding tools. They can meaningfully accelerate development and help contributors tackle complex changes. At the same time, we have zero tolerance for **slop**: unreviewed, low-effort output that wastes reviewer time and degrades the codebase.
+Agentic Resource Registry welcomes the use of AI coding tools. They can meaningfully accelerate development and help contributors tackle complex changes. At the same time, we have zero tolerance for **slop**: unreviewed, low-effort output that wastes reviewer time and degrades the codebase.
 
 This policy tells you what is expected when AI tools are part of your workflow.
 

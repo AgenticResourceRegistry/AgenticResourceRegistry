@@ -69,7 +69,12 @@ app = typer.Typer(
         "Examples:\n"
         "  observal scan\n"
         "  observal agent list\n"
-        "  observal registry mcp list"
+        "  observal registry mcp list\n\n"
+        "For agents: on a CLI/server version mismatch, run the command the error prints "
+        "(or `observal self upgrade --version <server version> --force --output json`) and re-check "
+        "`observal --version`. Only if that fails, install from the source repository: "
+        "`uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` for a -dev server, "
+        "or `...Observal@v<version>` for a release."
     ),
     no_args_is_help=True,
     rich_markup_mode="rich",
@@ -113,6 +118,24 @@ def main(
 
     # One-time local state migrations
     _try_lockfile_migration()
+
+    if ctx.invoked_subcommand != "auth":
+        _warn_if_login_expired()
+
+
+def _warn_if_login_expired() -> None:
+    """Say so when hooks found the login revoked; their session pushes are failing."""
+    from observal_cli.errors import machine_output_requested
+    from observal_cli.sessions.base import login_expired
+
+    if machine_output_requested() or not login_expired():
+        return
+    from rich.console import Console
+
+    Console(stderr=True).print(
+        "[yellow]Your Observal login was revoked or has expired (a web logout signs out every device), "
+        "so sessions are not being sent. Run `observal auth login` to resume.[/yellow]"
+    )
 
 
 def _migrate_legacy_mcp_configs() -> None:
@@ -219,6 +242,7 @@ from observal_cli.cmd_outdated import register_outdated
 from observal_cli.cmd_prompt import prompt_app
 from observal_cli.cmd_pull import register_pull
 from observal_cli.cmd_recommend import recommend_app
+from observal_cli.cmd_review import review_app
 from observal_cli.cmd_sandbox import sandbox_app
 from observal_cli.cmd_scan import register_scan
 from observal_cli.cmd_share import share_app
@@ -303,6 +327,7 @@ app.add_typer(inbox_app, name="inbox")
 app.add_typer(agent_app, name="agent")
 app.add_typer(share_app, name="share")
 app.add_typer(team_app, name="team")
+app.add_typer(review_app, name="review")
 app.add_typer(ops_app, name="ops")
 app.add_typer(admin_app, name="admin")
 app.add_typer(self_app, name="self")

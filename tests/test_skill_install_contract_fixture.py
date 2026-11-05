@@ -200,7 +200,12 @@ def test_server_bundle_fixture_binds_selected_files_modes_and_v2_digest():
         "external_mcps": [],
     }
     assert agent.lock["digest"] == lock_digest(documented_lock)
-    assert json.loads(agent.model_dump_json()) == example["agent"]["response"]
+    response = json.loads(agent.model_dump_json())
+    # The older frozen bundle fixture predates the request pin selectors; they
+    # default to no extra pins when omitted by the client.
+    assert response.pop("component_pins") == []
+    assert response.pop("selected_version") is None
+    assert response == example["agent"]["response"]
 
 
 @pytest.mark.parametrize(

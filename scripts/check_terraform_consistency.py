@@ -206,8 +206,7 @@ def check_env_coverage() -> tuple[list[str], list[str]]:
 
 # Env vars that Terraform injects but config.py doesn't read via Settings
 KNOWN_NON_CONFIG_VARS = {
-    "NEXT_PUBLIC_API_URL",  # consumed by web container, not config.py
-    "PORT",  # consumed by Next.js web container, not the API
+    "PORT",  # injected on the web task definition, not read by config.py
 }
 
 # Raw secrets used to build connection URLs, not injected as env vars

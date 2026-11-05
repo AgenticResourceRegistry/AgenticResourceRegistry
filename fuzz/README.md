@@ -3,7 +3,7 @@
 
 # Fuzzing
 
-Observal is fuzzed with [Atheris](https://github.com/google/atheris) and is being
+Agentic Resource Registry is fuzzed with [Atheris](https://github.com/google/atheris) and is being
 submitted to [Google OSS-Fuzz](https://google.github.io/oss-fuzz/) for continuous
 fuzzing; the upstream project is not live yet.
 The fuzz targets live here so they are versioned alongside the code they
@@ -116,11 +116,11 @@ cp -r fuzz/oss-fuzz oss-fuzz/projects/observal
 cd oss-fuzz
 
 python3 infra/helper.py build_image observal
-python3 infra/helper.py build_fuzzers observal /path/to/Observal   # builds this checkout
+python3 infra/helper.py build_fuzzers observal /path/to/AgenticResourceRegistry   # builds this checkout
 python3 infra/helper.py check_build observal
 python3 infra/helper.py run_fuzzer observal session_jsonl_fuzzer -- -runs=10000
 
-python3 infra/helper.py build_fuzzers --sanitizer coverage observal /path/to/Observal
+python3 infra/helper.py build_fuzzers --sanitizer coverage observal /path/to/AgenticResourceRegistry
 python3 infra/helper.py coverage observal --fuzz-target=session_jsonl_fuzzer
 ```
 

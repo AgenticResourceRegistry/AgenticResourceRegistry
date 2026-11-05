@@ -12,6 +12,7 @@ import tempfile
 from contextlib import nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -28,6 +29,7 @@ from observal_cli.constants import (
     VALID_HOOK_HANDLER_TYPES,
     VALID_HOOK_SCOPES,
 )
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import ErrorCategory, fail, load_json_object
 from observal_cli.prompts import select_one, text_input
 from observal_cli.render import (
@@ -43,6 +45,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
 
 hook_app = typer.Typer(
     help=(
@@ -99,7 +102,10 @@ def _validate_timeout(execution_mode: str, handler_config: dict) -> None:
 def hook_submit(
     from_file: str | None = typer.Option(None, "--from-file", "-f", help="Create from JSON file"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (hook ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (hook ID)"
+    ),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     script: str | None = typer.Option(None, "--script", help="Path to hook script file (content stored in registry)"),
     source_url: str | None = typer.Option(None, "--source-url", help="Git repo containing hook scripts"),
     source_ref: str | None = typer.Option(None, "--source-ref", help="Branch/tag to track (default: main)"),
@@ -144,11 +150,12 @@ def hook_submit(
         resolved = client.resolve_registry_reference("hook", submit_draft)
         submit_context = nullcontext() if output == "json" else spinner("Submitting draft for review...")
         with submit_context:
-            result = client.post(f"/api/v1/hooks/{resolved}/submit")
+            result = client.post(f"/api/v1/hooks/{resolved}/submit" + (f"?message={quote(message)}" if message else ""))
         if output == "json":
             output_json(result)
         else:
             rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+            print_review_link(result)
         return
 
     if from_file:
@@ -338,9 +345,11 @@ def hook_submit(
     if output == "json":
         output_json(result)
         return
-    message = "Draft saved" if draft else "Hook submitted"
-    rprint(f"[green]✓ {message}![/green] ID: [bold]{esc(result['id'])}[/bold]")
+    label = "Draft saved" if draft else "Hook submitted"
+    rprint(f"[green]✓ {label}![/green] ID: [bold]{esc(result['id'])}[/bold]")
     rprint(f"  Install: [cyan]observal registry hook install {esc(client.canonical_name(result))}[/cyan]")
+    if not draft:
+        print_review_link(result)
 
 
 @hook_app.command(name="list")
@@ -684,8 +693,18 @@ def hook_install(
             _atomic_write_text(cfg_file, config_content)
             rprint(f"  [green]✓[/green] Updated {esc(cfg_file)}")
 
+    from observal_cli.harness import ensure_loaded, get_adapter
     from observal_cli.lockfile import upsert_standalone
 
+    ensure_loaded()
+    try:
+        binding = get_adapter(harness).standalone_hook_binding(
+            config_path or "",
+            config_snippet if isinstance(config_snippet, dict) else {},
+            [(path, path.relative_to(project_root)) for path, _content, _executable in file_writes],
+        )
+    except KeyError:
+        binding = None
     try:
         upsert_standalone(
             harness,
@@ -701,6 +720,7 @@ def hook_install(
             namespace=listing.get("namespace"),
             slug=listing.get("slug"),
             local_name=local_name,
+            hook_binding=binding,
         )
     except PermissionError as error:
         fail(
@@ -813,7 +833,10 @@ def hook_edit(
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/hooks/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("hook", "hooks", resolved, result)
     if output == "json":
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry hook submit --submit {result.get('id', '<id>')}")

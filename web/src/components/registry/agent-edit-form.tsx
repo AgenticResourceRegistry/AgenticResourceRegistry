@@ -40,7 +40,9 @@ import {
 import {
   useAgentValidation,
   useCreateAgentVersion,
+  useSubmitDraft,
   useUpdateAgent,
+  useUpdateDraft,
   useVersionSuggestions,
 } from "@/hooks/use-api";
 import type {
@@ -61,6 +63,7 @@ import { ValidationPanel } from "@/components/builder/validation-panel";
 import { COMPONENT_TYPES, REVERSE_TYPE_MAP, TYPE_MAP } from "@/components/registry/agent-component-constants";
 import { ComponentPicker } from "@/components/registry/component-picker";
 import { VersionBumpDialog } from "@/components/registry/version-bump-dialog";
+import { AUTO_MODEL } from "@/lib/agent-model";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -89,6 +92,7 @@ interface ComponentLink {
   component_type?: string;
   component_id?: string;
   mcp_id?: string;
+  config_override?: Record<string, unknown> | null;
 }
 
 
@@ -113,7 +117,7 @@ export function AgentEditForm({
   // Merge version-specific fields over base agent data
   const vd = versionDetail;
   const initialDescription = vd?.description ?? agent.description ?? "";
-  const initialModelName = vd?.model_name ?? agent.model_name ?? "";
+  const initialModelName = (vd?.model_name ?? agent.model_name ?? "").trim() || AUTO_MODEL;
   const initialModelsByIde = (vd?.models_by_harness ?? agent.models_by_harness ?? {}) as Record<string, string>;
   const initialPrompt = vd?.prompt ?? agent.prompt ?? "";
 
@@ -156,6 +160,13 @@ export function AgentEditForm({
 
   // ── Mutations ─────────────────────────────────────────────────
   const createVersion = useCreateAgentVersion();
+  const updateDraft = useUpdateDraft();
+  const submitDraft = useSubmitDraft();
+  // An unpublished version (draft, under review, changes requested, rejected) is amended in place:
+  // the version number stays and an open review gets the change as a new revision. Only an
+  // approved version needs a new release.
+  const amendInPlace = ["draft", "pending", "changes_requested", "rejected"].includes(agent.status ?? "");
+  const underReview = agent.status === "pending" || agent.status === "changes_requested";
   const updateAgent = useUpdateAgent();
   const { data: versionSuggestions } = useVersionSuggestions(agentId);
 
@@ -188,6 +199,7 @@ export function AgentEditForm({
           component_name: component.component_name,
           mcp_name: component.mcp_name,
           name: component.name,
+          config_override: component.config_override,
         }))
       : (agent.component_links ?? agent.mcp_links ?? []);
     const grouped: Record<string, RegistryItem[]> = {
@@ -199,7 +211,7 @@ export function AgentEditForm({
       const compId = comp.component_id ?? comp.mcp_id;
       const compName = comp.component_name ?? comp.mcp_name ?? comp.name ?? compId ?? "";
       if (grouped[pluralType] && compId) {
-        grouped[pluralType].push({ id: compId, name: compName });
+        grouped[pluralType].push({ id: compId, name: compName, ...(comp.config_override !== undefined ? { config_override: comp.config_override } : {}) });
       }
     }
     setSelectedComponents(grouped);
@@ -329,11 +341,11 @@ export function AgentEditForm({
   // Only a confirmed release may refresh pins. Drafts always keep them, whatever
   // was left ticked in a cancelled release dialog.
   function buildVersionBody(version: string, refresh = false) {
-    const components: { component_type: string; component_id: string }[] = [];
+    const components: { component_type: string; component_id: string; config_override?: Record<string, unknown> | null }[] = [];
     for (const [type, items] of Object.entries(selectedComponents)) {
       const singularType = TYPE_MAP[type] ?? type;
       for (const item of items) {
-        components.push({ component_type: singularType, component_id: item.id });
+        components.push({ component_type: singularType, component_id: item.id, ...(item.config_override !== undefined ? { config_override: item.config_override as Record<string, unknown> | null } : {}) });
       }
     }
 
@@ -343,7 +355,7 @@ export function AgentEditForm({
       version,
       description: description.trim(),
       prompt: prompt.trim(),
-      model_name: modelName,
+      model_name: modelName.trim() || AUTO_MODEL,
       model_config_json: {},
       models_by_harness: modelsByHarness,
       external_mcps: [],
@@ -377,6 +389,34 @@ export function AgentEditForm({
         selectedComponents,
         successCriteria,
       };
+      setIsDirty(false);
+      onSuccess?.();
+    } catch {
+      // toast handled by mutation
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleAmend() {
+    const criteriaError = validateSuccessCriteria(successCriteria);
+    if (criteriaError) {
+      toast.error(criteriaError);
+      return;
+    }
+    setPublishing(true);
+    try {
+      const { description: d, prompt: p, model_name, models_by_harness, components, success_criteria } =
+        buildVersionBody(currentVersion);
+      const saved = await updateDraft.mutateAsync({
+        id: agentId,
+        body: { description: d, prompt: p, model_name, models_by_harness, components, success_criteria },
+      });
+      // Under review, saving here is the author's resubmission: it answers requested changes.
+      // A pending save that pushed no revision changed nothing, so there is nothing to resubmit.
+      const unchangedPending = agent.status === "pending" && saved.review_revision == null;
+      if (underReview && !unchangedPending) await submitDraft.mutateAsync(agentId);
+      initialStateRef.current = { description, modelName, modelsByHarness, prompt, selectedComponents, successCriteria };
       setIsDirty(false);
       onSuccess?.();
     } catch {
@@ -442,7 +482,7 @@ export function AgentEditForm({
       <section className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="agent-name" className="text-sm font-medium">
-            Agent Name
+            Agent File Name
             <span className="ml-1 text-destructive">*</span>
           </Label>
           <Input
@@ -452,7 +492,7 @@ export function AgentEditForm({
             className="max-w-md bg-muted/40 text-muted-foreground"
           />
           <p className="text-xs text-muted-foreground">
-            Agent name cannot be changed after creation.
+            Agent File name cannot be changed after creation.
           </p>
         </div>
 
@@ -462,7 +502,7 @@ export function AgentEditForm({
           </Label>
           <Textarea
             id="agent-description"
-            placeholder="What does this agent do?"
+            placeholder="What does this Agent File do?"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
@@ -483,7 +523,7 @@ export function AgentEditForm({
       {/* Agent Prompt */}
       <section className="space-y-2">
         <Label htmlFor="agent-prompt" className="text-sm font-medium">
-          Agent Prompt
+          Agent File Prompt
           <span className="ml-1 text-destructive">*</span>
         </Label>
         <Textarea
@@ -512,7 +552,7 @@ export function AgentEditForm({
             Components
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Select the MCPs, skills, hooks, prompts, and sandboxes for this agent. Drag to reorder.
+            Select the MCPs, skills, hooks, prompts, and sandboxes for this Agent File. Drag to reorder.
           </p>
         </div>
 
@@ -574,7 +614,19 @@ export function AgentEditForm({
       <Separator />
 
       {/* Actions */}
+      {amendInPlace && (
+        <p className="text-xs text-muted-foreground">
+          v{currentVersion} is not published yet, so changes are saved to it in place
+          {underReview ? " and reviewers see them as a new revision of the same review" : ""}. No new version is created.
+        </p>
+      )}
       <div className="flex items-center gap-3">
+        {amendInPlace ? (
+          <Button onClick={handleAmend} disabled={publishing || !isDirty} className="min-w-[160px]">
+            {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            {underReview ? "Save & update review" : "Save changes"}
+          </Button>
+        ) : (<>
         <Button
           onClick={() => setShowVersionDialog(true)}
           disabled={publishing || savingDraft || !isDirty}
@@ -601,6 +653,7 @@ export function AgentEditForm({
           )}
           Save Draft
         </Button>
+        </>)}
 
         <Button
           variant="ghost"

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Authenticated JSON escape hatch for Observal API endpoints."""
@@ -6,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any
 from urllib.parse import unquote
@@ -20,10 +22,25 @@ from observal_cli.render import OutputMode, esc, output_json
 
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _NO_BODY = object()
+# Git Bash (MSYS) rewrites a leading-slash argument into a Windows path before the CLI sees it:
+# /api/v1/mcps becomes C:/Program Files/Git/api/v1/mcps.
+_MSYS_CONVERTED = re.compile(r"^[A-Za-z]:/.*?(/api/v1/.*)$")
+
+
+def _undo_msys_path(value: str) -> str:
+    match = _MSYS_CONVERTED.match(value.strip().replace("\\", "/"))
+    if not match:
+        return value
+    typer.echo(
+        "Note: Git Bash rewrote the API path into a Windows path; using "
+        f"{match.group(1)}. Write api/v1/... without the leading slash to avoid this.",
+        err=True,
+    )
+    return match.group(1)
 
 
 def _api_path(value: str) -> str:
-    path = "/" + value.strip().lstrip("/")
+    path = "/" + _undo_msys_path(value).strip().lstrip("/")
     decoded = path
     while True:
         expanded = unquote(decoded)
@@ -42,7 +59,7 @@ def _api_path(value: str) -> str:
             "API path must be a canonical /api/v1 endpoint without a query string.",
             operation="Call Observal API",
             resource="API path",
-            remediation="Pass query values with --param KEY=VALUE.",
+            remediation="Pass query values with --param KEY=VALUE. The leading slash is optional: api/v1/teams works.",
         )
     return path
 
@@ -108,7 +125,7 @@ def _render_response(response: Any) -> None:
 
 def api_request(
     method: str = typer.Argument(help="HTTP method: GET, POST, PUT, PATCH, or DELETE."),
-    path: str = typer.Argument(help="Relative /api/v1 endpoint path."),
+    path: str = typer.Argument(help="Relative /api/v1 endpoint path; the leading slash is optional."),
     from_file: str | None = typer.Option(None, "--from-file", "-f", help="Read a JSON request body."),
     param: list[str] | None = typer.Option(None, "--param", help="Query parameter as KEY=VALUE; repeatable."),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json."),

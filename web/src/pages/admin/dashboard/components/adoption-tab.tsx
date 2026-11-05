@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -43,7 +44,7 @@ export function AdoptionTab() {
         <StatCard label="AI Adoption" value={`${adoption?.current_pct ?? 0}%`} subtitle="of users active" />
         <StatCard label="Active Users" value={adoption?.active_users ?? 0} subtitle={`of ${adoption?.total_users ?? 0} total`} />
         <StatCard label="Departments" value={adoption?.departments_covered ?? 0} subtitle="with AI usage" />
-        <StatCard label="Active Agents" value={agents?.active ?? 0} subtitle={`of ${agents?.total ?? 0} total`} />
+        <StatCard label="Active Agent Files" value={agents?.active ?? 0} subtitle={`of ${agents?.total ?? 0} total`} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -51,7 +52,7 @@ export function AdoptionTab() {
 
 
         <div className="rounded-xl bg-card shadow-sm p-5">
-          <h3 className="text-sm font-medium mb-4">Agents by Category</h3>
+          <h3 className="text-sm font-medium mb-4">Agent Files by Category</h3>
           <div className="flex items-center gap-4 mb-4 text-xs text-muted-foreground">
             <span><strong className="text-foreground">{agents?.published ?? 0}</strong> published</span>
             <span><strong className="text-foreground">{agents?.in_development ?? 0}</strong> in dev</span>
@@ -64,7 +65,7 @@ export function AdoptionTab() {
               </div>
             ))}
             {(!agents?.by_category || agents.by_category.length === 0) && (
-              <p className="text-xs text-muted-foreground">No agents yet.</p>
+              <p className="text-xs text-muted-foreground">No Agent Files yet.</p>
             )}
           </div>
         </div>
@@ -72,7 +73,7 @@ export function AdoptionTab() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl bg-card shadow-sm p-5">
-          <h3 className="text-sm font-medium mb-4">Agent Usage by Category</h3>
+          <h3 className="text-sm font-medium mb-4">Agent File Usage by Category</h3>
           {usage && usage.length > 0 ? (
             <div className="space-y-3">
               {usage.slice(0, 8).map((item) => (

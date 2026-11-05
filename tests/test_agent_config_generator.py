@@ -10,13 +10,17 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 import yaml
 
+from services.config_generator import generate_config as generate_mcp_config
+from services.config_generator import versioned_mcp_listing
 from services.harness import generate_agent_config
 from services.harness.helpers import (
+    AliasCollisionError,
     _build_rules_content,
     _inject_agent_id,
     _model_name_to_frontmatter,
@@ -52,6 +56,77 @@ def _make_agent(
     return agent
 
 
+def test_selected_mcp_version_supplies_actual_command_to_claude_adapter():
+    latest = SimpleNamespace(
+        name="Probe",
+        namespace="first",
+        slug="probe",
+        version="2.0.0",
+        command="latest-program",
+        args=["latest"],
+        environment_variables=[],
+        headers=[],
+        transport="stdio",
+        url=None,
+        framework=None,
+        docker_image=None,
+        auto_approve=[],
+    )
+    old = SimpleNamespace(
+        version="1.0.0",
+        command="older-program",
+        args=["previous"],
+        environment_variables=[],
+        headers=[],
+        transport="stdio",
+        url=None,
+        framework=None,
+        docker_image=None,
+        auto_approve=[],
+    )
+    snippet = generate_mcp_config(versioned_mcp_listing(latest, old), "claude-code", local_name="probe")
+    assert snippet["command"] == ["claude", "mcp", "add", "probe", "--", "older-program", "previous"]
+    assert latest.command == "latest-program"
+
+
+def test_mcp_generator_returns_final_aliases_and_rejects_sanitized_collisions():
+    ids = [uuid.uuid4(), uuid.uuid4()]
+
+    def listing(index: int, namespace: str):
+        return SimpleNamespace(
+            id=ids[index],
+            slug="probe",
+            namespace=namespace,
+            command="inert",
+            args=[],
+            environment_variables=[],
+            headers=[],
+            transport="stdio",
+            url=None,
+            framework=None,
+            docker_image=None,
+            auto_approve=[],
+        )
+
+    agent = _make_agent(components=[_make_component("mcp", id_) for id_ in ids])
+    aliases: dict[str, str] = {}
+    cfg = generate_agent_config(
+        agent,
+        "claude-code",
+        mcp_listings={ids[0]: listing(0, "first"), ids[1]: listing(1, "second")},
+        component_aliases=aliases,
+    )
+    assert aliases == {str(ids[0]): "first-probe", str(ids[1]): "second-probe"}
+    assert set(cfg["mcp_config"]) == set(aliases.values())
+    with pytest.raises(AliasCollisionError, match="aliases collide"):
+        generate_agent_config(
+            agent,
+            "claude-code",
+            mcp_listings={ids[0]: listing(0, "team a"), ids[1]: listing(1, "team-a")},
+            component_aliases={},
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 1. _sanitize_name
 # ═══════════════════════════════════════════════════════════════════
@@ -60,6 +135,10 @@ def _make_agent(
 class TestSanitizeName:
     def test_passthrough_for_safe_name(self):
         assert _sanitize_name("my-agent_v2") == "my-agent_v2"
+
+    def test_trailing_newline_is_replaced(self):
+        assert _sanitize_name("evil\n") == "evil-"
+        assert _sanitize_name("evil\r\n") == "evil--"
 
     def test_replaces_spaces_and_special_chars(self):
         assert _sanitize_name("my agent!@#v2") == "my-agent---v2"
@@ -422,6 +501,13 @@ class TestGenerateCodex:
         cfg = generate_agent_config(agent, "codex")
         assert len(cfg["agent_profile"]["content"]) > 0
 
+    def test_writes_no_hooks_file(self):
+        # A hooks file would tag every Codex session in the folder with the agent,
+        # and at user scope it would replace the hooks `observal doctor patch` installed.
+        for scope in ("project", "user"):
+            cfg = generate_agent_config(_make_agent(), "codex", options={"scope": scope})
+            assert "hooks_config" not in cfg
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 8. generate_agent_config — Copilot
@@ -598,6 +684,7 @@ class TestMcpListingClaudeCodeAdapter:
         ("transport", "flag", "scope", "claude_scope"),
         [
             ("streamable-http", "http", "user", "user"),
+            ("http", "http", "user", "user"),
             ("sse", "sse", "project", "local"),
         ],
     )
@@ -631,6 +718,25 @@ class TestMcpListingClaudeCodeAdapter:
             "X-Team: eng",
         ] in cfg["mcp_setup_commands"]
         assert ["claude", "mcp", "remove", "--scope", claude_scope, "linear"] in cfg["mcp_reset_commands"]
+
+    def test_legacy_http_listing_installs_remote_in_pi(self):
+        comp_id = uuid.uuid4()
+        agent = _make_agent(components=[_make_component("mcp", comp_id)])
+        cfg = generate_agent_config(
+            agent,
+            "pi",
+            mcp_listings={comp_id: self._remote_listing(comp_id, "http")},
+        )
+        entry = cfg["mcp_config"]["content"]["mcpServers"]["linear"]
+        assert entry["url"] == "https://mcp.linear.app/mcp"
+        assert entry["type"] == "streamable-http"
+        assert "command" not in entry
+
+    def test_invalid_remote_transport_does_not_fall_back_to_stdio(self):
+        comp_id = uuid.uuid4()
+        agent = _make_agent(components=[_make_component("mcp", comp_id)])
+        with pytest.raises(ValueError, match="Unsupported remote MCP transport"):
+            generate_agent_config(agent, "pi", mcp_listings={comp_id: self._remote_listing(comp_id, "unknown")})
 
     def test_user_scope_registers_stdio_servers_for_every_project(self):
         ext_mcps = [{"name": "srv", "command": "npx", "args": ["-y", "srv"]}]

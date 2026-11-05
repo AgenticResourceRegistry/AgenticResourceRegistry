@@ -138,6 +138,9 @@ async def _insert_table(
     batch: list[dict] = []
     columns = sorted(col_types.keys())
     logged_skipped = False
+    unscoped_facets = 0
+    legacy_agent_reports = 0
+    scoped_facets = table == "insight_session_facets" and {"project_id", "user_id", "harness"} <= col_types.keys()
 
     with open(jsonl_path, encoding="utf-8") as f:
         for line in f:
@@ -145,6 +148,29 @@ async def _insert_table(
             if not line:
                 continue
             row = json.loads(line)
+
+            # Pre-030 archives contain only Agent reports. Do not guess the
+            # subject of a newer or ambiguous row with a null subject_type.
+            if table == "insight_reports" and "subject_type" in col_types and row.get("subject_type") is None:
+                if (
+                    "subject_type" in row
+                    or not row.get("agent_id")
+                    or row.get("component_id")
+                    or row.get("component_type")
+                ):
+                    raise MigrationError(
+                        "insight_reports: cannot identify a report without subject_type as an Agent report"
+                    )
+                row["subject_type"] = "agent"
+                legacy_agent_reports += 1
+
+            # Migration 030 discarded legacy facet cache rows: their project,
+            # user and harness cannot be recovered from a session ID alone.
+            # Preserve that invariant when importing an older archive.
+            if scoped_facets and not all(row.get(col) for col in ("project_id", "user_id", "harness")):
+                skipped += 1
+                unscoped_facets += 1
+                continue
 
             if not logged_skipped:
                 skipped_cols = set(row) - set(columns)
@@ -170,6 +196,14 @@ async def _insert_table(
         inserted += ins
         skipped += sk
         table_warnings.extend(bw)
+
+    if unscoped_facets:
+        table_warnings.append(
+            f"insight_session_facets: skipped {unscoped_facets} unscoped legacy cache rows "
+            "(missing project_id, user_id or harness; re-extract from telemetry)"
+        )
+    if legacy_agent_reports:
+        table_warnings.append(f"insight_reports: classified {legacy_agent_reports} legacy rows as Agent reports")
 
     return inserted, skipped, table_warnings
 

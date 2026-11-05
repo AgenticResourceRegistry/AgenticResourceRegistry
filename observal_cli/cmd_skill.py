@@ -18,6 +18,7 @@ import tempfile
 from contextlib import contextmanager, nullcontext, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -27,6 +28,7 @@ from rich.table import Table
 from observal_cli import client, config
 from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import HARNESS_CAPABILITIES, VALID_HARNESSES, VALID_SKILL_TASK_TYPES
+from observal_cli.draft_submit import submit_edit_under_review
 from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.prompts import select_one, text_input
 from observal_cli.render import (
@@ -42,6 +44,7 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
 from observal_cli.shared.utils import sanitize_name as _sanitize_name
 from observal_cli.skill_folder import (
     SUPPORTED_FEATURE as SKILL_FOLDER_FEATURE,
@@ -258,8 +261,11 @@ def skill_submit(
     slash_command: str | None = typer.Option(None, "--slash-command", help="Slash command name"),
     supported_harnesses: list[str] | None = typer.Option(None, "--harness", help="Supported harness (repeatable)"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit_draft: str | None = typer.Option(None, "--submit", help="Submit a draft for review (skill ID)"),
+    submit_draft: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (skill ID)"
+    ),
     version_id: str | None = typer.Option(None, "--version-id", help="Exact saved draft UUID for --submit"),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -338,16 +344,19 @@ def skill_submit(
                     )
                 result = client.post(
                     f"/api/v1/skills/{resolved}/versions/{version_id}/submit",
-                    {"observed_revision": manifest["revision"]},
+                    {"observed_revision": manifest["revision"], **({"message": message} if message else {})},
                 )
             else:
-                result = client.post(f"/api/v1/skills/{resolved}/submit")
+                result = client.post(
+                    f"/api/v1/skills/{resolved}/submit" + (f"?message={quote(message)}" if message else "")
+                )
         if output == "json":
             output_json(result)
         else:
             rprint(
                 f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(str(result.get('listing_id') or result.get('id')))}[/bold]"
             )
+            print_review_link(result)
         return
 
     if from_file:
@@ -533,6 +542,8 @@ def skill_submit(
     validated_tag = "[green]✓ validated[/green]" if validated else "[yellow]unvalidated[/yellow]"
     rprint(f"[green]✓ {label.capitalize()} submitted![/green] ID: [bold]{esc(result['id'])}[/bold]  {validated_tag}")
     rprint(f"  Install: [cyan]observal registry skill install {esc(client.canonical_name(result))}[/cyan]")
+    if not draft:
+        print_review_link(result)
 
 
 # ── List / My ─────────────────────────────────────────────────────────────────
@@ -1082,8 +1093,28 @@ def skill_install(
                 remediation="Check the skill source and local filesystem, then retry.",
             )
 
+        from observal_cli.harness import ensure_loaded, get_adapter
+        from observal_cli.layer import skill_file_fingerprint
         from observal_cli.lockfile import upsert_standalone
 
+        skill_integrity = None
+        if managed_result is None and isinstance(installed_path, Path):
+            ensure_loaded()
+            active = get_adapter(harness).skill_location(scope, directory, local_name)
+            installed_file = installed_path if installed_path.name == "SKILL.md" else installed_path / "SKILL.md"
+            # Legacy delivery can write a canonical folder that is not active in
+            # this harness. Fingerprint only the file the harness actually loads.
+            if (
+                active
+                and installed_file.is_file()
+                and Path(active).is_file()
+                and installed_file.resolve() == Path(active).resolve()
+            ):
+                skill_integrity = skill_file_fingerprint(installed_file)
+            if not skill_integrity:
+                result.setdefault("warnings", []).append(
+                    "The installed skill is not at the active harness path; insight presence will remain unverified."
+                )
         try:
             if managed_result is None:
                 upsert_standalone(
@@ -1100,6 +1131,7 @@ def skill_install(
                     version_id=str(result["version_id"]) if result.get("version_id") else None,
                     digest=result.get("digest"),
                     requested_version=requested_version,
+                    skill_integrity=skill_integrity,
                 )
         except PermissionError as error:
             fail(
@@ -1370,6 +1402,9 @@ def _install_managed_folder(
             Path(bundle.skill_file_path).expanduser() if scope == "user" else Path.cwd() / bundle.skill_file_path
         ).parent.absolute()
         proof = managed_skill.receipt(bundle, target, harness, scope, registry_url=lockfile.current_registry_url())
+        # The bundle was validated against its digest; record its SKILL.md hash
+        # atomically with the ownership receipt, before the installed file can drift.
+        skill_integrity = next(f"sha256-{item.sha256}" for item in bundle.files if item.path == "SKILL.md")
         # Fetch an old reviewed version only when an existing, unreceipted
         # lock entry names it; never infer ownership from the directory name.
         old_bundle = None
@@ -1481,6 +1516,7 @@ def _install_managed_folder(
                     "version_id": bundle.version_id,
                     "digest": bundle.digest,
                     "folder_receipt": proof,
+                    "skill_integrity": skill_integrity,
                 }
             )
             if directory:
@@ -1738,14 +1774,21 @@ def skill_edit(
     _validate_skill_fields(updates, "Edit skill")
 
     resolved = client.resolve_registry_reference("skill", skill_id)
-    client.post(f"/api/v1/skills/{resolved}/start-edit")
+    lock = client.post(f"/api/v1/skills/{resolved}/start-edit")
+    # The server locks the exact version and returns its revision. Preserve an
+    # explicit caller precondition so a stale --from-file update still fails.
+    if "observed_revision" not in updates and lock.get("revision"):
+        updates["observed_revision"] = lock["revision"]
     save_context = nullcontext() if output == "json" else spinner("Saving changes...")
     with save_context:
         result = client.put(f"/api/v1/skills/{resolved}/draft", updates)
+        # Under review, an edit is the author's resubmission (as in the web edit form and agent edit).
+        result = submit_edit_under_review("skill", "skills", resolved, result)
     if output == "json":
         output_json(result)
     else:
         rprint(f"[green]✓ Updated {esc(result['name'])}[/green] (status: {esc(result.get('status', 'unknown'))})")
+        print_draft_save(result, f"observal registry skill submit --submit {result.get('id', '<id>')}")
 
 
 # ── Version lifecycle commands ──────────────────────────────────────────────

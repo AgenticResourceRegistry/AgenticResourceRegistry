@@ -122,3 +122,19 @@ async def test_skill_install_reports_its_version_without_a_request(session):
     assert response.version == "1.2.0"
     assert response.config_snippet["skill"]["version"] == "1.2.0"
     assert response.digest.startswith("sha256:")
+
+
+async def test_kiro_skill_install_returns_user_scope_and_script(session):
+    owner = await ds.user(session)
+    listing = await ds.skill(
+        session, owner, version="1.2.0", content="---\nname: review\ndescription: Review\n---\n# Review\n"
+    )
+    await session.commit()
+
+    with _endpoints():
+        response = await skill.install_skill(
+            str(listing.id), SkillInstallRequest(harness="kiro", scope="user"), None, session, owner
+        )
+
+    assert response.version == "1.2.0"
+    assert response.config_snippet["skills"]["path"] == "~/.kiro/skills/security-review/SKILL.md"

@@ -302,6 +302,70 @@ def detect_docker_image(root: Path, git_url: str) -> tuple[str | None, bool]:
     return (image, suggested)
 
 
+# `docker run` / `docker container run` options that take a separate value argument.
+_DOCKER_RUN_VALUE_FLAGS = frozenset(
+    {
+        "-a", "--attach", "--add-host", "--annotation", "--blkio-weight", "--blkio-weight-device",
+        "--cap-add", "--cap-drop", "--cgroup-parent", "--cgroupns", "--cidfile", "--cpu-period", "--cpu-quota",
+        "--cpu-rt-period", "--cpu-rt-runtime", "-c", "--cpu-shares", "--cpus", "--cpuset-cpus", "--cpuset-mems",
+        "--detach-keys", "--device", "--device-cgroup-rule", "--device-read-bps", "--device-read-iops",
+        "--device-write-bps", "--device-write-iops", "--dns", "--dns-option", "--dns-search", "--domainname",
+        "--entrypoint", "-e", "--env", "--env-file", "--expose", "--gpus", "--group-add", "--health-cmd",
+        "--health-interval", "--health-retries", "--health-start-interval", "--health-start-period",
+        "--health-timeout", "-h", "--hostname", "--ip", "--ip6", "--ipc", "--isolation", "--kernel-memory",
+        "-l", "--label", "--label-file", "--link", "--link-local-ip", "--log-driver", "--log-opt",
+        "--mac-address", "-m", "--memory", "--memory-reservation", "--memory-swap", "--memory-swappiness",
+        "--mount", "--name", "--network", "--net", "--network-alias", "--net-alias", "--oom-score-adj", "--pid",
+        "--pids-limit", "--platform", "-p", "--publish", "--pull", "--restart", "--runtime", "--security-opt",
+        "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl", "--tmpfs", "--ulimit",
+        "-u", "--user", "--userns", "--uts", "-v", "--volume", "--volume-driver", "--volumes-from", "-w",
+        "--workdir",
+    }
+)  # fmt: skip
+_DOCKER_SHORT_VALUE_FLAGS = frozenset(flag[1] for flag in _DOCKER_RUN_VALUE_FLAGS if len(flag) == 2)
+
+
+def docker_image_from_args(args: list[str]) -> str | None:
+    """The image in ``docker run [OPTIONS] IMAGE [COMMAND] [ARG...]`` arguments.
+
+    The image is the first positional argument after the options; anything after it
+    is the container's own command (for example ``stdio --read-only``), never the image.
+    Configs that omit ``run`` and start with options are accepted. Returns None for other
+    subcommands such as ``build``.
+    """
+    tokens = list(args)
+    if tokens[:2] == ["container", "run"]:
+        tokens = tokens[2:]
+    elif tokens[:1] == ["run"]:
+        tokens = tokens[1:]
+    elif not tokens or not tokens[0].startswith("-"):
+        return None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        if token.startswith("--"):
+            # --flag=value carries its value; a bare value flag consumes the next token.
+            index += 1 if "=" in token or token not in _DOCKER_RUN_VALUE_FLAGS else 2
+            continue
+        if f"-{token}" in _DOCKER_RUN_VALUE_FLAGS:
+            # A single-dash long flag such as ``-env`` (common in hand-written configs) takes a value.
+            index += 2
+            continue
+        if token.startswith("-") and len(token) > 1:
+            # Grouped short flags such as -it; a value flag consumes the rest of the token or the next one.
+            consumed_next = False
+            for position, letter in enumerate(token[1:], start=1):
+                if letter in _DOCKER_SHORT_VALUE_FLAGS:
+                    consumed_next = position == len(token) - 1
+                    break
+            index += 2 if consumed_next else 1
+            continue
+        return token
+    return None
+
+
 def infer_command_args(
     framework: str | None,
     docker_image: str | None,

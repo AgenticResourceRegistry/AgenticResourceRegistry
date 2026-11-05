@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Observal Contributors
+# SPDX-FileCopyrightText: 2025 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -98,6 +98,10 @@ jobs:
           # at a long-lived server when enabling the draft-creating tests.
           OBSERVAL_ISOLATED_STACK: 'true'
         run: pnpm exec playwright test frontend-flows skill-folder
+
+      - name: Show API errors on failure
+        if: failure()
+        run: cd docker && docker compose logs --tail 150 observal-api observal-init || true
 
       - name: Upload test results
         if: always()

@@ -57,11 +57,11 @@ test.describe("Agent Edit Form", () => {
     await page.getByRole("tab", { name: "Edit" }).click();
 
     // The form should be visible
-    await expect(page.getByLabel("Agent Name")).toBeVisible();
+    await expect(page.getByLabel("Agent File Name")).toBeVisible();
     await expect(page.getByLabel("Description")).toBeVisible();
 
     // Agent name field should be disabled
-    const nameInput = page.getByLabel("Agent Name");
+    const nameInput = page.getByLabel("Agent File Name");
     await expect(nameInput).toBeDisabled();
 
     // Description should be pre-filled

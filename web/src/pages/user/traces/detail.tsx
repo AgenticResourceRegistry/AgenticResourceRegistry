@@ -1072,7 +1072,7 @@ function EventDetail({ event }: { event: RawSessionEvent }) {
 }
 
 const MCP_FIELD_LABELS: Record<string, string> = {
-	mcp_id: "MCP Server",
+	mcp_id: "MCP Client",
 	mcp_method: "Method",
 	mcp_latency_ms: "MCP Latency",
 	tool_schema_valid: "Schema Valid",
@@ -2044,13 +2044,13 @@ function SessionInfoTab({
 					<span>{serviceName || "unknown"}</span>
 					{(agentName || agentId) && (
 						<>
-							<span className="text-muted-foreground">Agent</span>
+							<span className="text-muted-foreground">Agent File</span>
 							<span>{agentName || agentId}</span>
 						</>
 					)}
 					{agentVersion && (
 						<>
-							<span className="text-muted-foreground">Agent Version</span>
+							<span className="text-muted-foreground">Agent File Version</span>
 							<span>v{agentVersion}</span>
 						</>
 					)}

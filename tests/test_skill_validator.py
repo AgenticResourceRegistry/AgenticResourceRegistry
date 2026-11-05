@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for services/skill_validator.py."""
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from services.skill_validator import (
@@ -277,3 +279,66 @@ class TestValidateSkillMd:
             result = await validate_skill_md("https://github.com/org/repo", "/", "main")
 
         assert result.slash_command is None
+
+
+# ── SSRF guard ──────────────────────────────────────────────────────────────
+
+
+class TestValidateSkillMdBlocksPrivateHosts:
+    """The fetch must never reach a private address, directly or through a redirect."""
+
+    @staticmethod
+    def _client_with(handler):
+        real_client = httpx.AsyncClient
+        return lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    @staticmethod
+    def _is_private(url: str) -> bool:
+        return "169.254.169.254" in url or "127.0.0.1" in url
+
+    @pytest.mark.asyncio
+    async def test_direct_private_url_is_never_fetched(self):
+        hits = []
+
+        def handler(request):
+            hits.append(str(request.url))
+            return httpx.Response(200, text=VALID_SKILL_MD)
+
+        with (
+            patch("services.skill_validator.httpx.AsyncClient", self._client_with(handler)),
+            patch("services.skill_validator.is_private_url", self._is_private),
+            patch("services.skill_validator.ds.get_sync_bool", return_value=False),
+            pytest.raises(SkillValidationError, match="private or internal"),
+        ):
+            await validate_skill_md("http://127.0.0.1:8123/repo", "/", "main")
+        assert hits == []
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_private_url_is_not_followed(self):
+        hits = []
+
+        def handler(request):
+            hits.append(str(request.url))
+            return httpx.Response(302, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+
+        with (
+            patch("services.skill_validator.httpx.AsyncClient", self._client_with(handler)),
+            patch("services.skill_validator.is_private_url", self._is_private),
+            patch("services.skill_validator.ds.get_sync_bool", return_value=False),
+            pytest.raises(SkillValidationError, match="private or internal"),
+        ):
+            await validate_skill_md("https://git.example.com/org/repo", "/", "main")
+        assert hits == ["https://git.example.com/org/repo/raw/main/SKILL.md"]
+
+    @pytest.mark.asyncio
+    async def test_allow_internal_git_urls_permits_self_hosted_hosts(self):
+        def handler(request):
+            return httpx.Response(200, text=VALID_SKILL_MD)
+
+        with (
+            patch("services.skill_validator.httpx.AsyncClient", self._client_with(handler)),
+            patch("services.skill_validator.is_private_url", self._is_private),
+            patch("services.skill_validator.ds.get_sync_bool", return_value=True),
+        ):
+            result = await validate_skill_md("http://127.0.0.1:8123/repo", "/", "main")
+        assert result.name == "code-review"

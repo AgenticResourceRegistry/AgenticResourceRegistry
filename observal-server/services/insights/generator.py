@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
 import structlog
 
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 
 from ._deps import get_db_session
-from .facets import aggregate_facets, extract_and_cache_facets, load_cached_facets_batch
+from .facets import aggregate_facets, extract_facets, load_cached_facets_batch, store_facets
 from .registry_match import (
     RegistryScope,
     build_catalog,
@@ -32,9 +33,13 @@ from .registry_match import (
     count_reused,
     validate_reuse_suggestions,
 )
+from .scope import InsightScope
 from .sections import generate_sections
 from .session_meta_extractor import aggregate_metas, extract_all_session_metas
 from .transcript import build_session_transcript
+
+if TYPE_CHECKING:
+    from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
 
@@ -56,12 +61,16 @@ async def generate_report_content(
     registry_scope: RegistryScope | None = None,
     db=None,
     progress_callback=None,
+    scope: InsightScope | None = None,
 ) -> dict:
     """Generate a complete insight report for an agent.
 
     This is the main entry point. The host app (observal-server) handles
     DB persistence of the result.
     """
+    scope = scope or InsightScope(subject_type="agent", agent_id=agent_id)
+    if scope.subject_type != "agent" or scope.agent_id != agent_id:
+        raise ValueError("Agent Insights requires an agent report scope")
     owns_session = False
     if db is None:
         session_factory = get_db_session()
@@ -135,7 +144,7 @@ async def _run_pipeline(
     # Aggregate deterministic stats
     agg = aggregate_metas(session_metas)
 
-    session_ids = [m["session_id"] for m in session_metas]
+    session_ids = [m["session_key"] for m in session_metas]
     facets_by_session = await load_cached_facets_batch(session_ids, db)
     logger.info("insight_cached_facets_loaded", count=len(facets_by_session))
 
@@ -145,15 +154,15 @@ async def _run_pipeline(
         key=lambda m: m.get("duration_seconds", 0) * sum(m.get("tool_counts", {}).values()),
         reverse=True,
     )
-    top_sessions = [m for m in ranked if m["session_id"] not in facets_by_session][:MAX_FACET_SESSIONS]
+    top_sessions = [m for m in ranked if m["session_key"] not in facets_by_session][:MAX_FACET_SESSIONS]
 
-    transcripts: dict[str, str] = {}
+    transcripts: dict[SessionKey, str] = {}
     if top_sessions:
-        transcript_tasks = [build_session_transcript(m["session_id"]) for m in top_sessions]
+        transcript_tasks = [build_session_transcript(m["session_key"]) for m in top_sessions]
         results = await asyncio.gather(*transcript_tasks, return_exceptions=True)
         for meta, result in zip(top_sessions, results, strict=False):
             if isinstance(result, str) and result.strip():
-                transcripts[meta["session_id"]] = result
+                transcripts[meta["session_key"]] = result
 
     logger.info("insight_transcripts_built", count=len(transcripts))
     await _emit_progress(progress_callback, "extracting_facets", 3, 9, "Extracting qualitative session facets")
@@ -166,7 +175,7 @@ async def _run_pipeline(
         facets_by_session.update(
             await _extract_facets_batch(
                 transcripts=transcripts,
-                session_metas={m["session_id"]: m for m in session_metas},
+                session_metas={m["session_key"]: m for m in session_metas},
                 agent_id=agent_id or "",
                 db=db,
                 max_concurrent=max_concurrent,
@@ -187,7 +196,7 @@ async def _run_pipeline(
         if not session_model_usage:
             continue
 
-        facet = facets_by_session.get(meta["session_id"], {})
+        facet = facets_by_session.get(meta["session_key"], {})
         if not facet:
             continue
 
@@ -288,7 +297,7 @@ async def _run_pipeline(
             )
             if prior_metas:
                 prior_agg = aggregate_metas(prior_metas)
-                prior_ids = [m["session_id"] for m in prior_metas]
+                prior_ids = [m["session_key"] for m in prior_metas]
                 prior_facets_by_session = await load_cached_facets_batch(prior_ids, db)
                 prior_ranked = [
                     m
@@ -297,21 +306,21 @@ async def _run_pipeline(
                         key=lambda m: m.get("duration_seconds", 0) * sum(m.get("tool_counts", {}).values()),
                         reverse=True,
                     )
-                    if m["session_id"] not in prior_facets_by_session
+                    if m["session_key"] not in prior_facets_by_session
                 ][: min(MAX_FACET_SESSIONS, 25)]
-                prior_transcripts: dict[str, str] = {}
+                prior_transcripts: dict[SessionKey, str] = {}
                 prior_results = await asyncio.gather(
-                    *[build_session_transcript(m["session_id"]) for m in prior_ranked],
+                    *[build_session_transcript(m["session_key"]) for m in prior_ranked],
                     return_exceptions=True,
                 )
                 for meta, result in zip(prior_ranked, prior_results, strict=False):
                     if isinstance(result, str) and result.strip():
-                        prior_transcripts[meta["session_id"]] = result
+                        prior_transcripts[meta["session_key"]] = result
                 if prior_transcripts:
                     prior_facets_by_session.update(
                         await _extract_facets_batch(
                             transcripts=prior_transcripts,
-                            session_metas={m["session_id"]: m for m in prior_metas},
+                            session_metas={m["session_key"]: m for m in prior_metas},
                             agent_id=agent_id or "",
                             db=db,
                             max_concurrent=max_concurrent,
@@ -375,7 +384,7 @@ async def _run_pipeline(
             data_block += f"\n\n## Version Impact\n{json.dumps(version_impact, indent=2)}"
             logger.info("version_impact_detected", groups=version_impact["group_count"])
     except Exception as e:
-        logger.warning("version_impact_analysis_failed", error=str(e))
+        logger.warning("version_impact_analysis_failed", error=type(e).__name__)
 
     # ── Step 4c: Shortlist reusable registry components ───────────────────
     # Driven by this report's own signals, so the model is offered things
@@ -480,7 +489,6 @@ async def _run_pipeline(
         "metrics": metrics,
         "narrative": narrative,
         "sessions_analyzed": len(session_metas),
-        "models_used": [],
         "report_version": REPORT_VERSION,
         "regressions": [],
         "facets_summary": facets_summary,
@@ -531,34 +539,35 @@ def _analyze_component_utilization(agent_config: dict, session_metas: list[dict]
 
 
 async def _extract_facets_batch(
-    transcripts: dict[str, str],
-    session_metas: dict[str, dict],
+    transcripts: dict[SessionKey, str],
+    session_metas: dict[SessionKey, dict],
     agent_id: str,
     db,
     max_concurrent: int = 5,
-) -> dict[str, dict]:
-    """Extract facets with concurrency limit."""
+) -> dict[SessionKey, dict]:
+    """Extract facets with concurrency limit.
+
+    Only the LLM calls run concurrently. ``db`` is one AsyncSession, which
+    does not allow concurrent use, so results are stored sequentially after
+    the gather. Callers load cached facets beforehand and pass only the
+    sessions that still need extraction.
+    """
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def _one(sid: str, transcript: str) -> dict:
+    async def _one(sid: SessionKey, transcript: str) -> dict:
         async with semaphore:
-            return await extract_and_cache_facets(
-                session_id=sid,
-                transcript=transcript,
-                meta=session_metas.get(sid, {}),
-                agent_id=agent_id,
-                db=db,
-            )
+            return await extract_facets(sid.session_id, transcript, session_metas.get(sid, {}))
 
     session_ids = list(transcripts)
     tasks = [_one(sid, transcripts[sid]) for sid in session_ids]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    facets_by_session: dict[str, dict] = {}
+    facets_by_session: dict[SessionKey, dict] = {}
     for sid, result in zip(session_ids, results, strict=False):
         if isinstance(result, Exception):
-            logger.warning("facet_task_exception", session_id=sid, error=str(result), type=type(result).__name__)
+            logger.warning("facet_task_exception", session=sid, error=str(result), type=type(result).__name__)
         elif isinstance(result, dict) and result:
+            await store_facets(sid, agent_id, result, db)
             facets_by_session[sid] = result
 
     return facets_by_session
@@ -751,7 +760,6 @@ def _empty_report() -> dict:
             },
         },
         "sessions_analyzed": 0,
-        "models_used": [],
         "report_version": REPORT_VERSION,
         "regressions": [],
         "facets_summary": {},

@@ -84,7 +84,7 @@ if [ -f "$ENV_FILE" ]; then
     if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
         info "Kept the existing configuration and bind address $previous_bind"
         warn "Package files were staged, but running services were NOT upgraded or migrated."
-        warn "Follow https://github.com/Observal/Observal/blob/main/docs/skill-folder-rollout.md before starting the new stack."
+        warn "Follow https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/skill-folder-rollout.md before starting the new stack."
         exit 0
     fi
 fi

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -821,7 +821,7 @@ def test_agent_init_flag_mode_prompt_file_beta_and_harnesses(tmp_path, monkeypat
         "version": "0.1.0",
         "description": "Triage incidents",
         "owner": "alice",
-        "model_name": "claude-sonnet-4",
+        "model_name": "auto",
         "model_config_json": {},
         "models_by_harness": {},
         "prompt": "Triage incidents.",
@@ -920,9 +920,61 @@ def test_agent_build_validates_every_component_resource(tmp_path, monkeypatch):
         call("/api/v1/prompts/prompt-1"),
         call("/api/v1/sandboxes/sandbox-1"),
     ]
-    scope_payload = {"components": components, "visibility": "team", "team_id": "team-1"}
+    scope_payload = {
+        "components": components,
+        "supported_harnesses": ["kiro"],
+        "visibility": "team",
+        "team_id": "team-1",
+    }
     target.assert_called_once_with(scope_payload, "platform", "team")
     post.assert_called_once_with("/api/v1/agents/validate", scope_payload)
+
+
+def test_agent_build_warns_about_harnesses_publish_leaves_out(tmp_path, monkeypatch):
+    _write_agent_yaml(tmp_path, supported_harnesses=["cursor", "kiro"])
+    warning = (
+        "cursor has no skills support, which the components need, so publish leaves it out of supported harnesses."
+    )
+    monkeypatch.setattr(agent.client, "get", Mock(return_value={"id": "found"}))
+    monkeypatch.setattr(
+        agent.client,
+        "post",
+        Mock(
+            return_value={
+                "valid": True,
+                "issues": [{"severity": "warning", "message": warning}],
+                "supported_harnesses": ["kiro"],
+            }
+        ),
+    )
+    monkeypatch.setattr(agent.client, "add_publish_target", Mock(side_effect=_publish_target))
+
+    shown = _invoke("build", "--dir", str(tmp_path))
+    built = _invoke("build", "--dir", str(tmp_path), "--output", "json")
+
+    assert shown.exit_code == 0, shown.output
+    assert "cursor has no skills support" in shown.output
+    assert "All components valid" in shown.output
+    result = json.loads(built.output)
+    assert result["valid"] is True
+    assert result["supported_harnesses"] == ["kiro"]
+
+
+def test_agent_build_fails_when_no_declared_harness_can_run_the_agent(tmp_path, monkeypatch):
+    _write_agent_yaml(tmp_path, supported_harnesses=["cursor"])
+    error = "cursor has no skills support, which the components need, and no declared harness can run them."
+    monkeypatch.setattr(agent.client, "get", Mock(return_value={"id": "found"}))
+    monkeypatch.setattr(
+        agent.client,
+        "post",
+        Mock(return_value={"valid": False, "issues": [{"severity": "error", "message": error}]}),
+    )
+    monkeypatch.setattr(agent.client, "add_publish_target", Mock(side_effect=_publish_target))
+
+    result = _invoke("build", "--dir", str(tmp_path))
+
+    assert result.exit_code == 7
+    assert "cursor has no skills support" in result.output
 
 
 def test_agent_publish_rejects_incompatible_draft_modes(monkeypatch):
@@ -1016,7 +1068,12 @@ def test_agent_publish_update_requires_exact_name_match(tmp_path, monkeypatch):
 
 def test_agent_publish_update_with_explicit_bump_sends_no_version(tmp_path, monkeypatch):
     _write_agent_yaml(tmp_path)
-    get = Mock(return_value=[{"id": "agent-1", "name": "reviewer", "version": "1.2.3"}])
+    get = Mock(
+        side_effect=[
+            [{"id": "agent-1", "name": "reviewer", "version": "1.2.3"}],
+            {"id": "agent-1", "version": "1.2.3", "status": "pending"},
+        ]
+    )
     put = Mock(return_value={"id": "agent-1", "version": "1.3.0"})
     monkeypatch.setattr(agent.client, "get", get)
     monkeypatch.setattr(agent.client, "put", put)
@@ -1030,18 +1087,20 @@ def test_agent_publish_update_with_explicit_bump_sends_no_version(tmp_path, monk
     put.assert_called_once_with("/api/v1/agents/agent-1", payload)
 
 
-def test_agent_publish_tty_selects_suggested_bump(tmp_path, monkeypatch):
+def test_agent_publish_update_amends_pending_version_without_a_bump_prompt(tmp_path, monkeypatch):
+    """OBS-1473: --update keeps the version of an unpublished release; it never defaults to a bump."""
     _write_agent_yaml(tmp_path)
     get = Mock(
         side_effect=[
             [{"id": "agent-1", "name": "reviewer", "version": "1.2.3"}],
-            {"suggestions": {"patch": "1.2.4", "minor": "1.3.0", "major": "2.0.0"}},
+            {"id": "agent-1", "version": "1.2.3", "status": "pending"},
         ]
     )
-    put = Mock(return_value={"id": "agent-1", "version": "1.3.0"})
+    put = Mock(return_value={"id": "agent-1", "version": "1.2.3", "review_number": 21, "review_revision": 2})
+    prompt = Mock()
     monkeypatch.setattr(agent.client, "get", get)
     monkeypatch.setattr(agent.client, "put", put)
-    monkeypatch.setattr(agent, "select_one", Mock(side_effect=lambda _label, choices, **_kwargs: choices[1]))
+    monkeypatch.setattr(agent, "select_one", prompt)
     monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: True))
 
     agent.agent_publish(
@@ -1054,33 +1113,32 @@ def test_agent_publish_tty_selects_suggested_bump(tmp_path, monkeypatch):
         visibility=None,
     )
 
+    prompt.assert_not_called()
     payload = put.call_args.args[1]
-    assert payload["version_bump_type"] == "minor"
-    assert "version" not in payload
+    assert payload["version"] == "1.2.3"
+    assert "version_bump_type" not in payload
 
-    get.side_effect = [
-        [{"id": "agent-1", "name": "reviewer", "version": "1.2.3"}],
-        {"suggestions": {"patch": "1.2.4", "minor": "1.3.0", "major": "2.0.0"}},
-    ]
-    put.reset_mock()
-    monkeypatch.setattr(agent, "select_one", Mock(side_effect=lambda _label, choices, **_kwargs: choices[-1]))
 
-    agent.agent_publish(
-        directory=str(tmp_path),
-        update=True,
-        draft=False,
-        submit=None,
-        bump=None,
-        team=None,
-        visibility=None,
+def test_agent_publish_update_refuses_approved_version_and_points_at_release(tmp_path, monkeypatch):
+    _write_agent_yaml(tmp_path)
+    get = Mock(
+        side_effect=[
+            [{"id": "agent-1", "name": "reviewer", "version": "1.2.3"}],
+            {"id": "agent-1", "version": "1.2.3", "status": "approved"},
+        ]
     )
+    put = Mock()
+    monkeypatch.setattr(agent.client, "get", get)
+    monkeypatch.setattr(agent.client, "put", put)
 
-    keep_payload = put.call_args.args[1]
-    assert keep_payload["version"] == "1.2.3"
-    assert "version_bump_type" not in keep_payload
+    result = runner.invoke(cli_app, ["agent", "publish", "--dir", str(tmp_path), "--update"], terminal_width=200)
+
+    assert result.exit_code != 0
+    assert "agent release" in result.output
+    put.assert_not_called()
 
 
-def test_agent_publish_tty_surfaces_suggestion_failure(tmp_path, monkeypatch):
+def test_agent_publish_update_surfaces_status_lookup_failure(tmp_path, monkeypatch):
     _write_agent_yaml(tmp_path)
     get = Mock(
         side_effect=[
@@ -1644,3 +1702,15 @@ def test_agent_outdated_rejects_a_version_that_is_not_exact(monkeypatch):
     assert result.exit_code == 7
     assert "Invalid agent version" in result.output
     get.assert_not_called()
+
+
+def test_create_flags_default_model_to_auto(monkeypatch):
+    post = Mock(return_value={"id": "agent-3", "status": "pending"})
+    monkeypatch.setattr(agent.client, "get", Mock(return_value={"username": "alice"}))
+    monkeypatch.setattr(agent.client, "add_publish_target", Mock(side_effect=_publish_target))
+    monkeypatch.setattr(agent.client, "post", post)
+
+    result = _invoke("create", "--name", "helper", "--description", "d", "--prompt", "p")
+
+    assert result.exit_code == 0, result.output
+    assert post.call_args.args[1]["model_name"] == "auto"

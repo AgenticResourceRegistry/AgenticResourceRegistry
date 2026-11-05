@@ -220,7 +220,10 @@ function LoginContent() {
     }
     setLoading(true);
     try {
-      await auth.changePassword({ current_password: password, new_password: newPassword });
+      // Changing the password signs out every session; keep this one on the fresh pair it hands back.
+      const { exchange_code } = await auth.changePassword({ current_password: password, new_password: newPassword });
+      const session = await auth.exchangeCode({ code: exchange_code });
+      setTokens(session.access_token, session.refresh_token);
       toast.success("Password changed successfully");
       const res = await auth.whoami();
       setUserRole(res.role);
@@ -299,7 +302,7 @@ function LoginContent() {
               {brandingLogo ? (
                 <img loading="lazy" src={brandingLogo} alt="" width={32} height={32} className="object-contain" />
               ) : (
-                <img loading="lazy" src="/observal-logo.svg" alt="" width={32} height={32} className="object-contain" />
+                <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
               )}
               {brandingWordmark ? (
                 <img loading="lazy" src={brandingWordmark} alt={brandingAppName || "Observal"} width={192} height={24} className="h-6 max-w-48 object-contain" />
@@ -388,7 +391,7 @@ function LoginContent() {
             {brandingLogo ? (
               <img loading="lazy" src={brandingLogo} alt="" width={32} height={32} className="object-contain" />
             ) : (
-              <img loading="lazy" src="/observal-logo.svg" alt="" width={32} height={32} className="object-contain" />
+              <img loading="lazy" src="/logo.png" alt="" width={32} height={32} className="object-contain" />
             )}
             {brandingWordmark ? (
               <img loading="lazy" src={brandingWordmark} alt={brandingAppName || "Observal"} width={192} height={24} className="h-6 max-w-48 object-contain" />

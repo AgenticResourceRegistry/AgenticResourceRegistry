@@ -15,7 +15,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.skill import SkillVersion
 from tests import discovery_support as ds
 
@@ -52,7 +51,7 @@ async def test_real_postgres_review_generation_survives_upgrade_and_blocks_downg
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
             await conn.execute(text("ALTER TABLE skill_versions DROP COLUMN review_epoch"))
             await conn.run_sync(_run_migration, "upgrade")
             default = await conn.scalar(

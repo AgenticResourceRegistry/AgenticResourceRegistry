@@ -3,19 +3,44 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import uuid
+from types import SimpleNamespace
+
 from fastapi import APIRouter, Depends
 from loguru import logger as optic
+from pydantic import BaseModel, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, registry_identity, require_role
 from models.agent import Agent, AgentStatus, AgentVersion
+from models.skill import SkillListing
 from models.user import User, UserRole
 from schemas.bulk import BulkAgentItem, BulkAgentRequest, BulkResult, BulkResultItem
-from services.inbox import sources as inbox
+from schemas.constants import ListingVersion, make_harness_list_validator
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import submit_for_review
 
 router = APIRouter(prefix="/api/v1/bulk", tags=["bulk"])
+
+
+class _Definition(BaseModel):
+    """The rules AgentCreateRequest applies to these two fields, checked per item so one bad agent does not fail the batch."""
+
+    version: ListingVersion
+    supported_harnesses: list[str]
+
+    _validate_harnesses = field_validator("supported_harnesses")(make_harness_list_validator())
+
+
+def _definition_problem(item: BulkAgentItem) -> str | None:
+    try:
+        checked = _Definition(version=item.version, supported_harnesses=item.supported_harnesses)
+    except ValidationError as exc:
+        return exc.errors()[0]["msg"].removeprefix("Value error, ")
+    item.supported_harnesses = checked.supported_harnesses
+    return None
 
 
 async def _agent_name_exists(name: str, user: User, db: AsyncSession) -> bool:
@@ -36,8 +61,8 @@ async def _create_single_agent(
     item: BulkAgentItem,
     user: User,
     db: AsyncSession,
-) -> Agent:
-    """Create a single Agent + AgentVersion row (with components and goal template)."""
+) -> tuple[Agent, int]:
+    """Create a single Agent, version and review in one transaction."""
     optic.trace("name={}, user_id={}", item.name, user.id)
     namespace, slug = registry_identity(user, item.name)
     agent = Agent(
@@ -75,20 +100,25 @@ async def _create_single_agent(
         [{**comp, "component_type": comp.get("component_type", "mcp")} for comp in item.components],
         current_user=user,
     )
+
+    refs = [
+        SimpleNamespace(
+            component_type=comp.get("component_type", "mcp"), component_id=uuid.UUID(str(comp["component_id"]))
+        )
+        for comp in item.components
+    ]
+    skill_ids = [ref.component_id for ref in refs if ref.component_type == "skill"]
+    skill_listings: dict = {}
+    if skill_ids:
+        rows = (await db.execute(select(SkillListing).where(SkillListing.id.in_(skill_ids)))).scalars().all()
+        skill_listings = {row.id: row for row in rows}
+    apply_harness_inference(
+        version, SimpleNamespace(components=refs, external_mcps=item.external_mcps), skill_listings=skill_listings
+    )
     await lock_agent_version(db, agent, version)
 
-    # Every bulk-created version lands in the review queue as pending, so the
-    # reviewers who own that queue are told — same as a one-at-a-time submit.
-    await inbox.on_publish(
-        db,
-        agent,
-        subject_type="agent",
-        actor_id=user.id,
-        auto_approved=False,
-        version=item.version,
-    )
-
-    return agent
+    review = await submit_for_review(db, "agent", agent, version, user.id)
+    return agent, review.number
 
 
 @router.post("/agents", response_model=BulkResult)
@@ -111,6 +141,12 @@ async def bulk_create_agents(
     seen_identities: set[tuple[str, str]] = set()
 
     for item in request.agents:
+        problem = _definition_problem(item)
+        if problem:
+            results.append(BulkResultItem(name=item.name, status="error", error=problem))
+            errors += 1
+            continue
+
         try:
             identity = registry_identity(current_user, item.name)
         except ValueError:
@@ -175,9 +211,14 @@ async def bulk_create_agents(
             # turns into a wholly failed batch. Rolling back to the savepoint
             # clears that state and lets the remaining items proceed.
             async with db.begin_nested():
-                agent = await _create_single_agent(item, current_user, db)
-            results.append(BulkResultItem(name=item.name, status="created", agent_id=agent.id))
+                agent, review_number = await _create_single_agent(item, current_user, db)
+            results.append(
+                BulkResultItem(name=item.name, status="created", agent_id=agent.id, review_number=review_number)
+            )
             created += 1
+        except NoCompatibleHarnessError as exc:
+            results.append(BulkResultItem(name=item.name, status="error", error=str(exc)))
+            errors += 1
         except Exception as exc:
             optic.warning("bulk create failed for agent '{}': error_type={}", item.name, type(exc).__name__)
             results.append(BulkResultItem(name=item.name, status="error", error="Agent could not be created"))

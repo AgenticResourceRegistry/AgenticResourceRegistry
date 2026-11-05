@@ -34,9 +34,6 @@ class HookListing(Base):
     team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True
     )
-    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("component_bundles.id"), nullable=True
-    )
     submitted_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     co_authors: Mapped[list] = mapped_column(JSON, default=list)
     unique_agents: Mapped[int] = mapped_column(Integer, default=0)

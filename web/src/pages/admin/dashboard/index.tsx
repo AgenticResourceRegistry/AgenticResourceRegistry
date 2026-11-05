@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -63,9 +64,9 @@ function OnboardingWizard({ onDismiss }: { onDismiss: () => void }) {
             <li className="flex items-start gap-3">
               <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">3</span>
               <div>
-                <p className="text-sm font-medium">Categorize your agents</p>
+                <p className="text-sm font-medium">Categorize your Agent Files</p>
                 <p className="text-xs text-muted-foreground">
-                  In the Agent Builder, assign categories (Code Review, Testing, etc.) so the dashboard can group usage and costs.
+                  In the Agent File Builder, assign categories (Code Review, Testing, etc.) so the dashboard can group usage and costs.
                 </p>
               </div>
             </li>

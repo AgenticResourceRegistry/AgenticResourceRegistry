@@ -26,7 +26,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.mcp import ListingStatus, McpListing, McpValidationResult, McpVersion
 from models.mcp_webhook_sync import McpWebhookSync
 from models.team import Team, TeamMembership
@@ -37,11 +36,27 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 REPO_URL = "https://github.com/acme/weather-mcp"
+
+
+def test_authenticated_webhook_git_disables_redirects(monkeypatch):
+    from unittest.mock import Mock
+
+    from services.mcp_validator import settings
+
+    monkeypatch.setattr(settings, "GIT_CLONE_TOKEN", "DUMMY_SECRET_FOR_TEST")
+    monkeypatch.setattr(settings, "GIT_CLONE_TOKEN_HOSTS", "github.com")
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(svc.subprocess, "run", run)
+    svc._git(["ls-remote", svc._build_clone_url(REPO_URL), "HEAD"])
+    assert run.call_args.kwargs["env"]["GIT_CONFIG_VALUE_0"] == "false"
+    svc._git(["ls-remote", "https://attacker.example/repo.git", "HEAD"])
+    assert "GIT_CONFIG_COUNT" not in run.call_args.kwargs["env"]
+
+
 _TABLES = [
     User.__table__,
     Team.__table__,
     TeamMembership.__table__,
-    ComponentBundle.__table__,
     McpListing.__table__,
     McpVersion.__table__,
     McpValidationResult.__table__,

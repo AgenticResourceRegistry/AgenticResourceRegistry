@@ -728,6 +728,7 @@ async def test_import_both_extracts_telemetry_and_merges_row_counts(monkeypatch,
         rows_inserted={"users": 3},
         rows_skipped={"users": 1},
         duration_seconds=1.0,
+        warnings=["insight_session_facets: skipped 60 unscoped legacy cache rows"],
     )
     ch_result = TelemetryImportResult(
         migration_id="migration-4",
@@ -761,6 +762,7 @@ async def test_import_both_extracts_telemetry_and_merges_row_counts(monkeypatch,
         "rows_inserted": {"users": 3, "session_events": 4},
         "rows_skipped": {"users": 1},
         "tables_skipped": ["audit_log"],
+        "warnings": ["insight_session_facets: skipped 60 unscoped legacy cache rows"],
         "total_rows": 8,
         "schema_version_diff": None,
     }
@@ -1066,3 +1068,29 @@ def test_migration_upload_tempdir_uses_persistent_artifact_volume(tmp_path):
         assert tempfile.tempdir == str(upload_tempdir)
     finally:
         tempfile.tempdir = original_tempdir
+
+
+def test_migration_upload_tempdir_survives_read_only_filesystem(tmp_path, monkeypatch):
+    import errno
+    import tempfile
+    from pathlib import Path
+
+    from services.migration_uploads import configure_migration_upload_tempdir
+
+    def read_only(*_args, **_kwargs):
+        raise OSError(errno.EROFS, "Read-only file system")
+
+    monkeypatch.setattr(Path, "mkdir", read_only)
+    original_tempdir = tempfile.tempdir
+    try:
+        assert configure_migration_upload_tempdir(tmp_path / "migration_artifacts") is None
+        assert tempfile.tempdir == original_tempdir
+    finally:
+        tempfile.tempdir = original_tempdir
+
+
+def test_api_image_keeps_migration_artifacts_on_the_data_volume():
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).parents[1] / "docker" / "Dockerfile.api").read_text()
+    assert "ENV MIGRATION_ARTIFACT_ROOT=/data/migration_artifacts" in dockerfile

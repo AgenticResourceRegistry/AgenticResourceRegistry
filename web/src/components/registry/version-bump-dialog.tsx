@@ -136,7 +136,7 @@ export function VersionBumpDialog({
             <span className="flex-1">
               <span className="block text-sm font-medium">Update components to their latest approved versions</span>
               <span className="block text-xs text-muted-foreground">
-                Otherwise every component keeps the version this agent currently pins.
+                Otherwise every component keeps the version this Agent File currently pins.
               </span>
             </span>
           </label>

@@ -12,7 +12,7 @@ global:
 
 api:
   image:
-    repository: ghcr.io/observal/observal-api
+    repository: ghcr.io/agenticresourceregistry/observal-api
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
@@ -26,7 +26,7 @@ api:
 
 worker:
   image:
-    repository: ghcr.io/observal/observal-api
+    repository: ghcr.io/agenticresourceregistry/observal-api
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
@@ -39,7 +39,7 @@ worker:
 
 web:
   image:
-    repository: ghcr.io/observal/observal-web
+    repository: ghcr.io/agenticresourceregistry/observal-web
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 1

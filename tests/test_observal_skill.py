@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hemalatha Madeswaran <hemalathamadeswaran@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Static validation for the bundled Observal skill.
@@ -396,9 +397,10 @@ class TestAgentBehaviorContracts:
         assert "only when it contains a validated `component_ref`" in text
         assert "do not invent a matching identity" in text
 
-    def test_admin_reviews_use_uuids_and_redact_secrets(self):
+    def test_admin_reviews_use_review_numbers_and_redact_secrets(self):
         text = (SKILLS_DIR / "observal-admin/references/governance-and-identity.md").read_text(encoding="utf-8")
-        assert "List and select by UUID" in text
+        assert "List open reviews by number" in text
+        assert "observal review publish 123" in text
         assert "Treat the entire response as secret" in text
 
     def test_local_fallback_requires_an_explicit_failure(self):
@@ -506,3 +508,18 @@ class TestFlagResolution:
                     bad.append(f"{' '.join(parsed.path)} {flag} (in: {parsed.full})")
 
         assert not bad, "skill documents flags that do not exist on the target command:\n  " + "\n  ".join(bad)
+
+
+def test_skill_docs_do_not_promise_an_install_command_that_asks_for_sandboxes():
+    """Sandboxes only reach a machine through an Agent (`agent add`), so no line may say their step asks first."""
+    required = [SKILLS_DIR / "observal" / "SKILL.md", SKILLS_DIR / "observal" / "references" / "discovery.md"]
+    for path in required:
+        assert "no install command" in path.read_text(encoding="utf-8"), f"{path.name} must say sandboxes have none"
+    for path in SKILLS_DIR.rglob("*.md"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            lowered = line.lower()
+            promises = (
+                "confirms before writing" in lowered or "asks before changing" in lowered or "which asks" in lowered
+            )
+            if "sandbox" in lowered and promises:
+                assert "no install command" in lowered, f"{path.relative_to(SKILLS_DIR)}: {line[:120]}"

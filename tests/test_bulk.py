@@ -11,6 +11,7 @@ and validation of empty requests.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,6 +21,13 @@ from httpx import ASGITransport, AsyncClient
 from api.deps import get_current_user, get_db
 from api.routes.bulk import router
 from models.user import User, UserRole
+
+
+@pytest.fixture(autouse=True)
+def _mock_review_boundary(monkeypatch):
+    """Bulk routing tests use a mocked session; review persistence is tested separately."""
+    monkeypatch.setattr("api.routes.bulk.submit_for_review", AsyncMock(return_value=SimpleNamespace(number=42)))
+
 
 # ── Helpers ──────────────────────────────────────────────
 

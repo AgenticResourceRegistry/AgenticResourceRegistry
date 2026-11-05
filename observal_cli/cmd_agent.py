@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json as _json
 import re
 from contextlib import nullcontext
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib.parse import quote
 from uuid import UUID
 
 import typer
@@ -29,6 +31,7 @@ from rich.table import Table
 from observal_cli import client, config
 from observal_cli.cmd_fork import fork_detail_rows
 from observal_cli.constants import AGENT_NAME_REGEX, VALID_HARNESSES
+from observal_cli.draft_submit import needs_resubmission
 from observal_cli.errors import CliError, ErrorCategory, exit_partial, fail
 from observal_cli.prompts import fuzzy_select, select_many, select_one, text_input
 from observal_cli.render import (
@@ -46,6 +49,8 @@ from observal_cli.render import (
     spinner,
     status_badge,
 )
+from observal_cli.review_display import print_draft_save, print_review_link
+from observal_shared.agent_model import AUTO_MODEL, normalize_model_name
 
 # ── Agent authoring constants ──────────────────────────────
 YAML_FILE = "observal-agent.yaml"
@@ -65,6 +70,7 @@ _RESERVED_AGENT_SLUGS = {
 
 # Common model choices for the interactive wizard
 _MODEL_CHOICES = [
+    AUTO_MODEL,  # each harness uses its own default model
     "claude-sonnet-4",
     "claude-opus-4",
     "claude-haiku-4-5",
@@ -351,7 +357,9 @@ def agent_create(
     description: str | None = typer.Option(None, "--description", "-d", help="Short description"),
     prompt: str | None = typer.Option(None, "--prompt", "-p", help="System prompt text"),
     prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read system prompt from a file"),
-    model_name: str | None = typer.Option(None, "--model", "-m", help="Model name (e.g. claude-sonnet-4)"),
+    model_name: str | None = typer.Option(
+        None, "--model", "-m", help="Model name (default: auto, each harness picks its own default)"
+    ),
     supported_harnesses: list[str] | None = typer.Option(
         None, "--harness", help="Supported harnesses (repeat for multiple)"
     ),
@@ -407,7 +415,8 @@ def agent_create(
             return
         status = result.get("status", "pending")
         rprint(f"[green]✓ Agent submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
-        rprint(f"[yellow]Status: {esc(status)} - an admin must approve it before it becomes visible.[/yellow]")
+        print_review_link(result)
+        rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
         return
 
     # ── Path B: From flags (non-interactive) ─────────────────
@@ -469,8 +478,8 @@ def agent_create(
         normalized_version = _validate_version(version or "1.0.0", operation="Create agent")
         normalized_harnesses = _validate_harnesses(supported_harnesses or [], operation="Create agent")
 
-        # Default model
-        _model = model_name or "claude-sonnet-4"
+        # Every agent has a model; a missing or blank one is "auto".
+        _model = normalize_model_name(model_name)
 
         # Resolve owner from whoami
         whoami = client.get("/api/v1/auth/whoami")
@@ -522,7 +531,7 @@ def agent_create(
 
     description = text_input("  Description")
     version = _validate_version(text_input("  Version", default="1.0.0"), operation="Create agent")
-    model_name = select_one("  Model", _MODEL_CHOICES, default="claude-sonnet-4")
+    model_name = select_one("  Model", _MODEL_CHOICES, default=AUTO_MODEL)
 
     # ── Phase 2: Components ──────────────────────────────────
     rprint("\n[bold]2. Components[/bold]")
@@ -615,7 +624,8 @@ def agent_create(
         result = client.post("/api/v1/agents", payload)
     status = result.get("status", "pending")
     rprint(f"\n[green]✓ Agent submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
-    rprint(f"[yellow]Status: {esc(status)} - an admin must approve it before it becomes visible.[/yellow]")
+    print_review_link(result)
+    rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
 
 
 @agent_app.command(name="bulk-create")
@@ -816,7 +826,7 @@ def agent_bulk_create(
             esc(ag.get("name", "unnamed")),
             esc(ag.get("version", "1.0.0")),
             comp_count,
-            esc(ag.get("model_name", "claude-sonnet-4")),
+            esc(normalize_model_name(ag.get("model_name"))),
         )
     if output != "json":
         console.print(preview)
@@ -946,7 +956,7 @@ def agent_list(
         def _display(item: dict) -> str:
             email = item.get("created_by_email", "")
             suffix = f"  by {email}" if email else ""
-            return f"{name_inline(item)}  v{item.get('version', '?')}  {item.get('model_name', '')}{suffix}"
+            return f"{name_inline(item)}  v{item.get('version', '?')}  {normalize_model_name(item.get('model_name'))}{suffix}"
 
         selected = fuzzy_select(data, _display, label="Select agent")
         if selected:
@@ -988,7 +998,7 @@ def agent_list(
             str(i),
             esc(display_name(item)),
             esc(item.get("version", "")),
-            esc(item.get("model_name", "")),
+            esc(normalize_model_name(item.get("model_name"))),
             esc(handle(item)),
         ]
         if include_id:
@@ -1043,7 +1053,7 @@ def agent_my(
             str(i),
             esc(display_name(item)),
             esc(item.get("version", "")),
-            esc(item.get("model_name", "")),
+            esc(normalize_model_name(item.get("model_name"))),
             esc(handle(item)),
             status_badge(item.get("status", "")),
             str(item["id"])[:8] + "…",
@@ -1081,7 +1091,7 @@ def agent_show(
             f"{display_name(item)} v{item.get('version', '?')}",
             [
                 ("Status", listing_status(item)),
-                ("Model", f"[bold]{esc(item.get('model_name', 'N/A'))}[/bold]"),
+                ("Model", f"[bold]{esc(normalize_model_name(item.get('model_name')))}[/bold]"),
                 ("Namespace", esc(handle(item) or "N/A")),
                 ("Created By", esc(item.get("created_by_username") or item.get("created_by_email", ""))),
                 ("Description", esc(item.get("description", ""))),
@@ -1133,7 +1143,7 @@ def _fork_agent_yaml(item: dict) -> dict:
         "description": item.get("description") or "",
         "owner": item.get("owner") or "",
         "category": item.get("category"),
-        "model_name": item.get("model_name") or "claude-sonnet-4",
+        "model_name": normalize_model_name(item.get("model_name")),
         "model_config_json": item.get("model_config_json") or {},
         "models_by_harness": item.get("models_by_harness") or {},
         "prompt": item.get("prompt") or "",
@@ -1214,8 +1224,7 @@ def agent_fork(
     if directory is not None:
         rprint(f"[dim]Next:[/dim] observal agent publish --update --dir {esc(directory)}")
     rprint(f"[dim]Submit:[/dim] observal agent publish --submit {esc(result['id'])}")
-    for warning in result.get("warnings") or []:
-        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+    _print_warnings(result)
 
 
 @agent_app.command(name="install")
@@ -1232,6 +1241,10 @@ def agent_install(
     files depending on the target harness. Use --raw to pipe JSON directly
     to a file.
 
+    Observal's own launchers (telemetry hooks, sandbox and delegation MCP
+    servers) are rewritten to this CLI's Python interpreter, exactly as
+    `agent pull` writes them, so a copied snippet works on this machine.
+
     Examples:
       observal agent install my-agent --harness claude-code
       observal agent install my-agent --harness cursor --raw > config.json
@@ -1242,7 +1255,16 @@ def agent_install(
     with _progress("json" if raw else output, f"Generating {harness} config..."):
         result = client.post_public(f"/api/v1/agents/{resolved}/install", {"harness": harness})
 
-    snippet = result.get("config_snippet", {})
+    # The server names a bare python3; localize the launchers the way agent pull writes them.
+    from observal_cli.cmd_pull import localize_install_snippet
+    from observal_cli.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    snippet = localize_install_snippet(
+        result.get("config_snippet", {}), adapter=get_adapter(harness), agent_id=str(resolved)
+    )
+    if "config_snippet" in result:
+        result = {**result, "config_snippet": snippet}
     if raw:
         output_json(snippet)
         return
@@ -1457,7 +1479,7 @@ def agent_init(
     name: str | None = typer.Option(None, "--name", "-n", help="Agent name"),
     version: str | None = typer.Option(None, "--version", "-v", help="Version"),
     description: str | None = typer.Option(None, "--description", help="Description"),
-    model_name: str | None = typer.Option(None, "--model", "-m", help="Model name"),
+    model_name: str | None = typer.Option(None, "--model", "-m", help="Model name (default: auto)"),
     prompt: str | None = typer.Option(None, "--prompt", "-p", help="System prompt text"),
     prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read system prompt from a file"),
     supported_harnesses: list[str] | None = typer.Option(None, "--harness", help="Supported harness (repeatable)"),
@@ -1576,7 +1598,7 @@ def agent_init(
         raw_name = text_input("Agent name")
         version = text_input("Version", default=default_version)
         description = text_input("Description")
-        model_name = text_input("Model name", default="claude-sonnet-4")
+        model_name = text_input("Model name", default=AUTO_MODEL)
         prompt_text = text_input("System prompt")
         harnesses = _validate_harnesses(
             supported_harnesses or list(VALID_HARNESSES), operation="Initialize agent definition"
@@ -1603,10 +1625,10 @@ def agent_init(
         "version": version,
         "description": description,
         "owner": owner,
-        "model_name": model_name or "claude-sonnet-4",
+        "model_name": normalize_model_name(model_name),
         "model_config_json": {},
         # Optional per-harness model overrides, e.g. {"kiro": "claude-haiku-4-5"}.
-        # Leave empty to use model_name everywhere that accepts a model choice.
+        # Leave empty to use model_name everywhere that accepts a model choice ("auto" = harness default).
         "models_by_harness": {},
         "prompt": prompt_text,
         "supported_harnesses": harnesses,
@@ -1735,7 +1757,7 @@ def agent_build(
 
     if output != "json":
         rprint(f"[bold]Agent:[/bold] {esc(data.get('name', 'unnamed'))} v{esc(data.get('version', '?'))}")
-        rprint(f"[bold]Model:[/bold] {esc(data.get('model_name', 'N/A'))}")
+        rprint(f"[bold]Model:[/bold] {esc(normalize_model_name(data.get('model_name')))}")
         rprint()
 
     components = data.get("components", [])
@@ -1794,20 +1816,30 @@ def agent_build(
     if output != "json":
         console.print(table)
 
-    scope_payload = {"components": components}
+    declared = data.get("supported_harnesses", [])
+    scope_payload = {"components": components, "supported_harnesses": declared}
     client.add_publish_target(scope_payload, team, visibility)
     with _progress(output, "Checking agent composition scope..."):
         scope_result = client.post("/api/v1/agents/validate", scope_payload)
     issues = scope_result.get("issues", [])
+    warnings: list[str] = []
     for issue in issues:
-        errors.append(issue.get("message", "Component is not valid for this agent target"))
+        message = issue.get("message", "Component is not valid for this agent target")
+        if issue.get("severity") == "warning":
+            warnings.append(message)
+        else:
+            errors.append(message)
 
     result = {
         "valid": not errors,
         "agent": data.get("name"),
         "components": component_results,
         "issues": issues,
+        "supported_harnesses": scope_result.get("supported_harnesses", declared),
     }
+    if output != "json":
+        for warning in warnings:
+            rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
     if errors:
         if output != "json":
             rprint(f"\n[red]{len(errors)} component issue(s):[/red]")
@@ -1827,13 +1859,134 @@ def agent_build(
         rprint("\n[green]✓ All components valid.[/green]")
 
 
+def _print_warnings(result: dict) -> None:
+    for warning in result.get("warnings") or []:
+        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+
+
+# Statuses whose version is not published yet and is amended in place (a new review revision).
+_AMENDABLE_STATUSES = ("draft", "pending", "changes_requested", "rejected")
+
+
+def _amend_hint(agent: dict) -> str:
+    ref = client.canonical_name(agent) if agent.get("namespace") else agent.get("id", "AGENT")
+    return f"observal agent edit {ref} --description '...' (or edit observal-agent.yaml and run observal agent publish --update)"
+
+
+def _refuse_release_over_unpublished_first_release(agent: dict, *, operation: str) -> None:
+    """A first release still under review is amended, never superseded by a new version."""
+    if agent.get("status") in ("pending", "changes_requested") and not agent.get("latest_approved_version"):
+        fail(
+            ErrorCategory.CONFLICT,
+            f"v{agent.get('version', '?')} is not published yet, so there is no release to version from.",
+            operation=operation,
+            resource=str(agent.get("id", "agent")),
+            remediation=f"Amend it in place; reviewers see the change as a new revision of the same review: {_amend_hint(agent)}",
+        )
+
+
+@agent_app.command(name="edit")
+def agent_edit(
+    name: str = typer.Argument(..., help="Agent name, ID, row number, or @alias"),
+    description: str | None = typer.Option(None, "--description", "-d", help="New description"),
+    prompt: str | None = typer.Option(None, "--prompt", help="New system prompt"),
+    prompt_file: str | None = typer.Option(None, "--prompt-file", help="Read the new system prompt from a file"),
+    model_name: str | None = typer.Option(None, "--model", "-m", help="New default model (blank = auto)"),
+    message: str | None = typer.Option(None, "--message", help="Revision note for the review"),
+    output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
+):
+    """Amend an unpublished agent version in place.
+
+    Works while the latest version is a draft, pending review, changes
+    requested, or rejected. The version number stays the same. Under review,
+    the edit is submitted as a new revision of the same review, which answers
+    requested changes (like Save & update review in the web Edit tab).
+    An approved version is immutable: use `observal agent release` instead.
+
+    Examples:
+      observal agent edit my-agent --description 'Reviews pull requests for risk'
+      observal agent edit my-agent --prompt-file ./PROMPT.md --output json
+    """
+    if prompt is not None and prompt_file is not None:
+        fail(
+            ErrorCategory.VALIDATION,
+            "--prompt and --prompt-file cannot be used together.",
+            operation="Edit agent",
+            resource="agent prompt",
+            remediation="Choose one prompt source.",
+        )
+    if prompt_file is not None:
+        try:
+            prompt = Path(prompt_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            fail(
+                ErrorCategory.NOT_FOUND,
+                f"Could not read prompt file: {prompt_file}.",
+                operation="Edit agent",
+                resource=prompt_file,
+                remediation="Provide a readable UTF-8 prompt file.",
+                detail=repr(error),
+            )
+    updates = {
+        key: value
+        for key, value in (("description", description), ("prompt", prompt), ("model_name", model_name))
+        if value is not None
+    }
+    if not updates:
+        fail(
+            ErrorCategory.VALIDATION,
+            "Nothing to change.",
+            operation="Edit agent",
+            resource="agent edit options",
+            remediation="Pass --description, --prompt, --prompt-file, or --model.",
+        )
+    resolved = client.resolve_registry_reference("agent", name)
+    agent = client.get(f"/api/v1/agents/{resolved}")
+    if agent.get("status") not in _AMENDABLE_STATUSES:
+        fail(
+            ErrorCategory.CONFLICT,
+            f"v{agent.get('version', '?')} is {agent.get('status')} and cannot be edited in place.",
+            operation="Edit agent",
+            resource=str(agent.get("id", name)),
+            remediation=f"Release a new version: observal agent release {name} --bump patch",
+        )
+    client.post(f"/api/v1/agents/{agent['id']}/start-edit")
+    try:
+        with _progress(output, "Saving changes..."):
+            result = client.put(f"/api/v1/agents/{agent['id']}/draft", updates)
+    except BaseException:
+        # A failed save must not leave the edit lock blocking other editors for its full timeout.
+        with contextlib.suppress(Exception):
+            client.post(f"/api/v1/agents/{agent['id']}/cancel-edit")
+        raise
+    if agent.get("status") in ("pending", "changes_requested") and needs_resubmission(
+        {**result, "status": agent.get("status")}
+    ):
+        # Saving under review is the author's resubmission; it answers requested changes.
+        with _progress(output, "Submitting revision..."):
+            submitted = client.post(
+                f"/api/v1/agents/{agent['id']}/submit" + (f"?message={quote(message)}" if message else "")
+            )
+        result = {**result, **{k: v for k, v in submitted.items() if k in ("status", "review_number", "review_url")}}
+    if output == "json":
+        output_json(result)
+        return
+    rprint(f"[green]✓ Updated {esc(result.get('name', name))}[/green] v{esc(result.get('version', '?'))}")
+    print_draft_save(result, f"observal agent publish --submit {result.get('id', agent['id'])}")
+
+
 @agent_app.command(name="publish")
 def agent_publish(
     directory: str = typer.Option(".", "--dir", "-d", help="Directory containing observal-agent.yaml"),
     update: bool = typer.Option(False, "--update", "-u", help="Update existing agent instead of creating"),
     draft: bool = typer.Option(False, "--draft", help="Save as draft instead of submitting for review"),
-    submit: str | None = typer.Option(None, "--submit", help="Submit a draft agent for review (agent ID)"),
-    bump: str | None = typer.Option(None, "--bump", help="Version bump type: patch, minor, or major (skips prompt)"),
+    submit: str | None = typer.Option(
+        None, "--submit", "--submit-draft", help="Submit the current draft for review, or as a new revision (agent ID)"
+    ),
+    message: str | None = typer.Option(None, "--message", help="Revision note when submitting a draft"),
+    bump: str | None = typer.Option(
+        None, "--bump", help="With --update: also bump the unpublished version number (default: keep it)"
+    ),
     team: str | None = typer.Option(None, "--team", help="Teamspace UUID or handle"),
     visibility: str | None = typer.Option(None, "--visibility", help="Visibility: public or team"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -1868,11 +2021,14 @@ def agent_publish(
     if submit:
         resolved = client.resolve_registry_reference("agent", submit)
         with _progress(output, "Submitting draft for review..."):
-            result = client.post(f"/api/v1/agents/{resolved}/submit")
+            result = client.post(
+                f"/api/v1/agents/{resolved}/submit" + (f"?message={quote(message)}" if message else "")
+            )
         if output == "json":
             output_json(result)
             return
         rprint(f"[green]✓ Draft submitted for review![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        print_review_link(result)
         return
 
     dir_path = Path(directory)
@@ -1883,7 +2039,7 @@ def agent_publish(
         "version": data.get("version", "1.0.0"),
         "description": data.get("description", ""),
         "owner": data.get("owner", ""),
-        "model_name": data.get("model_name", "claude-sonnet-4"),
+        "model_name": normalize_model_name(data.get("model_name")),
         "models_by_harness": data.get("models_by_harness", {}) or {},
         "prompt": data.get("prompt", ""),
         "supported_harnesses": data.get("supported_harnesses", []),
@@ -1930,6 +2086,7 @@ def agent_publish(
             output_json(result)
             return
         rprint(f"[green]✓ Draft saved![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        _print_warnings(result)
         return
 
     if update:
@@ -1961,27 +2118,21 @@ def agent_publish(
                 )
             agent_id = match["id"]
 
-        # Version bump selection (interactive only when --bump not provided)
-        import sys
-
+        # --update amends the current version in place; it never bumps semver unless asked.
+        # A pending or changes-requested version becomes a new revision of the same review.
+        with _progress(output, "Checking current version..."):
+            current_agent = client.get(f"/api/v1/agents/{agent_id}")
+        if current_agent.get("status") not in _AMENDABLE_STATUSES:
+            fail(
+                ErrorCategory.CONFLICT,
+                f"v{current_agent.get('version', '?')} is {current_agent.get('status')} and cannot be updated in place.",
+                operation="Publish agent",
+                resource=agent_id,
+                remediation=f"Release a new version: observal agent release {agent_id} --bump patch --dir {directory}",
+            )
         if bump and bump in ("patch", "minor", "major"):
             payload["version_bump_type"] = bump
             payload.pop("version", None)
-        elif sys.stdin.isatty() and draft_id is None:
-            current_version = match.get("version", "1.0.0")
-            suggestions = client.get(f"/api/v1/agents/{agent_id}/version-suggestions")
-            sug = suggestions.get("suggestions", {})
-            bump_choices = [
-                f"patch  {current_version} → {sug.get('patch', '?')}  (bug fix)",
-                f"minor  {current_version} → {sug.get('minor', '?')}  (improvement)",
-                f"major  {current_version} → {sug.get('major', '?')}  (revamp)",
-                "keep   (use version from YAML)",
-            ]
-            choice = select_one("Version bump type", bump_choices, default=bump_choices[0])
-            bump_type = choice.split()[0]
-            if bump_type != "keep":
-                payload["version_bump_type"] = bump_type
-                payload.pop("version", None)
 
         with _progress(output, "Updating agent..."):
             result = client.put(f"/api/v1/agents/{agent_id}", payload)
@@ -1989,8 +2140,10 @@ def agent_publish(
             output_json(result)
             return
         rprint(
-            f"[green]✓ Agent updated![/green] ID: [bold]{esc(result['id'])}[/bold]  v{esc(result.get('version', '?'))}"
+            f"[green]✓ Agent updated in place![/green] ID: [bold]{esc(result['id'])}[/bold]  v{esc(result.get('version', '?'))}"
         )
+        print_draft_save(result, f"observal agent publish --submit {result.get('id', '<id>')}")
+        _print_warnings(result)
     else:
         with _progress(output, "Submitting agent for review..."):
             result = client.post("/api/v1/agents", payload)
@@ -1999,9 +2152,11 @@ def agent_publish(
             return
         status = result.get("status", "pending")
         rprint(f"[green]✓ Agent submitted![/green] ID: [bold]{esc(result['id'])}[/bold]")
+        print_review_link(result)
         rprint(f"  Pull: [cyan]observal agent pull {esc(client.canonical_name(result))}[/cyan]")
         if status != "approved":
-            rprint(f"[yellow]Status: {esc(status)} - an admin must approve it before it becomes visible.[/yellow]")
+            rprint(f"[yellow]Status: {esc(status)} - review is required before publication.[/yellow]")
+        _print_warnings(result)
 
 
 @agent_app.command(name="release")
@@ -2014,6 +2169,7 @@ def agent_release(
         "--refresh-components",
         help="Move every component without a version in the YAML to its latest approved release",
     ),
+    message: str | None = typer.Option(None, "--message", help="Review revision note"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
 ):
     """Bump version and push a versioned release to the registry.
@@ -2051,6 +2207,7 @@ def agent_release(
     with _progress(output, "Looking up agent..."):
         agent = client.get(f"/api/v1/agents/{resolved}")
     agent_id = agent["id"]
+    _refuse_release_over_unpublished_first_release(agent, operation="Release agent version")
 
     # Fetch version suggestions
     with _progress(output, "Fetching version suggestions..."):
@@ -2079,7 +2236,7 @@ def agent_release(
         "version": new_version,
         "description": data.get("description", ""),
         "prompt": data.get("prompt", ""),
-        "model_name": data.get("model_name", "claude-sonnet-4"),
+        "model_name": normalize_model_name(data.get("model_name")),
         "model_config_json": data.get("model_config_json") or {},
         "models_by_harness": data.get("models_by_harness", {}) or {},
         "external_mcps": data.get("external_mcps") or [],
@@ -2089,6 +2246,8 @@ def agent_release(
         "success_criteria": data.get("success_criteria"),
         "refresh_components": refresh_components,
     }
+    if message:
+        payload["message"] = message
 
     if output != "json":
         rprint("[dim]→[/dim] Pushing definition to registry...")
@@ -2102,8 +2261,8 @@ def agent_release(
         return
 
     rprint(f"[green]✓ Version {esc(new_version)} submitted for review[/green]")
-    for warning in result.get("warnings", []):
-        rprint(f"[yellow]⚠ {esc(warning)}[/yellow]")
+    print_review_link(result)
+    _print_warnings(result)
 
 
 @agent_app.command(name="versions")

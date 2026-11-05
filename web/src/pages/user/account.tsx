@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Tanvi Reddy <reddyplayer22@gmail.com>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -16,6 +17,7 @@ import {
 	getUserUsername,
 	getUserAvatar,
 	setUserUsername,
+	setTokens,
 	auth,
 } from "@/lib/api";
 import { ROLE_LABELS, type Role } from "@/hooks/use-role-guard";
@@ -170,7 +172,7 @@ function ChangeUsernameSection() {
 							<AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 							<p className="text-xs">
 								<span className="font-medium">@{currentUsername}</span> cannot be used as a
-								registry namespace, so publishing agents and components is blocked. Choose a
+								registry namespace, so publishing Agent Files and components is blocked. Choose a
 								valid username below — anything you already published moves with you.
 							</p>
 						</div>
@@ -268,10 +270,13 @@ function ChangePasswordSection() {
 		}
 		setSaving(true);
 		try {
-			await auth.changePassword({
+			// Changing the password signs out every session; keep this one on the fresh pair it hands back.
+			const { exchange_code } = await auth.changePassword({
 				current_password: currentPassword,
 				new_password: newPassword,
 			});
+			const session = await auth.exchangeCode({ code: exchange_code });
+			setTokens(session.access_token, session.refresh_token);
 			toast.success("Password changed successfully");
 			setCurrentPassword("");
 			setNewPassword("");

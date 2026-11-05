@@ -73,6 +73,10 @@ class SkillVersionManifest(BaseModel):
     version_id: uuid.UUID
     revision: SkillRevision
     files: list[SkillFileDeclaration] = Field(max_length=130)
+    # Set when the save pushed a new revision to the version's open review.
+    review_number: int | None = None
+    review_url: str | None = None
+    review_revision: int | None = None
 
 
 class SkillFilePut(BaseModel):
@@ -103,6 +107,7 @@ class SkillVersionRevisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     observed_revision: SkillRevision
+    message: str | None = Field(default=None, max_length=5000)
 
 
 class SkillDraftRebaseRequest(BaseModel):

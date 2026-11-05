@@ -1,11 +1,12 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "observal ops"
+---
 
-# `observal ops`
+Inspect current session telemetry, Registry usage, feedback, logs, and Agent or component insight reports.
 
-Inspect current session telemetry, Registry usage, feedback, logs, and Agent insight reports.
-
-All 11 supported workflows provide table and JSON output. Finite commands return one JSON document. Streaming commands return JSON Lines, one compact object per update.
+All 13 supported workflows provide table and JSON output. Finite commands return one JSON document. Streaming commands return JSON Lines, one compact object per update.
 
 The dead `ops metrics`, legacy `ops spans`, and synthetic `ops telemetry test` commands have been removed. Current trace detail comes from `ops traces --span` through the Sessions API.
 
@@ -21,7 +22,9 @@ The dead `ops metrics`, legacy `ops spans`, and synthetic `ops telemetry test` c
 | `traces` | List current sessions or fetch their details |
 | `telemetry status` | Check server event counts and local outbox health |
 | `logs` | Follow local or remote development logs |
-| `insights list` | List Agent insight reports |
+| `insights activity` | Summarize verified component presence, usage and evidence gaps |
+| `insights sessions` | Page through verified-present component sessions |
+| `insights list` | List Agent or component insight reports |
 | `insights show` | Show an insight report or section |
 | `insights generate` | Generate an insight report |
 
@@ -228,6 +231,52 @@ Report sections include:
 * `on_the_horizon`
 * `fun_ending`
 
+## Component insights
+
+Owners, co-authors and admins of an MCP, skill or hook can inspect its evidence with `--component TYPE NAMESPACE/SLUG` (or a component UUID). Read-only activity and session inspection use the same owner-authorized APIs as the web UI:
+
+```bash
+observal ops insights activity --component mcp alice/tool --period 14 --output json
+observal ops insights sessions --component hook alice/hook --limit 50 --output json
+observal ops insights sessions --component hook alice/hook --cursor NEXT_CURSOR --output json
+observal ops insights activity --component skill alice/review --version 1.2.3 --output json
+observal ops insights generate --component skill alice/review --version 1.2.3 --period 14 --wait --output json
+observal ops insights list --component skill alice/review --output json
+observal ops insights show --component skill alice/review latest --section coverage --output json
+```
+
+Periods accept 1 through 90 days for components; session page size accepts 1 through 100. `--version` on activity, sessions and generate resolves an **exact** component semantic-version label through its version-history endpoint, then scopes the request by version ID. A missing or inaccessible version is an error, not a fallback to all versions. The server binds pagination cursors to the caller, component, version and period. Use `--output json` for complete `coverage` (presence, projection, evidence, attribution reasons and limitations), nullable counts, source references, and the opaque `next_cursor`; the table is a brief readout, not the complete evidence record. For a component report, `--section summary`, `--section metrics`, `--section coverage`, and (when available) `--section component_analysis` select just that section. Component reports count only sessions where the component was verified present. If there are none, generation exits with validation code 7; JSON error output on stderr contains `error.result.coverage` and the human error summarizes presence gaps. Check `activity` first. Legacy Agent pins without an installation snapshot do not prove presence, and incomplete/unavailable projections do not prove zero use. Unauthorized access exits with permission code 4; failed server requests are not silently returned as empty sessions.
+
+**Trust boundary:** “verified present” means the server checked consistency of the client's uploaded snapshot, drift claims and transcript; it does not independently attest to the user's files, harness execution or session contents. A user can copy another person's component pins into a fabricated snapshot and session transcript, inflating that component owner's distinct-user and usage counts; a fabricated hook-run line can likewise count as a run because the client supplies the transcript. These counts must stay out of rankings, recommendations and review/approval decisions. Treat them as self-reported observations, not fraud-resistant measurements.
+
+**Outcomes, what to look at, and the reading.** Every component report adds three sections beside its counts, so an owner sees what to change and not only what happened:
+
+| Section | What it holds | How it is made |
+| --- | --- | --- |
+| `outcomes` | Sessions with the component against sessions in the same project, period and harnesses whose layer snapshot lacks it: goal achieved, satisfaction, friction. Each side shows its cohort size, how many were sampled (up to 30) and how many have outcome data. | Session facets, the same ones Agent reports use. Cached facets are reused; up to 40 sessions with none get one model call each when someone requests the report. |
+| `attention` | A short list of things to look at, such as a hook that failed most recorded runs, a skill present in many sessions and never loaded, or an MCP whose calls often return an error. Each item has its numbers and, where a remedy is known, one suggestion. | Fixed rules over the report's own counts. The same data always gives the same items. |
+| `analysis` | A model-written reading: health, what works, friction, and up to five suggested changes, each with an action type, a confidence and the evidence it rests on. | One model call over the counts, the attention items, the comparison and a few redacted friction notes. It never sees prompts, tool arguments or transcripts. |
+
+The comparison is an association. The two groups differ in more than the component, such as the task and the user, so the report never says the component caused or improved an outcome, and a difference is reported only when each side has at least 10 sessions with a known outcome, the achieved rates differ by at least 15 points, and the difference is statistically clear. The model's text is checked before it is kept: no number the data does not contain, no causal wording, no claim that a component was unused, no identifiers, no copied friction text, and every suggestion must cite the evidence it rests on. A reply that fails is repaired once and then dropped (`analysis.state` is `unknown`), and the counts never depend on it. A report nobody requested (a scheduled one) reads cached outcomes only and spends no model calls. Reading and comparison models are the `insights.model_sections` and `insights.model_facets` settings.
+
+MCP reports count attributed calls. Claude Code project-scoped Agent pulls register MCPs in the local project entry of `~/.claude.json` (not `.mcp.json`); standalone project-wide MCP installs may use `.mcp.json`. A settings file larger than the CLI's 512 KiB per-file hash limit stays unverified rather than being counted. Claude Code does not record an explicit success flag on successful MCP responses, so those calls have an unknown outcome; do not interpret the resulting success rate as zero or as confirmed success. MCP reports can add model-written findings when insights are configured.
+
+Skill report counts are deterministic. They count present sessions, sessions with a confirmed load (the skill's file text entered the model's context), sessions with an explicit invocation, and sessions where the skill was offered. Each harness records a different subset:
+
+| Harness | Offered | Confirmed load | Invocation |
+| --- | --- | --- | --- |
+| Pi | yes | model read of the skill's `SKILL.md` | not recorded |
+| Claude Code | not recorded | `Skill` tool call with its linked expansion | `/name` command with its harness-written expansion |
+
+"Not recorded" is unknown, never zero. If a cohort mixes harnesses, a count covers only the harnesses that record it, and the report says so. Skill evidence counts only for an Agent pull or standalone Registry install whose `SKILL.md` was fingerprinted at the exact active location the session names. Legacy or inactive paths without a fingerprint stay unverified until reinstalled. The verifier assumes the default `~/.claude` and `~/.pi/agent` directories. Skills under a custom `CLAUDE_CONFIG_DIR` or `PI_CODING_AGENT_DIR` are not counted. A load or invocation shows the skill's instructions entered context. It does not show that the skill was followed or that it helped. Hook reports are deterministic and cover Claude Code and Pi. They count present sessions, sessions where the hook **could run**, and recorded runs: successful runs that printed output, failures, and runs that blocked an action. A recorded run must name the exact event and command of the verified install.
+
+- **Silent runs.** Pi's extension records every run, so Pi reports count runs that succeeded without output as silent runs. Claude Code leaves no record of them: there, silent runs are unknown (`silent_runs` is null), recorded runs are a lower bound, and a hook with no recorded runs may still have run. In a cohort that mixes both, the silent count covers only Pi sessions and the report says so.
+- **Agent hooks run only with their agent; placement controls headless execution.** By default, `agent pull` puts them in the agent's frontmatter, which Claude Code runs only interactively. With the explicit `--hooks=settings` opt-in, they move to `settings.json` behind an agent-identity gate and can run headlessly while that agent is active. Sessions where the agent hook could not run are kept out of its denominator; uncertain identity or an untested Claude Code version is reported as unknown, not zero. Hooks installed independently with `hook install` (in `settings.json`) are not agent-scoped. See [Agent hooks in headless sessions](pull.md#agent-hooks-in-headless-sessions).
+- **Claude Code versions.** Hook records were proven on a tested range of Claude Code versions (currently 2.1.286). A session written by any other version is `version_unverified`: kept out of the denominator unless it recorded a run, and named in the report.
+- A recorded run shows the hook executed. It does not show what it changed or that it helped.
+
+- **Pi runs registry hooks in its Agentic Resource Registry extension.** Only command hooks on `PreToolUse` and `PostToolUse` are installed, in user scope; a pull reports every other hook as not installed. A verified Pi hook can run in every session, interactive or headless, so every session that verifies it is in the denominator. Runs are read from receipts the extension writes, which any other extension in the same Pi process could also write. See [Pi: Registry hooks](../integrations/pi.md#registry-hooks).
+
 ## Exit codes
 
 | Code | Meaning |
@@ -243,7 +292,7 @@ Report sections include:
 
 ## Related
 
-* [`observal inbox`](inbox.md): completed insight notifications
-* [`observal agent`](agent.md): apply insight recommendations
-* [`observal registry`](registry.md): inspect rated or recommended components
-* [Debug Agent failures](../use-cases/debug-agent-failures.md)
+* [`observal inbox`](/cli/inbox): completed insight notifications
+* [`observal agent`](/cli/agent): apply insight recommendations
+* [`observal registry`](/cli/registry): inspect rated or recommended components
+* [Debug Agent failures](/use-cases/debug-agent-failures)

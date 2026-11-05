@@ -33,7 +33,8 @@ import {
   useComponentUpdateDraft,
   useComponentSubmitDraft,
 } from "@/hooks/use-api";
-import { getUserRole } from "@/lib/api";
+import { getUserRole, registry } from "@/lib/api";
+import { useComponentInsightReports, useGenerateComponentInsight } from "@/hooks/use-insights-api";
 import { useOptionalAuth } from "@/hooks/use-auth";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { hasMinRole } from "@/hooks/use-role-guard";
@@ -46,6 +47,7 @@ import { tagColorClasses } from "@/lib/tag-colors";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ReviewForm } from "@/components/registry/review-form";
+import { ActiveReviewBanner } from "@/components/review/active-review-banner";
 import { VersionDropdown } from "@/components/registry/version-dropdown";
 import { ComponentEditForm } from "@/components/registry/component-edit-form";
 import { SubmitComponentDialog } from "@/components/registry/submit-component-dialog";
@@ -193,6 +195,8 @@ export default function ComponentDetailPage({
   const [forkOpen, setForkOpen] = useState(false);
   const [forkPage, setForkPage] = useState(1);
   const [activeTab, setActiveTab] = useState(search.tab === "edit" ? "edit" : "overview");
+  // The router reuses this detail page when the resolved listing changes.
+  useEffect(() => { setActiveTab("overview"); setForkPage(1); }, [id, type]);
   useEffect(() => { if (search.tab === "edit") setActiveTab("edit"); }, [id, search.tab]);
   const forkComponent = useForkComponent(type);
   const updateDraft = useComponentUpdateDraft(type);
@@ -200,9 +204,45 @@ export default function ComponentDetailPage({
   const [draftEditOpen, setDraftEditOpen] = useState(false);
   const { data: publicForks, isLoading: forksLoading, error: forksError } = useComponentForks(type, id, forkPage, activeTab === "forks");
   const canEdit = isAuthenticated && (item?.user_permission === "owner");
+  // Component Insights exist for MCPs (observed calls), skills (loads and invocations) and hooks (recorded runs).
+  const insightType = type === "mcps" ? "mcp" : type === "skills" ? "skill" : type === "hooks" ? "hook" : null;
+  const showInsights = insightType !== null && canEdit;
+  // A shared /components/...?tab=insights link opens the tab for those who may see it (owners and admins).
+  useEffect(() => { if (search.tab === "insights" && showInsights) setActiveTab("insights"); }, [id, search.tab, showInsights]);
+  const { data: reportPages, isLoading: reportsLoading, isError: reportsError, hasNextPage, fetchNextPage, isFetchingNextPage } = useComponentInsightReports(insightType ?? "mcp", id, showInsights);
+  const componentReports = reportPages?.pages.flat() ?? [];
+  const generateComponentInsight = useGenerateComponentInsight();
   // Only owners can read sync status, so only their open page follows GitHub syncs.
   useMcpSyncWatcher(item ? String(item.id) : undefined, canEdit && type === "mcps" && !!item?.git_url);
   const isEditableDraft = item?.status === "draft" || item?.status === "rejected";
+  // Legacy draft dialogs also edit saved skill revisions. They must observe
+  // the exact version, not silently retry a stale listing-level update.
+  const skillDraftVersion = type === "skills" && isEditableDraft
+    ? versionsData?.items.find((v) => v.version === item?.version && ["draft", "rejected"].includes(v.status))
+    : undefined;
+  const skillDraftVersionId = skillDraftVersion?.id;
+  async function saveDialogDraft(body: Record<string, unknown>): Promise<string | undefined> {
+    if (type !== "skills") {
+      await updateDraft.mutateAsync({ id, body });
+      return undefined;
+    }
+    if (!skillDraftVersionId) {
+      toast.error("Skill version is still loading; refresh before saving");
+      throw new Error("Skill version is still loading");
+    }
+    if (skillDraftVersion?.delivery_mode !== "registry_direct") {
+      await updateDraft.mutateAsync({ id, body });
+      return undefined;
+    }
+    const manifest = await registry.getSkillVersionManifest(id, skillDraftVersionId);
+    if ((Array.isArray(body.extra_files) && body.extra_files.length > 0) ||
+        manifest.files.some((file) => file.path !== "SKILL.md" && file.path !== body.script_filename)) {
+      toast.error("Edit this skill's saved folder using its version-bound file editor");
+      throw new Error("Saved folder needs the file editor");
+    }
+    await updateDraft.mutateAsync({ id, body: { ...body, observed_revision: manifest.revision } });
+    return (await registry.getSkillVersionManifest(id, skillDraftVersionId)).revision;
+  }
   useEffect(() => {
     if (search.tab === "edit" && isEditableDraft) setDraftEditOpen(true);
   }, [id, search.tab, isEditableDraft]);
@@ -259,6 +299,7 @@ export default function ComponentDetailPage({
   const versionsForDropdown = versions.filter((v) => v.status === "approved" && !v.requires_global_review) as unknown as import("@/lib/types").AgentVersionSummary[];
   const latestApprovedVersion = versions.find((v) => v.status === "approved" && !v.requires_global_review)?.version;
   const effectiveVersion = selectedVersion ?? latestApprovedVersion ?? (item?.version as string | undefined);
+  const selectedInsightVersion = selectedVersion ? versions.find((version) => version.version === selectedVersion) : undefined;
   // Never substitute the listing-level latest release when the viewer selected
   // an older version that is missing or still loading. Both the command and
   // resource view must resolve to the exact approved version UUID.
@@ -382,12 +423,12 @@ export default function ComponentDetailPage({
         title={isLoading ? "Component" : componentName}
         breadcrumbs={[
           { label: "Registry", href: "/" },
-          { label: "Components", href: "/components" },
+          { label: "Agentic Resources", href: `/resources/${type}` },
           { label: isLoading ? "..." : componentName },
         ]}
         actionButtonsLeft={
           <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-muted-foreground" asChild>
-            <Link to="/components">
+            <Link to="/resources/$type" params={{ type }}>
               <ArrowLeft className="h-3.5 w-3.5" />
               <span className="text-xs">Back</span>
             </Link>
@@ -411,6 +452,7 @@ export default function ComponentDetailPage({
           <ErrorState message="Component not found" />
         ) : (
           <div className="animate-in space-y-6">
+            <ActiveReviewBanner subjectId={item.id} enabled={canEdit || isAdmin} />
             {item.status === "archived" && (
               <ArchivedComponentBanner item={item} type={singularType} canRestore={canEdit} />
             )}
@@ -520,7 +562,7 @@ export default function ComponentDetailPage({
                     : existingSuccessorDraft ? "Resume the existing draft, or create a different next version."
                     : "Fork the reviewed folder or import a complete local folder for a Git or historical direct skill."}</p>
                 </div>
-                {existingSuccessorDraft && <Button asChild><Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                {existingSuccessorDraft && <Button asChild><Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                   folderVersionId: existingSuccessorDraft.id, folderVersion: existingSuccessorDraft.version }}>
                   Edit saved draft v{existingSuccessorDraft.version}
                 </Link></Button>}
@@ -531,8 +573,8 @@ export default function ComponentDetailPage({
               <SkillSuccessorDialog open={successorOpen} onOpenChange={setSuccessorOpen} listingId={String(item.id)}
                 onCreated={(manifest, draftVersion) => {
                   setSuccessorOpen(false);
-                  navigate({ to: "/components", search: {
-                    type: "skills", folderListingId: String(item.id), folderVersionId: manifest.version_id,
+                  navigate({ to: "/resources/$type", params: { type: "skills" }, search: {
+                    folderListingId: String(item.id), folderVersionId: manifest.version_id,
                     folderVersion: draftVersion,
                   } });
                 }} />
@@ -569,10 +611,43 @@ export default function ComponentDetailPage({
                     </span>
                   )}
                 </TabsTrigger>
+                {showInsights && <TabsTrigger value="insights">Insights</TabsTrigger>}
                 <TabsTrigger value="forks">Forks{item.fork_count ? ` (${item.fork_count})` : ""}</TabsTrigger>
                 {canEdit && <TabsTrigger value="edit">Edit</TabsTrigger>}
                 {canEdit && singularType === "mcp" && <TabsTrigger value="sync">Sync</TabsTrigger>}
               </TabsList>
+
+              {showInsights && <TabsContent value="insights" className="mt-6 space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-semibold">Component Insights</h2>
+                    <p className="max-w-[65ch] text-sm text-muted-foreground">{insightType === "skill"
+                      ? "Confirmed loads and invocations of this verified skill, and their coverage. A load shows the instructions entered context, not that they helped."
+                      : insightType === "hook"
+                        ? "Recorded runs of this verified hook in sessions where it could run. Silent successes leave no record, so runs are a lower bound."
+                        : "Observed MCP calls and attribution coverage across verified present sessions. Partial activity never proves no use."}</p>
+                  </div>
+                  <Button type="button" disabled={generateComponentInsight.isPending || (!!selectedVersion && !selectedInsightVersion)}
+                    onClick={() => insightType && generateComponentInsight.mutate({ type: insightType, id, versionId: selectedInsightVersion?.id })}>
+                    {generateComponentInsight.isPending ? "Queueing…" : selectedVersion ? `Generate v${selectedVersion} report` : "Generate all-versions report"}
+                  </Button>
+                </div>
+                {reportsLoading ? <p role="status" className="text-sm text-muted-foreground">Loading reports…</p> :
+                 reportsError ? <ErrorState message="Could not load component reports" /> :
+                 !componentReports?.length ? <p className="text-sm text-muted-foreground">No reports yet. Generate one to see observed activity and its coverage.</p> :
+                 <ul className="divide-y divide-border border-y border-border">
+                   {componentReports.map((report) => <li key={report.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+                     <Link to="/insights/$reportId" params={{ reportId: report.id }} className="font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">
+                       {new Date(report.created_at).toLocaleString()} · {report.component_version ? `v${report.component_version}` : "all versions"}
+                     </Link>
+                     <span className="text-muted-foreground">{report.status}</span>
+                   </li>)}
+                 </ul>}
+                {hasNextPage && <Button type="button" variant="outline" disabled={isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}>
+                  {isFetchingNextPage ? "Loading older reports…" : "Load older reports"}
+                </Button>}
+              </TabsContent>}
 
               <TabsContent value="overview" forceMount className="mt-6 data-[state=inactive]:hidden">
                 <div className="space-y-6 w-full min-h-[400px]">
@@ -690,7 +765,7 @@ export default function ComponentDetailPage({
                           </div>
                           {canEdit && singularType === "skill" && ["draft", "rejected"].includes(v.status) && (
                             <div className="flex flex-wrap items-center gap-3">
-                              <Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                              <Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                                 folderVersionId: v.id, folderVersion: v.version }} className="text-xs underline underline-offset-2">
                                 Edit exact draft
                               </Link>
@@ -736,7 +811,7 @@ export default function ComponentDetailPage({
                         <p className="text-sm text-muted-foreground">The approved release stays available. {existingSuccessorDraft
                           ? "Continue editing your saved successor, or create a different version."
                           : "Create a new folder version to change its files or metadata."}</p>
-                        {existingSuccessorDraft && <Button asChild><Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                        {existingSuccessorDraft && <Button asChild><Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                           folderVersionId: existingSuccessorDraft.id, folderVersion: existingSuccessorDraft.version }}>
                           Edit saved draft v{existingSuccessorDraft.version}
                         </Link></Button>}
@@ -746,7 +821,7 @@ export default function ComponentDetailPage({
                       <div className="rounded-md border border-border bg-card p-5 space-y-3">
                         <h2 className="font-semibold">Edit the exact folder draft</h2>
                         <p className="text-sm text-muted-foreground">This skill has a saved file tree. Open its version-bound editor to update the folder and its metadata together.</p>
-                        <Button asChild><Link to="/components" search={{ type: "skills", folderListingId: String(item.id),
+                        <Button asChild><Link to="/resources/$type" params={{ type: "skills" }} search={{ folderListingId: String(item.id),
                           folderVersionId: editableSkillFolderDraft.id, folderVersion: editableSkillFolderDraft.version }}>
                           Edit draft v{editableSkillFolderDraft.version}
                         </Link></Button>
@@ -760,8 +835,10 @@ export default function ComponentDetailPage({
                     ) : <ComponentEditForm
                       listingId={id}
                       type={type}
-                      currentVersion={effectiveVersion ?? "1.0.0"}
-                      item={effectiveItem ?? item}
+                      currentVersion={isEditableDraft || item.status === "changes_requested" || item.status === "pending"
+                        ? String(item.version) : (effectiveVersion ?? "1.0.0")}
+                      skillVersionId={singularType === "skill" ? versions.find((version) => version.version === item.version && ["draft", "rejected", "changes_requested"].includes(version.status))?.id : undefined}
+                      item={isEditableDraft || item.status === "changes_requested" || item.status === "pending" ? item : (effectiveItem ?? item)}
                       onSuccess={() => refetch()}
                     />}
                   </div>
@@ -911,20 +988,28 @@ export default function ComponentDetailPage({
           onSubmit={(body) => {
             void (async () => {
               try {
-                await updateDraft.mutateAsync({ id, body });
-                await submitDraft.mutateAsync(id);
+                const revision = await saveDialogDraft(body);
+                if (type === "skills" && skillDraftVersion?.delivery_mode === "registry_direct") {
+                  await submitFolderDraft.mutateAsync({ listingId: id, versionId: skillDraftVersionId!, observedRevision: revision! });
+                } else {
+                  await submitDraft.mutateAsync(id);
+                }
                 setDraftEditOpen(false);
                 await refetch();
               } catch { /* mutation hooks show the error; keep the draft open */ }
             })();
           }}
           onSaveDraft={(body) => {
-            updateDraft.mutate({ id, body }, { onSuccess: () => { setDraftEditOpen(false); void refetch(); } });
+            void saveDialogDraft(body).then(() => { setDraftEditOpen(false); void refetch(); }).catch(() => {});
           }}
           onUpdateDraft={(draftId, body) => {
-            updateDraft.mutate({ id: draftId, body }, { onSuccess: () => { setDraftEditOpen(false); void refetch(); } });
+            if (type !== "skills") {
+              updateDraft.mutate({ id: draftId, body }, { onSuccess: () => { setDraftEditOpen(false); void refetch(); } });
+            } else {
+              void saveDialogDraft(body).then(() => { setDraftEditOpen(false); void refetch(); }).catch(() => {});
+            }
           }}
-          isSubmitting={updateDraft.isPending || submitDraft.isPending}
+          isSubmitting={updateDraft.isPending || submitDraft.isPending || submitFolderDraft.isPending}
           isSavingDraft={updateDraft.isPending}
         />
       )}
@@ -1024,7 +1109,7 @@ function ComponentArchiveButton({
           <p className="text-sm text-muted-foreground">
             {isArchived
               ? "This makes the component discoverable again and removes archived install warnings."
-              : "Archived components stop appearing in registry lists and insight suggestions. Direct installs and agent pulls still work, but users will see a warning."}
+              : "Archived components stop appearing in registry lists and insight suggestions. Direct installs and Agent File pulls still work, but users will see a warning."}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>

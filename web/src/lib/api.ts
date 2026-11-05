@@ -10,6 +10,7 @@
 // SPDX-FileCopyrightText: 2026 Swathi Saravanan <ss4522@cornell.edu>
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com>
+// SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
@@ -31,14 +32,26 @@ import type {
 	SessionsSummary,
 	SessionErrorEvent,
 	TelemetryStatus,
-	ReviewItem,
 	SkillFolderDraftRequest,
 	SkillVersionManifest,
 	SkillApprovedBase,
 	SkillSuccessorRequest,
 	SkillFileContents,
 	SkillBinaryContents,
+	ReviewSummary,
+	ReviewDetail,
+	EligibleReviewer,
+	ReviewDraft,
+	ReviewGate,
+	ReviewFile,
+	ReviewThread,
+	ReviewCheck,
+	ReviewTimelineEntry,
+	ReviewPolicy,
+	CheckSettings,
 	RegistryItem,
+	RemoteAgentList,
+	DiscoverySearchResponse,
 	ForkRequest,
 	ForkDiff,
 	ForksResponse,
@@ -58,7 +71,6 @@ import type {
 	ComponentLeaderboardItem,
 	AuditLogEntry,
 	SecurityEvent,
-	DiagnosticsResponse,
 	RestartStatus,
 	SystemWarning,
 	UsagePingAdminResponse,
@@ -99,14 +111,12 @@ import type {
 	RecommendationsResponse,
 	SetRecommendedRequest,
 	SetRecommendedResponse,
-	DiscoverySearchFilter,
-	DiscoverySearchResponse,
 	InboxItem,
 	InboxItemDetail,
 	InboxListResponse,
+	InboxCountOptions,
 	InboxCounts,
 	InboxFilters,
-	InboxState,
 } from "./types";
 import { sessionExpiredLoginUrl } from "./safe-next";
 
@@ -119,6 +129,9 @@ const STORAGE_KEY_USER_NAME = "observal_user_name";
 const STORAGE_KEY_USER_EMAIL = "observal_user_email";
 const STORAGE_KEY_USER_USERNAME = "observal_user_username";
 const STORAGE_KEY_USER_AVATAR = "observal_user_avatar";
+// The account this tab signed in as. localStorage is shared between tabs, so another tab can
+// sign in as someone else underneath this one; refresh must never silently follow it.
+const STORAGE_KEY_TAB_ACTOR = "observal_tab_actor";
 
 // Access token is stored in sessionStorage (clears on tab close) to reduce
 // the XSS exposure window. Refresh token stays in localStorage so silent
@@ -136,7 +149,24 @@ function getRefreshToken(): string | null {
 	return localStorage.getItem(STORAGE_KEY_REFRESH_TOKEN);
 }
 
+function tokenSubject(token: string | null): string | null {
+	try {
+		const payload = JSON.parse(atob(token!.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+		return typeof payload.sub === "string" ? payload.sub : null;
+	} catch {
+		return null;
+	}
+}
+
+/** True when the shared refresh token belongs to a different account than this tab signed in as. */
+export function refreshIsForAnotherAccount(): boolean {
+	const actor = sessionStorage.getItem(STORAGE_KEY_TAB_ACTOR) ?? tokenSubject(getAccessToken());
+	return !!actor && tokenSubject(getRefreshToken()) !== actor;
+}
+
 export function setTokens(accessToken: string, refreshToken: string) {
+	const actor = tokenSubject(accessToken);
+	if (actor) sessionStorage.setItem(STORAGE_KEY_TAB_ACTOR, actor);
 	sessionStorage.setItem(STORAGE_KEY_ACCESS_TOKEN, accessToken);
 	localStorage.setItem(STORAGE_KEY_REFRESH_TOKEN, refreshToken);
 	window.dispatchEvent(new Event("storage"));
@@ -144,6 +174,7 @@ export function setTokens(accessToken: string, refreshToken: string) {
 
 export function clearSession() {
 	sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+	sessionStorage.removeItem(STORAGE_KEY_TAB_ACTOR);
 	localStorage.removeItem(STORAGE_KEY_REFRESH_TOKEN);
 	localStorage.removeItem("observal_api_key"); // clean up legacy
 	localStorage.removeItem(STORAGE_KEY_USER_ROLE);
@@ -207,11 +238,20 @@ export function getUserAvatar(): string | null {
 
 let _refreshPromise: Promise<RefreshResult> | null = null;
 
-type RefreshResult = "ok" | "rejected" | "network_error";
+type RefreshResult = "ok" | "rejected" | "network_error" | "account_changed";
 
 async function _tryRefreshToken(): Promise<RefreshResult> {
 	const refreshToken = getRefreshToken();
 	if (!refreshToken) return "rejected";
+
+	if (refreshIsForAnotherAccount()) {
+		// Another tab signed in as a different account. Drop only this tab's bearer: the shared
+		// refresh token belongs to that account, and this tab must not replay as them.
+		sessionStorage.removeItem(STORAGE_KEY_ACCESS_TOKEN);
+		window.dispatchEvent(new Event("observal:session-cleared"));
+		window.dispatchEvent(new Event("storage"));
+		return "account_changed";
+	}
 
 	try {
 		const res = await fetch(`${API}/auth/token/refresh`, {
@@ -223,6 +263,10 @@ async function _tryRefreshToken(): Promise<RefreshResult> {
 		if (!res.ok) return "rejected";
 
 		const data = await res.json();
+		// Sign-out here or in another tab clears the stored refresh token while this request is in
+		// flight. Writing the response back would restore the session, so drop it. "network_error"
+		// makes the caller retry with whatever token is stored now, if any.
+		if (getRefreshToken() !== refreshToken) return "network_error";
 		setTokens(data.access_token, data.refresh_token);
 		return "ok";
 	} catch {
@@ -311,8 +355,9 @@ async function request<T = unknown>(
 				throw new Error("Network unavailable");
 			}
 
-			// Real rejection: session is truly expired
-			clearSession();
+			// Real rejection: session is truly expired. An account switch in another tab leaves
+			// the shared login alone.
+			if (refreshResult !== "account_changed") clearSession();
 			if (typeof window !== "undefined") {
 				window.location.href = sessionExpiredLoginUrl();
 				return new Promise<T>(() => {});
@@ -338,8 +383,9 @@ async function request<T = unknown>(
 					} else if (Array.isArray(parsed.detail)) {
 						detail = parsed.detail
 							.map(
-								(e: { msg?: string }) =>
-									e.msg?.replace(/^Value error, /i, "") || "Validation error",
+								// Pydantic items carry msg; component checks carry reason.
+								(e: { msg?: string; reason?: string }) =>
+									(e.msg ?? e.reason)?.replace(/^Value error, /i, "") || "Validation error",
 							)
 							.join(". ");
 					} else {
@@ -435,7 +481,7 @@ export const auth = {
 	deviceConfirm: (userCode: string) =>
 		post<{ message: string }>("/auth/device/confirm", { user_code: userCode }),
 	changePassword: (body: { current_password: string; new_password: string }) =>
-		put<{ message: string }>("/auth/profile/password", body),
+		put<{ message: string; exchange_code: string }>("/auth/profile/password", body),
 	uploadAvatar: (body: { avatar_url: string }) =>
 		put<{ avatar_url: string | null }>("/auth/profile/avatar", body),
 	deleteAvatar: () => del<{ avatar_url: null }>("/auth/profile/avatar"),
@@ -499,6 +545,7 @@ export const registry = {
 		),
 	validate: (body: {
 		components: { component_type: string; component_id: string }[];
+		supported_harnesses?: string[];
 		team_id?: string;
 		visibility?: "public" | "team";
 	}) => post<ValidationResult>("/agents/validate", body),
@@ -541,8 +588,8 @@ export const registry = {
 		put<RegistryItem>(`/${type ?? "agents"}/${id}/draft`, body),
 	updateAgent: (id: string, body: unknown) =>
 		put<RegistryItem>(`/agents/${id}`, body),
-	submitDraft: (id: string, type?: RegistryType) =>
-		post(`/${type ?? "agents"}/${id}/submit`),
+	submitDraft: (id: string, type?: RegistryType, message?: string) =>
+		post<RegistryItem>(`/${type ?? "agents"}/${id}/submit${message ? `?message=${encodeURIComponent(message)}` : ""}`),
 	submit: (type: RegistryType, body: unknown) =>
 		post<RegistryItem>(`/${type}/submit`, body),
 	updateVisibility: (type: RegistryType, id: string, visibility: "public" | "team") =>
@@ -559,7 +606,7 @@ export const registry = {
 	getVersion: (agentId: string, version: string) =>
 		get<AgentVersionDetail>(`/agents/${agentId}/versions/${version}`),
 	createVersion: (agentId: string, body: unknown) =>
-		post<unknown>(`/agents/${agentId}/versions`, body),
+		post<{ review_number?: number | null; review_url?: string | null }>(`/agents/${agentId}/versions`, body),
 	getVersionDiff: (agentId: string, v1: string, v2: string) =>
 		get<VersionDiff>(`/agents/${agentId}/versions/${v1}/diff/${v2}`),
 	getVersionOutdated: (agentId: string, version: string) =>
@@ -605,8 +652,8 @@ export const registry = {
 		get<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/manifest`),
 	updateSkillVersionDraft: (listingId: string, versionId: string, body: unknown) =>
 		put<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/draft`, body),
-	submitSkillVersionDraft: (listingId: string, versionId: string, observedRevision: string) =>
-		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/submit`, { observed_revision: observedRevision }),
+	submitSkillVersionDraft: (listingId: string, versionId: string, observedRevision: string, message?: string) =>
+		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/submit`, { observed_revision: observedRevision, message }),
 	withdrawSkillVersion: (listingId: string, versionId: string, observedRevision: string) =>
 		post<SkillVersionManifest>(`/skills/${listingId}/versions/${versionId}/withdraw`, { observed_revision: observedRevision }),
 	getSkillFileContent: (listingId: string, versionId: string, filePath: string) =>
@@ -619,40 +666,63 @@ export const registry = {
 		post<{ status: string }>(`/${type ?? "agents"}/${id}/cancel-edit`),
 };
 
-// ── Review ──────────────────────────────────────────────────────────
-export const review = {
-	list: (params?: Record<string, string>) => {
-		const qs = params ? `?${new URLSearchParams(params)}` : "";
-		return get<ReviewItem[]>(`/review${qs}`);
-	},
-	listAgents: () => get<ReviewItem[]>("/review?tab=agents"),
-	/**
-	 * Pending queue narrowed to one teamspace. The server answers 403 when the
-	 * caller does not review for that teamspace, so callers must gate on the
-	 * team role before asking.
-	 */
-	listForTeam: (teamId: string, params?: Record<string, string>) =>
-		get<ReviewItem[]>(`/review?${new URLSearchParams({ ...params, team_id: teamId })}`),
-	get: (id: string) => get<ReviewItem>(`/review/${id}`),
-	getSkillVersion: (id: string, versionId: string) => get<ReviewItem>(`/review/skills/${id}/versions/${versionId}`),
-	decideSkillVersion: (id: string, versionId: string, action: "approve" | "reject", observedRevision: string, reason?: string, gitBaseAcknowledged = false) =>
-		post(`/review/skills/${id}/versions/${versionId}/decision`, {
-			action, observed_revision: observedRevision, reason, git_base_acknowledged: gitBaseAcknowledged,
-		}),
-	approve: (id: string) => post(`/review/${id}/approve`),
-	reject: (id: string, body: { reason: string }) =>
-		post(`/review/${id}/reject`, body),
-	approveAgent: (id: string, body?: { category?: string }) =>
-		post(`/review/agents/${id}/approve`, body),
-	rejectAgent: (id: string, body: { reason: string }) =>
-		post(`/review/agents/${id}/reject`, body),
-	approveBundle: (id: string) => post(`/review/bundles/${id}/approve`),
-	rejectBundle: (id: string, body: { reason: string }) =>
-		post(`/review/bundles/${id}/reject`, body),
-	relatedSkills: (id: string) =>
-		get<{ skills: ReviewItem[] }>(`/review/${id}/related-skills`),
-	approveWithSkills: (id: string, body: { skill_ids: string[] }) =>
-		post(`/review/${id}/approve-with-skills`, body),
+// ── PR reviews ──────────────────────────────────────────────────────
+export const prReviews = {
+  list: (filters: Record<string, string>) => get<{ items: ReviewSummary[]; next_cursor: number | null }>(
+    `/reviews?${new URLSearchParams(filters)}`,
+  ),
+  detail: (ref: string) => get<ReviewDetail>(`/reviews/${encodeURIComponent(ref)}`),
+  files: (ref: string) => get<ReviewFile[]>(`/reviews/${encodeURIComponent(ref)}/files`),
+  diff: (ref: string, params: Record<string, string>) => get<ReviewFile[]>(
+    `/reviews/${encodeURIComponent(ref)}/diff?${new URLSearchParams(params)}`,
+  ),
+  gate: (ref: string) => get<ReviewGate>(`/reviews/${encodeURIComponent(ref)}/gate`),
+  checks: (ref: string) => get<ReviewCheck[]>(`/reviews/${encodeURIComponent(ref)}/checks`),
+  threads: (ref: string) => get<ReviewThread[]>(`/reviews/${encodeURIComponent(ref)}/threads`),
+  timeline: (ref: string, cursor?: string) => get<{ items: ReviewTimelineEntry[]; next_cursor: string | null }>(
+    `/reviews/${encodeURIComponent(ref)}/timeline${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+  ),
+  submit: (ref: string, verdict: string, body: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/submissions`, { verdict, body },
+  ),
+  draft: (ref: string) => get<ReviewDraft>(`/reviews/${encodeURIComponent(ref)}/submissions/draft`),
+  discardDraft: (ref: string) => del(`/reviews/${encodeURIComponent(ref)}/submissions/draft`),
+  comment: (ref: string, body: string, path?: string, line?: number, asDraft = false) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads`,
+    path ? { path, side: "head", start_line: line, body, as_draft: asDraft } : { body, as_draft: asDraft },
+  ),
+  reply: (ref: string, threadId: string, body: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/comments`, { body },
+  ),
+  resolve: (ref: string, threadId: string, resolved: boolean) => post(
+    `/reviews/${encodeURIComponent(ref)}/threads/${threadId}/${resolved ? "resolve" : "unresolve"}`,
+  ),
+  withdrawRequest: (ref: string, submissionId: string, reason: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/submissions/${encodeURIComponent(submissionId)}/withdraw-request`, { reason },
+  ),
+  publish: (ref: string, category?: string, overrideReason?: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/publish`, { category, override_reason: overrideReason },
+  ),
+  close: (ref: string, reason: string) => post(`/reviews/${encodeURIComponent(ref)}/close`, { reason }),
+  withdraw: (ref: string) => post(`/reviews/${encodeURIComponent(ref)}/withdraw`),
+  reopen: (ref: string, message?: string) => post(`/reviews/${encodeURIComponent(ref)}/reopen`, { message }),
+  subscribe: (ref: string, mode: "watching" | "muted") => put(
+    `/reviews/${encodeURIComponent(ref)}/subscription`, { mode },
+  ),
+  eligibleReviewers: (ref: string, query: string) => get<EligibleReviewer[]>(
+    `/reviews/${encodeURIComponent(ref)}/reviewers/eligible?q=${encodeURIComponent(query)}`,
+  ),
+  requestReviewer: (ref: string, userId: string) => post(
+    `/reviews/${encodeURIComponent(ref)}/reviewers`, { user_id: userId },
+  ),
+  orgPolicy: () => get<ReviewPolicy>("/admin/review-policy"),
+  setOrgPolicy: (value: ReviewPolicy) => put<ReviewPolicy>("/admin/review-policy", value),
+  checkSettings: (teamId?: string) => get<CheckSettings>(teamId ? `/teams/${teamId}/review-checks` : "/admin/review-checks"),
+  setCheckSettings: (checks: Record<string, { enabled: boolean; required: boolean }>, teamId?: string) =>
+    put<CheckSettings>(teamId ? `/teams/${teamId}/review-checks` : "/admin/review-checks", { checks }),
+  rerunChecks: (ref: string) => post<{ queued: number }>(`/reviews/${encodeURIComponent(ref)}/checks/rerun`),
+  teamPolicy: (id: string) => get<ReviewPolicy | null>(`/teams/${id}/review-policy`),
+  setTeamPolicy: (id: string, value: ReviewPolicy) => put<ReviewPolicy>(`/teams/${id}/review-policy`, value),
 };
 
 // ── Telemetry ───────────────────────────────────────────────────────
@@ -909,7 +979,6 @@ export const admin = {
 			`/admin/security-events${qs}`,
 		);
 	},
-	diagnostics: () => get<DiagnosticsResponse>("/admin/diagnostics"),
 	restartStatus: () => get<RestartStatus>("/admin/restart/status"),
 	systemWarnings: () => get<SystemWarning[]>("/admin/system-warnings"),
 	samlConfig: () => get<Record<string, unknown>>("/admin/saml-config"),
@@ -1064,9 +1133,12 @@ export type PublicConfig = {
 	github_sso_enabled: boolean;
 	sso_only: boolean;
 	public_registry_enabled: boolean;
+	leaderboard_enabled: boolean;
 	self_registration_enabled: boolean;
 	/** Public rollout hint; server install and review endpoints remain authoritative. */
 	skill_folder_delivery_enabled?: boolean;
+	/** Present only while the experimental review-checks feature is on. */
+	experimental_review_checks?: boolean;
 	saml_enabled: boolean;
 	exec_dashboard_available: boolean;
 	enabled_features: string[];
@@ -1168,6 +1240,21 @@ export const config = {
 	ssoHealth: () => get<SsoHealthResult>("/config/sso-health"),
 };
 
+// ── Remote A2A agents ──────────────────────────────────────────────
+export const remoteAgents = {
+	list: () => get<RemoteAgentList>("/ard/imports"),
+};
+
+export const discovery = {
+	/** ARD Search over registry agents and remote A2A agents, ranked by relevance. */
+	searchAgents: (text: string, pageSize = 100) =>
+		post<DiscoverySearchResponse>("/ard/search", {
+			query: { text, filter: { "obs:kind": ["agent", "external"] } },
+			federation: "none",
+			pageSize,
+		}),
+};
+
 // ── Bulk ───────────────────────────────────────────────────────────
 export const bulk = {
 	createAgents: (body: { agents: unknown[]; dry_run?: boolean }) =>
@@ -1188,36 +1275,6 @@ export const recommendations = {
 		}),
 };
 
-// ── Discovery (ARD) ─────────────────────────────────────────────────
-const DISCOVERY_MEDIA_TYPES: Record<string, string> = {
-	skill: "application/ai-skill+md",
-	mcp: "application/mcp-server-card+json",
-	prompt: "application/vnd.observal.prompt+json",
-	sandbox: "application/vnd.observal.sandbox+json",
-	hook: "application/vnd.observal.hook+json",
-	agent: "application/vnd.observal.agent+json",
-	external: "application/a2a-agent-card+json",
-};
-
-export const discovery = {
-	/** ARD Search. Omitting federation means the spec's `auto`, bounded by the admin allowlist. */
-	search: (text: string, filter: DiscoverySearchFilter = {}, pageSize = 10, pageToken?: string) => {
-		const ardFilter: Record<string, string[]> = {};
-		if (filter.kind) ardFilter.type = [DISCOVERY_MEDIA_TYPES[filter.kind]];
-		if (filter.harness) ardFilter["obs:supportedHarnesses"] = [filter.harness];
-		if (!filter.includeUnapproved) ardFilter["obs:lifecycle"] = ["approved"];
-		const body: Record<string, unknown> = {
-			query: { text, filter: ardFilter },
-			federation: "none",
-			pageSize,
-		};
-		if (pageToken) body.pageToken = pageToken;
-		return post<DiscoverySearchResponse>("/ard/search", body);
-	},
-	entry: (identifier: string) =>
-		get<Record<string, unknown>>(`/ard/entries/${encodeURIComponent(identifier)}`),
-};
-
 // ── Inbox ──────────────────────────────────────────────────────────
 function inboxQuery(filters: InboxFilters = {}): string {
 	const params = new URLSearchParams();
@@ -1235,14 +1292,18 @@ export const inbox = {
 		get<InboxListResponse>(`/inbox${inboxQuery(filters)}`),
 	// Facets are opt-in: the nav badge polls this every minute for one number
 	// and should not pay for the sidebar's per-kind breakdown.
-	counts: (opts: { facets?: boolean; facetState?: InboxState } = {}) =>
-		get<InboxCounts>(
-			`/inbox/count${
-				opts.facets
-					? `?facets=true${opts.facetState ? `&facet_state=${opts.facetState}` : ""}`
-					: ""
-			}`,
-		),
+	counts: (opts: InboxCountOptions = {}) => {
+		const params = new URLSearchParams();
+		if (opts.facets) {
+			params.set("facets", "true");
+			if (opts.facetState) params.set("facet_state", opts.facetState);
+			if (opts.unread) params.set("unread", "true");
+			if (opts.actionRequired) params.set("action_required", "true");
+			if (opts.q) params.set("q", opts.q);
+		}
+		const query = params.toString();
+		return get<InboxCounts>(`/inbox/count${query ? `?${query}` : ""}`);
+	},
 	detail: (id: string) => get<InboxItemDetail>(`/inbox/${id}`),
 	read: (id: string) => post<InboxItem>(`/inbox/${id}/read`),
 	unread: (id: string) => post<InboxItem>(`/inbox/${id}/unread`),
@@ -1256,6 +1317,10 @@ export const inbox = {
 };
 
 export const insights = {
+	componentReports: (type: string, id: string, before?: { created_at: string; id: string }) =>
+		get<InsightReportListItem[]>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/reports${before ? `?before_created_at=${encodeURIComponent(before.created_at)}&before_id=${encodeURIComponent(before.id)}` : ""}`),
+	generateComponent: (type: string, id: string, periodDays = 14, versionId?: string) =>
+		post<InsightReportListItem>(`/insights/components/${encodeURIComponent(type)}/${encodeURIComponent(id)}/generate`, { period_days: periodDays, component_version_id: versionId ?? null }),
 	status: () => get<{ available: boolean; reason: string | null }>("/insights/status"),
 	sessionCount: (agentId: string, agentVersion?: string) =>
 		get<{ session_count: number; agent_version?: string; agent_version_id?: string }>(

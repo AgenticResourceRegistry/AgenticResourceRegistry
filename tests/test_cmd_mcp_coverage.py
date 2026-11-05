@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -1366,6 +1366,34 @@ def test_install_json_returns_operation_result_without_lockfile_write(monkeypatc
     assert result.exit_code == 0, result.stderr
     assert json.loads(result.stdout) == response
     upsert.assert_not_called()
+
+
+def test_edit_reviewed_successor_amends_instead_of_creating_sibling(monkeypatch):
+    monkeypatch.setattr(mcp.client, "resolve_registry_reference", Mock(return_value="resolved"))
+    monkeypatch.setattr(
+        mcp.client,
+        "get",
+        Mock(return_value={"status": "pending", "version": "1.1.0", "description": "Before edit"}),
+    )
+    post = Mock(return_value={"status": "pending", "version": "1.1.0"})
+    put = Mock(
+        return_value={"id": "mcp-1", "name": "search", "version": "1.1.0", "status": "pending", "review_revision": 2}
+    )
+    monkeypatch.setattr(mcp.client, "post", post)
+    monkeypatch.setattr(mcp.client, "put", put)
+
+    result = runner.invoke(
+        app,
+        ["registry", "mcp", "edit", "alice/search", "--description", "Corrected", "--output", "json"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    put.assert_called_once_with("/api/v1/mcps/resolved/draft", {"description": "Corrected"})
+    assert [call.args[0] for call in post.call_args_list] == [
+        "/api/v1/mcps/resolved/start-edit",
+        "/api/v1/mcps/resolved/submit",
+    ]
+    assert json.loads(result.stdout)["version"] == "1.1.0"
 
 
 def test_edit_json_is_noninteractive_and_returns_server_result(monkeypatch):

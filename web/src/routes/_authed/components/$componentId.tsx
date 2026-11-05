@@ -7,13 +7,13 @@ const ComponentDetail = lazy(() => import("@/pages/registry/components/detail"))
 
 export type ComponentSearch = {
   type?: string;
-  tab?: "edit";
+  tab?: "edit" | "insights";
 };
 
 export const Route = createFileRoute("/_authed/components/$componentId")({
   component: ComponentDetail,
   validateSearch: (search: Record<string, unknown>): ComponentSearch => ({
     type: (search.type as string) || "mcps",
-    tab: search.tab === "edit" ? "edit" : undefined,
+    tab: search.tab === "edit" || search.tab === "insights" ? search.tab : undefined,
   }),
 });

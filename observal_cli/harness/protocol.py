@@ -322,6 +322,10 @@ class HarnessAdapter(Protocol):
         """Resolve a harness hook payload to its local session source."""
         ...
 
+    def session_worker_environment(self) -> dict[str, str]:
+        """Return environment overrides for detached session workers."""
+        ...
+
     def discover_session_sources(
         self,
         home: Path | None = None,
@@ -366,6 +370,14 @@ class HarnessAdapter(Protocol):
         """Return whether aged session recovery should finalize the source."""
         ...
 
+    def reports_sessions_outside_pull(self) -> bool:
+        """Return whether sessions are reported by telemetry a pull does not write.
+
+        Harnesses whose telemetry is an installed extension rather than
+        written hook files report sessions for any pulled agent.
+        """
+        ...
+
     def is_session_final(self, event: dict[str, Any]) -> bool:
         """Return whether a hook payload marks its session final."""
         ...
@@ -390,7 +402,7 @@ class HarnessAdapter(Protocol):
         """Return whether an agent profile may resolve under the home directory."""
         ...
 
-    def persist_active_agent(self, agent_id: str, name: str, version: str | None) -> None:
+    def persist_active_agent(self, agent_id: str, name: str, version: str | None, *, is_user_scope: bool) -> None:
         """Persist harness-specific global agent attribution after pull."""
         ...
 
@@ -410,12 +422,27 @@ class HarnessAdapter(Protocol):
         """Return whether sessions must not fall back to name or cwd attribution."""
         ...
 
+    def attributes_by_directory(self) -> bool:
+        """Return whether a session that names no agent is credited to the agent pulled into its directory."""
+        ...
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        """Return the agent definition a subagent transcript ran as, or None for a main session."""
+        ...
+
     def headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         """Build the argv that runs a materialized agent on one task and exits.
 
         Raises:
             NotSupportedError: If the harness has no verified headless mode
                 (``headless_run`` runtime fact).
+        """
+        ...
+
+    def headless_not_ready(self) -> str | None:
+        """Why the harness cannot run a headless task right now (no usable login), or None.
+
+        None also when the harness has no reliable check or the check does not answer.
         """
         ...
 

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Kaushik Kumar <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Visibility and a concurrent status change serialize over the listing lock."""
@@ -16,7 +17,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.routes._skill_lock import lock_skill_version
 from models.base import Base
-from models.component_bundle import ComponentBundle
 from models.mcp import ListingStatus
 from models.skill import SkillListing, SkillVersion
 from services.teamspace import review_publication_to_public, skill_transition_needs_rollout_gate
@@ -32,14 +32,13 @@ async def test_publication_serializes_with_skill_review_status(monkeypatch, publ
     schema = f"skill_visibility_{uuid.uuid4().hex}"
     admin = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": f"{schema},public"}})
-    monkeypatch.setattr("services.inbox.sources.on_review_requested", AsyncMock(return_value=1))
     monkeypatch.setattr("services.inbox.sources.on_review_withdrawn", AsyncMock(return_value=1))
     try:
         async with admin.begin() as conn:
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
             await conn.execute(text(f'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA "{schema}"'))
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES, ComponentBundle.__table__])
+            await conn.run_sync(Base.metadata.create_all, tables=[*ds.TABLES])
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with sessions() as db:
             owner = await ds.user(db)

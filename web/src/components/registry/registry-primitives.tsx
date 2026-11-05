@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: 2026 Observal Contributors
+// SPDX-FileCopyrightText: 2026 Chandhini Veerabuthiran <chandhini03@users.noreply.github.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -552,7 +553,7 @@ export function RankingRow({
 
 /* ─── Ranking Head ───────────────────────────────── */
 
-export function RankingHead({ entityLabel = "Agent" }: { entityLabel?: string }) {
+export function RankingHead({ entityLabel = "Agent File" }: { entityLabel?: string }) {
   return (
     <div className="grid grid-cols-[42px_minmax(0,1fr)_120px_90px] items-center gap-3 px-5 py-2.5 text-2xs font-medium uppercase tracking-[0.05em] text-muted-foreground">
       <span>Rank</span>

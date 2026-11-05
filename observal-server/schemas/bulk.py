@@ -7,6 +7,8 @@ import uuid  # noqa: TC003 - needed at runtime by Pydantic
 
 from pydantic import BaseModel, Field, field_validator
 
+from observal_shared.agent_model import AUTO_MODEL, normalize_model_name
+
 
 class BulkAgentItem(BaseModel):
     """Single agent in a bulk create request. Extends AgentCreateRequest fields with relaxed defaults."""
@@ -16,11 +18,13 @@ class BulkAgentItem(BaseModel):
     description: str = ""
     owner: str = ""
     prompt: str = ""
-    model_name: str = "claude-sonnet-4"
+    model_name: str = AUTO_MODEL
     model_config_json: dict = Field(default_factory=dict)
     supported_harnesses: list[str] = Field(default_factory=list)
     components: list[dict] = Field(default_factory=list)  # [{component_type, component_id}]
     external_mcps: list[dict] = Field(default_factory=list)
+
+    _normalize_model = field_validator("model_name", mode="before")(lambda v: normalize_model_name(v))
 
     @field_validator("name")
     @classmethod
@@ -39,6 +43,7 @@ class BulkResultItem(BaseModel):
     name: str
     status: str  # "created", "skipped", "error"
     agent_id: uuid.UUID | None = None
+    review_number: int | None = None
     error: str | None = None
 
 

@@ -12,9 +12,14 @@ methods they support; the feature gate runs before the override.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger as optic
 
 from observal_cli.harness.protocol import (
     METHOD_FEATURE_MAP,
@@ -90,6 +95,9 @@ def _check_feature(harness_name: str, method_name: str) -> None:
         raise NotSupportedError(harness_name, method_name)
 
 
+HEADLESS_READY_TIMEOUT_SECONDS = 15
+
+
 class BaseAdapter:
     """Base class providing feature-gated defaults for all protocol methods.
 
@@ -103,6 +111,15 @@ class BaseAdapter:
     headless_binary: str | None = None
     # headless_command passes the task on stdin, so its length and cmd.exe quoting never matter.
     headless_task_on_stdin = False
+    # Environment variables the harness sets for the commands it runs, so a command can tell
+    # which harness started it (delegation runs in the caller's harness by default).
+    caller_env_markers: tuple[str, ...] = ()
+    # A quick command that exits non-zero exactly when headless_command would fail before doing
+    # any work (no usable login), and what to tell the user then. Empty: nothing reliable to ask.
+    headless_ready_argv: tuple[str, ...] = ()
+    headless_not_ready_hint = ""
+    # Credentials that authenticate a headless run without a login: when any is set the check is skipped.
+    headless_ready_skip_env: tuple[str, ...] = ()
     managed_agent_profiles: tuple[str, ...] = ()
     managed_skills: tuple[str, ...] = ()
     managed_mcp_files: tuple[str, ...] = ()
@@ -117,6 +134,74 @@ class BaseAdapter:
         ``None`` means the caller should fall back to its static path table.
         """
         return None
+
+    def prepare_mcp_setup_command(self, command: list[str], scope: str) -> list[str]:
+        """Return the harness-native setup command with its requested install scope."""
+        return command
+
+    def mcp_manifest_path(self, scope: str) -> str | None:
+        """Return the safe file-manifest location needed to verify this MCP scope."""
+        return None
+
+    def installed_mcp_manifest_path(self, scope: str, directory: str | None, alias: str) -> str | None:
+        """Return the actual hashed config file containing this installed MCP entry."""
+        return self.mcp_manifest_path(scope)
+
+    def skill_manifest_path(self, scope: str, alias: str) -> str | None:
+        """Manifest display path of the ACTIVE skill file this harness loads, if verifiable."""
+        return None
+
+    def skill_shadow_paths(self, scope: str, directory: str | None, alias: str) -> list[Path]:
+        """Unhashed locations where a same-named skill could be loaded instead."""
+        return []
+
+    def standalone_hook_binding(
+        self, config_path: str, config_snippet: dict, written: list[tuple[Path, Path]]
+    ) -> dict | None:
+        """Where a standalone hook install wrote its one command hook, if this harness can verify it.
+
+        ``written`` pairs each script's absolute path with its project-relative path.
+        """
+        return None
+
+    def verify_hook_binding(self, directory: str | None, component: dict) -> str:
+        """``verified``, ``drifted`` or ``unverified`` for a pinned hook's recorded binding (fail closed)."""
+        return "unverified"
+
+    def bind_pulled_hooks(
+        self, snippet: dict, lock_components: list[dict], target_dir: Path, is_user_scope: bool
+    ) -> list[str]:
+        """Record bindings for hooks a pull wrote outside an agent profile; returns warnings.
+
+        Claude Code's agent-file and gated hooks are bound by ``cmd_pull._record_hook_bindings``.
+        """
+        return []
+
+    def skill_location(self, scope: str, directory: str | None, alias: str) -> str | None:
+        """Absolute path of the active skill file, as the harness records it in sessions."""
+        return None
+
+    def redact_layer_content(self, display_path: str) -> bool:
+        """Whether the manifest may carry hashes but must not upload file bytes."""
+        return False
+
+    def layer_projection(self, display_path: str, path: Path, project_dir: str | None) -> bytes | None:
+        """Stable bytes hashed in place of a file the harness rewrites on its own, or None for the file itself."""
+        return None
+
+    def read_installed_mcp(self, scope: str, directory: str | None, alias: str) -> tuple[str, dict | None]:
+        """Return (verified|missing|unverified, entry); unsupported harnesses are unverified."""
+        return "unverified", None
+
+    def read_pulled_mcp(
+        self, scope: str, directory: str | None, alias: str, written_config: Path
+    ) -> tuple[str, dict | None]:
+        """Read the entry a pull wrote; by default the pull output is the installed config."""
+        return self.read_installed_mcp(scope, directory, alias)
+
+    def session_worker_environment(self) -> dict[str, str]:
+        """Environment overrides needed by detached session delivery workers."""
+        return {}
 
     def scan_home(self, home: Path | None = None) -> ScanResult:
         _check_feature(self.harness_name, "scan_home")
@@ -245,6 +330,10 @@ class BaseAdapter:
         """Finalize aged session sources by default."""
         return True
 
+    def reports_sessions_outside_pull(self) -> bool:
+        """Session telemetry comes from the hook files a pull writes."""
+        return False
+
     def is_session_final(self, event: dict[str, Any]) -> bool:
         """Recognize common final lifecycle event names."""
         event_name = str(
@@ -271,7 +360,7 @@ class BaseAdapter:
     def allow_home_agent_profile(self, is_user_scope: bool) -> bool:
         return is_user_scope
 
-    def persist_active_agent(self, agent_id: str, name: str, version: str | None) -> None:
+    def persist_active_agent(self, agent_id: str, name: str, version: str | None, *, is_user_scope: bool) -> None:
         return None
 
     def extract_mcp_servers(self, config: dict) -> dict:
@@ -301,12 +390,45 @@ class BaseAdapter:
     def requires_explicit_agent_id(self) -> bool:
         return False
 
+    def attributes_by_directory(self) -> bool:
+        return True
+
+    def session_subagent_name(self, session_jsonl: Path | None) -> str | None:
+        return None
+
     def headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         _check_headless(self.harness_name)
         return self._headless_command(request)
 
     def _headless_command(self, request: HeadlessRequest) -> HeadlessPlan:
         raise NotSupportedError(self.harness_name, "headless_command")
+
+    def headless_not_ready(self) -> str | None:
+        """Why this harness cannot run a delegated agent right now; None when it can, or cannot tell."""
+        if not self.headless_ready_argv:
+            return None
+        if any(os.environ.get(name) for name in self.headless_ready_skip_env):
+            return None
+        binary = shutil.which(self.headless_ready_argv[0])
+        if binary is None:
+            return None
+        try:
+            proc = subprocess.run(
+                [binary, *self.headless_ready_argv[1:]],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=HEADLESS_READY_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # A check that does not answer never blocks a delegation, but the skipped check is logged.
+            optic.warning(
+                "headless readiness check skipped: harness={} reason={}", self.harness_name, type(exc).__name__
+            )
+            return None
+        if proc.returncode == 0:
+            return None
+        return self.headless_not_ready_hint or f"`{' '.join(self.headless_ready_argv)}` failed."
 
     def parse_headless_output(self, plan: HeadlessPlan, stdout: str) -> HeadlessResult:
         """Plain-text harnesses: the answer is stdout, or the file the harness wrote it to."""

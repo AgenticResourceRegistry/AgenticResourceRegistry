@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI commands for Agent Insights reports."""
+"""CLI commands for Agent and evidence-backed component Insights reports."""
 
 from __future__ import annotations
 
 from contextlib import nullcontext
+from urllib.parse import quote
+from uuid import UUID
 
 import typer
 from packaging.version import InvalidVersion, Version
@@ -28,11 +30,12 @@ from observal_cli.render import (
 
 insights_app = typer.Typer(
     help=(
-        "Agent insight reports\n\n"
+        "Agent, MCP, skill and hook component insight reports\n\n"
         "Examples:\n"
         "  observal ops insights list alice/my-agent\n"
         "  observal ops insights show alice/my-agent latest\n"
-        "  observal ops insights generate alice/my-agent"
+        "  observal ops insights generate alice/my-agent\n"
+        "  observal ops insights generate --component skill alice/review"
     )
 )
 
@@ -129,7 +132,183 @@ def _select_report_id(reports: list[dict], report_ref: str | None) -> str:
     )
 
 
-def _resolve_report_for_show(target: str, report_ref: str | None) -> dict:
+_COMPONENT_REPORT_TYPES = ("mcp", "skill", "hook")
+
+
+def _component_route(component: tuple[str, str], prefix: str) -> str:
+    kind, ref = component
+    if kind not in _COMPONENT_REPORT_TYPES:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Component reports support {', '.join(_COMPONENT_REPORT_TYPES)} only.",
+            operation="Component insight report",
+            resource="component type",
+            remediation="Use --component mcp|skill|hook <ref>.",
+        )
+    resolved = client.resolve_registry_reference(kind, ref)
+    return f"/api/v1/{prefix}/{kind}/{resolved}"
+
+
+def _component_path(component: tuple[str, str]) -> str:
+    return _component_route(component, "insights/components")
+
+
+def _activity_path(component: tuple[str, str]) -> str:
+    return _component_route(component, "components") + "/activity"
+
+
+def _component_version_id(component: tuple[str, str], version: str) -> str:
+    try:
+        Version(version)
+    except InvalidVersion:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Invalid component version: {version}.",
+            operation="Select component version",
+            remediation="Use the exact semantic version from the component's version history.",
+        )
+    kind, _ = component
+    listing_id = _component_path(component).rsplit("/", 1)[-1]
+    details = client.get(f"/api/v1/{kind}s/{listing_id}/versions/{quote(version, safe='')}")
+    return str(details["id"])
+
+
+@insights_app.command(name="activity")
+def insights_activity(
+    component: tuple[str, str] = typer.Option(
+        ..., "--component", help="Component type and ref: mcp|skill|hook NAMESPACE/SLUG"
+    ),
+    period_days: int = typer.Option(14, "--period", "-p", min=1, max=90),
+    version: str | None = typer.Option(None, "--version", "-v", help="Exact component version"),
+    output: OutputMode = typer.Option("table", "--output", "-o"),
+):
+    """Show current verified presence, usage and coverage before generating a report."""
+    with _progress(output, "Fetching component activity..."):
+        params = {"period_days": period_days}
+        if version:
+            params["component_version_id"] = _component_version_id(component, version)
+        data = client.get(f"{_activity_path(component)}/summary", params=params)
+    if output == "json":
+        output_json(data)
+        return
+    kind = component[0]
+    coverage = data.get("coverage") or {}
+    presence = coverage.get("presence") or {}
+    projection = coverage.get("projection") or {}
+    rprint(
+        f"[bold]{esc(data.get('component', {}).get('qualified_name') or component[1])} · {esc(kind)} activity[/bold]"
+    )
+    rprint(
+        f"  Verified-present sessions: {data.get('present_sessions', 0)} / {presence.get('eligible_sessions', 0)} eligible"
+    )
+    if kind == "mcp":
+        rprint(
+            f"  Observed calls: {data.get('observed_calls', 0) if coverage.get('usage_rate_denominator_sessions') else 'not measured'}"
+        )
+    elif kind == "skill":
+        loads = data.get("confirmed_loads", 0) if coverage.get("usage_rate_denominator_sessions") else "not measured"
+        invocations = data.get("invocations")
+        rprint(f"  Confirmed loads: {loads}  Invocations: {invocations if invocations is not None else 'not recorded'}")
+    else:
+        runs = (
+            data.get("sessions_with_recorded_run", 0)
+            if coverage.get("usage_rate_denominator_sessions")
+            else "not measured"
+        )
+        rprint(f"  Eligible sessions: {data.get('eligible_sessions', 0)}  Recorded runs: {runs} sessions")
+    rprint(
+        f"  Projection: {projection.get('projection_complete_sessions', 0)} processed; state: {esc(coverage.get('attribution_state', 'unknown'))}"
+    )
+    gaps = {
+        k: presence.get(k)
+        for k in (
+            "legacy_hash_sessions",
+            "snapshot_missing_sessions",
+            "mapping_pending_sessions",
+            "mapping_failed_sessions",
+            "unverified_presence_sessions",
+        )
+        if presence.get(k)
+    }
+    if gaps:
+        rprint("  Presence gaps: " + ", ".join(f"{esc(k)}={v}" for k, v in gaps.items()))
+    if coverage.get("reasons"):
+        rprint(f"  Gaps: {esc(', '.join(coverage['reasons']))}")
+
+
+@insights_app.command(name="sessions")
+def insights_sessions(
+    component: tuple[str, str] = typer.Option(
+        ..., "--component", help="Component type and ref: mcp|skill|hook NAMESPACE/SLUG"
+    ),
+    period_days: int = typer.Option(14, "--period", "-p", min=1, max=90),
+    version: str | None = typer.Option(None, "--version", "-v", help="Exact component version"),
+    limit: int = typer.Option(50, "--limit", min=1, max=100),
+    cursor: str | None = typer.Option(None, "--cursor", help="Opaque cursor returned by the previous page"),
+    output: OutputMode = typer.Option("table", "--output", "-o"),
+):
+    """List verified-present sessions and their published component evidence."""
+    params: dict[str, str | int] = {"period_days": period_days, "limit": limit}
+    if version:
+        params["component_version_id"] = _component_version_id(component, version)
+    if cursor:
+        params["cursor"] = cursor
+    with _progress(output, "Fetching component sessions..."):
+        data = client.get(f"{_activity_path(component)}/sessions", params=params)
+    if output == "json":
+        output_json(data)
+        return
+    table = Table(title=f"{esc(component[1])} · {esc(component[0])} sessions")
+    for label in ("Session", "Harness", "Projection", "Source", "Evidence"):
+        table.add_column(label)
+    for row in data.get("sessions", []):
+        source = row.get("source_state", "available")
+        if row.get("projection_state") != "complete" or source != "available":
+            signal = "not measured"
+        elif component[0] == "mcp":
+            signal = f"{row.get('observed_calls', 0)} calls"
+        elif component[0] == "skill":
+            invocations = row.get("invocations")
+            signal = f"{row.get('confirmed_loads', 0)} loads; invocations: {invocations if invocations is not None else 'not recorded'}"
+        elif row.get("eligibility") != "eligible":
+            signal = f"not eligible ({row.get('eligibility', 'unknown')})"
+        else:
+            silent = row.get("silent_runs")
+            signal = f"{row.get('runs_with_output', 0)} output runs; silent: {silent if silent is not None else 'not recorded'}"
+        table.add_row(
+            esc(row.get("session_id", "")),
+            esc(row.get("harness", "")),
+            esc(row.get("projection_state", "")),
+            esc(source),
+            esc(signal),
+        )
+    console.print(table)
+    if data.get("next_cursor"):
+        rprint(f"  Next page: --cursor {esc(data['next_cursor'])}")
+
+
+def _resolve_report_for_show(target: str, report_ref: str | None, component: tuple[str, str] | None = None) -> dict:
+    if component:
+        # An exact historical ID is accessible even when it is no longer in the
+        # first report page. The server still rechecks component ownership.
+        if report_ref:
+            try:
+                exact_id = str(UUID(report_ref))
+            except ValueError:
+                pass
+            else:
+                resolved_path = _component_path(component)
+                report = client.get(f"/api/v1/insights/reports/{exact_id}")
+                if report.get("component_id") != resolved_path.rsplit("/", 1)[-1]:
+                    fail(
+                        ErrorCategory.VALIDATION,
+                        "Report does not belong to this component.",
+                        operation="Show component insight report",
+                    )
+                return report
+        reports = client.get(f"{_component_path(component)}/reports")
+        report_id = _select_report_id(reports, report_ref)
+        return client.get(f"/api/v1/insights/reports/{report_id}")
     agent_id = _resolve_agent_id(target)
     reports = client.get(f"/api/v1/agents/{agent_id}/insights/reports")
     report_id = _select_report_id(reports, report_ref)
@@ -138,8 +317,12 @@ def _resolve_report_for_show(target: str, report_ref: str | None) -> dict:
 
 @insights_app.command(name="list")
 def insights_list(
-    agent_id: str = typer.Argument(..., help="Agent ID, name, or @alias"),
+    agent_id: str = typer.Argument("", help="Agent ID, name, or @alias (omit with --component)"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
+    component: tuple[str, str] | None = typer.Option(
+        None, "--component", help="Component type and ref, e.g. mcp org/tool"
+    ),
+    all_reports: bool = typer.Option(False, "--all", help="List all component report pages"),
 ):
     """List insight reports for an agent.
 
@@ -149,9 +332,41 @@ def insights_list(
 
         observal ops insights list my-agent --output json
     """
+    component = component if isinstance(component, tuple) else None
+    all_reports = all_reports if isinstance(all_reports, bool) else False
+    if not component and not agent_id:
+        raise typer.BadParameter("Provide an agent or --component")
     with _progress(output, "Fetching insight reports..."):
-        resolved = _resolve_agent_id(agent_id)
-        data = client.get(f"/api/v1/agents/{resolved}/insights/reports")
+        if component and agent_id:
+            fail(ErrorCategory.VALIDATION, "Use an agent or --component, not both.", operation="List insight reports")
+        if not component and not agent_id:
+            fail(ErrorCategory.VALIDATION, "Provide an agent or --component.", operation="List insight reports")
+        if all_reports and not component:
+            fail(ErrorCategory.VALIDATION, "--all applies to component reports only.", operation="List insight reports")
+        path = (
+            f"{_component_path(component)}/reports"
+            if component
+            else f"/api/v1/agents/{_resolve_agent_id(agent_id)}/insights/reports"
+        )
+        data = client.get(f"{path}?limit=100" if all_reports else path)
+        if all_reports:
+            from urllib.parse import urlencode
+
+            while len(data) and len(data) % 100 == 0:
+                last = data[-1]
+                page = client.get(
+                    f"{path}?"
+                    + urlencode(
+                        {
+                            "limit": 100,
+                            "before_created_at": last["created_at"],
+                            "before_id": last["id"],
+                        }
+                    )
+                )
+                data.extend(page)
+                if len(page) < 100:
+                    break
     if output == "json":
         output_json(data)
         return
@@ -160,6 +375,8 @@ def insights_list(
         return
     table = Table(title=f"Insight Reports ({len(data)})", show_lines=False, padding=(0, 1))
     table.add_column("#", style="dim", width=3)
+    if all_reports:
+        table.add_column("Report ID")
     table.add_column("Status")
     table.add_column("Version")
     table.add_column("Period")
@@ -170,24 +387,29 @@ def insights_list(
         end = str(r.get("period_end") or "")[:10]
         table.add_row(
             str(i),
+            *([esc(r.get("id", ""))] if all_reports else []),
             status_badge(r.get("status", "")),
-            esc(r.get("agent_version") or "-"),
+            esc(r.get("component_version") or "all" if component else r.get("agent_version") or "-"),
             f"{esc(start)} → {esc(end)}",
             str(r.get("sessions_analyzed", 0)),
             relative_time(r.get("completed_at")),
         )
     console.print(table)
     rprint()
-    rprint(f"[dim]Open latest completed: [cyan]observal ops insights show {esc(agent_id)}[/cyan][/dim]")
-    rprint(f"[dim]Open row 1: [cyan]observal ops insights show {esc(agent_id)} 1[/cyan][/dim]")
+    target_hint = f"--component {esc(component[0])} {esc(component[1])}" if component else esc(agent_id)
+    rprint(f"[dim]Open latest completed: [cyan]observal ops insights show {target_hint}[/cyan][/dim]")
+    rprint(f"[dim]Open row 1: [cyan]observal ops insights show {target_hint} 1[/cyan][/dim]")
+    if all_reports:
+        rprint(f"[dim]Open an older report: [cyan]observal ops insights show {target_hint} REPORT_ID[/cyan][/dim]")
 
 
 @insights_app.command(name="show")
 def insights_show(
-    target: str = typer.Argument(..., help="Agent name, agent ID, or @alias"),
+    target: str = typer.Argument("", help="Agent name, agent ID, or @alias (omit with --component)"),
     report_ref: str | None = typer.Argument(None, help="Report row number, report ID prefix, or 'latest'"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
     section: str | None = typer.Option(None, "--section", "-s", help="Show only a specific section"),
+    component: tuple[str, str] | None = typer.Option(None, "--component", help="Component type and ref"),
 ):
     """Show an insight report with pretty-printed narrative.
 
@@ -199,8 +421,42 @@ def insights_show(
 
         observal ops insights show my-agent --section suggestions
     """
+    component = component if isinstance(component, tuple) else None
+    if not component and not target:
+        raise typer.BadParameter("Provide an agent or --component")
     with _progress(output, "Fetching report..."):
-        data = _resolve_report_for_show(target, report_ref)
+        if component:
+            if target and report_ref:
+                fail(
+                    ErrorCategory.VALIDATION,
+                    "Provide one report reference with --component.",
+                    operation="Show insight report",
+                )
+            report_ref = report_ref or target or None
+        elif not target:
+            fail(ErrorCategory.VALIDATION, "Provide an agent or --component.", operation="Show insight report")
+        data = (
+            _resolve_report_for_show(target, report_ref, component)
+            if component
+            else _resolve_report_for_show(target, report_ref)
+        )
+    if data.get("subject_type") == "component" and section:
+        narrative = data.get("narrative") or {}
+        sections = {"metrics": data.get("metrics"), "coverage": data.get("coverage")}
+        if isinstance(narrative, dict):
+            sections.update(narrative)
+        if section not in sections:
+            fail(
+                ErrorCategory.VALIDATION,
+                f"Unknown component insight section: {section}.",
+                operation="Show component insight report",
+                remediation=f"Choose from: {', '.join(sections)}.",
+            )
+        if output == "json":
+            output_json({"report_id": data.get("id"), "section": section, "data": sections[section]})
+        else:
+            _render_component_section(section, sections[section])
+        return
     if output == "json":
         if section:
             narrative = data.get("narrative") or {}
@@ -235,6 +491,73 @@ def insights_show(
             rprint(f"  [dim]{esc(data['progress_message'])}[/dim]")
         if data.get("error_message"):
             rprint(f"  [red]Error:[/red] {esc(data['error_message'])}")
+        return
+
+    if data.get("subject_type") == "component" and data.get("component_type") == "skill":
+        _render_skill_report(data)
+        return
+
+    if data.get("subject_type") == "component" and data.get("component_type") == "hook":
+        _render_hook_report(data)
+        return
+
+    if data.get("subject_type") == "component":
+        metrics = data.get("metrics") or {}
+        coverage = data.get("coverage") or {}
+        rprint(f"[bold]{esc(data.get('component_name') or 'Component')} Insights[/bold]")
+        observed = (
+            metrics.get("observed_calls", 0) if coverage.get("usage_rate_denominator_sessions", 0) else "not measured"
+        )
+        rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}  Observed calls: {observed}")
+        narrative = data.get("narrative") or {}
+        rprint(f"  {esc(narrative.get('summary') or 'No summary available')}")
+        _render_interpretation(narrative)
+        analysis = narrative.get("component_analysis") or {}
+        if not analysis:
+            rprint(
+                "  [dim]This report predates evidence-backed analysis; generate a new report to assess sessions.[/dim]"
+            )
+        elif analysis.get("state") == "unavailable":
+            rprint(
+                "  [yellow]The interpretation could not run (the evidence sample or the model failed); generate the report again.[/yellow]"
+            )
+        elif analysis.get("state") != "assessed" or not analysis.get("findings"):
+            rprint("  [dim]No grounded interpretive findings in this sample; this does not mean unused.[/dim]")
+        else:
+            rprint("\n[bold]What the published calls suggest[/bold]")
+            for finding in analysis["findings"]:
+                label = finding["kind"]
+                rprint(
+                    f"  [bold]{esc(label)}[/bold] · {esc(finding['confidence'])} confidence: {esc(finding['insight'])}"
+                )
+                for ref in finding["evidence_refs"]:
+                    excerpt = (analysis.get("evidence") or {}).get(ref)
+                    if excerpt:
+                        rprint(f"    [dim]{esc(ref)} · {esc(excerpt)}[/dim]")
+        if analysis:
+            rprint(
+                f"  [dim]Sample: {analysis.get('sampled_sessions', 0)} sessions"
+                f"{' (truncated)' if analysis.get('truncated') else ''}; not cohort-wide.[/dim]"
+            )
+        rprint(
+            f"  Cohort attribution gaps: {metrics.get('cohort_collision_calls', 0)} collisions, "
+            f"{metrics.get('cohort_unmatched_calls', 0)} unmatched calls (not assigned to this MCP)"
+        )
+        for label, values in (
+            ("Versions", metrics.get("version_distribution") or {}),
+            ("Harnesses", metrics.get("harness_distribution") or {}),
+        ):
+            if values:
+                rprint(f"  {label}: " + ", ".join(f"{esc(name)} ({count})" for name, count in sorted(values.items())))
+        projection = coverage.get("projection") or {}
+        rprint(
+            f"  Coverage: {projection.get('projection_complete_sessions', 0)} processed; "
+            f"state: {esc(coverage.get('attribution_state', 'unknown'))}"
+        )
+        if coverage.get("reasons"):
+            rprint(f"  Gaps: {esc(', '.join(coverage['reasons']))}")
+        for limitation in coverage.get("limitations") or []:
+            rprint(f"  [dim]{esc(limitation)}[/dim]")
         return
 
     narrative = data.get("narrative") or {}
@@ -305,6 +628,294 @@ def insights_show(
                 note_rendered = True
     if not note_rendered:
         _render_registry_match_note(registry_match)
+
+
+def _render_component_section(name: str, content: object) -> None:
+    """Render selected component facts without treating missing evidence as zero."""
+    rprint(f"[bold]{esc(name.replace('_', ' ').title())}[/bold]")
+    if name == "attention" and isinstance(content, list):
+        _render_attention(content)
+        return
+    if name == "analysis" and isinstance(content, dict):
+        _render_analysis(content)
+        return
+    if name == "outcomes" and isinstance(content, dict):
+        _render_outcomes(content)
+        return
+    if isinstance(content, str):
+        rprint(f"  {esc(content)}")
+        return
+    if not isinstance(content, dict):
+        rprint("  [dim]No data recorded.[/dim]")
+        return
+    table = Table(show_header=True, show_lines=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    for key, value in content.items():
+        if isinstance(value, dict):
+            for child, amount in value.items():
+                if not isinstance(amount, (dict, list)):
+                    table.add_row(esc(f"{key}.{child}"), esc("not recorded" if amount is None else str(amount)))
+        elif isinstance(value, list):
+            table.add_row(esc(key), esc(", ".join(str(item) for item in value)))
+        else:
+            table.add_row(esc(key), esc("not recorded" if value is None else str(value)))
+    console.print(table)
+    if name == "component_analysis" and isinstance(content.get("findings"), list):
+        for finding in content["findings"]:
+            if not isinstance(finding, dict):
+                continue
+            rprint(f"  {esc(finding.get('kind', 'Finding'))}: {esc(finding.get('insight', ''))}")
+            for ref in finding.get("evidence_refs") or []:
+                excerpt = (content.get("evidence") or {}).get(ref)
+                if excerpt:
+                    rprint(f"    [dim]{esc(ref)} · {esc(excerpt)}[/dim]")
+
+
+_HEALTH = {
+    "healthy": "healthy",
+    "watch": "worth watching",
+    "needs_attention": "needs attention",
+    "insufficient_data": "not enough data to judge",
+}
+_SEVERITY_MARK = {"attention": "[yellow]look at[/yellow]", "info": "[dim]note[/dim]"}
+
+
+def _percent(part: int, whole: int) -> str:
+    return f"{round(100 * part / whole)}%" if whole else "n/a"
+
+
+def _render_attention(items: list) -> None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rprint(f"  {_SEVERITY_MARK.get(item.get('severity'), '[dim]note[/dim]')} {esc(str(item.get('title', '')))}")
+        rprint(f"    {esc(str(item.get('detail', '')))}")
+        if item.get("suggestion"):
+            rprint(f"    [dim]Suggestion: {esc(str(item['suggestion']))}[/dim]")
+
+
+def _outcome_line(label: str, side: dict) -> str:
+    known = side.get("achieved", 0) + side.get("not_achieved", 0)
+    line = (
+        f"  {label} {side.get('achieved', 0)} of {known} sessions with a known outcome achieved their goal "
+        f"({_percent(side.get('achieved', 0), known)}); {side.get('analyzed', 0)} analyzed of "
+        f"{side.get('sessions', 0)} ({side.get('sampled', 0)} sampled)"
+    )
+    types = ", ".join(f"{kind.replace('_', ' ')} {count}" for kind, count in side.get("friction_types") or [])
+    return line + (f"; friction: {types}" if types else "")
+
+
+def _render_outcomes(outcomes: dict) -> None:
+    state = outcomes.get("state")
+    if state == "unavailable":
+        rprint("  [yellow]Outcomes could not be read (the session read or the model failed); generate again.[/yellow]")
+        return
+    if state != "assessed":
+        rprint("  [dim]No sessions with this component have outcome data yet.[/dim]")
+        return
+    rprint(_outcome_line("With it:   ", outcomes.get("with") or {}))
+    rprint(_outcome_line("Without it:", outcomes.get("without") or {}))
+    gap = outcomes.get("gap") or {}
+    verdict = {
+        "lower": "achieved less often with it",
+        "higher": "achieved more often with it",
+        "no_difference": "no difference large enough to report",
+        "insufficient": f"too few sessions to compare (needs {gap.get('min_per_side', 10)} with a known outcome on each side)",
+    }.get(gap.get("state"), "not assessed")
+    rprint(f"  Difference: {verdict}. These sessions differ in more than the component: an association, not a cause.")
+    rprint(f"  [dim]Without it means: {esc(str(outcomes.get('comparison', '')))}[/dim]")
+
+
+def _render_points(title: str, points: list) -> None:
+    if points:
+        rprint(f"  [bold]{title}[/bold]")
+        for point in points:
+            rprint(f"    {esc(point['title'])}: {esc(point['detail'])}")
+
+
+_EVIDENCE_LABELS = {
+    "metrics": "the counts",
+    "outcomes": "the session comparison",
+    "friction": "friction in sessions with it",
+}
+
+
+def _evidence_label(ref: str, attention: list | None) -> str:
+    """A suggestion cites an id; show the words an owner would recognise."""
+    if ref in _EVIDENCE_LABELS:
+        return _EVIDENCE_LABELS[ref]
+    title = next((i.get("title") for i in attention or [] if isinstance(i, dict) and i.get("id") == ref), None)
+    return str(title or ref.replace("_", " "))
+
+
+def _render_analysis(analysis: dict, attention: list | None = None) -> None:
+    state = analysis.get("state")
+    if state == "unavailable":
+        rprint("  [yellow]The reading could not run (the model failed); generate the report again.[/yellow]")
+    elif state == "insufficient":
+        rprint("  [dim]Too few sessions with outcome data, and nothing flagged, to write a reading yet.[/dim]")
+    elif state != "assessed":
+        rprint("  [dim]No reading was kept: it was not requested, or its answers failed the checks.[/dim]")
+    else:
+        glance = analysis.get("at_a_glance") or {}
+        rprint(
+            f"  [bold]At a glance[/bold]: {_HEALTH.get(glance.get('health'), 'unknown')}. {esc(glance.get('summary', ''))}"
+        )
+        _render_points("What works", analysis.get("what_works") or [])
+        _render_points("Friction", analysis.get("friction") or [])
+        for suggestion in analysis.get("suggestions") or []:
+            kind = str(suggestion.get("action_type", "")).replace("_", " ")
+            rprint(
+                f"  [bold]Suggestion[/bold] ({esc(kind)}, {esc(str(suggestion.get('confidence')))} confidence) "
+                f"{esc(suggestion['title'])}: {esc(suggestion['detail'])}"
+            )
+            based_on = "; ".join(_evidence_label(ref, attention) for ref in suggestion.get("evidence") or [])
+            rprint(f"    [dim]Based on: {esc(based_on)}[/dim]")
+
+
+def _render_interpretation(narrative: dict) -> None:
+    """Outcomes, attention items and the model's reading, in the order an owner wants them."""
+    if not any(key in narrative for key in ("outcomes", "attention", "analysis")):
+        rprint("  [dim]This report predates outcome analysis; generate a new report to add it.[/dim]")
+        return
+    if narrative.get("analysis"):
+        _render_analysis(narrative["analysis"], narrative.get("attention"))
+    if narrative.get("attention"):
+        rprint("  [bold]What to look at[/bold]")
+        _render_attention(narrative["attention"])
+    if narrative.get("outcomes"):
+        rprint("  [bold]Sessions with and without it[/bold]")
+        _render_outcomes(narrative["outcomes"])
+
+
+def _skill_count(metrics: dict, key: str, measured: bool, partial: bool) -> str:
+    """A measured count, "not measured" for this period, or "not recorded" by the cohort's harnesses."""
+    value = metrics.get(key)
+    if value is None and key in metrics:
+        return "not recorded"
+    if not measured or value is None:
+        return "not measured"
+    return f"{value} (only harnesses that record it)" if partial else str(value)
+
+
+def _render_skill_report(data: dict) -> None:
+    """Deterministic skill evidence: loads and invocations show context, never that a skill helped."""
+    metrics = data.get("metrics") or {}
+    coverage = data.get("coverage") or {}
+    reasons = coverage.get("reasons") or []
+    measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
+    rprint(f"[bold]{esc(data.get('component_name') or 'Skill')} Insights[/bold]")
+    rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
+    _render_interpretation(data.get("narrative") or {})
+    rows = (
+        ("Present sessions", str(metrics.get("present_sessions", 0))),
+        ("Sessions with a confirmed load", _skill_count(metrics, "loaded_sessions", measured, False)),
+        (
+            "Sessions with an invocation",
+            _skill_count(metrics, "invoked_sessions", measured, "invoked_not_recorded_on_some_harnesses" in reasons),
+        ),
+        (
+            "Sessions where offered",
+            _skill_count(
+                metrics, "available_sessions", measured, "available_not_recorded_on_some_harnesses" in reasons
+            ),
+        ),
+    )
+    for label, value in rows:
+        rprint(f"  {label}: {esc(value)}")
+    if measured and metrics.get("load_attempts"):
+        rprint(f"  [dim]{metrics['load_attempts']} load attempts failed or had no confirmed result (not loads).[/dim]")
+    for label, values in (
+        ("Versions", metrics.get("version_distribution") or {}),
+        ("Harnesses", metrics.get("harness_distribution") or {}),
+    ):
+        if values:
+            rprint(f"  {label}: " + ", ".join(f"{esc(name)} ({count})" for name, count in sorted(values.items())))
+    projection = coverage.get("projection") or {}
+    evidence = coverage.get("evidence") or {}
+    rprint(
+        f"  Coverage: {projection.get('projection_complete_sessions', 0)} of "
+        f"{(coverage.get('presence') or {}).get('present_sessions', 0)} present sessions processed; "
+        f"state: {esc(coverage.get('attribution_state', 'unknown'))}"
+    )
+    rprint(
+        f"  Not counted: {evidence.get('collision_facts', 0)} ambiguous, "
+        f"{evidence.get('unmatched_facts', 0)} unmatched skill records (not tied to this verified install)"
+    )
+    if reasons:
+        rprint(f"  Gaps: {esc(', '.join(reasons))}")
+    for limitation in coverage.get("limitations") or []:
+        rprint(f"  [dim]{esc(limitation)}[/dim]")
+
+
+def _render_hook_report(data: dict) -> None:
+    """Deterministic hook evidence: recorded runs are a lower bound and never show effect."""
+    metrics = data.get("metrics") or {}
+    coverage = data.get("coverage") or {}
+    eligibility = coverage.get("eligibility") or {}
+    measured = bool(coverage.get("usage_rate_denominator_sessions", 0))
+    rprint(f"[bold]{esc(data.get('component_name') or 'Hook')} Insights[/bold]")
+    rprint(f"  {esc((data.get('narrative') or {}).get('summary') or 'No summary available')}")
+    _render_interpretation(data.get("narrative") or {})
+    rprint(f"  Present sessions: {metrics.get('present_sessions', 0)}")
+    rprint(f"  Sessions where it could run: {metrics.get('eligible_sessions', 0)}")
+    if measured:
+        # A lower bound only where some harness in the cohort leaves silent runs unrecorded.
+        lower_bound = any(
+            str(item).startswith("silent_success_unrecorded") for item in coverage.get("limitations") or []
+        )
+        rprint(
+            f"  Sessions with a recorded run: {metrics.get('sessions_with_recorded_run', 0)}"
+            + (" (a lower bound)" if lower_bound else "")
+        )
+        silent = metrics.get("silent_runs")
+        rprint(
+            f"  Recorded runs: {metrics.get('runs_with_output', 0)} with output, "
+            + (f"{silent} silent, " if silent is not None else "")
+            + f"{metrics.get('failures', 0)} failed, {metrics.get('blocks', 0)} blocked"
+        )
+    else:
+        rprint("  Recorded runs: not measured (no processed session where it could run)")
+    labels = (
+        ("headless_sessions", "headless (this agent hook's placement cannot run)"),
+        ("agent_inactive_sessions", "agent not active"),
+        ("mode_unknown_sessions", "session mode unknown"),
+    )
+    could_not = [f"{eligibility[key]} {label}" for key, label in labels if eligibility.get(key)]
+    if could_not:
+        rprint(f"  Could not run: {esc(', '.join(could_not))}")
+    if eligibility.get("agent_unknown_sessions"):
+        rprint(
+            f"  Not known whether it could run: {eligibility['agent_unknown_sessions']} subagent session(s) "
+            "where neither the subagent nor its parent session recorded which agent ran"
+        )
+    if eligibility.get("version_unverified_sessions"):
+        rprint(
+            f"  Not known whether it could run: {eligibility['version_unverified_sessions']} session(s) recorded by "
+            "a harness version whose hook records are not verified yet"
+        )
+    for label, values in (
+        ("Versions", metrics.get("version_distribution") or {}),
+        ("Harnesses", metrics.get("harness_distribution") or {}),
+    ):
+        if values:
+            rprint(f"  {label}: " + ", ".join(f"{esc(name)} ({count})" for name, count in sorted(values.items())))
+    projection = coverage.get("projection") or {}
+    evidence = coverage.get("evidence") or {}
+    rprint(
+        f"  Coverage: {projection.get('projection_complete_sessions', 0)} of "
+        f"{(coverage.get('presence') or {}).get('present_sessions', 0)} present sessions processed; "
+        f"state: {esc(coverage.get('attribution_state', 'unknown'))}"
+    )
+    rprint(
+        f"  Not counted: {evidence.get('collision_runs', 0)} ambiguous, "
+        f"{evidence.get('unmatched_runs', 0)} unmatched recorded runs (not tied to this verified hook)"
+    )
+    if coverage.get("reasons"):
+        rprint(f"  Gaps: {esc(', '.join(coverage['reasons']))}")
+    for limitation in coverage.get("limitations") or []:
+        rprint(f"  [dim]{esc(limitation)}[/dim]")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -663,12 +1274,13 @@ _RENDERERS = {
 
 @insights_app.command(name="generate")
 def insights_generate(
-    agent_id: str = typer.Argument(..., help="Agent ID, name, or @alias"),
+    agent_id: str = typer.Argument("", help="Agent ID, name, or @alias (omit with --component)"),
     period_days: int = typer.Option(14, "--period", "-p", min=1, max=365, help="Analysis period in days"),
-    agent_version: str | None = typer.Option(None, "--version", "-v", help="Agent version to analyze"),
+    agent_version: str | None = typer.Option(None, "--version", "-v", help="Agent or component version to analyze"),
     compare_version: str | None = typer.Option(None, "--compare", help="Baseline agent version for A/B comparison"),
     output: OutputMode = typer.Option("table", "--output", "-o"),
     wait: bool = typer.Option(False, "--wait", help="Poll until the report completes"),
+    component: tuple[str, str] | None = typer.Option(None, "--component", help="Component type and ref"),
 ):
     """Trigger generation of a new insight report.
 
@@ -678,30 +1290,54 @@ def insights_generate(
 
         observal ops insights generate my-agent --period 30
     """
-    agent_version = _version(agent_version, "agent version")
+    component = component if isinstance(component, tuple) else None
+    if not component and not agent_id:
+        raise typer.BadParameter("Provide an agent or --component")
+    if (component and agent_id) or (not component and not agent_id):
+        fail(ErrorCategory.VALIDATION, "Provide either an agent or --component.", operation="Generate insight report")
+    if component and compare_version:
+        fail(
+            ErrorCategory.VALIDATION,
+            "--compare applies to Agent reports only.",
+            operation="Generate component insight report",
+        )
+    if component and period_days > 90:
+        fail(
+            ErrorCategory.VALIDATION,
+            "Component reports support at most 90 days.",
+            operation="Generate component insight report",
+        )
+    component_version = agent_version if component else None
+    agent_version = _version(agent_version, "agent version") if not component else None
     compare_version = _version(compare_version, "comparison version")
 
-    # Pre-check: verify insights is configured before queuing
-    with _progress(output, "Checking insights configuration..."):
-        status = client.get("/api/v1/insights/status")
-    if not status.get("available"):
-        reason = status.get("reason", "Insights is not configured.")
-        fail(
-            ErrorCategory.UNAVAILABLE,
-            f"Insights is unavailable: {reason}",
-            operation="Generate agent insight report",
-            resource="insights service",
-            remediation="Configure insights.model_sections and insights.api_key, then retry.",
-        )
+    # Evidence-backed component reports degrade to deterministic facts without a configured LLM.
+    if not component:
+        with _progress(output, "Checking insights configuration..."):
+            status = client.get("/api/v1/insights/status")
+        if not status.get("available"):
+            reason = status.get("reason", "Insights is not configured.")
+            fail(
+                ErrorCategory.UNAVAILABLE,
+                f"Insights is unavailable: {reason}",
+                operation="Generate agent insight report",
+                resource="insights service",
+                remediation="Configure insights.model_sections and insights.api_key, then retry.",
+            )
 
     with _progress(output, "Generating insight report..."):
-        resolved = _resolve_agent_id(agent_id)
+        resolved = _resolve_agent_id(agent_id) if not component else ""
+        component_path = _component_path(component) if component else ""
         body = {"period_days": period_days}
+        if component_version:
+            body["component_version_id"] = _component_version_id(component, component_version)
         if agent_version:
             body["agent_version"] = agent_version
         if compare_version:
             body["comparison_agent_version"] = compare_version
-        data = client.post(f"/api/v1/agents/{resolved}/insights/reports", body)
+        data = client.post(
+            f"{component_path}/generate" if component else f"/api/v1/agents/{resolved}/insights/reports", body
+        )
 
     if wait:
         import time
@@ -710,7 +1346,11 @@ def insights_generate(
         if output == "json":
             output_json_line({"event": "queued", "report": data})
         for _ in range(120):
-            current = client.get(f"/api/v1/agents/{resolved}/insights/reports/{report_id}")
+            current = client.get(
+                f"/api/v1/insights/reports/{report_id}"
+                if component
+                else f"/api/v1/agents/{resolved}/insights/reports/{report_id}"
+            )
             phase = str(current.get("progress_phase") or current.get("status") or "queued").replace("_", " ")
             percent = current.get("progress_percent", 0)
             if output == "json":
@@ -758,4 +1398,5 @@ def insights_generate(
         rprint(
             f"  Phase: {esc(str(data.get('progress_phase')).replace('_', ' '))} ({data.get('progress_percent', 0)}%)"
         )
-    rprint("[dim]  Run `observal ops insights show <agent>` when complete.[/dim]")
+    hint = f"--component {esc(component[0])} {esc(component[1])}" if component else "<agent>"
+    rprint(f"[dim]  Run `observal ops insights show {hint}` when complete.[/dim]")

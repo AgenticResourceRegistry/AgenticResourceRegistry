@@ -27,7 +27,7 @@ echo "  Instance:  $INSTANCE_ID"
 echo "  IP:        $PUBLIC_IP"
 echo "  Region:    $REGION"
 echo "  Domain:    ${DOMAIN:-"(none — HTTP only)"}"
-echo "  Image:     ghcr.io/observal/observal-api:$IMAGE_TAG"
+echo "  Image:     ghcr.io/agenticresourceregistry/observal-api:$IMAGE_TAG"
 echo "  Observability: $OBSERVABILITY_STACK"
 echo ""
 

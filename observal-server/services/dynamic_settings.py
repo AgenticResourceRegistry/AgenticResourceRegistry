@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -327,11 +329,13 @@ DEFAULTS: dict[str, str] = {
     # Deployment
     "deployment.sso_only": "false",
     "deployment.public_registry_enabled": "false",
+    # Interface: the deprecated Leaderboard (tab, page, and API). Off by default.
+    "deployment.leaderboard_enabled": "false",
     "deployment.frontend_url": "http://localhost:3000",
     "deployment.public_url": "",
     "deployment.cors_origins": "http://localhost:3000",
-    # Optional aggregate usage reporting. Company identity and public URL are
-    # required before the sender will transmit anything.
+    # Aggregate usage reporting, on for new installations. Until a company name
+    # is set, reports identify the installation as unknown-<number>.
     "usage_ping.enabled": "true",
     "usage_ping.company_name": "",
     "usage_ping.frequency": "every_6_hours",
@@ -349,6 +353,8 @@ DEFAULTS: dict[str, str] = {
     # complete-folder installers have been deployed. A new worker cannot make
     # an old worker enforce skill review and delivery markers.
     "registry.skill_folder_delivery_enabled": "false",
+    # Experimental features. Off by default; when off they are hidden everywhere, not just disabled.
+    "experimental.review_checks": "false",
     # Registry forking: kill switch and per-user hourly creation limit.
     "registry.fork.enabled": "true",
     "registry.fork.max_per_user_per_hour": "30",
@@ -438,6 +444,10 @@ SETTING_SUBTITLES: dict[str, str] = {
         "migrating a restored database through the current head, and confirming supported CLI clients. "
         "Keep off during mixed-version rollout; see docs/skill-folder-rollout.md."
     ),
+    "experimental.review_checks": (
+        "Automated and external checks on review revisions. Experimental: behavior, settings and APIs may change "
+        "or be removed. When off, none of it appears in the UI or API."
+    ),
     "deployment.public_registry_enabled": (
         "Allow signed-out visitors to browse and install approved public registry content. "
         "Publishing, private data, telemetry, and administration still require authentication."
@@ -445,6 +455,10 @@ SETTING_SUBTITLES: dict[str, str] = {
     "telemetry.otlp_forward_destinations": (
         "JSON list of OTLP/HTTP destinations that receive every stored session record as OTLP logs. "
         "Content is sent only to destinations with include_content set."
+    ),
+    "deployment.leaderboard_enabled": (
+        "Show the deprecated Leaderboard. Off by default: the tab, home page link, page, and leaderboard "
+        "API are unavailable to everyone. Ranking data is kept. The Leaderboard will be removed in a future release."
     ),
 }
 
@@ -512,6 +526,13 @@ def settings_schema() -> list[dict[str, Any]]:
 
 
 SECTIONS: list[dict[str, Any]] = [
+    {
+        "id": "experimental",
+        "title": "Experimental",
+        "description": "Features that are not ready for general use. They are off by default and hidden while off.",
+        "icon": "flask",
+        "keys": [k for k in DEFAULTS if k.startswith("experimental.")],
+    },
     {
         "id": "auth",
         "title": "Authentication",

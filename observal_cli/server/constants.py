@@ -37,7 +37,7 @@ REDIS_VERSION = "8.0"
 
 # ── GitHub repo for downloads ──────────────────────────────────
 
-GITHUB_REPO = "Observal/Observal"
+GITHUB_REPO = "AgenticResourceRegistry/AgenticResourceRegistry"
 DEPS_RELEASE_TAG = "deps/v1"
 
 # ── Platform detection ──────────────────────────────────────────

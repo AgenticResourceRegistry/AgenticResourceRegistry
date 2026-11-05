@@ -4,7 +4,7 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-# ── Build stage: install pnpm, deps, and build the Next.js app ──────────────
+# ── Build stage: install pnpm, deps, and build the Vite app ────────────────
 # node:24-alpine (multi-arch: linux/amd64, linux/arm64, linux/s390x)
 FROM node:24-alpine@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3 AS builder
 ARG TARGETARCH

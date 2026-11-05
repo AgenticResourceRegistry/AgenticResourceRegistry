@@ -12,10 +12,9 @@ import pytest
 from fastapi import HTTPException, Response
 from sqlalchemy import func, select
 
-from api.routes import component_versions, review, skill, skill_files
+from api.routes import component_versions, skill, skill_files
 from models.skill import SkillDownload, SkillListing, SkillVersion
-from models.user import UserRole
-from schemas.component_version import VersionPublishRequest, VersionReviewRequest
+from schemas.component_version import VersionPublishRequest
 from schemas.skill import SkillCandidateDraftRequest, SkillInstallRequest, SkillUpdateRequest
 from schemas.skill_resources import SkillVersionRevisionRequest
 from services.agent_lock import (
@@ -88,7 +87,6 @@ async def test_unreviewed_approved_extra_files_refuse_bundle_and_manifest_withou
 async def test_generic_publish_refuses_unbound_approved_folder_inheritance(monkeypatch):
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
-    monkeypatch.setattr(component_versions.inbox, "on_publish", AsyncMock())
     try:
         async with maker() as db:
             owner = await ds.user(db)
@@ -185,7 +183,6 @@ async def test_candidate_cannot_fork_unbound_approved_folder_even_with_computed_
 async def test_unbound_saved_folder_cannot_be_edited_or_withdrawn_into_valid_draft(monkeypatch, status):
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
-    monkeypatch.setattr(skill_files.inbox, "on_review_withdrawn", AsyncMock())
     try:
         async with maker() as db:
             owner = await ds.user(db)
@@ -208,36 +205,6 @@ async def test_unbound_saved_folder_cannot_be_edited_or_withdrawn_into_valid_dra
                         owner,
                     )
             assert refused.value.status_code == 409
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_reviewer_cannot_approve_unbound_folder_with_self_computed_observation(monkeypatch):
-    engine = ds.make_engine()
-    maker = await ds.create_schema(engine)
-    monkeypatch.setattr("api.routes.component_versions._ds.get_bool", AsyncMock(return_value=True))
-    monkeypatch.setattr("api.routes.component_versions.inbox.on_review_decided", AsyncMock())
-    try:
-        async with maker() as db:
-            author = await ds.user(db)
-            reviewer = await ds.user(db, role=UserRole.reviewer)
-            listing = await ds.skill(db, author, status=skill.ListingStatus.pending)
-            version = await db.get(SkillVersion, listing.latest_version_id)
-            version.extra_files = [{"path": "scripts/unreviewed.sh", "content": "echo unreviewed"}]
-            revision = skill_content_revision(listing, version)
-            listing_id, version_id = listing.id, version.id
-            await db.commit()
-            with pytest.raises(HTTPException) as refused:
-                await review.decide_skill_version(
-                    str(listing_id),
-                    version_id,
-                    VersionReviewRequest(action="approve", observed_revision=revision),
-                    db,
-                    reviewer,
-                )
-            assert refused.value.status_code == 409
-            assert (await db.get(SkillVersion, version_id)).status == skill.ListingStatus.pending
     finally:
         await engine.dispose()
 

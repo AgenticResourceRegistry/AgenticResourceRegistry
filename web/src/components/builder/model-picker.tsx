@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { AUTO_MODEL } from "@/lib/agent-model";
 import { cn } from "@/lib/utils";
 
 interface ModelPickerProps {
@@ -29,8 +30,10 @@ interface ModelComboboxProps {
 
 function ModelCombobox({ value, models, placeholder, onChange }: ModelComboboxProps) {
   const [open, setOpen] = useState(false);
+  const query = value.trim().toLowerCase();
+  // An exact selection (e.g. the "auto" default) shows every option instead of filtering to itself.
   const filteredModels = models
-    .filter((model) => model.toLowerCase().includes(value.trim().toLowerCase()))
+    .filter((model) => !query || models.includes(value.trim()) || model.toLowerCase().includes(query))
     .slice(0, 50);
 
   return (
@@ -96,7 +99,7 @@ export function ModelPicker({
 }: ModelPickerProps) {
   const { data: harnesses, defaultHarness } = useHarnesses();
   const allHarnesses = useMemo(() => harnesses ?? [], [harnesses]);
-  const allModels = Array.from(new Set(allHarnesses.flatMap((harness) => harness.supported_models ?? [])));
+  const allModels = Array.from(new Set([AUTO_MODEL, ...allHarnesses.flatMap((harness) => harness.supported_models ?? [])]));
   const overrideEntries = Object.entries(modelsByHarness);
   const fallbackHarness =
     (defaultHarness && allHarnesses.some((harness) => harness.name === defaultHarness) ? defaultHarness : undefined) ??
@@ -154,11 +157,11 @@ export function ModelPicker({
         <ModelCombobox
           value={modelName}
           onChange={onModelNameChange}
-          placeholder="auto (let the harness pick)"
+          placeholder={`${AUTO_MODEL} (let the harness pick)`}
           models={allModels}
         />
         <p className="text-xs text-muted-foreground">
-          Used when no harness override is set. Leave blank to let each harness choose.
+          Used when no harness override is set. <span className="font-mono">{AUTO_MODEL}</span> lets each harness use its own default; a blank value saves as <span className="font-mono">{AUTO_MODEL}</span>.
         </p>
       </div>
 

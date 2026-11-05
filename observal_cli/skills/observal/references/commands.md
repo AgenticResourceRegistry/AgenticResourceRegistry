@@ -3,6 +3,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Observal CLI Command Reference
@@ -19,13 +20,8 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal reconcile`: Backfill local session records missed by automatic hook delivery
 - `observal scan`: Show a read-only inventory of your local harness setup.
 
-**`observal admin`**: Core administration and submission review commands
+**`observal admin`**: Core administration commands (use 'observal review' for submission reviews)
 
-- `observal admin review`: Submission review commands
-  - `observal admin review approve`: Approve a component, Agent, or bundle submission.
-  - `observal admin review list`: List pending submissions awaiting review.
-  - `observal admin review reject`: Reject a component, Agent, or bundle submission.
-  - `observal admin review show`: Show review details for a component or Agent.
 - `observal admin audit-log`: Query the compliance audit log.
 - `observal admin audit-log-export`: Export the compliance audit log as CSV or JSON.
 - `observal admin cache-clear`: Clear all server caches.
@@ -60,6 +56,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal agent bulk-create`: Bulk-create agents from a JSON file.
 - `observal agent create`: Create a new agent (interactive wizard, from file, or via flags).
 - `observal agent delete`: Archive an agent. Prefer the archive command.
+- `observal agent edit`: Amend an unpublished agent version in place.
 - `observal agent fork`: Fork an approved agent release into your own editable draft.
 - `observal agent init`: Scaffold an observal-agent.yaml definition file.
 - `observal agent install`: Get install config for an agent.
@@ -77,10 +74,10 @@ Every command available in the installed CLI. This block is generated from the T
 **`observal auth`**: Authentication and account commands
 
 - `observal auth login`: Connect to Observal.
-- `observal auth logout`: Clear saved credentials.
+- `observal auth logout`: Attempt to sign out everywhere and clear saved credentials.
 - `observal auth whoami`: Show current authenticated user.
 - `observal auth status`: Check authenticated server connectivity and local outbox health.
-- `observal auth change-password`: Change your password.
+- `observal auth change-password`: Change your password and sign out every other session.
 - `observal auth set-username`: Set or update your username.
 
 **`observal config`**: CLI configuration
@@ -129,9 +126,11 @@ Every command available in the installed CLI. This block is generated from the T
 
 **`observal ops`**: Observability and operational commands (sessions, telemetry, rankings, feedback, insights)
 
-- `observal ops insights`: Agent insight reports
+- `observal ops insights`: Agent, MCP, skill and hook component insight reports
+  - `observal ops insights activity`: Show current verified presence, usage and coverage before generating a report.
   - `observal ops insights generate`: Trigger generation of a new insight report.
   - `observal ops insights list`: List insight reports for an agent.
+  - `observal ops insights sessions`: List verified-present sessions and their published component evidence.
   - `observal ops insights show`: Show an insight report with pretty-printed narrative.
 - `observal ops logs`: Live log viewer (open in a separate tab)
 - `observal ops telemetry`: Telemetry health commands
@@ -179,7 +178,7 @@ Every command available in the installed CLI. This block is generated from the T
     - `observal registry mcp sync status`: Show webhook sync settings and the result of the last sync.
   - `observal registry mcp submit`: Submit an MCP server to the registry.
   - `observal registry mcp show`: Show full details of an MCP server.
-  - `observal registry mcp install`: Generate an install config snippet for an MCP server.
+  - `observal registry mcp install`: Generate a snippet, or with --apply configure and track a Claude Code MCP.
   - `observal registry mcp archive`: Archive this component.
   - `observal registry mcp edit`: Edit an MCP server submission.
   - `observal registry mcp fork`: Fork an approved mcp release into your own editable draft.
@@ -248,6 +247,35 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal registry version`: Manage component versions
   - `observal registry version list`: List version history for a registry component.
   - `observal registry version publish`: Publish a new version for a registry component.
+
+**`observal review`**: Review versions, conversations, checks, and publication gates
+
+- `observal review policy`: Organization and teamspace review policy
+  - `observal review policy set`: Set a policy key; use required_approvals.TYPE and a count for per-type gates.
+  - `observal review policy show`: Show organization or teamspace review policy.
+- `observal review approve`: Submit an approval, without publishing the version.
+- `observal review checks`: Show validation and advisory checks.
+- `observal review close`: Close and reject a review.
+- `observal review comment`: Add a general or line-anchored comment, optionally to a pending review.
+- `observal review diff`: Show numbered unified diff hunks (server redaction applies).
+- `observal review dismiss`: Dismiss a verdict (admin or team owner, reason required).
+- `observal review draft`: View or discard your pending review comments.
+- `observal review files`: List changed virtual files.
+- `observal review gate`: Show what blocks publishing and which open items are advisory.
+- `observal review list`: List reviews visible to you; pass the review number to other review commands.
+- `observal review mute`: Mute review activity except final outcomes.
+- `observal review publish`: Publish once the gate allows it; super admins can override approvals and checks with a reason.
+- `observal review reopen`: Reopen a review you withdrew by resubmitting its version.
+- `observal review reply`: Reply to a conversation.
+- `observal review request-changes`: Request changes on a review.
+- `observal review request-reviewer`: Request a reviewer by user UUID.
+- `observal review resolve`: Resolve a conversation.
+- `observal review show`: Show a review and its publication gate.
+- `observal review submit`: Submit pending comments with a verdict; publishing is a separate action.
+- `observal review threads`: List inline and general conversations.
+- `observal review unresolve`: Reopen a conversation.
+- `observal review watch`: Watch review activity.
+- `observal review withdraw`: Withdraw your own review.
 
 **`observal self`**: CLI self-management commands (upgrade, downgrade, rollback, status)
 

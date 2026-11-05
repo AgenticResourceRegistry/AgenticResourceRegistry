@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared helpers for agent route sub-modules."""
@@ -30,6 +31,12 @@ from services.shared.utils import registry_item_slug
 _VISIBILITY_UNSET = object()
 
 
+def _may_read_unapproved(agent: Agent, caller, prefer_user_id: uuid.UUID | None) -> bool:
+    """Owners, co-authors, admins and reviewers may read an agent whose latest version is not approved."""
+    permission = get_effective_agent_permission(agent, caller)
+    return may_view_unapproved(permission, caller) or agent.created_by == prefer_user_id
+
+
 async def _load_agent(
     db: AsyncSession,
     agent_id: str,
@@ -49,10 +56,15 @@ async def _load_agent(
 
     Set *include_all_statuses* to find agents regardless of version status
     (needed for unarchive, delete, etc.).
+
+    Without it, a UUID, prefix or name sees the same agents: approved ones, plus
+    unapproved ones the caller may read. A name tries approved and own agents
+    first, so a legacy name never turns ambiguous for an admin or reviewer.
     """
     conditions = list(extra_conditions or [])
     if not include_deleted:
         conditions.append(Agent.deleted_at.is_(None))
+    caller = None if current_user is _VISIBILITY_UNSET else current_user
 
     try:
         agent = await resolve_prefix_id(Agent, agent_id, db, extra_conditions=conditions)
@@ -62,12 +74,12 @@ async def _load_agent(
         # Otherwise a UUID or prefix reads an agent whose version is pending, which
         # is exactly the state a team-private agent lands in the moment it is made
         # public, and its prompt would be readable before any reviewer saw it.
-        if not include_all_statuses and agent.status != AgentStatus.approved:
-            owner_id = getattr(agent, "created_by", None)
-            caller = None if current_user is _VISIBILITY_UNSET else current_user
-            permission = get_effective_agent_permission(agent, caller)
-            if not may_view_unapproved(permission, caller) and owner_id != prefer_user_id:
-                return None
+        if (
+            not include_all_statuses
+            and agent.status != AgentStatus.approved
+            and not _may_read_unapproved(agent, caller, prefer_user_id)
+        ):
+            return None
         return agent
     except HTTPException:
         pass
@@ -78,17 +90,23 @@ async def _load_agent(
         if parts
         else or_(Agent.slug == agent_id.lower(), Agent.name == agent_id)
     )
-    stmt = select(Agent).join(AgentVersion, Agent.latest_version_id == AgentVersion.id).where(identity_filter)
+    any_status = select(Agent).join(AgentVersion, Agent.latest_version_id == AgentVersion.id).where(identity_filter)
+    if conditions:
+        any_status = any_status.where(*conditions)
+    if current_user is not _VISIBILITY_UNSET:
+        any_status = apply_visibility_filter(any_status, Agent, current_user)
+    stmt = any_status
     if not include_all_statuses:
         visible_status = AgentVersion.status == AgentStatus.approved
         if prefer_user_id is not None:
             visible_status = visible_status | (Agent.created_by == prefer_user_id)
         stmt = stmt.where(visible_status)
-    if conditions:
-        stmt = stmt.where(*conditions)
-    if current_user is not _VISIBILITY_UNSET:
-        stmt = apply_visibility_filter(stmt, Agent, current_user)
     results = (await db.execute(stmt.limit(2))).scalars().all()
+    if not results and not include_all_statuses and caller is not None:
+        # Same gate as the UUID branch, so an admin or reviewer finds a pending
+        # agent by namespace/slug just as they would by its UUID.
+        candidates = (await db.execute(any_status)).scalars().all()
+        results = [item for item in candidates if _may_read_unapproved(item, caller, prefer_user_id)][:2]
     if not parts and len(results) > 1:
         choices = ", ".join(item.qualified_name for item in results)
         raise HTTPException(status_code=409, detail=f"'{agent_id}' is ambiguous; use one of: {choices}")

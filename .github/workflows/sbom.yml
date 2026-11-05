@@ -66,7 +66,7 @@ jobs:
         run: uv run --no-project scripts/check_vulnerabilities.py sbom-python.cdx.json sbom-node.cdx.json
 
       - name: Ensure labels exist
-        if: github.repository == 'Observal/Observal'
+        if: github.repository == 'AgenticResourceRegistry/AgenticResourceRegistry'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -74,7 +74,7 @@ jobs:
           gh label create "automated" --color "0E8A16" --description "Created by CI automation" 2>/dev/null || true
 
       - name: Post vulnerability summary
-        if: github.repository == 'Observal/Observal' && hashFiles('vulnerability-report.md') != ''
+        if: github.repository == 'AgenticResourceRegistry/AgenticResourceRegistry' && hashFiles('vulnerability-report.md') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -106,7 +106,7 @@ jobs:
 
       # ── Attach to release ────────────────────────────────────
       - name: Attach SBOMs to release
-        if: github.event_name == 'release' && github.repository == 'Observal/Observal'
+        if: github.event_name == 'release' && github.repository == 'AgenticResourceRegistry/AgenticResourceRegistry'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -132,7 +132,8 @@ jobs:
 
       - name: Run ScanCode license scan
         run: |
-          uv tool install "scancode-toolkit>=32.0,<33.0"
+          # pluggy 1.7 rejects plugincode's hook specs ("did not find any 'pre_scan' hooks").
+          uv tool install "scancode-toolkit>=32.0,<33.0" --with "pluggy<1.7"
           scancode \
             --license --package --info \
             --license-policy .reuse/license-policy.yml \

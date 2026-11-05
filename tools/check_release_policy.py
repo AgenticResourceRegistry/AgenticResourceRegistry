@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.release import RELEASE_TITLE, ReleaseError, commit_log, release_series, run, validate_target
+from tools.release import DEV_TITLE, RELEASE_TITLE, ReleaseError, commit_log, release_series, run, validate_target
 
 
 def check(base: str, head: str, target: str) -> None:
@@ -36,7 +36,8 @@ def check(base: str, head: str, target: str) -> None:
         if not source:
             raise ReleaseError("Release fixes must record cherry-pick -x provenance from main")
         run("git", "merge-base", "--is-ancestor", source[1], "origin/main")
-        if RELEASE_TITLE.fullmatch(run("git", "show", "-s", "--format=%s", source[1])):
+        subject = run("git", "show", "-s", "--format=%s", source[1])
+        if RELEASE_TITLE.fullmatch(subject) or DEV_TITLE.fullmatch(subject):
             raise ReleaseError("Do not backport release metadata")
         if ".release.toml" in run("git", "diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha).splitlines():
             raise ReleaseError("Backports cannot modify the release manifest")

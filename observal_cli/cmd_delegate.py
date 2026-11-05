@@ -115,7 +115,7 @@ def delegate_run(
     agent: str = typer.Argument(..., help="Agent identifier (urn:air:...) or registry reference (namespace/slug)"),
     message: str = typer.Argument(..., help="The complete task brief (quote it as one argument)"),
     harness: str | None = typer.Option(
-        None, "--harness", "-i", help="Harness to run a registry agent in (detected when omitted)"
+        None, "--harness", "-i", help="Harness to run a registry agent in (default: the harness you call from)"
     ),
     wait: int = typer.Option(600, "--wait", "-w", min=0, max=1800, help="Seconds to wait before returning"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -123,7 +123,8 @@ def delegate_run(
     """Delegate a task and wait for the result.
 
     A registry agent runs headless in a throwaway copy of this repository; its
-    changes come back as a patch that is not applied. A remote A2A agent is
+    changes come back as a patch that is not applied. It runs in the harness you
+    call from; when that harness cannot run it, pass --harness to choose another. A remote A2A agent is
     called directly with its approved Agent Card.
 
     Examples:
@@ -139,7 +140,15 @@ def delegate_run(
             remediation=f"Choose one of: {', '.join(VALID_HARNESSES)}.",
         )
     with nullcontext() if output == "json" else spinner("Delegating..."):
-        task = _guard("Delegate to agent", service.start, agent, message, harness=harness, wait_seconds=wait)
+        task = _guard(
+            "Delegate to agent",
+            service.start,
+            agent,
+            message,
+            harness=harness,
+            parent_harness=service.caller_harness(),
+            wait_seconds=wait,
+        )
     _show(task, output)
 
 

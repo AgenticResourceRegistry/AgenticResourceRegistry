@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Admin user management routes."""
@@ -9,12 +10,12 @@ from fastapi import Depends, HTTPException
 from loguru import logger as optic
 from pydantic import BaseModel
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import ROLE_HIERARCHY, get_db, require_password_auth, require_role
-from models.user import User, UserRole
+from models.user import User, UserRole, live_users
 from schemas.admin import (
     AdminResetPasswordRequest,
     UserAdminResponse,
@@ -24,6 +25,8 @@ from schemas.admin import (
     UserRoleUpdate,
 )
 from services.security_events import EventType, SecurityEvent, Severity, emit_security_event
+from services.token_revocation import revoke_user_tokens
+from services.user_deletion import LastAdminError, delete_user_account, revoke_deleted_user_tokens
 from services.username_generator import generate_unique_username
 
 from ._router import router
@@ -38,7 +41,7 @@ async def list_users(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.debug("admin users list")
-    stmt = select(User).order_by(User.created_at.desc())
+    stmt = select(User).where(live_users()).order_by(User.created_at.desc())
     result = await db.execute(stmt)
     users = [UserAdminResponse.model_validate(u) for u in result.scalars().all()]
     return users
@@ -124,7 +127,7 @@ async def update_user_role(
     if user_id == current_user.id and new_role != current_user.role:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
 
-    stmt = select(User).where(User.id == user_id)
+    stmt = select(User).where(User.id == user_id, live_users())
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
@@ -157,7 +160,7 @@ async def update_user_department(
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
     optic.trace("user_id={}", user_id)
-    stmt = select(User).where(User.id == user_id)
+    stmt = select(User).where(User.id == user_id, live_users())
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
@@ -194,7 +197,7 @@ async def bulk_update_departments(
     not_found = []
 
     for entry in req.entries:
-        stmt = select(User).where(User.email == entry.email.strip().lower())
+        stmt = select(User).where(User.email == entry.email.strip().lower(), live_users())
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
         if user:
@@ -220,7 +223,7 @@ async def reset_user_password(
     a secure random password that doesn't collide with existing hashes.
     """
     optic.trace("user_id={}", user_id)
-    stmt = select(User).where(User.id == user_id)
+    stmt = select(User).where(User.id == user_id, live_users())
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
@@ -234,11 +237,13 @@ async def reset_user_password(
         raise HTTPException(status_code=422, detail="Provide new_password or set generate=true")
 
     user.set_password(new_password)
+    from services.redis import get_redis
+
+    # Sign the user out everywhere before the reset lands; a Redis error aborts with the old password intact.
+    await revoke_user_tokens(get_redis(), user.id)
     await db.commit()
 
     try:
-        from services.redis import get_redis
-
         redis = get_redis()
         await redis.setex(f"must_change_password:{user.id}", 86400, "1")
     except (RedisError, Exception):
@@ -272,28 +277,32 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin)),
 ):
-    """Admin deletes a user account and all associated data."""
+    """Admin deletes a user account.
+
+    The account becomes an empty shell (see ``services.user_deletion``): it
+    can never log in and holds no identifying fields, while telemetry,
+    reports and anything the user authored keep the original user ID.
+    """
     optic.debug("admin user delete")
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
 
-    stmt = select(User).where(User.id == user_id)
+    stmt = select(User).where(User.id == user_id, live_users())
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Prevent deleting the last admin/super_admin
-    if user.role in (UserRole.admin, UserRole.super_admin):
-        admin_count = await db.scalar(
-            select(func.count()).select_from(User).where(User.role.in_([UserRole.admin, UserRole.super_admin]))
-        )
-        if admin_count is not None and admin_count <= 1:
-            raise HTTPException(status_code=400, detail="Cannot delete the last admin")
-
-    optic.warning("Admin {} deleted user {} ({})", current_user.email, user.email, user.id)
     deleted_user_email = user.email
     deleted_user_id = str(user.id)
+    try:
+        # Refuses the last live admin (shared with SCIM deletion).
+        await delete_user_account(db, user)
+    except LastAdminError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    await db.commit()
+    await revoke_deleted_user_tokens(user.id)
+    optic.warning("Admin {} deleted user {}", current_user.id, deleted_user_id)
     await emit_security_event(
         SecurityEvent(
             event_type=EventType.USER_DELETED,
@@ -307,8 +316,6 @@ async def delete_user(
             detail=f"Deleted user {deleted_user_email}",
         )
     )
-    await db.delete(user)
-    await db.commit()
 
 
 # ── Penalty & Weight Customization ──────────────────────

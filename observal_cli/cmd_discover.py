@@ -178,7 +178,7 @@ def _use_hint(item: dict) -> str:
     return f"observal discover use {item.get('identifier', '')}"
 
 
-def _next_step(item: dict, harness: str | None) -> str | None:
+def _next_step(item: dict, harness: str | None, entity_id: str | None = None) -> str | None:
     """The existing command that installs a next-session resource; it already confirms.
 
     The command pins the version the discovery entry describes, so what gets
@@ -186,6 +186,14 @@ def _next_step(item: dict, harness: str | None) -> str | None:
     """
     kind = item.get("obs:kind")
     ref, _, version = (item.get("obs:nativeRef") or "").partition("@")
+    if kind == "sandbox":
+        # No install command exists: a sandbox only reaches a machine inside an Agent. `agent add` takes the UUID,
+        # not the native ref, so a missing ref is fine; the entry's own version still pins the release shown.
+        if not entity_id:
+            return None
+        version = version or item.get("version") or ""
+        pin = f" --version {shlex.quote(version)}" if version else ""
+        return f"observal agent add sandbox {shlex.quote(entity_id)}{pin}"
     if not ref or not kind:
         return None
     # The command is meant to be run as printed, and the reference comes from a
@@ -197,8 +205,6 @@ def _next_step(item: dict, harness: str | None) -> str | None:
         return f"observal agent pull {ref}{flag}{pin}"
     if kind in ("mcp", "skill", "hook"):
         return f"observal registry {kind} install {ref}{flag}{pin}"
-    if kind == "sandbox":
-        return f"observal registry sandbox show {ref} --output json"
     return None
 
 
@@ -211,7 +217,12 @@ def discover_search(
     kind: str | None = typer.Option(
         None, "--type", "-t", help="Restrict to one kind: agent, mcp, skill, hook, prompt, sandbox"
     ),
-    harness: str | None = typer.Option(None, "--harness", "-i", help="Only resources that work in this harness"),
+    harness: str | None = typer.Option(
+        None,
+        "--harness",
+        "-i",
+        help="Only resources that declare support for this harness (undeclared ones are left out)",
+    ),
     limit: int = typer.Option(DEFAULT_LIMIT, "--limit", "-n", min=1, max=MAX_LIMIT, help="How many results"),
     unapproved: bool = typer.Option(False, "--include-unapproved", help="Also show your own pending/rejected items"),
     output: OutputMode = typer.Option("table", "--output", "-o", help="Output format: table or json"),
@@ -253,6 +264,12 @@ def discover_search(
         rprint(f"[dim]Nothing in Observal matches[/dim] {esc(text)}[dim].[/dim]")
         rprint(
             "[dim]Try fewer or different words, or drop --type/--harness. If it truly does not exist, build it and consider publishing it.[/dim]"
+        )
+        rprint(
+            "[dim]For most users, discovery only covers your own listings and the teamspaces you belong to, not other "
+            "people's public listings. Browse those with `observal registry <type> list` or `observal agent list`, and "
+            "install registry agents and components by reference. Remote A2A agents are not installed: run them "
+            "with `observal delegate run`.[/dim]"
         )
         return
 
@@ -316,7 +333,7 @@ def discover_inspect(
         ("Version", entry.get("version")),
         ("Status", entry.get("obs:lifecycle")),
         ("Visibility", entry.get("obs:visibility")),
-        ("Harnesses", ", ".join(entry.get("obs:supportedHarnesses") or []) or "any"),
+        ("Harnesses", ", ".join(entry.get("obs:supportedHarnesses") or []) or "not declared"),
         ("Usable now", "yes" if entry.get("obs:activatable") else "no"),
         ("Capabilities", ", ".join(entry.get("capabilities") or [])),
         ("Artifact", entry.get("url")),
@@ -350,8 +367,10 @@ def discover_use(
 
     Skills and prompts are text: their exact approved version is printed for
     you to read now and the use is recorded in the capability lock. MCP
-    servers, hooks, agents and sandboxes change your setup, so this prints
-    the existing install command, which asks before writing anything.
+    servers, hooks and agents change your setup, so this prints the existing
+    install command, which asks before writing anything. Sandboxes have no
+    install command; this prints `observal agent add sandbox <uuid>`, which
+    only edits a local observal-agent.yaml.
 
     Examples:
       observal discover use urn:air:observal.acme.com:skill:5f2c...
@@ -397,7 +416,20 @@ def discover_use(
     cwd = str(Path.cwd())
 
     if kind not in _CONTEXT_KINDS:
-        step = _next_step({"obs:kind": kind, "obs:nativeRef": native_ref}, harness_value)
+        step = _next_step({"obs:kind": kind, "obs:nativeRef": native_ref, "version": version}, harness_value, entity_id)
+        if kind == "sandbox":
+            reason = (
+                "Sandboxes have no install command; they are used through an Agent. "
+                + (
+                    "Run next_step in an Agent directory (create one with `observal agent init`) to add it to "
+                    "observal-agent.yaml, then "
+                    if step
+                    else "Add it to an Agent's observal-agent.yaml, then "
+                )
+                + "`observal agent publish` and `observal agent pull <agent> --harness <harness>` to put it on your machine."
+            )
+        else:
+            reason = "This kind changes your harness setup; run the install command, which confirms before writing."
         result = {
             "identifier": urn,
             "kind": kind,
@@ -405,13 +437,18 @@ def discover_use(
             "native_ref": native_ref,
             "mode": "next-session",
             "activated": False,
-            "reason": "This kind changes your harness setup; run the install command, which confirms before writing.",
+            "reason": reason,
             "next_step": step,
         }
         if output == "json":
             output_json(result)
             return
-        rprint(f"[yellow]{esc(entry.get('displayName', ''))}[/yellow] is a {kind}; it takes effect after a restart.")
+        if kind == "sandbox":
+            rprint(f"[yellow]{esc(entry.get('displayName', ''))}[/yellow] is a sandbox. {reason}")
+        else:
+            rprint(
+                f"[yellow]{esc(entry.get('displayName', ''))}[/yellow] is a {kind}; it takes effect after a restart."
+            )
         if step:
             rprint(f"  Run: [cyan]{esc(step)}[/cyan]")
         return

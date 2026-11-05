@@ -1,13 +1,14 @@
-<!-- SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+---
+# SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Authentication and SSO"
+---
 
-# Authentication and SSO
-
-How Observal authenticates users and signs tokens, and how to wire up SSO.
+How Agentic Resource Registry authenticates users and signs tokens, and how to wire up SSO.
 
 ## Authentication modes
 
-Observal supports password auth, API keys, OAuth / OIDC, and SAML. The public login page shows only the methods enabled for the deployment.
+Agentic Resource Registry supports password auth, API keys, OAuth / OIDC, and SAML. The public login page shows only the methods enabled for the deployment.
 
 | Method | How it is enabled | Notes |
 | --- | --- | --- |
@@ -19,7 +20,7 @@ Observal supports password auth, API keys, OAuth / OIDC, and SAML. The public lo
 
 Use `deployment.sso_only=true` when password login should be hidden and only SSO should be available.
 
-## SSO-only mode {#sso-only-mode}
+## SSO-only mode
 
 `deployment.sso_only` controls whether password-based authentication is available.
 
@@ -30,9 +31,9 @@ Use `deployment.sso_only=true` when password login should be hidden and only SSO
 
 Set it in **Admin → SSO → Access policy**. Confirm OIDC or SAML works with a real test user before enabling it.
 
-## Self registration {#self-registration}
+## Self registration
 
-Controls whether visitors can create their own Observal account from the login page.
+Controls whether visitors can create their own Agentic Resource Registry account from the login page.
 
 | Value | Effect |
 |-------|--------|
@@ -74,13 +75,13 @@ JWT_KEY_DIR=/data/keys
 
 Losing these keys invalidates **every** access and refresh token. All users must log in again. Tokens rotate, but only the private key can issue new ones, and there is no recovery path without the keys.
 
-Back up the `apidata` volume every time you back up Postgres. See [Backup and restore](backup-and-restore.md).
+Back up the `apidata` volume every time you back up Postgres. See [Backup and restore](/self-hosting/backup-and-restore).
 
 ### Key rotation and algorithm changes
 
 For a same-algorithm emergency rotation, stop the API, back up and remove `signing.pem`, then restart. New keys are generated and existing sessions must authenticate again.
 
-To move between ES256 and RS256, change `JWT_SIGNING_ALGORITHM` and restart. Observal archives the old public key, generates the selected key type, publishes both in JWKS, and continues verifying old tokens until they expire. New tokens use only the configured algorithm. Unsupported algorithms and token headers that do not match the resolved key type are rejected.
+To move between ES256 and RS256, change `JWT_SIGNING_ALGORITHM` and restart. Agentic Resource Registry archives the old public key, generates the selected key type, publishes both in JWKS, and continues verifying old tokens until they expire. New tokens use only the configured algorithm. Unsupported algorithms and token headers that do not match the resolved key type are rejected.
 
 If the signing key is encrypted, use `JWT_KEY_PASSWORD_FILE` and rotate the password and key together during a planned restart.
 
@@ -95,7 +96,7 @@ SAML_SP_X509_CERT_FILE=/run/secrets/saml_sp_x509_cert
 
 Both files are required together. File-backed material overrides the generated database key, appears as externally managed in admin responses, and cannot be replaced through the admin API. Replace both files atomically and restart the API to rotate them.
 
-OAuth, Google, GitHub, and SAML secret environment imports also accept the `NAME_FILE` form. File-backed values stay in memory rather than being copied into PostgreSQL or Redis. See [Configuration](configuration.md#secret-files).
+OAuth, Google, GitHub, and SAML secret environment imports also accept the `NAME_FILE` form. File-backed values stay in memory rather than being copied into PostgreSQL or Redis. See [Configuration](/self-hosting/configuration#secret-files).
 
 ## OAuth / OIDC SSO
 
@@ -103,21 +104,27 @@ Set these three in **Admin → SSO → SSO settings**, then restart the API so t
 
 | Setting | Value |
 | --- | --- |
-| `oauth.client_id` {#oauth-client-id} | Client ID from your IdP |
-| `oauth.client_secret` {#oauth-client-secret} | Client secret from your IdP |
-| `oauth.server_metadata_url` {#oauth-server-metadata-url} | OIDC discovery URL, for example `https://accounts.example.com/.well-known/openid-configuration` |
+| `oauth.client_id` | Client ID from your IdP |
+| `oauth.client_secret` | Client secret from your IdP |
+| `oauth.server_metadata_url` | OIDC discovery URL, for example `https://accounts.example.com/.well-known/openid-configuration` |
 
-Observal uses [Authlib](https://docs.authlib.org/) and reads the IdP discovery document, so any OIDC-compliant provider works (Auth0, Okta, Azure AD, Google Workspace, Keycloak, Authentik, Dex, etc.).
+Agentic Resource Registry uses [Authlib](https://docs.authlib.org/) and reads the IdP discovery document, so any OIDC-compliant provider works (Auth0, Okta, Azure AD, Google Workspace, Keycloak, Authentik, Dex, etc.).
 
-### OIDC Client ID {#oauth-client-id}
+<a id="oauth-client-id"></a>
+
+### OIDC Client ID
 
 The public client identifier from your IdP application registration.
 
-### OIDC Client Secret {#oauth-client-secret}
+<a id="oauth-client-secret"></a>
+
+### OIDC Client Secret
 
 The private client secret from your IdP application registration. It is stored encrypted and is never shown again after saving.
 
-### OIDC Discovery URL {#oauth-server-metadata-url}
+<a id="oauth-server-metadata-url"></a>
+
+### OIDC Discovery URL
 
 The `.well-known/openid-configuration` URL for your IdP tenant or authorization server.
 
@@ -141,9 +148,11 @@ The first user who logs in via OAuth is **not** automatically an admin. Bootstra
 
 ### Scope / claims
 
-Observal requests standard `openid profile email` scope. The IdP's `email` claim is the canonical user identifier.
+Agentic Resource Registry requests standard `openid profile email` scope. The IdP's `email` claim is the canonical user identifier.
 
-## Google OAuth (first-class provider) {#google-oauth}
+<a id="google-oauth"></a>
+
+## Google OAuth (first-class provider)
 
 Google sign-in runs as its own provider, separate from the generic OIDC slot above. Both can be enabled at the same time, so a deployment can offer Okta *and* Google on the login screen.
 
@@ -166,7 +175,9 @@ The Google OIDC discovery URL is hardcoded server-side, so you don't need to set
 6. Copy the generated **Client ID** and **Client secret** into SSO settings or your container env.
 7. Restart the API container so the Authlib client is rebuilt.
 
-### Restricting to specific email domains {#google-allowed-domains}
+<a id="google-allowed-domains"></a>
+
+### Restricting to specific email domains
 
 Set `GOOGLE_OAUTH_ALLOWED_DOMAINS` to a comma-separated list of domains. Anyone outside the list is rejected with a 403, even if they have a valid Google account.
 
@@ -178,13 +189,15 @@ Leave it unset to allow any Google account (including personal `@gmail.com` addr
 
 ### Notes
 
-- Observal additionally requires Google's `email_verified` claim to be `true`. Unverified accounts (rare on Google but possible) are rejected with a 400.
+- Agentic Resource Registry additionally requires Google's `email_verified` claim to be `true`. Unverified accounts (rare on Google but possible) are rejected with a 400.
 - The first Google user is **not** automatically an admin (matches the generic OIDC behavior). Bootstrap a local admin first, then use that account to promote the Google user.
 - The auth provider and Google subject ID are recorded on the user row (`auth_provider="google"`, `sso_subject_id=<google-sub>`) for audit purposes.
 
-## GitHub OAuth (first-class provider) {#github-oauth}
+<a id="github-oauth"></a>
 
-GitHub sign-in runs as its own provider, alongside generic OIDC and Google. Unlike those two, GitHub is plain OAuth 2.0 (not OIDC): there is no discovery URL and no ID token. Observal fetches the profile and email list from the GitHub REST API after the code exchange.
+## GitHub OAuth (first-class provider)
+
+GitHub sign-in runs as its own provider, alongside generic OIDC and Google. Unlike those two, GitHub is plain OAuth 2.0 (not OIDC): there is no discovery URL and no ID token. Agentic Resource Registry fetches the profile and email list from the GitHub REST API after the code exchange.
 
 Set these in the SSO settings page, or as container env vars for one-time import at startup. The **Sign in with GitHub** button appears after the API restarts:
 
@@ -201,7 +214,9 @@ GITHUB_OAUTH_CLIENT_SECRET=ghp_... / github_pat_... style secret
 4. Copy the generated **Client ID** and generate a **Client secret**; put both into SSO settings or your container env.
 5. Restart the API container so the Authlib client is rebuilt.
 
-### Restricting to GitHub organizations {#github-allowed-orgs}
+<a id="github-allowed-orgs"></a>
+
+### Restricting to GitHub organizations
 
 Set `GITHUB_OAUTH_ALLOWED_ORGS` to a comma-separated list of GitHub organization slugs. Only *active* members of at least one listed org can sign in; everyone else is rejected with a 403. Pending invitations don't count.
 
@@ -209,13 +224,13 @@ Set `GITHUB_OAUTH_ALLOWED_ORGS` to a comma-separated list of GitHub organization
 GITHUB_OAUTH_ALLOWED_ORGS=acme-inc,acme-labs
 ```
 
-When an org allowlist is configured, Observal requests the `read:org` scope (in addition to `read:user user:email`) so it can see private org memberships. Members may need to grant/request org approval for the OAuth app if the org restricts third-party access.
+When an org allowlist is configured, Agentic Resource Registry requests the `read:org` scope (in addition to `read:user user:email`) so it can see private org memberships. Members may need to grant/request org approval for the OAuth app if the org restricts third-party access.
 
 Leave it unset to allow any GitHub account to provision itself as `role=user`.
 
 ### Notes
 
-- Observal only accepts **verified** email addresses from `GET /user/emails` (preferring the primary). The profile-level `email` field is never trusted, and accounts with no verified email are rejected with a 400.
+- Agentic Resource Registry only accepts **verified** email addresses from `GET /user/emails` (preferring the primary). The profile-level `email` field is never trusted, and accounts with no verified email are rejected with a 400.
 - Departments are not populated automatically from GitHub (there is no groups claim). Assign them in **Admin → Users**, individually or via bulk upload — same as Google users.
 - The auth provider and the *numeric* GitHub user ID are recorded on the user row (`auth_provider="github"`, `sso_subject_id=<github-id>`). The numeric ID is used instead of the login handle because handles can be renamed and re-registered.
 
@@ -247,7 +262,7 @@ Users can generate API keys for scripts and CI. The key inherits the user's role
 ```bash
 # Get a key - flow depends on your setup (web UI usually)
 # Then in CI:
-export OBSERVAL_API_KEY=<key>
+export OBSERVAL_API_KEY='replace-with-your-key'
 export OBSERVAL_SERVER_URL=https://observal.your-company.internal
 
 observal ops traces --limit 100 --output json | jq
@@ -262,23 +277,24 @@ Auth endpoints are rate-limited to slow brute-force attempts:
 | Setting | Default | Scope |
 | --- | --- | --- |
 | `RATE_LIMIT_AUTH` | `10/minute` | General auth endpoints |
-| `RATE_LIMIT_AUTH_STRICT` | `5/minute` | Login, registration, and password reset |
+| `RATE_LIMIT_AUTH_STRICT` | `5/minute` | User registration |
 
 Tighten for public-facing deployments.
 
 ## Password reset
 
-Users who forget their password request a reset code via `observal auth reset-password --email <email>` or the web UI **Forgot password?** link. The server logs a 6-character code to its console:
+There is no self-service reset flow. The login page says **Forgot password? Contact your admin.** — an admin resets the account from **Admin > Users** in the web UI or with the CLI:
 
-```
-WARNING - PASSWORD RESET CODE for alice@example.com: A7X9B2 (expires in 15 minutes)
+```bash
+observal admin reset-password <email>
+observal admin reset-password <email> --generate
 ```
 
-An operator reads the log and passes the code to the user out-of-band (Slack, phone). This is deliberate: no email infrastructure needed for the default flow. If you want emailed reset codes, implement an email transport in the server.
+`--generate` has the server mint a random password and the CLI prints it once. Hand it to the user out-of-band (Slack, phone); they must change it at their next sign-in.
 
 ## Operational controls
 
-Observal includes:
+Agentic Resource Registry includes:
 
 * **Audit logging**: every privileged action lands in ClickHouse's `audit_log`
 * **SSO-only mode** (`deployment.sso_only=true`)
@@ -287,4 +303,4 @@ See `docs/self-hosting/sso-cli.md` for SSO CLI commands.
 
 ## Next
 
-→ [Session tracking and reconciliation](../core-concepts/session-tracking.md)
+→ [Session tracking and reconciliation](/core-concepts/session-tracking)

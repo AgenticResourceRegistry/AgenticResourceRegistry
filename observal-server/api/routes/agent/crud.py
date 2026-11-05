@@ -39,10 +39,11 @@ from schemas.agent import (
 )
 from services.cache import invalidate_namespace
 from services.config_generator import validate_mcp_command
-from services.harness_capability_inference import compute_supported_harnesses, infer_required_features
+from services.harness_capability_inference import NoCompatibleHarnessError, apply_harness_inference
 from services.registry_fork import agent_fork_counts, provenance_for, provenance_for_many
 from services.registry_namespace import identity_exists, slugify
 from services.registry_telemetry import emit_registry_event
+from services.review.cutover import lock_review_for_edit, push_draft_edit, submit_for_review
 from services.teamspace import resolve_publish_target
 
 from ._router import router
@@ -69,7 +70,9 @@ _VERSION_OWNED_FIELDS = (
     "components",
     "mcp_server_ids",
 )
-_EDITABLE_VERSION_STATUSES = frozenset({AgentStatus.draft, AgentStatus.pending, AgentStatus.rejected})
+_EDITABLE_VERSION_STATUSES = frozenset(
+    {AgentStatus.draft, AgentStatus.pending, AgentStatus.rejected, AgentStatus.changes_requested}
+)
 
 
 @router.post("", response_model=AgentResponse)
@@ -168,10 +171,8 @@ async def create_agent(
         models_by_harness=req.models_by_harness,
         external_mcps=[m.model_dump() for m in req.external_mcps],
         supported_harnesses=req.supported_harnesses,
-        status=AgentStatus.approved if target.auto_approve else AgentStatus.pending,
+        status=AgentStatus.pending,
         released_by=current_user.id,
-        reviewed_by=current_user.id if target.auto_approve else None,
-        reviewed_at=datetime.now(UTC) if target.auto_approve else None,
         success_criteria=req.success_criteria.model_dump() if req.success_criteria else None,
     )
     db.add(version)
@@ -206,8 +207,10 @@ async def create_agent(
         components = all_crefs
         external_mcps = version.external_mcps
 
-    version.required_capabilities = infer_required_features(_AgentProxy(), skill_listings=skill_listings_map)
-    version.inferred_supported_harnesses = compute_supported_harnesses(version.required_capabilities)
+    try:
+        harness_warnings = apply_harness_inference(version, _AgentProxy(), skill_listings=skill_listings_map)
+    except NoCompatibleHarnessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     # Flush pending AgentComponent + goal rows so the snapshot builder picks
     # them up via its own SELECTs (the relationship cache is empty).
@@ -217,6 +220,7 @@ async def create_agent(
 
     await lock_agent_version(db, agent, version)
     version.yaml_snapshot = await build_yaml_snapshot(version, db)
+    review = await submit_for_review(db, "agent", agent, version, current_user.id)
 
     try:
         await db.commit()
@@ -243,8 +247,12 @@ async def create_agent(
     )
 
     return _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
-    )
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        warnings=harness_warnings,
+    ).model_copy(update={"review_number": review.number, "review_url": f"/review/{review.number}"})
 
 
 @router.get("", response_model=list[AgentSummary])
@@ -682,6 +690,8 @@ async def update_agent(
     edits_version = "success_criteria" in req.model_fields_set or any(
         getattr(req, field) is not None for field in _VERSION_OWNED_FIELDS
     )
+    if edits_version and latest is not None:
+        await lock_review_for_edit(db, "agent", latest)
     if edits_version and latest is not None and latest.status not in _EDITABLE_VERSION_STATUSES:
         raise HTTPException(
             status_code=409,
@@ -814,8 +824,14 @@ async def update_agent(
             current_user=current_user,
         )
 
-    # Re-infer harness features only when components or external_mcps changed
-    if req.components is not None or req.mcp_server_ids is not None or req.external_mcps is not None:
+    # Re-infer harness features when components, external_mcps or the declared harnesses changed
+    harness_warnings: list[str] = []
+    if (
+        req.components is not None
+        or req.mcp_server_ids is not None
+        or req.external_mcps is not None
+        or req.supported_harnesses is not None
+    ):
         if not agent.latest_version:
             raise HTTPException(status_code=400, detail="Agent has no version to update features on")
         current_comps = (
@@ -833,8 +849,10 @@ async def update_agent(
             components = current_comps
             external_mcps = agent.external_mcps
 
-        agent.required_capabilities = infer_required_features(_AgentProxy(), skill_listings=skill_listings_map_update)
-        agent.inferred_supported_harnesses = compute_supported_harnesses(agent.required_capabilities)
+        try:
+            harness_warnings = apply_harness_inference(agent, _AgentProxy(), skill_listings=skill_listings_map_update)
+        except NoCompatibleHarnessError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     snapshot_fields = (
         "version",
@@ -860,6 +878,12 @@ async def update_agent(
 
         await lock_agent_version(db, agent, agent.latest_version)
         agent.latest_version.yaml_snapshot = await build_yaml_snapshot(agent.latest_version, db)
+    # A save on a version under review becomes its next revision, so reviewers see what would publish.
+    pushed = (
+        await push_draft_edit(db, "agent", agent, agent.latest_version, current_user.id)
+        if edits_version and agent.latest_version is not None
+        else None
+    )
 
     await db.commit()
     agent = await _load_agent(db, str(agent.id), prefer_user_id=current_user.id, current_user=current_user)
@@ -874,9 +898,14 @@ async def update_agent(
         resource_name=agent.name,
     )
 
-    return _agent_to_response(
-        agent, name_map, created_by_email=current_user.email, created_by_username=current_user.username
+    response = _agent_to_response(
+        agent,
+        name_map,
+        created_by_email=current_user.email,
+        created_by_username=current_user.username,
+        warnings=harness_warnings,
     )
+    return response.model_copy(update=pushed) if pushed else response
 
 
 @router.delete("/{agent_id}")
@@ -937,7 +966,10 @@ async def restore_deleted_agent(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     restore_name = req.name if req and req.name else agent.name
-    restore_slug = slugify(restore_name) if req and req.name else agent.slug
+    try:
+        restore_slug = slugify(restore_name) if req and req.name else agent.slug
+    except ValueError as exc:  # a reserved slug such as "draft"
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if await identity_exists(db, Agent, agent.namespace, restore_slug, exclude_id=agent.id):
         raise HTTPException(
             status_code=409,

@@ -64,6 +64,10 @@ export interface RegistryItem {
 	description?: string;
 	status?: string;
 	rejection_reason?: string;
+	review_number?: number | null;
+	review_url?: string | null;
+	/** Set when a draft save pushed a new revision to the open review. */
+	review_revision?: number | null;
 	created_at?: string;
 	updated_at?: string;
 	is_recommended?: boolean;
@@ -144,6 +148,7 @@ export interface AgentComponentReference {
 	component_name?: string;
 	mcp_name?: string;
 	resolved_version?: string;
+	config_override?: Record<string, unknown> | null;
 	status?: string;
 }
 
@@ -199,6 +204,8 @@ export interface ComponentVersionSummary {
 	status: string;
 	requires_global_review?: boolean;
 	rejection_reason: string | null;
+	review_number?: number | null;
+	review_url?: string | null;
 	download_count: number;
 	supported_harnesses: string[];
 	released_by: string;
@@ -290,6 +297,7 @@ export interface BulkResultItem {
 	name: string;
 	status: "created" | "skipped" | "error";
 	agent_id?: string | null;
+	review_number?: number | null;
 	error?: string | null;
 }
 
@@ -319,6 +327,7 @@ export interface ValidationIssue {
 export interface ValidationResult {
 	valid: boolean;
 	issues: ValidationIssue[];
+	supported_harnesses?: string[];
 }
 
 // ── Version Diff ────────────────────────────────────────────────────
@@ -361,126 +370,6 @@ export interface AgentVersionOutdated {
 	version: string;
 	components: ComponentPinFreshness[];
 	summary: { total: number; outdated: number; unlocked: number; archived: number };
-}
-
-// ── Review ──────────────────────────────────────────────────────────
-
-export interface McpValidationResult {
-	stage: string;
-	passed: boolean;
-	details?: string;
-	run_at?: string;
-}
-
-export interface ReviewComponentBlocker {
-	component_type: string;
-	component_id: string;
-	name: string;
-	status: string;
-}
-
-export interface ReviewItem {
-	id: string;
-	name?: string;
-	description?: string;
-	version?: string;
-	owner?: string;
-	type?: string;
-	listing_type?: string;
-	submitted_by?: string;
-	submitted_at?: string;
-	created_at?: string;
-	updated_at?: string;
-	status?: string;
-	mcp_validated?: boolean;
-	validation_results?: McpValidationResult[];
-	components_ready?: boolean;
-	component_blockers?: ReviewComponentBlocker[];
-	blocking_components?: ReviewComponentBlocker[];
-	bundle_id?: string;
-	bundle_name?: string;
-	rejection_reason?: string;
-	forked_from?: ForkProvenance | null;
-
-	// Common detail fields
-	git_url?: string;
-	git_ref?: string;
-	supported_harnesses?: string[];
-
-	// MCP-specific
-	transport?: string;
-	framework?: string;
-	docker_image?: string;
-	command?: string;
-	args?: string[];
-	url?: string;
-	headers?: unknown[];
-	auto_approve?: string[];
-	tools_schema?: Record<string, unknown>;
-	environment_variables?: unknown[];
-	setup_instructions?: string;
-	changelog?: string;
-
-	// Skill-specific
-	skill_path?: string;
-	skill_md_content?: string;
-	validated?: boolean;
-	target_agents?: string[];
-	task_type?: string;
-	slash_command?: string;
-	version_id?: string;
-	base_version_id?: string | null;
-	base_version?: string | null;
-	base_delivery_mode?: "git_fetch" | "registry_direct" | null;
-	base_git_url?: string | null;
-	base_git_ref?: string | null;
-	review_key?: string;
-	revision?: string;
-	files?: SkillManifestFile[];
-	pending_version_id?: string;
-	has_extra_files?: boolean;
-
-	// Hook-specific
-	event?: string;
-	execution_mode?: string;
-	handler_type?: string;
-	handler_config?: Record<string, unknown>;
-	scope?: string;
-	tool_filter?: string[];
-	priority?: number;
-	script_content?: string;
-	script_filename?: string;
-	source_url?: string;
-	source_ref?: string;
-	source_path?: string;
-	resolved_sha?: string;
-	requirements?: string[];
-
-	// Prompt-specific
-	category?: string;
-	template?: string;
-	variables?: unknown[];
-	model_hints?: Record<string, unknown>;
-	tags?: string[];
-
-	// Sandbox-specific
-	runtime_type?: string;
-	image?: string;
-	resource_limits?: Record<string, unknown>;
-	network_policy?: string;
-	entrypoint?: string;
-	sandbox_path?: string;
-	validated_at?: string;
-
-	// Agent-specific
-	prompt?: string;
-	model_name?: string;
-	model_config_json?: Record<string, unknown>;
-	external_mcps?: unknown[];
-	required_capabilities?: string[];
-	component_count?: number;
-	components?: { component_type: string; component_id: string }[];
-	success_criteria?: SuccessCriteria | null;
 }
 
 // ── Skill Folder Resources ───────────────────────────────────────────
@@ -652,58 +541,39 @@ export interface SetRecommendedResponse {
 	is_recommended: boolean;
 }
 
-// ── Discovery (ARD) ─────────────────────────────────────────────────
+// ── Remote A2A agents ───────────────────────────────────────────────
 
-/** `external` is a remote agent registered by its A2A Agent Card (ADR 0002). */
-export type DiscoveryKind = "agent" | "mcp" | "skill" | "hook" | "prompt" | "sandbox" | "external";
+/** A remote agent registered by its A2A Agent Card (ADR 0002), as listed by `GET /ard/imports`. */
+export interface RemoteAgent {
+	identifier: string;
+	displayName: string;
+	version?: string;
+	url?: string;
+	"obs:lifecycle": "approved" | "pending" | "rejected" | "archived" | "draft";
+	"obs:visibility": "public" | "team" | "owner";
+}
 
-export type DiscoveryApproval = "approved" | "pending" | "rejected" | "archived" | "draft";
+export interface RemoteAgentList {
+	items: RemoteAgent[];
+	total: number;
+}
 
-export type DiscoveryAvailability =
-	| "now"
-	| "next-session"
-	| "explicit-install"
-	| "delegate"
-	| "not-approved"
-	| "archived"
-	| "unsupported-in-harness";
+// ── Discovery (ARD search) ──────────────────────────────────────────
 
 /** One entry of `results` in an ARD Search response. `score` is relevance only. */
 export interface DiscoverySearchResult {
 	identifier: string;
 	displayName?: string;
-	type?: string;
-	url?: string;
 	version?: string;
-	description?: string;
-	capabilities?: string[];
 	score: number;
-	source: string;
 	matchedOn?: string[];
-	"obs:kind"?: DiscoveryKind;
+	"obs:kind"?: "agent" | "external";
+	/** `namespace/slug@version` of the registry agent behind the entry. */
 	"obs:nativeRef"?: string | null;
-	"obs:approval"?: DiscoveryApproval;
-	"obs:visibility"?: "public" | "team" | "owner";
-	"obs:supportedHarnesses"?: string[];
-	"obs:availability"?: DiscoveryAvailability;
-	"obs:activatable"?: boolean;
-	/** Can take a delegated task right now (approved agent with a headless harness, or remote A2A agent). */
-	"obs:delegable"?: boolean;
-	/** An admin marked this as recommended. Editorial only; never part of `score`. */
-	"obs:recommended"?: boolean;
-	"obs:artifactDigest"?: string | null;
-	"obs:publisher"?: string;
-	/** Organization named on a remote A2A agent's card, as the card states it. */
-	"obs:provider"?: string;
+	"obs:approval"?: RemoteAgent["obs:lifecycle"];
+	"obs:visibility"?: RemoteAgent["obs:visibility"];
 }
 
 export interface DiscoverySearchResponse {
 	results: DiscoverySearchResult[];
-	pageToken?: string;
-}
-
-export interface DiscoverySearchFilter {
-	kind?: DiscoveryKind;
-	harness?: string;
-	includeUnapproved?: boolean;
 }

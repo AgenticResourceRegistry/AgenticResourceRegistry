@@ -1,4 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Observal
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -38,13 +37,13 @@ variable "sizing" {
 variable "image_repo_api" {
   description = "Container image repository for api + worker + init."
   type        = string
-  default     = "ghcr.io/observal/observal-api"
+  default     = "ghcr.io/agenticresourceregistry/observal-api"
 }
 
 variable "image_repo_web" {
   description = "Container image repository for the web frontend."
   type        = string
-  default     = "ghcr.io/observal/observal-web"
+  default     = "ghcr.io/agenticresourceregistry/observal-web"
 }
 
 variable "image_tag" {

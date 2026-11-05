@@ -1,4 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 export type InboxKind =
@@ -6,6 +8,9 @@ export type InboxKind =
 	| "review_approved"
 	| "review_rejected"
 	| "review_comment"
+	| "review_approval"
+	| "review_dismissed"
+	| "review_ready"
 	| "change_requested"
 	| "team_join_requested"
 	| "team_join_decided"
@@ -16,6 +21,9 @@ export type InboxKind =
 	| "system_notice";
 
 export type InboxState = "open" | "done" | "dismissed";
+
+/** A folder in the inbox: one lifecycle state, or every state at once. */
+export type InboxFolder = InboxState | "all";
 
 export interface InboxItem {
 	id: string;
@@ -55,19 +63,37 @@ export interface InboxItemDetail extends InboxItem {
 export interface InboxListResponse {
 	items: InboxItem[];
 	total: number;
+	/** Unread rows among `total`, under the same filters. */
+	unread: number;
 	page: number;
 	page_size: number;
 }
 
 export interface InboxCounts {
+	/** Unread items in the Open bucket, the rows the Inbox lists by default. */
 	unread: number;
 	action_required: number;
 	open: number;
 	done: number;
 	dismissed: number;
-	/** Both are empty unless the request asked for facets. */
+	/* Everything below is filled only when the request asked for facets. */
+	/** Unread items per folder; `open` always equals `unread`. */
+	unread_by_state: Partial<Record<InboxState, number>>;
+	/** The selected folder under the active search. */
+	scope_total: number;
+	scope_unread: number;
+	scope_action_required: number;
+	/** Also narrowed by the Unread and Needs action toggles, so they add up to the list. */
 	by_kind: Partial<Record<InboxKind, number>>;
 	by_subject_type: Record<string, number>;
+}
+
+export interface InboxCountOptions {
+	facets?: boolean;
+	facetState?: InboxFolder;
+	unread?: boolean;
+	actionRequired?: boolean;
+	q?: string;
 }
 
 export type InboxSort = "newest" | "oldest";
@@ -98,6 +124,9 @@ export const INBOX_KIND_REASONS: Record<InboxKind, string> = {
 	review_approved: "approved",
 	review_rejected: "changes needed",
 	review_comment: "commented",
+	review_approval: "review approved",
+	review_dismissed: "submission dismissed",
+	review_ready: "ready to publish",
 	change_requested: "changes requested",
 	team_join_requested: "join request",
 	team_join_decided: "join decided",
@@ -130,6 +159,9 @@ export const INBOX_KIND_LABELS: Record<InboxKind, string> = {
 	review_approved: "Approved",
 	review_rejected: "Changes needed",
 	review_comment: "Comment",
+	review_approval: "Review approval",
+	review_dismissed: "Dismissed submission",
+	review_ready: "Ready to publish",
 	change_requested: "Changes requested",
 	team_join_requested: "Join request",
 	team_join_decided: "Join decision",

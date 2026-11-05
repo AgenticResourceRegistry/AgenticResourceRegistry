@@ -1,0 +1,40 @@
+{
+  "hash": "1dd22eeb05f7e953",
+  "harnesses": {
+    "claude-code": [
+      {
+        "path": "project:.claude/agents/phase0-observability-probe.md",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 0
+      }
+    ]
+  },
+  "lockfile_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "pinned_versions": {
+    "agents": [
+      {
+        "name": "phase0-observability-probe",
+        "id": "00000000-0000-4000-8000-000000000001",
+        "version": "1.0.0",
+        "harness": "claude-code",
+        "components": [
+          {
+            "type": "mcp",
+            "name": "phase0-probe",
+            "version": "0.1.0"
+          },
+          {
+            "type": "mcp",
+            "name": "phase0-probe",
+            "version": "0.1.0"
+          }
+        ]
+      }
+    ],
+    "standalone": []
+  },
+  "drift": {
+    "is_canonical": true,
+    "drifted_files": []
+  }
+}

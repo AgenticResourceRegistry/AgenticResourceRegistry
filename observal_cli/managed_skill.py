@@ -334,6 +334,8 @@ def recover(target: Path, *, backup_root: Path | None = None, require_same_devic
         else:
             matches = _records(lockfile.read_lockfile(), target)
             if len(matches) == 1 and matches[0][1].get("folder_receipt") == state["new"]:
+                # A reinstall of the exact pinned bytes leaves the receipt unchanged;
+                # verification makes a post-swap crash safe to finalize as well.
                 verify_tree(target, state["new"])
                 marker.unlink()
             elif not matches:
@@ -460,6 +462,7 @@ def transact(
         ):
             raise ManagedSkillError("Destination belongs to another registry or owner")
         previous = matches[0][1].get("folder_receipt") if matches else None
+        missing_prior = None
         if target.exists() or target.is_symlink():
             if target.is_symlink():
                 raise ManagedSkillError("Symlink target cannot be managed")
@@ -529,7 +532,16 @@ def transact(
             if target.name != bundle.folder_name or (old_bundle and old_bundle.folder_name != bundle.folder_name):
                 raise ManagedSkillError("Folder name changed; explicit rename/migration required")
         elif matches:
-            raise ManagedSkillError("Managed folder missing; restore a backup before installing")
+            # Only a completely absent, singly owned folder with the *same reviewed bytes*
+            # can be recreated. Refuse a repin, changed release, or foreign owner here.
+            if (
+                previous != proof
+                or previous.get("target") != str(target)
+                or previous.get("listing_id") != bundle.listing_id
+                or matches[0][0] != proof["registry_url"]
+            ):
+                raise ManagedSkillError("Managed folder missing; re-pull its pinned version before upgrading")
+            missing_prior, previous = previous, None
         elif collisions:
             raise ManagedSkillError("Destination conflicts with existing files: " + "; ".join(collisions))
         if previous is not None:
@@ -539,7 +551,7 @@ def transact(
             after = {f["path"]: f for f in proof["files"]}
             common = sorted(before.keys() & after.keys())
             return {
-                "action": "upgrade" if previous else "install",
+                "action": "upgrade" if previous else "reinstall" if missing_prior else "install",
                 "target": str(target),
                 "from_version_id": previous["version_id"] if previous else None,
                 "to_version_id": bundle.version_id,
@@ -571,8 +583,9 @@ def transact(
         backup = folder / "old"
         old_version = matches[0][1].get("version") if matches else None
         outcome = {
-            "action": "upgrade" if previous else "install",
+            "action": "upgrade" if previous else "reinstall" if missing_prior else "install",
             "target": str(target),
+            "missing_prior": missing_prior,
             "backup": str(backup) if previous else None,
             "backup_id": folder.name,
         }
@@ -826,6 +839,14 @@ def restore_backup(backup_id: str, *, backup_root: Path | None = None, prune: bo
                 def update(data: dict) -> None:
                     records = _records(data, target)
                     records[0][1]["folder_receipt"] = state["old"]
+                    # Restoring a verified older folder must also restore the
+                    # matching skill fingerprint; otherwise its next session
+                    # would be incorrectly reported as locally drifted.
+                    restored_skill = next(
+                        (file for file in state["old"]["files"] if file.get("path") == "SKILL.md"), None
+                    )
+                    if restored_skill:
+                        records[0][1]["skill_integrity"] = f"sha256-{restored_skill['sha256']}"
                     records[0][1]["version_id"] = state["old"]["version_id"]
                     records[0][1]["digest"] = state["old"]["digest"]
                     if state.get("old_version"):

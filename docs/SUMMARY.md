@@ -3,6 +3,8 @@
 <!-- SPDX-FileCopyrightText: 2026 Nithin-Bhargav-07 <gaddamnithinbhargav@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
@@ -10,18 +12,18 @@
 
 ## Getting Started
 
-* [Installation](README.md)
+* [Installation](index.md)
 * [Quickstart](getting-started/quickstart.md)
 * [Setup guide](getting-started/onboarding.md)
 
 ## Core Concepts
 
-* [Overview](core-concepts/README.md)
+* [Overview](core-concepts/index.md)
 * [Session tracking and reconciliation](core-concepts/session-tracking.md)
 
 ## Use Cases
 
-* [Overview](use-cases/README.md)
+* [Overview](use-cases/index.md)
 * [Observe MCP traffic](use-cases/observe-mcp-traffic.md)
 * [Share agent configs across harnesses](use-cases/share-agent-configs.md)
 * [Debug agent failures](use-cases/debug-agent-failures.md)
@@ -32,7 +34,7 @@
 
 ## CLI Reference
 
-* [Overview](cli/README.md)
+* [Overview](cli/index.md)
 * [observal api](cli/api.md)
 * [Mutation retries and idempotency](cli/idempotency.md)
 * [observal auth](cli/auth.md)
@@ -64,7 +66,7 @@
 
 ## Self-Hosting
 
-* [Overview](self-hosting/README.md)
+* [Overview](self-hosting/index.md)
 * [Requirements](self-hosting/requirements.md)
 * [Single-node deployment](self-hosting/single-node-deploy.md)
 * [Production deployment](self-hosting/production-deploy.md)
@@ -112,5 +114,6 @@
 * [Code Review Standard](code-review.md)
 * [Development Guide](DEVELOPMENT_GUIDE.md)
 * [Testing Guide](testing/Testing_Guide.md)
+* [Database integration tests](testing/database-integration-tests.md)
 * [Fuzzing Guide](../fuzz/README.md)
 * [AI Policy](../AI_POLICY.md)

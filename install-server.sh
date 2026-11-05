@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Observal Server Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install-server.sh | bash -s -- [OPTIONS]
+# Usage: curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash -s -- [OPTIONS]
 #
 # Options:
 #   --version VERSION          Version to install (default: latest)
@@ -19,7 +19,7 @@ set -euo pipefail
 #   OBSERVAL_INSTALL_DIR       Install directory
 #   OBSERVAL_FORCE=1           Skip overwrite confirmation
 
-GITHUB_REPO="Observal/Observal"
+GITHUB_REPO="AgenticResourceRegistry/AgenticResourceRegistry"
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -82,7 +82,7 @@ while [ $# -gt 0 ]; do
     -h | --help)
         cat <<'HELP'
 Observal Server Installer
-Usage: curl -fsSL https://raw.githubusercontent.com/Observal/Observal/main/install-server.sh | bash -s -- [OPTIONS]
+Usage: curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash -s -- [OPTIONS]
 
 Options:
   --version VERSION    Version to install (default: latest)

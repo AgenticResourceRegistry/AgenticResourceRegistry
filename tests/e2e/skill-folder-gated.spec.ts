@@ -4,7 +4,7 @@
 /** Gate-on acceptance. This test creates and reviews releases: disposable CI stack ONLY. */
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { API_BASE, getAccessToken, loginToWebUI } from "./helpers";
+import { API_BASE, getAccessToken, loginToWebUI, publishSubject, reviewNumber } from "./helpers";
 
 test("isolated owner successor is reviewed and its displayed version installs exactly", async ({ page }) => {
   test.skip(process.env.OBSERVAL_ISOLATED_STACK !== "true" || process.env.OBSERVAL_RUN_GATE_ON !== "true",
@@ -29,9 +29,8 @@ test("isolated owner successor is reviewed and its displayed version installs ex
     });
     const prefix = `/skills/${base.listing_id}/versions/`;
     const submittedBase = await call("POST", `${prefix}${base.version_id}/submit`, { observed_revision: base.revision });
-    await call("POST", `/review/skills/${base.listing_id}/versions/${base.version_id}/decision`, {
-      action: "approve", observed_revision: submittedBase.revision,
-    });
+    expect(submittedBase.revision).toBeTruthy();
+    await publishSubject("skill", base.listing_id);
     const reviewedBase = await call("GET", `${prefix}${base.version_id}/manifest`);
     const next = await call("POST", `/skills/${base.listing_id}/drafts`, {
       base_version_id: base.version_id, observed_base_revision: reviewedBase.revision,
@@ -46,32 +45,15 @@ test("isolated owner successor is reviewed and its displayed version installs ex
       ],
     });
     const pending = await call("POST", `${prefix}${next.version_id}/submit`, { observed_revision: saved.revision });
+    expect(pending.revision).toBeTruthy();
     await loginToWebUI(page);
-    await page.goto("/review?tab=components");
-    await page.getByRole("tab", { name: /components/i }).click();
-    await page.locator(`[data-review-item="skill:${next.version_id}"]`).click();
-    await page.getByRole("button", { name: "View full diff" }).click();
-    const sheet = page.getByRole("dialog");
-    await expect(sheet.getByText(/Compared to base/)).toBeVisible();
-    // The CI gate-on job creates this pending version itself. A same-size altered
-    // HTTP 200 preview must fail SHA-256 verification before approval is offered.
-    const fileUrl = `**/api/v1/skills/${base.listing_id}/versions/${next.version_id}/files/SKILL.md`;
-    let tampered = false;
-    await page.route(fileUrl, async (route) => {
-      const response = await route.fetch();
-      const file = await response.json();
-      if (response.status() !== 200 || !file.content.startsWith("---")) throw new Error("Expected candidate SKILL.md");
-      tampered = true;
-      await route.fulfill({ response, json: { ...file, content: `+${file.content.slice(1)}` } });
-    });
-    await sheet.getByRole("button", { name: "SKILL.md" }).click();
-    await expect(sheet.getByText("File checksum differs from its reviewed manifest.")).toBeVisible();
-    expect(tampered).toBe(true);
-    await expect(sheet.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
-    await page.unroute(fileUrl);
-    await call("POST", `/review/skills/${base.listing_id}/versions/${next.version_id}/decision`, {
-      action: "approve", observed_revision: pending.revision,
-    });
+    // The successor has its own review, separate from the published base's closed one.
+    await page.goto(`/review/${await reviewNumber("skill", base.listing_id)}`);
+    await expect(page.getByText("v1.1.0").first()).toBeVisible();
+    await page.getByRole("button", { name: "Files changed" }).click();
+    await expect(page.getByText("templates/note.txt").first()).toBeVisible();
+    await expect(page.getByText("scripts/hello.sh").first()).toBeVisible();
+    await publishSubject("skill", base.listing_id);
     await page.goto(`/components/${base.listing_id}?type=skills`);
     const install = page.locator("aside");
     await expect(install.locator("code")).toContainText("--version 1.1.0");

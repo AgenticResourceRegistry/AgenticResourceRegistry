@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+// SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link } from "@tanstack/react-router";
@@ -151,7 +152,7 @@ function TeamspaceCard({ team, isAdmin }: { team: TeamDisplay; isAdmin: boolean 
       {/* Meta row – matches mockup: members · agents · reviews · role */}
       <div className="mt-3.5 flex items-center gap-3 border-t border-border pt-2.5 text-[10px] text-muted-foreground">
         {team.member_count != null && <span>{team.member_count} members</span>}
-        {team.agent_count != null && <span>{team.agent_count} agents</span>}
+        {team.agent_count != null && <span>{team.agent_count} Agent Files</span>}
         {team.review_count != null && team.review_count > 0 && (
           <span>{team.review_count} {team.review_count === 1 ? "review" : "reviews"}</span>
         )}
@@ -170,7 +171,7 @@ function TeamspaceListRow({ team, isAdmin }: { team: TeamDisplay; isAdmin: boole
   /* Catalogue string: "38 agents · 64 parts" or fallback "—" */
   const catalogue =
     team.agent_count != null
-      ? `${team.agent_count} agents` + (team.component_count != null ? ` · ${team.component_count} parts` : "")
+      ? `${team.agent_count} Agent Files` + (team.component_count != null ? ` · ${team.component_count} parts` : "")
       : "—";
   const reviews = team.review_count != null ? String(team.review_count) : "—";
 
@@ -292,7 +293,7 @@ function CreatePanel({
 
         <div className="hidden border-t border-border pt-4 text-xs leading-5 text-muted-foreground 2xl:block">
           <p className="font-medium text-foreground">After creation</p>
-          <p className="mt-1">Invite members, assign roles, and publish agents or components under this namespace.</p>
+          <p className="mt-1">Invite members, assign roles, and publish Agent Files or components under this namespace.</p>
         </div>
       </aside>
 
@@ -304,7 +305,7 @@ function CreatePanel({
               {firstTeamspace ? "Create your first teamspace" : "Create a teamspace"}
             </h3>
             <p className="mt-2 max-w-xl text-[13px] leading-6 text-muted-foreground">
-              Create a shared namespace for publishing agents and components with your team.
+              Create a shared namespace for publishing Agent Files and components with your team.
             </p>
           </div>
           {onCancel && (
@@ -548,7 +549,7 @@ export default function TeamspacesPage() {
 
         {/* ── Registry note ── */}
         <RegistryNote className="mb-4">
-          <strong>Teamspaces are publishing namespaces.</strong> Open one to browse its agents and components, manage members, and clear its review queue.
+          <strong>Teamspaces are publishing namespaces.</strong> Open one to browse its Agent Files and components, manage members, and clear its review queue.
         </RegistryNote>
 
         {/* ── Content ── */}

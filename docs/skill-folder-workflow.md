@@ -1,13 +1,14 @@
-<!-- SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com> -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Complete skill folders: developer workflow
+---
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+title: "Complete skill folders: developer workflow"
+---
 
 > In a fully rolled-out deployment, authors do not manage a feature switch:
 > save a draft, explicitly submit it for review, then install the approved
 > release. If this deployment has not enabled complete-folder delivery yet,
 > authors can save drafts but cannot finish review or installation. Ask the
-> operator to complete the [one-time rollout](skill-folder-rollout.md); do not
+> operator to complete the [one-time rollout](/skill-folder-rollout); do not
 > turn the gate on as part of authoring.
 
 A complete skill contains a UTF-8 `SKILL.md` at its root and optional scripts,
@@ -37,20 +38,18 @@ editable and the submission control explains why it is unavailable. A reviewer
 must inspect that exact candidate before approving it. Until approval, old
 released bytes and their installations remain unchanged.
 
-Reviewers can use the browser or the CLI. In the CLI, `review show` prints a
-folder candidate's version UUID, revision and files, and `review approve` lists
-the files (with added, removed, modified paths against a stored base) and binds
-the decision to that revision:
+Reviewers can use the browser or the CLI. Every file of a folder skill, including
+resource files, appears in the review snapshot, so the approval is bound to the exact
+revision the reviewer inspected. Approving never publishes by itself, and a folder with
+resources is never published automatically:
 
 ```sh
-observal admin review show NAMESPACE/SLUG
-observal admin review approve NAMESPACE/SLUG --revision REVISION   # exactly what you inspected
-observal admin review approve NAMESPACE/SLUG --yes                  # accept the files listed for this run
-observal admin review approve NAMESPACE/SLUG --revision REVISION --ack-git-base   # Git -> folder conversion
-observal admin review reject NAMESPACE/SLUG --reason 'Unsafe script'
+observal review show NUMBER
+observal review files NUMBER
+observal review diff NUMBER --file SKILL.md
+observal review approve NUMBER
+observal review publish NUMBER
 ```
-
-Pass `--version-id UUID` when a listing has several pending versions.
 
 To release a successor under the *same listing*:
 
@@ -71,7 +70,7 @@ observal registry skill import-folder NAMESPACE/SLUG --from-dir ./my-skill \
 ```
 
 The browser's **Import folder as next version** uses the same atomic endpoint.
-Supply the *entire* directory yourself. Observal does **not** fetch private Git
+Supply the *entire* directory yourself. Agentic Resource Registry does **not** fetch private Git
 contents for a purported file-by-file diff: reviewers see old Git source
 metadata and the complete new candidate. The old Git release remains installable
 until its successor passes review.

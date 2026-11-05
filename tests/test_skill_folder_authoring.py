@@ -369,7 +369,6 @@ async def test_submission_recomputes_revision_after_slash_command_normalization(
                 db,
                 owner,
             )
-        monkeypatch.setattr(skill_files.inbox, "on_review_requested", AsyncMock())
         monkeypatch.setattr(skill_files._ds, "get_bool", AsyncMock(return_value=True))
         async with maker() as db:
             owner = await db.get(User, owner.id)
@@ -463,10 +462,8 @@ async def test_submission_refuses_folder_whose_name_cannot_install(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approval_refuses_folder_whose_name_cannot_install(monkeypatch):
-    """Any route that produced the version (generic publish, pre-fix drafts) hits this last gate."""
-    from schemas.component_version import VersionReviewRequest
-
+async def test_uninstallable_folder_blocks_publish_even_with_override(monkeypatch):
+    """A folder that cannot install is an integrity failure: no publish path, override included, skips it."""
     engine = ds.make_engine()
     maker = await ds.create_schema(engine)
     try:
@@ -481,21 +478,21 @@ async def test_approval_refuses_folder_whose_name_cannot_install(monkeypatch):
             version.status = ListingStatus.pending
             version.content_revision = skill_content_revision(listing, version)
             await db.commit()
-            monkeypatch.setattr(component_versions._ds, "get_bool", AsyncMock(return_value=True))
-            with pytest.raises(HTTPException) as exc:
-                await component_versions._review_version(
-                    str(listing.id),
-                    "",
-                    VersionReviewRequest(action="approve", observed_revision=version.content_revision),
-                    SkillListing,
-                    SkillVersion,
-                    "skill",
-                    db,
-                    admin,
-                    selected_id=version.id,
-                )
-            assert exc.value.status_code == 422
-            await db.rollback()
-            assert (await db.get(SkillVersion, manifest.version_id)).status == ListingStatus.pending
+            from services.review.decisions import open_or_push, publish, submit_verdict
+
+            review = await open_or_push(db, "skill", listing, version, owner.id)
+            monkeypatch.setattr("services.review.decisions._ds.get_bool", AsyncMock(return_value=True))
+            await submit_verdict(db, review, admin, "approve")
+            from services.review.decisions import gate
+
+            result = await gate(db, review)
+            assert "required_checks" in result.requirements
+            assert any(check["id"] == "skill_folder" for check in result.blocking_checks)
+            assert "skill_folder" in result.hard and not result.ready
+            admin.role = UserRole.super_admin
+            with pytest.raises(HTTPException) as blocked:
+                await publish(db, review, admin, override_reason="Emergency")
+            assert blocked.value.status_code == 409 and "skill_folder" in blocked.value.detail
+            assert review.state.value != "published"
     finally:
         await engine.dispose()
