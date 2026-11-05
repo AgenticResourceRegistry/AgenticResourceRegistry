@@ -20,8 +20,8 @@ from .scope import SessionKey
 logger = structlog.get_logger(__name__)
 
 FACET_VERSION = 1
-# Only Kiro transcripts changed; do not invalidate other harnesses' cached LLM work.
-_FACET_VERSIONS = {"kiro": 2}
+# Kiro and Codex normalized transcripts use v2; other harness caches remain eligible.
+_FACET_VERSIONS = {"kiro": 2, "codex": 2}
 # Five binds per key; leave ample room below asyncpg's 32,767-argument limit.
 _FACET_LOOKUP_BATCH_SIZE = 1000
 

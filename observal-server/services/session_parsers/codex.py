@@ -48,9 +48,9 @@ _CONTEXT_PREFIXES = (
 def user_prompt_text(payload: dict) -> str | None:
     """The text the user typed in a Codex ``response_item`` message, or None.
 
-    Codex writes every user turn as a ``response_item`` message with role
-    ``user``; some versions also echo it as an ``event_msg`` ``user_message``,
-    which is therefore not counted, so each prompt is counted once.
+    Codex writes user turns as ``response_item`` messages with role ``user``.
+    Some versions also record ``event_msg`` ``user_message`` echoes. Insight
+    converters correlate both forms and retain event-only prompts when needed.
     """
     if payload.get("role") != "user":
         return None
@@ -401,7 +401,118 @@ def _output_text(payload: dict) -> str:
     output = payload.get("output", "")
     if isinstance(output, list):
         return "\n".join(str(block.get("text", "")) for block in output if isinstance(block, dict))
-    return str(output)
+    if isinstance(output, dict):
+        return json.dumps(output)
+    return output if isinstance(output, str) else ""
+
+
+def _message_identity(entry: dict) -> tuple[str, str, str] | None:
+    """Identify semantic messages, never treating injected context as user input."""
+    payload = dict_field(entry, "payload")
+    source = str_field(entry, "type")
+    if source == "response_item":
+        prompt = user_prompt_text(payload)
+        if prompt is not None:
+            return "user", prompt, source
+        if payload.get("role") == "assistant":
+            text = "\n".join(
+                str_field(block, "text")
+                for block in list_field(payload, "content")
+                if isinstance(block, dict) and block.get("type") == "output_text"
+            )
+            if text:
+                return "assistant", text, source
+    elif source == "event_msg":
+        role = {"user_message": "user", "agent_message": "assistant"}.get(str_field(payload, "type"))
+        text = str_field(payload, "message")
+        if role and text.strip() and not (role == "user" and text.lstrip().startswith(_CONTEXT_PREFIXES)):
+            return role, text, source
+    return None
+
+
+def _without_message_echoes(entries: list[dict]) -> list[dict]:
+    """Prefer response items over neighboring event echoes, not global text deduplication."""
+    omitted: set[int] = set()
+    previous: tuple[int, tuple[str, str, str]] | None = None
+    for index, entry in enumerate(entries):
+        identity = _message_identity(entry)
+        if identity:
+            if previous and identity[:2] == previous[1][:2] and identity[2] != previous[1][2]:
+                omitted.add(index if identity[2] == "event_msg" else previous[0])
+                previous = None
+            else:
+                previous = index, identity
+        elif entry.get("type") == "response_item":
+            # Tools and non-message response items separate model inputs/outputs.
+            previous = None
+    return [entry for index, entry in enumerate(entries) if index not in omitted]
+
+
+def _tool_error(payload: dict, text: str) -> bool:
+    """Read explicit failure flags and Codex exit envelopes, not arbitrary error words."""
+    if payload.get("is_error") is True or payload.get("isError") is True:
+        return True
+    try:
+        output = json.loads(text)
+    except ValueError:
+        output = None
+    if isinstance(output, dict) and (
+        output.get("error") or output.get("success") is False or output.get("status") in ("error", "failed")
+    ):
+        return True
+    return any(int(code) != 0 for code in _EXIT_CODE.findall(text))
+
+
+def transcript_rows(rows: list[dict]) -> list[dict]:
+    """Normalize rollout content for insights even when stored classification is obsolete."""
+    entries: list[dict] = []
+    original: dict[int, dict] = {}
+    for row in rows:
+        entry = load_line(row.get("raw_line", ""))
+        if entry is not None:
+            entries.append(entry)
+            original[id(entry)] = row
+    normalized: list[dict] = []
+    tool_names: dict[str, str] = {}
+    for entry in _without_message_echoes(entries):
+        payload = dict_field(entry, "payload")
+        identity = _message_identity(entry)
+        if identity:
+            role, text, _ = identity
+            normalized.append(
+                {"event_type": "user_prompt" if role == "user" else "assistant_text", "raw_line": {"content": text}}
+            )
+            continue
+        if entry.get("type") == "response_item":
+            kind = payload.get("type")
+            name = str_field(payload, "name")
+            call_id = str_field(payload, "call_id")
+            if kind in ("function_call", "custom_tool_call"):
+                if call_id:
+                    tool_names[call_id] = name
+                text = _tool_text(payload)
+                if name in _SHELL_TOOLS:
+                    value = {"command": _shell_command(text)}
+                else:
+                    try:
+                        value = json.loads(text)
+                    except ValueError:
+                        value = text
+                normalized.append({"event_type": "tool_call", "tool_name": name, "raw_line": {"input": value}})
+            elif kind in ("function_call_output", "custom_tool_call_output"):
+                text = _output_text(payload)
+                normalized.append(
+                    {
+                        "event_type": "tool_result",
+                        "tool_name": tool_names.get(call_id, name) or "unknown",
+                        "raw_line": {"content": text, "is_error": _tool_error(payload, text)},
+                    }
+                )
+            # Reasoning, developer/system context and injected user instructions stay hidden.
+        elif entry.get("type") != "event_msg":
+            # Leave unrelated conventional records to the existing formatter.
+            normalized.append(original[id(entry)])
+    return normalized
 
 
 def meta_records(entries: list[dict]) -> list[dict]:
@@ -419,12 +530,25 @@ def meta_records(entries: list[dict]) -> list[dict]:
     last_response: dict | None = None
     last_total: dict = {}
 
-    for entry in entries:
+    for entry in _without_message_echoes(entries):
         ts = str_field(entry, "timestamp")
         payload = dict_field(entry, "payload")
         line_type = str_field(entry, "type")
         payload_type = str_field(payload, "type")
 
+        if line_type == "event_msg":
+            identity = _message_identity(entry)
+            if identity:
+                role, text, _ = identity
+                if role == "user":
+                    records.append(meta_user(ts, text))
+                    response = None
+                else:
+                    if response is None:
+                        response = last_response = meta_assistant(ts, model)
+                        records.append(response)
+                    response["message"]["content"].append({"type": "text", "text": text})
+                continue
         if line_type == "session_meta":
             records.append(meta_session(str_field(payload, "cwd"), ts))
             continue
@@ -457,9 +581,8 @@ def meta_records(entries: list[dict]) -> list[dict]:
                 continue
             if payload_type in ("function_call_output", "custom_tool_call_output"):
                 text = _output_text(payload)
-                codes = [int(code) for code in _EXIT_CODE.findall(text)]
                 name = tool_names.get(str_field(payload, "call_id"), "")
-                records.append(meta_tool_result(ts, name, any(code != 0 for code in codes), text))
+                records.append(meta_tool_result(ts, name, _tool_error(payload, text), text))
                 response = None
                 continue
             prompt = user_prompt_text(payload)

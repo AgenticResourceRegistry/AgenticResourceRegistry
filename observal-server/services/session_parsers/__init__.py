@@ -19,6 +19,7 @@ Public API
 ----------
 parse_raw_events(rows)  -- consumed by api/routes/sessions.py
 meta_records(harness, entries)  -- consumed by services/insights/session_meta_extractor.py
+transcript_rows(harness, rows)  -- consumed by services/insights/transcript.py
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from .claude_code import meta_records as _claude_code_meta
 from .claude_code import parse_rows as _parse_claude_code
 from .codex import meta_records as _codex_meta
 from .codex import parse_rows as _parse_codex
+from .codex import transcript_rows as _codex_transcript
 from .copilot_cli import parse_rows as _parse_copilot_cli
 from .cursor import parse_rows as _parse_cursor
 from .goose import parse_rows as _parse_goose
@@ -97,7 +99,7 @@ def meta_records(harness: str, entries: list[dict]) -> list[dict]:
     return convert(entries) if convert else entries
 
 
-_TRANSCRIPT_ROWS: dict[str, _MetaFn] = {"kiro": _kiro_transcript}
+_TRANSCRIPT_ROWS: dict[str, _MetaFn] = {"kiro": _kiro_transcript, "codex": _codex_transcript}
 
 
 def transcript_rows(harness: str, rows: list[dict]) -> list[dict]:
