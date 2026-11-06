@@ -129,6 +129,10 @@ async def apply_insight_suggestions(
 
     # Extract suggestions from narrative
     narrative = report.narrative or {}
+    from services.insights.section_validation import suggestions_failed
+
+    if suggestions_failed(narrative):
+        raise ValueError("Suggestions generation failed; generate a new report before applying")
     suggestions = narrative.get("suggestions", {})
     if not suggestions:
         raise ValueError("Report has no suggestions to apply")
