@@ -128,3 +128,7 @@ Read `narrative.registry_match` when present:
 - Missing key: the report predates reuse metadata.
 
 Explain the returned state directly. Do not convert absence into an error.
+
+## Instruction cohort coverage
+
+New agent reports expose `metrics.cohort`: bound record count, verified top-level count, separately counted children, per-session decisions and limitations. Binding alone is never proof that an agent's instructions reached the model. Unknown/mismatched instruction formats and missing parent metadata are excluded from instruction-effect analysis, not evidence of non-use. Recorded Pi system sections and supported explicit delegation envelopes can show prompt presence; they do not attest unique versions, compliance or task relevance. Child reported costs remain separate, never summed into parent spend. Legacy reports have no verification coverage and remain unchanged. `metrics.rich.user_turns` counts user records independently of all message records.

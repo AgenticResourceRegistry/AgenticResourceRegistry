@@ -216,10 +216,22 @@ async def test_agent_generator_keeps_same_id_users_separate(monkeypatch):
     raw = '{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}'
     metas = [extract_session_meta("same-id", [raw]), extract_session_meta("same-id", [raw])]
     for meta in metas:
-        meta.update(credits=0, harness="pi", layer_hash="", agent_version="")
+        meta.update(
+            credits=0,
+            harness="pi",
+            layer_hash="",
+            agent_version="",
+            parent_metadata_known=True,
+            instruction_evidence={"state": "verified", "reason": "fixture", "cache_key": "fixture"},
+        )
     metas[0].update(session_key=alice, user_id="alice")
     metas[1].update(session_key=bob, user_id="bob")
-    cache = AsyncMock(return_value={alice: {"goal_categories": ["fix_bug"]}, bob: {"goal_categories": ["write_tests"]}})
+    cache = AsyncMock(
+        return_value={
+            alice: {"goal_categories": ["fix_bug"], "_cohort_key": "fixture"},
+            bob: {"goal_categories": ["write_tests"], "_cohort_key": "fixture"},
+        }
+    )
     monkeypatch.setattr(generator, "extract_all_session_metas", AsyncMock(return_value=metas))
     monkeypatch.setattr(generator, "load_cached_facets_batch", cache)
     monkeypatch.setattr(generator, "generate_sections", AsyncMock(return_value={"ok": True}))

@@ -91,3 +91,42 @@ def meta_records(harness: str, entries: list[dict]) -> list[dict]:
     parser_id = HARNESS_REGISTRY[harness]["session_parser"]  # KeyError = unknown harness
     convert = _META_RECORDS.get(parser_id or "")
     return convert(entries) if convert else entries
+
+
+def instruction_evidence(harness: str, raw_lines: list[str], expected: dict | None) -> dict:
+    """Dispatch only to formats that actually persist prompt-loading evidence."""
+    import json
+
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    from .pi_instructions import instruction_evidence as pi_evidence
+
+    def codex_evidence(entries, contract):
+        result = pi_evidence(_codex_meta(entries), contract)
+        if result.get("cache_key"):
+            import hashlib
+
+            result["cache_key"] = hashlib.sha256(
+                json.dumps({"source": entries, "contract": contract, "policy": 1}, sort_keys=True, default=str).encode()
+            ).hexdigest()
+        return result
+
+    extractors = {"pi": pi_evidence, "codex": codex_evidence}
+    parser = HARNESS_REGISTRY.get(harness, {}).get("session_parser")
+    extract = extractors.get(parser)
+    if extract is None:
+        return {"state": "unknown", "reason": "harness_instruction_format_unavailable"}
+    entries = []
+    try:
+        for line in raw_lines:
+            if line.strip():
+                entry = json.loads(line)
+                if not isinstance(entry, dict):
+                    return {"state": "unknown", "reason": "malformed_source_record"}
+                entries.append(entry)
+    except (ValueError, RecursionError):
+        return {"state": "unknown", "reason": "malformed_source_record"}
+    try:
+        return extract(entries, expected)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return {"state": "unknown", "reason": "unsupported_instruction_record_shape"}

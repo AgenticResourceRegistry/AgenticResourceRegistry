@@ -392,7 +392,18 @@ export interface InsightReconciliation {
 	tool_uses?: number;
 }
 
+export interface InsightCohortCoverage {
+    policy_version: number;
+    bound_sessions: number;
+    bound_top_level_sessions: number;
+    verified_top_level_sessions: number;
+    child_sessions: number;
+    decisions: Record<string, number>;
+    limitations: string[];
+}
+
 export interface InsightMetrics {
+    cohort?: InsightCohortCoverage;
 	overview: {
 		total_sessions: string;
 		unique_users: string;

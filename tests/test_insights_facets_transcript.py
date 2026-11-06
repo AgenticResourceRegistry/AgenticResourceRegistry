@@ -43,6 +43,8 @@ def _meta(session_id: str, duration: int, tool_count: int) -> dict:
         "start_time": "2026-01-01T00:00:00Z",
         "harness": "pi",
         "user_message_count": 2,
+        "parent_metadata_known": True,
+        "instruction_evidence": {"state": "verified", "reason": "fixture", "cache_key": "fixture-source"},
     }
 
 
@@ -88,6 +90,7 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
     from services.insights import generator
 
     cached_facet = {
+        "_cohort_key": "fixture-source",
         "underlying_goal": "fix a bug",
         "goal_categories": ["fix_bug"],
         "outcome": "mostly_achieved",

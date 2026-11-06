@@ -48,7 +48,7 @@ CLAUDE_NOT_LOGGED_IN = json.dumps(
 
 
 @pytest.mark.asyncio
-async def test_sessions_with_prompts_but_no_response_are_skipped(monkeypatch):
+async def test_failed_runs_are_retained_for_coverage_not_instruction_analysis(monkeypatch):
     def key(session_id: str, harness: str) -> SessionKey:
         return SessionKey("default", "user-1", harness, session_id)
 
@@ -69,4 +69,10 @@ async def test_sessions_with_prompts_but_no_response_are_skipped(monkeypatch):
 
     metas = await session_meta_extractor.extract_all_session_metas("agent", "2026-10-01", "2026-10-20")
 
-    assert [meta["session_id"] for meta in metas] == ["pi-ok", "claude-ok", "cursor"]
+    assert len(metas) == 7
+    assert {meta["session_id"] for meta in metas if meta.get("failed_run")} == {
+        "pi-failed",
+        "claude-failed",
+        "pi-refused",
+        "claude-not-logged-in",
+    }
