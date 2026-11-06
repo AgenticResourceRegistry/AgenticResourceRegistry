@@ -369,7 +369,11 @@ async def run_single_report(report_id: str) -> None:
             report.completed_at = datetime.now(UTC)
             report.progress_phase = "completed"
             report.progress_percent = 100
-            report.progress_message = "Report completed"
+            report.progress_message = (
+                "Report partially available"
+                if (report.narrative or {}).get("generation_state") == "partial"
+                else "Report completed"
+            )
             report.progress_updated_at = report.completed_at
 
             # Tell whoever asked for this report that it is ready, in the same

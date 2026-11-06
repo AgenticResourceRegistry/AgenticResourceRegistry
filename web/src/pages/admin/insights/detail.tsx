@@ -55,9 +55,10 @@ import type {
 
 // ── Status Indicator ──────────────────────────────────────────────────────
 
-function StatusIndicator({ status }: { status: InsightReport["status"] }) {
+function StatusIndicator({ status, partial = false }: { status: InsightReport["status"]; partial?: boolean }) {
 	switch (status) {
 		case "completed":
+            if (partial) return <div className="inline-flex items-center gap-1.5 text-sm font-medium text-warning"><AlertTriangle className="h-4 w-4" /> Partially available</div>;
 			return (
 				<div className="inline-flex items-center gap-1.5 text-sm font-medium text-success">
 					<CheckCircle2 className="h-4 w-4" /> Completed
@@ -1777,6 +1778,7 @@ function formatItem(item: unknown): string {
 function ReportContent({ report }: { report: InsightReport }) {
 	const metrics = report.metrics;
 	const narrative = report.narrative;
+	const sectionErrors = narrative?.section_errors ?? [];
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const rich = (metrics as any)?.rich as Record<string, unknown> | undefined;
 	// facets_summary is stored inside aggregated_data by the batch job
@@ -1824,6 +1826,12 @@ function ReportContent({ report }: { report: InsightReport }) {
 
 	return (
 		<div className="space-y-6">
+			{sectionErrors.length > 0 && (
+                <div role="status" className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+                    <p className="font-semibold">This report is partially available</p>
+                    <p className="mt-1">These sections failed to generate: {sectionErrors.map(error => error.section.replaceAll("_", " ")).join(", ")}. Generate a new report to retry. Available sections are shown below.</p>
+                </div>
+            )}
 			{/* At a Glance (4-panel executive summary) */}
 			<AtAGlance data={narrative?.at_a_glance} />
 
@@ -1939,11 +1947,16 @@ function ReportContent({ report }: { report: InsightReport }) {
 			<FrictionSection data={narrative?.friction_analysis} />
 
 			{/* Suggestions */}
-			<SuggestionsSection
+            {sectionErrors.some(error => error.section === "suggestions") ? (
+                <div className="rounded-lg border border-border p-4">
+                    <h3 className="text-sm font-semibold">Suggestions unavailable</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">Suggestions failed to generate. Generate a new report before applying changes.</p>
+                </div>
+            ) : <SuggestionsSection
 				data={narrative?.suggestions}
 				report={report}
 				registryMatch={narrative?.registry_match as RegistryMatchSummary | undefined}
-			/>
+			/>}
 
 			{/* On the Horizon */}
 			<OnTheHorizon data={narrative?.on_the_horizon} />
@@ -2022,7 +2035,7 @@ export default function InsightReportPage() {
 					<div className="space-y-6">
 						{/* Header with status and metadata */}
 						<div className="flex items-center justify-between">
-							<StatusIndicator status={report.status} />
+							<StatusIndicator status={report.status} partial={report.narrative?.generation_state === "partial"} />
 							<div className="text-xs text-muted-foreground space-x-3">
 								{report.agent_version && <span>Version v{report.agent_version}</span>}
 								{report.comparison_agent_version && <span>Compared to v{report.comparison_agent_version}</span>}
