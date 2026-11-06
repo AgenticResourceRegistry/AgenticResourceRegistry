@@ -10,10 +10,8 @@ import asyncio
 import json
 import os
 import re
-import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 
@@ -31,10 +29,13 @@ PROMPT = "Write one focused candidate test. Never execute it."
 
 
 async def main():
+    """Verify a disposable integration; keep its test password in the caller environment."""
     if os.environ.get("INSIGHTS_DISPOSABLE_VERIFY") != "1":
         raise RuntimeError("Disposable integration verification only")
     suffix = uuid.uuid4().hex[:8]
-    password = secrets.token_urlsafe(30)
+    password = os.environ.get("INSIGHTS_RUNTIME_PASSWORD", "")
+    if len(password) < 24:
+        raise RuntimeError("Pass an ephemeral INSIGHTS_RUNTIME_PASSWORD (24+ chars) to this process and browser runner")
     now = datetime.now(UTC)
     async with async_session() as db:
         owner = User(
@@ -127,7 +128,7 @@ async def main():
                             "type": "toolCall",
                             "id": "t1",
                             "name": "mcp",
-                            "arguments": {"server": "linear", "tool": "linear_get_issue"},
+                            "arguments": json.dumps({"server": "linear", "tool": "linear_get_issue"}),
                         },
                         {"type": "toolCall", "id": "t2", "name": "mcp", "arguments": {"tool": "unknown"}},
                     ]
@@ -149,6 +150,7 @@ async def main():
         facet_calls = []
 
         async def model(prompt, **kwargs):
+            """Inject deterministic facets/sections only in this process."""
             if "Analyze this session and extract structured facets" in prompt:
                 facet_calls.append(prompt)
                 state = "out_of_scope" if "Remove disk caches" in prompt else "in_scope"
@@ -182,6 +184,9 @@ async def main():
                 }
             if name == "at_a_glance":
                 assert "DELETECACHESRULE" not in prompt, "Rejected advice must not reach synthesis"
+                assert oid not in prompt and good_sid not in prompt, (
+                    "Private source identities must stay out of model prompts"
+                )
                 return {
                     name: {
                         "health": "mixed",
@@ -237,13 +242,11 @@ async def main():
         response = await client.get("/api/v1/insights/reports/" + rid, headers=headers)
         response.raise_for_status()
         assert response.json()["narrative"]["source_index"][good_ref]["session_id"] == good_sid
-    path = Path("/tmp/insights-evidence-ui.json")
-    path.write_text(json.dumps({"email": f"evidence-{suffix}@example.com", "password": password, "report_id": rid}))
-    path.chmod(0o600)
     print(
         json.dumps(
             {
                 "report_id": rid,
+                "fixture_email": f"evidence-{suffix}@example.com",
                 "verified_sources": 2,
                 "change_eligible_sources": 1,
                 "invalid_off_task_withheld": "passed",

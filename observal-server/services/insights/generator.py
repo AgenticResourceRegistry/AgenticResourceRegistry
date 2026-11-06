@@ -25,7 +25,7 @@ import structlog
 from observal_shared.migration.constants import DEFAULT_PROJECT_ID
 
 from ._deps import get_db_session
-from .evidence import RELEVANCE_SCHEMA, qualified, role_hash, source_ref, sources
+from .evidence import RELEVANCE_SCHEMA, prompt_sources, qualified, role_context, role_hash, source_ref, sources
 from .facets import aggregate_facets, extract_facets, load_cached_facets_batch, store_facets
 from .registry_match import (
     RegistryScope,
@@ -159,7 +159,10 @@ async def _run_pipeline(
         result["narrative"]["suggestions"] = {"config_additions": [], "features_to_try": [], "usage_patterns": []}
         return result
     role = (agent_config or {}).get("system_prompt_excerpt", "")
-    complete = bool(role) and (agent_config or {}).get("system_prompt_length", 2001) <= len(role)
+    declared_complete = (
+        isinstance(role, str) and bool(role) and (agent_config or {}).get("system_prompt_length", 2001) <= len(role)
+    )
+    _, _, complete = role_context(role, declared_complete)
     for meta in session_metas:
         meta["_agent_scope_excerpt"] = role
         meta["_agent_scope_complete"] = complete
@@ -401,7 +404,9 @@ async def _run_pipeline(
         estimated_waste=estimated_waste,
         component_utilization=component_utilization,
     )
-    data_block += "\n\n## Source evidence index\n" + json.dumps(evidence_index, indent=2)
+    data_block += "\n\n## Source evidence index\n" + json.dumps(
+        prompt_sources(evidence_index, [f.get("_evidence_ref") for f in all_facets[-MAX_FACET_SESSIONS:]]), indent=2
+    )
     if comparison_cohort:
         data_block += f"\n\n## Prior Version Comparison Cohort\n{json.dumps(comparison_cohort, indent=2, default=str)}"
 

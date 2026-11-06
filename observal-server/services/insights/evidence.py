@@ -23,7 +23,20 @@ def qualified(meta):
 
 
 def role_hash(role):
+    """Bind caches to the original role excerpt, not its shortened display form."""
     return hashlib.sha256(role.encode()).hexdigest() if isinstance(role, str) and role else ""
+
+
+def role_context(role, declared_complete):
+    """Use a bounded redacted excerpt but retain one consistent cache identity.
+
+    Redaction may expand text. Any truncation, before or after redaction, makes
+    scope incomplete so it cannot qualify a generated agent change.
+    """
+    raw = role if isinstance(role, str) else ""
+    redacted = redact_secrets(raw[:2000])
+    complete = declared_complete is True and bool(raw) and len(raw) <= 2000 and len(redacted) <= 2000
+    return redacted[:2000], role_hash(raw), complete
 
 
 def mcp_target(name, arguments):
@@ -47,10 +60,12 @@ def mcp_target(name, arguments):
 
 
 def source_ref(key):
+    """Identify a full scoped session without publishing its identity to the model."""
     return "s_" + hashlib.sha256(json.dumps(key.as_tuple()).encode()).hexdigest()[:20]
 
 
 def sources(metas, facets, scope_hash):
+    """Build the stored audit index, preserving model-assessed relevance uncertainty."""
     index = {}
     for meta in metas:
         if not qualified(meta):
@@ -77,6 +92,14 @@ def sources(metas, facets, scope_hash):
     return index
 
 
+def prompt_sources(index, refs=None, limit=50):
+    """Give models bounded opaque references/relevance, not stored session identities."""
+    candidates = refs if refs is not None else index
+    fields = ("instruction_evidence", "task_relevance", "task_relevance_basis", "eligible_for_changes")
+    selected = list(dict.fromkeys(ref for ref in candidates if ref in index))[:limit]
+    return {ref: {key: index[ref][key] for key in fields if key in index[ref]} for ref in selected}
+
+
 def validate_narrative(narrative, index):
     """Drop unsupported actionable records; preserve source map and rejection accounting."""
     if not isinstance(narrative, dict):
@@ -85,6 +108,7 @@ def validate_narrative(narrative, index):
     rejected = []
 
     def grounded(items, section, actionable):
+        """Keep records only when all claimed references meet the required evidence tier."""
         kept = []
         for position, item in enumerate(items if isinstance(items, list) else []):
             refs = item.get("evidence_refs") if isinstance(item, dict) else None
@@ -99,24 +123,29 @@ def validate_narrative(narrative, index):
                 )
         return kept
 
-    suggestions = result.get("suggestions") or {}
-    if isinstance(suggestions, dict):
-        result["suggestions"] = {
-            **suggestions,
-            **{
-                key: grounded(suggestions.get(key), "suggestions." + key, True)
-                for key in ("config_additions", "features_to_try", "usage_patterns")
-            },
-        }
+    suggestions = result.get("suggestions")
+    if suggestions is not None and not isinstance(suggestions, dict):
+        rejected.append({"section": "suggestions", "position": 0, "reason": "invalid_section_shape"})
+    suggestions = suggestions if isinstance(suggestions, dict) else {}
+    # Never preserve legacy items/strings as a fallback path around the gate.
+    result["suggestions"] = {
+        key: grounded(suggestions.get(key), "suggestions." + key, True)
+        for key in ("config_additions", "features_to_try", "usage_patterns")
+    }
     for section, key, actionable in (
         ("what_works", "strengths", False),
         ("friction_analysis", "categories", False),
         ("on_the_horizon", "opportunities", True),
     ):
         body = result.get(section)
+        if actionable and section in result and not isinstance(body, dict):
+            rejected.append({"section": section, "position": 0, "reason": "invalid_section_shape"})
+            body = {}
         if isinstance(body, dict):
             result[section] = {**body, key: grounded(body.get(key), section + "." + key, actionable)}
     glance = result.get("at_a_glance")
+    if "at_a_glance" in result and not isinstance(glance, dict):
+        glance = {}
     if isinstance(glance, dict):
         refs = glance.get("evidence_refs")
         grounded_refs = (

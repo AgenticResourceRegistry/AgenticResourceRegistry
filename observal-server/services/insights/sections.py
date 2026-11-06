@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from ._deps import get_call_model
-from .evidence import validate_narrative
+from .evidence import prompt_sources, validate_narrative
 from .registry_match import catalog_block
 
 if TYPE_CHECKING:
@@ -153,6 +153,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     "intro": "1 sentence summarizing the overall value delivered. Use 'you' not 'the user'.",
     "strengths": [
       {{
+        "evidence_refs": ["source-ref copied from evidence index"],
         "title": "short title (3-6 words)",
         "description": "2-3 sentences with specific evidence from metrics AND session examples. Use 'you'."
       }}
@@ -176,6 +177,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     "intro": "1 sentence summarizing the overall friction pattern. Use 'you'.",
     "categories": [
       {{
+        "evidence_refs": ["source-ref copied from evidence index"],
         "title": "concrete category name",
         "severity": "high | medium | low",
         "description": "1-2 sentences explaining the problem. Use 'you'.",
@@ -203,6 +205,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
   "suggestions": {{
     "config_additions": [
       {{
+        "evidence_refs": ["source-ref copied from evidence index"],
         "action_type": "modify_prompt",
         "addition": "exact text to add to the agent's system prompt or AGENTS.md",
         "why": "1 sentence explaining why based on actual sessions",
@@ -213,6 +216,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     ],
     "features_to_try": [
       {{
+        "evidence_refs": ["source-ref copied from evidence index"],
         "action_type": "reuse_existing_component | attach_registry_component | remove_component | create_new_skill | create_new_hook | no_action",
         "feature": "Skill | Hook | Prompt | MCP | Sandbox | Component",
         "name": "short-kebab-name (max 30 chars, e.g. 'scope-guard', 'pr-review', 'test-runner')",
@@ -227,6 +231,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     ],
     "usage_patterns": [
       {{
+        "evidence_refs": ["source-ref copied from evidence index"],
         "title": "short title (2-4 words)",
         "suggestion": "1-2 sentence summary",
         "detail": "3-4 sentences explaining how this applies to YOUR work, referencing specific sessions",
@@ -412,6 +417,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     "intro": "1 sentence about the trajectory of AI-assisted development for this user",
     "opportunities": [
       {{
+        "evidence_refs": ["source-ref copied from evidence index"],
         "title": "short title (4-8 words)",
         "whats_possible": "2-3 ambitious sentences about autonomous agent workflows that would help this user specifically",
         "how_to_try": "1-2 sentences on how to start experimenting with this today",
@@ -683,9 +689,10 @@ async def generate_sections(
     initial_rejections = narrative["evidence_validation"].get("rejected_records", [])
 
     # Run synthesis with all section outputs
+    provider_sections = {**narrative, "source_index": prompt_sources(evidence_index or {})}
     synthesis_prompt = SYNTHESIS_PROMPT.format(
         data_block=data_block,
-        sections_json=json.dumps(narrative, indent=2, default=str),
+        sections_json=json.dumps(provider_sections, indent=2, default=str),
     )
     try:
         synthesis_result = await call_model(synthesis_prompt, model_override=fast_model, max_tokens=4096)
