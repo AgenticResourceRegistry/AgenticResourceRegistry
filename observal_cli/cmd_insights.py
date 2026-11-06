@@ -476,7 +476,13 @@ def insights_show(
                     resource="insight report section",
                     remediation=f"Choose from: {', '.join(narrative.keys())}.",
                 )
-            output_json({"report_id": data.get("id"), "section": section, "data": narrative[section]})
+            section_errors = [
+                e for e in narrative.get("section_errors", []) if isinstance(e, dict) and e.get("section") == section
+            ]
+            result = {"report_id": data.get("id"), "section": section, "data": narrative[section]}
+            if section_errors:
+                result["section_errors"] = section_errors
+            output_json(result)
         else:
             output_json(data)
         return
@@ -569,6 +575,11 @@ def insights_show(
             resource="insight report",
             remediation="Regenerate the report or check server compatibility.",
         )
+    errors = narrative.get("section_errors") or []
+    relevant_errors = [e for e in errors if isinstance(e, dict) and (not section or e.get("section") == section)]
+    if relevant_errors:
+        names = ", ".join(str(e.get("section", "unknown")) for e in relevant_errors)
+        rprint(f"  [yellow]Partial report: {esc(names)} failed to generate. Generate a new report to retry.[/yellow]")
     registry_match = narrative.get("registry_match")
     if not isinstance(registry_match, dict):
         registry_match = None

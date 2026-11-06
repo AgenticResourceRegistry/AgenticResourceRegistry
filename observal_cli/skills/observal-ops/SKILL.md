@@ -43,3 +43,7 @@ Read the selected reference completely before executing.
 ## Completion
 
 Report the time range, filters, counts, health state, strongest evidence, uncertainty, and concrete next action. Do not present popularity fallback or sparse reports as personalized certainty.
+
+### Partial report generation
+
+A narrative with `generation_state: partial` includes `section_errors` (section, safe error code, attempts). Available sections remain readable. A section-specific JSON `show` includes its errors when present; an empty suggestions result is not the same as a failed suggestions section. Generate a new report to retry failed sections; Apply rejects a failed suggestions section. Older reports without these fields have unknown section-completion coverage.
