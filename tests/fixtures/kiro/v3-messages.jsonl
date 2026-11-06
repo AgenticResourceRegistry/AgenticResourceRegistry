@@ -1,0 +1,18 @@
+{"id": "redacted-1", "timestamp": "2026-10-24T00:00:38.273Z", "payload": {"type": "user", "content": "inspect a.py"}}
+{"id": "redacted-2", "timestamp": "2026-10-24T00:00:39.094Z", "payload": {"type": "turn_start"}}
+{"id": "redacted-5", "timestamp": "2026-10-24T00:00:41.843Z", "payload": {"type": "assistant", "operationType": "Say", "content": "Checked a.py."}}
+{"id": "redacted-6", "timestamp": "2026-10-24T00:00:42.212Z", "payload": {"type": "tool_call", "toolName": "tool_load", "toolCallId": "toolu_bdrk_01FsRtna1sreucjvuqcZgSrK", "args": {"path": "a.py"}}}
+{"id": "redacted-7", "timestamp": "2026-10-24T00:00:42.212Z", "payload": {"type": "tool_result", "toolCallId": "toolu_bdrk_01FsRtna1sreucjvuqcZgSrK", "success": true, "content": "done"}}
+{"id": "redacted-8", "timestamp": "2026-10-24T00:00:42.216Z", "payload": {"type": "assistant", "operationType": "Reasoning", "reasoningModelId": "qdev::auto", "content": "..."}}
+{"id": "redacted-9", "timestamp": "2026-10-24T00:00:42.217Z", "payload": {"type": "session_metadata"}}
+{"id": "redacted-10", "timestamp": "2026-10-24T00:00:44.057Z", "payload": {"type": "assistant", "operationType": "Reasoning", "reasoningModelId": "qdev::auto", "content": "..."}}
+{"id": "redacted-11", "timestamp": "2026-10-24T00:00:44.057Z", "payload": {"type": "session_metadata"}}
+{"id": "redacted-12", "timestamp": "2026-10-24T00:00:44.064Z", "payload": {"type": "tool_call", "toolName": "tool_call", "toolCallId": "toolu_bdrk_016yi1o1UiSriRRYGUaZxaF6", "args": {"path": "a.py"}}}
+{"id": "redacted-13", "timestamp": "2026-10-24T00:00:44.064Z", "payload": {"type": "tool_result", "toolCallId": "toolu_bdrk_016yi1o1UiSriRRYGUaZxaF6", "success": true, "content": "done"}}
+{"id": "redacted-14", "timestamp": "2026-10-24T00:00:45.073Z", "payload": {"type": "assistant", "operationType": "Say", "content": "Checked a.py."}}
+{"id": "redacted-15", "timestamp": "2026-10-24T00:00:45.074Z", "payload": {"type": "assistant", "operationType": "Reasoning", "reasoningModelId": "qdev::auto", "content": "..."}}
+{"id": "redacted-16", "timestamp": "2026-10-24T00:00:45.074Z", "payload": {"type": "session_metadata"}}
+{"id": "redacted-18", "timestamp": "2026-10-24T00:00:50.808Z", "payload": {"type": "usage_summary"}}
+{"id": "redacted-19", "timestamp": "2026-10-24T00:00:50.809Z", "payload": {"type": "session_event"}}
+{"id": "redacted-20", "timestamp": "2026-10-24T00:00:50.806Z", "payload": {"type": "turn_end"}}
+{"id": "redacted-21", "timestamp": "2026-10-24T00:00:50.816Z", "payload": {"type": "session_start", "content": ""}}
