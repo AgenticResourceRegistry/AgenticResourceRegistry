@@ -1488,6 +1488,7 @@ def insights_generate(
 
 
 def _render_cohort_coverage(data):
+    """Show qualified-versus-bound counts without implying unknown sessions were unused."""
     coverage = (data.get("metrics") or {}).get("cohort")
     if isinstance(coverage, dict):
         rprint(

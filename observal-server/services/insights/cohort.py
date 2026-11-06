@@ -6,6 +6,7 @@ POLICY_VERSION = 1
 
 
 def select_cohort(metas):
+    """Separate eligible top-level evidence from bound, child and unknown records."""
     selected = []
     members = []
     top_level = []
@@ -70,3 +71,16 @@ def qualified_cache(cached, metas):
     """Do not reuse pre-verification facets, another version's facets or stale source."""
     keys = {m["session_key"]: (m.get("instruction_evidence") or {}).get("cache_key") for m in metas}
     return {key: value for key, value in cached.items() if keys.get(key) and value.get("_cohort_key") == keys[key]}
+
+
+def prompt_metrics(value):
+    """Copy aggregate model input without per-session rosters at any nesting depth.
+
+    Stored/API metrics retain their members; only the provider-bound copy drops
+    them, including nested prior-version and previous-report cohort coverage.
+    """
+    if isinstance(value, dict):
+        return {key: prompt_metrics(child) for key, child in value.items() if key != "members"}
+    if isinstance(value, list):
+        return [prompt_metrics(child) for child in value]
+    return value

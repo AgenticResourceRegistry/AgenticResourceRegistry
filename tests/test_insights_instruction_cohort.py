@@ -245,3 +245,45 @@ def test_repo_docs_inactive_profiles_and_code_quotes_are_not_active_agent_eviden
         ]
         assert evidence(rows)["state"] != "verified"
     assert evidence([system("```\n" + PROMPT + "\n```"), message("assistant", [])])["state"] != "verified"
+
+
+def test_delegation_parser_preserves_literal_closing_tags_and_crlf():
+    from services.session_parsers.pi_instructions import _delegated_prompt
+
+    role = "Explain </agent-instructions> as literal text."
+    text = f"You are acting as the agent `tester`. Follow its instructions.\r\n<agent-instructions>\r\n{role}\r\n</agent-instructions>\r\n<task>Explain </agent-instructions> and </task> tags</task>\r\n"
+    assert _delegated_prompt(text, role, ["tester"])
+    assert not _delegated_prompt(text, role + " extra", ["tester"])
+    assert not _delegated_prompt(text.replace("</task>\r\n", ""), role, ["tester"])
+
+
+def test_delegation_missing_close_is_bounded_on_large_whitespace():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    file = Path(__file__).parents[1] / "observal-server/services/session_parsers/pi_instructions.py"
+    script = "import runpy,sys; m=runpy.run_path(sys.argv[1]); assert not m['_delegated_prompt']('You are acting as the agent `tester`. Follow its instructions.<agent-instructions>'+' '*200000, 'role', ['tester'])"
+    subprocess.run([sys.executable, "-c", script, str(file)], check=True, timeout=10)
+
+
+def test_provider_metrics_drop_all_nested_rosters_without_mutating_records():
+    import copy
+
+    from services.insights.cohort import prompt_metrics
+
+    roster = [{"user_id": "private-user", "session_id": "private-session"}]
+    metrics = {
+        "metrics": {
+            "cohort": {"members": roster, "bound_sessions": 1},
+            "rich": {
+                "version_comparison_baseline": {"prior_cohort": {"members": roster, "verified_top_level_sessions": 1}}
+            },
+        }
+    }
+    before = copy.deepcopy(metrics)
+    public = prompt_metrics(metrics)
+    assert metrics == before
+    assert "members" not in json.dumps(public) and "private-user" not in json.dumps(public)
+    assert public["metrics"]["cohort"]["bound_sessions"] == 1
+    assert public["metrics"]["rich"]["version_comparison_baseline"]["prior_cohort"]["verified_top_level_sessions"] == 1

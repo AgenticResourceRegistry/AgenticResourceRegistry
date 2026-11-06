@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from ._deps import get_db_session
-from .cohort import qualified_cache, select_cohort
+from .cohort import prompt_metrics, qualified_cache, select_cohort
 from .facets import aggregate_facets, extract_facets, load_cached_facets_batch, store_facets
 from .registry_match import (
     RegistryScope,
@@ -369,7 +369,7 @@ async def _run_pipeline(
         component_utilization=component_utilization,
     )
     if comparison_cohort:
-        data_block += f"\n\n## Prior Version Comparison Cohort\n{json.dumps(comparison_cohort, indent=2, default=str)}"
+        data_block += f"\n\n## Prior Version Comparison Cohort\n{json.dumps(prompt_metrics(comparison_cohort), indent=2, default=str)}"
 
     # ── Step 4b: Version impact analysis ─────────────────────────────────
     # Existing layer-group queries are binding-scoped, not verified-session-scoped.
@@ -393,7 +393,7 @@ async def _run_pipeline(
     await _emit_progress(progress_callback, "generating_sections", 7, 9, "Generating report sections")
     narrative = await generate_sections(
         data_block=data_block,
-        previous_report=previous_metrics,
+        previous_report=prompt_metrics(previous_metrics),
         registry_offer=registry_offer,
     )
 

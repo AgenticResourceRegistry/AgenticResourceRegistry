@@ -9,10 +9,8 @@ telemetry repair, paid provider or personal profile writes.
 import asyncio
 import json
 import os
-import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 
@@ -29,10 +27,15 @@ PROMPT = "Write one focused candidate test. Never execute it."
 
 
 async def main():
+    """Verify only a disposable instance; keep fixture passwords in the caller environment."""
     if os.environ.get("INSIGHTS_DISPOSABLE_VERIFY") != "1":
         raise RuntimeError("Explicit disposable verification required")
     suffix = uuid.uuid4().hex[:8]
-    password = secrets.token_urlsafe(30)
+    password = os.environ.get("INSIGHTS_RUNTIME_PASSWORD", "")
+    if len(password) < 24:
+        raise RuntimeError(
+            "Pass an ephemeral INSIGHTS_RUNTIME_PASSWORD (24+ chars) to this process and the browser runner"
+        )
     async with async_session() as db:
         owner = User(
             email=f"cohort-{suffix}@example.com",
@@ -143,6 +146,7 @@ async def main():
         seen = []
 
         async def model(prompt, **kwargs):
+            """Return deterministic facets only in this verification process."""
             seen.append(prompt)
             return {
                 "goal_categories": ["write_tests"],
@@ -156,7 +160,9 @@ async def main():
         _deps.call_model = model
 
         async def sections(**kwargs):
+            """Assert private contracts/rosters never enter provider-bound data."""
             assert "_instruction_contract" not in kwargs["data_block"]
+            assert "private-roster-fixture" not in json.dumps(kwargs.get("previous_report"))
             return {"suggestions": {"config_additions": [], "features_to_try": [], "usage_patterns": []}}
 
         generator.generate_sections = sections
@@ -172,6 +178,9 @@ async def main():
                 period_start=start,
                 period_end=end,
                 agent_config=config,
+                previous_metrics={
+                    "metrics": {"cohort": {"bound_sessions": 1, "members": [{"user_id": "private-roster-fixture"}]}}
+                },
                 db=db,
             )
             coverage = result["metrics"]["cohort"]
@@ -210,22 +219,12 @@ async def main():
         response = await client.get("/api/v1/insights/reports/" + report_id, headers=headers)
         response.raise_for_status()
         assert response.json()["metrics"]["cohort"]["child_sessions"] == 1
-    credentials = Path("/tmp/insights-cohorts-ui.json")
-    credentials.write_text(
-        json.dumps(
-            {
-                "email": f"cohort-{suffix}@example.com",
-                "password": password,
-                "report_id": report_id,
-                "agent_id": agent_id,
-            }
-        )
-    )
-    credentials.chmod(0o600)
     print(
         json.dumps(
             {
                 "report_id": report_id,
+                "fixture_email": f"cohort-{suffix}@example.com",
+                "agent_id": agent_id,
                 "bound": 4,
                 "verified_top_level": 1,
                 "child": 1,
