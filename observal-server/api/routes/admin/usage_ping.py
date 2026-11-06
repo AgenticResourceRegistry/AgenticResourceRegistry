@@ -8,8 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, require_role, require_super_admin
 from models.user import User, UserRole
-from schemas.usage_ping import UsagePingAdminResponse, UsagePingStatus
-from services.usage_ping import build_usage_ping, send_usage_ping, usage_ping_status
+from schemas.usage_ping import (
+    UsagePingAdminResponse,
+    UsagePingContactDefer,
+    UsagePingContactState,
+    UsagePingContactUpdate,
+    UsagePingStatus,
+)
+from services.usage_ping import (
+    build_usage_ping,
+    contact_state,
+    defer_contact,
+    save_contact,
+    send_usage_ping,
+    usage_ping_status,
+    withdraw_contact,
+)
 
 from ._router import router
 
@@ -44,3 +58,37 @@ async def trigger_usage_ping(
         updated = await usage_ping_status(db)
         raise HTTPException(status_code=502, detail=updated.last_error or "Usage report delivery failed")
     return UsagePingAdminResponse(status=await usage_ping_status(db), payload=await build_usage_ping(db))
+
+
+@router.get("/usage-ping/contact", response_model=UsagePingContactState)
+async def get_usage_ping_contact(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_super_admin),
+):
+    return await contact_state(db)
+
+
+@router.put("/usage-ping/contact", response_model=UsagePingContactState)
+async def put_usage_ping_contact(
+    req: UsagePingContactUpdate,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_super_admin),
+):
+    return await save_contact(db, req)
+
+
+@router.delete("/usage-ping/contact", response_model=UsagePingContactState)
+async def delete_usage_ping_contact(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_super_admin),
+):
+    return await withdraw_contact(db)
+
+
+@router.post("/usage-ping/contact/defer", response_model=UsagePingContactState)
+async def defer_usage_ping_contact(
+    req: UsagePingContactDefer,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(require_super_admin),
+):
+    return await defer_contact(db, never=req.never)

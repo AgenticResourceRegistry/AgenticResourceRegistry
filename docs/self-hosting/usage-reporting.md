@@ -4,13 +4,21 @@
 title: "Usage reporting"
 ---
 
-Agentic Resource Registry can send aggregate usage reports to the Agentic Resource Registry-operated collector at `https://usage.observal.io/api/v1/usage-pings`. Reporting is enabled by default with a six-hour cadence and starts on new installations without any setup. Until a super administrator sets a company name, reports identify the installation as `unknown-` followed by a six-digit number derived from its installation ID. Once a name is set, the next report carries it under the same installation ID. The collector and reporting dashboard are maintained separately in [Agentic Resource Registry Usage](https://github.com/Observal/observal_usage).
+Agentic Resource Registry can send usage reports to the Agentic Resource Registry-operated collector at `https://usage.observal.io/api/v1/usage-pings`. Reporting is enabled by default with a six-hour cadence and starts on new installations without any setup. Until a super administrator sets a company name, reports identify the installation as `unknown-` followed by a six-digit number derived from its installation ID. Once a name is set, the next report carries it under the same installation ID. The collector and reporting dashboard are maintained separately in [Agentic Resource Registry Usage](https://github.com/Observal/observal_usage).
 
 ## Configure reporting
 
 A super administrator can open **Admin > Settings > Usage Reporting**, which appears near the top of the settings page, to enter the company name and save the reporting configuration. Setting **Deployment Public URL** adds the deployment hostname to reports; without it the hostname is reported as `unknown`. The available frequencies are every six hours, daily, and weekly. Every six hours is the default. The same panel can disable reporting, change the frequency, preview the exact payload, and send a test report.
 
-Only a super administrator can change the company identity, frequency, or consent setting.
+The same panel has an **Include administrator email addresses** switch, which lists the addresses it covers. It is on by default, so reports carry the email addresses of the installation's super administrators (up to five). Turning it off removes them from later reports.
+
+Only a super administrator can change the company identity, frequency, email, contact, or consent settings.
+
+## Staying in touch
+
+The first time a super administrator opens the web UI, a **Stay in touch with the team** dialog asks whether they want to share a contact person with the Agentic Resource Registry maintainers. Nothing is shared unless they fill in the form and tick the consent box. Choosing **Not now** hides the dialog; once the installation has five or more users or has been running for fourteen days, an admin-only banner asks again, at most once every thirty days. **Don't ask again** stops both.
+
+A shared contact (name, work email, and optionally role and team size, with the time consent was given) is sent with every later report. A super administrator can edit or remove it under **Admin > Settings > Usage Reporting > Contact person**. Removing it stops sending it with future reports.
 
 The first upgrade to 1.15.1 or later resets usage reporting to its defaults (on, every six hours) on every existing installation, including installations where it was previously switched off. A super administrator can switch it off again after the upgrade.
 
@@ -20,6 +28,11 @@ Disabling the switch stops scheduled delivery immediately. It does not remove re
 
 - Stable, randomly generated installation ID
 - Company name and deployment hostname supplied by the administrator, or the `unknown-` placeholder and `unknown` hostname when unset
+- The domains signed-in users reach the server on, most used first (up to five). The server records the host of each successful token refresh, taken from the browser `Origin` header or the `X-Forwarded-Host` and `Host` headers. IP-address hosts are reported only as `localhost`, `private-ip`, or `public-ip`.
+- Super administrators' email addresses, oldest accounts first (up to five), unless **Include administrator email addresses** is turned off
+- The number of registered users per email domain (top ten domains)
+- Hostnames of the configured OIDC or SAML identity provider, the Google sign-in allowed domains, and the GitHub sign-in allowed organizations
+- The opt-in contact person described above, only after a super administrator shares one
 - Agentic Resource Registry version and deployment type
 - Aggregate counts for users, teams, registry components, agent installations, and sessions
 - Aggregate session totals by harness
@@ -33,7 +46,11 @@ Disabling the switch stops scheduled delivery immediately. It does not remove re
 
 ## Data never included
 
-Usage reports do not include names, email addresses, user IDs, agent IDs, prompts, responses, tool arguments, tool results, trace events, source code, file paths, repository names, model identifiers, IP addresses, authentication tokens, API keys, credentials, or arbitrary configuration values. Token and credit fields contain numeric totals only. Distinct model and agent-version fields contain counts, never their names or identifiers. Only the selected feature flags listed above are included.
+Usage reports do not include user names, user IDs, agent IDs, prompts, responses, tool arguments, tool results, trace events, source code, file paths, repository names, model identifiers, authentication tokens, API keys, credentials, or arbitrary configuration values. The only email addresses included are the super administrators' (while that switch is on) and the opt-in contact; other users' addresses are never sent. Token and credit fields contain numeric totals only. Distinct model and agent-version fields contain counts, never their names or identifiers. Only the selected feature flags listed above are included.
+
+## Network information at the collector
+
+When a report arrives, the collector looks up the sending IP address to record the network it came from: the network owner and autonomous system number, the cloud provider and region when the address belongs to one, the reverse-DNS name, and the registered country. These come from public RDAP registry records and reverse DNS. The collector stores only those results and a one-way hash used to detect address changes; it does not store the IP address itself.
 
 ## Delivery behavior
 

@@ -25,3 +25,8 @@ class UsagePingState(Base):
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     last_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Opt-in contact shared with the collector: name, email, role, team_size, consented_at.
+    contact: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # "" (never asked), "later", "never", or "submitted".
+    contact_prompt: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    contact_prompted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
