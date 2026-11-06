@@ -550,7 +550,7 @@ async def _call_section(section_name: str, prompt: str, model: str | None = None
         try:
             result = await call_model(prompt, model_override=model, max_tokens=max_tokens)
             if section_valid(section_name, result):
-                return section_name, result
+                return section_name, {section_name: result[section_name]}
             code = "invalid_or_empty_response"
         except Exception:
             # Model errors may contain credentials or untrusted response text.
