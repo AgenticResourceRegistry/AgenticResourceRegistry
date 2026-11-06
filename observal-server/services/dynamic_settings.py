@@ -338,6 +338,8 @@ DEFAULTS: dict[str, str] = {
     "usage_ping.enabled": "true",
     "usage_ping.company_name": "",
     "usage_ping.frequency": "every_6_hours",
+    # Reports include super administrators' email addresses unless a super admin turns this off.
+    "usage_ping.include_admin_emails": "true",
     # Danger-zone actions (rendered as buttons; value is informational only)
     "danger.purge_traces_insights": "",
     # Security
@@ -557,7 +559,7 @@ SECTIONS: list[dict[str, Any]] = [
     {
         "id": "usage_ping",
         "title": "Usage Reporting",
-        "description": "Share aggregate adoption data with Observal on a super-admin-selected schedule. No prompts, traces, source code, credentials, or user identities are included.",
+        "description": "Share adoption data and deployment identity with Observal on a super-admin-selected schedule. Super administrators' email addresses are included unless turned off. No prompts, traces, source code, or credentials are included.",
         "icon": "activity",
         "keys": [k for k in DEFAULTS if k.startswith("usage_ping.")],
     },

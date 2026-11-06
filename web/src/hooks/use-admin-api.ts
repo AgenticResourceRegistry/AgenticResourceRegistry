@@ -143,6 +143,37 @@ export function useSendUsagePing() {
   });
 }
 
+// Only super admins decide whether to share a contact, so nobody else fetches it.
+export function useUsagePingContact() {
+  const role = getUserRole();
+  return useQuery({
+    queryKey: ["admin", "usage-ping", "contact"],
+    queryFn: admin.usagePingContact,
+    enabled: role === "super_admin",
+    staleTime: 5 * 60_000,
+  });
+}
+
+function useContactMutation<TArgs>(mutationFn: (args: TArgs) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "usage-ping", "contact"] }),
+  });
+}
+
+export function useSaveUsagePingContact() {
+  return useContactMutation(admin.saveUsagePingContact);
+}
+
+export function useWithdrawUsagePingContact() {
+  return useContactMutation(admin.withdrawUsagePingContact);
+}
+
+export function useDeferUsagePingContact() {
+  return useContactMutation(admin.deferUsagePingContact);
+}
+
 export function useRestartStatus() {
   return useQuery({
     queryKey: ["admin", "restart-status"],
