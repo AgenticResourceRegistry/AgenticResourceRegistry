@@ -28,11 +28,13 @@ from services.review.secret_scanner import CREDENTIAL, secret_paths
 
 class PreflightError(ValueError):
     def __init__(self, errors):
+        """Retain structured preflight errors for safe API serialization."""
         super().__init__("Proposed bundle failed deterministic preflight")
         self.errors = errors
 
 
 async def _preview_payload(report_id, db, actor_id, selection):
+    """Stage the exact selected artifacts, check safety/delivery, and hash their logical identity."""
     from services.insights.self_learn import _materialize_insight_suggestions
 
     items = await _materialize_insight_suggestions(report_id, db, actor_id, selection)
@@ -143,6 +145,7 @@ async def _preview_payload(report_id, db, actor_id, selection):
     def normalize(value):
         # Generated UUIDs differ between rollback-only preview and submission;
         # their logical references are stable. Existing references stay literal.
+        """Replace newly generated UUIDs with logical references for stable preview fingerprints."""
         if isinstance(value, str):
             for identity, logical in identities.items():
                 value = value.replace(identity, logical)
@@ -195,6 +198,7 @@ async def _preview_payload(report_id, db, actor_id, selection):
 
 
 async def preview_suggestions(report_id, db, actor_id, selection):
+    """Render a redacted preview and always roll back its staging savepoint."""
     transaction = await db.begin_nested()
     try:
         payload, _, _ = await _preview_payload(report_id, db, actor_id, selection)
@@ -204,6 +208,7 @@ async def preview_suggestions(report_id, db, actor_id, selection):
 
 
 async def submit_suggestions(report_id, db, actor_id, selection, *, preview_digest=None):
+    """Commit the checked proposal only when its preview digest still matches; never waive review."""
     transaction = await db.begin_nested()
     try:
         payload, items, reviews = await _preview_payload(report_id, db, actor_id, selection)
@@ -233,6 +238,7 @@ async def submit_suggestions(report_id, db, actor_id, selection, *, preview_dige
 
 
 def _redact_preview(value):
+    """Recursively hide credential-like values while preserving preview structure."""
     if isinstance(value, str):
         return CREDENTIAL.sub("<redacted>", value)
     if isinstance(value, list):

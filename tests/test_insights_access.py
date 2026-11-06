@@ -115,6 +115,7 @@ async def _call_agent_route(name: str, agent_id: str, db, user):
 
 
 async def _call_report_route(name: str, report_id: str, db, user):
+    """Invoke the report route with fixture authorization dependencies."""
     import api.routes.insights as insights
 
     if name == "apply_report_suggestions":

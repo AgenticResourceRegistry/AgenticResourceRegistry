@@ -496,6 +496,7 @@ def _auto_publish_allowed(policy, version) -> bool:
 
 
 async def sync_state(db, review, *, actor_id=None, policy=None):
+    """Reconcile gate status without auto-publishing insight-generated proposals."""
     if review.state in (ReviewState.closed, ReviewState.published):
         return None
     result = await gate(db, review, policy=policy)
