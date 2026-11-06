@@ -128,3 +128,7 @@ Read `narrative.registry_match` when present:
 - Missing key: the report predates reuse metadata.
 
 Explain the returned state directly. Do not convert absence into an error.
+
+## Recommendation source references
+
+New recommendations carry `evidence_refs` mapped to full scoped sessions in `narrative.source_index`. `evidence_validation` explains rejected records and change-eligible coverage. Task relevance is model-assessed, not a deterministic fact; source references are auditability, not correctness. Unknown/off-task sources cannot justify agent changes. MCP target counts are explicit attempts, never inferred from configured MCP names or proof of successful component use. Configuration/mentions alone never prove a skill loaded or a sandbox ran; absent observability stays unknown, not unused. Legacy reports remain unverified and unchanged. Section-specific JSON show includes source/validation context when present.
