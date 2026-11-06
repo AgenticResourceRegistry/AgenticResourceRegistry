@@ -3,24 +3,13 @@
 """Review checks (deterministic snapshot checks and live pin readiness)."""
 
 import json
-import re
 
 import yaml
 from sqlalchemy import select
 
 from models.agent_component import AgentComponent
 from services.agent_lock import pinned_component_blockers as legacy_pinned_component_blockers
-
-# Provider-issued token shapes. Modern keys carry hyphens and underscores (sk-proj-..., sk-ant-...).
-CREDENTIAL = re.compile(
-    r"(?:sk-[A-Za-z0-9_-]{20,}"
-    r"|gh[pousr]_[A-Za-z0-9]{30,}"
-    r"|github_pat_[A-Za-z0-9_]{40,}"
-    r"|AKIA[A-Z0-9]{16}"
-    r"|AIza[A-Za-z0-9_-]{35}"
-    r"|xox[abprs]-[A-Za-z0-9-]{10,}"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
-)
+from services.review.secret_scanner import CREDENTIAL, secret_paths
 
 
 def snapshot_checks(files: dict, version=None, *, subject_type=None, base_files=None) -> list[dict]:
@@ -28,10 +17,12 @@ def snapshot_checks(files: dict, version=None, *, subject_type=None, base_files=
     if version is not None:
         for column in version.__table__.columns:
             value = getattr(version, column.name)
-            if isinstance(value, (str, dict, list)) and CREDENTIAL.search(
-                value if isinstance(value, str) else json.dumps(value)
-            ):
-                leaked.append(column.name)
+            if column.name == "lock_snapshot" and isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (ValueError, RecursionError):
+                    pass  # Still scan the raw malformed snapshot.
+            leaked.extend(secret_paths(value, column.name))
     checks = [
         {
             "id": "secrets",

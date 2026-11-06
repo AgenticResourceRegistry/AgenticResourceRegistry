@@ -28,8 +28,6 @@ import yaml
 from loguru import logger as optic
 from sqlalchemy import select
 
-from api.search import keyword_search
-
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +37,7 @@ from models.hook import HookListing, HookVersion
 from models.insight_report import InsightReport, InsightReportStatus
 from models.mcp import ListingStatus
 from models.prompt import PromptListing, PromptVersion
+from models.review import Review, ReviewEvent, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.user import User
 from services.registry_namespace import slugify
@@ -48,9 +47,9 @@ from services.registry_recommender import (
     ResolvedComponent,
     coerce_uuid,
     resolve_component_any_type,
-    visibility_clause,
 )
-from services.review.cutover import submit_for_review
+from services.review.decisions import open_or_push, sync_state
+from services.review.notifications import deliver_event
 from services.versioning import bump_version
 
 
@@ -81,7 +80,7 @@ _SELF_LEARN_SEPARATOR = "\n\n# ── Auto-learned from Insights ──\n"
 _MAX_NAME_LEN = 48
 
 
-async def apply_insight_suggestions(
+async def _materialize_insight_suggestions(
     report_id: str | uuid.UUID,
     db: AsyncSession,
     triggered_by: uuid.UUID,
@@ -105,7 +104,7 @@ async def apply_insight_suggestions(
     if report_uuid is None:
         raise ValueError("Report not found")
 
-    stmt = select(InsightReport).where(InsightReport.id == report_uuid)
+    stmt = select(InsightReport).where(InsightReport.id == report_uuid).with_for_update()
     result = await db.execute(stmt)
     report = result.scalar_one_or_none()
 
@@ -116,18 +115,37 @@ async def apply_insight_suggestions(
     if report.applied_at is not None:
         raise ValueError("Suggestions have already been applied for this report")
 
+    # Match publication's review -> agent lock order before superseding proposals.
+    await db.execute(
+        select(Review.id)
+        .where(
+            Review.subject_type == "agent",
+            Review.subject_id == report.agent_id,
+            Review.state.in_([ReviewState.open, ReviewState.changes_requested, ReviewState.approved]),
+        )
+        .order_by(Review.id)
+        .with_for_update()
+    )
+
     # Load agent
-    agent_stmt = select(Agent).where(Agent.id == report.agent_id)
+    agent_stmt = select(Agent).where(Agent.id == report.agent_id).with_for_update()
     agent_result = await db.execute(agent_stmt)
     agent = agent_result.scalar_one_or_none()
     if not agent:
         raise ValueError("Agent not found")
+
+    if isinstance(agent, Agent):
+        await db.refresh(agent, attribute_names=["latest_version"])
 
     # Resolve the submitting user (agent owner)
     owner_user = await _resolve_owner_user(agent, db)
     submitter_id = owner_user.id if owner_user else triggered_by
 
     # Extract suggestions from narrative
+    if report.narrative is not None and not isinstance(report.narrative, dict):
+        raise ValueError("Report narrative has an invalid shape")
+    if isinstance(report.narrative, dict) and not isinstance(report.narrative.get("section_errors", []), list):
+        raise ValueError("Report section-error metadata has an invalid shape")
     narrative = report.narrative or {}
     from services.insights.section_validation import suggestions_failed
 
@@ -136,6 +154,11 @@ async def apply_insight_suggestions(
     suggestions = narrative.get("suggestions", {})
     if not suggestions:
         raise ValueError("Report has no suggestions to apply")
+    if not isinstance(suggestions, dict) or any(
+        not isinstance(suggestions.get(key, []), list)
+        for key in ("config_additions", "features_to_try", "usage_patterns")
+    ):
+        raise ValueError("Suggestion categories must be lists")
 
     applied: dict = {
         "agent_version": None,
@@ -145,6 +168,16 @@ async def apply_insight_suggestions(
         "linked_existing": [],
         "removed_components": [],
     }
+
+    approved_base = await db.scalar(
+        select(AgentVersion)
+        .where(AgentVersion.agent_id == agent.id, AgentVersion.status == AgentStatus.approved)
+        .order_by(AgentVersion.created_at.desc())
+        .limit(1)
+    )
+    if approved_base is None:
+        raise ValueError("Agent has no approved version to improve")
+    agent._insights_harnesses = list(approved_base.supported_harnesses or [])
 
     # Determine which indices to apply per category
     config_indices = _resolve_indices(
@@ -162,7 +195,7 @@ async def apply_insight_suggestions(
 
     # Regeneration semantics: applying a newer report hard-replaces older
     # pending insight-generated versions so users do not see competing fixes.
-    superseded_versions = await _withdraw_stale_insight_generated_versions(agent, db)
+    superseded_versions = await _withdraw_stale_insight_generated_versions(agent, db, triggered_by)
     if superseded_versions:
         applied["superseded_agent_versions"] = superseded_versions
 
@@ -179,18 +212,46 @@ async def apply_insight_suggestions(
         if idx >= len(features_to_try):
             continue
         feature = features_to_try[idx]
+        if not isinstance(feature, dict):
+            raise ValueError("Selected feature has an invalid shape")
+        if any(
+            feature.get(field) is not None and not isinstance(feature[field], str)
+            for field in (
+                "feature",
+                "name",
+                "one_liner",
+                "why_for_you",
+                "example",
+                "existing_component_id",
+                "action_type",
+            )
+        ):
+            raise ValueError("Selected feature metadata must use string fields")
         action_type = str(feature.get("action_type") or "").lower()
+        if action_type not in _REUSE_ACTIONS | {"create_new_skill", "create_new_hook", "remove_component", "no_action"}:
+            raise ValueError("Selected feature has no supported explicit action_type")
+        if action_type == "no_action":
+            continue
         existing_id = feature.get("existing_component_id")
+        if action_type in _REUSE_ACTIONS and not existing_id:
+            raise ValueError("A selected reuse action needs an explicit component ID")
+        if action_type in {"create_new_skill", "create_new_hook"} and existing_id:
+            raise ValueError("Creation actions cannot silently replace an existing component reference")
+        if action_type == "create_new_skill" and str(feature.get("feature", "")).strip().lower() not in {
+            "skill",
+            "custom skill",
+        }:
+            raise ValueError("New skill actions must declare feature=Skill")
+        if action_type == "create_new_hook" and str(feature.get("feature", "")).strip().lower() not in {
+            "hook",
+            "lifecycle hook",
+        }:
+            raise ValueError("New hook actions must declare feature=Hook")
         if action_type in _REUSE_ACTIONS and existing_id:
             resolved = await _resolve_reusable_component(feature, agent, db)
             if not resolved:
-                optic.info(
-                    "self_learn_reuse_rejected: agent={}, component_id={}, declared_type={}",
-                    agent.name,
-                    str(existing_id),
-                    feature.get("feature"),
-                )
-                continue
+                optic.info("self_learn_reuse_rejected: report_id={}", str(report_uuid))
+                raise ValueError("Selected registry component is unavailable or not authorized")
             linked_existing.append(resolved)
             applied["linked_existing"].append(
                 {
@@ -207,13 +268,29 @@ async def apply_insight_suggestions(
             continue
         # Creating brand-new MCPs from an LLM suggestion is never safe: they
         # carry commands, images and credentials. Reuse above is allowed.
-        if _is_mcp_suggestion(feature):
-            continue
+        if str(feature.get("feature", "")).strip().lower() in {"mcp", "mcp server", "server"}:
+            raise ValueError("New executable MCP suggestions are not supported; select a reviewed existing component")
         if action_type == "remove_component" and existing_id:
             try:
                 cid = uuid.UUID(str(existing_id))
             except ValueError:
                 cid = None
+
+            attached = (
+                await db.scalar(
+                    select(AgentComponent.component_id)
+                    .join(AgentVersion, AgentVersion.id == AgentComponent.agent_version_id)
+                    .where(
+                        AgentVersion.id == approved_base.id,
+                        AgentComponent.component_id == cid,
+                    )
+                    .limit(1)
+                )
+                if cid
+                else None
+            )
+            if attached is None:
+                raise ValueError("Selected removal does not reference an attached component")
             if cid:
                 removed_component_ids.append(cid)
                 applied["removed_components"].append(
@@ -226,23 +303,7 @@ async def apply_insight_suggestions(
                     }
                 )
             continue
-        if _is_skill_suggestion(feature):
-            existing_match = await _find_existing_skill_match(feature, agent, db)
-            if existing_match:
-                linked_existing.append(existing_match)
-                applied["linked_existing"].append(
-                    {
-                        "type": "skill",
-                        "id": str(existing_match.id),
-                        "name": existing_match.name,
-                        "qualified_name": existing_match.qualified_name,
-                        "version": existing_match.latest_version,
-                        "reason": "matched existing registry skill",
-                        "confidence": feature.get("confidence"),
-                        "risk": feature.get("risk") or "low",
-                    }
-                )
-                continue
+        if action_type == "create_new_skill":
             skill_info = await _create_skill_listing(
                 agent=agent,
                 feature=feature,
@@ -250,13 +311,15 @@ async def apply_insight_suggestions(
                 db=db,
                 actor_id=triggered_by,
             )
+            if not skill_info:
+                raise ValueError("Selected skill could not be materialized; check its content and name")
             if skill_info:
                 skill_info["confidence"] = feature.get("confidence")
                 skill_info["risk"] = feature.get("risk")
                 skill_info["why"] = feature.get("why_for_you")
                 applied["skills"].append(skill_info)
                 created_skill_ids.append(uuid.UUID(skill_info["id"]))
-        elif _is_hook_suggestion(feature):
+        elif action_type == "create_new_hook":
             hook_info = await _create_hook_listing(
                 agent=agent,
                 feature=feature,
@@ -264,6 +327,8 @@ async def apply_insight_suggestions(
                 db=db,
                 actor_id=triggered_by,
             )
+            if not hook_info:
+                raise ValueError("Selected hook could not be materialized; check its content and name")
             if hook_info:
                 hook_info["confidence"] = feature.get("confidence")
                 hook_info["risk"] = feature.get("risk")
@@ -279,6 +344,17 @@ async def apply_insight_suggestions(
         if idx >= len(usage_patterns):
             continue
         pattern = usage_patterns[idx]
+        if not isinstance(pattern, dict) or any(
+            pattern.get(field) is not None and not isinstance(pattern[field], str)
+            for field in ("title", "detail", "suggestion", "copyable_prompt")
+        ):
+            raise ValueError("Selected prompt pattern has invalid string metadata")
+        if (
+            not isinstance(pattern, dict)
+            or not isinstance(pattern.get("copyable_prompt"), str)
+            or not pattern["copyable_prompt"].strip()
+        ):
+            raise ValueError("Selected prompt pattern has no complete copyable_prompt")
         if pattern.get("copyable_prompt"):
             prompt_info = await _create_prompt_listing(
                 agent=agent,
@@ -287,13 +363,34 @@ async def apply_insight_suggestions(
                 db=db,
                 actor_id=triggered_by,
             )
+            if not prompt_info:
+                raise ValueError("Selected prompt could not be materialized; check its content and name")
             if prompt_info:
                 applied["prompts"].append(prompt_info)
                 created_prompt_ids.append(uuid.UUID(prompt_info["id"]))
 
     # 3. Create new AgentVersion with selected config additions + linked components
     config_additions = suggestions.get("config_additions", [])
-    selected_additions = [config_additions[i] for i in config_indices if i < len(config_additions)]
+    selected_additions = [config_additions[i] for i in config_indices]
+    if any(
+        not isinstance(item, dict)
+        or item.get("action_type", "modify_prompt") != "modify_prompt"
+        or item.get("where", "system_prompt") not in ("system_prompt", "AGENTS.md")
+        or not isinstance(item.get("addition"), str)
+        or not item["addition"].strip()
+        for item in selected_additions
+    ):
+        raise ValueError("Selected prompt additions have unsupported destinations or empty content")
+    for item in selected_additions:
+        required = item.get("requires_feature_indices")
+        if not isinstance(required, list) or any(
+            type(i) is not int or i < 0 or i >= len(features_to_try) for i in required
+        ):
+            raise ValueError("Prompt addition lacks valid explicit dependency metadata; generate a new report")
+        if not set(required).issubset(feature_indices):
+            raise ValueError("A selected prompt addition requires an unselected feature")
+        if any(features_to_try[i].get("action_type") in {"no_action", "remove_component"} for i in required):
+            raise ValueError("A required feature must be created or attached, not removed or skipped")
     if selected_additions:
         applied["prompt_additions"] = [
             {
@@ -332,12 +429,12 @@ async def apply_insight_suggestions(
     report.applied_at = datetime.now(UTC)
     report.applied_items = applied
 
-    await db.commit()
+    await db.flush()
 
     optic.info(
-        "self_learn_applied: report_id={}, agent={}, version_created={}, skills_created={}, hooks_created={}, prompts_created={}",
+        "self_learn_staged: report_id={}, agent_id={}, version_created={}, skills_created={}, hooks_created={}, prompts_created={}",
         report_id,
-        agent.name,
+        str(agent.id),
         applied["agent_version"] is not None,
         len(applied["skills"]),
         len(applied["hooks"]),
@@ -347,21 +444,60 @@ async def apply_insight_suggestions(
     return applied
 
 
-async def _withdraw_stale_insight_generated_versions(agent: Agent, db: AsyncSession) -> list[dict]:
-    stmt = select(AgentVersion).where(
-        AgentVersion.agent_id == agent.id,
-        AgentVersion.status == AgentStatus.pending,
+async def _withdraw_stale_insight_generated_versions(agent: Agent, db: AsyncSession, actor_id: uuid.UUID) -> list[dict]:
+    """Supersede only provably generated pending proposals, never a description-name guess."""
+    from api.deps import get_effective_agent_permission
+
+    generated_ids = set(
+        (
+            await db.scalars(
+                select(Review.version_id)
+                .join(ReviewEvent, ReviewEvent.review_id == Review.id)
+                .where(
+                    Review.subject_type == "agent",
+                    Review.subject_id == agent.id,
+                    ReviewEvent.kind == "insights_generated",
+                )
+            )
+        ).all()
     )
-    result = await db.execute(stmt)
-    withdrawn = []
-    for version in result.scalars().all():
-        if not (version.description or "").startswith("Self-learned from insights"):
+    for prior in (
+        await db.scalars(
+            select(InsightReport).where(InsightReport.agent_id == agent.id, InsightReport.applied_at.is_not(None))
+        )
+    ).all():
+        info = prior.applied_items.get("agent_version") if isinstance(prior.applied_items, dict) else None
+        if isinstance(info, dict) and (vid := coerce_uuid(info.get("id"))) is not None:
+            generated_ids.add(vid)
+    pending = (
+        await db.scalars(
+            select(AgentVersion).where(AgentVersion.agent_id == agent.id, AgentVersion.status == AgentStatus.pending)
+        )
+    ).all()
+    superseded = []
+    for version in pending:
+        if version.id not in generated_ids:
             continue
+        actor = await db.get(User, actor_id)
+        if get_effective_agent_permission(agent, actor) not in {"owner", "edit"}:
+            raise ValueError("Not authorized to replace prior generated proposals")
+        old_review = await db.scalar(
+            select(Review).where(Review.subject_type == "agent", Review.version_id == version.id)
+        )
+        if old_review and old_review.state in {ReviewState.closed, ReviewState.published}:
+            continue
+        if old_review:
+            old_review.state = ReviewState.closed
+            old_review.closed_reason = "superseded"
+            old_review.closed_at = datetime.now(UTC)
+            old_review.closed_by = actor_id
+            db.add(ReviewEvent(review_id=old_review.id, kind="superseded", actor_id=actor_id))
+            await deliver_event(db, old_review, "superseded", actor_id)
         version.status = AgentStatus.rejected
         version.rejection_reason = "Superseded by newer insight-generated proposal"
-        withdrawn.append({"id": str(version.id), "version": version.version})
+        superseded.append({"id": str(version.id), "version": version.version})
     await db.flush()
-    return withdrawn
+    return superseded
 
 
 async def handle_component_rejection(
@@ -431,7 +567,11 @@ def _resolve_indices(selected: list[int] | None, items: list) -> list[int]:
     """Return the indices to process. If selected is None, return all indices."""
     if selected is None:
         return list(range(len(items)))
-    return [i for i in selected if 0 <= i < len(items)]
+    if len(selected) != len(set(selected)) or any(
+        not isinstance(i, int) or isinstance(i, bool) or i < 0 or i >= len(items) for i in selected
+    ):
+        raise ValueError("Selected suggestion indices are invalid or duplicated")
+    return selected
 
 
 async def _resolve_owner_user(agent: Agent, db: AsyncSession) -> User | None:
@@ -472,7 +612,7 @@ async def _create_agent_version_with_additions(
     latest_version = latest_result.scalar_one_or_none()
 
     if not latest_version:
-        optic.warning("self_learn_no_approved_version: agent={}", agent.name)
+        optic.warning("self_learn_no_approved_version: agent_id={}", str(agent.id))
         return None
 
     # Build the new prompt with additions, skipping exact duplicates already present.
@@ -515,24 +655,15 @@ async def _create_agent_version_with_additions(
             if not (await db.execute(dup_stmt)).scalar_one_or_none():
                 break
         else:
-            optic.error("self_learn_version_exhaustion: agent={}", agent.name)
+            optic.error("self_learn_version_exhaustion: agent_id={}", str(agent.id))
             return None
 
     total_linked = len(new_components) + len(linked_existing)
-    desc_parts = []
-    if config_additions:
-        desc_parts.append(f"{len(config_additions)} prompt additions")
-    if total_linked:
-        desc_parts.append(f"{total_linked} linked components")
-    if removed_component_ids:
-        desc_parts.append(f"{len(removed_component_ids)} removed components")
-    description = "Self-learned from insights: " + ", ".join(desc_parts)
-
     now = datetime.now(UTC)
     new_version = AgentVersion(
         agent_id=agent.id,
         version=new_ver,
-        description=description,
+        description=latest_version.description,
         prompt=new_prompt,
         model_name=latest_version.model_name,
         model_config_json=latest_version.model_config_json,
@@ -551,7 +682,14 @@ async def _create_agent_version_with_additions(
     order_idx = 0
     removed_set = set(removed_component_ids or [])
     carried_ids: set[uuid.UUID] = set()
-    for comp in latest_version.components or []:
+    carried_components = (
+        await db.scalars(
+            select(AgentComponent)
+            .where(AgentComponent.agent_version_id == latest_version.id)
+            .order_by(AgentComponent.order_index)
+        )
+    ).all()
+    for comp in carried_components:
         if comp.component_id in removed_set:
             continue
         carried_ids.add(comp.component_id)
@@ -591,9 +729,9 @@ async def _create_agent_version_with_additions(
     for resolved in linked_existing:
         if resolved.id in carried_ids:
             optic.info(
-                "self_learn_reuse_already_attached: agent={}, component={}",
-                agent.name,
-                resolved.qualified_name,
+                "self_learn_reuse_already_attached: agent_id={}, component_id={}",
+                str(agent.id),
+                str(resolved.id),
             )
             continue
         carried_ids.add(resolved.id)
@@ -618,11 +756,12 @@ async def _create_agent_version_with_additions(
 
     # A pending self-learned version sits in the same queue as a hand-released
     # one; the reviewers who will clear it are told the same way.
-    await submit_for_review(db, "agent", agent, new_version, actor_id)
+    await _submit_insights_review(db, "agent", agent, new_version, actor_id)
 
     return {
         "id": str(new_version.id),
         "version": new_ver,
+        "base_version_id": str(latest_version.id),
         "additions_count": len(config_additions),
         "linked_components": total_linked,
         "removed_components": len(removed_component_ids or []),
@@ -679,7 +818,10 @@ async def _refresh_capability_inference(version: AgentVersion, db: AsyncSession)
         # A version no declared harness can run must fail the apply, not be saved half-narrowed.
         raise
     except Exception as e:  # pragma: no cover - inference must never block the apply
-        optic.warning("self_learn_capability_inference_failed: version={}, error={}", version.version, str(e))
+        optic.warning(
+            "self_learn_capability_inference_failed: version_id={}, error_type={}", str(version.id), type(e).__name__
+        )
+        raise ValueError("Harness compatibility could not be validated") from None
 
 
 def _build_additions_text(config_additions: list[dict]) -> str:
@@ -691,7 +833,7 @@ def _build_additions_text(config_additions: list[dict]) -> str:
             continue
         where = addition.get("where", "system_prompt")
         why = addition.get("why", "")
-        if where in ("system_prompt", "AGENTS.md", "agent_config"):
+        if where in ("system_prompt", "AGENTS.md"):
             if why:
                 lines.append(f"# Reason: {why}")
             lines.append(text)
@@ -863,53 +1005,6 @@ async def _resolve_reusable_component(feature: dict, agent: Agent, db: AsyncSess
     )
 
 
-async def _find_existing_skill_match(feature: dict, agent: Agent, db: AsyncSession) -> ResolvedComponent | None:
-    """Deterministically find an existing approved skill before creating a duplicate.
-
-    Scoped to the agent's visibility: matching must never reach into another
-    user's private or team-private skills.
-    """
-    raw_name = _slugify(str(feature.get("name") or ""))
-    one_liner = str(feature.get("one_liner") or feature.get("why_for_you") or "")
-    keywords = [kw for kw in _extract_keywords(f"{raw_name} {one_liner}", max_words=6).split("-") if kw]
-    if not raw_name and not keywords:
-        return None
-
-    stmt = (
-        select(SkillListing, SkillVersion)
-        .join(SkillVersion, SkillListing.latest_version_id == SkillVersion.id)
-        .where(SkillVersion.status == ListingStatus.approved)
-    )
-    search_filter, search_rank = keyword_search(
-        f"{raw_name} {one_liner}",
-        [SkillListing.name, SkillVersion.description],
-        name_field=SkillListing.name,
-    )
-    visibility = visibility_clause(SkillListing, agent.created_by)
-    if visibility is not None:
-        stmt = stmt.where(visibility)
-    if search_filter is not None:
-        stmt = stmt.where(search_filter).order_by(search_rank.desc())
-    stmt = stmt.limit(100)
-
-    for listing, version in (await db.execute(stmt)).all():
-        listing_slug = _slugify(listing.name or "")
-        haystack = f"{listing.name} {version.description or ''}".lower()
-        hit = raw_name and (listing_slug == raw_name or raw_name in listing_slug or listing_slug in raw_name)
-        if not hit and keywords:
-            hit = sum(1 for kw in keywords if kw in haystack) >= min(3, len(keywords))
-        if hit:
-            return ResolvedComponent(
-                component_type="skill",
-                id=listing.id,
-                name=listing.name,
-                namespace=listing.namespace,
-                slug=listing.slug,
-                latest_version=version.version,
-            )
-    return None
-
-
 async def _create_skill_listing(
     agent: Agent,
     feature: dict,
@@ -944,6 +1039,13 @@ async def _create_skill_listing(
     # Build proper SKILL.md content if the example is raw text
     skill_md = _ensure_skill_md_format(name, one_liner, example)
 
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    declared = getattr(agent, "_insights_harnesses", agent.supported_harnesses) or []
+    skill_harnesses = [h for h in declared if "skills" in HARNESS_REGISTRY.get(h, {}).get("capabilities", set())]
+    if not skill_harnesses:
+        raise ValueError("Selected skill is unsupported by every declared agent harness")
+
     # Validate through Pydantic schema and stored SKILL.md frontmatter rules.
     try:
         validate_skill_md_content_frontmatter(skill_md)
@@ -956,10 +1058,10 @@ async def _create_skill_listing(
             delivery_mode="registry_direct",
             target_agents=[agent.name],
             task_type="general",
-            supported_harnesses=["claude-code", "kiro", "pi"],
+            supported_harnesses=skill_harnesses,
         )
     except (SkillValidationError, ValidationError) as e:
-        optic.warning("self_learn_skill_validation_failed: name={}, errors={}", name, str(e))
+        optic.warning("self_learn_skill_validation_failed: error_type={}", type(e).__name__)
         return None
 
     # Check for existing
@@ -1002,7 +1104,7 @@ async def _create_skill_listing(
 
     # Self-learned components enter the same review queue as hand-submitted
     # ones, so the reviewers who own that queue hear about them the same way.
-    await submit_for_review(db, "skill", listing, version, actor_id)
+    await _submit_insights_review(db, "skill", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1069,6 +1171,38 @@ async def _create_hook_listing(
     # Convert to proper executable script
     script_content = _normalize_script(script_content, name)
     script_filename = f"{name}.sh"
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    harnesses = getattr(agent, "_insights_harnesses", agent.supported_harnesses) or []
+    if not harnesses:
+        raise ValueError("Agent must declare harnesses before creating an executable hook")
+    from services.harness import ensure_loaded, get_adapter
+
+    ensure_loaded()
+    config = {
+        "name": name,
+        "event": event,
+        "handler_type": "command",
+        "handler_config": {"inline": True},
+        "script_content": script_content,
+        "script_filename": script_filename,
+    }
+    unsupported = []
+    for harness in harnesses:
+        adapter = get_adapter(harness)
+        if adapter is None or adapter.hook_delivery_errors(config, HARNESS_REGISTRY[harness]["default_scope"]):
+            unsupported.append(harness if harness in HARNESS_REGISTRY else "unregistered harness")
+    if unsupported:
+        raise ValueError("Selected script hook cannot be installed for: " + ", ".join(unsupported))
+    raw_requirements = feature.get("requirements")
+    raw_requirements = [] if raw_requirements is None else raw_requirements
+    if not isinstance(raw_requirements, list) or any(
+        not isinstance(item, str) or not item.strip() for item in raw_requirements
+    ):
+        raise ValueError("Hook requirements must be a list of executable dependency names")
+    requirements = ["bash", *raw_requirements]
+    if re.search(r"\bjq\b", script_content) and "jq" not in requirements:
+        raise ValueError("Generated hook uses jq without declaring it in requirements")
 
     # Validate through Pydantic schema
     try:
@@ -1089,10 +1223,11 @@ async def _create_hook_listing(
             scope="agent",
             script_content=script_content,
             script_filename=script_filename,
-            supported_harnesses=["claude-code", "kiro", "pi"],
+            supported_harnesses=harnesses,
+            requirements=requirements,
         )
     except ValidationError as e:
-        optic.warning("self_learn_hook_validation_failed: name={}, errors={}", name, str(e))
+        optic.warning("self_learn_hook_validation_failed: error_type={}", type(e).__name__)
         return None
 
     # Check for existing
@@ -1128,6 +1263,7 @@ async def _create_hook_listing(
         script_content=validated.script_content,
         script_filename=validated.script_filename,
         supported_harnesses=validated.supported_harnesses,
+        requirements=validated.requirements,
         status=ListingStatus.pending,
         released_by=submitter_id,
         released_at=datetime.now(UTC),
@@ -1138,7 +1274,7 @@ async def _create_hook_listing(
     listing.latest_version_id = version.id
 
     # Same review queue as a hand-submitted hook, so the same notification.
-    await submit_for_review(db, "hook", listing, version, actor_id)
+    await _submit_insights_review(db, "hook", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1149,94 +1285,45 @@ async def _create_hook_listing(
 
 
 def _parse_hook_example(example: str) -> tuple[str, str, str]:
-    """Parse hook event and mode from the example text.
-
-    Returns (event, execution_mode, script_content).
-    Events must be one of: PreToolUse, PostToolUse, Notification, Stop,
-    SubagentStop, SessionStart, UserPromptSubmit.
-    """
+    """Require one explicit canonical event or documented alias; never guess from prose."""
+    event_map = {
+        "before tool use": ("PreToolUse", "sync"),
+        "pretooluse": ("PreToolUse", "sync"),
+        "after tool use": ("PostToolUse", "async"),
+        "posttooluse": ("PostToolUse", "async"),
+        "session end": ("Stop", "blocking"),
+        "stop": ("Stop", "blocking"),
+        "before prompt": ("UserPromptSubmit", "sync"),
+        "userpromptsubmit": ("UserPromptSubmit", "sync"),
+        "session start": ("SessionStart", "async"),
+        "sessionstart": ("SessionStart", "async"),
+        "notification": ("Notification", "async"),
+        "subagentstop": ("SubagentStop", "async"),
+    }
     lines = example.strip().splitlines()
-    event = "Stop"  # safe default
-    execution_mode = "async"
-    script_lines = []
-
-    for line in lines:
-        lower = line.lower().strip()
-        if lower.startswith("# hook:"):
-            hook_desc = lower.replace("# hook:", "").strip()
-            if "commit" in hook_desc or "push" in hook_desc or "before" in hook_desc:
-                event = "Stop"
-                execution_mode = "blocking"
-            elif "start" in hook_desc or "init" in hook_desc or "session" in hook_desc:
-                event = "SessionStart"
-                execution_mode = "async"
-            elif "prompt" in hook_desc or "submit" in hook_desc:
-                event = "UserPromptSubmit"
-                execution_mode = "sync"
-            elif "tool" in hook_desc and "pre" in hook_desc:
-                event = "PreToolUse"
-                execution_mode = "sync"
-            elif "tool" in hook_desc and "post" in hook_desc:
-                event = "PostToolUse"
-                execution_mode = "async"
-            else:
-                event = "Stop"
-                execution_mode = "async"
-        else:
-            script_lines.append(line)
-
-    script_content = "\n".join(script_lines).strip()
-    if not script_content:
-        script_content = example.strip()
-
-    return event, execution_mode, script_content
+    headers = [line for line in lines if line.lower().strip().startswith("# hook:")]
+    if len(headers) != 1:
+        raise ValueError("Hook needs exactly one explicit # Hook: event header")
+    declared = headers[0].split(":", 1)[1].strip().lower()
+    if declared not in event_map:
+        raise ValueError("Hook event is unsupported or ambiguous; use a canonical event name")
+    event, mode = event_map[declared]
+    return event, mode, "\n".join(line for line in lines if line != headers[0]).strip()
 
 
 def _normalize_script(raw_script: str, name: str) -> str:
-    """Convert LLM-generated pseudocode into a proper executable script.
+    """Accept declared executable source, never turn pseudocode into a successful no-op."""
+    import subprocess
 
-    If the content looks like Python pseudocode (uses def, import, class),
-    wrap it in a Python shebang. If it looks like shell commands, add bash shebang.
-    If it's a mix or unclear, produce a shell script that echos a placeholder.
-    """
-    lines = raw_script.strip().splitlines()
-
-    # Already has a shebang
-    if lines and lines[0].startswith("#!"):
-        return raw_script
-
-    # Detect if this is Python pseudocode
-    python_indicators = ("def ", "import ", "class ", "context.get", "return {")
-    python_score = sum(1 for line in lines if any(ind in line for ind in python_indicators))
-
-    # Detect shell commands
-    shell_indicators = ("pytest", "ruff ", "git ", "npm ", "make ", "cd ", "echo ", "exit ")
-    shell_score = sum(1 for line in lines if any(ind in line.lower() for ind in shell_indicators))
-
-    if shell_score > python_score:
-        # Wrap as proper bash script
-        return f"#!/usr/bin/env bash\nset -euo pipefail\n# Generated by Observal Insights for: {name}\n\n{raw_script}"
-
-    if python_score > 0:
-        # It's Python pseudocode. Wrap it but mark as needing review.
-        return (
-            f"#!/usr/bin/env python3\n"
-            f"# Generated by Observal Insights for: {name}\n"
-            f"# NOTE: This script was auto-generated from insight suggestions.\n"
-            f"# Review and adapt before approving.\n\n"
-            f"{raw_script}"
-        )
-
-    # Default: shell with the content as comments + placeholder
-    commented = "\n".join(f"# {line}" for line in lines if line.strip())
-    return (
-        f"#!/usr/bin/env bash\n"
-        f"set -euo pipefail\n"
-        f"# Generated by Observal Insights for: {name}\n"
-        f"# TODO: Implement the following logic:\n"
-        f"{commented}\n\n"
-        f'echo "[{name}] Hook executed successfully"\n'
-    )
+    if not raw_script.startswith(("#!/usr/bin/env bash\n", "#!/bin/bash\n")):
+        raise ValueError("Generated hooks require a complete Bash script with an explicit shebang")
+    try:
+        checked = subprocess.run(["bash", "-n"], input=raw_script, text=True, capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("Bash syntax validation is unavailable") from None
+    if checked.returncode:
+        raise ValueError("Generated hook failed Bash syntax validation")
+    return raw_script
 
 
 async def _create_prompt_listing(
@@ -1277,7 +1364,7 @@ async def _create_prompt_listing(
             supported_harnesses=[],
         )
     except ValidationError as e:
-        optic.warning("self_learn_prompt_validation_failed: name={}, errors={}", name, str(e))
+        optic.warning("self_learn_prompt_validation_failed: error_type={}", type(e).__name__)
         return None
 
     # Check for existing
@@ -1318,7 +1405,7 @@ async def _create_prompt_listing(
     listing.latest_version_id = version.id
 
     # Same review queue as a hand-submitted prompt, so the same notification.
-    await submit_for_review(db, "prompt", listing, version, actor_id)
+    await _submit_insights_review(db, "prompt", listing, version, actor_id)
 
     return {
         "id": str(listing.id),
@@ -1326,3 +1413,25 @@ async def _create_prompt_listing(
         "description": detail or title,
         "type": "prompt",
     }
+
+
+async def _submit_insights_review(db, subject_type, subject, version, actor_id):
+    """Stage a normal revision with durable provenance before any auto-publication check."""
+    review = await open_or_push(db, subject_type, subject, version, actor_id)
+    db.add(ReviewEvent(review_id=review.id, kind="insights_generated", actor_id=actor_id))
+    await db.flush()
+    await sync_state(db, review, actor_id=actor_id)
+    await deliver_event(db, review, "opened", actor_id, revision=1)
+    return review
+
+
+async def apply_insight_suggestions(report_id, db, triggered_by, selection=None, *, preview_digest=None):
+    from services.insights.apply_preview import submit_suggestions
+
+    return await submit_suggestions(report_id, db, triggered_by, selection, preview_digest=preview_digest)
+
+
+async def preview_insight_suggestions(report_id, db, triggered_by, selection):
+    from services.insights.apply_preview import preview_suggestions
+
+    return await preview_suggestions(report_id, db, triggered_by, selection)

@@ -220,14 +220,23 @@ export function useGenerateInsight() {
 export function useApplyInsightSuggestions() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { agentId: string; reportId: string; selection?: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } }) =>
+    mutationFn: (vars: { agentId: string; reportId: string; selection: import("@/lib/types").InsightApplySelection }) =>
       insights.applySuggestions(vars.agentId, vars.reportId, vars.selection),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["insights", "report", vars.agentId, vars.reportId] });
-      toast.success("Suggestions applied: items added to review queue");
+      toast.success("Submitted for review; registry publication is pending");
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to apply suggestions");
     },
   });
+}
+
+
+export function usePreviewInsightSuggestions() {
+    return useMutation({
+        mutationFn: (vars: { agentId: string; reportId: string; selection: import("@/lib/types").InsightApplySelection }) =>
+            insights.previewSuggestions(vars.agentId, vars.reportId, vars.selection),
+        onError: (err: Error) => toast.error(err.message || "Failed to preview selected suggestions"),
+    });
 }
