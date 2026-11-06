@@ -11,19 +11,53 @@ import hashlib
 import json
 import re
 
-_ENVELOPE = re.compile(
-    r"^You are acting as the agent `([^`]+)`\. Follow its instructions\.\s*<agent-instructions>\s*(.*?)\s*</agent-instructions>\s*<task>\s*(.+?)\s*</task>\s*$",
-    re.S,
-)
+
+def _delegated_prompt(value, prompt, names):
+    """Parse the exact CLI envelope in linear time, using the known role boundary.
+
+    Consuming the expected prompt allows closing-tag text inside instructions;
+    taking the final task tag also preserves closing-tag text inside the task.
+    """
+    if not isinstance(value, str):
+        return False
+    value = value.replace("\r\n", "\n")
+    prefix = "You are acting as the agent `"
+    if not value.startswith(prefix):
+        return False
+    end = value.find("`", len(prefix))
+    if end < 0 or value[len(prefix) : end] not in names:
+        return False
+    sentence = "`. Follow its instructions."
+    if not value.startswith(sentence, end):
+        return False
+    rest = value[end + len(sentence) :].lstrip()
+    opening = "<agent-instructions>"
+    if not rest.startswith(opening):
+        return False
+    rest = rest[len(opening) :].lstrip()
+    if not rest.startswith(prompt):
+        return False
+    rest = rest[len(prompt) :].lstrip()
+    closing = "</agent-instructions>"
+    if not rest.startswith(closing):
+        return False
+    rest = rest[len(closing) :].lstrip()
+    if not rest.startswith("<task>"):
+        return False
+    rest = rest[len("<task>") :].rstrip()
+    return rest.endswith("</task>") and bool(rest[: -len("</task>")].strip())
+
 
 _FILES = re.compile(r'<project_instructions\b[^>]*\bpath="([^"]+)"[^>]*>(.*?)</project_instructions>', re.S)
 
 
 def _text(value):
+    """Normalize line endings and envelope-edge whitespace, not instruction words."""
     return value.replace("\r\n", "\n").strip() if isinstance(value, str) else ""
 
 
 def _matches(sections, content, expected):
+    """Match complete active instruction text while excluding code-fenced quotes."""
     if _text(content) == expected or _text(sections.get("preamble")) == expected:
         return True
     for path, body in _FILES.findall(sections.get("project_context", "")):
@@ -40,6 +74,7 @@ def _matches(sections, content, expected):
 
 
 def instruction_evidence(entries, expected):
+    """Check recorded instructions for every response without exposing their bodies."""
     prompt = _text((expected or {}).get("prompt"))
     if not prompt:
         return {"state": "unknown", "reason": "registry_prompt_unavailable"}
@@ -67,6 +102,7 @@ def instruction_evidence(entries, expected):
     visiting = set()
 
     def apply(entry, prior):
+        """Replay one immutable parent state through a checkpoint, patch or envelope."""
         sections, content, known = prior
         message = entry.get("message") or {}
         if entry.get("type") == "context_edit" and entry.get("targetId") == sections.get("_delegated_entry"):
@@ -75,9 +111,8 @@ def instruction_evidence(entries, expected):
             value = message.get("content")
             if isinstance(value, list):
                 value = "\n".join(b.get("text", "") for b in value if isinstance(b, dict) and b.get("type") == "text")
-            match = _ENVELOPE.fullmatch(value) if isinstance(value, str) else None
             names = (expected or {}).get("names") or []
-            if match and match.group(1) in names and _text(match.group(2)) == prompt:
+            if _delegated_prompt(value, prompt, names):
                 sections = {**sections, "_delegated": prompt, "_delegated_entry": entry.get("id")}
         checkpoint = entry.get("type") == "compaction"
         if checkpoint:
@@ -102,6 +137,7 @@ def instruction_evidence(entries, expected):
         return sections, content, known
 
     def state(identity):
+        """Memoize the state on one tree ancestry and reject cycles."""
         if identity in memo:
             return memo[identity]
         if identity in visiting:

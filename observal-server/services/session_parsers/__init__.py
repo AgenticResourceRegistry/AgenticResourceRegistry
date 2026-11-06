@@ -102,6 +102,7 @@ def instruction_evidence(harness: str, raw_lines: list[str], expected: dict | No
     from .pi_instructions import instruction_evidence as pi_evidence
 
     def codex_evidence(entries, contract):
+        """Reuse Codex normalization while binding cache identity to its full raw source."""
         result = pi_evidence(_codex_meta(entries), contract)
         if result.get("cache_key"):
             import hashlib
