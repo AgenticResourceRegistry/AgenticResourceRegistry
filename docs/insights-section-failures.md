@@ -47,3 +47,7 @@ AI assistance: Pi under human direction. Human review of the complete diff and s
 - Broad Insights/CLI/self-learn selection: **355 passed** before the final malformed-provider fixture; the subsequent section/CLI selection including that fixture: **60 passed**. Frontend typecheck passed; lint reported **0 errors, 94 existing warnings**; scoped design detector returned no findings.
 - Final opt-in Playwright run with retries disabled: **1 passed**, checking desktop/mobile, retained available content, failure states and absent Apply controls. Earlier verification runs exposed an incomplete synthetic strength fixture and a redundant-navigation timing failure; the fixture was corrected and viewport changes now reuse the loaded report. Screenshots were captured for both the partial-report banner and unavailable suggestions at both sizes, and retained in the private suite evidence directory.
 - No paid/hosted provider was called. This verifies failure handling and API/UI behavior with deterministic fault injection, not a hosted model's retry success rate or worker-queue scheduling under load.
+
+## Untrusted provider and stored diagnostics
+
+Successful calls return only their validated section envelope; provider-supplied top-level error/generation metadata cannot fabricate pipeline failures. The report UI tolerates null entries, missing/non-string section names and a non-array diagnostic field. Unknown names get an explicit fallback without hiding available sections.

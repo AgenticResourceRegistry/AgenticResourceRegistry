@@ -28,18 +28,30 @@ test("partial sections are visible and failed suggestions cannot be applied", as
   });
   expect(response.ok()).toBeTruthy();
   const report = await response.json();
+  const pageErrors: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  // Exercise malformed historical/provider diagnostics at the browser boundary;
+  // the underlying disposable report is still fetched from the real API.
+  await page.route(`**/insights/reports/${reportId}`, async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.narrative.section_errors = [null, {}, { section: 123 }, ...body.narrative.section_errors];
+    await route.fulfill({ response, json: body });
+  });
   await page.goto(`/agents/${report.agent_id}/insights/${reportId}`);
   await expect(page.getByText("This report is partially available", { exact: true })).toBeVisible({ timeout: 15000 });
   for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await expect(page.getByText("This report is partially available", { exact: true })).toBeVisible();
     await expect(page.getByText("Suggestions unavailable", { exact: true })).toBeVisible();
+    await expect(page.getByText(/unknown, unknown, unknown/)).toBeVisible();
     await expect(page.getByText("Synthetic answer delivered", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Apply Selected/ })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.getByText("This report is partially available", { exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`partial-report-${viewport.width}.png`), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`malformed-section-errors-${viewport.width}.png`), fullPage: true });
     await page.getByText("Suggestions unavailable", { exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`suggestions-unavailable-${viewport.width}.png`), fullPage: true });
   }
+  expect(pageErrors).toEqual([]);
 });
