@@ -1848,7 +1848,7 @@ function ReportContent({
 }) {
 	const metrics = report.metrics;
 	const narrative = report.narrative;
-	const sectionErrors = narrative?.section_errors ?? [];
+	const sectionErrors = Array.isArray(narrative?.section_errors) ? narrative.section_errors : [];
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const rich = (metrics as any)?.rich as Record<string, unknown> | undefined;
 	// facets_summary is stored inside aggregated_data by the batch job
@@ -1901,7 +1901,7 @@ function ReportContent({
 			{sectionErrors.length > 0 && (
                 <div role="status" className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
                     <p className="font-semibold">This report is partially available</p>
-                    <p className="mt-1">These sections failed to generate: {sectionErrors.map(error => error.section.replaceAll("_", " ")).join(", ")}. Generate a new report to retry. Available sections are shown below.</p>
+                    <p className="mt-1">These sections failed to generate: {sectionErrors.map(error => typeof error?.section === "string" ? error.section.replaceAll("_", " ") : "unknown").join(", ")}. Generate a new report to retry. Available sections are shown below.</p>
                 </div>
             )}
 			{/* Up to five points with their evidence one click away; everything else is opt-in below. */}
@@ -2055,6 +2055,7 @@ function ReportContent({
 					<FunEnding data={narrative?.fun_ending} />
 				</>
 			)}
+
 
 
 			{/* No narrative fallback */}

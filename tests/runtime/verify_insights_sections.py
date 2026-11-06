@@ -26,11 +26,13 @@ from version import get_server_version
 
 
 async def main():
+    """Exercise the guarded disposable stack without changing hosted settings or model providers."""
     if os.environ.get("INSIGHTS_DISPOSABLE_VERIFY") != "1":
         raise RuntimeError("Requires explicit disposable verification")
     calls = {}
 
     async def model(prompt, **kwargs):
+        """Return deterministic process-local fixture responses for the exercised pipeline."""
         match = re.search(r'"([a-z_]+)":\s*\{', prompt)
         if not match:
             return {}
@@ -48,6 +50,7 @@ async def main():
     sections.get_call_model = lambda: model
 
     async def no_override():
+        """Use fixture model selection without modifying persisted configuration."""
         return None
 
     sections._get_section_model = no_override
