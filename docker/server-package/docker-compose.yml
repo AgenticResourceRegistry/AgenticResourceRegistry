@@ -75,7 +75,7 @@ services:
 
   observal-db:
     restart: unless-stopped
-    image: postgres:18
+    image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
     group_add:
       - "${OBSERVAL_SECRET_GID:-1000}"
     ports:
@@ -102,7 +102,7 @@ services:
 
   observal-clickhouse:
     restart: unless-stopped
-    image: clickhouse/clickhouse-server:26.6
+    image: clickhouse/clickhouse-server:26.6@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b
     group_add:
       - "${OBSERVAL_SECRET_GID:-1000}"
     ports:
@@ -133,7 +133,7 @@ services:
 
   observal-redis:
     restart: unless-stopped
-    image: redis:8-alpine
+    image: redis:8-alpine@sha256:71885d8cc6e42f2bc0aa2eb853bfc4be200b5108a46ac50e117ae1df0531fb80
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
@@ -202,7 +202,7 @@ services:
       - observal-net
 
   observal-lb:
-    image: nginx:1.31-alpine
+    image: nginx:1.31-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
     ports:
       - "${OBSERVAL_BIND_ADDRESS:-127.0.0.1}:${API_HOST_PORT:-8000}:80"
     volumes:
