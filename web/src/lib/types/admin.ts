@@ -438,7 +438,28 @@ export interface InsightMetrics {
 	}[];
 }
 
+export interface InsightEvidenceSource {
+    harness: string;
+    session_id: string;
+    project_id: string;
+    user_id: string;
+    task_relevance: string;
+    task_relevance_basis: string;
+    eligible_for_changes: boolean;
+}
+
+export interface InsightConfigAddition {
+    addition: string; why: string; where: string; confidence?: string; risk?: string; evidence_refs?: string[];
+}
+
+export interface InsightUsageSuggestion {
+    title: string; suggestion: string; detail: string; copyable_prompt: string; evidence_refs?: string[];
+}
+
 export interface InsightNarrative {
+    source_index?: Record<string, InsightEvidenceSource>;
+    evidence_validation?: { state: string; instruction_matched_sources: number; change_eligible_sources: number;
+        rejected_records: { section: string; position: number; reason: string }[]; limitations: string[] };
 	// V3 structured format: each section is a structured object
 	// V1 fallback: each section is string[] or string
 	// The frontend handles both formats gracefully
@@ -480,6 +501,7 @@ export interface ComponentRef {
 }
 
 export interface FeatureSuggestion {
+    evidence_refs?: string[];
 	feature: string;
 	action_type?: string;
 	name?: string;

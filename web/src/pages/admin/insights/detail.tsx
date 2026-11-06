@@ -51,6 +51,8 @@ import type {
 	FeatureSuggestion,
 	InsightReport,
 	RegistryMatchSummary,
+    InsightConfigAddition,
+    InsightUsageSuggestion,
 } from "@/lib/types";
 
 // ── Status Indicator ──────────────────────────────────────────────────────
@@ -723,9 +725,9 @@ function SuggestionsSection({
 	const obj = data as Record<string, unknown>;
 
 	// V4 format
-	const configAdditions = obj.config_additions as { addition: string; why: string; where: string; confidence?: string; risk?: string }[] | undefined;
+	const configAdditions = obj.config_additions as InsightConfigAddition[] | undefined;
 	const featuresToTry = obj.features_to_try as FeatureSuggestion[] | undefined;
-	const usagePatterns = obj.usage_patterns as { title: string; suggestion: string; detail: string; copyable_prompt: string }[] | undefined;
+	const usagePatterns = obj.usage_patterns as InsightUsageSuggestion[] | undefined;
 
 	// V3 fallback
 	const items = obj.items as { title: string; action: string; why: string; priority: string }[] | undefined;
@@ -887,6 +889,7 @@ function SuggestionsSection({
 										<CopyButton text={c.addition} />
 									</div>
 									{c.why && <p className="text-xs text-muted-foreground mt-2 italic ml-7">Why: {c.why}</p>}
+                                    {c.evidence_refs && <p className="mt-2 text-xs text-muted-foreground break-all">Sources: {c.evidence_refs.join(", ")}</p>}
 								</div>
 							))}
 						</div>
@@ -930,6 +933,7 @@ function SuggestionsSection({
 											{f.risk && <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{f.risk} risk</span>}
 											<div className="font-medium text-sm mt-2">{f.one_liner}</div>
 											<p className="text-xs text-foreground/60 mt-1">{f.why_for_you}</p>
+                                            {f.evidence_refs && <p className="mt-2 text-xs text-muted-foreground break-all">Sources: {f.evidence_refs.join(", ")}</p>}
 											{f.component_ref && <ReuseBadge componentRef={f.component_ref} />}
 											{f.match_reason && (
 												<p className="text-xs text-muted-foreground mt-2 italic">Why this fits: {f.match_reason}</p>
@@ -970,6 +974,7 @@ function SuggestionsSection({
 											<div className="font-medium text-sm">{p.title}</div>
 											<p className="text-sm text-foreground/70 mt-1">{p.suggestion}</p>
 											<p className="text-xs text-muted-foreground mt-2">{p.detail}</p>
+                                            {p.evidence_refs && <p className="mt-2 text-xs text-muted-foreground break-all">Sources: {p.evidence_refs.join(", ")}</p>}
 											{p.copyable_prompt && (
 												<>
 													<pre className="mt-2 p-2 rounded bg-muted/30 text-xs font-[family-name:var(--font-mono)] text-foreground/70 whitespace-pre-wrap break-all">
@@ -1827,6 +1832,17 @@ function ReportContent({ report }: { report: InsightReport }) {
 			{/* At a Glance (4-panel executive summary) */}
 			<AtAGlance data={narrative?.at_a_glance} />
 
+            <div role="status" className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
+                <p className="font-semibold">Recommendation evidence</p>
+                <p className="mt-1 text-muted-foreground">MCP target attempts (not successful component use): {Object.entries((rich?.observed_mcp_target_attempts ?? {}) as Record<string, number>).map(([target, count]) => `${target}: ${count}`).join(" · ") || "none identified"}. Unidentified attempts: {Number(rich?.unidentified_mcp_attempts ?? 0)}. Skill/sandbox use remains unknown unless separately evidenced.</p>
+                {narrative?.evidence_validation ? <>
+                    <p className="mt-1">{narrative.evidence_validation.change_eligible_sources ?? 0} in-scope sources eligible for changes. {narrative.evidence_validation.rejected_records?.length ?? 0} unsupported records withheld.</p>
+                    <p className="mt-1 text-muted-foreground">Task relevance is model-assessed. Source references support auditability, not correctness or causal attribution. Unknown/off-task evidence cannot justify agent changes.</p>
+                    <details className="mt-2"><summary className="cursor-pointer">Source details</summary>
+                        <ul className="mt-2 space-y-1">{Object.entries(narrative.source_index ?? {}).map(([ref, source]) => <li className="break-all" key={ref}>{ref}: {source.harness}/{source.session_id} — {source.task_relevance} (model-assessed)</li>)}</ul>
+                    </details>
+                </> : <p className="mt-1 text-muted-foreground">This legacy report has no validated per-claim source references. Treat recommendations as unverified candidates.</p>}
+            </div>
 			{/* Stats Overview (matching pi /insights layout) */}
 			<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
 				<MetricCard label="Sessions" value={totalSessions} icon={Zap} subtext={daysActive > 0 ? `${daysActive} active days` : uniqueUsers > 1 ? `${uniqueUsers} users` : undefined} />

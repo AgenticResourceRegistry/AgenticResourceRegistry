@@ -476,7 +476,11 @@ def insights_show(
                     resource="insight report section",
                     remediation=f"Choose from: {', '.join(narrative.keys())}.",
                 )
-            output_json({"report_id": data.get("id"), "section": section, "data": narrative[section]})
+            result = {"report_id": data.get("id"), "section": section, "data": narrative[section]}
+            if narrative.get("evidence_validation"):
+                result["evidence_validation"] = narrative["evidence_validation"]
+                result["source_index"] = narrative.get("source_index", {})
+            output_json(result)
         else:
             output_json(data)
         return
