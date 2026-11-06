@@ -84,6 +84,11 @@ class PiAdapter(BaseHarnessAdapter):
     def harness_name(self) -> str:
         return "pi"
 
+    def hook_delivery_errors(self, hook: dict, scope: str) -> list[str]:
+        """Return adapter-specific reasons a hook cannot actually be delivered at this scope."""
+        _, warnings = pi_hook_entries([hook], scope)
+        return warnings
+
     def format_config(self, ctx: ConfigContext) -> dict:
         """Format config for Pi.
 

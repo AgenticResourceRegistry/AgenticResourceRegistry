@@ -148,6 +148,7 @@ async def _mcp(db: AsyncSession, *, name: str, submitter: User, version: str = "
 
 
 async def _report(db: AsyncSession, agent: Agent, features: list[dict]) -> InsightReport:
+    """Persist a completed owned suggestion report for proposal tests."""
     now = datetime.now(UTC)
     report = InsightReport(
         agent_id=agent.id,
@@ -159,7 +160,7 @@ async def _report(db: AsyncSession, agent: Agent, features: list[dict]) -> Insig
         narrative={"suggestions": {"features_to_try": features}},
     )
     db.add(report)
-    await db.flush()
+    await db.commit()
     return report
 
 
@@ -298,6 +299,7 @@ async def test_created_skill_keeps_component_name(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_private_component_from_another_user_is_not_attached(db: AsyncSession):
+    """Verify private component from another user is not attached."""
     owner = await _user(db, "owner@example.com")
     outsider = await _user(db, "outsider@example.com")
     agent = await _agent(db, owner)
@@ -321,10 +323,8 @@ async def test_private_component_from_another_user_is_not_attached(db: AsyncSess
         ],
     )
 
-    applied = await apply_insight_suggestions(str(report.id), db, owner.id)
-
-    assert applied["linked_existing"] == []
-    assert applied["agent_version"] is None
+    with pytest.raises(ValueError):
+        await apply_insight_suggestions(str(report.id), db, owner.id)
 
 
 @pytest.mark.asyncio
@@ -357,6 +357,7 @@ async def test_personal_private_component_is_attachable(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_hallucinated_component_id_is_dropped(db: AsyncSession):
+    """Verify hallucinated component id is dropped."""
     owner = await _user(db, "owner@example.com")
     agent = await _agent(db, owner)
     report = await _report(
@@ -373,13 +374,13 @@ async def test_hallucinated_component_id_is_dropped(db: AsyncSession):
         ],
     )
 
-    applied = await apply_insight_suggestions(str(report.id), db, owner.id)
-
-    assert applied["linked_existing"] == []
+    with pytest.raises(ValueError):
+        await apply_insight_suggestions(str(report.id), db, owner.id)
 
 
 @pytest.mark.asyncio
 async def test_non_uuid_component_id_is_dropped(db: AsyncSession):
+    """Verify non uuid component id is dropped."""
     owner = await _user(db, "owner@example.com")
     agent = await _agent(db, owner)
     report = await _report(
@@ -396,13 +397,13 @@ async def test_non_uuid_component_id_is_dropped(db: AsyncSession):
         ],
     )
 
-    applied = await apply_insight_suggestions(str(report.id), db, owner.id)
-
-    assert applied["linked_existing"] == []
+    with pytest.raises(ValueError):
+        await apply_insight_suggestions(str(report.id), db, owner.id)
 
 
 @pytest.mark.asyncio
 async def test_unapproved_component_is_not_attached(db: AsyncSession):
+    """Verify unapproved component is not attached."""
     owner = await _user(db, "owner@example.com")
     agent = await _agent(db, owner)
     pending = await _skill(db, name="not-ready", submitter=owner, status=ListingStatus.pending)
@@ -420,9 +421,8 @@ async def test_unapproved_component_is_not_attached(db: AsyncSession):
         ],
     )
 
-    applied = await apply_insight_suggestions(str(report.id), db, owner.id)
-
-    assert applied["linked_existing"] == []
+    with pytest.raises(ValueError):
+        await apply_insight_suggestions(str(report.id), db, owner.id)
 
 
 @pytest.mark.asyncio
@@ -439,7 +439,8 @@ async def test_mislabelled_type_still_resolves_by_id(db: AsyncSession):
         description="Guards scope",
         status=ListingStatus.approved,
         event="PreToolUse",
-        handler_type="script",
+        handler_type="command",
+        handler_config={"command": "exit 0"},
         released_by=owner.id,
         released_at=datetime.now(UTC),
     )
@@ -500,6 +501,7 @@ async def test_existing_mcp_can_be_reused(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_new_mcp_is_never_created(db: AsyncSession):
+    """Verify new mcp is never created."""
     owner = await _user(db, "owner@example.com")
     agent = await _agent(db, owner)
     report = await _report(
@@ -517,11 +519,8 @@ async def test_new_mcp_is_never_created(db: AsyncSession):
         ],
     )
 
-    applied = await apply_insight_suggestions(str(report.id), db, owner.id)
-
-    assert applied["skills"] == []
-    assert applied["hooks"] == []
-    assert applied["agent_version"] is None
+    with pytest.raises(ValueError):
+        await apply_insight_suggestions(str(report.id), db, owner.id)
 
 
 # ── capability inference ──────────────────────────────────────────────────
