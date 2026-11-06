@@ -990,6 +990,25 @@ def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: boo
     return "merged" if existed else "created"
 
 
+# ``command`` may be a string or a list of argv-style strings. Normalise both so
+# two spellings of the same handler compare equal across pulls.
+def _hook_entry_key(entry: object) -> str:
+    if not isinstance(entry, dict):
+        return json.dumps(entry, sort_keys=True, default=str)
+    command = entry.get("command", "")
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    normalised = {key: value for key, value in entry.items() if key != "command"}
+    normalised["command"] = command
+    return json.dumps(normalised, sort_keys=True, default=str)
+
+
+def _is_observal_entry(entry: object) -> bool:
+    from observal_cli.shared.utils import is_observal_hook_entry
+
+    return isinstance(entry, dict) and is_observal_hook_entry(entry)
+
+
 def _reconcile_hook_event_lists(section: dict, incoming: dict) -> None:
     """Merge incoming hook event lists into *section* without losing user hooks.
 
@@ -997,22 +1016,29 @@ def _reconcile_hook_event_lists(section: dict, incoming: dict) -> None:
     ``dict.update`` replaces those lists wholesale, so a pull would drop a
     user-owned ``preToolUse`` deny hook and re-add Observal entries every time.
 
-    For every event that is a list on both sides: keep existing entries that
-    are not Observal-managed, then append each incoming entry once (matched by
-    value), so repeated pulls are idempotent.
-    """
-    from observal_cli.shared.utils import is_observal_hook_entry
+    For every event that is a list on both sides the result is:
 
+    * every existing entry that is not Observal-managed, in order;
+    * then one copy of each incoming entry, skipped when an equal entry is
+      already present -- so a repeated pull is idempotent instead of stacking
+      a second copy of every user-submitted hook component.
+
+    Incoming entries are compared by ``_hook_entry_key`` so a handler with the
+    same command but a different key order is not duplicated.
+    """
     for event, incoming_entries in incoming.items():
         current = section.get(event)
         if not isinstance(incoming_entries, list) or not isinstance(current, list):
             section[event] = incoming_entries
             continue
-        kept = [entry for entry in current if not (isinstance(entry, dict) and is_observal_hook_entry(entry))]
-        merged = list(kept)
+        merged = [entry for entry in current if not _is_observal_entry(entry)]
+        seen = {_hook_entry_key(entry) for entry in merged}
         for entry in incoming_entries:
-            if entry not in merged:
-                merged.append(entry)
+            key = _hook_entry_key(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(entry)
         section[event] = merged
 
 

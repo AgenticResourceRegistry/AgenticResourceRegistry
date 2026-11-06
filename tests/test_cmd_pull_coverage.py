@@ -4418,3 +4418,44 @@ def test_pull_merge_is_idempotent_for_hook_event_lists(tmp_path: Path) -> None:
         cmd_pull._write_file(path, content, merge_mcp=True)
 
     assert json.loads(path.read_text())["hooks"]["stop"] == [user, observal]
+
+
+def test_pull_merge_does_not_duplicate_user_hook_components(tmp_path: Path) -> None:
+    """User-submitted hook components ride along in the incoming config on every pull.
+
+    The server appends them to the generated hooks.json, so a plain value-dedup
+    would be enough for a re-pull -- but the generated command spelling may differ
+    (``python3`` vs ``python``, argv list vs string). The second pull must still
+    leave exactly one copy of the user component.
+    """
+    path = tmp_path / "hooks.json"
+    user_component = {"command": "guard --deny rm -rf", "type": "command"}
+    observal = {"command": "python3 -m observal_cli.hooks.cursor_session_push", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [user_component]}}))
+
+    # Every pull sends Observal + the same user component, as the generator does.
+    content = {"version": 1, "hooks": {"preToolUse": [observal, {**user_component}]}}
+    for _ in range(3):
+        cmd_pull._write_file(path, content, merge_mcp=True)
+
+    entries = json.loads(path.read_text())["hooks"]["preToolUse"]
+    assert entries.count(user_component) == 1
+    assert entries.count(observal) == 1
+
+
+def test_pull_merge_matches_argv_and_string_commands(tmp_path: Path) -> None:
+    """A handler whose command is an argv list equals the string spelling."""
+    path = tmp_path / "hooks.json"
+    as_list = {"command": ["python3", "guard.py", "--deny", "rm -rf"], "type": "command"}
+    as_string = {"command": "python3 guard.py --deny rm -rf", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"postToolUse": [as_list]}}))
+
+    cmd_pull._write_file(
+        path,
+        {"version": 1, "hooks": {"postToolUse": [{"type": "command", "command": "python3 guard.py --deny rm -rf"}]}},
+        merge_mcp=True,
+    )
+
+    entries = json.loads(path.read_text())["hooks"]["postToolUse"]
+    assert entries == [as_list]
+    assert as_string is not None
