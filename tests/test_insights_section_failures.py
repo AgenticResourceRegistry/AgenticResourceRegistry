@@ -107,14 +107,16 @@ async def test_apply_rejects_persisted_suggestions_error_before_writes():
         narrative={**EMPTY, "section_errors": [{"section": "suggestions", "code": "model_call_failed", "attempts": 2}]},
     )
     agent = SimpleNamespace(created_by=None)
+    transaction = SimpleNamespace(is_active=True, rollback=AsyncMock())
     db = SimpleNamespace(
         execute=AsyncMock(
-            side_effect=[
-                SimpleNamespace(scalar_one_or_none=lambda: report),
-                SimpleNamespace(scalar_one_or_none=lambda: agent),
-            ]
+            side_effect=lambda stmt: SimpleNamespace(
+                scalar_one_or_none=lambda: report if "insight_reports" in str(stmt) else agent
+            )
         ),
         commit=AsyncMock(),
+        rollback=AsyncMock(),
+        begin_nested=AsyncMock(return_value=transaction),
     )
     with pytest.raises(ValueError, match="Suggestions generation failed"):
         await apply_insight_suggestions(uuid.uuid4(), db, uuid.uuid4())
