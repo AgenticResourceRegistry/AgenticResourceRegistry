@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Build readable session transcripts from ClickHouse session_events.
@@ -23,10 +24,10 @@ logger = structlog.get_logger(__name__)
 
 MAX_TRANSCRIPT_CHARS = 30000
 SUMMARY_CHUNK_CHARS = 25000
-MAX_PROMPT_CHARS = 500
-MAX_ASSISTANT_CHARS = 300
-MAX_TOOL_INPUT_CHARS = 200
-MAX_TOOL_OUTPUT_CHARS = 200
+MAX_PROMPT_CHARS = 4000
+MAX_ASSISTANT_CHARS = 4000
+MAX_TOOL_INPUT_CHARS = 1000
+MAX_TOOL_OUTPUT_CHARS = 1000
 
 CHUNK_SUMMARY_PROMPT = """Summarize this portion of a session transcript. Focus on:
 1. What the user asked for
@@ -73,14 +74,18 @@ async def build_session_transcript(session: SessionKey) -> str:
     if not rows:
         return ""
 
-    transcript = _format_rows(rows)
+    transcript = _format_rows(rows, harness=session.harness)
     if len(transcript) <= MAX_TRANSCRIPT_CHARS:
         return transcript
     return await _summarize_transcript(session.session_id, transcript)
 
 
-def _format_rows(rows: list[dict]) -> str:
+def _format_rows(rows: list[dict], harness: str = "") -> str:
     """Parse raw_line JSONL rows and format as readable transcript."""
+    if harness:
+        from services.session_parsers import transcript_rows
+
+        rows = transcript_rows(harness, rows)
     lines: list[str] = []
 
     for row in rows:
@@ -94,6 +99,9 @@ def _format_rows(rows: list[dict]) -> str:
         try:
             parsed = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
+            continue
+
+        if not isinstance(parsed, dict):
             continue
 
         line = _format_event(event_type, tool_name, parsed, row.get("content_preview", ""))
@@ -134,29 +142,58 @@ async def _summarize_transcript(session_id: str, transcript: str) -> str:
     )
 
 
+def _task_text(text: str) -> str:
+    """Only unwrap the CLI's explicit delegation envelope, never arbitrary user XML."""
+    if (
+        text.startswith("You are acting as the agent `")
+        and "<agent-instructions>" in text
+        and "</agent-instructions>" in text
+    ):
+        rest = text.split("</agent-instructions>", 1)[1].strip()
+        if rest.startswith("<task>") and rest.endswith("</task>"):
+            return "[Delegated task; agent instructions omitted]\n" + rest[6:-7].strip()
+    return text
+
+
+def _excerpt(text: str, limit: int) -> str:
+    """Keep both ends within a fixed budget and disclose discarded middle content."""
+    if len(text) <= limit:
+        return text
+    marker = "\n[... middle omitted ...]\n"
+    available = limit - len(marker)
+    head = available // 2
+    return text[:head] + marker + text[-(available - head) :]
+
+
 def _format_event(event_type: str, tool_name: str, parsed: dict, row_content_preview: str = "") -> str:
     """Format a single parsed JSONL event into a transcript line."""
     if event_type == "user_prompt":
         text = _extract_text(parsed) or (row_content_preview if isinstance(row_content_preview, str) else "")
         if text:
-            return f"[User]: {text[:MAX_PROMPT_CHARS]}"
+            return f"[User]: {_excerpt(_task_text(text), MAX_PROMPT_CHARS)}"
 
     elif event_type == "assistant_text":
         text = _extract_assistant_text(parsed)
         if text:
-            return f"[Assistant]: {text[:MAX_ASSISTANT_CHARS]}"
+            return f"[Assistant]: {_excerpt(text, MAX_ASSISTANT_CHARS)}"
 
     elif event_type == "tool_call":
         name = tool_name or _extract_tool_name(parsed) or "unknown"
         input_summary = _extract_tool_input(parsed)
-        return f"[Tool: {name}] {input_summary[:MAX_TOOL_INPUT_CHARS]}"
+        return f"[Tool: {name}] {_excerpt(input_summary, MAX_TOOL_INPUT_CHARS)}"
 
     elif event_type == "tool_result":
         name = tool_name or "unknown"
-        is_error = parsed.get("is_error", False) or parsed.get("isError", False)
+        message = parsed.get("message") if isinstance(parsed.get("message"), dict) else parsed
+        is_error = parsed.get("is_error", False) or parsed.get("isError", False) or message.get("isError", False)
+        blocks = message.get("content", [])
+        if isinstance(blocks, list):
+            is_error = is_error or any(
+                isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error") for b in blocks
+            )
         content = _extract_tool_result(parsed)
         if is_error:
-            return f"[Tool Result: {name}] ERROR: {content[:MAX_TOOL_OUTPUT_CHARS]}"
+            return f"[Tool Result: {name}] ERROR: {_excerpt(content, MAX_TOOL_OUTPUT_CHARS)}"
         # Skip non-error tool results to keep transcript focused
         return ""
 
@@ -251,7 +288,8 @@ def _extract_tool_input(parsed: dict) -> str:
 
 def _extract_tool_result(parsed: dict) -> str:
     """Extract content from a tool result."""
-    content = parsed.get("content", "")
+    message = parsed.get("message") if isinstance(parsed.get("message"), dict) else parsed
+    content = message.get("content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -259,6 +297,9 @@ def _extract_tool_result(parsed: dict) -> str:
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
                 parts.append(block.get("text", ""))
+            elif isinstance(block, dict) and block.get("type") == "tool_result":
+                value = block.get("content", "")
+                parts.append(value if isinstance(value, str) else json.dumps(value))
             elif isinstance(block, str):
                 parts.append(block)
         return " ".join(parts)

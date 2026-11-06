@@ -145,7 +145,9 @@ async def _run_pipeline(
     agg = aggregate_metas(session_metas)
 
     session_ids = [m["session_key"] for m in session_metas]
-    facets_by_session = await load_cached_facets_batch(session_ids, db)
+    facets_by_session = await load_cached_facets_batch(
+        session_ids, db, source_hashes={m["session_key"]: m.get("source_hash", "") for m in session_metas}
+    )
     logger.info("insight_cached_facets_loaded", count=len(facets_by_session))
 
     # Build transcripts only for top sessions that still need facets.
@@ -298,7 +300,9 @@ async def _run_pipeline(
             if prior_metas:
                 prior_agg = aggregate_metas(prior_metas)
                 prior_ids = [m["session_key"] for m in prior_metas]
-                prior_facets_by_session = await load_cached_facets_batch(prior_ids, db)
+                prior_facets_by_session = await load_cached_facets_batch(
+                    prior_ids, db, source_hashes={m["session_key"]: m.get("source_hash", "") for m in prior_metas}
+                )
                 prior_ranked = [
                     m
                     for m in sorted(
@@ -347,6 +351,23 @@ async def _run_pipeline(
 
     # ── Step 4: Build the data block (pi-style focused format) ────────────
     facets_summary = aggregate_facets(all_facets)
+    attempted = {m["session_key"] for m in top_sessions}
+    facets_summary["processing_coverage"] = [
+        {
+            "project_id": sid.project_id,
+            "user_id": sid.user_id,
+            "harness": sid.harness,
+            "session_id": sid.session_id,
+            "status": "processed"
+            if facets_by_session.get(sid)
+            else "transcript_unavailable"
+            if sid in attempted and sid not in transcripts
+            else "facet_failed_or_insufficient"
+            if sid in transcripts
+            else "skipped_budget",
+        }
+        for sid in session_ids
+    ]
     cache_read_tokens = agg.get("total_cache_read_tokens", 0)
     cache_write_tokens = agg.get("total_cache_write_tokens", 0)
     input_tokens = agg.get("total_input_tokens", 0)
@@ -567,7 +588,7 @@ async def _extract_facets_batch(
         if isinstance(result, Exception):
             logger.warning("facet_task_exception", session=sid, error=str(result), type=type(result).__name__)
         elif isinstance(result, dict) and result:
-            await store_facets(sid, agent_id, result, db)
+            await store_facets(sid, agent_id, result, db, source_hash=session_metas.get(sid, {}).get("source_hash", ""))
             facets_by_session[sid] = result
 
     return facets_by_session

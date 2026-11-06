@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Per-session facet extraction via LLM (Haiku).
@@ -18,7 +19,17 @@ from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
 
-FACET_VERSION = 1
+FACET_VERSION = 3
+# Bounded excerpt semantics changed for all harnesses; invalidate old facets.
+_FACET_VERSIONS: dict[str, int] = {}
+# Five binds per key; leave ample room below asyncpg's 32,767-argument limit.
+_FACET_LOOKUP_BATCH_SIZE = 1000
+
+
+def facet_version(harness: str) -> int:
+    """Return the cache schema version for this harness without invalidating other harnesses."""
+    return _FACET_VERSIONS.get(harness, FACET_VERSION)
+
 
 FACET_PROMPT = """\
 Analyze this session and extract structured facets.
@@ -105,23 +116,51 @@ async def extract_facets(
         return {}
 
 
-async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> None:
+async def store_facets(session: SessionKey, agent_id: str, facets: dict, db, *, source_hash: str = "") -> None:
     """Persist only to the row for this exact scoped session."""
     import uuid as _uuid
 
     from sqlalchemy import select
 
     model = get_facets_model()
+    facets = {**facets, "_source_hash": source_hash} if source_hash else facets
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    if isinstance(db, AsyncSession) and db.get_bind().dialect.name in {"postgresql", "sqlite"}:
+        # The unique key deliberately excludes facet_version. Concurrent reports
+        # replace the disposable cache row, never race a select-then-insert.
+        if db.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        values = dict(
+            project_id=session.project_id,
+            user_id=session.user_id,
+            harness=session.harness,
+            session_id=session.session_id,
+            agent_id=_uuid.UUID(agent_id) if agent_id else None,
+            facet_version=facet_version(session.harness),
+            facets=facets,
+            extracted_at=datetime.now(UTC),
+        )
+        statement = insert(model).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[model.project_id, model.user_id, model.harness, model.session_id],
+            set_={key: values[key] for key in ("facets", "facet_version", "extracted_at")},
+        )
+        await db.execute(statement)
+        await db.flush()
+        return
     stmt = select(model).where(
         model.project_id == session.project_id,
         model.user_id == session.user_id,
         model.harness == session.harness,
         model.session_id == session.session_id,
-        model.facet_version == FACET_VERSION,
     )
     existing = (await db.execute(stmt)).scalar_one_or_none()
     if existing:
         existing.facets = facets
+        existing.facet_version = facet_version(session.harness)
         existing.extracted_at = datetime.now(UTC)
     else:
         db.add(
@@ -131,14 +170,16 @@ async def store_facets(session: SessionKey, agent_id: str, facets: dict, db) -> 
                 harness=session.harness,
                 session_id=session.session_id,
                 agent_id=_uuid.UUID(agent_id) if agent_id else None,
-                facet_version=FACET_VERSION,
+                facet_version=facet_version(session.harness),
                 facets=facets,
             )
         )
     await db.flush()
 
 
-async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[SessionKey, dict]:
+async def load_cached_facets_batch(
+    sessions: list[SessionKey], db, *, source_hashes: dict[SessionKey, str] | None = None
+) -> dict[SessionKey, dict]:
     """Legacy unscoped cache entries are intentionally never eligible for reuse."""
     if not sessions:
         return {}
@@ -146,18 +187,31 @@ async def load_cached_facets_batch(sessions: list[SessionKey], db) -> dict[Sessi
     from sqlalchemy import select, tuple_
 
     model = get_facets_model()
-    stmt = select(model).where(
-        tuple_(model.project_id, model.user_id, model.harness, model.session_id).in_(
-            [session.as_tuple() for session in sessions]
-        ),
-        model.facet_version == FACET_VERSION,
-    )
-    result = await db.execute(stmt)
-    return {
-        SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
-        for row in result.scalars().all()
-        if row.facets
-    }
+    cached: dict[SessionKey, dict] = {}
+    for start in range(0, len(sessions), _FACET_LOOKUP_BATCH_SIZE):
+        batch = sessions[start : start + _FACET_LOOKUP_BATCH_SIZE]
+        stmt = select(model).where(
+            tuple_(model.project_id, model.user_id, model.harness, model.session_id, model.facet_version).in_(
+                [(*session.as_tuple(), facet_version(session.harness)) for session in batch]
+            ),
+        )
+        result = await db.execute(stmt)
+        cached.update(
+            {
+                SessionKey(row.project_id, row.user_id, row.harness, row.session_id): row.facets
+                for row in result.scalars().all()
+                if row.facets
+                and row.facet_version == facet_version(row.harness)
+                and (
+                    source_hashes is None
+                    or row.facets.get("_source_hash")
+                    == source_hashes.get(
+                        SessionKey(row.project_id, row.user_id, row.harness, row.session_id), "missing"
+                    )
+                )
+            }
+        )
+    return cached
 
 
 def aggregate_facets(all_facets: list[dict]) -> dict:
