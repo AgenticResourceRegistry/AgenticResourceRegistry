@@ -24,6 +24,7 @@ _SECRET_FIELD = re.compile(r"(?:^|[_\W])(?:token|secret|password|authorization|a
 
 
 def _credential_key(name: str) -> bool:
+    """Recognize credential keys without treating unrelated identifiers as secrets."""
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
     normalized = re.sub(r"[^A-Za-z0-9_]", "_", normalized).lower()
     return normalized in {"headers", "env", "environment", "environment_variables"} or bool(

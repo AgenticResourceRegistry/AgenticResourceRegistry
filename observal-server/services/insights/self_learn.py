@@ -19,6 +19,7 @@ to choose specific suggestions. Omit or pass None to apply all in a category.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from datetime import UTC, datetime
@@ -389,7 +390,10 @@ async def _materialize_insight_suggestions(
             raise ValueError("Prompt addition lacks valid explicit dependency metadata; generate a new report")
         if not set(required).issubset(feature_indices):
             raise ValueError("A selected prompt addition requires an unselected feature")
-        if any(features_to_try[i].get("action_type") in {"no_action", "remove_component"} for i in required):
+        if any(
+            str(features_to_try[i].get("action_type") or "").lower() in {"no_action", "remove_component"}
+            for i in required
+        ):
             raise ValueError("A required feature must be created or attached, not removed or skipped")
     if selected_additions:
         applied["prompt_additions"] = [
@@ -1145,8 +1149,9 @@ async def _create_hook_listing(
 ) -> dict | None:
     """Create a pending HookListing from a features_to_try suggestion.
 
-    Validates through HookSubmitRequest. Converts pseudocode examples
-    into proper shell scripts with shebangs.
+    Requires explicit hook metadata and valid Bash through HookSubmitRequest.
+    Parse syntax in a worker thread without executing the script; check delivery
+    and declared requirements before staging a pending review item.
     """
     from pydantic import ValidationError
 
@@ -1169,7 +1174,7 @@ async def _create_hook_listing(
     event, execution_mode, script_content = _parse_hook_example(example)
 
     # Convert to proper executable script
-    script_content = _normalize_script(script_content, name)
+    script_content = await asyncio.to_thread(_normalize_script, script_content, name)
     script_filename = f"{name}.sh"
     from observal_shared.harness_registry import HARNESS_REGISTRY
 
@@ -1426,12 +1431,14 @@ async def _submit_insights_review(db, subject_type, subject, version, actor_id):
 
 
 async def apply_insight_suggestions(report_id, db, triggered_by, selection=None, *, preview_digest=None):
+    """Submit selected insight artifacts through the shared deterministic preflight builder."""
     from services.insights.apply_preview import submit_suggestions
 
     return await submit_suggestions(report_id, db, triggered_by, selection, preview_digest=preview_digest)
 
 
 async def preview_insight_suggestions(report_id, db, triggered_by, selection):
+    """Preview the shared proposal builder without retaining staged writes."""
     from services.insights.apply_preview import preview_suggestions
 
     return await preview_suggestions(report_id, db, triggered_by, selection)

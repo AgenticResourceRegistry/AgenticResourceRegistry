@@ -51,3 +51,7 @@ AI assistance: Pi under human direction. Human review of complete diffs and scre
 - Final opt-in Playwright run, retries disabled: **1 passed**, checking no default selections, exact preview, enabled confirmation only after validation, desktop/mobile overflow and submission review links. Screenshots were preserved in the private `insights-evidence/apply/` folder. Temporary UI test credentials were removed; network traces were disabled.
 - Frontend typecheck passed; lint: **0 errors, 94 existing warnings**; scoped design detector: no findings. No paid model or actual harness guardrail execution was performed. This is proof of API/preflight/publication/install behavior, not a certification of generated executable logic on every harness version.
 - AI assistance: **Pi 1.5.0**, under human direction. Human diff/screenshot review and explicit authorization are still required before PR publication.
+
+## Generated hook and dependency boundaries
+
+Hook suggestions must declare executable requirements in their model schema and format rules. Syntax-only Bash validation runs in a worker thread, never on the API event loop. Required-feature checks use the feature loop's case normalization, so skipped/removed actions cannot justify dependent instructions. The disposable runtime verifier receives its password from the caller environment and never writes credential files.

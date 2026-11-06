@@ -13,6 +13,7 @@ from services.review.secret_scanner import CREDENTIAL, secret_paths
 
 
 def snapshot_checks(files: dict, version=None, *, subject_type=None, base_files=None) -> list[dict]:
+    """Evaluate required review checks against rendered files and the immutable version snapshot."""
     leaked = [path for path, file in files.items() if CREDENTIAL.search(file["content"])]
     if version is not None:
         for column in version.__table__.columns:
