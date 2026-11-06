@@ -4,8 +4,10 @@
 """Session JSONL parsers -- READ path (raw ClickHouse rows -> frontend events).
 
 Dispatches to format-specific parsers based on the ``session_parser`` key in
-``observal_shared.harness_registry.HARNESS_REGISTRY``. Dispatch is **strict**: an unknown harness
-raises ``KeyError`` so new harnesses cannot silently fall through to a wrong parser.
+``observal_shared.harness_registry.HARNESS_REGISTRY``. Read/meta dispatch is **strict**:
+an unknown harness raises ``KeyError`` so new harnesses cannot silently fall through
+to a wrong parser. Insight transcript normalization preserves historical unknown
+harness rows for the existing generic formatter.
 
 When adding a new harness:
   1. Add its entry to ``observal_shared/harness_registry.py`` with a ``"session_parser"`` key.
@@ -18,6 +20,7 @@ Public API
 ----------
 parse_raw_events(rows)  -- consumed by api/routes/sessions.py
 meta_records(harness, entries)  -- consumed by services/insights/session_meta_extractor.py
+transcript_rows(harness, rows)  -- consumed by services/insights/transcript.py
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from .claude_code import meta_records as _claude_code_meta
 from .claude_code import parse_rows as _parse_claude_code
 from .codex import meta_records as _codex_meta
 from .codex import parse_rows as _parse_codex
+from .codex import transcript_rows as _codex_transcript
 from .copilot_cli import parse_rows as _parse_copilot_cli
 from .cursor import parse_rows as _parse_cursor
 from .goose import parse_rows as _parse_goose
@@ -91,3 +95,15 @@ def meta_records(harness: str, entries: list[dict]) -> list[dict]:
     parser_id = HARNESS_REGISTRY[harness]["session_parser"]  # KeyError = unknown harness
     convert = _META_RECORDS.get(parser_id or "")
     return convert(entries) if convert else entries
+
+
+_TRANSCRIPT_ROWS: dict[str, _MetaFn] = {"codex": _codex_transcript}
+
+
+def transcript_rows(harness: str, rows: list[dict]) -> list[dict]:
+    """Expand native transcript records when a parser needs multi-event formatting."""
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    parser_id = HARNESS_REGISTRY.get(harness, {}).get("session_parser")
+    convert = _TRANSCRIPT_ROWS.get(parser_id or "")
+    return convert(rows) if convert else rows
