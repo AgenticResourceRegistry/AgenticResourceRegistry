@@ -188,9 +188,11 @@ const DEDICATED_SECTIONS: { area: string; id: string; title: string; description
 		["retention.max_trace_count", "Max trace count (optional)", ""],
 	] },
 	{ area: "data", id: "usage", title: "Usage reporting", rows: [
-		["usage_ping.enabled", "Share aggregate product usage with Observal", "Sends aggregate reports to usage.observal.io on the schedule you choose."],
+		["usage_ping.enabled", "Share aggregate product usage with Agentic Resource Registry", "Sends aggregate reports to usage.observal.io on the schedule you choose."],
+		["usage_ping.include_admin_emails", "Include administrator email addresses", "Sends super administrator email addresses with each report."],
 		["usage_ping.company_name", "Company name", ""],
 		["usage_ping.frequency", "Reporting frequency", ""],
+		["usage_ping.contact", "Contact person", "Share someone the maintainers can reach about this deployment."],
 	] },
 	{ area: "data", id: "migration", title: "Data Migration", rows: [
 		["migration", "Export, import, and validate instance data", "Move registry data and telemetry between Observal instances."],

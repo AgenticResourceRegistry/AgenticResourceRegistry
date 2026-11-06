@@ -74,6 +74,8 @@ import type {
 	RestartStatus,
 	SystemWarning,
 	UsagePingAdminResponse,
+	UsagePingContactState,
+	UsagePingContactUpdate,
 	UsagePingStatus,
 	InsightReportListItem,
 	InsightReport,
@@ -878,6 +880,12 @@ export const admin = {
 	usagePingStatus: () => get<UsagePingStatus>("/admin/usage-ping/status"),
 	usagePingPreview: () => get<UsagePingAdminResponse>("/admin/usage-ping/preview"),
 	sendUsagePing: () => post<UsagePingAdminResponse>("/admin/usage-ping/send", {}),
+	usagePingContact: () => get<UsagePingContactState>("/admin/usage-ping/contact"),
+	saveUsagePingContact: (body: UsagePingContactUpdate) =>
+		put<UsagePingContactState>("/admin/usage-ping/contact", body),
+	withdrawUsagePingContact: () => del<UsagePingContactState>("/admin/usage-ping/contact"),
+	deferUsagePingContact: (never: boolean) =>
+		post<UsagePingContactState>("/admin/usage-ping/contact/defer", { never }),
 	updateSetting: (key: string, body: unknown) =>
 		put<unknown>(`/admin/settings/${key}`, body),
 	deleteSetting: (key: string) => del(`/admin/settings/${key}`),

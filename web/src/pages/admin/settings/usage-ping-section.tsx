@@ -6,7 +6,14 @@ import { CheckCircle2, Eye, EyeOff, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { admin } from "@/lib/api";
 import type { AdminSetting, UsagePingFrequency } from "@/lib/types";
-import { useSendUsagePing, useUsagePingPreview, useUsagePingStatus } from "@/hooks/use-api";
+import {
+  useSendUsagePing,
+  useUsagePingContact,
+  useUsagePingPreview,
+  useUsagePingStatus,
+  useWithdrawUsagePingContact,
+} from "@/hooks/use-api";
+import { StayInTouchDialog } from "@/components/usage/stay-in-touch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -30,6 +37,11 @@ function enabledOf(settings: AdminSetting[]): boolean {
   return valueOf(settings, "usage_ping.enabled", "true") === "true";
 }
 
+// Unset means the server default: super administrator email addresses are included.
+function includeEmailsOf(settings: AdminSetting[]): boolean {
+  return valueOf(settings, "usage_ping.include_admin_emails", "true") === "true";
+}
+
 function frequencyOf(settings: AdminSetting[]): UsagePingFrequency {
   const value = valueOf(settings, "usage_ping.frequency", "every_6_hours");
   return FREQUENCY_OPTIONS.find((option) => option.value === value)?.value ?? "every_6_hours";
@@ -50,8 +62,12 @@ export function UsagePingSection({
   const [companyName, setCompanyName] = useState(() => valueOf(settings, "usage_ping.company_name"));
   const [frequency, setFrequency] = useState<UsagePingFrequency>(() => frequencyOf(settings));
   const [enabled, setEnabled] = useState(() => enabledOf(settings));
+  const [includeEmails, setIncludeEmails] = useState(() => includeEmailsOf(settings));
   const [saving, setSaving] = useState(false);
   const [showPayload, setShowPayload] = useState(false);
+  const contact = useUsagePingContact();
+  const withdraw = useWithdrawUsagePingContact();
+  const [contactOpen, setContactOpen] = useState(false);
 
   // Follow the server only for fields the user hasn't edited, so saving another
   // card (which refetches settings) never discards a draft here.
@@ -59,6 +75,7 @@ export function UsagePingSection({
     companyName: valueOf(settings, "usage_ping.company_name"),
     frequency: frequencyOf(settings),
     enabled: enabledOf(settings),
+    includeEmails: includeEmailsOf(settings),
   });
   useEffect(() => {
     const previous = lastStored.current;
@@ -66,10 +83,12 @@ export function UsagePingSection({
       companyName: valueOf(settings, "usage_ping.company_name"),
       frequency: frequencyOf(settings),
       enabled: enabledOf(settings),
+      includeEmails: includeEmailsOf(settings),
     };
     setCompanyName((current) => (current === previous.companyName ? next.companyName : current));
     setFrequency((current) => (current === previous.frequency ? next.frequency : current));
     setEnabled((current) => (current === previous.enabled ? next.enabled : current));
+    setIncludeEmails((current) => (current === previous.includeEmails ? next.includeEmails : current));
     lastStored.current = next;
   }, [settings]);
 
@@ -77,6 +96,7 @@ export function UsagePingSection({
     companyName !== valueOf(settings, "usage_ping.company_name"),
     frequency !== frequencyOf(settings),
     enabled !== enabledOf(settings),
+    includeEmails !== includeEmailsOf(settings),
   ].filter(Boolean).length;
   useEffect(() => {
     onDirtyChange?.("usage", dirtyCount > 0);
@@ -87,6 +107,7 @@ export function UsagePingSection({
     setCompanyName(valueOf(settings, "usage_ping.company_name"));
     setFrequency(frequencyOf(settings));
     setEnabled(enabledOf(settings));
+    setIncludeEmails(includeEmailsOf(settings));
   }
 
   async function save() {
@@ -96,6 +117,7 @@ export function UsagePingSection({
       await admin.updateSetting("usage_ping.company_name", { value: trimmed });
       await admin.updateSetting("usage_ping.frequency", { value: frequency });
       await admin.updateSetting("usage_ping.enabled", { value: enabled ? "true" : "false" });
+      await admin.updateSetting("usage_ping.include_admin_emails", { value: includeEmails ? "true" : "false" });
       // Show what was stored, so the card isn't left looking unsaved after a trim.
       setCompanyName(trimmed);
       await refetch();
@@ -106,6 +128,15 @@ export function UsagePingSection({
       toast.error(error instanceof Error ? error.message : "Could not save usage reporting settings");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removeContact() {
+    try {
+      await withdraw.mutateAsync(undefined);
+      toast.success("Contact removed from future usage reports");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not remove the contact");
     }
   }
 
@@ -120,6 +151,7 @@ export function UsagePingSection({
 
   const enabledId = rowDomId("usage_ping.enabled") + "-control";
   const companyId = rowDomId("usage_ping.company_name") + "-control";
+  const includeEmailsId = rowDomId("usage_ping.include_admin_emails") + "-control";
   const frequencyId = rowDomId("usage_ping.frequency") + "-control";
   return (
     <SettingsGroup id="usage" title="Usage reporting">
@@ -138,14 +170,35 @@ export function UsagePingSection({
       >
         <SettingRow
           settingKey="usage_ping.enabled"
-          label="Share aggregate product usage with Observal"
+          label="Share aggregate product usage with Agentic Resource Registry"
           htmlFor={enabledId}
           layout="inline"
           meta="Enabled by default · Every 6 hours"
-          description="Sends aggregate reports to usage.observal.io on the schedule you choose. Reports include company and instance identity, version, aggregate counts, feature flags, and harness totals. Prompts, traces, source code, user identities, and credentials are never included."
+          description="Sends reports to usage.observal.io on the schedule you choose. Reports include company and instance identity, the domains users reach this server on, user counts per email domain, super administrator email addresses (unless turned off below), sign-in provider domains, version, aggregate counts, feature flags, and harness totals. Prompts, traces, source code, and credentials are never included, and a contact person is sent only if you add one below."
         >
           <SwitchStateLabel checked={enabled} />
           <Switch id={enabledId} checked={enabled} onCheckedChange={setEnabled} aria-label="Enable usage reporting" />
+        </SettingRow>
+        <SettingRow
+          settingKey="usage_ping.include_admin_emails"
+          label="Include administrator email addresses"
+          htmlFor={includeEmailsId}
+          layout="inline"
+          meta="On by default"
+          description={
+            status?.admin_emails.length
+              ? `${includeEmails ? "Sent with each report" : "Would be sent if turned on"}: ${status.admin_emails.join(", ")}`
+              : "Sends the email addresses of super administrators (up to 5) with each report."
+          }
+        >
+          <SwitchStateLabel checked={includeEmails} />
+          <Switch
+            id={includeEmailsId}
+            checked={includeEmails}
+            onCheckedChange={setIncludeEmails}
+            disabled={!enabled}
+            aria-label="Include administrator email addresses in usage reports"
+          />
         </SettingRow>
         <SettingRow settingKey="usage_ping.company_name" label="Company name" htmlFor={companyId}>
           <Input
@@ -174,6 +227,34 @@ export function UsagePingSection({
             </SelectContent>
           </Select>
         </SettingRow>
+        <SettingRow
+          settingKey="usage_ping.contact"
+          label="Contact person"
+          description={
+            contact.isError
+              ? "Could not load the contact person. Reload the page to try again."
+              : contact.data?.contact
+                ? `Shared since ${new Date(contact.data.contact.consented_at).toLocaleDateString()}. Removing it stops sending the contact with future reports.`
+                : "Optional. Add someone the maintainers can reach about this deployment."
+          }
+        >
+          <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+            {contact.data?.contact ? (
+              <span className="mr-auto min-w-0 truncate text-sm">
+                {contact.data.contact.name} <span className="text-muted-foreground">· {contact.data.contact.email}</span>
+              </span>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={() => setContactOpen(true)} disabled={!contact.data}>
+              {contact.data?.contact ? "Edit contact" : "Add contact"}
+            </Button>
+            {contact.data?.contact ? (
+              <Button variant="ghost" size="sm" onClick={() => void removeContact()} disabled={withdraw.isPending}>
+                Remove
+              </Button>
+            ) : null}
+          </div>
+        </SettingRow>
+        <StayInTouchDialog open={contactOpen} onOpenChange={setContactOpen} initial={contact.data?.contact ?? null} mode="edit" />
         <div className="space-y-3 px-4 py-3.5 sm:px-[1.125rem]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-muted-foreground">
