@@ -310,6 +310,7 @@ def test_show_completed_header_orders_sections_and_registry_note(cli, monkeypatc
         "  Sessions: 42  Model: analysis-model  Compared to: v2.0.0",
         "  Cache: 75% hit rate, 900 tokens saved",
         "",
+        "  [yellow]Legacy report: bindings were not verified against recorded instructions.[/yellow]",
     ]
     assert render_section.call_args_list == [
         call("at_a_glance", {"health": "healthy"}),

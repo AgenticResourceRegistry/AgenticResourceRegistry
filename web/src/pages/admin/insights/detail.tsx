@@ -1896,6 +1896,14 @@ function ReportContent({
 
 	return (
 		<div className="space-y-6">
+            <div role="status" className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
+                <p className="font-semibold">Instruction evidence and session coverage</p>
+                {metrics?.cohort ? <>
+                    <p className="mt-1">{metrics.cohort.verified_top_level_sessions} verified top-level sessions from {metrics.cohort.bound_sessions} bound records. {metrics.cohort.child_sessions} child sessions are reported separately, not independent tasks.</p>
+                    <p className="mt-1 text-muted-foreground">Unknown or mismatched instructions are excluded from agent-effect analysis. This does not prove non-use. Recorded matches do not prove task relevance or compliance.</p>
+                    <p className="mt-1 text-muted-foreground">{Object.entries(metrics.cohort.decisions).map(([reason, count]) => `${reason.replaceAll("_", " ")}: ${count}`).join(" · ")}</p>
+                </> : <p className="mt-1 text-muted-foreground">Legacy report: agent bindings were not verified against recorded instructions. Treat agent-specific conclusions as unverified.</p>}
+            </div>
 			{/* Up to five points with their evidence one click away; everything else is opt-in below. */}
 			<KeyPointsSummary report={report} />
 			<SectionToggles sections={sections} />
@@ -1912,6 +1920,7 @@ function ReportContent({
 				</>
 			)}
 
+
 			{show("analysis") && (
 				<>
 					<AtAGlance data={narrative?.at_a_glance} />
@@ -1927,7 +1936,8 @@ function ReportContent({
 				<>
 					<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
 						<MetricCard label="Sessions" value={totalSessions} icon={Zap} subtext={daysActive > 0 ? `${daysActive} active days` : uniqueUsers > 1 ? `${uniqueUsers} users` : undefined} />
-						<MetricCard label="Messages" value={fmt(totalMessages)} icon={Database} subtext={totalSessions > 0 ? `${(totalMessages / totalSessions).toFixed(1)} per session` : undefined} />
+						<MetricCard label="User turns" value={typeof rich?.user_turns === "number" ? rich.user_turns : "not assessed"} icon={MessageSquare} subtext="Separate from all message records" />
+                        <MetricCard label="Messages" value={fmt(totalMessages)} icon={Database} subtext={totalSessions > 0 ? `${(totalMessages / totalSessions).toFixed(1)} per session` : undefined} />
 						<MetricCard label="Active Time" value={fmtHours(activeHours)} icon={Timer} />
 						{sessionsWithTokens > 0 && <MetricCard label="Tokens In" value={fmt(inputTokens)} icon={Database} />}
 						{sessionsWithTokens > 0 && <MetricCard label="Tokens Out" value={fmt(outputTokens)} icon={Database} />}
