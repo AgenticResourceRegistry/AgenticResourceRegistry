@@ -49,6 +49,8 @@ CLAUDE_NOT_LOGGED_IN = json.dumps(
 
 @pytest.mark.asyncio
 async def test_failed_runs_are_retained_for_coverage_not_instruction_analysis(monkeypatch):
+    """Verify failed runs are retained for coverage not instruction analysis."""
+
     def key(session_id: str, harness: str) -> SessionKey:
         return SessionKey("default", "user-1", harness, session_id)
 

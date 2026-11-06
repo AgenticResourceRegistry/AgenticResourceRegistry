@@ -544,6 +544,7 @@ async def extract_all_session_metas(
     agent_version: str | None = None,
     expected_instruction: dict | None = None,
 ) -> list[dict]:
+    """Discover scoped session records and preserve failed/child coverage independently of analysis."""
     transcripts = await fetch_all_session_transcripts(
         agent_id,
         period_start,
