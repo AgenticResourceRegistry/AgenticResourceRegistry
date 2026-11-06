@@ -17,14 +17,17 @@ EXPECTED = {"prompt": PROMPT, "version_id": "v1", "names": ["owner/tester", "tes
 
 
 def message(role, content="", **fields):
+    """Build one Pi fixture message with a stable tree identity and optional parent."""
     return {"type": "message", "message": {"role": role, "content": content, **fields}}
 
 
 def evidence(entries, expected=EXPECTED, harness="pi"):
+    """Evaluate fixture instruction receipts against the selected role contract."""
     return instruction_evidence(harness, [json.dumps(e) for e in entries], expected)
 
 
 def system(prompt=PROMPT):
+    """Build a recorded system instruction checkpoint, not a conversation mention."""
     return message(
         "system",
         sections={
@@ -35,6 +38,7 @@ def system(prompt=PROMPT):
 
 
 def test_system_prompt_is_verified_without_logging_instruction_body():
+    """Verify system prompt is verified without logging instruction body."""
     result = evidence([system(), message("user", "Find a reproducer"), message("assistant", [])])
     assert result["state"] == "verified" and result["responses_checked"] == 1
     assert PROMPT not in json.dumps(result)
@@ -42,15 +46,18 @@ def test_system_prompt_is_verified_without_logging_instruction_body():
 
 @pytest.mark.parametrize("role", ["user", "assistant", "toolResult"])
 def test_prompt_in_conversation_text_does_not_prove_profile_load(role):
+    """Verify prompt in conversation text does not prove profile load."""
     assert evidence([message(role, PROMPT), message("assistant", [])])["state"] == "unknown"
 
 
 def test_installed_skill_descriptions_do_not_prove_agent_prompt_load():
+    """Verify installed skill descriptions do not prove agent prompt load."""
     rows = [message("system", sections={"preamble": "Base", "skills": PROMPT}), message("assistant", [])]
     assert evidence(rows)["state"] == "mismatch"
 
 
 def test_explicit_missing_or_changed_prompt_is_mismatch():
+    """Verify explicit missing or changed prompt is mismatch."""
     assert evidence([system("Different agent instructions"), message("assistant", [])])["state"] == "mismatch"
     assert (
         evidence(
@@ -66,6 +73,7 @@ def test_explicit_missing_or_changed_prompt_is_mismatch():
 
 
 def test_legacy_compaction_without_checkpoint_is_unknown():
+    """Verify legacy compaction without checkpoint is unknown."""
     assert (
         evidence(
             [system(), message("assistant", []), {"type": "compaction", "summary": PROMPT}, message("assistant", [])]
@@ -77,6 +85,7 @@ def test_legacy_compaction_without_checkpoint_is_unknown():
 
 
 def test_patch_of_unrelated_section_preserves_loaded_instructions():
+    """Verify patch of unrelated section preserves loaded instructions."""
     assert (
         evidence(
             [system(), message("system", sections={"skills": "new skill descriptions"}), message("assistant", [])]
@@ -86,6 +95,7 @@ def test_patch_of_unrelated_section_preserves_loaded_instructions():
 
 
 def test_every_branch_response_is_checked_not_only_last_branch():
+    """Verify every branch response is checked not only last branch."""
     rows = [
         dict(system(), id="s", parentId=None),
         dict(message("assistant", []), id="a", parentId="s"),
@@ -105,10 +115,12 @@ def test_every_branch_response_is_checked_not_only_last_branch():
     ],
 )
 def test_missing_cyclic_and_duplicate_trees_remain_unknown(rows):
+    """Verify missing cyclic and duplicate trees remain unknown."""
     assert evidence(rows)["state"] == "unknown"
 
 
 def test_delegation_requires_exact_role_and_identity_envelope():
+    """Verify delegation requires exact role and identity envelope."""
     text = f"You are acting as the agent `owner/tester`. Follow its instructions.\n\n<agent-instructions>\n{PROMPT}\n</agent-instructions>\n\n<task>Find a reproducer</task>"
     assert evidence([message("user", text), message("assistant", [])])["state"] == "verified"
     assert evidence([message("user", "Example: " + text), message("assistant", [])])["state"] == "unknown"
@@ -119,6 +131,7 @@ def test_delegation_requires_exact_role_and_identity_envelope():
 
 
 def test_source_and_expected_version_changes_invalidate_facet_marker():
+    """Verify source and expected version changes invalidate facet marker."""
     rows = [system(), message("assistant", [])]
     first = evidence(rows)["cache_key"]
     assert first != evidence([*rows, message("user", "more")])["cache_key"]
@@ -133,11 +146,15 @@ def test_source_and_expected_version_changes_invalidate_facet_marker():
     "harness", ["claude-code", "kiro", "cursor", "copilot", "copilot-cli", "goose", "opencode", "antigravity"]
 )
 def test_formats_without_instruction_receipts_are_explicitly_unknown(harness):
+    """Verify formats without instruction receipts are explicitly unknown."""
     assert evidence([system(), message("assistant", [])], harness=harness)["state"] == "unknown"
 
 
 def test_parent_child_units_and_costs_do_not_collapse_users():
+    """Verify parent child units and costs do not collapse users."""
+
     def meta(user, sid, state="verified", parent="", known=True, failed=False):
+        """Build a scoped session fixture with explicit instruction/relevance coverage."""
         return {
             "session_key": SessionKey("p", user, "pi", sid),
             "instruction_evidence": {"state": state, "reason": "fixture"},
@@ -167,6 +184,7 @@ def test_parent_child_units_and_costs_do_not_collapse_users():
 
 @pytest.mark.asyncio
 async def test_empty_verified_cohort_never_calls_model(monkeypatch):
+    """Verify empty verified cohort never calls model."""
     from services.insights import generator
 
     key = SessionKey("p", "u", "pi", "s")
@@ -194,6 +212,7 @@ async def test_empty_verified_cohort_never_calls_model(monkeypatch):
 
 
 def test_codex_delegated_role_uses_existing_converter_not_a_fidelity_rewrite():
+    """Verify codex delegated role uses existing converter not a fidelity rewrite."""
     text = f"You are acting as the agent `tester`. Follow its instructions.\n\n<agent-instructions>\n{PROMPT}\n</agent-instructions>\n\n<task>Find a reproducer</task>"
     rows = [
         {
@@ -214,6 +233,7 @@ def test_codex_delegated_role_uses_existing_converter_not_a_fidelity_rewrite():
 
 
 def test_private_instruction_contract_is_never_sent_as_config_data():
+    """Verify private instruction contract is never sent as config data."""
     from services.insights.generator import _build_data_block
 
     result = _build_data_block(
@@ -232,6 +252,7 @@ def test_private_instruction_contract_is_never_sent_as_config_data():
 
 
 def test_repo_docs_inactive_profiles_and_code_quotes_are_not_active_agent_evidence():
+    """Verify repo docs inactive profiles and code quotes are not active agent evidence."""
     for path in ["/repo/AGENTS.md", "/home/test/.pi/agent/agents/tester/AGENTS.md"]:
         rows = [
             message(
@@ -248,6 +269,7 @@ def test_repo_docs_inactive_profiles_and_code_quotes_are_not_active_agent_eviden
 
 
 def test_delegation_parser_preserves_literal_closing_tags_and_crlf():
+    """Verify delegation parser preserves literal closing tags and crlf."""
     from services.session_parsers.pi_instructions import _delegated_prompt
 
     role = "Explain </agent-instructions> as literal text."
@@ -258,6 +280,7 @@ def test_delegation_parser_preserves_literal_closing_tags_and_crlf():
 
 
 def test_delegation_missing_close_is_bounded_on_large_whitespace():
+    """Verify delegation missing close is bounded on large whitespace."""
     import subprocess
     import sys
     from pathlib import Path
@@ -268,6 +291,7 @@ def test_delegation_missing_close_is_bounded_on_large_whitespace():
 
 
 def test_provider_metrics_drop_all_nested_rosters_without_mutating_records():
+    """Verify provider metrics drop all nested rosters without mutating records."""
     import copy
 
     from services.insights.cohort import prompt_metrics

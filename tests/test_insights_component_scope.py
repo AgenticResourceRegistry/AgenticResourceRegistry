@@ -206,6 +206,7 @@ async def test_component_report_read_and_export_recheck_ownership(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_generator_keeps_same_id_users_separate(monkeypatch):
+    """Verify agent generator keeps same id users separate."""
     from services.insights import generator
 
     alice = SessionKey("default", "alice", "pi", "same-id")
