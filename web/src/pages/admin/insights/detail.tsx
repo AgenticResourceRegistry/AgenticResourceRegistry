@@ -42,10 +42,11 @@ import {
 	ChevronDown,
 } from "lucide-react";
 import { useInsightReport } from "@/hooks/use-api";
-import { useApplyInsightSuggestions } from "@/hooks/use-insights-api";
+import { useApplyInsightSuggestions, usePreviewInsightSuggestions } from "@/hooks/use-insights-api";
 import { DiscoveryOptimizationSection } from "@/components/insights/discovery-optimization";
 import { KeyPointsSummary, RichText, SectionToggles } from "@/components/insights/report-summary";
 import { useReportSections } from "@/lib/insight-key-points";
+
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PageHeader } from "@/components/layouts/page-header";
@@ -735,6 +736,8 @@ function SuggestionSnippet({ text }: { text: string }) {
 function SuggestionCard({
 	selectable,
 	selected,
+    disabled = false,
+    selectionLabel,
 	onToggle,
 	kind,
 	highlightKind,
@@ -745,6 +748,8 @@ function SuggestionCard({
 }: {
 	selectable: boolean;
 	selected: boolean;
+    disabled?: boolean;
+    selectionLabel?: string;
 	onToggle: () => void;
 	kind?: string;
 	highlightKind?: boolean;
@@ -758,12 +763,13 @@ function SuggestionCard({
 	const columns = selectable ? "cursor-pointer grid-cols-[1rem_minmax(0,1fr)_2rem]" : "grid-cols-[minmax(0,1fr)_2rem]";
 	const tone = !selectable ? "border-border bg-card" : selected ? "border-primary/40 bg-primary/5" : "border-border opacity-55";
 	return (
-		<div className={`grid items-start gap-x-3 rounded-md border px-4 py-3.5 transition-colors ${columns} ${tone}`} onClick={selectable ? onToggle : undefined}>
+		<div className={`grid items-start gap-x-3 rounded-md border px-4 py-3.5 transition-colors ${columns} ${tone}`} onClick={selectable && !disabled ? onToggle : undefined}>
 			{selectable && (
 				<Checkbox
 					className="mt-1"
 					checked={selected}
-					aria-label={`Apply: ${title}`}
+					aria-label={selectionLabel ?? `Apply: ${title}`}
+                    disabled={disabled}
 					onClick={(event) => event.stopPropagation()}
 					onCheckedChange={onToggle}
 				/>
@@ -819,100 +825,97 @@ function suggestionCounts(data: unknown): Record<SuggestionKind, number> | null 
 
 const emptySelection = (): SuggestionSets => ({ configs: new Set(), features: new Set(), patterns: new Set() });
 
-/** Which suggestions are ticked. Lives on the page so the sticky top bar can apply them from anywhere. */
+/** Page-scoped selection and preview: every control submits the same validated bundle. */
 function useSuggestionSelection(report: InsightReport | undefined) {
-	const counts = suggestionCounts(report?.narrative?.suggestions);
-	const configs = counts?.configs ?? 0;
-	const features = counts?.features ?? 0;
-	const patterns = counts?.patterns ?? 0;
-	const everything = React.useCallback(
-		(): SuggestionSets => ({
-			configs: new Set(Array.from({ length: configs }, (_, i) => i)),
-			features: new Set(Array.from({ length: features }, (_, i) => i)),
-			patterns: new Set(Array.from({ length: patterns }, (_, i) => i)),
-		}),
-		[configs, features, patterns],
-	);
-	const [selected, setSelected] = React.useState<SuggestionSets>(emptySelection);
-	// Nothing starts ticked, again whenever a different report loads: the reader opts in to each change.
-	React.useEffect(() => setSelected(emptySelection()), [report?.id]);
-	const totalSelectable = configs + features + patterns;
-	const totalSelected = selected.configs.size + selected.features.size + selected.patterns.size;
-	return {
-		counts,
-		selected,
-		totalSelected,
-		totalSelectable,
-		allSelected: totalSelectable > 0 && totalSelected === totalSelectable,
-		toggle: (kind: SuggestionKind, i: number) =>
-			setSelected((current) => {
-				const next = new Set(current[kind]);
-				if (next.has(i)) next.delete(i);
-				else next.add(i);
-				return { ...current, [kind]: next };
-			}),
-		selectAll: () => setSelected(everything()),
-		unselectAll: () => setSelected(emptySelection()),
-		/** The API applies everything when a list is omitted, so only partial lists are sent. */
-		payload: () => {
-			const selection: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } = {};
-			if (selected.configs.size < configs) selection.config_indices = [...selected.configs];
-			if (selected.features.size < features) selection.feature_indices = [...selected.features];
-			if (selected.patterns.size < patterns) selection.pattern_indices = [...selected.patterns];
-			return Object.keys(selection).length > 0 ? selection : undefined;
-		},
-	};
+    const counts = suggestionCounts(report?.narrative?.suggestions);
+    const configs = counts?.configs ?? 0, features = counts?.features ?? 0, patterns = counts?.patterns ?? 0;
+    const [selected, setSelected] = React.useState<SuggestionSets>(emptySelection);
+    const [confirming, setConfirming] = React.useState(false);
+    const preview = usePreviewInsightSuggestions();
+    const apply = useApplyInsightSuggestions();
+    const { reset: resetPreview } = preview;
+    React.useEffect(() => { setSelected(emptySelection()); setConfirming(false); resetPreview(); }, [report?.id, resetPreview]);
+    const busy = preview.isPending || apply.isPending;
+    const change = (next: (current: SuggestionSets) => SuggestionSets) => {
+        if (busy) return;
+        resetPreview(); setConfirming(false); setSelected(next);
+    };
+    const payload = () => ({
+        config_indices: [...selected.configs].sort((a, b) => a - b),
+        feature_indices: [...selected.features].sort((a, b) => a - b),
+        pattern_indices: [...selected.patterns].sort((a, b) => a - b),
+    });
+    const totalSelectable = configs + features + patterns;
+    const totalSelected = selected.configs.size + selected.features.size + selected.patterns.size;
+    return {
+        counts, selected, totalSelected, totalSelectable, busy, preview, apply, confirming,
+        allSelected: totalSelectable > 0 && totalSelected === totalSelectable,
+        toggle: (kind: SuggestionKind, i: number) => change(current => {
+            const next = new Set(current[kind]); next.has(i) ? next.delete(i) : next.add(i);
+            return { ...current, [kind]: next };
+        }),
+        selectAll: () => change(() => ({ configs: new Set(Array.from({length: configs}, (_, i) => i)),
+            features: new Set(Array.from({length: features}, (_, i) => i)), patterns: new Set(Array.from({length: patterns}, (_, i) => i)) })),
+        unselectAll: () => change(emptySelection),
+        cancel: () => { if (!busy) { resetPreview(); setConfirming(false); } },
+        handlePreview: () => {
+            if (busy || !report?.agent_id || !totalSelected) return;
+            setConfirming(true);
+            preview.mutate({ agentId: report.agent_id, reportId: report.id, selection: payload() });
+        },
+        handleApply: () => {
+            if (busy || !report?.agent_id || !preview.data?.ready || !preview.variables) return;
+            apply.mutate({ agentId: report.agent_id, reportId: report.id,
+                selection: { ...preview.variables.selection, preview_digest: preview.data.digest } });
+            setConfirming(false);
+        },
+    };
 }
 
 type SuggestionSelection = ReturnType<typeof useSuggestionSelection>;
 
-/** Apply lives in the sticky header next to Export HTML, so it is reachable wherever the reader is. */
+/** Sticky controls preview first; confirmation never bypasses preflight or regenerates content. */
 function ApplySuggestionsControl({ report, selection }: { report?: InsightReport; selection: SuggestionSelection }) {
-	const applySuggestions = useApplyInsightSuggestions();
-	const [confirming, setConfirming] = React.useState(false);
-	if (!report || report.status !== "completed" || !report.agent_id || !selection.counts) return null;
-	if (report.applied_at) {
-		return (
-			<span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
-				<CheckCircle2 className="h-3 w-3" /> Suggestions applied
-			</span>
-		);
-	}
-	if (confirming) {
-		return (
-			<div className="flex items-center gap-2">
-				<span className="hidden text-xs text-muted-foreground sm:inline">Submit {selection.totalSelected} for review?</span>
-				<Button
-					size="sm"
-					className="h-8 gap-1 text-xs"
-					disabled={applySuggestions.isPending}
-					onClick={() => {
-						applySuggestions.mutate({ agentId: report.agent_id!, reportId: report.id, selection: selection.payload() });
-						setConfirming(false);
-					}}
-				>
-					{applySuggestions.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-					Confirm
-				</Button>
-				<Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setConfirming(false)}>
-					Cancel
-				</Button>
-			</div>
-		);
-	}
-	return (
-		<Button
-			size="sm"
-			className="gap-1.5"
-			disabled={applySuggestions.isPending || selection.totalSelected === 0}
-			onClick={() => setConfirming(true)}
-		>
-			<Brain className="h-4 w-4" />
-			{/* the header is narrow on phones: "Apply (2)" there, the full label from sm up */}
-			<span className="sm:hidden">Apply ({selection.totalSelected})</span>
-			<span className="hidden sm:inline">Apply suggestions ({selection.totalSelected})</span>
-		</Button>
-	);
+    if (!report || report.status !== "completed" || !report.agent_id || !selection.counts) return null;
+    if (report.applied_at) return <span className="text-xs text-info">Submitted for review</span>;
+    if (selection.confirming) return <div className="flex items-center gap-2">
+        <Button size="sm" disabled={selection.busy || !selection.preview.data?.ready} onClick={selection.handleApply}>
+            {selection.apply.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />} Confirm
+        </Button>
+        <Button variant="ghost" size="sm" disabled={selection.busy} onClick={selection.cancel}>Cancel</Button>
+    </div>;
+    return <Button size="sm" className="gap-1.5" disabled={selection.busy || !selection.totalSelected} onClick={selection.handlePreview}>
+        <Brain className="h-4 w-4" /> Preview selected ({selection.totalSelected})
+    </Button>;
+}
+
+/** Exact rendered files/checks stay visible independently of collapsed report sections. */
+function SuggestionPreview({ selection }: { selection: SuggestionSelection }) {
+    return <>
+            {selection.confirming && (
+                <div className="border-b border-border p-5 space-y-3" aria-live="polite">
+                    <h4 className="text-sm font-semibold">Exact proposed bundle</h4>
+                    {selection.preview.isPending && <p className="text-sm text-muted-foreground">Building and checking the selected changes…</p>}
+                    {selection.preview.isError && <p className="text-sm text-destructive">{selection.preview.error?.message ?? "Resolve the selected suggestions before submitting."}</p>}
+                    {selection.preview.data && <>
+                        <p className="text-sm">Component reviews must publish before the parent agent review. Public installation requires required reviews to publish. Owner-only draft installs, if enabled, remain governed by server policy. Asynchronous review checks may still be pending. Content/delivery checks are not runtime proof of generated code; executable changes still need human review and testing.</p>
+                        <ol className="list-decimal pl-5 text-sm">{selection.preview.data.publication_order.map((step, i) => <li key={i}>{step}</li>)}</ol>
+                        {selection.preview.data.errors.map((error, i) => <p key={i} className="text-sm text-destructive">{error.name}: {error.check} failed ({error.paths.join(", ")})</p>)}
+                        <details><summary className="cursor-pointer text-sm">Existing links, removals and superseded proposals</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(selection.preview.data.effects, null, 2)}</pre></details>
+                        {selection.preview.data.artifacts.map((artifact, i) => <details key={i} className="rounded-md border border-border p-3">
+                            <summary className="cursor-pointer text-sm font-medium">{artifact.type}: {artifact.name} v{artifact.version}</summary>
+                            <p className="mt-2 text-xs text-muted-foreground">{artifact.checks.map(check => `${check.name}: ${check.status}`).join(" · ")}</p>
+                            {Object.entries(artifact.files).map(([path, file]) => <div key={path} className="mt-3">
+                                <h5 className="text-xs font-semibold break-all">{path}</h5>
+                                {artifact.base_files[path] && <details className="mt-1"><summary className="cursor-pointer text-xs">Before</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{artifact.base_files[path].content}</pre></details>}
+                                <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">{file.content}</pre>
+                            </div>)}
+                            {Object.keys(artifact.base_files).filter(path => !(path in artifact.files)).map(path => <p key={path} className="mt-2 text-xs">Removed file: {path}</p>)}
+                        </details>)}
+                    </>}
+                </div>
+            )}
+    </>;
 }
 
 function SuggestionsSection({
@@ -926,6 +929,7 @@ function SuggestionsSection({
 	registryMatch?: RegistryMatchSummary;
 	selection: SuggestionSelection;
 }) {
+
 	if (!data) return null;
 
 	if (Array.isArray(data) || typeof data === "string") {
@@ -955,11 +959,12 @@ function SuggestionsSection({
 	const toggleFeature = (i: number) => selection.toggle("features", i);
 	const togglePattern = (i: number) => selection.toggle("patterns", i);
 
+
 	if (!hasV4 && (!items || items.length === 0)) return null;
 
 	return (
 		<div className="rounded-lg border border-border bg-card">
-			<div className="flex items-center justify-between px-5 py-3 border-b border-border">
+			<div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-border">
 				<div className="flex items-center gap-2">
 					<Lightbulb className="h-4 w-4 text-primary-accent" />
 					<h3 className="font-[family-name:var(--font-display)] text-sm font-semibold">
@@ -968,24 +973,33 @@ function SuggestionsSection({
 				</div>
 				{report && !report.applied_at && hasV4 && (
 					<div className="flex items-center gap-3">
-						<span className="text-xs text-muted-foreground">Tick what to apply, then use Apply at the top.</span>
+						<span className="text-xs text-muted-foreground">Tick changes, then preview them at the top.</span>
 						<Button
 							variant="ghost"
 							size="sm"
 							className="h-8 text-xs"
-							disabled={selection.totalSelectable === 0}
+							disabled={selection.busy || selection.totalSelectable === 0}
 							onClick={selection.allSelected ? selection.unselectAll : selection.selectAll}
 						>
 							{selection.allSelected ? "Unselect all" : "Select all"}
 						</Button>
+
 					</div>
 				)}
 				{report?.applied_at && (
-					<span className="inline-flex items-center gap-1.5 text-xs font-medium text-success bg-success/10 px-2.5 py-1 rounded-full">
-						<CheckCircle2 className="h-3 w-3" /> Applied
+					<span className="inline-flex items-center gap-1.5 text-xs font-medium text-info bg-info/10 px-2.5 py-1 rounded-full">
+						<CheckCircle2 className="h-3 w-3" /> Submitted for review
 					</span>
 				)}
 			</div>
+            {report?.applied_items?.reviews && <div className="border-b border-border p-5 text-sm">
+                <p className="font-medium">Submitted reviews</p>
+                <p className="mt-1 text-muted-foreground">Statuses are recorded at submission. Open a review for its current publication gate.</p>
+                <ul className="mt-2 space-y-1">{report.applied_items.reviews.map(review => <li key={review.id}>
+                    <a className="underline underline-offset-4" href={`/review/${review.number}`}>Review #{review.number}: {review.type} — {review.name}</a>
+                </li>)}</ul>
+            </div>}
+
 			<div className="px-5 py-4 space-y-6">
 				{configAdditions && configAdditions.length > 0 && (
 					<SuggestionGroup title="Prompt changes" hint="Lines to add to the Agent File's system prompt or AGENTS.md.">
@@ -994,6 +1008,8 @@ function SuggestionsSection({
 								key={i}
 								selectable={!report?.applied_at}
 								selected={selectedConfigs.has(i)}
+                                disabled={selection.busy}
+                                selectionLabel={`Select config addition ${i + 1}`}
 								onToggle={() => toggleConfig(i)}
 								title={c.addition}
 								reason={c.why}
@@ -1001,6 +1017,7 @@ function SuggestionsSection({
 							/>
 						))}
 					</SuggestionGroup>
+
 				)}
 
 				{featuresToTry && featuresToTry.length > 0 && (
@@ -1015,6 +1032,8 @@ function SuggestionsSection({
 									key={i}
 									selectable={!report?.applied_at}
 									selected={selectedFeatures.has(i)}
+                                disabled={selection.busy}
+                                selectionLabel={`Select feature ${i + 1}`}
 									onToggle={() => toggleFeature(i)}
 									kind={f.component_ref ? "Reuse, don't rebuild" : `New ${(f.feature || "component").toLowerCase()}`}
 									highlightKind={Boolean(f.component_ref)}
@@ -1027,6 +1046,7 @@ function SuggestionsSection({
 									{f.match_reason && <p className="text-sm leading-6 text-muted-foreground"><RichText text={f.match_reason} /></p>}
 									{f.example && !f.component_ref && <SuggestionSnippet text={f.example} />}
 								</SuggestionCard>
+
 							))}
 					</SuggestionGroup>
 				)}
@@ -1038,6 +1058,8 @@ function SuggestionsSection({
 								key={i}
 								selectable={!report?.applied_at}
 								selected={selectedPatterns.has(i)}
+                                disabled={selection.busy}
+                                selectionLabel={`Select prompt pattern ${i + 1}`}
 								onToggle={() => togglePattern(i)}
 								title={p.title}
 								reason={p.suggestion}
@@ -1048,6 +1070,7 @@ function SuggestionsSection({
 							</SuggestionCard>
 						))}
 					</SuggestionGroup>
+
 				)}
 
 				{/* V3 fallback: items array */}
@@ -2121,7 +2144,9 @@ export default function InsightReportPage() {
 							</div>
 						</div>
 
-						{/* Loading state */}
+						<SuggestionPreview selection={selection} />
+
+                        {/* Loading state */}
 						{(report.status === "pending" || report.status === "running") && (
 							<div className="flex flex-col items-center justify-center py-16 gap-4">
 								<Loader2 className="h-8 w-8 animate-spin text-primary-accent" />

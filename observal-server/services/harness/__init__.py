@@ -95,6 +95,8 @@ class HarnessAdapter(Protocol):
 
     def emits_prompt_files(self) -> bool: ...
 
+    def hook_delivery_errors(self, hook: dict, scope: str) -> list[str]: ...
+
 
 class BaseHarnessAdapter:
     """Shared defaults for harness adapters."""
@@ -131,6 +133,79 @@ class BaseHarnessAdapter:
 
     def format_hook_component(self, command: str) -> dict:
         return {"command": command}
+
+    def hook_delivery_errors(self, hook: dict, scope: str) -> list[str]:
+        """Check default-scope delivery through this adapter, not a generic capability label."""
+        from types import SimpleNamespace
+
+        from observal_shared.harness_registry import HARNESS_REGISTRY
+
+        spec = HARNESS_REGISTRY[self.harness_name]
+        if hook.get("event") not in spec.get("hook_events_map", {}):
+            return ["Hook event is unsupported"]
+        if hook.get("tool_filter"):
+            return ["Tool-filter delivery is not validated for this adapter"]
+        handler = hook.get("handler_type", "command")
+        config = hook.get("handler_config") or {}
+        if handler not in {"command", "http"} or not isinstance(config, dict):
+            return ["Hook handler is unsupported"]
+        script = hook.get("script_content")
+        filename = hook.get("script_filename")
+        if script and (not filename or not spec.get("hook_scripts_dir")):
+            return ["Hook script delivery is unsupported"]
+        if filename and not script:
+            return ["Hook script bytes are unavailable"]
+        command = config.get("command") if handler == "command" else config.get("url")
+        if not script and (not isinstance(command, str) or not command.strip()):
+            return ["Hook has no deliverable command"]
+        probe = SimpleNamespace(
+            name="insights-probe",
+            prompt="",
+            description="",
+            owner="",
+            model_name="auto",
+            models_by_harness={},
+            model_config_json={},
+            external_mcps=[],
+            components=[],
+            supported_harnesses=[self.harness_name],
+        )
+        try:
+            result = self.format_config(
+                ConfigContext(
+                    agent=probe,
+                    safe_name="insights-probe",
+                    harness=self.harness_name,
+                    observal_url="",
+                    hook_configs=[hook],
+                    options={"scope": scope},
+                )
+            )
+        except Exception:
+            return ["Hook installation plan could not be generated"]
+        if script:
+            files = result.get("hook_files") or []
+            if not any(
+                item.get("content") == script and str(item.get("path", "")).endswith("/" + filename) for item in files
+            ):
+                return ["Hook script is absent from the installation plan"]
+        else:
+
+            def values(value):
+                if isinstance(value, str):
+                    return [value]
+                if isinstance(value, dict):
+                    return [s for child in value.values() for s in values(child)]
+                if isinstance(value, list):
+                    return [s for child in value for s in values(child)]
+                return []
+
+            emitted = values(result)
+            if command not in emitted and not (
+                handler == "http" and any(s.startswith("curl ") and command in s for s in emitted)
+            ):
+                return ["Hook command is absent from the installation plan"]
+        return []
 
     def emits_prompt_files(self) -> bool:
         return False

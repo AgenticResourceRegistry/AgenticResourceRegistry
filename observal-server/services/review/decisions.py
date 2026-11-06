@@ -499,17 +499,22 @@ async def sync_state(db, review, *, actor_id=None, policy=None):
     if review.state in (ReviewState.closed, ReviewState.published):
         return None
     result = await gate(db, review, policy=policy)
+    generated = await db.scalar(
+        select(ReviewEvent.id)
+        .where(ReviewEvent.review_id == review.id, ReviewEvent.kind == "insights_generated")
+        .limit(1)
+    )
     if result.ready and review.state != ReviewState.approved:
         review.state = ReviewState.approved
         _, version = await _target(db, review)
         version.status = AgentStatus.pending if review.subject_type == "agent" else ListingStatus.pending
         _event(db, review, "gate_ready", actor_id)
         # Unattended publishing still needs every open item cleared; only people may publish past them.
-        if result.clear and _auto_publish_allowed(policy or await policy_for(review, db=db), version):
+        if result.clear and not generated and _auto_publish_allowed(policy or await policy_for(review, db=db), version):
             await publish(db, review, None, auto=True, policy=policy)
     elif result.ready and review.state == ReviewState.approved:
         _, version = await _target(db, review)
-        if result.clear and _auto_publish_allowed(policy or await policy_for(review, db=db), version):
+        if result.clear and not generated and _auto_publish_allowed(policy or await policy_for(review, db=db), version):
             await publish(db, review, None, auto=True, policy=policy)
     elif not result.ready and review.state == ReviewState.approved:
         review.state = ReviewState.changes_requested if result.outstanding_requests else ReviewState.open

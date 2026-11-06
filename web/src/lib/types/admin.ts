@@ -610,6 +610,8 @@ export interface InsightReport {
 }
 
 export interface InsightAppliedItems {
+    state?: string;
+    reviews?: { id: string; number: number; type: string; name: string; status: string }[];
 	agent_version: { id: string; version: string; additions_count: number; linked_components: number } | null;
 	skills: { id: string; name: string; description: string; type: string }[];
 	hooks: { id: string; name: string; description: string; type: string }[];
@@ -944,4 +946,30 @@ export interface MigrationValidateResult {
 export interface MigrationDownloadToken {
 	token: string;
 	expires_at: string;
+}
+
+
+export interface InsightApplySelection {
+    config_indices: number[];
+    feature_indices: number[];
+    pattern_indices: number[];
+    preview_digest?: string;
+}
+
+export interface InsightApplyPreview {
+    ready: boolean;
+    digest: string;
+    base_version_id: string;
+    state: string;
+    publication_order: string[];
+    effects: Record<string, unknown>;
+    errors: { type: string; name: string; check: string; paths: string[] }[];
+    artifacts: {
+        type: string;
+        name: string;
+        version: string;
+        files: Record<string, { content: string; lang: string }>;
+        base_files: Record<string, { content: string; lang: string }>;
+        checks: { id: string; name: string; status: string; required: boolean; details: string[] }[];
+    }[];
 }
