@@ -497,8 +497,17 @@ export interface InsightMetrics {
 	}[];
 }
 
+export interface InsightSectionError {
+    section: string;
+    code: "invalid_or_empty_response" | "model_call_failed";
+    attempts: number;
+}
+
 export interface InsightNarrative {
 	discovery?: DiscoveryOptimization;
+    section_errors?: InsightSectionError[];
+    generation_state?: "complete" | "partial";
+
 	// V3 structured format: each section is a structured object
 	// V1 fallback: each section is string[] or string
 	// The frontend handles both formats gracefully
