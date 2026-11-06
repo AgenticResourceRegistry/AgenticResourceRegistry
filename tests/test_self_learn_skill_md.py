@@ -40,7 +40,7 @@ def test_self_learn_generated_skill_md_frontmatter_is_yaml_serialized():
 @pytest.mark.asyncio
 async def test_self_learn_rejects_unsafe_existing_frontmatter_before_persisting():
     module = _load_self_learn_module()
-    agent = SimpleNamespace(name="review-agent", owner="owner")
+    agent = SimpleNamespace(name="review-agent", owner="owner", supported_harnesses=["claude-code"])
     feature = {
         "name": "review",
         "one_liner": "Review code",

@@ -1338,11 +1338,12 @@ export const insights = {
 		get<InsightReport>(`/agents/${agentId}/insights/reports/${reportId}`),
 	getReportById: (reportId: string) =>
 		get<InsightReport>(`/insights/reports/${reportId}`),
-	applySuggestions: (agentId: string, reportId: string, selection?: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] }) =>
-		post<{ applied: boolean; report_id: string; items: InsightAppliedItems }>(
-			`/agents/${agentId}/insights/reports/${reportId}/apply`,
-			selection ?? {},
-		),
+    previewSuggestions: (agentId: string, reportId: string, selection: import("./types").InsightApplySelection) =>
+        post<import("./types").InsightApplyPreview>(`/agents/${agentId}/insights/reports/${reportId}/preview`, selection),
+    applySuggestions: (agentId: string, reportId: string, selection: import("./types").InsightApplySelection) =>
+        post<{ applied: boolean; report_id: string; items: InsightAppliedItems }>(
+            `/agents/${agentId}/insights/reports/${reportId}/apply`, selection,
+        ),
 	exportHtml: async (agentId: string, reportId: string): Promise<void> => {
 		let token = getAccessToken();
 		let res = await fetch(`${API}/agents/${agentId}/insights/reports/${reportId}/export/html`, {

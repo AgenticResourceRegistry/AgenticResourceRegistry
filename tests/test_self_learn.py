@@ -252,8 +252,8 @@ class TestApplyEndpoint:
     """Tests for the POST /api/v1/insights/reports/{id}/apply endpoint."""
 
     @pytest.mark.asyncio
-    async def test_requires_admin_role(self):
-        """The endpoint should require admin role (returns 401 without auth)."""
+    async def test_requires_authenticated_user(self):
+        """The endpoint requires authentication; owner/edit authorization is tested separately."""
         from httpx import ASGITransport, AsyncClient
 
         from main import app

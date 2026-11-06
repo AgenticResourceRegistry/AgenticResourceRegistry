@@ -82,7 +82,7 @@ async def apply_agent_insight_report_suggestions(
     report_id: uuid.UUID,
     body: ApplySuggestionsRequest | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.admin)),
+    current_user: User = Depends(require_role(UserRole.user)),
 ):
     """Apply selected suggestions from an agent insight report."""
     from api.routes.insights import apply_report_suggestions
@@ -115,3 +115,17 @@ async def delete_agent_insight_reports(
     from api.routes.insights import clear_agent_reports
 
     return await clear_agent_reports(agent_id, db, current_user)
+
+
+@router.post("/{agent_id}/insights/reports/{report_id}/preview")
+async def preview_agent_insight_report_suggestions(
+    agent_id: str,
+    report_id: uuid.UUID,
+    body: ApplySuggestionsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(UserRole.user)),
+):
+    from api.routes.insights import preview_report_suggestions
+
+    await get_agent_insight_report(agent_id, report_id, db, current_user)
+    return await preview_report_suggestions(report_id, body, db, current_user)

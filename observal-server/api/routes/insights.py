@@ -802,12 +802,12 @@ async def apply_report_suggestions(
     report_id: uuid.UUID,
     body: ApplySuggestionsRequest | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.admin)),
+    current_user: User = Depends(require_role(UserRole.user)),
 ):
     """Apply selected insight suggestions as pending registry items.
 
-    Pass index arrays to select specific suggestions. Omit or pass null
-    to skip a category entirely. Pass an empty body to apply all.
+    Pass explicit index arrays and the digest returned by preview. Omitted
+    categories are empty. Human publication and queued checks remain pending.
     """
     optic.trace("report_id={}", report_id)
 
@@ -834,15 +834,9 @@ async def apply_report_suggestions(
     # Run the self-learn pipeline
     from services.insights.self_learn import apply_insight_suggestions
 
-    selection = None
-    if body and (
-        body.config_indices is not None or body.feature_indices is not None or body.pattern_indices is not None
-    ):
-        selection = {
-            "config_indices": body.config_indices,
-            "feature_indices": body.feature_indices,
-            "pattern_indices": body.pattern_indices,
-        }
+    if body is None or body.preview_digest is None:
+        raise HTTPException(status_code=422, detail="Preview explicitly selected changes before applying")
+    selection = body.model_dump(exclude={"preview_digest"})
 
     try:
         applied = await apply_insight_suggestions(
@@ -850,12 +844,45 @@ async def apply_report_suggestions(
             db=db,
             triggered_by=current_user.id,
             selection=selection,
+            preview_digest=body.preview_digest,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        from services.insights.apply_preview import PreflightError
+
+        detail = {"message": str(e), "errors": e.errors} if isinstance(e, PreflightError) else str(e)
+        raise HTTPException(status_code=400, detail=detail)
 
     return {
         "applied": True,
         "report_id": report_id,
         "items": applied,
     }
+
+
+@router.post("/reports/{report_id}/preview")
+async def preview_report_suggestions(
+    report_id: uuid.UUID,
+    body: ApplySuggestionsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(UserRole.user)),
+):
+    """Render and validate selected artifacts in a rollback-only transaction."""
+    report = await db.get(InsightReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    await _authorize_report(report, db, current_user)
+    if report.subject_type != "agent":
+        raise HTTPException(status_code=409, detail="Suggestions are unavailable for component reports")
+    _require_insights()
+    import services.dynamic_settings as ds
+
+    if not await ds.get_bool("insights.self_learn_enabled", default=True):
+        raise HTTPException(status_code=403, detail="Self-learning is disabled")
+    from services.insights.self_learn import preview_insight_suggestions
+
+    try:
+        return await preview_insight_suggestions(
+            report_id, db, current_user.id, body.model_dump(exclude={"preview_digest"})
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None

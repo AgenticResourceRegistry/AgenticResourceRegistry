@@ -40,7 +40,7 @@ import {
 	Brain,
 } from "lucide-react";
 import { useInsightReport } from "@/hooks/use-api";
-import { useApplyInsightSuggestions } from "@/hooks/use-insights-api";
+import { useApplyInsightSuggestions, usePreviewInsightSuggestions } from "@/hooks/use-insights-api";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layouts/page-header";
 import { ErrorState } from "@/components/shared/error-state";
@@ -701,11 +701,12 @@ function SuggestionsSection({
 	registryMatch?: RegistryMatchSummary;
 }) {
 	const applySuggestions = useApplyInsightSuggestions();
+    const previewSuggestions = usePreviewInsightSuggestions();
 	const [showConfirm, setShowConfirm] = React.useState(false);
 	const [selectedConfigs, setSelectedConfigs] = React.useState<Set<number>>(new Set());
 	const [selectedFeatures, setSelectedFeatures] = React.useState<Set<number>>(new Set());
 	const [selectedPatterns, setSelectedPatterns] = React.useState<Set<number>>(new Set());
-	const [initialized, setInitialized] = React.useState(false);
+
 
 	if (!data) return null;
 
@@ -732,26 +733,20 @@ function SuggestionsSection({
 
 	const hasV4 = (configAdditions && configAdditions.length > 0) || (featuresToTry && featuresToTry.length > 0) || (usagePatterns && usagePatterns.length > 0);
 
-	// Initialize all selected by default
-	if (!initialized && hasV4) {
-		const cSet = new Set(configAdditions?.map((_, i) => i) ?? []);
-		const fSet = new Set(featuresToTry?.map((_, i) => i) ?? []);
-		const pSet = new Set(usagePatterns?.map((_, i) => i) ?? []);
-		if (cSet.size || fSet.size || pSet.size) {
-			setSelectedConfigs(cSet);
-			setSelectedFeatures(fSet);
-			setSelectedPatterns(pSet);
-			setInitialized(true);
-		}
-	}
 
 	const toggleConfig = (i: number) => {
+        if (applySuggestions.isPending || previewSuggestions.isPending) return;
+        previewSuggestions.reset(); setShowConfirm(false);
 		setSelectedConfigs((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
 	};
 	const toggleFeature = (i: number) => {
+        if (applySuggestions.isPending || previewSuggestions.isPending) return;
+        previewSuggestions.reset(); setShowConfirm(false);
 		setSelectedFeatures((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
 	};
 	const togglePattern = (i: number) => {
+        if (applySuggestions.isPending || previewSuggestions.isPending) return;
+        previewSuggestions.reset(); setShowConfirm(false);
 		setSelectedPatterns((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
 	};
 
@@ -773,32 +768,24 @@ function SuggestionsSection({
 		setShowConfirm(false);
 	};
 
-	const handleApply = () => {
-		if (!report || !report.agent_id) return;
-		const selection: { config_indices?: number[]; feature_indices?: number[]; pattern_indices?: number[] } = {};
-		if (selectedConfigs.size < (configAdditions?.length ?? 0)) {
-			selection.config_indices = [...selectedConfigs];
-		}
-		if (selectedFeatures.size < (featuresToTry?.length ?? 0)) {
-			selection.feature_indices = [...selectedFeatures];
-		}
-		if (selectedPatterns.size < (usagePatterns?.length ?? 0)) {
-			selection.pattern_indices = [...selectedPatterns];
-		}
-		const hasSelection = Object.keys(selection).length > 0;
-		applySuggestions.mutate({
-			agentId: report.agent_id,
-			reportId: report.id,
-			selection: hasSelection ? selection : undefined,
-		});
-		setShowConfirm(false);
-	};
+    const selection = () => ({ config_indices: [...selectedConfigs], feature_indices: [...selectedFeatures], pattern_indices: [...selectedPatterns] });
+    const handlePreview = () => {
+        if (!report?.agent_id) return;
+        setShowConfirm(true);
+        previewSuggestions.mutate({ agentId: report.agent_id, reportId: report.id, selection: selection() });
+    };
+    const handleApply = () => {
+        if (!report?.agent_id || !previewSuggestions.data?.ready) return;
+        applySuggestions.mutate({ agentId: report.agent_id, reportId: report.id,
+            selection: { ...selection(), preview_digest: previewSuggestions.data.digest } });
+        setShowConfirm(false);
+    };
 
 	if (!hasV4 && (!items || items.length === 0)) return null;
 
 	return (
 		<div className="rounded-lg border border-border bg-card">
-			<div className="flex items-center justify-between px-5 py-3 border-b border-border">
+			<div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-border">
 				<div className="flex items-center gap-2">
 					<Lightbulb className="h-4 w-4 text-primary-accent" />
 					<h3 className="font-[family-name:var(--font-display)] text-sm font-semibold">
@@ -823,18 +810,18 @@ function SuggestionsSection({
 									size="sm"
 									className="gap-1.5 text-xs"
 									disabled={applySuggestions.isPending || totalSelected === 0}
-									onClick={() => setShowConfirm(true)}
+									onClick={handlePreview}
 								>
-									<Brain className="h-3.5 w-3.5" /> Apply Selected ({totalSelected})
+									<Brain className="h-3.5 w-3.5" /> Preview selected ({totalSelected})
 								</Button>
 							</div>
 						) : (
-							<div className="flex items-center gap-2">
-								<span className="text-xs text-muted-foreground">Submit {totalSelected} items to review?</span>
+							<div className="flex flex-wrap items-center gap-2">
+								<span className="text-xs text-muted-foreground">Submit this validated bundle for review?</span>
 								<Button
 									size="sm"
 									className="h-7 text-xs gap-1"
-									disabled={applySuggestions.isPending}
+									disabled={applySuggestions.isPending || previewSuggestions.isPending || !previewSuggestions.data?.ready}
 									onClick={handleApply}
 								>
 									{applySuggestions.isPending ? (
@@ -857,11 +844,41 @@ function SuggestionsSection({
 					</div>
 				)}
 				{report?.applied_at && (
-					<span className="inline-flex items-center gap-1.5 text-xs font-medium text-success bg-success/10 px-2.5 py-1 rounded-full">
-						<CheckCircle2 className="h-3 w-3" /> Applied
+					<span className="inline-flex items-center gap-1.5 text-xs font-medium text-info bg-info/10 px-2.5 py-1 rounded-full">
+						<CheckCircle2 className="h-3 w-3" /> Submitted for review
 					</span>
 				)}
 			</div>
+            {report?.applied_items?.reviews && <div className="border-b border-border p-5 text-sm">
+                <p className="font-medium">Submitted reviews</p>
+                <p className="mt-1 text-muted-foreground">Statuses are recorded at submission. Open a review for its current publication gate.</p>
+                <ul className="mt-2 space-y-1">{report.applied_items.reviews.map(review => <li key={review.id}>
+                    <a className="underline underline-offset-4" href={`/review/${review.number}`}>Review #{review.number}: {review.type} — {review.name}</a>
+                </li>)}</ul>
+            </div>}
+            {showConfirm && (
+                <div className="border-b border-border p-5 space-y-3" aria-live="polite">
+                    <h4 className="text-sm font-semibold">Exact proposed bundle</h4>
+                    {previewSuggestions.isPending && <p className="text-sm text-muted-foreground">Building and checking the selected changes…</p>}
+                    {previewSuggestions.isError && <p className="text-sm text-destructive">{previewSuggestions.error?.message ?? "Resolve the selected suggestions before submitting."}</p>}
+                    {previewSuggestions.data && <>
+                        <p className="text-sm">Component reviews must publish before the parent agent review. Public installation requires required reviews to publish. Owner-only draft installs, if enabled, remain governed by server policy. Asynchronous review checks may still be pending. Content/delivery checks are not runtime proof of generated code; executable changes still need human review and testing.</p>
+                        <ol className="list-decimal pl-5 text-sm">{previewSuggestions.data.publication_order.map((step, i) => <li key={i}>{step}</li>)}</ol>
+                        {previewSuggestions.data.errors.map((error, i) => <p key={i} className="text-sm text-destructive">{error.name}: {error.check} failed ({error.paths.join(", ")})</p>)}
+                        <details><summary className="cursor-pointer text-sm">Existing links, removals and superseded proposals</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(previewSuggestions.data.effects, null, 2)}</pre></details>
+                        {previewSuggestions.data.artifacts.map((artifact, i) => <details key={i} className="rounded-md border border-border p-3">
+                            <summary className="cursor-pointer text-sm font-medium">{artifact.type}: {artifact.name} v{artifact.version}</summary>
+                            <p className="mt-2 text-xs text-muted-foreground">{artifact.checks.map(check => `${check.name}: ${check.status}`).join(" · ")}</p>
+                            {Object.entries(artifact.files).map(([path, file]) => <div key={path} className="mt-3">
+                                <h5 className="text-xs font-semibold break-all">{path}</h5>
+                                {artifact.base_files[path] && <details className="mt-1"><summary className="cursor-pointer text-xs">Before</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{artifact.base_files[path].content}</pre></details>}
+                                <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">{file.content}</pre>
+                            </div>)}
+                            {Object.keys(artifact.base_files).filter(path => !(path in artifact.files)).map(path => <p key={path} className="mt-2 text-xs">Removed file: {path}</p>)}
+                        </details>)}
+                    </>}
+                </div>
+            )}
 			<div className="px-5 py-4 space-y-6">
 				{configAdditions && configAdditions.length > 0 && (
 					<div>
@@ -871,12 +888,12 @@ function SuggestionsSection({
 							{configAdditions.map((c, i) => (
 								<div
 									key={i}
-									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedConfigs.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10 opacity-60"}`}
+									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedConfigs.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10"}`}
 									onClick={!report?.applied_at ? () => toggleConfig(i) : undefined}
 								>
 									<div className="flex items-start gap-3">
 										{!report?.applied_at && (
-											<input type="checkbox" checked={selectedConfigs.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => toggleConfig(i)} className="mt-1 h-4 w-4 rounded border-border" />
+											<input aria-label={`Select config addition ${i + 1}`} type="checkbox" disabled={applySuggestions.isPending || previewSuggestions.isPending} checked={selectedConfigs.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => toggleConfig(i)} className="mt-1 h-4 w-4 rounded border-border" />
 										)}
 										<div className="flex-1">
 											<span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground mr-2">{c.where}</span>
@@ -909,12 +926,12 @@ function SuggestionsSection({
 								.map(({ f, i }) => (
 								<div
 									key={i}
-									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedFeatures.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10 opacity-60"}`}
+									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedFeatures.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10"}`}
 									onClick={!report?.applied_at ? () => toggleFeature(i) : undefined}
 								>
 									<div className="flex items-start gap-2">
 										{!report?.applied_at && (
-											<input type="checkbox" checked={selectedFeatures.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => toggleFeature(i)} className="mt-1 h-4 w-4 rounded border-border" />
+											<input aria-label={`Select feature ${i + 1}`} type="checkbox" disabled={applySuggestions.isPending || previewSuggestions.isPending} checked={selectedFeatures.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => toggleFeature(i)} className="mt-1 h-4 w-4 rounded border-border" />
 										)}
 										<div className="flex-1">
 											<span
@@ -959,12 +976,12 @@ function SuggestionsSection({
 							{usagePatterns.map((p, i) => (
 								<div
 									key={i}
-									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedPatterns.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10 opacity-60"}`}
+									className={`rounded-md border p-3 transition-colors ${!report?.applied_at ? "cursor-pointer" : ""} ${selectedPatterns.has(i) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/10"}`}
 									onClick={!report?.applied_at ? () => togglePattern(i) : undefined}
 								>
 									<div className="flex items-start gap-2">
 										{!report?.applied_at && (
-											<input type="checkbox" checked={selectedPatterns.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => togglePattern(i)} className="mt-1 h-4 w-4 rounded border-border" />
+											<input aria-label={`Select prompt pattern ${i + 1}`} type="checkbox" disabled={applySuggestions.isPending || previewSuggestions.isPending} checked={selectedPatterns.has(i)} onClick={(event) => event.stopPropagation()} onChange={() => togglePattern(i)} className="mt-1 h-4 w-4 rounded border-border" />
 										)}
 										<div className="flex-1">
 											<div className="font-medium text-sm">{p.title}</div>

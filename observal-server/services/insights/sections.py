@@ -200,9 +200,10 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
     "config_additions": [
       {{
         "action_type": "modify_prompt",
+        "requires_feature_indices": [],
         "addition": "exact text to add to the agent's system prompt or AGENTS.md",
         "why": "1 sentence explaining why based on actual sessions",
-        "where": "system_prompt | AGENTS.md | agent_config",
+        "where": "system_prompt | AGENTS.md",
         "confidence": "high | medium | low | insufficient_data",
         "risk": "low | medium | high"
       }}
@@ -233,6 +234,8 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
 }}
 
 Rules:
+- Structured agent_config changes are unsupported; propose only system_prompt or AGENTS.md text additions.
+- Every config addition MUST include requires_feature_indices: a list of zero-based features_to_try indices it needs, or [] for an independent change. Do not guess dependencies from names.
 - config_additions: PRIORITIZE instructions from USER INSTRUCTIONS and REPEATED INSTRUCTIONS sections. These are things the user has ALREADY told the agent but it keeps forgetting. Maximum 7.
 - features_to_try: 2-3 concrete suggestions.
 - usage_patterns: 2-4 suggestions for how to prompt differently. Each must include a copyable prompt the user can try immediately.
