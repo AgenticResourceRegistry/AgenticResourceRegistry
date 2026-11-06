@@ -12,6 +12,7 @@ from services.insights.session_meta_extractor import extract_session_meta
 
 
 def meta(user="alice", sid="s", state="verified", parent=""):
+    """Build a scoped session fixture with explicit instruction/relevance coverage."""
     return {
         "session_key": SessionKey("p", user, "pi", sid),
         "instruction_evidence": {"state": state},
@@ -21,6 +22,7 @@ def meta(user="alice", sid="s", state="verified", parent=""):
 
 
 def facet(state="in_scope"):
+    """Build a facet fixture qualified for the expected role and relevance schema."""
     return {
         "_relevance_schema": 1,
         "_scope_hash": role_hash("role"),
@@ -30,6 +32,7 @@ def facet(state="in_scope"):
 
 
 def test_source_refs_are_scoped_and_require_recorded_instruction_contract():
+    """Verify source refs are scoped and require recorded instruction contract."""
     alice, bob = meta(), meta("bob")
     assert source_ref(alice["session_key"]) != source_ref(bob["session_key"])
     assert not qualified(meta(state="unknown")) and not qualified(meta(parent="parent"))
@@ -44,6 +47,7 @@ def test_source_refs_are_scoped_and_require_recorded_instruction_contract():
 
 
 def test_missing_invented_off_task_and_unknown_refs_cannot_justify_changes():
+    """Verify missing invented off task and unknown refs cannot justify changes."""
     a, b = meta(), meta(sid="off")
     index = sources([a, b], {a["session_key"]: facet(), b["session_key"]: facet("out_of_scope")}, role_hash("role"))
     good, off = source_ref(a["session_key"]), source_ref(b["session_key"])
@@ -59,6 +63,7 @@ def test_missing_invented_off_task_and_unknown_refs_cannot_justify_changes():
 
 
 def test_unknown_scope_and_unversioned_facet_do_not_become_in_scope():
+    """Verify unknown scope and unversioned facet do not become in scope."""
     a = meta()
     for data in [{}, {"agent_task_relevance": {"state": "in_scope"}}, {**facet(), "_scope_complete": False}]:
         index = sources([a], {a["session_key"]: data}, role_hash("role"))
@@ -66,6 +71,7 @@ def test_unknown_scope_and_unversioned_facet_do_not_become_in_scope():
 
 
 def test_unreferenced_synthesis_cannot_reintroduce_dropped_changes():
+    """Verify unreferenced synthesis cannot reintroduce dropped changes."""
     result = validate_narrative({"at_a_glance": {"quick_win": "Add unsafe unrelated hook"}}, {})
     assert "unsafe" not in json.dumps(result)
 
@@ -82,10 +88,12 @@ def test_unreferenced_synthesis_cannot_reintroduce_dropped_changes():
     ],
 )
 def test_mcp_targets_are_explicit_attempts_not_guessed_registry_components(name, args, expected):
+    """Verify mcp targets are explicit attempts not guessed registry components."""
     assert mcp_target(name, args) == expected
 
 
 def test_meta_observes_actual_target_not_the_configured_mcp():
+    """Verify meta observes actual target not the configured mcp."""
     rows = [
         {
             "type": "message",
@@ -110,6 +118,7 @@ def test_meta_observes_actual_target_not_the_configured_mcp():
 
 
 def test_configured_or_mentioned_skills_are_not_proven_successful_loads():
+    """Verify configured or mentioned skills are not proven successful loads."""
     from services.insights.generator import _analyze_component_utilization
 
     result = _analyze_component_utilization({"configured_skills": ["test-skill"]}, [{"first_prompt": "test-skill"}], [])
@@ -118,6 +127,7 @@ def test_configured_or_mentioned_skills_are_not_proven_successful_loads():
 
 @pytest.mark.asyncio
 async def test_standalone_main_without_cohort_contract_fails_closed(monkeypatch):
+    """Verify standalone main without cohort contract fails closed."""
     from services.insights import generator
 
     monkeypatch.setattr(
@@ -138,6 +148,7 @@ async def test_standalone_main_without_cohort_contract_fails_closed(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_truncated_role_forces_unknown_relevance(monkeypatch):
+    """Verify truncated role forces unknown relevance."""
     import services.dynamic_settings as ds
     from services.insights import facets
 
@@ -155,6 +166,7 @@ async def test_truncated_role_forces_unknown_relevance(monkeypatch):
 
 @pytest.mark.parametrize("bad", ["unreferenced advice", ["unreferenced advice"], 7, True])
 def test_actionable_wrong_shapes_cannot_escape_through_legacy_rendering(bad):
+    """Verify actionable wrong shapes cannot escape through legacy rendering."""
     result = validate_narrative({"suggestions": bad, "on_the_horizon": bad, "at_a_glance": bad}, {})
     assert result["suggestions"] == {"config_additions": [], "features_to_try": [], "usage_patterns": []}
     assert result["on_the_horizon"]["opportunities"] == []
@@ -163,11 +175,13 @@ def test_actionable_wrong_shapes_cannot_escape_through_legacy_rendering(bad):
 
 
 def test_legacy_items_do_not_bypass_canonical_suggestion_gate():
+    """Verify legacy items do not bypass canonical suggestion gate."""
     result = validate_narrative({"suggestions": {"items": [{"action": "unreferenced advice"}]}}, {})
     assert "items" not in result["suggestions"]
 
 
 def test_every_actionable_prompt_schema_explicitly_requests_source_refs():
+    """Verify every actionable prompt schema explicitly requests source refs."""
     from services.insights.sections import SECTION_PROMPTS
 
     for name, expected in [("what_works", 1), ("friction_analysis", 1), ("suggestions", 3), ("on_the_horizon", 1)]:
@@ -175,6 +189,7 @@ def test_every_actionable_prompt_schema_explicitly_requests_source_refs():
 
 
 def test_redaction_expansion_keeps_original_scope_hash_and_marks_truncation():
+    """Verify redaction expansion keeps original scope hash and marks truncation."""
     from services.insights.evidence import role_context
     from services.secrets_redactor import redact_secrets
 
@@ -186,6 +201,7 @@ def test_redaction_expansion_keeps_original_scope_hash_and_marks_truncation():
 
 @pytest.mark.asyncio
 async def test_long_upstream_role_uses_same_identity_for_facet_and_generator(monkeypatch):
+    """Verify long upstream role uses same identity for facet and generator."""
     import services.dynamic_settings as ds
     from services.insights import facets
     from services.insights.evidence import role_context
@@ -213,6 +229,7 @@ async def test_long_upstream_role_uses_same_identity_for_facet_and_generator(mon
     ],
 )
 def test_mcp_json_string_arguments_have_the_same_target_semantics(arguments, expected, unknown):
+    """Verify mcp json string arguments have the same target semantics."""
     row = {
         "type": "message",
         "message": {
@@ -225,6 +242,7 @@ def test_mcp_json_string_arguments_have_the_same_target_semantics(arguments, exp
 
 
 def test_provider_source_index_is_bounded_and_does_not_mutate_audit_roster():
+    """Verify provider source index is bounded and does not mutate audit roster."""
     import copy
 
     from services.insights.evidence import prompt_sources

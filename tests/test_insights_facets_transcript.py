@@ -11,6 +11,7 @@ import pytest
 
 
 def _meta(session_id: str, duration: int, tool_count: int) -> dict:
+    """Build scoped fixture metadata with the cache markers required by this pipeline."""
     from services.insights.scope import SessionKey
 
     return {
@@ -86,6 +87,7 @@ def test_transcript_falls_back_to_normalized_preview_only_for_prompts():
 
 @pytest.mark.asyncio
 async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypatch):
+    """Verify generate report uses cached facets outside top sessions."""
     import services.dynamic_settings as ds
     from services.insights import generator
     from services.insights.evidence import role_hash
