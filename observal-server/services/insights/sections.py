@@ -219,7 +219,8 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
         "why_for_you": "why this would help YOU based on your sessions",
         "confidence": "high | medium | low | insufficient_data",
         "risk": "low | medium | high",
-        "example": "required only for create_new_skill/create_new_hook; see format rules below"
+        "example": "required only for create_new_skill/create_new_hook; see format rules below",
+        "requirements": ["jq"]
       }}
     ],
     "usage_patterns": [
@@ -236,6 +237,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT:
 Rules:
 - Structured agent_config changes are unsupported; propose only system_prompt or AGENTS.md text additions.
 - Every config addition MUST include requires_feature_indices: a list of zero-based features_to_try indices it needs, or [] for an independent change. Do not guess dependencies from names.
+- Every create_new_hook MUST include requirements: the executables its script calls besides bash (for example "jq"), or [] when it uses only Bash builtins.
 - config_additions: PRIORITIZE instructions from USER INSTRUCTIONS and REPEATED INSTRUCTIONS sections. These are things the user has ALREADY told the agent but it keeps forgetting. Maximum 7.
 - features_to_try: 2-3 concrete suggestions.
 - usage_patterns: 2-4 suggestions for how to prompt differently. Each must include a copyable prompt the user can try immediately.

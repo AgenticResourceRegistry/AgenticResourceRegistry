@@ -125,6 +125,7 @@ async def preview_agent_insight_report_suggestions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.user)),
 ):
+    """Authorize editor access and return a rollback-only preview of selected artifacts."""
     from api.routes.insights import preview_report_suggestions
 
     await get_agent_insight_report(agent_id, report_id, db, current_user)

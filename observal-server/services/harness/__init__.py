@@ -95,7 +95,9 @@ class HarnessAdapter(Protocol):
 
     def emits_prompt_files(self) -> bool: ...
 
-    def hook_delivery_errors(self, hook: dict, scope: str) -> list[str]: ...
+    def hook_delivery_errors(self, hook: dict, scope: str) -> list[str]:
+        """Return reasons a hook cannot actually be delivered at this scope."""
+        ...
 
 
 class BaseHarnessAdapter:
@@ -192,6 +194,7 @@ class BaseHarnessAdapter:
         else:
 
             def values(value):
+                """Collect command strings recursively from the generated hook installation plan."""
                 if isinstance(value, str):
                     return [value]
                 if isinstance(value, dict):

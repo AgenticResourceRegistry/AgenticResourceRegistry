@@ -85,6 +85,7 @@ class PiAdapter(BaseHarnessAdapter):
         return "pi"
 
     def hook_delivery_errors(self, hook: dict, scope: str) -> list[str]:
+        """Return adapter-specific reasons a hook cannot actually be delivered at this scope."""
         _, warnings = pi_hook_entries([hook], scope)
         return warnings
 

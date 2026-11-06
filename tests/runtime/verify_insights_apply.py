@@ -10,10 +10,8 @@ Set INSIGHTS_DISPOSABLE_VERIFY=1 explicitly in the disposable API container.
 import asyncio
 import json
 import os
-import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 from sqlalchemy import func, select
@@ -30,6 +28,7 @@ from version import get_server_version
 
 
 async def counts():
+    """Count proposal artifacts so rollback and failure paths can be checked for writes."""
     async with async_session() as db:
         return [
             await db.scalar(select(func.count()).select_from(model))
@@ -38,10 +37,40 @@ async def counts():
 
 
 async def main():
+    """Exercise the guarded disposable stack without changing hosted settings or model providers."""
     if os.environ.get("INSIGHTS_DISPOSABLE_VERIFY") != "1":
         raise RuntimeError("Requires explicit disposable verification")
+    import threading
+    from types import SimpleNamespace
+
+    from services.insights import self_learn
+
+    caller_thread = threading.get_ident()
+    worker_threads = []
+    original_normalize = self_learn._normalize_script
+
+    def normalize(script, name):
+        """Observe the real parse-only subprocess without changing its validation."""
+        worker_threads.append(threading.get_ident())
+        return original_normalize(script, name)
+
+    self_learn._normalize_script = normalize
+    try:
+        await self_learn._create_hook_listing(
+            SimpleNamespace(name="runtime-hook", supported_harnesses=[]),
+            {"example": "# Hook: PreToolUse\n#!/bin/bash\nexit 0"},
+            uuid.uuid4(),
+            None,
+        )
+    except ValueError as error:
+        assert "Agent must declare harnesses" in str(error)
+    finally:
+        self_learn._normalize_script = original_normalize
+    assert len(worker_threads) == 1 and worker_threads[0] != caller_thread
     suffix = uuid.uuid4().hex[:8]
-    password = secrets.token_urlsafe(30)
+    password = os.environ.get("INSIGHTS_RUNTIME_PASSWORD", "")
+    if len(password) < 24:
+        raise RuntimeError("Pass an ephemeral INSIGHTS_RUNTIME_PASSWORD (24+ chars) to this process and browser runner")
     async with async_session() as db:
         people = {}
         for name, role in (
@@ -123,6 +152,7 @@ async def main():
     ) as client:
 
         async def login(name):
+            """Authenticate the disposable fixture user without printing its credentials."""
             response = await client.post(
                 "/api/v1/auth/login", json={"email": f"{name}-{suffix}@example.com", "password": password}
             )
@@ -256,18 +286,13 @@ async def main():
         db.add(ui)
         await db.commit()
         ui_id = str(ui.id)
-    credential_file = Path("/tmp/insights-apply-ui.json")
-    credential_file.write_text(
-        json.dumps(
-            {"email": f"owner-{suffix}@example.com", "password": password, "agent_id": agent_id, "report_id": ui_id}
-        )
-    )
-    credential_file.chmod(0o600)
     print(
         json.dumps(
             {
                 "agent_id": agent_id,
                 "report_id": report_id,
+                "ui_report_id": ui_id,
+                "fixture_email": f"owner-{suffix}@example.com",
                 "bad_report_id": bad_id,
                 "owner_permissions": "passed",
                 "reader_denied": "passed",

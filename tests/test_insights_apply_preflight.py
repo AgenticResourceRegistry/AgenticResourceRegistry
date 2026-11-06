@@ -29,6 +29,7 @@ SELECT = {"config_indices": [0], "feature_indices": [], "pattern_indices": []}
 
 
 async def setup_report(db, addition="Be concise."):
+    """Persist a minimal owned report with one independent prompt addition."""
     owner = await _user(db, "owner@example.com")
     agent = await _agent(db, owner)
     now = datetime.now(UTC)
@@ -58,6 +59,7 @@ async def setup_report(db, addition="Be concise."):
 
 
 async def counts(db):
+    """Count proposal artifacts so rollback and failure paths can be checked for writes."""
     return tuple(
         [await db.scalar(select(func.count()).select_from(model)) for model in [AgentVersion, Review, InboxItem]]
     )
@@ -65,6 +67,7 @@ async def counts(db):
 
 @pytest.mark.asyncio
 async def test_preview_rolls_back_all_artifacts_and_digest_matches_submission(db):
+    """Verify preview rolls back all artifacts and digest matches submission."""
     owner, rid = await setup_report(db)
     before = await counts(db)
     preview = await preview_insight_suggestions(rid, db, owner, SELECT)
@@ -83,6 +86,7 @@ async def test_preview_rolls_back_all_artifacts_and_digest_matches_submission(db
 
 @pytest.mark.asyncio
 async def test_stale_preview_leaves_report_unapplied(db):
+    """Verify stale preview leaves report unapplied."""
     owner, rid = await setup_report(db)
     preview = await preview_insight_suggestions(rid, db, owner, SELECT)
     report = await db.get(InsightReport, rid)
@@ -110,6 +114,7 @@ async def test_stale_preview_leaves_report_unapplied(db):
 
 @pytest.mark.asyncio
 async def test_raw_secret_fails_without_leaking_or_committing(db):
+    """Verify raw secret fails without leaking or committing."""
     token = "sk-proj-" + "a" * 32
     owner, rid = await setup_report(db, "Use " + token)
     before = await counts(db)
@@ -125,6 +130,7 @@ async def test_raw_secret_fails_without_leaking_or_committing(db):
 
 @pytest.mark.asyncio
 async def test_generated_review_never_auto_publishes_when_checks_clear(db):
+    """Verify generated review never auto publishes when checks clear."""
     from services.review.decisions import gate, sync_state
     from services.review.policy import ApprovalPolicy
 
@@ -143,6 +149,7 @@ async def test_generated_review_never_auto_publishes_when_checks_clear(db):
 
 @pytest.mark.asyncio
 async def test_required_feature_cannot_be_silently_unselected(db):
+    """Verify required feature cannot be silently unselected."""
     owner, rid = await setup_report(db)
     report = await db.get(InsightReport, rid)
     report.narrative = {
@@ -176,6 +183,7 @@ async def test_required_feature_cannot_be_silently_unselected(db):
     ],
 )
 def test_explicit_hook_mapping(header, event, mode):
+    """Verify explicit hook mapping."""
     from services.insights.self_learn import _parse_hook_example
 
     actual_event, actual_mode, body = _parse_hook_example(f"# Hook: {header}\n#!/usr/bin/env bash\nexit 0")
@@ -184,6 +192,7 @@ def test_explicit_hook_mapping(header, event, mode):
 
 @pytest.mark.parametrize("header", ["before commit", "before push", "unknown", "session after tool", ""])
 def test_ambiguous_hook_events_are_rejected(header):
+    """Verify ambiguous hook events are rejected."""
     from services.insights.self_learn import _parse_hook_example
 
     with pytest.raises(ValueError):
@@ -191,6 +200,7 @@ def test_ambiguous_hook_events_are_rejected(header):
 
 
 def test_hook_validation_is_syntax_only_and_never_executes(tmp_path):
+    """Verify hook validation is syntax only and never executes."""
     from services.insights.self_learn import _normalize_script
 
     sentinel = tmp_path / "must-not-exist"
@@ -202,6 +212,7 @@ def test_hook_validation_is_syntax_only_and_never_executes(tmp_path):
 
 
 def test_secret_boundaries_and_structured_context():
+    """Verify secret boundaries and structured context."""
     from services.review.secret_scanner import CREDENTIAL, secret_paths
 
     harmless = "bug-repro-ask-answers-not-investigations"
@@ -216,6 +227,7 @@ def test_secret_boundaries_and_structured_context():
 @pytest.mark.parametrize("operation", ["apply", "preview"])
 @pytest.mark.parametrize("scoped", [False, True])
 async def test_actual_route_dependencies_allow_editors_not_readers(monkeypatch, actor_kind, operation, scoped):
+    """Verify actual route dependencies allow editors not readers."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -267,6 +279,7 @@ async def test_actual_route_dependencies_allow_editors_not_readers(monkeypatch, 
 
 
 def test_embedded_generic_keys_in_credential_maps_still_fail():
+    """Verify embedded generic keys in credential maps still fail."""
     from services.review.secret_scanner import CREDENTIAL, secret_paths
 
     token = "prefixsk-" + "a" * 32
@@ -276,6 +289,7 @@ def test_embedded_generic_keys_in_credential_maps_still_fail():
 
 
 def test_pi_delivery_contract_uses_existing_supported_matrix():
+    """Verify pi delivery contract uses existing supported matrix."""
     from services.harness import ensure_loaded, get_adapter
 
     ensure_loaded()
@@ -296,6 +310,7 @@ def test_pi_delivery_contract_uses_existing_supported_matrix():
 
 @pytest.mark.asyncio
 async def test_assembled_reused_hook_is_checked_for_real_delivery(db):
+    """Verify assembled reused hook is checked for real delivery."""
     from models.agent_component import AgentComponent
     from models.hook import HookListing, HookVersion
     from models.mcp import ListingStatus
@@ -340,3 +355,57 @@ async def test_assembled_reused_hook_is_checked_for_real_delivery(db):
     preview = await preview_insight_suggestions(rid, db, owner, SELECT)
     assert not preview["ready"] and any(e["check"] == "delivery" for e in preview["errors"])
     assert await counts(db) == before
+
+
+@pytest.mark.parametrize("action", ["No_Action", "Remove_Component"])
+@pytest.mark.asyncio
+async def test_mixed_case_skipped_features_cannot_satisfy_prompt_dependencies(db, action):
+    """Match the feature loop's normalization before allowing dependent instructions."""
+    owner, rid = await setup_report(db)
+    report = await db.get(InsightReport, rid)
+    report.narrative = {
+        "suggestions": {
+            "config_additions": [{"addition": "Use the required feature", "requires_feature_indices": [0]}],
+            "features_to_try": [{"action_type": action, "feature": "Unused"}],
+            "usage_patterns": [],
+        }
+    }
+    await db.commit()
+    before = await counts(db)
+    with pytest.raises(ValueError, match="not removed or skipped"):
+        await preview_insight_suggestions(rid, db, owner, {**SELECT, "feature_indices": [0]})
+    assert await counts(db) == before
+
+
+def test_generated_hook_prompt_requests_executable_requirements():
+    """The model schema and format rules must expose hook preflight dependencies."""
+    from services.insights.sections import SECTION_PROMPTS
+
+    prompt = SECTION_PROMPTS["suggestions"]
+    assert '"requirements": ["jq"]' in prompt
+    assert "Every create_new_hook MUST include requirements" in prompt
+
+
+@pytest.mark.asyncio
+async def test_hook_syntax_validation_runs_outside_the_event_loop(monkeypatch):
+    """The blocking parse-only subprocess must not stall concurrent API requests."""
+    import threading
+    from types import SimpleNamespace
+
+    from services.insights import self_learn
+
+    current = threading.get_ident()
+    observed = []
+
+    def normalize(script, name):
+        """Record the worker identity without spawning or executing a shell."""
+        observed.append(threading.get_ident())
+        return script
+
+    monkeypatch.setattr(self_learn, "_normalize_script", normalize)
+    agent = SimpleNamespace(name="fixture", supported_harnesses=[])
+    with pytest.raises(ValueError, match="Agent must declare harnesses"):
+        await self_learn._create_hook_listing(
+            agent, {"example": "# Hook: PreToolUse\n#!/bin/bash\nexit 0"}, uuid.uuid4(), None
+        )
+    assert len(observed) == 1 and observed[0] != current
