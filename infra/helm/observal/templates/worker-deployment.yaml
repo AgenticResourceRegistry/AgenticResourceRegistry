@@ -45,6 +45,8 @@ spec:
             - /app/.venv/bin/python
             - -c
             - "import asyncio; asyncio.set_event_loop(asyncio.new_event_loop()); from arq import run_worker; from worker import WorkerSettings; run_worker(WorkerSettings)"
+          env:
+            {{- include "observal.connectionEnv" . | trim | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "observal.configMapName" . }}

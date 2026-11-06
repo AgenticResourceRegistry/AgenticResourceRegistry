@@ -53,6 +53,7 @@ spec:
           env:
             - name: SKIP_DDL_ON_STARTUP
               value: "true"
+            {{- include "observal.connectionEnv" . | trim | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "observal.configMapName" . }}

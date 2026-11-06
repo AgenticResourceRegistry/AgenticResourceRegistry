@@ -11,12 +11,10 @@ from loguru import logger as optic
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from config import settings
+from observal_shared.migration.connections import parse_clickhouse_url
 
-_parsed = urlparse(settings.CLICKHOUSE_URL.replace("clickhouse://", "http://"))
-CLICKHOUSE_HTTP = f"http://{_parsed.hostname}:{_parsed.port or 8123}"
-CLICKHOUSE_DB = _parsed.path.strip("/") or "default"
-CLICKHOUSE_USER = _parsed.username or "default"
-CLICKHOUSE_PASSWORD = _parsed.password or ""
+CLICKHOUSE_HTTP, CLICKHOUSE_DB, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD = parse_clickhouse_url(settings.CLICKHOUSE_URL)
+_parsed = urlparse(CLICKHOUSE_HTTP)
 
 
 def credential_headers() -> dict[str, str]:

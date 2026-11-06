@@ -7,7 +7,7 @@
 
 import json
 import time
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import redis.asyncio as aioredis
 from arq import create_pool as arq_create_pool
@@ -139,8 +139,10 @@ def parse_redis_settings() -> RedisSettings:
     return RedisSettings(
         host=parsed.hostname or "localhost",
         port=parsed.port or 6379,
-        password=parsed.password,
+        username=unquote(parsed.username) if parsed.username else None,
+        password=unquote(parsed.password) if parsed.password else None,
         database=int(parsed.path.lstrip("/") or 0),
+        ssl=parsed.scheme == "rediss",
     )
 
 

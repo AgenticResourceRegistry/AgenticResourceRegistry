@@ -91,6 +91,107 @@ Name of the ConfigMap holding non-sensitive env vars.
 {{- end }}
 
 {{/*
+Embedded workload toggles. Render "true" or an empty string.
+*/}}
+{{- define "observal.postgres.embedded" -}}
+{{- if and .Values.postgresql.enabled (not .Values.externalPostgres.enabled) }}true{{ end }}
+{{- end }}
+
+{{- define "observal.clickhouse.embedded" -}}
+{{- if and .Values.clickhouse.enabled (not .Values.externalClickhouse.enabled) }}true{{ end }}
+{{- end }}
+
+{{- define "observal.redis.embedded" -}}
+{{- if and .Values.redis.enabled (not .Values.externalRedis.enabled) }}true{{ end }}
+{{- end }}
+
+{{/*
+Name of the Secret holding URLs built from externalX host settings.
+*/}}
+{{- define "observal.externalSecretName" -}}
+{{- printf "%s-external" (include "observal.fullname" .) }}
+{{- end }}
+
+{{/*
+Percent-encoded userinfo (with trailing @), or empty when there is neither user nor password.
+Takes a dict with username and password.
+*/}}
+{{- define "observal.urlUserinfo" -}}
+{{- $user := (.username | default "") | toString | urlquery | replace "+" "%20" -}}
+{{- $pass := (.password | default "") | toString | urlquery | replace "+" "%20" -}}
+{{- if and $user $pass -}}
+{{- printf "%s:%s@" $user $pass -}}
+{{- else if $user -}}
+{{- printf "%s@" $user -}}
+{{- else if $pass -}}
+{{- printf ":%s@" $pass -}}
+{{- end -}}
+{{- end }}
+
+{{- define "observal.externalPostgresUrl" -}}
+{{- $e := .Values.externalPostgres -}}
+{{- printf "postgresql+asyncpg://%s%s:%d/%s" (include "observal.urlUserinfo" $e) $e.host (int $e.port) $e.database -}}
+{{- if $e.sslMode }}?ssl={{ $e.sslMode }}{{ end -}}
+{{- end }}
+
+{{- define "observal.externalClickhouseUrl" -}}
+{{- $e := .Values.externalClickhouse -}}
+{{- $scheme := ternary "clickhouses" "clickhouse" (default false $e.secure) -}}
+{{- printf "%s://%s%s:%d/%s" $scheme (include "observal.urlUserinfo" $e) $e.host (int $e.port) $e.database -}}
+{{- end }}
+
+{{- define "observal.externalRedisUrl" -}}
+{{- $e := .Values.externalRedis -}}
+{{- $scheme := ternary "rediss" "redis" (default false $e.tls) -}}
+{{- printf "%s://%s%s:%d/%d" $scheme (include "observal.urlUserinfo" $e) $e.host (int $e.port) (int $e.database) -}}
+{{- end }}
+
+{{/*
+Fail early on inconsistent embedded/external settings.
+*/}}
+{{- define "observal.validate" -}}
+{{- range $svc := list
+    (dict "name" "postgresql" "ext" "externalPostgres" "embedded" .Values.postgresql.enabled "cfg" .Values.externalPostgres)
+    (dict "name" "clickhouse" "ext" "externalClickhouse" "embedded" .Values.clickhouse.enabled "cfg" .Values.externalClickhouse)
+    (dict "name" "redis" "ext" "externalRedis" "embedded" .Values.redis.enabled "cfg" .Values.externalRedis) -}}
+{{- if and (not $svc.embedded) (not $svc.cfg.enabled) -}}
+{{- fail (printf "%s.enabled=false requires %s.enabled=true" $svc.name $svc.ext) -}}
+{{- end -}}
+{{- if and $svc.cfg.enabled (not $svc.cfg.existingSecret) (not $svc.cfg.host) -}}
+{{- fail (printf "%s.enabled=true requires %s.existingSecret or %s.host" $svc.ext $svc.ext $svc.ext) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+DATABASE_URL, CLICKHOUSE_URL and REDIS_URL env entries, each read from the Secret that owns it.
+*/}}
+{{- define "observal.connectionEnv" -}}
+{{- $shared := include "observal.secretName" . -}}
+{{- $generated := include "observal.externalSecretName" . -}}
+{{- range $svc := list
+    (dict "var" "DATABASE_URL" "embedded" (include "observal.postgres.embedded" .) "cfg" .Values.externalPostgres)
+    (dict "var" "CLICKHOUSE_URL" "embedded" (include "observal.clickhouse.embedded" .) "cfg" .Values.externalClickhouse)
+    (dict "var" "REDIS_URL" "embedded" (include "observal.redis.embedded" .) "cfg" .Values.externalRedis) -}}
+{{- $name := $shared -}}
+{{- $key := $svc.var -}}
+{{- if not $svc.embedded -}}
+{{- if $svc.cfg.existingSecret -}}
+{{- $name = $svc.cfg.existingSecret -}}
+{{- $key = default "connection-uri" $svc.cfg.existingSecretKey -}}
+{{- else -}}
+{{- $name = $generated -}}
+{{- end -}}
+{{- end }}
+- name: {{ $svc.var }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $name }}
+      key: {{ $key }}
+{{- end }}
+{{- end }}
+
+{{/*
 Image pull policy helper. Takes a dict with repository, tag, pullPolicy,
 and optional appVersion fallback.
 */}}
@@ -109,7 +210,7 @@ and optional appVersion fallback.
 Standard initContainer: wait for Postgres readiness.
 */}}
 {{- define "observal.initWaitPostgres" -}}
-{{- if .Values.postgresql.enabled }}
+{{- if include "observal.postgres.embedded" . }}
 - name: wait-for-postgres
   image: postgres:16
   imagePullPolicy: IfNotPresent
@@ -133,7 +234,7 @@ Standard initContainer: wait for Postgres readiness.
 Standard initContainer: wait for ClickHouse readiness.
 */}}
 {{- define "observal.initWaitClickhouse" -}}
-{{- if .Values.clickhouse.enabled }}
+{{- if include "observal.clickhouse.embedded" . }}
 - name: wait-for-clickhouse
   image: curlimages/curl:8.8.0
   imagePullPolicy: IfNotPresent
@@ -151,7 +252,7 @@ Standard initContainer: wait for ClickHouse readiness.
 Standard initContainer: wait for Redis readiness.
 */}}
 {{- define "observal.initWaitRedis" -}}
-{{- if .Values.redis.enabled }}
+{{- if include "observal.redis.embedded" . }}
 - name: wait-for-redis
   image: redis:7-alpine
   imagePullPolicy: IfNotPresent
