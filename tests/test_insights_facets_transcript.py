@@ -43,6 +43,8 @@ def _meta(session_id: str, duration: int, tool_count: int) -> dict:
         "start_time": "2026-01-01T00:00:00Z",
         "harness": "pi",
         "user_message_count": 2,
+        "parent_metadata_known": True,
+        "instruction_evidence": {"state": "verified", "reason": "fixture", "cache_key": "fixture-source"},
     }
 
 
@@ -86,8 +88,12 @@ def test_transcript_falls_back_to_normalized_preview_only_for_prompts():
 async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypatch):
     import services.dynamic_settings as ds
     from services.insights import generator
+    from services.insights.evidence import role_hash
 
     cached_facet = {
+        "_relevance_schema": 1,
+        "_scope_hash": role_hash("fixture role"),
+        "_scope_complete": True,
         "underlying_goal": "fix a bug",
         "goal_categories": ["fix_bug"],
         "outcome": "mostly_achieved",
@@ -117,6 +123,7 @@ async def test_generate_report_uses_cached_facets_outside_top_sessions(monkeypat
         agent_id="agent-id",
         period_start="2026-01-01",
         period_end="2026-01-02",
+        agent_config={"system_prompt_excerpt": "fixture role", "system_prompt_length": 12},
         db=SimpleNamespace(),
     )
 

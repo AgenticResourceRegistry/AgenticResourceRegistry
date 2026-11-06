@@ -216,10 +216,34 @@ async def test_agent_generator_keeps_same_id_users_separate(monkeypatch):
     raw = '{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}'
     metas = [extract_session_meta("same-id", [raw]), extract_session_meta("same-id", [raw])]
     for meta in metas:
-        meta.update(credits=0, harness="pi", layer_hash="", agent_version="")
+        meta.update(
+            credits=0,
+            harness="pi",
+            layer_hash="",
+            agent_version="",
+            parent_metadata_known=True,
+            instruction_evidence={"state": "verified", "reason": "fixture", "cache_key": "fixture"},
+        )
     metas[0].update(session_key=alice, user_id="alice")
     metas[1].update(session_key=bob, user_id="bob")
-    cache = AsyncMock(return_value={alice: {"goal_categories": ["fix_bug"]}, bob: {"goal_categories": ["write_tests"]}})
+    from services.insights.evidence import role_hash
+
+    cache = AsyncMock(
+        return_value={
+            alice: {
+                "goal_categories": ["fix_bug"],
+                "_relevance_schema": 1,
+                "_scope_hash": role_hash("fixture role"),
+                "_scope_complete": True,
+            },
+            bob: {
+                "goal_categories": ["write_tests"],
+                "_relevance_schema": 1,
+                "_scope_hash": role_hash("fixture role"),
+                "_scope_complete": True,
+            },
+        }
+    )
     monkeypatch.setattr(generator, "extract_all_session_metas", AsyncMock(return_value=metas))
     monkeypatch.setattr(generator, "load_cached_facets_batch", cache)
     monkeypatch.setattr(generator, "generate_sections", AsyncMock(return_value={"ok": True}))
@@ -228,6 +252,7 @@ async def test_agent_generator_keeps_same_id_users_separate(monkeypatch):
         agent_id="id",
         period_start="2026-01-01",
         period_end="2026-01-02",
+        agent_config={"system_prompt_excerpt": "fixture role", "system_prompt_length": 12},
         db=SimpleNamespace(),
     )
     assert set(cache.await_args.args[0]) == {alice, bob}

@@ -26,6 +26,7 @@ from services.insight_version_filters import agent_version_filter
 from services.session_parsers import meta_records
 
 from ._deps import get_query
+from .evidence import mcp_target
 from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
@@ -87,6 +88,8 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
 
     Returns a dict with all computable stats (no LLM needed).
     """
+    observed_mcp_targets: dict[str, int] = {}
+    unidentified_mcp_calls = 0
     tool_counts: dict[str, int] = {}
     languages: dict[str, int] = {}
     tool_error_categories: dict[str, int] = {}
@@ -233,6 +236,11 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
                         continue
                     if tool_id:
                         seen_tool_ids.add(tool_id)
+                    target, mcp_attempt = mcp_target(tool_name, block.get("arguments"))
+                    if target:
+                        observed_mcp_targets[target] = observed_mcp_targets.get(target, 0) + 1
+                    elif mcp_attempt:
+                        unidentified_mcp_calls += 1
 
                     tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
                     # What the call does, when the harness names its tools differently from Pi.
@@ -360,6 +368,8 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
         "failed_response_count": failed_response_count,
         "total_messages": total_messages,
         "tool_counts": tool_counts,
+        "observed_mcp_target_attempts": observed_mcp_targets,
+        "unidentified_mcp_attempts": unidentified_mcp_calls,
         "languages": languages,
         "git_commits": git_commits,
         "git_pushes": git_pushes,
@@ -607,6 +617,8 @@ def aggregate_metas(metas: list[dict]) -> dict:
         "sessions_using_subagent": 0,
         "sessions_using_mcp": 0,
         "tool_counts": {},
+        "observed_mcp_target_attempts": {},
+        "unidentified_mcp_attempts": 0,
         "languages": {},
         "tool_error_categories": {},
         "projects": {},
@@ -646,6 +658,10 @@ def aggregate_metas(metas: list[dict]) -> dict:
             agg["sessions_using_subagent"] += 1
         if meta["uses_mcp"]:
             agg["sessions_using_mcp"] += 1
+
+        for target, count in meta.get("observed_mcp_target_attempts", {}).items():
+            agg["observed_mcp_target_attempts"][target] = agg["observed_mcp_target_attempts"].get(target, 0) + count
+        agg["unidentified_mcp_attempts"] += meta.get("unidentified_mcp_attempts", 0)
 
         # Merge tool counts
         for tool, count in meta["tool_counts"].items():
