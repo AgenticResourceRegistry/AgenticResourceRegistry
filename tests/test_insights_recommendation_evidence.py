@@ -151,3 +151,96 @@ async def test_truncated_role_forces_unknown_relevance(monkeypatch):
         "s", "task with enough text " * 10, {"_agent_scope_excerpt": "role", "_agent_scope_complete": False}
     )
     assert result["agent_task_relevance"]["state"] == "unknown"
+
+
+@pytest.mark.parametrize("bad", ["unreferenced advice", ["unreferenced advice"], 7, True])
+def test_actionable_wrong_shapes_cannot_escape_through_legacy_rendering(bad):
+    result = validate_narrative({"suggestions": bad, "on_the_horizon": bad, "at_a_glance": bad}, {})
+    assert result["suggestions"] == {"config_additions": [], "features_to_try": [], "usage_patterns": []}
+    assert result["on_the_horizon"]["opportunities"] == []
+    assert "unreferenced advice" not in json.dumps(result)
+    assert any(r["reason"] == "invalid_section_shape" for r in result["evidence_validation"]["rejected_records"])
+
+
+def test_legacy_items_do_not_bypass_canonical_suggestion_gate():
+    result = validate_narrative({"suggestions": {"items": [{"action": "unreferenced advice"}]}}, {})
+    assert "items" not in result["suggestions"]
+
+
+def test_every_actionable_prompt_schema_explicitly_requests_source_refs():
+    from services.insights.sections import SECTION_PROMPTS
+
+    for name, expected in [("what_works", 1), ("friction_analysis", 1), ("suggestions", 3), ("on_the_horizon", 1)]:
+        assert SECTION_PROMPTS[name].count('"evidence_refs"') == expected
+
+
+def test_redaction_expansion_keeps_original_scope_hash_and_marks_truncation():
+    from services.insights.evidence import role_context
+    from services.secrets_redactor import redact_secrets
+
+    raw = "password=abcdefgh\n" + "x" * (2000 - len("password=abcdefgh\n"))
+    assert len(redact_secrets(raw)) > 2000
+    text, scope_hash, complete = role_context(raw, True)
+    assert len(text) <= 2000 and scope_hash == role_hash(raw) and complete is False
+
+
+@pytest.mark.asyncio
+async def test_long_upstream_role_uses_same_identity_for_facet_and_generator(monkeypatch):
+    import services.dynamic_settings as ds
+    from services.insights import facets
+    from services.insights.evidence import role_context
+
+    raw = "role " * 450
+    monkeypatch.setattr(ds, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        facets, "get_call_model", lambda: AsyncMock(return_value={"agent_task_relevance": {"state": "in_scope"}})
+    )
+    result = await facets.extract_facets(
+        "s", "Task with enough input " * 10, {"_agent_scope_excerpt": raw, "_agent_scope_complete": True}
+    )
+    assert result["_scope_hash"] == role_context(raw, True)[1] == role_hash(raw)
+    assert result["_scope_complete"] is False and result["agent_task_relevance"]["state"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "arguments,expected,unknown",
+    [
+        ('{"server":"linear","tool":"linear_get_issue"}', {"linear": 1}, 0),
+        ('{"server":"linear","search":"tools"}', {}, 1),
+        ("[1,2]", {}, 1),
+        ("null", {}, 1),
+        ("{bad", {}, 1),
+    ],
+)
+def test_mcp_json_string_arguments_have_the_same_target_semantics(arguments, expected, unknown):
+    row = {
+        "type": "message",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "toolCall", "id": "c", "name": "mcp", "arguments": arguments}],
+        },
+    }
+    result = extract_session_meta("s", [json.dumps(row)], "pi")
+    assert result["observed_mcp_target_attempts"] == expected and result["unidentified_mcp_attempts"] == unknown
+
+
+def test_provider_source_index_is_bounded_and_does_not_mutate_audit_roster():
+    import copy
+
+    from services.insights.evidence import prompt_sources
+
+    index = {
+        f"s_{i}": {
+            "project_id": "private-project",
+            "user_id": "private-user",
+            "session_id": f"private-{i}",
+            "eligible_for_changes": True,
+            "task_relevance": "in_scope",
+        }
+        for i in range(100)
+    }
+    before = copy.deepcopy(index)
+    provider = prompt_sources(index)
+    assert len(provider) == 50 and index == before
+    assert "private-" not in json.dumps(provider) and "user_id" not in json.dumps(provider)
+    assert list(prompt_sources(index, ["s_99", "s_1", "invalid"])) == ["s_99", "s_1"]

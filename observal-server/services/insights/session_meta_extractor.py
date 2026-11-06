@@ -298,7 +298,15 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
                         continue
                     if tool_id:
                         seen_tool_ids.add(tool_id)
-                    target, mcp_attempt = mcp_target(tool_name, block.get("arguments"))
+                    args = block.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (ValueError, TypeError, RecursionError):
+                            args = {}
+                    if not isinstance(args, dict):
+                        args = {}
+                    target, mcp_attempt = mcp_target(tool_name, args)
                     if target:
                         observed_mcp_targets[target] = observed_mcp_targets.get(target, 0) + 1
                     elif mcp_attempt:
@@ -312,13 +320,6 @@ def extract_session_meta(session_id: str, raw_lines: list[str], harness: str = "
                         uses_subagent = True
                     if tool_name.startswith("mcp__") or tool_name == "mcp":
                         uses_mcp = True
-
-                    args = block.get("arguments", {})
-                    if not isinstance(args, dict):
-                        try:
-                            args = json.loads(args) if isinstance(args, str) else {}
-                        except (json.JSONDecodeError, TypeError):
-                            args = {}
 
                     file_path = args.get("path", "") or args.get("file_path", "")
 

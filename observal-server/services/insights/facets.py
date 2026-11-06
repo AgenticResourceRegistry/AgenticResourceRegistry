@@ -16,7 +16,7 @@ import structlog
 from services.secrets_redactor import redact_secrets
 
 from ._deps import get_call_model, get_facets_model
-from .evidence import RELEVANCE_SCHEMA, role_hash
+from .evidence import RELEVANCE_SCHEMA, role_context
 from .scope import SessionKey
 
 logger = structlog.get_logger(__name__)
@@ -102,9 +102,7 @@ async def extract_facets(
 
     model_override = await ds.get("insights.model_facets") or None
 
-    role = meta.get("_agent_scope_excerpt", "")
-    role = redact_secrets(role[:2000]) if isinstance(role, str) else ""
-    complete = meta.get("_agent_scope_complete") is True
+    role, scope_hash, complete = role_context(meta.get("_agent_scope_excerpt"), meta.get("_agent_scope_complete"))
     prompt = FACET_PROMPT.format(transcript=transcript, agent_role=role or "Unavailable; relevance is unknown")
 
     try:
@@ -126,7 +124,7 @@ async def extract_facets(
                 **result,
                 "agent_task_relevance": relevance,
                 "_relevance_schema": RELEVANCE_SCHEMA,
-                "_scope_hash": role_hash(role),
+                "_scope_hash": scope_hash,
                 "_scope_complete": complete,
             }
         return {}
