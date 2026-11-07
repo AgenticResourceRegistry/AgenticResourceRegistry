@@ -586,6 +586,59 @@ def _check_copilot(issues: list, warnings: list):
         )
 
 
+_COPILOT_CLI_USER_CONFIGS = ("settings.json", "config.json")
+
+
+def _is_observal_copilot_cli_entry(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    command = " ".join(str(entry.get(key) or "") for key in ("bash", "powershell", "command"))
+    return _is_observal_hook_entry({"command": command, "url": str(entry.get("url") or "")})
+
+
+def _strip_observal_copilot_cli_hooks(data: dict) -> tuple[dict, int]:
+    """Return *data* without Observal hook entries, and how many were removed."""
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return data, 0
+    removed = 0
+    kept_hooks: dict = {}
+    for event, entries in hooks.items():
+        if not isinstance(entries, list):
+            kept_hooks[event] = entries
+            continue
+        kept = [entry for entry in entries if not _is_observal_copilot_cli_entry(entry)]
+        removed += len(entries) - len(kept)
+        if kept:
+            kept_hooks[event] = kept
+    if not removed:
+        return data, 0
+    cleaned = {key: value for key, value in data.items() if key != "hooks"}
+    if kept_hooks:
+        cleaned["hooks"] = kept_hooks
+    return cleaned, removed
+
+
+def _copilot_cli_user_config_hooks() -> list[tuple[Path, dict, int]]:
+    """Find Observal hooks in Copilot CLI's own config files, which Observal no longer writes.
+
+    Older versions installed hooks into these files, and Copilot CLI keeps running them
+    after the hook modules they point at are gone.
+    """
+    found = []
+    for name in _COPILOT_CLI_USER_CONFIGS:
+        path = Path.home() / ".copilot" / name
+        if not path.is_file():
+            continue
+        try:
+            cleaned, removed = _strip_observal_copilot_cli_hooks(_read_json_object(path))
+        except (OSError, ValueError):
+            continue
+        if removed:
+            found.append((path, cleaned, removed))
+    return found
+
+
 def _check_copilot_cli(issues: list, warnings: list):
     """Check if Observal session push hooks are installed for Copilot CLI."""
     optic.debug("_check_copilot_cli")
@@ -593,6 +646,12 @@ def _check_copilot_cli(issues: list, warnings: list):
     if not copilot_dir.exists():
         rprint("  [dim]Copilot CLI not detected[/dim]")
         return
+
+    for path, _, removed in _copilot_cli_user_config_hooks():
+        warnings.append(
+            f"{path} has {removed} Observal hook entries that Copilot CLI still runs. "
+            "Run `observal doctor patch --harness copilot-cli` to remove them."
+        )
 
     hooks_path = copilot_dir / "hooks" / "observal.json"
     if not hooks_path.exists():
@@ -1220,20 +1279,40 @@ def _cleanup_copilot(dry_run: bool) -> bool:
 
 
 def _cleanup_copilot_cli(dry_run: bool) -> bool:
-    """Remove Observal hooks from ~/.copilot/hooks/observal.json."""
+    """Remove Observal hooks from ~/.copilot/hooks/observal.json and Copilot CLI's own config files."""
     rprint("[cyan]Copilot CLI[/cyan]")
-    hooks_path = Path.home() / ".copilot" / "hooks" / "observal.json"
-
-    if not hooks_path.exists():
-        rprint("  [dim]No ~/.copilot/hooks/observal.json found - skipping[/dim]")
-        return False
-
     verb = "Would remove" if dry_run else "Removed"
-    rprint(f"  {verb} {esc(hooks_path)}")
-    if not dry_run:
-        hooks_path.unlink()
+    changed = False
 
-    return True
+    for path, cleaned, removed in _copilot_cli_user_config_hooks():
+        rprint(f"  {verb} {removed} Observal hook entries from {esc(path)}")
+        if not dry_run:
+            atomic_write(path, json.dumps(cleaned, indent=2) + "\n")
+        changed = True
+
+    hooks_path = Path.home() / ".copilot" / "hooks" / "observal.json"
+    if not hooks_path.exists():
+        if not changed:
+            rprint("  [dim]No Observal hooks found - skipping[/dim]")
+        return changed
+
+    try:
+        cleaned, removed = _strip_observal_copilot_cli_hooks(_read_json_object(hooks_path))
+    except (OSError, ValueError):
+        rprint(f"  [yellow]Could not parse {esc(hooks_path)} - leaving it untouched[/yellow]")
+        return changed
+
+    if set(cleaned) <= {"version"}:
+        rprint(f"  {verb} {esc(hooks_path)}")
+        if not dry_run:
+            hooks_path.unlink()
+        return True
+    if removed:
+        rprint(f"  {verb} {removed} Observal hook entries from {esc(hooks_path)}")
+        if not dry_run:
+            atomic_write(hooks_path, json.dumps(cleaned, indent=2) + "\n")
+        return True
+    return changed
 
 
 def _cleanup_opencode(dry_run: bool) -> bool:
@@ -1831,6 +1910,14 @@ def _patch_copilot_cli(dry_run: bool) -> bool:
 
     desired = build_copilot_cli_hooks()
 
+    stale_removed = False
+    for path, cleaned, removed in _copilot_cli_user_config_hooks():
+        verb = "Would remove" if dry_run else "Removed"
+        rprint(f"  {verb} {removed} stale Observal hook entries from {esc(path)}")
+        if not dry_run:
+            atomic_write(path, json.dumps(cleaned, indent=2) + "\n")
+        stale_removed = True
+
     # Load existing hook file if present
     existing: dict = {}
     if hooks_path.exists():
@@ -1848,8 +1935,9 @@ def _patch_copilot_cli(dry_run: bool) -> bool:
             break
 
     if not needs_update:
-        rprint("  [dim]Already up to date[/dim]")
-        return False
+        if not stale_removed:
+            rprint("  [dim]Already up to date[/dim]")
+        return stale_removed
 
     # Merge: keep existing non-Observal hooks, add ours
     merged_hooks = existing_hooks.copy()
