@@ -213,7 +213,9 @@ def _reconcile_harness(
             rprint(f"  [red]✗[/red] {esc(source.session_id)} could not be read")
             continue
 
-        local_offset, _line_count, finalized = read_cursor_state(source.checkpoint_key)
+        local_offset, _line_count, finalized = read_cursor_state(
+            source.checkpoint_key, destination=str(cfg.get("server_url") or "")
+        )
         bytes_new = max(size - local_offset, 0)
         session["bytes_new"] = bytes_new
         if dry_run:

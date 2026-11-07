@@ -148,7 +148,7 @@ def test_session_end_finalises_and_advances_the_cursor(tmp_path: Path, monkeypat
 
     assert posted[0]["final"] is True
     assert posted[0]["session_hash"]
-    offset, line_count, finalized = base.read_cursor_state("20260807_1", home=tmp_path)
+    offset, line_count, finalized = base.read_cursor_state("20260807_1", home=tmp_path, destination="http://server")
     assert finalized is True
     assert line_count == 3  # session + message + session_end
     assert offset == mirrored.path.stat().st_size

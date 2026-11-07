@@ -13,10 +13,12 @@ from observal_cli import telemetry_buffer
 from observal_cli.harness import SessionSource
 from observal_cli.sessions import base
 
+SERVER = "http://server"
+
 
 def config() -> dict:
     return {
-        "server_url": "http://server",
+        "server_url": SERVER,
         "access_token": "token",
         "user_id": "user",
     }
@@ -49,7 +51,7 @@ def test_server_checkpoint_recovers_local_cursor(tmp_path: Path, monkeypatch, lo
         state.parent.mkdir()
         state.write_text("not-json")
     elif local_state == "stale":
-        base.write_cursor("session", source_path.stat().st_size, 3, finalized=True, home=tmp_path)
+        base.write_cursor("session", source_path.stat().st_size, 3, finalized=True, home=tmp_path, destination=SERVER)
     db = tmp_path / "outbox.db"
     source = SessionSource("claude-code", "session", source_path)
     acknowledged_offset = len(records[0].encode()) + len(records[1].encode())
@@ -71,8 +73,8 @@ def test_server_checkpoint_recovers_local_cursor(tmp_path: Path, monkeypatch, lo
     item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
     assert item.start_line == item.end_line == 2
     assert item.payload["lines"] == ['{"n":2}']
-    assert base.read_cursor("session", home=tmp_path) == (acknowledged_offset, 2)
-    assert base.read_cursor_state("session", home=tmp_path)[2] is False
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (acknowledged_offset, 2)
+    assert base.read_cursor_state("session", home=tmp_path, destination=SERVER)[2] is False
 
 
 def test_reconcile_spool_cannot_replace_built_layer_hash_with_extra_field(tmp_path: Path, monkeypatch):
@@ -124,7 +126,7 @@ def test_invalid_server_byte_checkpoint_does_not_skip_local_source(tmp_path: Pat
     )
 
     assert recovered is None
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (0, 0)
 
 
 def test_offline_delivery_spools_before_post_and_keeps_cursor(tmp_path: Path, monkeypatch):
@@ -149,7 +151,7 @@ def test_offline_delivery_spools_before_post_and_keeps_cursor(tmp_path: Path, mo
     )
 
     assert observed_pending == [1]
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (0, 0)
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0].attempts == 1
 
 
@@ -238,7 +240,7 @@ def test_batch_past_a_quarantined_gap_is_accepted_without_blocking_later_session
     assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
     assert posted == ["gappy", "next"]
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
-    assert base.read_cursor("gappy", home=tmp_path)[1] == 7
+    assert base.read_cursor("gappy", home=tmp_path, destination=SERVER)[1] == 7
 
 
 def test_batch_past_a_gap_is_accepted_when_the_server_skipped_some_lines(tmp_path: Path):
@@ -251,7 +253,7 @@ def test_batch_past_a_gap_is_accepted_when_the_server_skipped_some_lines(tmp_pat
 
     assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=post)
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
-    assert base.read_cursor("gappy", home=tmp_path)[1] == 7
+    assert base.read_cursor("gappy", home=tmp_path, destination=SERVER)[1] == 7
 
 
 def test_respooled_earlier_lines_are_sent_before_later_batches(tmp_path: Path):
@@ -309,7 +311,7 @@ def test_reconcile_delivery_reports_rejection_without_advancing_cursor(tmp_path:
 
     assert delivered is False
     assert rejections == [("kiro", "bad", 422)]
-    assert base.read_cursor(source.checkpoint_key, home=tmp_path) == (0, 0)
+    assert base.read_cursor(source.checkpoint_key, home=tmp_path, destination=SERVER) == (0, 0)
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
 
 
@@ -332,7 +334,7 @@ def test_spool_only_never_blocks_hook_on_network(tmp_path: Path, monkeypatch):
     )
 
     assert posts == []
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (0, 0)
     item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
     assert item.start_line == 0
     assert item.end_line == 1
@@ -371,7 +373,7 @@ def test_offline_growth_spools_only_records_after_pending_checkpoint(tmp_path: P
     items = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
     assert [(item.start_line, item.end_line) for item in items] == [(0, 0), (1, 1)]
     assert items[-1].final
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (0, 0)
 
 
 def test_restart_drains_acknowledged_records_and_finalizes_cursor(tmp_path: Path, monkeypatch):
@@ -399,9 +401,9 @@ def test_restart_drains_acknowledged_records_and_finalizes_cursor(tmp_path: Path
 
     assert base.drain_outbox(config(), home=tmp_path, db_path=db, post=acknowledge)
     assert telemetry_buffer.stats(db_path=db)["pending"] == 0
-    assert base.read_cursor("session", home=tmp_path) == (source_path.stat().st_size, 1)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (source_path.stat().st_size, 1)
     state = json.loads((tmp_path / ".observal" / "sync_state.json").read_text())
-    assert state["session"]["finalized"] is True
+    assert state["servers"][SERVER]["session"]["finalized"] is True
 
 
 def test_metadata_only_final_batch_is_spooled_and_acknowledged(tmp_path: Path, monkeypatch):
@@ -463,7 +465,7 @@ def test_final_drain_with_no_new_records_marks_acknowledged_cursor_final(tmp_pat
         post=acknowledge,
     )
     state = json.loads((tmp_path / ".observal" / "sync_state.json").read_text())
-    assert state["session"]["finalized"] is True
+    assert state["servers"][SERVER]["session"]["finalized"] is True
 
 
 def test_final_hash_mismatch_rewinds_and_repairs_source_range(tmp_path: Path, monkeypatch):
@@ -500,7 +502,7 @@ def test_final_hash_mismatch_rewinds_and_repairs_source_range(tmp_path: Path, mo
     )
     assert starts == [0, 1]
     assert telemetry_buffer.stats(db_path=db)["pending"] == 0
-    assert base.read_cursor("session", home=tmp_path) == (source_path.stat().st_size, 3)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (source_path.stat().st_size, 3)
 
 
 def test_server_commit_before_local_delete_is_safe_to_retry(tmp_path: Path, monkeypatch):
@@ -593,19 +595,19 @@ def _install_http_transport(monkeypatch, handler) -> None:
 def test_cursor_state_defaults_to_home_and_validates_entries(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    base.write_cursor("session", 10, 2, finalized=True)
-    base.write_cursor("session", 20, 3)
-    assert base.read_cursor_status("session") == (20, 3, True, True)
+    base.write_cursor("session", 10, 2, finalized=True, destination=SERVER)
+    base.write_cursor("session", 20, 3, destination=SERVER)
+    assert base.read_cursor_status("session", destination=SERVER) == (20, 3, True, True)
 
-    base.write_cursor("session", 5, 1, preserve_finalized=False)
-    assert base.read_cursor_status("session") == (5, 1, False, True)
+    base.write_cursor("session", 5, 1, preserve_finalized=False, destination=SERVER)
+    assert base.read_cursor_status("session", destination=SERVER) == (5, 1, False, True)
 
     state_file = tmp_path / ".observal" / "sync_state.json"
     state_file.write_text(json.dumps({"session": {"offset": -1, "line_count": 1}}))
-    assert base.read_cursor_status("session") == (0, 0, False, False)
+    assert base.read_cursor_status("session", destination=SERVER) == (0, 0, False, False)
 
     state_file.write_text("not-json")
-    assert base.read_cursor_status("session") == (0, 0, False, False)
+    assert base.read_cursor_status("session", destination=SERVER) == (0, 0, False, False)
 
 
 def test_jsonl_readers_handle_symlinks_corruption_offsets_and_partial_records(tmp_path: Path):
@@ -863,7 +865,7 @@ def test_checkpoint_offsets_and_recovery_fallbacks_are_exact(tmp_path: Path):
     assert base._checkpoint_byte_offset(source_path, 99, 0) is None
     assert base._checkpoint_byte_offset(tmp_path / "missing.jsonl", 1, 0) is None
 
-    base.write_cursor("custom-key", 4, 1, home=tmp_path)
+    base.write_cursor("custom-key", 4, 1, home=tmp_path, destination=SERVER)
     source = SessionSource("claude-code", "session", source_path, cursor_key="custom-key")
     assert base.recover_cursor_from_server(source, config(), home=tmp_path, fetch=lambda *_args: None) == (4, 1)
     assert base.recover_cursor_from_server(SessionSource("claude-code", "session"), config(), home=tmp_path) is None
@@ -894,7 +896,7 @@ def test_drain_outbox_rejects_incomplete_configuration_and_partial_acknowledgeme
     )
     pending = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)
     assert [(item.session_id, item.start_line, item.end_line) for item in pending] == [("session", 0, 0)]
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination=SERVER) == (0, 0)
 
 
 def test_drain_session_source_rejects_missing_inputs_and_failed_recovery(tmp_path: Path, monkeypatch):
@@ -942,7 +944,7 @@ def test_blank_only_source_is_a_successful_spool_noop(tmp_path: Path, monkeypatc
         db_path=db,
     )
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
-    assert base.read_cursor("blank", home=tmp_path) == (0, 0)
+    assert base.read_cursor("blank", home=tmp_path, destination=SERVER) == (0, 0)
 
 
 def test_empty_final_source_replays_once_after_an_integrity_repair(tmp_path: Path, monkeypatch):
@@ -965,7 +967,7 @@ def test_empty_final_source_replays_once_after_an_integrity_repair(tmp_path: Pat
         post=lambda *_args: acknowledgements.pop(0),
     )
     assert acknowledgements == []
-    assert base.read_cursor_state("empty", home=tmp_path) == (0, 0, True)
+    assert base.read_cursor_state("empty", home=tmp_path, destination=SERVER) == (0, 0, True)
     assert telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db) == []
 
 

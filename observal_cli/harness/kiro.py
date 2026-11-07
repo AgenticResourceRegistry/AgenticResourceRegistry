@@ -251,10 +251,14 @@ class KiroAdapter(BaseAdapter):
         # replacing them, inflating prompt_count on every hook fire. Once the
         # cursor has moved past the first delivery the prompt is already
         # stored. A retry before the cursor advances reuses the same offset and
-        # deduplicates correctly.
-        from observal_cli.sessions.base import read_cursor_state
+        # deduplicates correctly. Delivery is tracked per server, so a server
+        # that has not received this transcript still gets its prompt.
+        from observal_cli.sessions.base import load_config, read_cursor_state
 
-        delivered_offset, delivered_lines, _finalized = read_cursor_state(source.checkpoint_key, home=home)
+        destination = str((load_config(home) or {}).get("server_url") or "")
+        delivered_offset, delivered_lines, _finalized = read_cursor_state(
+            source.checkpoint_key, home=home, destination=destination
+        )
         if delivered_offset or delivered_lines:
             return ()
 

@@ -24,18 +24,10 @@ def read_agent_marker(cwd: str, session_jsonl: Path | None = None) -> tuple[str 
         if pulled_at and session_jsonl and session_jsonl.exists():
             from datetime import datetime
 
-            session_id = session_jsonl.stem
-            # Inline cursor read to avoid circular dep with base.py
-            offset = 0
-            state_file = Path.home() / ".observal" / "sync_state.json"
-            if state_file.exists():
-                try:
-                    state = json.loads(state_file.read_text())
-                    offset = state.get(session_id, {}).get("offset", 0)
-                except Exception:
-                    pass
+            # Imported here: base.py imports far more than the harness readers that use this module.
+            from observal_cli.sessions.base import highest_delivered_offset
 
-            if offset == 0:
+            if highest_delivered_offset(session_jsonl.stem) == 0:
                 pull_time = datetime.fromisoformat(pulled_at)
                 stat = session_jsonl.stat()
                 ctime = getattr(stat, "st_birthtime", None) or stat.st_ctime

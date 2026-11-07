@@ -780,8 +780,8 @@ def test_reconcile_collects_parent_and_sub_execution(tmp_path: Path, monkeypatch
         adapter, "discover_session_sources", lambda since_hours: discover(home=tmp_path, since_hours=since_hours)
     )
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _name: adapter)
-    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (0, 0, False))
-    monkeypatch.setattr(base, "read_cursor_state", lambda _key, home=None: (0, 0, False))
+    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key, **_kwargs: (0, 0, False))
+    monkeypatch.setattr(base, "read_cursor_state", lambda _key, home=None, **_kwargs: (0, 0, False))
     monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda _source, _cfg: (0, 0))
     drained = []
     monkeypatch.setattr(

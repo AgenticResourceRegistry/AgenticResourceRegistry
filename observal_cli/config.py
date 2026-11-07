@@ -210,26 +210,51 @@ def load_persisted() -> dict:
     return stored
 
 
+class EnvSecretError(ValueError):
+    """A token variable in the environment is set ambiguously or its file cannot be read."""
+
+    def __init__(self, name: str, cause: ValueError) -> None:
+        super().__init__(str(cause))
+        self.name = name
+        self.cause = cause
+
+
+def env_access_token() -> str | None:
+    """The access token supplied by the environment, if any.
+
+    Commands and session push hooks both resolve credentials through this. When several aliases
+    are set, OBSERVAL_TOKEN wins over OBSERVAL_API_KEY, which wins over OBSERVAL_ACCESS_TOKEN.
+    """
+    resolved = None
+    for name in ("OBSERVAL_ACCESS_TOKEN", "OBSERVAL_API_KEY", "OBSERVAL_TOKEN"):
+        try:
+            token = resolve_secret(name)
+        except ValueError as exc:
+            raise EnvSecretError(name, exc) from exc
+        if token:
+            resolved = token
+    return resolved
+
+
 def load() -> dict:
     """Load config from disk and apply environment variable overrides."""
     cfg = {**DEFAULTS, **load_persisted()}
 
     if env_url := os.environ.get("OBSERVAL_SERVER_URL"):
         cfg["server_url"] = env_url
-    for name in ("OBSERVAL_ACCESS_TOKEN", "OBSERVAL_API_KEY", "OBSERVAL_TOKEN"):
-        try:
-            token = resolve_secret(name)
-        except ValueError as exc:
-            fail(
-                ErrorCategory.VALIDATION,
-                f"{name} is configured incorrectly.",
-                operation="Load CLI configuration",
-                resource=name,
-                remediation=f"Set only {name} or {name}_FILE, then retry.",
-                detail=repr(exc),
-            )
-        if token:
-            cfg["access_token"] = token
+    try:
+        token = env_access_token()
+    except EnvSecretError as exc:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"{exc.name} is configured incorrectly.",
+            operation="Load CLI configuration",
+            resource=exc.name,
+            remediation=f"Set only {exc.name} or {exc.name}_FILE, then retry.",
+            detail=repr(exc.cause),
+        )
+    if token:
+        cfg["access_token"] = token
 
     return cfg
 

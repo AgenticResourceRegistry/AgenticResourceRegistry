@@ -58,6 +58,17 @@ A non-dry run:
 
 Acknowledged checkpoints make repeated runs idempotent.
 
+## After switching servers
+
+Delivery progress is tracked per server. After a new login, or with `OBSERVAL_SERVER_URL` pointing somewhere
+else, sessions already sent to the previous server count as undelivered for the new one. Hooks do not copy
+them over on their own; run reconcile against the new server to backfill them:
+
+```bash
+OBSERVAL_SERVER_URL=https://new.example OBSERVAL_ACCESS_TOKEN_FILE=~/new-token \
+  observal reconcile --harness kiro --since 24 --output json
+```
+
 A dry run only reads local sources and cursor state. It does not drain the outbox, contact the ingest API, or update cursor state.
 
 ## JSON result

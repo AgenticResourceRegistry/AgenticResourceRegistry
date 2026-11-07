@@ -74,7 +74,7 @@ def test_hook_spools_before_detached_delivery(tmp_path: Path, monkeypatch):
         home=tmp_path,
     )
 
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination="http://server") == (0, 0)
     item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
     assert item.harness == "antigravity"
     assert item.payload["hook_event"] == "PreInvocation"
@@ -103,7 +103,7 @@ def test_public_reconcile_uses_shared_drain(tmp_path: Path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _harness: Adapter())
-    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (0, 0, False))
+    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key, **_kwargs: (0, 0, False))
     monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda source, cfg: (0, 0))
     monkeypatch.setattr(
         cmd_reconcile_cli,

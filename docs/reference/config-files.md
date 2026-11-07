@@ -19,7 +19,7 @@ Every file Agentic Resource Registry reads or writes on the client (`~/.observal
 | `telemetry_buffer.db` | Durable SQLite outbox for Python session exporters awaiting contiguous server acknowledgement | `0600` |
 | `opencode_session_outbox/` | Per-session durable OpenCode plugin batches and acknowledged line state | `0600` files |
 | `pi_session_outbox/` | Durable pending Pi extension batches | `0600` files |
-| `sync_state.json` | Acknowledged byte/line cursors for file-backed exporters | owner read/write |
+| `sync_state.json` | Acknowledged byte/line cursors for file-backed exporters, per destination server | owner read/write |
 | `keys/` | Server-side JWT keys (operators only; path controlled by `JWT_KEY_DIR`) | `0600` |
 
 ### `config.json` schema
