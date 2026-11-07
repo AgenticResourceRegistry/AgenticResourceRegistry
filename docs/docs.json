@@ -110,22 +110,32 @@
             ]
           },
           {
-            "group": "Self-Hosting",
+            "group": "Deploy a registry",
             "pages": [
               "self-hosting/index",
               "self-hosting/requirements",
+              "self-hosting/docker-compose",
               "self-hosting/single-node-deploy",
               "self-hosting/production-deploy",
-              "self-hosting/docker-compose",
               "self-hosting/aws-terraform",
-              "self-hosting/gcp-terraform",
+              "self-hosting/gcp-terraform"
+            ]
+          },
+          {
+            "group": "Configure access and behavior",
+            "pages": [
               "self-hosting/configuration",
-              "self-hosting/usage-reporting",
+              "self-hosting/authentication",
+              "self-hosting/usage-reporting"
+            ]
+          },
+          {
+            "group": "Operate and recover",
+            "pages": [
               "self-hosting/ports-and-volumes",
               "self-hosting/databases",
-              "self-hosting/authentication",
-              "self-hosting/upgrades",
               "self-hosting/backup-and-restore",
+              "self-hosting/upgrades",
               "self-hosting/troubleshooting"
             ]
           },

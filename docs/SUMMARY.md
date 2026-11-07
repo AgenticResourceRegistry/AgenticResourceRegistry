@@ -66,22 +66,28 @@
 * [Review and publish a submission](guides/review-and-publish.md)
 * [Run a team-wide agent registry](use-cases/team-registry.md)
 
-### Self-Hosting
+### Deploy a registry
 
-* [Overview](self-hosting/index.md)
+* [Self-host a registry](self-hosting/index.md)
 * [Requirements](self-hosting/requirements.md)
+* [Run the source Compose stack](self-hosting/docker-compose.md)
 * [Single-node deployment](self-hosting/single-node-deploy.md)
 * [Production deployment](self-hosting/production-deploy.md)
-* [Docker Compose setup](self-hosting/docker-compose.md)
 * [AWS deployment with Terraform](self-hosting/aws-terraform.md)
 * [GCP deployment with Terraform](self-hosting/gcp-terraform.md)
-* [Configuration](self-hosting/configuration.md)
+
+### Configure access and behavior
+
+* [Configure your registry](self-hosting/configuration.md)
+* [Set up authentication and SSO](self-hosting/authentication.md)
 * [Usage reporting](self-hosting/usage-reporting.md)
-* [Ports and volumes](self-hosting/ports-and-volumes.md)
-* [Databases](self-hosting/databases.md)
-* [Authentication and SSO](self-hosting/authentication.md)
-* [Upgrades](self-hosting/upgrades.md)
-* [Backup and restore](self-hosting/backup-and-restore.md)
+
+### Operate and recover
+
+* [Understand ports and persistent storage](self-hosting/ports-and-volumes.md)
+* [Understand registry and evidence storage](self-hosting/databases.md)
+* [Back up and rehearse recovery](self-hosting/backup-and-restore.md)
+* [Plan and verify an upgrade](self-hosting/upgrades.md)
 * [Troubleshooting](self-hosting/troubleshooting.md)
 
 ### Security

@@ -4,7 +4,8 @@
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Overview"
+title: "Self-host a registry"
+description: "Choose a deployment artifact and verify access, configuration, storage, and recovery."
 ---
 
 Run the registry on infrastructure you control. Self-hosting determines where the registry stores data; it does not guarantee zero network egress. Image downloads, identity providers, remote resources, and configured insights/model providers can make outbound requests. Review those integrations and your data-handling policy before deployment.
@@ -66,17 +67,18 @@ Core services share the `observal-net` network and persistent volumes `pgdata`, 
 
 The downloadable server package has its own Compose files, image-version selection, and host bindings. Read the files shipped with your chosen release rather than applying source-stack defaults to it. See [documentation and software versions](/reference/documentation-version) and [requirements](/self-hosting/requirements).
 
-## Deployment tiers
+## Choose the deployment artifact
 
-Choose the deployment model that fits your team:
+Use the artifact you intend to operate, not a universal command copied from another deployment type:
 
-|                    | [Single-node](/self-hosting/single-node-deploy) | [Kubernetes](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) | [Production](/self-hosting/production-deploy)    |
-| ------------------ | ------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| **How**            | Docker Compose on one VM             | Official Helm chart                                                                                 | Terraform on AWS or GCP               |
-| **Best for**       | ≤50 users, internal tools, POCs      | Cloud-native teams, existing K8s infra                                                              | Enterprise, SLA-bound, 50+ users      |
-| **Cost**           | $20 to $150/mo                       | Variable                                                                                            | \~$180 to $255/mo                     |
-| **HA**             | No                                   | Pod resilience & horizontal scaling                                                                 | Yes (Multi-AZ databases, autoscaling) |
-| **Time to deploy** | 10 minutes                           | 10 to 15 minutes                                                                                    | 20 to 30 minutes                      |
+| Path | When to use it | What to verify |
+| --- | --- | --- |
+| [Source Compose](/self-hosting/docker-compose) | Development evaluation or a deliberately maintained source deployment | Selected revision, effective environment, ports, migrations, and volume ownership. |
+| Downloaded server package | A release-based single-node installation | Selected image tag, shipped files/secret mounts, staging versus cutover, and compatible shell. |
+| [Kubernetes](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) | An existing Kubernetes operating environment | Chart/release compatibility, external storage, identity, migration ordering, and ingress. |
+| [Cloud deployment](/self-hosting/production-deploy) | A reviewed AWS/GCP infrastructure deployment | Resource topology, IAM, backups, rollout, networking, and failure recovery. |
+
+Templates do not guarantee availability, capacity, cost, or a fixed deployment time. Measure the intended workload and review the actual infrastructure plan. If your team already has a registry, use [existing-registry onboarding](/getting-started/onboarding) instead of deploying another server.
 
 **Start here:**
 
@@ -84,7 +86,7 @@ Choose the deployment model that fits your team:
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Deploy on a single VM (simplest) | [Single-node deployment](/self-hosting/single-node-deploy)                                                                          |
 | Deploy on Kubernetes with Helm   | [Kubernetes deployment with Helm](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/docs/self-hosting/kubernetes-helm.md) |
-| Deploy a production HA stack     | [Production deployment](/self-hosting/production-deploy)                                                                            |
+| Review a production cloud deployment     | [Production deployment](/self-hosting/production-deploy)                                                                            |
 | Deploy on AWS specifically       | [AWS deployment with Terraform](/self-hosting/aws-terraform)                                                                        |
 | Deploy on GCP specifically       | [GCP deployment with Terraform](/self-hosting/gcp-terraform)                                                                        |
 
@@ -111,9 +113,10 @@ Before putting Agentic Resource Registry in front of real users:
 2. **Protect database passwords**: server-package setup generates restricted PostgreSQL and ClickHouse credential files; source deployments must replace the `.env.example` defaults.
 3. **Scope `CORS_ALLOWED_ORIGINS`** to your real frontend host.
 4. **Configure SSO** in **Admin → SSO**, including `deployment.sso_only` if you want SSO-only login.
-5. **Tune rate limits** (`RATE_LIMIT_AUTH`, `RATE_LIMIT_AUTH_STRICT`).
-6. **Set `DATA_RETENTION_DAYS`** to match your retention policy (default 90 days).
+5. **Configure auth rate limits** through `security.rate_limit_auth` and `security.rate_limit_auth_strict`, then verify startup-bound behavior.
+6. **Set `data.retention_days` and the separate application retention policy** to match privacy/storage requirements; verify the actual TTL.
 7. **Back up the JWT key volume** (`apidata`): losing it invalidates every session.
-8. **Remove demo accounts**: remove `DEMO_*` variables and generated demo password files before a real deployment, then delete any already-seeded demo users.
+8. **Remove demo access**: explicitly clear source service defaults or review packaged credential files, then remove existing demo users through an authorized account. See [demo configuration](/self-hosting/configuration#demo-accounts).
+9. **Review outbound reporting and providers**: [usage reporting](/self-hosting/usage-reporting) is enabled by default; self-hosting is not a zero-egress guarantee.
 
 Each of these is covered in the linked deep-dive below. Start with [Requirements](/self-hosting/requirements).

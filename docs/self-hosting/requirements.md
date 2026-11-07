@@ -7,7 +7,7 @@
 title: "Requirements"
 ---
 
-Minimum and recommended specs for running the Agentic Resource Registry stack.
+Sizing and software starting points for the registry stack. These are not load-test guarantees; measure your workload and account for the combined service limits, database growth, and backup headroom.
 
 ## Hardware
 
@@ -39,11 +39,11 @@ The heaviest user of disk is **ClickHouse**. Growth depends on:
 
 * Number and length of harness sessions
 * Raw transcript record size
-* `DATA_RETENTION_DAYS`
+* Runtime raw/session retention policy (`data.retention_days` and `retention.*`)
 
 Session transcripts vary significantly by harness and tool output size. Measure representative workloads and plan 2 to 3 times headroom over observed growth.
 
-Postgres stays under 500 MB for most deployments; it holds only registry metadata and user accounts.
+PostgreSQL growth depends on users, resource/version content, reviews, and settings. Measure it separately from ClickHouse rather than assuming a fixed metadata-only size.
 
 ## Software
 
@@ -64,8 +64,8 @@ This limitation concerns the **server package setup**, not proof that the standa
 
 For the **CLI** (developer machines, not the server):
 
-* **Standalone binary** (recommended) -- no dependencies, just `curl | bash`
-* Or Python **3.11, 3.12, or 3.13** with `uv`, `pipx`, or `pip`
+* **Standalone binary** -- no Python required; installation and integrations still need their own binaries, permissions, and model access
+* Or Python **3.11 or newer** matching the CLI package requirements, preferably installed as an isolated tool with `uv` or `pipx`
 
 ## Network
 
@@ -77,9 +77,9 @@ For the **CLI** (developer machines, not the server):
 
 ## TLS / HTTPS
 
-Local loopback access can use HTTP. For every remote deployment, terminate TLS 1.2 or later with Caddy, nginx, an enterprise load balancer, or a cloud ingress. Point the proxy at the loopback nginx listener on `localhost:8000`.
+Local loopback access can use HTTP. For remote deployment, use an approved TLS-terminating reverse proxy or ingress. Point it at the intended restricted load-balancer binding, not an assumed universal port: the server package defaults to port 8000, while source Compose defaults to port 80 and needs an explicit restricted binding for this layout.
 
-Example Caddy configuration:
+Example Caddy configuration for a package listener on loopback port 8000:
 
 ```caddyfile
 observal.your-company.internal {

@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Data & Retention Settings"
 ---
@@ -53,14 +54,16 @@ Two legacy Insights tables that current versions no longer write are cleaned con
 
 ## ClickHouse TTL
 
-`data.retention_days` remains the separate ClickHouse TTL setting. It controls automatic expiry of raw session content and defaults to 90 days. Application retention values cannot exceed this ceiling when it is enabled.
+`data.retention_days` is the separate configured ClickHouse TTL policy and defaults to 90 days. Application retention controls validate against that configured ceiling when enabled. **The setting value does not establish the actual table TTL.**
 
-| Value | Effect |
+In the inspected source Compose path, `SKIP_DDL_ON_STARTUP=true` skips the runtime initializer that applies the policy. The fresh operator rehearsal's `session_events` table had no TTL clause despite the 90-day default. Other tables can have independent migration-defined TTLs. Verify the actual table definition with authorized database access before relying on automatic expiration or a privacy/storage guarantee.
+
+| Value | Requested policy—not proof of application |
 |-------|--------|
-| `90` (default) | Keep raw telemetry for 90 days |
-| `30` | Short TTL for privacy-sensitive deployments |
-| `365` | Long TTL for annual analysis |
-| `0` | Keep raw telemetry indefinitely, not recommended unless storage is actively managed |
+| `90` (default) | 90-day raw-session TTL when the policy is applied |
+| `30` | Shorter requested retention window |
+| `365` | Longer requested retention window |
+| `0` | No requested raw-session TTL; does not automatically remove an existing TTL when policy application is skipped |
 
 **When to lower:** The deployment has strict data minimization rules, or ClickHouse storage is growing too quickly.
 
@@ -86,15 +89,7 @@ Cache duration, in seconds, for expensive dashboard aggregation queries.
 | `15` | Near-live dashboard updates, higher query load |
 | `300` | Lower query load for large deployments, charts can lag by several minutes |
 
-## OTEL Cache TTL
-
-Cache duration, in seconds, for trace and session list endpoints.
-
-| Value | Effect |
-|-------|--------|
-| `15` (default) | Keeps trace lists responsive while preserving near-live monitoring |
-| `5` | Useful during active debugging |
-| `60` | Better for large deployments where trace lists are expensive |
+The current documented cache settings are `data.cache_ttl_default` and `data.cache_ttl_dashboard`. Do not infer an additional configurable “OTEL Cache TTL” from a cache namespace or an older guide. Startup-bound cache decorators may require a restart; verify actual response behavior after changes.
 
 ## Deleting a user {#deleting-a-user}
 
