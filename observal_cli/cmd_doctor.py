@@ -32,13 +32,14 @@ from rich import print as rprint
 from typer.models import OptionInfo
 
 from observal_cli import config, pi_extension
-from observal_cli.errors import ErrorCategory, fail
+from observal_cli.errors import CliError, ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.harness_specs.claude_code_hooks_spec import (
     MANAGED_ENV_KEYS,
     get_desired_hooks,
 )
 from observal_cli.render import OutputMode, esc, output_json
+from observal_cli.sessions.kiro import kiro_home
 from observal_cli.shared.utils import (
     atomic_write,
 )
@@ -384,10 +385,25 @@ def _check_claude_code_agent_hooks(issues: list, warnings: list):
 
 
 def _check_kiro(issues: list, warnings: list):
+    """Report missing or partial hook coverage for the active Kiro runtime root."""
+    from observal_cli.harness_specs.kiro_hooks_spec import iter_kiro_hooks
+
     optic.trace("issues={}, warnings={}", issues, warnings)
-    agents_dir = Path.home() / ".kiro" / "agents"
+    from observal_cli.harness import get_adapter
+
+    config_dir = kiro_home()
+    status = get_adapter("kiro").detect_hooks(config_dir) if config_dir.is_dir() else None
+    if status == "installed":
+        rprint("  [green]Acknowledged session hooks installed for the configured Kiro surface[/green]")
+        return
+    if status in {"partial", "missing"}:
+        warnings.append(
+            "Kiro acknowledged session hooks are missing or incomplete. "
+            "Run `observal doctor patch --harness kiro` to repair the configured surface."
+        )
+    agents_dir = config_dir / "agents"
     if not agents_dir.is_dir():
-        rprint("  [dim]No ~/.kiro/agents/ found[/dim]")
+        rprint(f"  [dim]No Kiro agents directory found: {esc(agents_dir)}[/dim]")
         return
 
     agent_profiles = list(agents_dir.glob("*.json"))
@@ -401,15 +417,12 @@ def _check_kiro(issues: list, warnings: list):
             agent_data = _read_json_object(af)
         except Exception:
             continue
-        hooks = agent_data.get("hooks", {})
-        for _event, entries in hooks.items():
-            if not isinstance(entries, list):
-                continue
-            for h in entries:
-                command = h.get("command", "")
-                if "observal_cli.hooks.session_push --harness kiro" in command:
-                    has_session_push = True
-                    break
+        if any(
+            "observal_cli.hooks.session_push --harness kiro" in hook.command
+            for hook in iter_kiro_hooks(agent_data.get("hooks"))
+        ):
+            has_session_push = True
+            break
 
     if not has_session_push:
         warnings.append(
@@ -777,6 +790,7 @@ def _valid_targets(values: list[str], operation: str, valid_harnesses: list[str]
 
 
 def _adapter_change(target: str, action: str, dry_run: bool, output: OutputMode | str) -> bool:
+    """Translate adapter patch or cleanup failures into actionable CLI errors."""
     from observal_cli.harness.protocol import NotSupportedError
 
     try:
@@ -813,10 +827,18 @@ def _adapter_change(target: str, action: str, dry_run: bool, output: OutputMode 
 
 
 def _patch_targets(targets: list[str], *, dry_run: bool, output: OutputMode | str) -> dict:
+    """Continue across harness failures and audit only successfully changed targets."""
     ensure_loaded()
     rows = []
+    failures: list[CliError] = []
     for target in targets:
-        rows.append({"harness": target, "changed": _adapter_change(target, "patch", dry_run, output)})
+        try:
+            rows.append({"harness": target, "changed": _adapter_change(target, "patch", dry_run, output)})
+        except CliError as error:
+            if len(targets) == 1:
+                raise
+            failures.append(error)
+            rows.append({"harness": target, "changed": False, "error": error.message})
     changed = any(row["changed"] for row in rows)
     if changed and not dry_run:
         from observal_cli.audit import emit_cli_audit
@@ -824,10 +846,23 @@ def _patch_targets(targets: list[str], *, dry_run: bool, output: OutputMode | st
         emit_cli_audit(
             "doctor.patch",
             resource_type="harness",
-            detail=f"harnesses={','.join(targets)}, hooks=true",
+            detail=f"harnesses={','.join(row['harness'] for row in rows if 'error' not in row)}, hooks=true",
             sensitivity="high",
         )
-    return {"action": "patch", "dry_run": dry_run, "changed": changed, "targets": rows}
+    result = {"action": "patch", "dry_run": dry_run, "changed": changed, "targets": rows}
+    if failures:
+        if output != OutputMode.json:
+            for row in rows:
+                if "error" in row:
+                    rprint(f"  [red]{esc(row['harness'])}: {esc(row['error'])}[/red]")
+        fail(
+            failures[0].category,
+            "Doctor patch could not patch every selected harness.",
+            operation="Doctor patch",
+            remediation="Repair the failed harness configurations and retry; other harnesses were processed.",
+            result=result,
+        )
+    return result
 
 
 def _cleanup_targets(targets: list[str], *, dry_run: bool, output: OutputMode | str) -> dict:
@@ -907,6 +942,7 @@ def doctor_cleanup(
 
 
 def _cleanup_claude_code(dry_run: bool) -> bool:
+    """Remove owned Claude instrumentation while preserving unrelated user configuration."""
     optic.trace("dry_run={}", dry_run)
     rprint("[cyan]Claude Code[/cyan]")
     settings_path = Path.home() / ".claude" / "settings.json"
@@ -966,22 +1002,36 @@ def _cleanup_claude_code(dry_run: bool) -> bool:
 
 
 def _cleanup_kiro(dry_run: bool) -> bool:
+    """Remove owned hooks from profiles and standalone files in the active Kiro root."""
+    from observal_cli.harness_specs.kiro_hooks_spec import is_observal_v1_hook
+
     optic.trace("dry_run={}", dry_run)
     rprint("[cyan]Kiro[/cyan]")
-    agents_dir = Path.home() / ".kiro" / "agents"
+    agents_dir = kiro_home() / "agents"
     if not agents_dir.is_dir():
-        rprint("  [dim]No ~/.kiro/agents/ found - skipping[/dim]")
-        return False
+        rprint(f"  [dim]No Kiro agents directory found: {esc(agents_dir)} - skipping profiles[/dim]")
+        return _cleanup_kiro_hook_files(dry_run)
 
     changed = False
     for agent_profile in sorted(agents_dir.glob("*.json")):
-        agent_data = _read_json_object(agent_profile)
+        try:
+            agent_data = _read_json_object(agent_profile)
+        except (ValueError, OSError) as error:
+            optic.warning("Skipping unreadable Kiro profile {}: {}", agent_profile, error)
+            rprint(f"  [yellow]Skipping unreadable profile: {esc(agent_profile)}[/yellow]")
+            continue
 
         agent_changed = False
 
-        # Remove hooks that reference Observal
+        # Universal arrays and legacy mappings must retain unrelated user hooks.
         hooks = agent_data.get("hooks", {})
-        if isinstance(hooks, dict):
+        if isinstance(hooks, list):
+            cleaned = [entry for entry in hooks if not is_observal_v1_hook(entry)]
+            if len(cleaned) < len(hooks):
+                agent_changed = True
+                if not dry_run:
+                    agent_data["hooks"] = cleaned
+        elif isinstance(hooks, dict):
             for event, entries in list(hooks.items()):
                 if not isinstance(entries, list):
                     continue
@@ -1022,7 +1072,7 @@ def _kiro_hook_dirs() -> set[Path]:
     from observal_cli.lockfile import read_registry_lockfile
 
     dirs: set[Path] = set()
-    user_config_dir = Path.home() / ".kiro"
+    user_config_dir = kiro_home()
     if user_config_dir.is_dir():
         dirs.add(user_config_dir)
     try:
@@ -1425,7 +1475,7 @@ def _patch_kiro(dry_run: bool) -> bool:
             if not local_name or not agent_id:
                 continue
             if entry.get("scope") == "user":
-                profile = Path.home() / ".kiro" / "agents" / f"{local_name}.json"
+                profile = kiro_home() / "agents" / f"{local_name}.json"
             else:
                 directory = entry.get("directory")
                 if not directory:
@@ -1434,8 +1484,15 @@ def _patch_kiro(dry_run: bool) -> bool:
             if not profile.exists():
                 rprint(f"  [yellow]Missing locked profile: {esc(profile)}[/yellow]")
                 continue
-            current = _read_json_object(profile)
-            desired = adapter.rewrite_agent_profile(json.loads(json.dumps(current)), agent_id=agent_id)
+            # Standalone hooks belong to the scope, not to readable profiles.
+            hook_dirs.add(profile.parent.parent)
+            try:
+                current = _read_json_object(profile)
+                desired = adapter.rewrite_agent_profile(json.loads(json.dumps(current)), agent_id=agent_id)
+            except (ValueError, OSError) as error:
+                optic.warning("Skipping unreadable Kiro profile {}: {}", profile, error)
+                rprint(f"  [yellow]Skipping unreadable profile: {esc(profile)}[/yellow]")
+                continue
             if desired != current:
                 changed = True
                 verb = "Would repair" if dry_run else "Repaired"
@@ -1443,14 +1500,10 @@ def _patch_kiro(dry_run: bool) -> bool:
                 if not dry_run:
                     atomic_write(profile, json.dumps(desired, indent=2) + "\n")
 
-            # The standalone v1 hooks file is what Kiro IDE 1.0 and CLI 3.0
-            # actually read. One file per scope, shared by every agent there.
-            hook_dirs.add(profile.parent.parent)
-
     # Kiro reads ~/.kiro/hooks/observal.json for *every* session, whichever agent
     # is active, so the user-scope file has to exist even when the lockfile holds
     # no usable Kiro agents - otherwise the harness emits no telemetry at all.
-    user_config_dir = Path.home() / ".kiro"
+    user_config_dir = kiro_home()
     if user_config_dir.is_dir():
         hook_dirs.add(user_config_dir)
 

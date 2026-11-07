@@ -263,7 +263,13 @@ def test_kiro_stop_routes_credits_through_shared_engine(tmp_path: Path, monkeypa
     )
 
     assert drained[0]["extra_fields"] == {"total_credits": 2.0}
-    assert spawned == [(("--finalize-session", "kiro-session", "--cwd", "/work"), "kiro")]
+    intent = json.loads(next((tmp_path / ".observal/session-delivery").rglob("finalization.pending")).read_text())
+    assert spawned == [
+        (
+            ("--finalize-session", "kiro-session", "--cwd", "/work", "--finalization-generation", intent["generation"]),
+            "kiro",
+        )
+    ]
 
 
 def test_kiro_hook_spec_uses_shared_engine_with_uuid_attribution():

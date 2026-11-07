@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Base adapter with feature-flag gating from harness_Registry.
@@ -199,6 +200,44 @@ class BaseAdapter:
         """Read the entry a pull wrote; by default the pull output is the installed config."""
         return self.read_installed_mcp(scope, directory, alias)
 
+    def accepts_session_hook(self, source, event, placement="", home=None):
+        """Allow hooks by default; adapters can select a runtime-capable placement."""
+        return True
+
+    def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
+        """Permit normal delivery; adapters may coordinate duplicate lifecycle hooks."""
+        from contextlib import nullcontext
+
+        from observal_cli.sessions.delivery_guard import DeliveryAttempt
+
+        return nullcontext(DeliveryAttempt())
+
+    def session_outbox_context(self, source, config, home=None):
+        """Optional local authority attached to durable final batches, never sent to the API."""
+        return None
+
+    def session_outbox_guard(self, item, config, *, home=None, db_path=None):
+        """Permit ordinary delivery; adapters can validate queued final authority through ACK."""
+        from observal_cli.sessions.delivery_guard import ordinary_outbox_guard
+
+        return ordinary_outbox_guard(item, config, home=home, db_path=db_path)
+
+    def reconcile_only_finalization(self, source):
+        """Whether this source must finish outside its hook owner's process tree."""
+        return False
+
+    def session_reconciliation_final(self, source, config, home=None):
+        """Whether explicit reconciliation may finalize this source group."""
+        return True
+
+    def session_finalization_pending(self, source, config, home=None):
+        """Whether recovery must finish an explicitly requested finalization."""
+        return False
+
+    def session_finalization_generation(self, source, config, home=None):
+        """Optional Stop identity to bind a waiting worker to its scheduled turn."""
+        return None
+
     def session_worker_environment(self) -> dict[str, str]:
         """Environment overrides needed by detached session delivery workers."""
         return {}
@@ -352,6 +391,10 @@ class BaseAdapter:
         return None
 
     def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
+        return content
+
+    def merge_agent_profile(self, content: dict, path: Path) -> dict:
+        """Preserve harness-owned local profile state before a pull rewrites it."""
         return content
 
     def rewrite_agent_profile(self, content: dict, agent_id: str) -> dict:
