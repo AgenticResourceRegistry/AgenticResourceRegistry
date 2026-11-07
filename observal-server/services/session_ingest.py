@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Session JSONL ingest service.
@@ -405,6 +406,7 @@ async def ingest_session_lines(
     end_byte_offsets: list[int] | None = None,
     total_credits: float | None = None,
     parent_session_id: str | None = None,
+    session_model: str | None = None,
 ) -> IngestResult:
     """Parse, classify, and batch-insert JSONL transcript lines.
 
@@ -441,10 +443,13 @@ async def ingest_session_lines(
         raise ValueError("end_byte_offsets must contain one value per source line")
 
     if not lines:
-        extra = get_extra_rows(harness, session_id, project_id, user_id, agent_id, agent_version, total_credits)
+        extra = get_extra_rows(
+            harness, session_id, project_id, user_id, agent_id, agent_version, total_credits, session_model
+        )
         for row in extra:
             row["is_source_record"] = 0
-            row["rendered"] = 1
+            row.setdefault("rendered", 1)
+            row["parent_session_id"] = parent_session_id
         if extra:
             await insert_session_events(extra)
             await refresh_session_summary(session_id, project_id, user_id, harness)
@@ -566,10 +571,13 @@ async def ingest_session_lines(
         await insert_session_events(rows)
         optic.debug("inserted {} canonical rows for session={}", len(rows), session_id)
 
-    extra = get_extra_rows(harness, session_id, project_id, user_id, agent_id, agent_version, total_credits)
+    extra = get_extra_rows(
+        harness, session_id, project_id, user_id, agent_id, agent_version, total_credits, session_model
+    )
     for row in extra:
         row["is_source_record"] = 0
-        row["rendered"] = 1
+        row.setdefault("rendered", 1)
+        row["parent_session_id"] = parent_session_id
     if extra:
         await insert_session_events(extra)
 
