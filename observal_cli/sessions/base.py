@@ -11,8 +11,10 @@ logging. Hooks, background recovery, and public reconcile all use this engine.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,37 +31,118 @@ if TYPE_CHECKING:
 # Offset / cursor state
 # ---------------------------------------------------------------------------
 
+# sync_state.json holds delivery cursors per destination server. A session delivered to one
+# server says nothing about what another server has received.
+#
+#   {
+#     "version": 2,
+#     "servers": {"<server url>": {"<checkpoint key>": {"offset", "line_count", "finalized"}}},
+#     "legacy_server": "<server url>",
+#     "<checkpoint key>": {"offset", "line_count", "finalized"}
+#   }
+#
+# Top-level entries are the single-server layout. Older CLIs wrote them, and the Pi extension
+# still reads and writes them for the server saved in config.json, so they are always kept.
+# They belong to `legacy_server`: the saved server when this file was first upgraded, the only
+# place a hook could send to at the time.
+_STATE_FILE = "sync_state.json"
+_STATE_VERSION = 2
+_STATE_KEYS = frozenset({"version", "servers", "legacy_server"})
 
-def read_cursor_status(session_id: str, home: Path | None = None) -> tuple[int, int, bool, bool]:
-    """Return byte offset, line count, finality, and whether local state is valid."""
+
+def server_key(server_url: str) -> str:
+    """The destination key shared by the durable outbox and the delivery cursors."""
+    return str(server_url or "").strip().rstrip("/")
+
+
+def _load_state(home: Path) -> dict:
+    """The whole state file, or {} when it is missing or unreadable."""
+    try:
+        data = json.loads((home / ".observal" / _STATE_FILE).read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _legacy_server(data: dict, home: Path) -> str:
+    if data.get("version") == _STATE_VERSION:
+        return server_key(str(data.get("legacy_server") or ""))
+    return server_key(str(_stored_config(home).get("server_url") or ""))
+
+
+def _server_cursors(data: dict) -> dict[str, dict]:
+    servers = data.get("servers") if data.get("version") == _STATE_VERSION else None
+    if not isinstance(servers, dict):
+        return {}
+    return {server: cursors for server, cursors in servers.items() if isinstance(cursors, dict)}
+
+
+def _flat_entry(data: dict, session_id: str) -> dict | None:
+    entry = None if session_id in _STATE_KEYS else data.get(session_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _cursor_entry(data: dict, home: Path, session_id: str, destination: str) -> dict | None:
+    destination = server_key(destination)
+    entry = _server_cursors(data).get(destination, {}).get(session_id)
+    if isinstance(entry, dict):
+        return entry
+    return _flat_entry(data, session_id) if destination == _legacy_server(data, home) else None
+
+
+def read_cursor_status(session_id: str, home: Path | None = None, *, destination: str) -> tuple[int, int, bool, bool]:
+    """Return byte offset, line count, finality, and whether local state is valid for one server."""
     if home is None:
         home = Path.home()
-    state_file = home / ".observal" / "sync_state.json"
-    if state_file.exists():
-        try:
-            entry = json.loads(state_file.read_text()).get(session_id)
-            if not isinstance(entry, dict):
-                return 0, 0, False, False
-            offset = entry.get("offset")
-            line_count = entry.get("line_count")
-            if not isinstance(offset, int) or not isinstance(line_count, int) or offset < 0 or line_count < 0:
-                return 0, 0, False, False
-            return offset, line_count, bool(entry.get("finalized")), True
-        except Exception:
-            pass
-    return 0, 0, False, False
+    entry = _cursor_entry(_load_state(home), home, session_id, destination)
+    if entry is None:
+        return 0, 0, False, False
+    offset = entry.get("offset")
+    line_count = entry.get("line_count")
+    if not isinstance(offset, int) or not isinstance(line_count, int) or offset < 0 or line_count < 0:
+        return 0, 0, False, False
+    return offset, line_count, bool(entry.get("finalized")), True
 
 
-def read_cursor_state(session_id: str, home: Path | None = None) -> tuple[int, int, bool]:
-    """Return byte offset, line count, and finality for one local source."""
-    offset, line_count, finalized, _valid = read_cursor_status(session_id, home=home)
+def read_cursor_state(session_id: str, home: Path | None = None, *, destination: str) -> tuple[int, int, bool]:
+    """Return byte offset, line count, and finality for one local source on one server."""
+    offset, line_count, finalized, _valid = read_cursor_status(session_id, home=home, destination=destination)
     return offset, line_count, finalized
 
 
-def read_cursor(session_id: str, home: Path | None = None) -> tuple[int, int]:
-    """Return (byte_offset, line_count) for *session_id* from sync_state.json."""
-    offset, line_count, _finalized = read_cursor_state(session_id, home=home)
+def read_cursor(session_id: str, home: Path | None = None, *, destination: str) -> tuple[int, int]:
+    """Return (byte_offset, line_count) delivered to one server for *session_id*."""
+    offset, line_count, _finalized = read_cursor_state(session_id, home=home, destination=destination)
     return offset, line_count
+
+
+def delivered_to_another_server(session_id: str, home: Path | None = None, *, destination: str) -> bool:
+    """Whether some other server holds records for this source.
+
+    Automatic recovery uses this to leave such sessions alone after a server switch: copying past work
+    to a newly configured server is a deliberate `observal reconcile`, not a side effect of a hook.
+    """
+    if home is None:
+        home = Path.home()
+    data = _load_state(home)
+    current = server_key(destination)
+    if any(
+        server != current and isinstance(cursors.get(session_id), dict)
+        for server, cursors in _server_cursors(data).items()
+    ):
+        return True
+    return _flat_entry(data, session_id) is not None and _legacy_server(data, home) != current
+
+
+def highest_delivered_offset(session_id: str, home: Path | None = None) -> int:
+    """The furthest byte offset of this source delivered to any server, or 0."""
+    if home is None:
+        home = Path.home()
+    data = _load_state(home)
+    entries = [cursors.get(session_id) for cursors in _server_cursors(data).values()]
+    entries.append(_flat_entry(data, session_id))
+    offsets = [entry.get("offset") for entry in entries if isinstance(entry, dict)]
+    return max((offset for offset in offsets if isinstance(offset, int)), default=0)
 
 
 def write_cursor(
@@ -69,35 +152,33 @@ def write_cursor(
     finalized: bool = False,
     home: Path | None = None,
     preserve_finalized: bool = True,
+    *,
+    destination: str,
 ) -> None:
-    """Persist updated byte offset and line count for *session_id*.
+    """Persist updated byte offset and line count for *session_id* on one server.
 
     ``finalized=True`` marks that the Stop hook completed (or crash recovery
-    ran) so the scanner will skip this session.
+    ran) so the scanner will skip this session for that server.
     """
     if home is None:
         home = Path.home()
     sync_dir = home / ".observal"
     sync_dir.mkdir(parents=True, exist_ok=True)
-    state_file = sync_dir / "sync_state.json"
 
-    data: dict = {}
-    if state_file.exists():
-        try:
-            loaded = json.loads(state_file.read_text())
-            if isinstance(loaded, dict):
-                data = loaded
-        except Exception:
-            pass
-
+    data = _load_state(home)
+    previous = _cursor_entry(data, home, session_id, destination)
+    if data.get("version") != _STATE_VERSION:
+        data["legacy_server"] = _legacy_server(data, home)
+        data["version"] = _STATE_VERSION
+    servers = _server_cursors(data)
+    data["servers"] = servers
     entry: dict = {"offset": offset, "line_count": line_count}
-    previous = data.get(session_id)
     if finalized or (preserve_finalized and isinstance(previous, dict) and previous.get("finalized")):
         entry["finalized"] = True
-    data[session_id] = entry
+    servers.setdefault(server_key(destination), {})[session_id] = entry
     with tempfile.NamedTemporaryFile("w", dir=sync_dir, delete=False) as temporary:
         temporary.write(json.dumps(data))
-    Path(temporary.name).replace(state_file)
+    Path(temporary.name).replace(sync_dir / _STATE_FILE)
 
 
 # ---------------------------------------------------------------------------
@@ -190,32 +271,72 @@ def read_new_lines(jsonl_path: Path, offset: int) -> tuple[list[str], int]:
 # ---------------------------------------------------------------------------
 
 
-def load_config(home: Path | None = None) -> dict | None:
-    """Read server_url and access_token from ~/.observal/config.json.
+def _stored_config(home: Path) -> dict:
+    """The saved login in ~/.observal/config.json, or {} when it is missing or unreadable."""
+    try:
+        data = json.loads((home / ".observal" / "config.json").read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
-    Token priority: api_key (30-day) > access_token (1-hour).
-    Returns None when the file is missing or required fields are absent.
+
+def _token_subject(token: str) -> str:
+    """The `sub` claim of a JWT access token, read without verification.
+
+    Only used to file outbox batches under the right user for a token supplied in the
+    environment; the server still authenticates every request.
     """
+    try:
+        claims_segment = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(claims_segment + "=" * (-len(claims_segment) % 4)))
+    except Exception:
+        return ""
+    subject = claims.get("sub") if isinstance(claims, dict) else None
+    return subject.strip() if isinstance(subject, str) else ""
+
+
+def load_config(home: Path | None = None) -> dict | None:
+    """Resolve the server and credentials that session delivery uses.
+
+    Resolution matches `observal_cli.config.load()`: `OBSERVAL_SERVER_URL` and the
+    `OBSERVAL_ACCESS_TOKEN` family (and their `_FILE` forms) override
+    ~/.observal/config.json, where api_key (30-day) is preferred over access_token
+    (1-hour). The saved refresh token is used only for the saved login on its own
+    server, so a token from the environment is never refreshed against the wrong one.
+    Returns None when no server or token is configured.
+    """
+    from observal_cli.config import EnvSecretError, env_access_token
+
     if home is None:
         home = Path.home()
     cfg_file = home / ".observal" / "config.json"
-    if not cfg_file.exists():
-        return None
+    stored = _stored_config(home)
+    stored_url = str(stored.get("server_url") or "").strip()
+    stored_token = str(stored.get("api_key") or "").strip() or str(stored.get("access_token") or "").strip()
+    stored_user = str(stored.get("user_id") or "").strip()
     try:
-        data = json.loads(cfg_file.read_text())
-    except Exception:
+        env_token = (env_access_token() or "").strip()
+    except EnvSecretError as exc:
+        optic.warning("{} is configured incorrectly; session delivery skipped", exc.name)
         return None
-    if not isinstance(data, dict):
-        return None
-    server_url = data.get("server_url", "").strip()
-    access_token = data.get("api_key", "").strip() or data.get("access_token", "").strip()
+    env_url = os.environ.get("OBSERVAL_SERVER_URL", "").strip()
+
+    server_url = env_url or stored_url
+    access_token = env_token or stored_token
     if not server_url or not access_token:
         return None
+    saved_server = server_key(server_url) == server_key(stored_url)
+    if env_token:
+        user_id = _token_subject(env_token) or (stored_user if saved_server else "")
+        refresh_token = ""
+    else:
+        user_id = stored_user
+        refresh_token = str(stored.get("refresh_token") or "").strip() if saved_server else ""
     return {
         "server_url": server_url,
         "access_token": access_token,
-        "refresh_token": data.get("refresh_token", "").strip(),
-        "user_id": str(data.get("user_id", "")).strip(),
+        "refresh_token": refresh_token,
+        "user_id": user_id,
         "_config_path": str(cfg_file),
     }
 
@@ -434,9 +555,10 @@ def recover_cursor_from_server(
     """Replace missing, corrupt, or stale local state with the server checkpoint."""
     if source.path is None:
         return None
+    destination = str(config.get("server_url") or "")
     checkpoint = (fetch or get_server_checkpoint)(source, config)
     if checkpoint is None:
-        return read_cursor(source.checkpoint_key, home=home)
+        return read_cursor(source.checkpoint_key, home=home, destination=destination)
     acknowledged_line = int(checkpoint["acknowledged_line"])
     line_count = acknowledged_line + 1
     server_offset = int(checkpoint.get("acknowledged_offset") or 0)
@@ -453,6 +575,7 @@ def recover_cursor_from_server(
         line_count,
         home=home,
         preserve_finalized=False,
+        destination=destination,
     )
     return byte_offset, line_count
 
@@ -495,7 +618,7 @@ def drain_outbox(
     """Drain durable batches for the configured server/user until blocked."""
     from observal_cli import telemetry_buffer
 
-    destination = str(config.get("server_url") or "").rstrip("/")
+    destination = server_key(str(config.get("server_url") or ""))
     user_id = str(config.get("user_id") or "")
     if not destination or not user_id:
         return False
@@ -539,6 +662,7 @@ def drain_outbox(
                 repair_from_line,
                 home=home,
                 preserve_finalized=False,
+                destination=destination,
             )
             telemetry_buffer.accept_item(item.id, db_path=db_path)
             if repairs is not None:
@@ -555,6 +679,7 @@ def drain_outbox(
                     item.end_line + 1,
                     finalized=item.final,
                     home=home,
+                    destination=destination,
                 )
                 telemetry_buffer.accept_item(item.id, db_path=db_path)
                 log_error(
@@ -572,6 +697,7 @@ def drain_outbox(
             acknowledged_line + 1,
             finalized=item.final,
             home=home,
+            destination=destination,
         )
         telemetry_buffer.acknowledge(
             destination=destination,
@@ -632,7 +758,7 @@ def drain_session_source(
     """Spool all complete source records, then deliver them through the outbox."""
     from observal_cli import telemetry_buffer
 
-    destination = str(config.get("server_url") or "").rstrip("/")
+    destination = server_key(str(config.get("server_url") or ""))
     user_id = str(config.get("user_id") or "")
     if source.path is None or not destination or not user_id:
         return False
@@ -657,7 +783,7 @@ def drain_session_source(
             return False
         byte_offset, line_count = recovered
     else:
-        byte_offset, line_count = read_cursor(source.checkpoint_key, home=home)
+        byte_offset, line_count = read_cursor(source.checkpoint_key, home=home, destination=destination)
     byte_offset, line_count = telemetry_buffer.spooled_checkpoint(
         destination=destination,
         user_id=user_id,
@@ -747,6 +873,7 @@ def drain_session_source(
                 line_count,
                 finalized=final and delivered,
                 home=home,
+                destination=destination,
             )
         return delivered and not source_was_rejected()
 

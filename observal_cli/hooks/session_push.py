@@ -17,6 +17,7 @@ from loguru import logger as optic
 
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.sessions.base import (
+    delivered_to_another_server,
     drain_outbox,
     drain_session_source,
     load_config,
@@ -205,8 +206,15 @@ def _recover_sessions(harness: str, exclude_session: str = "", home: Path | None
                 continue
         except OSError:
             continue
-        offset, _line_count, finalized = read_cursor_state(source.checkpoint_key, home=home)
+        destination = str(config.get("server_url") or "")
+        offset, line_count, finalized = read_cursor_state(source.checkpoint_key, home=home, destination=destination)
         if offset >= stat.st_size and (finalized or not recovery_final):
+            continue
+        if not (offset or line_count or finalized) and delivered_to_another_server(
+            source.checkpoint_key, home=home, destination=destination
+        ):
+            # Delivered to the server configured before a switch. Copying it to this one
+            # is an explicit `observal reconcile`, never a background side effect.
             continue
         event = {"session_id": source.session_id, "hook_event_name": "Stop"}
         # Scope is checked after the cheap cursor and age filters: deciding it

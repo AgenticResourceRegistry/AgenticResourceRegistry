@@ -76,7 +76,7 @@ def test_vscode_materialized_source_uses_acknowledged_outbox(tmp_path: Path, mon
         home=tmp_path,
         db_path=db,
     )
-    assert base.read_cursor("session", home=tmp_path) == (0, 0)
+    assert base.read_cursor("session", home=tmp_path, destination="http://server") == (0, 0)
     item = telemetry_buffer.pending(destination="http://server", user_id="user", db_path=db)[0]
     assert item.harness == "copilot"
     assert item.start_line == item.end_line == 0
@@ -88,7 +88,7 @@ def test_vscode_materialized_source_uses_acknowledged_outbox(tmp_path: Path, mon
         }
 
     assert base.drain_outbox(_config(), home=tmp_path, db_path=db, post=acknowledge)
-    assert base.read_cursor("session", home=tmp_path) == (source.path.stat().st_size, 1)
+    assert base.read_cursor("session", home=tmp_path, destination="http://server") == (source.path.stat().st_size, 1)
 
 
 def test_copilot_cli_resolves_and_discovers_native_jsonl(tmp_path: Path):
