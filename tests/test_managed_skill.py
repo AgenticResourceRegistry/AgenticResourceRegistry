@@ -16,7 +16,23 @@ from pathlib import Path
 import pytest
 
 from observal_cli import lockfile, managed_skill
-from observal_cli.skill_folder import validate_bundle
+from observal_cli.skill_folder import file_mode_matches, validate_bundle
+
+WINDOWS = os.name == "nt"
+# Windows refuses to rename a directory, or any of its ancestors, while a pin handle is open on it, so the
+# substitutions these tests stage cannot happen there. test_windows_* below prove that refusal instead.
+posix_only_swap = pytest.mark.skipif(WINDOWS, reason="Windows blocks the ancestor rename this test simulates")
+windows_only = pytest.mark.skipif(not WINDOWS, reason="exercises native Windows handles")
+
+
+def link_dir(link: Path, target: Path) -> None:
+    """A directory symlink, or a junction on Windows, where symlinks need Developer Mode."""
+    if WINDOWS:
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
 
 
 def bundle(version, content=b"skill", script=b"\x00\xff", script_mode="0755"):
@@ -163,7 +179,7 @@ def test_initial_upgrade_preview_restore_and_prune(store):
     target, root = store
     one, two = bundle("v1"), bundle("v2", content=b"changed")
     assert install(one, target, root)["action"] == "install"
-    assert oct(os.stat(target / "scripts/run").st_mode & 0o777) == "0o755"
+    assert file_mode_matches(os.stat(target / "scripts/run").st_mode & 0o777, 0o755)
     assert (target / "empty").read_bytes() == b""
     assert install(one, target, root)["action"] == "unchanged"
     preview = install(two, target, root, check=True)
@@ -217,7 +233,7 @@ def test_missing_managed_folder_does_not_upgrade_or_overwrite_foreign_tree(store
         install(bundle("v1"), target, root)
     assert (target / "SKILL.md").read_text() == "foreign"
     shutil.rmtree(target)
-    target.symlink_to(root, target_is_directory=True)
+    link_dir(target, root)
     with pytest.raises(managed_skill.ManagedSkillError, match="Symlink"):
         install(bundle("v1"), target, root)
 
@@ -255,7 +271,7 @@ def test_missing_managed_folder_recovery_after_swapped_before_record(store, monk
 
     shutil.rmtree(target)
     proof = managed_skill.receipt(pinned, target, "pi", "project", registry_url="https://example.org")
-    key = hashlib.sha256(str(target).encode()).hexdigest()
+    key = managed_skill._slot_prefix(target)
     folder = root / f"{key}-crashed"
     folder.mkdir()
     (folder / "marker.json").write_text(json.dumps({"target": str(target), "old": None, "new": proof}))
@@ -297,7 +313,7 @@ def test_interrupted_restore_preserves_both_versions_and_prior_receipt(store):
     install(first, target, root)
     upgraded = install(second, target, root)
     original = root / upgraded["backup_id"] / "old"
-    replacement = root / f"{hashlib.sha256(str(target).encode()).hexdigest()}-restore-crash"
+    replacement = root / f"{managed_skill._slot_prefix(target)}-restore-crash"
     replacement.mkdir()
     old_proof = managed_skill.receipt(second, target, "pi", "project", registry_url="https://example.org")
     new_proof = managed_skill.receipt(first, target, "pi", "project", registry_url="https://example.org")
@@ -397,7 +413,7 @@ def test_recover_interrupted_rename_and_refuse_changed_target(store):
     target, root = store
     one = bundle("v1")
     install(one, target, root)
-    key = hashlib.sha256(str(target).encode()).hexdigest()
+    key = managed_skill._slot_prefix(target)
     folder = root / f"{key}-123"
     folder.mkdir()
     proof = managed_skill.receipt(one, target, "pi", "project", registry_url="https://example.org")
@@ -416,7 +432,7 @@ def test_recover_unrecorded_initial_swap_without_claiming_managed_ownership(stor
     first = bundle("v1")
     target.parent.mkdir(parents=True)
     root.mkdir()
-    key = hashlib.sha256(str(target).encode()).hexdigest()
+    key = managed_skill._slot_prefix(target)
     folder = root / f"{key}-initial"
     folder.mkdir()
     proof = managed_skill.receipt(first, target, "pi", "project", registry_url="https://example.org")
@@ -437,7 +453,7 @@ def test_recover_crash_after_new_tree_before_receipt_keeps_old_release(store):
     install(old, target, root)
     old_proof = managed_skill.receipt(old, target, "pi", "project", registry_url="https://example.org")
     new_proof = managed_skill.receipt(new, target, "pi", "project", registry_url="https://example.org")
-    key = hashlib.sha256(str(target).encode()).hexdigest()
+    key = managed_skill._slot_prefix(target)
     folder = root / f"{key}-crash"
     folder.mkdir()
     (folder / "marker.json").write_text(json.dumps({"target": str(target), "old": old_proof, "new": new_proof}))
@@ -505,7 +521,7 @@ def test_renamed_successor_refuses_second_live_folder_and_keeps_prior_receipt(st
 def test_symlink_target_refused(store):
     target, root = store
     target.parent.mkdir(parents=True)
-    target.symlink_to(target.parent)
+    link_dir(target, target.parent)
     with pytest.raises(managed_skill.ManagedSkillError, match="Symlink"):
         install(bundle("v1"), target, root)
 
@@ -527,7 +543,7 @@ def test_wide_existing_lockfile_is_narrowed(store):
     install(bundle("v1"), target, root)
     os.chmod(lockfile.LOCKFILE_PATH, 0o666)
     install(bundle("v2"), target, root)
-    assert lockfile.LOCKFILE_PATH.stat().st_mode & 0o777 == 0o600
+    assert file_mode_matches(lockfile.LOCKFILE_PATH.stat().st_mode & 0o777, 0o600)
 
 
 def test_different_targets_cannot_orphan_listing_receipt(store):
@@ -599,6 +615,7 @@ def test_restore_lockfile_unreadable_after_swap_refuses_rollback(store, monkeypa
     assert list(root.glob("*/marker.json"))  # recovery evidence is retained, not silently deleted
 
 
+@posix_only_swap
 def test_ancestor_symlink_swapped_during_staging_is_refused(tmp_path, monkeypatch):
     config = tmp_path / "config"
     monkeypatch.setattr(lockfile, "CONFIG_DIR", config)
@@ -634,6 +651,7 @@ def _isolated_machine(tmp_path, monkeypatch):
     monkeypatch.setattr(lockfile, "_LOCKFILE_LOCK", config / "lockfile.lock")
 
 
+@posix_only_swap
 def test_backup_ancestor_swap_never_deletes_redirected_staging_directory(tmp_path, monkeypatch):
     _isolated_machine(tmp_path, monkeypatch)
     target = tmp_path / "project" / ".pi" / "skills" / "example"
@@ -658,6 +676,7 @@ def test_backup_ancestor_swap_never_deletes_redirected_staging_directory(tmp_pat
     assert not target.exists()
 
 
+@posix_only_swap
 def test_restore_refuses_when_destination_ancestor_is_swapped_after_pinning(tmp_path, monkeypatch):
     _isolated_machine(tmp_path, monkeypatch)
     project = tmp_path / "project"
@@ -722,6 +741,7 @@ def test_upgrade_preview_reports_modified_files_and_mode_changes(store):
     assert identical["action"] == "unchanged"
 
 
+@posix_only_swap
 def test_ancestor_swapped_after_record_is_never_reported_as_success(tmp_path, monkeypatch):
     _isolated_machine(tmp_path, monkeypatch)
     project = tmp_path / "project"
@@ -783,7 +803,7 @@ def test_crash_while_staging_beside_the_destination_is_cleaned_up_by_recovery(st
 def test_recovery_refuses_a_marker_that_names_a_stage_elsewhere(store):
     target, root = store
     root.mkdir(parents=True)
-    key = hashlib.sha256(str(target).encode()).hexdigest()
+    key = managed_skill._slot_prefix(target)
     folder = root / f"{key}-deadbeef"
     folder.mkdir()
     victim = target.parent.parent / "precious"
@@ -827,7 +847,7 @@ def test_stage_falls_back_to_the_skills_directory_when_the_parent_is_not_usable(
 def test_recovery_removes_a_stage_recorded_inside_the_skills_directory(store):
     target, root = store
     root.mkdir(parents=True)
-    key = hashlib.sha256(str(target).encode()).hexdigest()
+    key = managed_skill._slot_prefix(target)
     folder = root / f"{key}-cafe"
     folder.mkdir()
     stage = target.parent / f".{target.name}.observal-stage-abc123"
@@ -862,3 +882,177 @@ def test_read_failure_while_verifying_after_the_lock_advanced_is_still_a_committ
         install(bundle("v1"), target, tmp_path / "backups")
     assert exc.value.outcome["action"] == "install"  # callers must keep the recorded install, not roll it back
     assert list((tmp_path / "backups").glob("*/marker.json"))
+
+
+def test_windows_retry_outlasts_a_briefly_busy_path(monkeypatch):
+    monkeypatch.setattr(managed_skill, "_WINDOWS", True)
+    monkeypatch.setattr(managed_skill, "_WINDOWS_RETRY_DELAYS", (0, 0, 0))
+    attempts = []
+
+    def busy_twice():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError(13, "The process cannot access the file because it is being used")
+        return "moved"
+
+    assert managed_skill._retry_on_windows(busy_twice) == "moved"
+    assert len(attempts) == 3
+
+    attempts.clear()
+
+    def always_busy():
+        attempts.append(1)
+        raise PermissionError(13, "busy")
+
+    with pytest.raises(PermissionError):
+        managed_skill._retry_on_windows(always_busy)
+    assert len(attempts) == 4  # one attempt per delay, then a last one that reports the error
+
+
+def test_posix_never_retries(monkeypatch):
+    monkeypatch.setattr(managed_skill, "_WINDOWS", False)
+    attempts = []
+
+    def busy():
+        attempts.append(1)
+        raise PermissionError(13, "denied")
+
+    with pytest.raises(PermissionError):
+        managed_skill._retry_on_windows(busy)
+    assert len(attempts) == 1
+
+
+def test_file_mode_matches_keeps_exact_bits_on_posix_and_write_access_on_windows():
+    assert file_mode_matches(0o644, 0o644)
+    assert not file_mode_matches(0o444, 0o644)  # losing write access is a change on every platform
+    # Windows has no executable bit: 0644 and 0755 both read back as 0666 there.
+    assert file_mode_matches(0o666, 0o755) is WINDOWS
+    assert file_mode_matches(0o755, 0o644) is WINDOWS
+
+
+@windows_only
+def test_windows_pin_blocks_renaming_the_directory_and_every_ancestor(tmp_path):
+    pinned = tmp_path / "project" / ".pi" / "skills"
+    pinned.mkdir(parents=True)
+    (pinned / "child").mkdir()
+    fd = managed_skill._pin_dir(pinned)
+    try:
+        for path in (pinned, pinned.parent, pinned.parent.parent):
+            with pytest.raises(PermissionError):
+                path.rename(path.with_name(path.name + "-moved"))
+        # Children of a pinned directory still move, which is all a swap needs.
+        (pinned / "child").rename(pinned / "renamed")
+        assert managed_skill._still_pinned(pinned, fd)
+    finally:
+        os.close(fd)
+    (tmp_path / "project").rename(tmp_path / "project-moved")  # released once the pin closes
+
+
+@windows_only
+def test_windows_junction_anywhere_in_the_destination_is_refused(store, tmp_path):
+    _target, root = store
+    outside = tmp_path / "outside"
+    (outside / "skills").mkdir(parents=True)
+    project = tmp_path / "project"
+    project.mkdir()
+    link_dir(project / ".pi", outside)
+    linked = project / ".pi" / "skills" / "example"
+    assert managed_skill.is_link(project / ".pi")
+    with pytest.raises(managed_skill.ManagedSkillError, match="Symlink"):
+        install(bundle("v1"), linked, root)
+    with pytest.raises(managed_skill.ManagedSkillError, match="Symlink"):
+        managed_skill._pin_dir(linked.parent)
+    assert not (outside / "skills" / "example").exists()
+
+
+@windows_only
+def test_windows_ancestor_swap_during_staging_cannot_redirect_the_install(tmp_path, monkeypatch):
+    _isolated_machine(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    target = project / ".pi" / "skills" / "example"
+    outside = tmp_path / "outside"
+    (outside / "skills").mkdir(parents=True)
+    real_install = managed_skill.install_folder_bundle
+    refused = []
+
+    def try_to_swap_ancestor(b, stage):
+        real_install(b, stage)
+        try:
+            (project / ".pi").rename(project / ".pi-original")
+        except PermissionError:
+            refused.append(True)
+
+    monkeypatch.setattr(managed_skill, "install_folder_bundle", try_to_swap_ancestor)
+    assert install(bundle("v1"), target, tmp_path / "backups")["action"] == "install"
+    assert refused  # Windows refused the substitution while the destination was pinned
+    assert (target / "SKILL.md").read_bytes() == b"skill"
+    assert not (outside / "skills" / "example").exists()
+
+
+@windows_only
+def test_windows_upgrade_with_a_file_held_open_fails_cleanly_and_keeps_the_old_release(store, monkeypatch):
+    target, root = store
+    install(bundle("v1"), target, root)
+    before = lockfile.read_lockfile()
+    monkeypatch.setattr(managed_skill, "_WINDOWS_RETRY_DELAYS", (0.01, 0.01))
+    # An editor or a running harness holding a file in the old folder open.
+    with (
+        open(target / "SKILL.md", "rb"),
+        pytest.raises(managed_skill.ManagedSkillError, match="original installation preserved") as exc,
+    ):
+        install(bundle("v2", content=b"changed"), target, root)
+    assert exc.value.remediation and "Close any editor" in exc.value.remediation
+    assert (target / "SKILL.md").read_bytes() == b"skill"
+    assert lockfile.read_lockfile() == before
+    assert not list(root.iterdir())  # nothing moved, so no marker or empty slot is left behind
+    # Once the file is closed, a preview and then the upgrade go through.
+    assert install(bundle("v2", content=b"changed"), target, root, check=True)["action"] == "upgrade"
+    assert install(bundle("v2", content=b"changed"), target, root)["action"] == "upgrade"
+    assert (target / "SKILL.md").read_bytes() == b"changed"
+    assert not list(root.glob("*/marker.json"))
+
+
+def test_a_swap_that_never_moved_the_old_folder_does_not_block_the_next_preview(store, monkeypatch):
+    target, root = store
+    install(bundle("v1"), target, root)
+    real_rename = managed_skill._rename_at
+
+    def refuse_first_move(*args):
+        if args[2] == target.name and args[5] == "old":
+            raise managed_skill.ManagedSkillError("folder is busy")
+        return real_rename(*args)
+
+    monkeypatch.setattr(managed_skill, "_rename_at", refuse_first_move)
+    with pytest.raises(managed_skill.ManagedSkillError, match="original installation preserved"):
+        install(bundle("v2", content=b"changed"), target, root)
+    monkeypatch.setattr(managed_skill, "_rename_at", real_rename)
+
+    assert (target / "SKILL.md").read_bytes() == b"skill"
+    assert not list(root.glob("*/marker.json"))
+    assert install(bundle("v2", content=b"changed"), target, root, check=True)["action"] == "upgrade"
+
+
+@windows_only
+def test_windows_backup_slots_leave_room_for_the_staged_files(store):
+    target, root = store
+    install(bundle("v1"), target, root)
+    done = install(bundle("v2", content=b"changed"), target, root)
+    # 16 + 1 + 12 characters instead of 64 + 1 + 32: paths stop at 260 characters on Windows by default.
+    assert len(done["backup_id"]) == 29
+    assert managed_skill.backups_list(backup_root=root)[0]["id"] == done["backup_id"]
+    assert managed_skill.restore_backup(done["backup_id"], backup_root=root)["restored"] == done["backup_id"]
+    assert (target / "SKILL.md").read_bytes() == b"skill"
+
+
+@windows_only
+def test_windows_path_past_the_limit_names_the_fix(store, monkeypatch):
+    target, root = store
+
+    def too_long(_bundle, stage):
+        raise OSError(None, "The filename or extension is too long", str(stage), 206)
+
+    monkeypatch.setattr(managed_skill, "install_folder_bundle", too_long)
+    with pytest.raises(managed_skill.ManagedSkillError, match="original installation preserved") as exc:
+        install(bundle("v1"), target, root)
+    assert "260 characters" in exc.value.remediation
+    assert not target.exists()
