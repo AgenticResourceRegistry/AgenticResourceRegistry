@@ -965,27 +965,65 @@ def _cleanup_claude_code(dry_run: bool) -> bool:
     return changed
 
 
+def _kiro_cleanup_profiles(agents_dir: Path) -> set[Path]:
+    """Include user profiles and exact locked project profiles, never project-wide globs."""
+    from observal_cli.lockfile import read_registry_lockfile
+
+    profiles = set(agents_dir.glob("*.json"))
+    try:
+        _, registry = read_registry_lockfile()
+    except (RuntimeError, ValueError, OSError) as error:
+        optic.warning("Cannot read Kiro project inventory: {}", error)
+        rprint("  [yellow]Cannot read project inventory; cleaning user profiles only[/yellow]")
+        return profiles
+    for entry in registry.get("harnesses", {}).get("kiro", {}).get("agents", []):
+        if entry.get("scope") == "user":
+            continue
+        local_name = entry.get("local_name") or entry.get("slug") or entry.get("name")
+        directory = entry.get("directory")
+        if not local_name or not directory:
+            continue
+        project_agents = Path(directory) / ".kiro" / "agents"
+        profile = project_agents / f"{local_name}.json"
+        # A corrupt lock alias must not turn cleanup into a write outside agents/.
+        if profile.parent == project_agents and profile.is_file():
+            profiles.add(profile)
+    return profiles
+
+
 def _cleanup_kiro(dry_run: bool) -> bool:
+    """Remove owned inline and standalone hooks in user and locked project scopes."""
+    from observal_cli.harness_specs.kiro_hooks_spec import is_observal_v1_hook
+
     optic.trace("dry_run={}", dry_run)
     rprint("[cyan]Kiro[/cyan]")
     agents_dir = Path.home() / ".kiro" / "agents"
-    if not agents_dir.is_dir():
-        rprint("  [dim]No ~/.kiro/agents/ found - skipping[/dim]")
-        return False
-
     changed = False
-    for agent_profile in sorted(agents_dir.glob("*.json")):
-        agent_data = _read_json_object(agent_profile)
+    for agent_profile in sorted(_kiro_cleanup_profiles(agents_dir)):
+        try:
+            agent_data = _read_json_object(agent_profile)
+        except (ValueError, OSError) as error:
+            optic.warning("Skipping unreadable Kiro profile {}: {}", agent_profile, error)
+            rprint(f"  [yellow]Skipping unreadable profile: {esc(agent_profile)}[/yellow]")
+            continue
 
         agent_changed = False
-
-        # Remove hooks that reference Observal
         hooks = agent_data.get("hooks", {})
-        if isinstance(hooks, dict):
+        if isinstance(hooks, list):
+            cleaned = [entry for entry in hooks if not is_observal_v1_hook(entry)]
+            if len(cleaned) < len(hooks):
+                agent_changed = True
+                if not dry_run:
+                    agent_data["hooks"] = cleaned
+        elif isinstance(hooks, dict):
             for event, entries in list(hooks.items()):
                 if not isinstance(entries, list):
                     continue
-                cleaned = [e for e in entries if not _is_observal_hook_entry(e)]
+                cleaned = [
+                    e
+                    for e in entries
+                    if not isinstance(e, dict) or not _is_observal_hook_entry(e, include_generic_marker=False)
+                ]
                 if len(cleaned) < len(entries):
                     agent_changed = True
                     if not dry_run:
@@ -995,13 +1033,18 @@ def _cleanup_kiro(dry_run: bool) -> bool:
                             del hooks[event]
 
         if agent_changed:
+            if not dry_run:
+                try:
+                    atomic_write(agent_profile, json.dumps(agent_data, indent=2) + "\n")
+                except OSError as error:
+                    optic.warning("Cannot write Kiro profile {}: {}", agent_profile, error)
+                    rprint(f"  [yellow]Cannot write profile: {esc(agent_profile)}[/yellow]")
+                    continue
             changed = True
             verb = "Would clean" if dry_run else "Cleaned"
-            rprint(f"  {verb} {esc(agent_profile.name)}")
-            if not dry_run:
-                atomic_write(agent_profile, json.dumps(agent_data, indent=2) + "\n")
+            rprint(f"  {verb} {esc(agent_profile)}")
 
-    # Standalone v1 hooks files (~/.kiro/hooks/observal.json and project copies)
+    # Standalone hooks are independent of whether any agent profile still exists.
     if _cleanup_kiro_hook_files(dry_run):
         changed = True
 
