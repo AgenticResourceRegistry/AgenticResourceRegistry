@@ -1,102 +1,65 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Share agent configs across harnesses"
+title: "Share agent configurations"
+description: "Give teammates the same versioned setup without copying coding-tool configuration."
 ---
 
-Your team has a reviewer agent that works great in Claude Code. Now someone wants to use it in Kiro. Then Cursor. Then they want to tweak the skills. Copy-pasting config snippets across tools doesn't scale.
+Share a registry agent when teammates need the same instructions and resources. They pull a reviewed version into their own coding tool instead of copying your local configuration or credentials.
 
-Agentic Resource Registry's registry gives you one agent definition that installs cleanly into every supported harness.
+## Before you start
 
-## The shape of an agent
+You need a published agent that your teammate can access. Confirm it supports their harness and that its components are compatible with that tool. Private teamspace resources require the appropriate membership.
 
-Every agent is a YAML file that bundles:
+If you are creating the agent, use the [local authoring workflow](/cli/agent#local-authoring-workflow). `agent add` takes component UUIDs: look up each resource rather than inventing names in the YAML. Build validates the definition; publishing and review make it available according to your registry's policy.
 
-* MCP servers it needs
-* Skills to load
-* Hooks to wire into the session lifecycle
-* Prompts (with variables)
-* Sandboxes for code execution
+## Share the qualified name
 
-When someone runs `observal agent pull <agent>`, Agentic Resource Registry templates that YAML into the right files for their harness: `~/.claude/agents/*.json`, `.kiro/agents/*.json`, `.cursor/mcp.json`, and so on.
+Send the agent's `namespace/slug`, its intended use, and the harnesses you have actually checked. For example, `platform/reviewer` is a clearer reference than `reviewer`, which may exist in more than one namespace.
 
-## Publish an agent
-
-### Option A - the interactive wizard
+Your teammate can inspect it:
 
 ```bash
-observal agent create
+observal agent show platform/reviewer
 ```
 
-Step-by-step prompts: name, description, which MCP servers, which skills, which hooks. Results in a registry entry you can share by ID.
+The name above is illustrative; replace it with your agent's actual qualified name.
 
-### Option B - the YAML workflow (recommended for teams)
+## Preview and pull
+
+For Claude Code, from the target project:
 
 ```bash
-observal agent init                  # scaffold observal-agent.yaml
-observal agent add mcp github-mcp    # add components
-observal agent add skill code-review-skill
-observal agent add hook pretooluse-logger
-
-observal agent build                 # validate (dry-run)
-observal agent publish               # submit to registry
+observal agent pull platform/reviewer --harness claude-code --scope project --dry-run
+observal agent pull platform/reviewer --harness claude-code --scope project
 ```
 
-The YAML workflow is PR-reviewable. The file lives in your repo; changes flow through your normal review process.
+The CLI writes a Markdown agent profile with YAML frontmatter under `.claude/agents/`, installs compatible resources, and runs required setup such as MCP registration. Activate it using the exact generated local name. [First-agent walkthrough](/getting-started/quickstart).
 
-## Install an agent into any harness
+For Kiro or Cursor, choose the appropriate `--harness` value and follow that tool's [integration instructions](/integrations/index). Do not assume configuration formats, defaults, or activation commands are the same. `vscode` is not a current harness identifier; VS Code Copilot uses `copilot`.
 
-Browse what exists:
+## Share versions, not secrets
 
-```bash
-observal agent list
-observal agent list --search review
-observal agent show <agent-id>
-```
+Project-scope installs record the agent version in `observal.lock`. Commit that lockfile when teammates should pull the same version. Publishing newer component versions does not update an existing agent's pins by itself; the author releases a new agent version to change them.
 
-Install with one command, pick the harness:
+Do not share local token files or generated credentials. Each teammate supplies the component settings and credentials required by their installation. These values are sent to the registry when it generates install configuration; enter secrets interactively instead of placing them in shell arguments.
 
-```bash
-observal agent pull <agent-id> --harness claude-code
-observal agent pull <agent-id> --harness kiro
-observal agent pull <agent-id> --harness cursor
-observal agent pull <agent-id> --harness vscode
-observal agent pull <agent-id> --harness codex
-```
+A pull can install session hooks and a delegation MCP entry as well as your explicitly selected components. Review the preview with your teammate, especially where session data can be reported to the server.
 
-The CLI prompts for any environment variables the MCP servers declare as required (GitHub tokens, API keys). These are stored in your harness config, not uploaded to Agentic Resource Registry.
+## If a teammate cannot install it
 
-### Control what gets installed
+Check these in order:
 
-```bash
-# Preview without writing anything
-observal agent pull <agent-id> --harness claude-code --dry-run
+1. The qualified name and their registry connection.
+2. Their teamspace access and the agent version's publication state.
+3. The version's declared harness support and required component capabilities.
+4. The preview warnings, required credentials, and setup-command failures.
+5. The tool-specific activation step after installation.
 
-# Install into a specific directory
-observal agent pull <agent-id> --harness claude-code --dir ./my-project
-
-# Claude Code only: scope (project-local vs user-global)
-observal agent pull <agent-id> --harness claude-code --scope project
-observal agent pull <agent-id> --harness claude-code --scope user
-
-# Claude Code only: sub-agent model
-observal agent pull <agent-id> --harness claude-code --model sonnet
-
-# Claude Code only: tool allowlist
-observal agent pull <agent-id> --harness claude-code --tools Read,Write,Bash
-```
-
-## What portability actually means
-
-The harness feature matrix (defined in `packages/observal-shared/observal_shared/harness_registry.py`) controls what each harness supports. If an agent uses skills and the target harness doesn't have skills, the installer:
-
-* Installs the compatible parts cleanly
-* Warns about the unsupported parts
-* Exits non-zero if the agent *requires* something the harness cannot provide
-
-Useful when onboarding a new machine or swapping between "work setup" and "personal setup."
+Do not override unsupported-harness checks just to make the command finish. A partial install may not provide the behavior your team depends on.
 
 ## Next
 
-→ [Run a team-wide agent registry](/use-cases/team-registry): once publishing is routine, you need governance.
+[Manage teamspaces](/use-cases/teamspaces), [fork an agent for a different workflow](/use-cases/fork-and-customize), or [check installed versions](/cli/outdated).

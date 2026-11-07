@@ -2,116 +2,89 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Installation"
+title: "Install the CLI"
+description: "Install the observal command on your machine and verify it works."
 ---
 
-Agentic Resource Registry has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
+The `observal` CLI connects your machine to Agentic Resource Registry. Use it to browse resources, pull agents, and manage what you have installed.
 
-## Install the server
+Installing the CLI does **not** deploy a registry server. To evaluate a server locally, use [Try a registry locally](/getting-started/local-evaluation). For a team deployment, use [Self-hosting](/self-hosting/index).
 
-The server runs as a Docker Compose stack (API, web UI, PostgreSQL, ClickHouse, Redis, worker, load balancer). Prometheus and Grafana are optional deployment overlays.
+## Install a standalone binary
 
-> [!NOTE]
-> Requires Docker Engine ≥ 24.0 with Compose v2 (`docker compose`, not `docker-compose`). Homebrew's Docker formula is outdated. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages. Verify with `docker version` and `docker compose version`.
+The standalone binary does not require Python. Choose your operating system:
 
-**One-line install:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
-```
-
-This downloads a config package, runs guided setup (domain, secrets, ports), pulls container images from GHCR, and starts the full stack.
-
-**From source** (for contributors):
-
-```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
-cp .env.example .env
-make up
-```
-
-For deployment options, see [Self-Hosting](/self-hosting/docker-compose) and [Production deployment](/self-hosting/production-deploy).
-
-## Install the CLI
-
-The CLI is what you use to log in, instrument harness configs, pull agents, and query traces.
-
-## Install (standalone binary)
-
-The standalone binary is the simplest way to install. No Python required.
-
-macOS / Linux:
+<Tabs>
+  <Tab title="macOS / Linux">
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
 ```
 
-Windows (PowerShell):
+The installer downloads the latest release for your platform and installs it to `/usr/local/bin` by default. To choose a version or directory, use the installer's `--version` and `--bin-dir` options.
+
+  </Tab>
+  <Tab title="Windows">
+
+Run in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
 ```
 
-This downloads the latest release binary for your platform and places it on your `PATH`. On Windows it installs to `%LOCALAPPDATA%\Programs\Observal` and updates your user `PATH` (open a new terminal afterwards). Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to pin a version or change the install directory.
+The installer uses `%LOCALAPPDATA%\Programs\Observal` by default and updates your user `PATH`. Open a new terminal after installation. Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to choose a version or directory.
 
-Connecting to a server your team already runs? See the [Setup guide](/getting-started/onboarding).
+  </Tab>
+</Tabs>
 
-Verify it worked:
+<Warning>
+  These commands download and execute an installer. Review the script first if your security policy requires it. The installers check release checksums when available, but warn and can proceed without verification if checksums cannot be downloaded. See [release verification](/security/release-verification) for stronger verification steps.
+</Warning>
+
+## Verify the installation
 
 ```bash
 observal --version
 ```
 
+You should see an `observal` version. If your registry requires a different CLI version, login prints the command to install it.
+
 ## Alternative: install with Python
 
-If you prefer to install via Python, use one of these methods. Requires Python 3.11 or newer.
-
-**uv (recommended):**
+Requires Python 3.11 or newer. With [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```bash
 uv tool install observal-cli
 ```
 
-**pipx:**
+You can also use `pipx install observal-cli`. Prefer an isolated tool install over adding CLI dependencies to an application environment.
 
-```bash
-pipx install observal-cli
-```
-
-**pip:**
-
-```bash
-pip install --user observal-cli
-```
-
-### Optional extras
-
-The Python package includes the Docker SDK. The `migrate` extra adds `pyarrow` for `observal server migrate`:
+The optional `migrate` extra adds dependencies for the server data-migration commands; it is not needed to pull agents:
 
 ```bash
 uv tool install 'observal-cli[migrate]'
 ```
 
-## Install from source (for contributors)
+### Install from a checkout
+
+For local source evaluation or contribution, run this from the repository root:
 
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd AgenticResourceRegistry
 uv tool install --editable .
 ```
 
-## What gets installed
+Use a checkout matching your server. A development server may not match the latest published CLI release.
 
-The Python package provides three entry points:
+## Troubleshooting
 
-| Command                | Purpose                                              |
-| ---------------------- | ---------------------------------------------------- |
-| `observal`             | The main CLI                                         |
-| `observal-sandbox-run` | Sandbox runner invoked by Agentic Resource Registry sandboxes         |
-| `observal-sandbox-mcp` | MCP adapter used by sandbox execution               |
-
-You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.
+| Problem | Next step |
+| --- | --- |
+| Command not found after installation | Open a new terminal. Check that the install directory is on `PATH`. |
+| Cannot write to `/usr/local/bin` | Choose a writable directory with the Unix installer's `--bin-dir` option, then add it to `PATH`. |
+| No binary for your platform | Use the Python installation method rather than assuming every OS/architecture has a release binary. |
+| Login reports a version mismatch | Use the exact matching version requested by the server; a newer CLI is not necessarily compatible. |
 
 ## Upgrade
 
@@ -119,28 +92,22 @@ You will almost never call the sandbox helpers directly. The CLI wires them into
 observal self upgrade
 ```
 
+For a pinned team deployment, follow your administrator's version instructions rather than upgrading independently. See [CLI version management](/cli/self).
+
 ## Uninstall
 
-Standalone binary:
-
-```bash
-rm "$(which observal)"
-```
-
-Python install:
+For a Python tool install:
 
 ```bash
 uv tool uninstall observal-cli
-# or: pipx uninstall observal-cli
-# or: pip uninstall observal-cli
+# If installed with pipx instead:
+pipx uninstall observal-cli
 ```
 
-Uninstalling the CLI does **not** remove your config (`~/.observal/`). Delete that folder if you want a clean slate:
+For a standalone install, remove the `observal` executable from the directory where you installed it. On macOS/Linux, `command -v observal` shows the executable path. On Windows, use `Get-Command observal`.
 
-```bash
-rm -rf ~/.observal
-```
+Removing the CLI does not sign you out remotely or remove generated harness files. [Logout](/cli/auth#logout) and [harness cleanup](/cli/doctor) are separate operations. Keep the CLI installed until you have completed any cleanup you need.
 
 ## Next
 
--> [Quickstart](/getting-started/quickstart)
+[Join your team's registry](/getting-started/onboarding), or [try a registry locally](/getting-started/local-evaluation).

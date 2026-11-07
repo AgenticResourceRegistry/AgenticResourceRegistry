@@ -3,11 +3,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "API endpoints"
 ---
 
-REST and GraphQL surface of the Agentic Resource Registry server. Unless noted, endpoints require authentication via Bearer token or API key (`Authorization: Bearer <token>` or `X-API-Key: <key>`).
+REST and GraphQL surface of the Agentic Resource Registry server. Unless noted, endpoints require a JWT access token in `Authorization: Bearer <token>`. There is no `X-API-Key` authentication path. Sign in through the supported credential or browser flow to obtain tokens; see [Authentication](/cli/auth).
 
 Base path: `/api/v1`.
 
@@ -16,8 +17,8 @@ Base path: `/api/v1`.
 | Method | Path | Description |
 | --- | --- | --- |
 | `POST` | `/auth/bootstrap` | Auto-create admin on fresh server (localhost only) |
-| `POST` | `/auth/register` | Self-registration (email + password; `deployment.sso_only=false` only) |
-| `POST` | `/auth/login` | Login with API key or email + password |
+| `POST` | `/auth/register` | Self-registration with email and password, only when `auth.self_registration_enabled` is on and password authentication is allowed |
+| `POST` | `/auth/login` | Login with email/username and password when password authentication is allowed |
 | `POST` | `/auth/exchange` | Exchange one-time OAuth code for credentials |
 | `GET` | `/auth/whoami` | Current user info |
 | `POST` | `/auth/token` | Exchange credentials for JWT access + refresh tokens |

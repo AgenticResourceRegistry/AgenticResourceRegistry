@@ -1,7 +1,9 @@
 ---
 # SPDX-FileCopyrightText: 2026 Rishika Kaur <kaurrishika377@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Claude Code"
+description: "Install and activate a registry agent in Claude Code, with scope and session-capture details."
 ---
 
 Claude Code is a first-class Agentic Resource Registry harness integration. Agentic Resource Registry can install Claude Code agents, register MCP servers, add hooks, install skills, and collect session telemetry.
@@ -73,15 +75,25 @@ observal agent pull <agent-name> --harness claude-code --scope user
 
 User agents are written to `~/.claude/agents/{name}.md`.
 
-### 4. Install global session hooks
+### 4. Activate the agent
 
-`observal auth login` installs these automatically when Claude Code is already present. To install or repair them by hand:
+Start a new Claude Code session in the target project with the generated agent filename, without `.md`:
 
 ```bash
-observal doctor patch
+claude --agent LOCAL_NAME
 ```
 
-This reconciles Agentic Resource Registry's hooks into `~/.claude/settings.json` without removing hooks you added yourself. Use `observal doctor cleanup` to remove them.
+Replace `LOCAL_NAME` with the name in the path printed by the pull. A profile on disk does not automatically select the agent in an existing session. For a complete first-install walkthrough, see [Pull your first agent](/getting-started/quickstart).
+
+### 5. Optional: install global session hooks
+
+Human-mode `observal auth login` can install these automatically when Claude Code is already present, unless setup was skipped. To install or repair them explicitly:
+
+```bash
+observal doctor patch --harness claude-code
+```
+
+This reconciles Agentic Resource Registry's hooks into `~/.claude/settings.json` without removing hooks you added yourself. Global hooks can deliver every Claude Code session to the configured registry, not only sessions using a pulled agent. Review your team's data-handling policy before enabling them. Pull-generated agent hooks can already report sessions without this global setup. Use `observal doctor cleanup` to remove Registry-managed global instrumentation; it is not an uninstall command for the pulled agent.
 
 ---
 

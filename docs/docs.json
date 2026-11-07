@@ -30,156 +30,171 @@
           "anchor": "Contributing Guide",
           "icon": "arrow-up-right-from-square",
           "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CONTRIBUTING.md"
-        },
-        {
-          "anchor": "Fuzzing Guide",
-          "icon": "arrow-up-right-from-square",
-          "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/fuzz/README.md"
-        },
-        {
-          "anchor": "AI Policy",
-          "icon": "arrow-up-right-from-square",
-          "href": "https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/AI_POLICY.md"
         }
       ]
     },
-    "groups": [
+    "tabs": [
       {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "getting-started/quickstart",
-          "getting-started/onboarding"
-        ]
-      },
-      {
-        "group": "Core Concepts",
-        "pages": [
-          "core-concepts/index",
-          "core-concepts/session-tracking"
-        ]
-      },
-      {
-        "group": "Use Cases",
-        "pages": [
-          "use-cases/index",
-          "use-cases/observe-mcp-traffic",
-          "use-cases/share-agent-configs",
-          "use-cases/debug-agent-failures",
-          "use-cases/team-registry",
-          "use-cases/fork-and-customize",
-          "use-cases/teamspaces",
-          "use-cases/mcp-repo-sync"
-        ]
-      },
-      {
-        "group": "CLI Reference",
-        "pages": [
-          "cli/index",
-          "cli/api",
-          "cli/idempotency",
-          "cli/auth",
-          "cli/config",
-          "cli/discover",
-          "cli/scan",
-          "cli/share",
-          "cli/outdated",
-          "cli/reconcile",
-          "cli/inbox",
-          "cli/pull",
-          "cli/registry",
-          "cli/recommend",
-          "cli/component",
-          "cli/models",
-          "cli/agent",
-          "cli/team",
-          "cli/ops",
-          "cli/admin",
+        "tab": "Guides",
+        "groups": [
           {
-            "group": "observal doctor",
+            "group": "Start here",
             "pages": [
-              "cli/doctor",
-              "cli/support"
-            ]
-          },
-          "cli/self",
-          "cli/prompt",
-          {
-            "group": "observal server",
-            "pages": [
-              "cli/server",
-              "cli/migrate"
+              "index",
+              "getting-started/onboarding",
+              "getting-started/installation",
+              "getting-started/quickstart",
+              "getting-started/local-evaluation"
             ]
           },
           {
-            "group": "observal registry skill",
+            "group": "Core Concepts",
             "pages": [
-              "cli/skill",
-              "skill-folder-workflow",
-              "skill-folder-rollout"
+              "core-concepts/index",
+              "core-concepts/session-tracking"
+            ]
+          },
+          {
+            "group": "Use Cases",
+            "pages": [
+              "use-cases/index",
+              "use-cases/observe-mcp-traffic",
+              "use-cases/share-agent-configs",
+              "use-cases/debug-agent-failures",
+              "use-cases/team-registry",
+              "use-cases/fork-and-customize",
+              "use-cases/teamspaces",
+              "use-cases/mcp-repo-sync"
             ]
           }
         ]
       },
       {
-        "group": "Self-Hosting",
-        "pages": [
-          "self-hosting/index",
-          "self-hosting/requirements",
-          "self-hosting/single-node-deploy",
-          "self-hosting/production-deploy",
-          "self-hosting/docker-compose",
-          "self-hosting/aws-terraform",
-          "self-hosting/gcp-terraform",
-          "self-hosting/configuration",
-          "self-hosting/usage-reporting",
-          "self-hosting/ports-and-volumes",
-          "self-hosting/databases",
-          "self-hosting/authentication",
-          "self-hosting/upgrades",
-          "self-hosting/backup-and-restore",
-          "self-hosting/troubleshooting"
+        "tab": "Integrations",
+        "groups": [
+          {
+            "group": "Coding tools",
+            "pages": [
+              "integrations/index",
+              "integrations/claude-code",
+              "integrations/copilot",
+              "integrations/cursor",
+              "integrations/goose",
+              "integrations/kiro",
+              "integrations/opencode",
+              "integrations/pi"
+            ]
+          }
         ]
       },
       {
-        "group": "Integrations",
-        "pages": [
-          "integrations/copilot",
-          "integrations/cursor",
-          "integrations/goose",
-          "integrations/kiro",
-          "integrations/opencode",
-          "integrations/pi"
+        "tab": "Self-hosting & Admin",
+        "groups": [
+          {
+            "group": "Self-Hosting",
+            "pages": [
+              "self-hosting/index",
+              "self-hosting/requirements",
+              "self-hosting/single-node-deploy",
+              "self-hosting/production-deploy",
+              "self-hosting/docker-compose",
+              "self-hosting/aws-terraform",
+              "self-hosting/gcp-terraform",
+              "self-hosting/configuration",
+              "self-hosting/usage-reporting",
+              "self-hosting/ports-and-volumes",
+              "self-hosting/databases",
+              "self-hosting/authentication",
+              "self-hosting/upgrades",
+              "self-hosting/backup-and-restore",
+              "self-hosting/troubleshooting"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/assurance-case",
+              "security/release-verification"
+            ]
+          }
         ]
       },
       {
-        "group": "Reference",
-        "pages": [
-          "reference/environment-variables",
-          "reference/api-endpoints",
-          "reference/hooks-spec",
-          "reference/config-files"
-        ]
-      },
-      {
-        "group": "Security",
-        "pages": [
-          "security/assurance-case",
-          "security/release-verification"
-        ]
-      },
-      {
-        "group": "Architecture Decisions",
-        "pages": [
-          "adr/0001-agentic-resource-discovery"
-        ]
-      },
-      {
-        "group": "Contributing",
-        "pages": [
-          "code-review",
-          "DEVELOPMENT_GUIDE",
-          "testing/Testing_Guide"
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "cli/index",
+              "cli/api",
+              "cli/idempotency",
+              "cli/auth",
+              "cli/config",
+              "cli/discover",
+              "cli/scan",
+              "cli/share",
+              "cli/outdated",
+              "cli/reconcile",
+              "cli/inbox",
+              "cli/pull",
+              "cli/registry",
+              "cli/recommend",
+              "cli/component",
+              "cli/models",
+              "cli/agent",
+              "cli/team",
+              "cli/ops",
+              "cli/admin",
+              {
+                "group": "observal doctor",
+                "pages": [
+                  "cli/doctor",
+                  "cli/support"
+                ]
+              },
+              "cli/self",
+              "cli/prompt",
+              {
+                "group": "observal server",
+                "pages": [
+                  "cli/server",
+                  "cli/migrate"
+                ]
+              },
+              {
+                "group": "observal registry skill",
+                "pages": [
+                  "cli/skill",
+                  "skill-folder-workflow",
+                  "skill-folder-rollout"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/environment-variables",
+              "reference/api-endpoints",
+              "reference/hooks-spec",
+              "reference/config-files"
+            ]
+          },
+          {
+            "group": "Architecture Decisions",
+            "pages": [
+              "adr/0001-agentic-resource-discovery",
+              "adr/0002-a2a-delegation"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "code-review",
+              "DEVELOPMENT_GUIDE",
+              "testing/Testing_Guide"
+            ]
+          }
         ]
       }
     ]
