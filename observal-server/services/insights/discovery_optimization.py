@@ -319,13 +319,13 @@ async def generate_discovery_optimization(db: AsyncSession, report: InsightRepor
     empty_replies = 0
     rejected: list[str] = []
     for attempt in range(MAX_ATTEMPTS):
+        rejected = []  # per attempt: a later empty reply must not inherit an earlier attempt's rejections
         response = await model(prompt, model_override=override, max_tokens=1200)
         if not response:
             # The model layer returns {} for a failed call, an unconfigured model, or a reply it could not parse.
             empty_replies += 1
             reason = "the reply was empty or not valid JSON"
         else:
-            rejected = []
             try:
                 proposals = Proposals.model_validate(response)
             except ValidationError as error:

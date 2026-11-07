@@ -376,3 +376,83 @@ async def test_a_description_that_instructs_its_author_is_rejected_not_published
         result = await optimizer.generate_discovery_optimization(db, report, {"metrics": {"rich": {}}})
     assert result["state"] == "unknown"
     assert "suggestions" not in result
+
+
+@pytest.mark.asyncio
+async def test_failed_calls_after_a_no_gain_reply_are_not_reported_as_no_edit_needed(sessions, monkeypatch):
+    """An earlier attempt's rejections must not turn two later model failures into a clean 'nothing to improve'."""
+
+    async def setting(*_args):
+        return None
+
+    no_gain = {
+        "suggestions": [
+            {
+                "illustrative_query": "kubernetes cluster upgrades",
+                "suggested_description": "Helps with everyday development tasks and related engineering work.",
+                "rationale": "A slightly longer description of the same scope.",
+                "evidence_keys": [],
+            }
+        ]
+    }
+    replies = [no_gain, {}, {}]
+
+    async def model(*_args, **_kwargs):
+        return replies.pop(0)
+
+    monkeypatch.setattr("services.dynamic_settings.get", setting)
+    monkeypatch.setattr(optimizer, "get_call_model", lambda: model)
+    async with sessions() as db:
+        owner = await fx.user(db)
+        agent = await fx.agent(db, owner)
+        report = SimpleNamespace(subject_type="agent", agent_id=agent.id, agent_version_id=agent.latest_version_id)
+        result = await optimizer.generate_discovery_optimization(db, report, {"metrics": {"rich": {}}})
+    assert result["state"] == "unknown", result
+    assert "suggestions" not in result
+
+
+def _where(statement) -> str:
+    return str(statement).split("WHERE", 1)[1]
+
+
+async def _in_flight_where(helper, **kwargs) -> str:
+    from unittest.mock import AsyncMock, MagicMock
+
+    seen = []
+
+    async def execute(statement, *_a, **_k):
+        seen.append(statement)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    db = SimpleNamespace(execute=AsyncMock(side_effect=execute))
+    await helper(db, now=__import__("datetime").datetime.now(__import__("datetime").UTC), period_days=14, **kwargs)
+    return _where(seen[-1])  # the first statement is the advisory lock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_discovery", [False, True])
+async def test_a_discovery_request_never_joins_a_run_queued_without_discovery(include_discovery):
+    import uuid
+
+    from api.routes.insights import _in_flight_component_report, _in_flight_report
+
+    component = await _in_flight_where(
+        _in_flight_component_report,
+        listing_id=uuid.uuid4(),
+        component_type="skill",
+        component_version_id=None,
+        include_discovery=include_discovery,
+    )
+    agent = await _in_flight_where(
+        _in_flight_report,
+        agent=SimpleNamespace(id=uuid.uuid4()),
+        agent_version=SimpleNamespace(id=uuid.uuid4()),
+        comparison_version=None,
+        version_scope="canonical_and_dirty",
+        include_discovery=include_discovery,
+    )
+    # Asking for suggestions requires a run that was queued with them; a plain request may join either.
+    assert ("discovery_optimization_requested" in component) is include_discovery
+    assert ("discovery_optimization_requested" in agent) is include_discovery
