@@ -68,9 +68,32 @@ class CapabilityUse:
     def from_json(cls, line: str) -> CapabilityUse | None:
         try:
             data = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             return None
-        if not isinstance(data, dict) or not data.get("ts") or not data.get("kind"):
+        if not isinstance(data, dict):
+            return None
+        if not isinstance(data.get("ts"), str) or not isinstance(data.get("kind"), str) or not data["kind"]:
+            return None
+        try:
+            _parse_ts(data["ts"])
+        except ValueError:
+            return None
+        # Reject malformed records before they can break matching or deduplication.
+        string_fields = (
+            "harness",
+            "cwd",
+            "identifier",
+            "component_id",
+            "native_ref",
+            "version",
+            "digest",
+            "mode",
+            "source",
+            "session_hint",
+        )
+        if any(data.get(key) is not None and not isinstance(data[key], str) for key in string_fields):
+            return None
+        if data.get("extra") is not None and not isinstance(data["extra"], dict):
             return None
         known = {f for f in cls.__dataclass_fields__}
         extra = {k: v for k, v in data.items() if k not in known}
