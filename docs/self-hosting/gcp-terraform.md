@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "GCP deployment with Terraform"
 ---
@@ -155,30 +156,23 @@ Or use the Cloud Console: **Logging → Logs Explorer**, filter by `resource.typ
 
 ### Re-run migrations
 
+Only after the [canonical migration/recovery gates](/self-hosting/upgrades) are satisfied: preserve backups, drain incompatible writers, review the target and exported command, and control traffic. A launch response is not completion; wait for the intended task/job and inspect its exit/result before resuming access. Do not re-run migrations against a serving deployment as an improvised repair.
+
 ```bash
 $(terraform output -raw init_job_run_command)
 ```
 
-### Read a generated secret
+### Verify generated secret configuration
 
-```bash
-gcloud secrets versions access latest \
-  --secret="observal-prod-SECRET_KEY"
-```
+Review Secret Manager versions, service-account permissions, and the intended container injection without printing decrypted credentials in a shared transcript. Coordinated database URLs, native credentials, and application encryption configuration must be preserved for [recovery](/self-hosting/backup-and-restore).
 
 ### Upgrade to a new release
 
-```hcl
-# terraform.tfvars
-image_tag = "v1.5.0"
-```
+Use [the canonical upgrade gates](/self-hosting/upgrades), choose the actual target image/revision, and preserve full backups before a change. Cloud Run revision rollout is not a migration or zero-downtime guarantee.
 
-```bash
-terraform apply
-$(terraform output -raw init_job_run_command)
-```
+The Terraform init-job resource defines the job; it does not by itself prove the job executed successfully. The exported `init_job_run_command` launches it, but an operator must wait for completion and inspect its result. For a migration requiring a homogeneous fleet, drain incompatible old API/worker revisions before initialization and control traffic until the new schema and application are verified.
 
-Cloud Run handles the rolling deploy. Zero downtime.
+Do not apply a new image and then assume existing writers were safely stopped while the job ran. Review the planned dependency/execution graph and use the approved Cloud Run traffic/writer procedure for that release. If a change fails, determine schema/data state before selecting prior revisions; an image rollback does not restore Cloud SQL, ClickHouse evidence, or matching application/encryption artifacts.
 
 ### Resize the data disk
 

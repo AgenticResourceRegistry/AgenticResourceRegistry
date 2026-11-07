@@ -1,7 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Database integration tests
+---
+# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+title: "Database integration tests"
+---
 
 `tests/integration_clickhouse/` holds tests that run against **real** ClickHouse and PostgreSQL instead of mocks. They cover behaviour a mock cannot show: ClickHouse deduplication and `FINAL` reads, migrations applying through the real runner, deletes completing, row locks, and foreign-key failures.
 

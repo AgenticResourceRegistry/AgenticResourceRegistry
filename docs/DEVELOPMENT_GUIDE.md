@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Development Guide"
 ---
@@ -57,7 +58,7 @@ title: "Development Guide"
   * [Reinstalling after changes](/DEVELOPMENT_GUIDE#reinstalling-after-changes)
 * [Harness Recommendations](/DEVELOPMENT_GUIDE#harness-recommendations)
   * [VS Code](/DEVELOPMENT_GUIDE#vs-code)
-  * [PyCharm / IntelliJ](/DEVELOPMENT_GUIDE#pycharm--intellij)
+  * [PyCharm / IntelliJ](/DEVELOPMENT_GUIDE#pycharm-/-intellij)
 * [Pre-commit Hooks](/DEVELOPMENT_GUIDE#pre-commit-hooks)
 * [Pull Request Checklist](/DEVELOPMENT_GUIDE#pull-request-checklist)
 * [Getting Help](/DEVELOPMENT_GUIDE#getting-help)
