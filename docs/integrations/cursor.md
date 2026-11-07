@@ -68,6 +68,35 @@ observal agent pull <agent-name> --harness cursor --scope user
 
 User agents are written to `~/.cursor/agents/{name}.md`.
 
+### 4. Invoke the installed subagent
+
+Cursor uses these profiles as **custom subagents**, not as an automatic replacement for the parent session. Restart Agent in the same workspace after pulling, then request the exact generated local name:
+
+```text
+/LOCAL_NAME read README.md and summarize it in three bullets.
+Do not edit files or run shell commands. Wait for the subagent's result.
+```
+
+Replace `LOCAL_NAME` with the installed profile's name. Natural-language selection such as “Use the LOCAL_NAME subagent” is also documented by Cursor. Inspect the task card or child activity to confirm the requested profile ran; a parent answer alone is not sufficient.
+
+For the CLI, start an interactive planning session from the workspace:
+
+```bash
+cursor-agent --mode plan
+```
+
+Then give it the explicit subagent request above. The checked CLI help (`2026.10.22-27dcf5f`) has no `--agent` selection flag; do not borrow `claude --agent` syntax. Keep normal trust and permission checks enabled. Parent plan mode and a no-edit prompt do not independently constrain a remote MCP server.
+
+### 5. Verify configuration and the task
+
+```bash
+observal scan --inventory --harness cursor
+```
+
+Confirm the installed profile and review the generated files, then verify the subagent's task completes under the intended permissions. Inventory confirms local configuration, not native selection or delivered session evidence.
+
+The format and invocation steps follow [Cursor's custom-subagent documentation](https://cursor.com/docs/subagents). No model-authenticated Cursor child task was completed in this docs batch; validate the profile on the actual tool version your team runs.
+
 ---
 
 ## Config paths
@@ -114,8 +143,8 @@ writes to `.cursor/agents/` unless `--scope user` is specified.
 and hooks are stored in the `.cursor` directory for project
 installs and under `~/.cursor` for user installs.
 
-**Registry skills are not supported.** Paths for skills may exist in shared metadata, but Cursor does not have the registry `skills` capability. Do not assume a pull installs usable skills or choose an agent that requires them.
+**Registry skill installation is not supported by this adapter.** Cursor itself documents native skills, but the registry's Cursor adapter does not advertise its `skills` capability. Paths in shared metadata do not establish a usable registry install. Choose an agent compatible with the adapter's actual capabilities.
 
-**Activation walkthrough is incomplete.** This page documents generated configuration and capture behavior, not an end-to-end activation test on your Cursor version. Confirm how that version loads the generated profile before treating installation as successful activation.
+**Runtime verification remains version-specific.** This page now describes explicit native subagent invocation, but it does not certify a completed model-authenticated task on every Cursor version. Confirm the child activity and result, not just the generated files.
 
 **Auto model sentinel configuration is not available.**

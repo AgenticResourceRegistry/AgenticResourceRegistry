@@ -50,11 +50,14 @@
 * [Supported coding tools](integrations/index.md)
 * [Claude Code](integrations/claude-code.md)
 * [Copilot](integrations/copilot.md)
+* [Use a registry agent in Copilot CLI](integrations/copilot-cli.md)
 * [Cursor](integrations/cursor.md)
+* [Use a registry agent in Codex](integrations/codex.md)
 * [Goose](integrations/goose.md)
 * [Kiro](integrations/kiro.md)
 * [OpenCode](integrations/opencode.md)
 * [Pi](integrations/pi.md)
+* [Antigravity: check compatibility before activation](integrations/antigravity.md)
 
 ## Self-hosting & Admin
 

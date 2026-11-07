@@ -18,11 +18,11 @@ This table follows the shared harness registry in the current source tree. It de
 | [Claude Code](/integrations/claude-code) | `claude-code` | Yes | Yes | Yes | No |
 | [Kiro](/integrations/kiro) | `kiro` | Yes | Yes | Yes | No |
 | [Cursor](/integrations/cursor) | `cursor` | Yes | No | Yes | No |
-| Codex | `codex` | Yes | Yes | Yes | No |
+| [Codex](/integrations/codex) | `codex` | Yes | Yes | Yes | No |
 | [Copilot](/integrations/copilot) | `copilot` | Yes | Yes | Yes | Yes |
-| Copilot CLI | `copilot-cli` | Yes | Yes | Yes | Yes |
+| [Copilot CLI](/integrations/copilot-cli) | `copilot-cli` | Yes | Yes | Yes | Yes |
 | [OpenCode](/integrations/opencode) | `opencode` | Yes | Yes | Yes | No |
-| Antigravity | `antigravity` | Yes | Yes | Yes | No |
+| [Antigravity](/integrations/antigravity) | `antigravity` | Yes | Yes | Yes | No |
 | [Goose](/integrations/goose) | `goose` | Yes | Yes | Yes | No |
 | [Pi](/integrations/pi) | `pi` | Yes | Yes | Yes | No |
 
@@ -32,7 +32,11 @@ A missing native prompt capability does not mean the tool cannot receive agent i
 
 Registry support and completed documentation are separate. The [Claude Code first-agent walkthrough](/getting-started/quickstart) provides a concrete install/activation path. Existing integration pages describe configuration and limitations, but are not a promise that every current tool version has been verified end to end.
 
-**Incomplete activation guides:** Codex, Copilot CLI, and Antigravity do not yet have dedicated install → activate → verify walkthroughs here. The Cursor page also needs a version-specific activation walkthrough. Do not substitute a generic pull command and assume the installed profile is active. These are documentation follow-ups, not missing registry adapters.
+[Codex](/integrations/codex), [Copilot CLI](/integrations/copilot-cli), and [Cursor](/integrations/cursor) now describe their native activation paths. Codex and Cursor profiles are custom subagents; selecting a main-session configuration profile is not the same action. The paths were checked against vendor documentation and available CLI help, not completed model-authenticated runs on all three tools.
+
+**Antigravity compatibility hold:** [the Antigravity page](/integrations/antigravity) documents a mismatch between the registry's JSON output and current vendor-documented Markdown profiles/global paths. Legacy format compatibility must be confirmed or the adapter updated before calling this a verified activation path.
+
+A guide's presence is not certification that every tool release loads the generated configuration. Review its stated validation scope and confirm a real task on the version your team uses.
 
 ## Choose a scope
 

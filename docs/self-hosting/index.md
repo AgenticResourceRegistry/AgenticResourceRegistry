@@ -2,13 +2,18 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Overview"
 ---
 
-Run Agentic Resource Registry entirely on your own infrastructure. No SaaS, no egress, every byte of telemetry stays inside your network.
+Run the registry on infrastructure you control. Self-hosting determines where the registry stores data; it does not guarantee zero network egress. Image downloads, identity providers, remote resources, and configured insights/model providers can make outbound requests. Review those integrations and your data-handling policy before deployment.
 
-For a packaged single-node install, `install-server.sh` generates restricted credential files under `secrets/`, records their `NAME_FILE` paths in `.env`, and binds host ports to loopback. It prompts when a terminal is available and applies the same safe defaults automatically in headless CI or agent environments. The source Compose path remains available for development and accepts direct `.env` values.
+The packaged single-node installer is designed to generate restricted credential files under `secrets/`, record their `NAME_FILE` paths in `.env`, and bind new host ports to loopback. The source Compose path remains available for development and accepts direct `.env` values.
+
+<Warning>
+  Packaged setup currently fails on macOS's Bash 3.2 with an empty-array error. That limitation was reproduced independently of this docs PR. Use the [source evaluation path](/getting-started/local-evaluation), or validate the packaged setup with a compatible shell before relying on it. See [software requirements](/self-hosting/requirements#packaged-setup-on-macos).
+</Warning>
 
 ## Architecture at a glance
 

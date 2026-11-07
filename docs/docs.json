@@ -87,11 +87,14 @@
               "integrations/index",
               "integrations/claude-code",
               "integrations/copilot",
+              "integrations/copilot-cli",
               "integrations/cursor",
+              "integrations/codex",
               "integrations/goose",
               "integrations/kiro",
               "integrations/opencode",
-              "integrations/pi"
+              "integrations/pi",
+              "integrations/antigravity"
             ]
           }
         ]

@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Requirements"
 ---
@@ -54,6 +55,12 @@ Postgres stays under 500 MB for most deployments; it holds only registry metadat
 
 > [!NOTE]
 > Homebrew's Docker formula is outdated and may ship an older Compose version. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages to get Docker Engine ≥ 24.0 with Compose v2.
+
+### Packaged setup on macOS
+
+The server package's `setup.sh` currently fails with `profile_args[@]: unbound variable` when the default observability profile is run under macOS Bash 3.2. This was reproduced on both the docs branch and the pre-docs baseline. The corresponding headless setup tests pass with GNU Bash in a Linux container; that is not certification of all package workflows.
+
+This limitation concerns the **server package setup**, not proof that the standalone CLI installer is broken. Do not assume every shell accepted by a CLI install command can run packaged server setup. Until the implementation is corrected or your shell is verified, use the [source evaluation guide](/getting-started/local-evaluation) rather than claiming a successful packaged deployment.
 
 For the **CLI** (developer machines, not the server):
 

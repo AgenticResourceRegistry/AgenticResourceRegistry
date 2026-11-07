@@ -3,7 +3,7 @@
 
 # Core documentation batch: verification and handoff
 
-The original-batch record below is retained as history. The [review follow-up](#review-follow-up) records the new clean-deployment, reviewer-UI, model-task, and accessibility checks and supersedes the corresponding original blockers. Full-suite, release/publication, and human visual-review requirements remain open.
+The original-batch record below is retained as history. The [review follow-up](#review-follow-up) records the new clean-deployment, reviewer-UI, model-task, and accessibility checks and supersedes the corresponding original blockers. The later `registry-docs-next-batch.md` records the native integration guides, independently reproduced baseline/platform failures, and Antigravity compatibility hold. Full-suite, release/publication, and human visual-review requirements remain open.
 
 ## Scope
 
