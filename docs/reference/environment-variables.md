@@ -111,7 +111,8 @@ Used only by Docker Compose. Prometheus and Grafana ports apply only when `docke
 | ---------------------- | ------- | ------------------------- |
 | `OBSERVAL_BIND_ADDRESS` | `127.0.0.1` in the server package | Host address for published ports. A non-loopback value is explicit remote exposure. |
 | `OBSERVAL_SECRET_GID` | operator group from `setup.sh` | Supplementary container group allowed to read server-package files with mode `0640`. |
-| `API_HOST_PORT`        | `8000`  | API (internal, behind LB) |
+| `API_HOST_PORT` | `8000` in the package | Published package load-balancer endpoint for UI/API; not the source API container port. |
+| `LB_HOST_PORT` | `80` in source Compose | Published source load-balancer endpoint; source API port 8000 remains internal. |
 | `WEB_HOST_PORT`        | `3000`  | Web UI                    |
 | `POSTGRES_HOST_PORT`   | `5432`  | Postgres                  |
 | `CLICKHOUSE_HOST_PORT` | `8123`  | ClickHouse                |
@@ -138,7 +139,7 @@ Read from the environment at invocation time. Override values in `~/.observal/co
 | ----------------------- | ------------------------------ | ----------------------------------------------------------- |
 | `OBSERVAL_SERVER_URL`   | from `~/.observal/config.json` | Server URL                                                  |
 | `OBSERVAL_ACCESS_TOKEN` | from `~/.observal/config.json` | Access token (preferred for CI)                             |
-| `OBSERVAL_API_KEY`      | from `~/.observal/config.json` | API key alias for `OBSERVAL_ACCESS_TOKEN` |
+| `OBSERVAL_API_KEY` | legacy token input | Historical alias for a JWT access token; not API-key authentication. Prefer `OBSERVAL_ACCESS_TOKEN` or its file form. |
 | `OBSERVAL_TOKEN`        | from `~/.observal/config.json` | CI token alias with highest legacy precedence |
 | `OBSERVAL_PASSWORD`     | unset                          | Password for credential or bootstrap login |
 | `OBSERVAL_CURRENT_PASSWORD` | unset                      | Current password for non-interactive password changes |
@@ -147,13 +148,14 @@ Read from the environment at invocation time. Override values in `~/.observal/co
 
 The token and password variables support corresponding `_FILE` forms. Configuring both a direct variable and its file form is an error. When multiple token aliases are present, the legacy precedence remains `OBSERVAL_TOKEN`, then `OBSERVAL_API_KEY`, then `OBSERVAL_ACCESS_TOKEN`.
 
-Example CI usage:
+Example CI usage (dedicated account and isolated configuration; do not reuse a developer's unrelated refresh credentials):
 
 ```bash
-export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-export OBSERVAL_API_KEY='replace-with-your-key'
+export OBSERVAL_SERVER_URL=https://registry.example.com
+# Mount the authorized account's JWT access token through your CI secret mechanism.
+export OBSERVAL_ACCESS_TOKEN_FILE=/run/secrets/observal_access_token
 
-observal ops traces --limit 100 --output json | jq
+observal api GET /api/v1/agents --output json
 ```
 
 ## Related

@@ -274,6 +274,8 @@ aws ecs update-service \
 
 ### Re-run migrations / seeds
 
+Only after the [canonical migration/recovery gates](/self-hosting/upgrades) are satisfied: preserve backups, drain incompatible writers, review the target and exported command, and control traffic. A launch response is not completion; wait for the intended task/job and inspect its exit/result before resuming access. Do not re-run migrations against a serving deployment as an improvised repair.
+
 The init task runs automatically on every `image_tag` change. To run it manually:
 
 ```bash
@@ -290,28 +292,17 @@ sudo docker compose -f /opt/observal/docker-compose.data.yml ps          # CH/Gr
 sudo docker compose -f /opt/observal/docker-compose.data.yml logs -f clickhouse
 ```
 
-### Read a generated secret
+### Verify generated secret configuration
 
-```bash
-aws ssm get-parameter --with-decryption \
-  --name /observal-prod/SECRET_KEY \
-  --query Parameter.Value --output text
-```
-
-The Terraform run generates and stores `DB_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SECRET_KEY`, and `GRAFANA_ADMIN_PASSWORD`, plus pre-built `DATABASE_URL`, `REDIS_URL`, and `CLICKHOUSE_URL` connection strings. ECS injects these into tasks at start; you never paste them in.
+Check the intended parameter names/versions, task permissions, and injection configuration without printing decrypted values into shared logs. The Terraform run manages database/application secrets and connection strings; verify that the application URLs and native database credentials agree. If retrieval is necessary for an authorized recovery task, use a protected channel and preserve the matching encryption configuration—do not treat secret retrieval as a routine debug transcript.
 
 ### Upgrade to a new Agentic Resource Registry release
 
-```hcl
-# terraform.tfvars
-image_tag = "v1.5.0"
-```
+Follow the [canonical migration and recovery gates](/self-hosting/upgrades) before changing an image tag. Select an actual verified target; no historical example is a recommended release.
 
-```bash
-terraform apply
-```
+The module's `run_init_on_apply` controls its one-shot initializer. When enabled, its trigger launches an ECS task, waits for it to stop, and checks the container exit code. New API/worker service dependencies refer to this resource, but **existing running tasks are not automatically drained before the migration**. For an incompatible or homogeneous-fleet upgrade, stop/drain those writers through the approved ECS/traffic-control procedure before running initialization.
 
-The init task re-runs migrations against the live RDS, then ECS rolls each service over with zero downtime.
+Inspect the planned resource graph and actual task result, then verify the selected services and ordinary-user workflow before restoring traffic. An ECS rolling update is not a zero-downtime or schema-compatibility guarantee. Image rollback does not restore database/application state; preserve the full [recovery set](/self-hosting/backup-and-restore).
 
 ### Resize the data volume
 
@@ -333,7 +324,7 @@ sudo resize2fs /dev/nvme1n1
 terraform destroy
 ```
 
-In `prod`, RDS has `deletion_protection = true` and `skip_final_snapshot = false`. Disable both manually before destroy if that is really what you want. The S3 backups bucket also blocks destroy unless `backup_bucket_force_destroy = true`.
+In `prod`, RDS deletion protection and final-snapshot requirements are intentional safeguards. Plan a separately authorized teardown, preserve the complete recovery set, and retain the required final snapshot. Do not disable every protection merely to repair a failed deployment. The backup bucket's force-destroy behavior is also destructive and must be reviewed independently.
 
 ## Remote state
 

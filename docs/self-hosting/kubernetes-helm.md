@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Ravi Chopra <shivamchopra1234567890@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Kubernetes Deployment with Helm"
 ---
@@ -133,7 +134,7 @@ helm upgrade --install observal oci://ghcr.io/agenticresourceregistry/charts/obs
 
 ### Upgrading
 
-To apply configuration changes or update to a newer chart version:
+Before an update, read [the canonical migration/recovery gates](/self-hosting/upgrades), inspect the chart's initializer hooks, and drain incompatible old writers before a migration requiring a homogeneous fleet. A Helm dependency/hook is not proof existing API/worker pods stopped. After selecting the reviewed target and procedure, configuration changes use:
 
 ```bash
 helm upgrade observal oci://ghcr.io/agenticresourceregistry/charts/observal \
@@ -144,14 +145,14 @@ helm upgrade observal oci://ghcr.io/agenticresourceregistry/charts/observal \
 
 ### Rollback
 
-If an upgrade encounters issues, rollback to a previous release revision:
+A Helm rollback changes release resources; it does not undo database migrations or restore data. Inspect the completed migration state and prior application compatibility before selecting a previous revision. Use [the verified recovery procedure](/self-hosting/backup-and-restore) if needed. First inspect history:
 
 ```bash
 # View release history
 helm history observal --namespace observal
 
-# Rollback to revision 1
-helm rollback observal 1 --namespace observal
+# Only after checking schema/application compatibility:
+helm rollback observal PRIOR_REVISION --namespace observal
 ```
 
 ### Uninstalling

@@ -65,6 +65,38 @@ In the inspected source Compose path, `SKIP_DDL_ON_STARTUP=true` skips the runti
 | `365` | Longer requested retention window |
 | `0` | No requested raw-session TTL; does not automatically remove an existing TTL when policy application is skipped |
 
+### Verify storage and scheduled retention
+
+Using an authorized ClickHouse client with the correct endpoint and authentication, run this **read-only** query (replace the database name if your deployment uses another one):
+
+```sql
+SHOW CREATE TABLE observal.session_events;
+```
+
+Read the actual returned definition, not only `data.retention_days` in the settings UI:
+
+- A **table-level TTL** describes expiration of rows according to its expression.
+- A **column-level TTL**, such as one attached to `raw_line`, can expire that column's content without deleting the entire session record. It is not the same as whole-row retention.
+- If the relevant TTL is absent, do not infer automatic 90-day expiration from a stored policy value. Other tables and derived records have their own policies.
+
+A TTL clause establishes configured storage behavior, not deletion at an exact wall-clock deadline. ClickHouse cleanup/merges are asynchronous; inspect representative authorized records and the applied policy over an appropriate window. Do not issue an improvised `ALTER`, purge, or forced production cleanup just to make the check pass.
+
+Separately inspect the scheduled policy through authorized settings reads:
+
+```bash
+observal admin settings --output json
+```
+
+Check `retention.enabled`, `retention.trace_days`, `retention.score_days`, and `retention.max_trace_count`. Then inspect the worker's configured schedule and its actual completion/failure/no-op evidence. For a source deployment, a bounded log read is:
+
+```bash
+docker compose -f docker/docker-compose.yml logs --since 24h --tail 200 observal-worker
+```
+
+Use your actual project/files/profile and protect the output. Look for `run_retention_purge`, completion statistics, failures, or messages explaining that a run was skipped. A successfully scheduled job can be a no-op when the policy is disabled or work is deferred; job success alone is not deletion evidence. The source worker schedules this task every six hours, but configured schedules are not proof it ran in your deployment.
+
+Rehearse execution with non-sensitive fixtures in an isolated environment if needed. These read-only checks do not enable retention, delete data, or certify that every derived record has been removed.
+
 **When to lower:** The deployment has strict data minimization rules, or ClickHouse storage is growing too quickly.
 
 **When to raise:** You need longer trend windows for audits, investigations, or longitudinal agent performance analysis.
