@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """harness adapter protocol definition.
@@ -392,6 +393,10 @@ class HarnessAdapter(Protocol):
 
     def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
         """Rewrite downloaded hook configuration before writing it."""
+        ...
+
+    def merge_agent_profile(self, content: dict, path: Path) -> dict:
+        """Merge native local profile state into downloaded content, without writing."""
         ...
 
     def rewrite_agent_profile(self, content: dict, agent_id: str) -> dict:
