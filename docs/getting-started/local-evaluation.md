@@ -78,7 +78,9 @@ An empty agent list is expected if nothing has been published yet.
 
 Continue with [Pull your first agent](/getting-started/quickstart), using its [no-agents-yet instructions](/getting-started/quickstart#no-agents-yet) if needed.
 
-The default configuration does not promise that authors can install pending agents. For this evaluation, complete the review using the separate demo reviewer account (`reviewer@demo.example`, password `reviewer-changeme`) in the web UI. Inspect the submission, approve it, and publish it if the review gate still requires publication. Return to your ordinary user account to list and pull the approved agent.
+The default configuration does not promise that authors can install pending agents. For this evaluation, open a separate browser session for the demo reviewer account (`reviewer@demo.example`, password `reviewer-changeme`) and follow [Review and publish a submission](/guides/review-and-publish). Inspect **Files changed**, submit an **Approve** verdict through **Review changes**, and check the **Publication gate**. If publication is still required, select **Publish vVERSION** and confirm. Do not treat an approval badge as proof that publication completed.
+
+Return to the ordinary user account and confirm the agent appears in `observal agent list`. Copy its actual qualified name and approved version into the first-agent walkthrough.
 
 Use the registry UI's actual review link or number. Do not assume a fixed review number or that every CLI/server release returns the same review metadata.
 

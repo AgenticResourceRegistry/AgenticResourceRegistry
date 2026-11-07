@@ -19,22 +19,29 @@
 * [Install the CLI](getting-started/installation.md)
 * [Pull your first agent](getting-started/quickstart.md)
 * [Try a registry locally](getting-started/local-evaluation.md)
-
-### Core Concepts
-
 * [Core concepts](core-concepts/index.md)
-* [Session tracking and reconciliation](core-concepts/session-tracking.md)
 
-### Use Cases
+### Agents and resources
 
-* [Use Cases](use-cases/index.md)
-* [Observe MCP activity in sessions](use-cases/observe-mcp-traffic.md)
+* [Registry workflows](use-cases/index.md)
+* [Inspect an agent before installing](guides/inspect-an-agent.md)
+* [Create and publish an agent](guides/create-an-agent.md)
 * [Share agent configurations](use-cases/share-agent-configs.md)
-* [Debug agent failures from session evidence](use-cases/debug-agent-failures.md)
-* [Run a team-wide agent registry](use-cases/team-registry.md)
 * [Fork and customize an agent or component](use-cases/fork-and-customize.md)
 * [Teamspaces](use-cases/teamspaces.md)
 * [Sync an MCP server from GitHub or GitLab](use-cases/mcp-repo-sync.md)
+
+### Discovery, delegation, and insights
+
+* [Discover resources with ARD](guides/discover-resources.md)
+* [Delegate work with A2A](guides/delegate-work.md)
+* [Interpret agent and component insights](guides/interpret-insights.md)
+
+### Session evidence
+
+* [Debug agent failures from session evidence](use-cases/debug-agent-failures.md)
+* [Observe MCP activity in sessions](use-cases/observe-mcp-traffic.md)
+* [Session tracking and reconciliation](core-concepts/session-tracking.md)
 
 ## Integrations
 
@@ -50,6 +57,11 @@
 * [Pi](integrations/pi.md)
 
 ## Self-hosting & Admin
+
+### Registry administration
+
+* [Review and publish a submission](guides/review-and-publish.md)
+* [Run a team-wide agent registry](use-cases/team-registry.md)
 
 ### Self-Hosting
 
@@ -113,6 +125,7 @@
 
 ### Reference
 
+* [Documentation and software versions](reference/documentation-version.md)
 * [Environment variables](reference/environment-variables.md)
 * [API endpoints](reference/api-endpoints.md)
 * [Hooks specification](reference/hooks-spec.md)

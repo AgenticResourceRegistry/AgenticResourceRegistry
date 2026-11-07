@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Single-node deployment"
 ---
@@ -152,7 +153,7 @@ sed -i "s|^CLICKHOUSE_PASSWORD=.*|CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD|" .en
 
 ## Step 4: Set up TLS
 
-This guide uses the source Compose stack. Every `localhost:80` example below refers to that stack's nginx load balancer. Do not expose its HTTP listener directly to remote clients. For downloadable server-package bindings, see [Requirements](/self-hosting/requirements#tls--https).
+This guide uses the source Compose stack. Every `localhost:80` example below refers to that stack's nginx load balancer. Do not expose its HTTP listener directly to remote clients. For downloadable server-package bindings, see [Requirements](/self-hosting/requirements#tls-/-https).
 
 ### Option A: Caddy (simplest — automatic HTTPS)
 

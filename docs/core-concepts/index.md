@@ -61,7 +61,7 @@ Visibility and review answer different questions:
 
 Public, teamspace, and author access are not interchangeable. Review policies determine required approvals and publication behavior. Approval is not a security audit or proof of effectiveness.
 
-An author may be able to inspect a pending submission without being able to install it. Installing your own unapproved agent depends on `security.allow_draft_install`; do not assume it is enabled. See [review and publication](/cli/admin#review-queue).
+An author may be able to inspect a pending submission without being able to install it. Installing your own unapproved agent depends on `security.allow_draft_install`; do not assume it is enabled. See [review and publication](/guides/review-and-publish).
 
 ## Installed is not active
 
@@ -73,11 +73,11 @@ For example, a Claude Code project profile is selected with `claude --agent LOCA
 
 ## Discovery, delegation, and insights
 
-**Discovery (ARD)** helps a caller find and inspect resources for a task. Search relevance is distinct from approval, compatibility, and whether a resource is usable now. [Discovery reference](/cli/discover).
+**Discovery (ARD)** helps a caller find and inspect resources for a task. Search relevance is distinct from approval, compatibility, and whether a resource is usable now. [Discover resources](/guides/discover-resources).
 
-**Delegation (A2A)** hands a task to another agent. A local registry agent runs through a supported harness; a remote A2A agent is an existing service described by an Agent Card. Delegated work has permissions and isolation limits of its own. [Delegation architecture](/adr/0002-a2a-delegation).
+**Delegation (A2A)** hands a task to another agent. A local registry agent runs through a supported harness; a remote A2A agent is an existing service described by an Agent Card. Delegated work has permissions and isolation limits of its own. [Delegate work](/guides/delegate-work).
 
-**Insights** help interpret agent usage and component evidence. Agent reports and deterministic component evidence have different meanings. A verified install is not proof a component was used, and a recorded use is not proof it helped. [Agent and component insights](/cli/ops#agent-insights).
+**Insights** help interpret agent usage and component evidence. Agent reports and deterministic component evidence have different meanings. A verified install is not proof a component was used, and a recorded use is not proof it helped. [Interpret insights](/guides/interpret-insights).
 
 Sessions and traces are the underlying evidence where supported and delivered. For delivery details, use [session tracking and reconciliation](/core-concepts/session-tracking).
 

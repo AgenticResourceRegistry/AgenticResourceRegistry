@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Docker Compose setup"
 ---
@@ -60,7 +61,7 @@ curl http://localhost/health
 
 ## 4. Configure TLS (production only)
 
-For local dev, `http://localhost` is fine. For production, put a TLS-terminating reverse proxy in front of the nginx LB. See [Requirements → TLS / HTTPS](/self-hosting/requirements#tls--https).
+For local dev, `http://localhost` is fine. For production, put a TLS-terminating reverse proxy in front of the nginx LB. See [Requirements → TLS / HTTPS](/self-hosting/requirements#tls-/-https).
 
 ## 5. Bootstrap the first user
 

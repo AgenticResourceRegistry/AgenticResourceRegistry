@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Run a team-wide agent registry"
 ---
@@ -11,8 +12,8 @@ Once two or more people are authoring agents, you need a single source of truth.
 
 ## What changes at team scale
 
-* **Discovery**: everyone sees the same list of agents, MCPs, skills, hooks, prompts, and sandboxes.
-* **Review**: admins approve what appears in the public listing. Authors' own items are still immediately usable.
+* **Discovery**: teammates search one registry, with results scoped to their account and teamspace access.
+* **Review**: eligible reviewers approve submitted revisions, and the publication gate controls which releases become available. Installing an author's own pending agent depends on `security.allow_draft_install`; it is not always allowed.
 * **Governance**: RBAC roles (`super_admin`, `admin`, `reviewer`, `user`) control who can publish and approve.
 * **Visibility**: centralized dashboards instead of "ask Sarah which version she's running."
 
@@ -42,14 +43,14 @@ Install the server once ([Self-Hosting](/self-hosting)). Then every engineer ins
 
 ## Users and roles
 
-Four roles, RBAC-enforced on every endpoint.
+Server roles and teamspace permissions determine what an account can do. The roles below are a summary, not a promise of access to every private resource.
 
 | Role | Can | Cannot |
 | --- | --- | --- |
-| `user` | Publish components (subject to review), install agents, view their own traces | Approve submissions, see other users' private traces, change server settings |
-| `reviewer` | Everything `user` can + approve/reject submissions | Change server settings, manage users |
-| `admin` | Everything `reviewer` can + manage users, change server settings | Only restriction: certain super-admin operations |
-| `super_admin` | Everything | - |
+| `user` | Submit resources, install accessible releases, view authorized session evidence | Global review and server-administration operations |
+| `reviewer` | Review submissions within their authorized scope | Server settings and user management reserved for administrators |
+| `admin` | Manage permitted users, settings, and review operations | Operations reserved for super admins or restricted by policy |
+| `super_admin` | Manage server-wide administrative policy and permitted operations | Role elevation does not remove privacy, review, or security boundaries |
 
 Manage users:
 
@@ -63,12 +64,12 @@ Change a role via the web UI (`/settings/users`) or the API (`PUT /api/v1/admin/
 
 ## Onboarding a new engineer
 
-Two commands to get them productive:
+Give them the registry URL, an account or invitation, and the [existing-registry onboarding guide](/getting-started/onboarding). For example:
 
 ```bash
 # The new engineer runs:
 curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
-observal auth login --server https://observal.your-company.internal
+observal auth login --server https://observal.your-company.internal --no-setup
 ```
 
 For managed deployments, users authenticate through SSO or are provisioned by an admin. See [Authentication and SSO](/self-hosting/authentication).
@@ -76,15 +77,16 @@ For managed deployments, users authenticate through SSO or are provisioned by an
 After logging in, they can:
 
 ```bash
-observal agent list                           # see every agent the team has published
-observal agent pull team-reviewer --harness claude-code # install one
-observal scan                                 # discover what they have installed
-observal doctor patch --all-harnesses        # instrument everything
+observal agent list                                  # approved agents visible to this account
+observal agent show platform/team-reviewer --output json
+observal scan --inventory                             # read-only local inventory
 ```
+
+`platform/team-reviewer` is illustrative. Follow [Pull your first agent](/getting-started/quickstart) to inspect the exact release, preview, install, and activate it. Configure session capture separately when you have a reason and permission to collect that data.
 
 ## Review workflow
 
-Authors submit. Reviewers approve. Approved items appear in the public listing.
+Authors submit revisions. Eligible reviewers inspect and approve them. Approval may not publish automatically; check the publication gate and final state. [Review and publish](/guides/review-and-publish) includes the web UI path.
 
 ```bash
 observal review list --output json

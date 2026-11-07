@@ -12,6 +12,10 @@ The `observal` CLI connects your machine to Agentic Resource Registry. Use it to
 
 Installing the CLI does **not** deploy a registry server. To evaluate a server locally, use [Try a registry locally](/getting-started/local-evaluation). For a team deployment, use [Self-hosting](/self-hosting/index).
 
+<Note>
+  The installers below default to published releases, not necessarily the 1.17 development revision described by these guides. [Check the version guidance](/reference/documentation-version) before choosing an installation.
+</Note>
+
 ## Install a standalone binary
 
 The standalone binary does not require Python. Choose your operating system:

@@ -3,7 +3,7 @@
   "theme": "mint",
   "name": "Agentic Resource Registry",
   "colors": {
-    "primary": "#018399",
+    "primary": "#017184",
     "light": "#16A7BF",
     "dark": "#01505E"
   },
@@ -44,27 +44,36 @@
               "getting-started/onboarding",
               "getting-started/installation",
               "getting-started/quickstart",
-              "getting-started/local-evaluation"
+              "getting-started/local-evaluation",
+              "core-concepts/index"
             ]
           },
           {
-            "group": "Core Concepts",
-            "pages": [
-              "core-concepts/index",
-              "core-concepts/session-tracking"
-            ]
-          },
-          {
-            "group": "Use Cases",
+            "group": "Agents and resources",
             "pages": [
               "use-cases/index",
-              "use-cases/observe-mcp-traffic",
+              "guides/inspect-an-agent",
+              "guides/create-an-agent",
               "use-cases/share-agent-configs",
-              "use-cases/debug-agent-failures",
-              "use-cases/team-registry",
               "use-cases/fork-and-customize",
               "use-cases/teamspaces",
               "use-cases/mcp-repo-sync"
+            ]
+          },
+          {
+            "group": "Discovery, delegation, and insights",
+            "pages": [
+              "guides/discover-resources",
+              "guides/delegate-work",
+              "guides/interpret-insights"
+            ]
+          },
+          {
+            "group": "Session evidence",
+            "pages": [
+              "use-cases/debug-agent-failures",
+              "use-cases/observe-mcp-traffic",
+              "core-concepts/session-tracking"
             ]
           }
         ]
@@ -90,6 +99,13 @@
       {
         "tab": "Self-hosting & Admin",
         "groups": [
+          {
+            "group": "Registry administration",
+            "pages": [
+              "guides/review-and-publish",
+              "use-cases/team-registry"
+            ]
+          },
           {
             "group": "Self-Hosting",
             "pages": [
@@ -174,6 +190,7 @@
           {
             "group": "Reference",
             "pages": [
+              "reference/documentation-version",
               "reference/environment-variables",
               "reference/api-endpoints",
               "reference/hooks-spec",

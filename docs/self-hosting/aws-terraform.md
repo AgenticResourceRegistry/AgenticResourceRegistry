@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "AWS deployment with Terraform"
 ---
@@ -231,7 +232,7 @@ Things to know:
 
 ## Required IAM permissions
 
-The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](/self-hosting/aws-terraform#hardened-iam-policy).
+The IAM principal running Terraform needs permission to manage resources across these services. The AWS-managed policies below are broad starting points, not least-privilege policies. Review and restrict permissions to the resources your deployment manages before applying Terraform.
 
 | Service                             | Managed policy                    |
 | ----------------------------------- | --------------------------------- |

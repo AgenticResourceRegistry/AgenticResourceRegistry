@@ -22,10 +22,10 @@ Send the agent's `namespace/slug`, its intended use, and the harnesses you have 
 Your teammate can inspect it:
 
 ```bash
-observal agent show platform/reviewer
+observal agent show platform/reviewer --output json
 ```
 
-The name above is illustrative; replace it with your agent's actual qualified name.
+The name above is illustrative; replace it with your agent's actual qualified name. JSON includes the prompt and component links; the default table does not. Follow [Inspect an agent](/guides/inspect-an-agent) to review the exact release and its pinned components, rather than assuming current listing details match a project lock.
 
 ## Preview and pull
 

@@ -14,6 +14,10 @@ Agentic Resource Registry is a self-hosted registry for sharing coding agents an
 
 An **agent** combines instructions with the MCP servers, skills, hooks, prompts, and sandboxes it needs. The registry keeps these resources versioned, controls who can access them, and generates configuration for the coding tool you choose.
 
+<Note>
+  These guides follow the 1.17 development line. Published installers may provide a different release; [match the documentation, CLI, and registry versions](/reference/documentation-version).
+</Note>
+
 ## Start with an agent
 
 <CardGroup cols={2}>
@@ -25,7 +29,7 @@ An **agent** combines instructions with the MCP servers, skills, hooks, prompts,
   </Card>
 </CardGroup>
 
-Already connected? [Pull your first agent](/getting-started/quickstart). Ready to publish your own? Follow the [agent authoring workflow](/cli/agent#local-authoring-workflow).
+Already connected? [Pull your first agent](/getting-started/quickstart). Ready to publish your own? Follow the [agent authoring workflow](/guides/create-an-agent).
 
 ## How it fits together
 
@@ -45,11 +49,11 @@ An agent's declared harness support and the tool's capabilities determine what c
 
 **Share and maintain resources.** Compose agents from reusable components, publish reviewed versions, fork an existing setup, and share it with a team. [Share agent configurations](/use-cases/share-agent-configs).
 
-**Discover what already exists.** Search for resources that fit a task. Agentic Resource Discovery (ARD) supplies a structured discovery format; relevance, approval, compatibility, and availability are separate signals. [Discovery command reference](/cli/discover).
+**Discover what already exists.** Search for resources that fit a task. Agentic Resource Discovery (ARD) supplies a structured discovery format; relevance, approval, compatibility, and availability are separate signals. [Discover resources with ARD](/guides/discover-resources).
 
-**Delegate part of a task.** Agent-to-agent delegation uses A2A tasks for local registry agents and reviewed remote agent services. An installable agent and a remote service are different resources. [Delegation architecture and safety boundaries](/adr/0002-a2a-delegation).
+**Delegate part of a task.** Agent-to-agent delegation uses A2A tasks for local registry agents and reviewed remote agent services. An installable agent and a remote service are different resources. [Delegate work with A2A](/guides/delegate-work).
 
-**Learn from insights.** Agent reports help you examine how an agent is used and where it encounters friction. Component reports distinguish verified configuration from evidence of actual use; coverage varies by coding tool. [Agent insights](/cli/ops#agent-insights) and [component insights](/cli/ops#component-insights).
+**Learn from insights.** Agent reports help you examine how an agent is used and where it encounters friction. Component reports distinguish verified configuration from evidence of actual use; coverage varies by coding tool. [Interpret agent and component insights](/guides/interpret-insights).
 
 Sessions and traces supply evidence for those reports and for debugging. They are useful after you start using an agent, not a prerequisite for finding and installing one. [Debug a failure using session evidence](/use-cases/debug-agent-failures).
 

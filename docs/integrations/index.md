@@ -28,7 +28,11 @@ This table follows the shared harness registry in the current source tree. It de
 
 A missing native prompt capability does not mean the tool cannot receive agent instructions. It means you must not assume standalone registry prompts install as a native prompt feature. Sandbox behavior is separate from this capability table.
 
-Dedicated setup guides are linked where available. For Codex, Copilot CLI, and Antigravity, check the [pull reference](/cli/pull) and the tool's actual configuration before installing; their presence in the registry is not a substitute for an activation guide.
+### Setup-guide coverage
+
+Registry support and completed documentation are separate. The [Claude Code first-agent walkthrough](/getting-started/quickstart) provides a concrete install/activation path. Existing integration pages describe configuration and limitations, but are not a promise that every current tool version has been verified end to end.
+
+**Incomplete activation guides:** Codex, Copilot CLI, and Antigravity do not yet have dedicated install → activate → verify walkthroughs here. The Cursor page also needs a version-specific activation walkthrough. Do not substitute a generic pull command and assume the installed profile is active. These are documentation follow-ups, not missing registry adapters.
 
 ## Choose a scope
 

@@ -35,7 +35,7 @@ For the commands below, replace this **illustrative name** with the one returned
 
 ```bash
 AGENT='your-team/reviewer'
-observal agent show "$AGENT"
+observal agent show "$AGENT" --output json
 ```
 
   </Tab>
@@ -43,7 +43,7 @@ observal agent show "$AGENT"
 
 ```powershell
 $AGENT = 'your-team/reviewer'
-observal agent show "$AGENT"
+observal agent show "$AGENT" --output json
 ```
 
   </Tab>
@@ -51,7 +51,45 @@ observal agent show "$AGENT"
 
 Both shells can use the quoted `"$AGENT"` argument in the pull commands below.
 
-Check its purpose, instructions, component list, review status, and declared harness support. Choose an agent that supports `claude-code`. If there are no agents available, use the [empty-registry path](#no-agents-yet) below.
+JSON output includes `prompt` and `component_links`; the default table is only a summary. Read the instructions and identify the components before installing. Choose an agent that supports `claude-code`. If there are no agents available, use the [empty-registry path](#no-agents-yet) below.
+
+### Inspect the release you will install
+
+A listing's details are not necessarily the version pinned in your project. List its releases:
+
+```bash
+observal agent versions "$AGENT"
+```
+
+Choose an approved version. If this project already has `observal.lock`, inspect its pinned version before deciding to replace it. Copy the agent's `id` from JSON output and the chosen version into these variables; the values below are placeholders:
+
+<Tabs>
+  <Tab title="macOS / Linux">
+
+```bash
+AGENT_ID='COPY_AGENT_UUID_FROM_SHOW'
+VERSION='COPY_APPROVED_VERSION'
+```
+
+  </Tab>
+  <Tab title="PowerShell">
+
+```powershell
+$AGENT_ID = 'COPY_AGENT_UUID_FROM_SHOW'
+$VERSION = 'COPY_APPROVED_VERSION'
+```
+
+  </Tab>
+</Tabs>
+
+Read the exact release and its component pins:
+
+```bash
+observal api GET "/api/v1/agents/$AGENT_ID/versions/$VERSION" --output json
+observal api GET "/api/v1/agents/$AGENT_ID/versions/$VERSION/lock" --output json
+```
+
+Check `prompt`, `supported_harnesses`, `external_mcps`, and `components` in the release detail. The lock identifies component versions and digests. A component name alone does not show its executable content: [inspect the referenced component versions](/guides/inspect-an-agent#inspect-pinned-components) before proceeding. If a pin is unavailable or cannot be inspected with your permissions, stop and ask the author or administrator.
 
 <Note>
   Registry approval is a publication gate, not proof that every component is safe for your project. Review hook commands, MCP sources, and required permissions yourself.
@@ -62,10 +100,10 @@ Check its purpose, instructions, component list, review status, and declared har
 From your chosen project directory:
 
 ```bash
-observal agent pull "$AGENT" --harness claude-code --scope project --dry-run
+observal agent pull "$AGENT" --harness claude-code --scope project --version "$VERSION" --strict --dry-run
 ```
 
-The preview shows the planned file paths, warnings, and any setup commands. It does not install the agent or record it as installed. It contacts the registry to generate the configuration and may ask for component settings or credentials.
+The explicit version keeps this preview and the next pull on the release you inspected. `--strict` refuses incomplete pins or integrity problems rather than installing with a warning. The preview shows the planned file paths, warnings, and any setup commands. It does not install the agent or record it as installed. It contacts the registry to generate the configuration and may ask for component settings or credentials.
 
 For this path, expect an agent profile under `.claude/agents/`. The exact filename is printed by the CLI. Review the rest of the plan too: an agent may add skills, register MCP servers, and configure session hooks.
 
@@ -80,7 +118,7 @@ If required credentials are missing, supply them interactively when prompted. Do
 Apply the same installation:
 
 ```bash
-observal agent pull "$AGENT" --harness claude-code --scope project
+observal agent pull "$AGENT" --harness claude-code --scope project --version "$VERSION" --strict
 ```
 
 Review every warning. A failed setup command or incomplete skill installation is not a successful install just because some files were written.
@@ -151,7 +189,7 @@ observal agent create `
   </Tab>
 </Tabs>
 
-Record the returned agent ID and review information. Ask a reviewer or administrator to approve and publish the submission according to the registry's policy. Approval and publication can be separate steps. Then list agents again and copy its actual qualified name.
+Record the returned agent ID and review information. Follow [Review and publish a submission](/guides/review-and-publish) with an eligible reviewer. Approval and publication can be separate steps. Then list agents again and copy its actual qualified name.
 
 Some deployments allow authors to install their own unapproved versions through `security.allow_draft_install`. Do not assume that setting is enabled. If the install is refused while the submission is pending, complete review rather than bypassing the policy. The default first-success path here uses a published agent.
 
@@ -159,6 +197,7 @@ Some deployments allow authors to install their own unapproved versions through 
 
 | Problem | What to check |
 | --- | --- |
+| Strict install refuses incomplete pins | Ask the author for a fully pinned, published release. Do not drop strict mode to complete this first-install guide. |
 | Agent not found or not approved | Check the qualified name, teamspace access, and publication state. Your own pending agent may still be blocked by policy. |
 | Ambiguous name | Use the complete `namespace/slug` returned by the registry. |
 | Harness not supported | Choose an agent that declares Claude Code support. Do not override compatibility checks for your first install. |

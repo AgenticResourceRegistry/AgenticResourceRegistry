@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Faatih <22oo1cso41faatih@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Cursor"
 ---
@@ -27,6 +28,7 @@ and agent profiles are managed under the `.cursor` configuration directory.
 | Agent profiles  | Project and user scope                                      |
 | Hook bridge     | Supported                                                   |
 | MCP servers     | `.cursor/mcp.json` and `~/.cursor/mcp.json`                 |
+| Registry skills | Not supported by the Cursor adapter capability contract |
 | Session parsing | Built-in Cursor session parser                              |
 | Default scope   | Project                                                     |
 
@@ -74,7 +76,6 @@ User agents are written to `~/.cursor/agents/{name}.md`.
 | ------------- | -------------------------------- | ---------------------------------- |
 | Agent profile | `.cursor/agents/{name}.md`       | `~/.cursor/agents/{name}.md`       |
 | MCP config    | `.cursor/mcp.json`               | `~/.cursor/mcp.json`               |
-| Skills        | `.cursor/skills/{name}/SKILL.md` | `~/.cursor/skills/{name}/SKILL.md` |
 | Hook config   | `.cursor/hooks.json`             | `~/.cursor/hooks.json`             |
 
 Cursor MCP configs use the `mcpServers` key.
@@ -110,7 +111,11 @@ Cursor hook timeouts require a split delivery path: the hook synchronously write
 writes to `.cursor/agents/` unless `--scope user` is specified.
 
 **Configuration lives under `.cursor`.** Agent profiles, MCP configuration,
-skills, and hooks are stored in the `.cursor` directory for project
+and hooks are stored in the `.cursor` directory for project
 installs and under `~/.cursor` for user installs.
+
+**Registry skills are not supported.** Paths for skills may exist in shared metadata, but Cursor does not have the registry `skills` capability. Do not assume a pull installs usable skills or choose an agent that requires them.
+
+**Activation walkthrough is incomplete.** This page documents generated configuration and capture behavior, not an end-to-end activation test on your Cursor version. Confirm how that version loads the generated profile before treating installation as successful activation.
 
 **Auto model sentinel configuration is not available.**

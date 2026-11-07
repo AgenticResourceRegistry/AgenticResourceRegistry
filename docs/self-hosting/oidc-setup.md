@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "OIDC / OAuth 2.0 SSO Setup Guide"
 ---
@@ -32,7 +33,7 @@ Configure OIDC SSO in **Admin → SSO → SSO settings**.
 | `oauth.client_id` | The client ID issued by your IdP when you register the Agentic Resource Registry application. |
 | `oauth.client_secret` | The client secret issued by your IdP. Treat this as a password and store it securely. |
 | `oauth.server_metadata_url` | The OIDC discovery URL for your IdP. This is the `.well-known/openid-configuration` endpoint. |
-| `deployment.sso_only` | When set to `true`, disables password-based authentication entirely. Only SSO login is allowed. See [SSO-Only Mode](#6-sso-only-mode). |
+| `deployment.sso_only` | When set to `true`, disables password-based authentication entirely. Only SSO login is allowed. See [SSO-Only Mode](#5-sso-only-mode). |
 | `deployment.frontend_url` | The public URL of your Agentic Resource Registry instance. Used to construct the OAuth callback URL registered with your IdP. |
 
 OIDC client changes require an API restart before normal user login uses them. Existing `OAUTH_*` env vars are imported once on startup when the dynamic setting is not already present.
