@@ -86,3 +86,23 @@ The PR remains draft. Required follow-up includes authenticated native tasks for
 - Scoped deterministic design scan: no findings; not rendered accessibility certification.
 
 No new native activation claim was inferred from a configuration file, a guide link, CLI help, or a name appearing in the user prompt.
+
+## Four-issue editorial follow-up
+
+The subsequent audit identified four remaining documentation defects; all four were corrected without implementation or test changes:
+
+- Antigravity's compatibility hold is now in the matrix row itself, with registered-only capability values, and in the opening qualification.
+- The self-hosting inventory is explicitly the source Compose stack: all eight core service names and image/build fields match `docker/docker-compose.yml`. Init and the load balancer are included. Prometheus and Grafana are listed separately with overlay image values, and packaged deployments are distinguished. The original architecture heading/anchor was preserved.
+- Literal escaped paragraph breaks were removed from the A2A guide.
+- Cursor's direct entry path now links exact-release inspection, uses an explicit registry URL with login setup skipped, and previews/pulls the same explicit version and scope in strict mode. Login and pull side effects are explained before installation.
+
+Checks performed for this follow-up:
+
+- Targeted content assertions compared all eight service/image or build rows and both optional images against source YAML, checked the inline hold, checked Cursor's command sequence, and checked the escaped-paragraph defect. Passed.
+- Full Mintlify strict build: zero errors/warnings.
+- Full-site link and anchor check: passed.
+- Browser checks on four routes at desktop/mobile widths (eight cases): HTTP 200, expected headings, no document-level horizontal overflow. Assertions also checked the rendered matrix hold, eight core rows, normal paragraph text, and Cursor's setup safeguards.
+- Updated Cursor captures and new matrix, source-stack, and delegation-guide captures were recorded. They are browser evidence, not a human visual sign-off; image inspection remains disabled.
+- Scoped deterministic scan and whitespace check: no findings.
+
+No authenticated native tasks or new full-suite run were performed in this editorial follow-up. Earlier platform evidence remains unchanged; the Linux comparison changed Python/dependency environment as well as OS and is not a controlled platform-only experiment. Native execution, Antigravity compatibility, publication target, and human/manual review remain open.

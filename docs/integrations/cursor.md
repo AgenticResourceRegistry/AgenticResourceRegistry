@@ -36,37 +36,41 @@ and agent profiles are managed under the `.cursor` configuration directory.
 
 ## Setup
 
-### 1. Install the Agentic Resource Registry CLI
+### 1. Install the CLI
+
+Follow [Install the CLI](/getting-started/installation) and the [documentation version guidance](/reference/documentation-version). Authenticate Cursor separately with an account that can use its models; registry login does not provide those credentials.
+
+### 2. Connect to your registry
+
+Replace the example URL with your registry's URL:
 
 ```bash
-uv tool install observal-cli
-# or: pipx install observal-cli
+observal auth login --server https://registry.example.com --no-setup
 ```
 
-### 2. Authenticate
+The CLI saves credentials in `~/.observal/config.json`. `--no-setup` skips post-login harness setup. Without it, login can install bundled skills and session instrumentation in detected coding tools. See [Join your team's registry](/getting-started/onboarding) for sign-in and setup details.
+
+### 3. Inspect, preview, and pull an exact release
+
+Choose a qualified `namespace/slug` and an approved version declaring Cursor support. [Inspect that exact agent release and its pinned components](/guides/inspect-an-agent) before installing. The registry's Cursor adapter does not support skill installation; check that the agent does not require an unsupported capability.
+
+From the target project, replace the resource and version placeholders:
 
 ```bash
-observal auth login
+observal agent pull YOUR_NAMESPACE/YOUR_AGENT --harness cursor --scope project --version AGENT_VERSION --strict --dry-run
 ```
 
-This writes credentials to `~/.observal/config.json`.
+Read every generated path, setup action, and warning. The preview can include `.cursor/hooks.json`, MCP configuration, and commands that report session content to the registry. Missing component credentials should be entered interactively, not placed in shell arguments. Skipping login setup does not prevent a pull from installing its own hooks.
 
-### 3. Pull an agent into Cursor
+If the plan is appropriate, apply the same version and scope:
 
 ```bash
-observal agent pull <agent-name> --harness cursor
+observal agent pull YOUR_NAMESPACE/YOUR_AGENT --harness cursor --scope project --version AGENT_VERSION --strict
 ```
 
-Cursor's default scope is project scope. By default, the agent is written to
-`.cursor/agents/{name}.md`.
+The project agent profile is written under `.cursor/agents/`; use the exact generated name for activation. A successful project install records the selected release in `observal.lock`. Strict mode checks pins and integrity, not whether the submitted code is safe.
 
-To install into your user configuration:
-
-```bash
-observal agent pull <agent-name> --harness cursor --scope user
-```
-
-User agents are written to `~/.cursor/agents/{name}.md`.
+For a user-scope install, use `--scope user` in both the preview and pull after the same inspection. Review the planned home paths and permissions first; user profiles use `~/.cursor/agents/`.
 
 ### 4. Invoke the installed subagent
 
@@ -136,8 +140,7 @@ Cursor hook timeouts require a split delivery path: the hook synchronously write
 
 ## Caveats
 
-**Default scope is project.** `observal agent pull <agent-name> --harness cursor`
-writes to `.cursor/agents/` unless `--scope user` is specified.
+**Default scope is project.** Project profiles use `.cursor/agents/`; user profiles use `~/.cursor/agents/`. Keep the same explicit release and scope between inspection, preview, and pull.
 
 **Configuration lives under `.cursor`.** Agent profiles, MCP configuration,
 and hooks are stored in the `.cursor` directory for project

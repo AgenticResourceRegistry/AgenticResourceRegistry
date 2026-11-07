@@ -31,7 +31,9 @@ observal delegate run RESOURCE_IDENTIFIER 'Summarize README.md in three bullets.
 
 Replace the identifier and choose a task appropriate to the agent. Check `observal delegate run --help` for the exact supported options on your installed version.
 
-The example explicitly selects Claude Code for a local run and returns without waiting for completion. For another local harness or a remote service, choose the matching options rather than assuming Claude Code runs the remote agent.\n\nA local delegated agent runs in a separate workspace. That prevents ordinary workspace edits from automatically becoming your project changes, but it is **not** a general operating-system sandbox: a process can still reach resources its permissions allow. Do not send secrets or trust the prompt alone to enforce isolation.
+The example explicitly selects Claude Code for a local run and returns without waiting for completion. For another local harness or a remote service, choose the matching options rather than assuming Claude Code runs the remote agent.
+
+A local delegated agent runs in a separate workspace. That prevents ordinary workspace edits from automatically becoming your project changes, but it is **not** a general operating-system sandbox: a process can still reach resources its permissions allow. Do not send secrets or trust the prompt alone to enforce isolation.
 
 Remote calls go directly from the client to the reviewed endpoint, not through a registry traffic proxy. Host-specific credential configuration is documented in the [delegation architecture](/adr/0002-a2a-delegation#decision-4-no-proxy-credentials-stay-with-the-caller).
 

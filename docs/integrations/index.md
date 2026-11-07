@@ -7,7 +7,7 @@ description: "Choose a harness and understand what the registry can install for 
 
 Choose the coding tool you actually use, then follow its setup and activation instructions. Agentic Resource Registry calls these tools **harnesses**.
 
-All ten registered harnesses have registry integration support. Two checks still matter: the agent version must support your chosen harness, and that harness must support the components the agent needs. Passing one check does not replace the other.
+All ten harnesses have registry adapter entries, but that does not certify native activation on every tool release. Antigravity is currently on a compatibility hold. Two checks still matter: the agent version must support your chosen harness, and that harness must support the components the agent needs. Passing one check does not replace the other.
 
 ## Capability overview
 
@@ -22,7 +22,7 @@ This table follows the shared harness registry in the current source tree. It de
 | [Copilot](/integrations/copilot) | `copilot` | Yes | Yes | Yes | Yes |
 | [Copilot CLI](/integrations/copilot-cli) | `copilot-cli` | Yes | Yes | Yes | Yes |
 | [OpenCode](/integrations/opencode) | `opencode` | Yes | Yes | Yes | No |
-| [Antigravity](/integrations/antigravity) | `antigravity` | Yes | Yes | Yes | No |
+| [Antigravity — compatibility hold](/integrations/antigravity) | `antigravity` | Registered only | Registered only | Registered only | No |
 | [Goose](/integrations/goose) | `goose` | Yes | Yes | Yes | No |
 | [Pi](/integrations/pi) | `pi` | Yes | Yes | Yes | No |
 

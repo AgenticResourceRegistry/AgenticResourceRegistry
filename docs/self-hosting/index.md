@@ -17,42 +17,54 @@ The packaged single-node installer is designed to generate restricted credential
 
 ## Architecture at a glance
 
+The inventory below describes `docker/docker-compose.yml` in this documentation's source revision, not every deployment artifact. It has **eight core services**. The init service runs migrations and exits; it is not a continuously running application process.
+
 ```mermaid
 flowchart TB
     engineers[Engineers]
-    web["observal-web - static web UI"]
-    api["observal-api - FastAPI backend"]
-    worker["observal-worker - async jobs"]
-    db["observal-db - Postgres"]
-    redis["observal-redis - jobs + pub/sub"]
-    ch["observal-clickhouse - telemetry"]
-    grafana["observal-grafana - optional dashboards"]
+    lb[Load balancer]
+    web[Web UI]
+    api[API]
+    init[Init: migrations]
+    worker[Worker]
+    db[(PostgreSQL)]
+    redis[(Redis)]
+    ch[(ClickHouse)]
 
-    engineers --> web
-    web <--> api
-    api --> worker
+    engineers --> lb
+    lb --> web
+    lb --> api
+    init --> db
+    init --> ch
     api --> db
     api --> redis
     api --> ch
     worker --> db
     worker --> redis
     worker --> ch
-    grafana --> ch
 ```
 
-**Seven services:**
+| Core service | Source image or build | Purpose |
+| --- | --- | --- |
+| `observal-init` | `docker/Dockerfile.api` | Run database migrations, then exit |
+| `observal-api` | `docker/Dockerfile.api` | Serve the registry API |
+| `observal-web` | `docker/Dockerfile.web` | Serve the web UI |
+| `observal-lb` | `nginx:1.31-alpine` | Route UI and API requests |
+| `observal-db` | `postgres:18` | Store users, resources, reviews, and settings |
+| `observal-clickhouse` | `clickhouse/clickhouse-server:26.6` | Store session and audit evidence |
+| `observal-redis` | `redis:8-alpine` | Queue jobs, cache settings, and coordinate runtime services |
+| `observal-worker` | `docker/Dockerfile.api` | Run background jobs |
 
-| Service               | Image                               | Ports      | Purpose                   |
-| --------------------- | ----------------------------------- | ---------- | ------------------------- |
-| `observal-api`        | built from `docker/Dockerfile.api`  | 8000       | FastAPI backend           |
-| `observal-web`        | built from `docker/Dockerfile.web`  | 3000       | Vite web UI               |
-| `observal-db`         | `postgres:16`                       | 5432       | Registry, users, config   |
-| `observal-clickhouse` | `clickhouse/clickhouse-server:26.3` | 8123       | Session and audit events |
-| `observal-redis`      | `redis:7-alpine`                    | 6379       | Job queue (arq) + pub/sub |
-| `observal-worker`     | built from `docker/Dockerfile.api`  | (internal) | Background async jobs     |
-| `observal-grafana`    | `grafana/grafana-oss:11.6.5`        | 3001       | Dashboards (optional)     |
+Prometheus and Grafana are **optional overlay services**, not part of the eight-service core. `docker/docker-compose.observability.yml` adds Prometheus; its `grafana` profile enables Grafana:
 
-All services run on a private `observal-net` bridge network. Named volumes (`pgdata`, `chdata`, `redisdata`, `grafanadata`, `apidata`) hold persistent data.
+| Optional service | Overlay image | Purpose |
+| --- | --- | --- |
+| `observal-prometheus` | `prom/prometheus:v3.12.0` | Collect operational metrics |
+| `observal-grafana` | `grafana/grafana-oss:13.0.2` | View operational dashboards |
+
+Core services share the `observal-net` network and persistent volumes `pgdata`, `chdata`, `redisdata`, and `apidata`. The Grafana overlay adds `grafanadata`. Network membership does not prevent exposure through published host ports; inspect [ports and volumes](/self-hosting/ports-and-volumes) before sharing the instance.
+
+The downloadable server package has its own Compose files, image-version selection, and host bindings. Read the files shipped with your chosen release rather than applying source-stack defaults to it. See [documentation and software versions](/reference/documentation-version) and [requirements](/self-hosting/requirements).
 
 ## Deployment tiers
 
