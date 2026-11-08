@@ -141,6 +141,8 @@ async def test_install_uses_the_pinned_release_after_a_newer_one_is_approved(ses
     assert response.lock["status"] == "locked"
     assert response.lock["problems"] == []
     assert response.lock["components"][0]["source"] == "lock"
+    assert response.component_pins[0]["version"] == response.lock["components"][0]["version"]
+    assert response.component_pins[0]["id"] == response.lock["components"][0]["id"]
     assert response.lock["digest"].startswith("sha256:")
 
 
