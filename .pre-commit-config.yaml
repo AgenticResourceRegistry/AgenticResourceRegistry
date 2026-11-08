@@ -80,4 +80,5 @@ repos:
     hooks:
       - id: hadolint-docker
         stages: [pre-commit]
+        exclude: \.dockerignore$  # Dockerfile-specific ignore files are not Dockerfiles
         args: [--ignore, DL3008, --ignore, DL3013]
