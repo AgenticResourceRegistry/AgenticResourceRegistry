@@ -63,7 +63,7 @@ def _new_release(kind: str, listing, owner, marker: str):
         return McpVersion(**common, transport="stdio", command="npx", args=["-y", marker])
     if kind == "skill":
         return SkillVersion(
-            **common, task_type="code_review", delivery_mode="registry_direct", skill_md_content=f"---\n---\n{marker}"
+            **common, task_type="code_review", delivery_mode="registry_direct", skill_md_content=f"# Skill\n{marker}"
         )
     if kind == "hook":
         return HookVersion(**common, event="PostToolUse", handler_type="command", handler_config={"command": marker})
@@ -232,6 +232,10 @@ async def test_agent_bundle_preserves_pinned_tree_for_every_skill_harness(sessio
     version = (await session.execute(select(AgentVersion))).scalar_one()
     version.supported_harnesses = [harness]
     await lock_agent_version(session, agent, version)
+    newer = _new_release("skill", listing, owner, "NEWER-RELEASE-MARKER")
+    session.add(newer)
+    await session.flush()
+    listing.latest_version_id = newer.id
     await session.commit()
 
     with pytest.raises(HTTPException, match="skill_extra_files_v1") as old_client:
@@ -272,6 +276,7 @@ async def test_agent_bundle_preserves_pinned_tree_for_every_skill_harness(sessio
     assert len(response.skill_bundles) == 1
     folder = response.skill_bundles[0]
     assert folder.version_id == pinned.id
+    assert response.component_pins[0]["version"] == response.lock["components"][0]["version"] == pinned.version
     assert folder.digest == content_digest("skill", pinned)
     assert folder.skill_file_path.endswith("/SKILL.md")
     assert {file.path for file in folder.files} == {"SKILL.md", "templates/a.txt", "scripts/run.sh"}
@@ -405,6 +410,7 @@ async def test_legacy_pin_falls_back_to_latest_with_a_warning_and_strict_refuses
 
     assert response.lock["status"] == "unlocked"
     assert response.lock["components"][0]["source"] == "fallback-latest"
+    assert response.component_pins[0]["version"] == response.lock["components"][0]["version"]
     assert any("has no locked version" in warning for warning in response.warnings)
     assert refused.value.status_code == 409
     assert refused.value.detail.startswith("Strict install refused: mcp 'GitHub' is not locked.")
@@ -426,18 +432,20 @@ async def test_content_changed_after_locking_is_reported(session):
     assert refused.value.status_code == 409
 
 
-async def test_requested_older_agent_version_installs_its_own_pins(session):
+@pytest.mark.parametrize("kind", sorted(_FACTORIES))
+@pytest.mark.parametrize("strict", [False, True])
+async def test_requested_older_agent_version_installs_its_own_pins(session, kind, strict):
     owner = await ds.user(session)
-    listing, agent, _marker = await _pinned_agent(session, owner, "mcp")
-    newer_mcp = _new_release("mcp", listing, owner, "NEWER-RELEASE-MARKER")
-    session.add(newer_mcp)
+    listing, agent, pinned_marker = await _pinned_agent(session, owner, kind)
+    newer_component = _new_release(kind, listing, owner, "NEWER-RELEASE-MARKER")
+    session.add(newer_component)
     await session.flush()
-    listing.latest_version_id = newer_mcp.id
+    listing.latest_version_id = newer_component.id
     newer_agent = AgentVersion(
         id=uuid.uuid4(),
         agent_id=agent.id,
         version="4.0.0",
-        description="Uses the newer MCP",
+        description="Uses the newer component",
         prompt="Review.",
         model_name="claude-sonnet-4",
         status=AgentStatus.approved,
@@ -449,20 +457,32 @@ async def test_requested_older_agent_version_installs_its_own_pins(session):
     session.add(
         AgentComponent(
             agent_version_id=newer_agent.id,
-            component_type="mcp",
+            component_type=kind,
             component_id=listing.id,
-            component_name="GitHub",
+            component_name=listing.name,
             resolved_version="9.0.0",
-            resolved_version_id=newer_mcp.id,
+            resolved_version_id=newer_component.id,
         )
     )
     agent.latest_version_id = newer_agent.id
+    await lock_agent_version(session, agent, newer_agent)
     await session.commit()
 
-    latest = await _install(session, agent, owner)
-    pinned = await _install(session, agent, owner, version="3.1.0")
+    latest = await _install(session, agent, owner, strict=strict)
+    pinned = await _install(session, agent, owner, version="3.1.0", strict=strict)
+    explicit_latest = await _install(session, agent, owner, version="4.0.0", strict=strict)
 
-    assert latest.version == "4.0.0"
+    assert latest.version == explicit_latest.version == "4.0.0"
     assert "NEWER-RELEASE-MARKER" in json.dumps(latest.config_snippet)
     assert pinned.version == "3.1.0"
+    assert pinned_marker in json.dumps(pinned.config_snippet)
     assert "NEWER-RELEASE-MARKER" not in json.dumps(pinned.config_snippet)
+    for response in (latest, pinned, explicit_latest):
+        body = response.model_dump(mode="json")
+        component = body["component_pins"][0]
+        locked = body["lock"]["components"][0]
+        assert component["id"] == locked["id"] == str(listing.id)
+        assert component["type"] == locked["type"] == kind
+        assert component["version"] == locked["version"]
+    assert latest.component_pins[0]["version"] == "9.0.0"
+    assert pinned.component_pins[0]["version"] != "9.0.0"
