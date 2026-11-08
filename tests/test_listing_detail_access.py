@@ -24,6 +24,7 @@ from httpx import ASGITransport, AsyncClient
 
 from api.deps import get_db, get_registry_user
 from models.mcp import ListingStatus
+from models.team import TeamMembership
 from models.user import User, UserRole
 
 # ── Helpers ──────────────────────────────────────────────
@@ -47,7 +48,9 @@ def _mock_db(membership=None):
     # check_listing_visibility_async resolves team membership with db.scalar.
     # A bare AsyncMock returns a truthy sentinel, which would make every caller
     # look like a team member, so the membership row is always explicit here.
-    db.scalar = AsyncMock(return_value=membership)
+    db.scalar = AsyncMock(
+        side_effect=lambda stmt: membership if stmt.column_descriptions[0]["entity"] is TeamMembership else None
+    )
     # Fork-count reads use a grouped execute; this fixture has no fork rows.
     db.execute.return_value.all = MagicMock(return_value=[])
     db.execute.return_value.scalars = MagicMock()

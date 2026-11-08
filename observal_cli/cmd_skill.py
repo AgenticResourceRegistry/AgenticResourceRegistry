@@ -1304,12 +1304,20 @@ def _submit_folder_draft(
     with submit_context:
         result = client.post(endpoint, payload)
 
-    if output == "json":
-        output_json(result)
-        return
-
     # The folder endpoint returns a version manifest, not a listing response.
     listing_id = result.get("listing_id")
+    if output == "json":
+        output_json(
+            {
+                **result,
+                "next": (
+                    f"observal registry skill submit --submit {listing_id} "
+                    f"--version-id {result['version_id']} --output json"
+                ),
+            }
+        )
+        return
+
     rprint("\n[green]✓ Skill folder draft saved.[/green] Review and delivery may still be disabled.")
     rprint(f"  Listing ID: [bold]{esc(str(listing_id))}[/bold]")
     rprint(f"  Version: {esc(payload['version'])}")
