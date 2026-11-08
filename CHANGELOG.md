@@ -41,6 +41,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- return the active review number, URL, and numeric revision from skill-folder submission and skill detail responses, and include the explicit submit command in folder-draft JSON ([OBS-1518](https://linear.app/observalinc/issue/OBS-1518/skill-folder-submit-opens-a-review-but-returns-review-number-null))
 - repair in-app help links that still point at the renamed core concepts doc
 - install Claude Code session hooks on login when Claude Code is already present, and have doctor and scan require both the `UserPromptSubmit` and `Stop` hooks
 - answer malformed ARD search and list requests with a 400 ARD error envelope instead of a 422
