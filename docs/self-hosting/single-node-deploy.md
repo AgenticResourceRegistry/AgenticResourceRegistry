@@ -1,384 +1,174 @@
 ---
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Single-node deployment"
+description: "Prepare a source Compose VM with coordinated credentials, protected access, and verified recovery."
 ---
 
-Run the full Agentic Resource Registry stack on a single VM with Docker Compose. Best for teams of up to ~50 users, internal tools, evaluations, and any deployment where simplicity matters more than multi-AZ redundancy.
+Use this path when you intend to maintain the source Compose stack on one Linux VM. The goal is a healthy registry behind a restricted TLS entry point, with real operator access and a tested recovery procedure. Compose does not automatically provide complete off-host backups, a fixed deployment time, or zero-downtime upgrades.
 
-**End state:** Agentic Resource Registry running behind TLS on one server, with automated backups to S3-compatible storage, surviving reboots, and upgradable in under a minute.
+This development-checked guide is not a stable production certification. Select and verify the intended software release before team access. If you only want to try pulling an agent, use [local evaluation](/getting-started/local-evaluation).
 
 ## When to use this vs. the Terraform module
 
-| | Single-node (this guide) | [Production Terraform](/self-hosting/aws-terraform) |
-|---|---|---|
-| **Best for** | Small/mid teams, internal use, POCs | Enterprise, SLA-bound, high-traffic |
-| **Infra** | 1 VM, any cloud or on-prem | ~100 managed AWS resources |
-| **Cost** | $20–150/mo | ~$255/mo |
-| **HA** | No — single point of failure | Yes — Multi-AZ Postgres, autoscaling ECS |
-| **Time to deploy** | 10 minutes | 20–30 minutes |
-| **Operational complexity** | Low — SSH, docker compose, cron | Medium — Terraform, AWS console, CloudWatch |
-| **Scaling** | Vertical (bigger VM) | Horizontal (more Fargate tasks) |
+A single VM is simpler to operate but has a single-host failure boundary. [Cloud templates](/self-hosting/production-deploy) offer different managed-service topologies; their presence does not guarantee availability or migration compatibility. Choose based on measured workload, recovery objectives, networking, and operational ownership—not a promised number of users or monthly cost.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph vm[Single VM]
-        nginx["nginx - TLS"]
-        web[Web UI]
-        api["API - FastAPI"]
-        worker["Worker - arq"]
-        pg[(Postgres)]
-        redis[(Redis)]
-        ch[(ClickHouse)]
-        grafana[Grafana]
-        systemd["systemd - docker compose restart"]
-        cron["cron - daily backups to S3"]
-    end
-
-    nginx --> web
-    nginx --> api
-    api --> pg
-    api --> ch
-    api --> redis
-    api --> worker
-    worker --> pg
-    worker --> redis
+    clients[Users] --> tls[Host TLS reverse proxy]
+    tls --> lb[Loopback Compose load balancer]
+    lb --> web[Web UI]
+    lb --> api[API]
+    api --> pg[(PostgreSQL)]
+    api --> ch[(ClickHouse)]
+    api --> redis[(Redis)]
+    worker[Worker] --> pg
     worker --> ch
-    grafana --> ch
-    systemd -.-> nginx
-    systemd -.-> api
-    systemd -.-> worker
-    cron -.-> pg
-    cron -.-> ch
+    worker --> redis
+    init[Init: migrations] --> pg
+    init --> ch
 ```
 
-Everything runs as Docker containers on a single host. The nginx LB routes traffic and terminates TLS. Docker's restart policy and systemd keep the stack running across reboots.
+The source load balancer routes HTTP; it does not terminate TLS by default. The host proxy example below is separate from the Compose containers. Init runs and exits; optional monitoring is not part of the eight-service core.
 
 ## Prerequisites
 
-| Requirement | Minimum | Recommended |
-|---|---|---|
-| **VM** | 2 vCPU, 4 GB RAM, 40 GB SSD | 4 vCPU, 8 GB RAM, 100 GB SSD |
-| **OS** | Ubuntu 22.04+ / Amazon Linux 2023 / Debian 12 | Ubuntu 24.04 LTS |
-| **Docker** | Engine ≥ 24.0 with Compose v2 | Latest stable |
-| **Domain** (for TLS) | A DNS record pointing to the VM's public IP | — |
-| **Firewall** | Ports 80, 443 open inbound | — |
+Choose a current Linux VM/image compatible with the container architectures and [resource requirements](/self-hosting/requirements). You need restricted administrative access, a domain and approved TLS procedure, storage/backup headroom, Docker, and a Compose version supporting the shown override semantics.
 
-### Sizing guide
+Host commands below run on the VM, from its source checkout unless stated otherwise. A `127.0.0.1` URL refers to that host; a CLI on your own machine needs an authorized tunnel or the verified public endpoint.
 
-| Team size | VM spec | Estimated cost (AWS) |
-|---|---|---|
-| 1–10 users | `t3.medium` (2 vCPU / 4 GB) | ~$30/mo |
-| 10–30 users | `t3.large` (2 vCPU / 8 GB) | ~$60/mo |
-| 30–50 users | `t3.xlarge` (4 vCPU / 16 GB) | ~$120/mo |
-| 50+ users | Consider the [Terraform module](/self-hosting/aws-terraform) | ~$255/mo |
+Use a supported, patched Docker Engine **28 or newer** for this loopback/TLS layout. [Docker documents that older Engines can expose localhost-published ports to hosts on the same L2 network](https://docs.docker.com/engine/network/port-publishing/#publishing-ports), bypassing the host TLS proxy. Verify ordinary NAT/default routing and host firewall assumptions; do not enable direct/routed or unprotected networking as a workaround.
 
-ClickHouse is the memory consumer. If you run out, increase `CLICKHOUSE_MEMORY_LIMIT` before resizing the VM.
+The example uses `!override`, which requires Compose **2.24.4 or newer**. [Docker's merge documentation](https://docs.docker.com/reference/compose-file/merge/) explains why ordinary port-list merging would otherwise retain the old public bindings. Do not simply remove the tag on an older client.
 
 ## Step 1: Provision the VM
 
-Use any cloud provider or on-prem hypervisor. Example for AWS:
-
-```bash
-aws ec2 run-instances \
-  --image-id ami-0c7217cdde317cfec \
-  --instance-type t3.large \
-  --key-name your-key \
-  --security-group-ids sg-xxxxx \
-  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3"}}]' \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=observal}]'
-```
-
-For other clouds:
-- **GCP:** `e2-standard-2` with 100 GB balanced persistent disk
-- **Azure:** `Standard_B2ms` with 100 GB Premium SSD
-- **Hetzner:** `CPX31` (4 vCPU / 8 GB, ~€15/mo)
-- **On-prem:** any Linux box meeting the specs above
+Use your provider's reviewed image, disk, identity, and firewall setup. Restrict administrative access. Record the VM, storage, domain, recovery owner, and planned application exposure. A stale hardcoded AMI or estimated team-size table is not a valid provisioning plan.
 
 ## Step 2: Install Docker
 
-SSH into the VM and install Docker:
+Install a supported Docker Engine and Compose using [the maintained Docker installation instructions](https://docs.docker.com/engine/install/) for your operating system/provider, then verify:
 
 ```bash
-ssh ubuntu@your-server-ip
-
-# Ubuntu / Debian
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Verify
 docker version
 docker compose version
 ```
 
+Docker administrative access is privileged. Do not add accounts to its administrative group without reviewing that trust boundary.
+
 ## Step 3: Clone and configure
 
+Select the reviewed source revision:
+
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry
 cp .env.example .env
 ```
 
-Edit `.env` for production. At minimum, change these:
+Do **not** rotate only `POSTGRES_PASSWORD` and `CLICKHOUSE_PASSWORD`. Prepare the [coordinated configuration](/self-hosting/configuration#database-connections): database credentials, correctly encoded application connection URLs or files, API/worker/init consumers, and health-check credentials must agree. Changing an environment password is not a universal credential-rotation procedure for an existing database volume.
 
-```bash
-# Generate a secure secret key
-SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+Preserve a strong application encryption secret with the recovery configuration. Configure actual process CORS and the runtime frontend URL through their distinct mechanisms. See [configuration](/self-hosting/configuration), [authentication](/self-hosting/authentication), and [secret files](/self-hosting/configuration#secret-files).
 
-# Set strong database passwords
-POSTGRES_PASSWORD=$(openssl rand -base64 24)
-CLICKHOUSE_PASSWORD=$(openssl rand -base64 24)
+Source Compose supplies demo fallbacks even when `.env` lines are removed. Create a reviewed `compose.single-node.override.yml` at the checkout root to clear those API inputs and keep app listeners off public interfaces:
 
-# Set your domain (used for CORS and OAuth redirects)
-CORS_ALLOWED_ORIGINS=https://observal.yourcompany.com
-FRONTEND_URL=https://observal.yourcompany.com
-
-# Remove demo accounts for production
-# Comment out or delete all DEMO_* variables
+```yaml
+services:
+  observal-api:
+    environment:
+      DEMO_SUPER_ADMIN_EMAIL: ""
+      DEMO_SUPER_ADMIN_PASSWORD: ""
+      DEMO_ADMIN_EMAIL: ""
+      DEMO_ADMIN_PASSWORD: ""
+      DEMO_REVIEWER_EMAIL: ""
+      DEMO_REVIEWER_PASSWORD: ""
+      DEMO_USER_EMAIL: ""
+      DEMO_USER_PASSWORD: ""
+  observal-lb:
+    ports: !override
+      - "127.0.0.1:8080:80"
+  observal-web:
+    ports: !override
+      - "127.0.0.1:3000:3000"
 ```
 
-Write them into `.env`:
-
-```bash
-sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$SECRET_KEY|" .env
-sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PASSWORD|" .env
-sed -i "s|^CLICKHOUSE_PASSWORD=.*|CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD|" .env
-```
-
-> SAML SSO, audit logs, and executive dashboards are included in the open-source distribution. See [Configuration](/self-hosting/configuration). For mounted credentials and private keys, use the documented [`NAME_FILE` inputs](/self-hosting/configuration#secret-files) instead of placing secret contents in `.env`.
+Verify the merged model's bindings and demo suppression without printing credentials into shared logs. Keep the same project, files, environment file, and optional profiles on every later operation. This override does not supply coordinated database secrets or complete production hardening by itself.
 
 ## Step 4: Set up TLS
 
-This guide uses the source Compose stack. Every `localhost:80` example below refers to that stack's nginx load balancer. Do not expose its HTTP listener directly to remote clients. For downloadable server-package bindings, see [Requirements](/self-hosting/requirements#tls--https).
-
-### Option A: Caddy (simplest — automatic HTTPS)
-
-```bash
-sudo apt install -y caddy
-```
-
-Create `/etc/caddy/Caddyfile`:
+Prepare an approved host proxy/ingress with access to the restricted upstream. If using Caddy, follow its [installation instructions](https://caddyserver.com/docs/install) before configuring the service. This example uses a host Caddy configuration after the loopback port-8080 override above:
 
 ```caddyfile
-observal.yourcompany.com {
-    reverse_proxy localhost:80
+registry.example.com {
+    reverse_proxy 127.0.0.1:8080
 }
 ```
 
-```bash
-sudo systemctl enable --now caddy
-```
+Replace the domain and configure its DNS, certificates, proxy policy, and renewal monitoring. Using port 8080 avoids competing with the proxy's public HTTP listener on port 80. Keep the public application route closed until first-admin and configuration checks complete.
 
-Caddy handles Let's Encrypt certificates automatically. No renewal cron needed.
-
-### Option B: Certbot + nginx production config
-
-```bash
-sudo apt install -y certbot
-sudo certbot certonly --standalone -d observal.yourcompany.com
-```
-
-Then use the production compose overlay which configures nginx for TLS:
-
-```bash
-cd docker
-docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
-```
-
-Set up auto-renewal:
-
-```bash
-echo "0 3 * * * certbot renew --quiet && docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.production.yml restart observal-lb" | sudo tee -a /etc/crontab
-```
-
-### Option C: Behind a cloud load balancer
-
-If your VM sits behind an AWS ALB, GCP HTTPS LB, or Cloudflare, terminate TLS there and proxy to port 80 on the VM. No TLS config on the VM itself.
+If using a cloud load balancer or a reviewed TLS Compose overlay instead, verify that artifact's certificate mounts, bindings, allowed origins, health route, and trust settings. Do not combine two listeners on the same host port or assume a firewall alone blocks Docker-published ports.
 
 ## Step 5: Start the stack
 
-```bash
-cd ~/AgenticResourceRegistry
-docker compose -f docker/docker-compose.yml up -d --build
-```
-
-First build takes 3–5 minutes (pulling images, building the API and web containers). Watch the logs:
+For a **fresh deployment only**, from the configured checkout:
 
 ```bash
-docker compose -f docker/docker-compose.yml logs -f observal-init observal-api
+docker compose --env-file .env -f docker/docker-compose.yml -f compose.single-node.override.yml up --build -d
+docker compose --env-file .env -f docker/docker-compose.yml -f compose.single-node.override.yml ps -a
+docker compose --env-file .env -f docker/docker-compose.yml -f compose.single-node.override.yml logs --tail 50 observal-init
+curl http://127.0.0.1:8080/health
 ```
 
-Wait for:
-```
-observal-init  | INFO - Database up to date.
-observal-api   | INFO - Application startup complete.
-```
-
-Verify:
-
-```bash
-curl -fsSL http://localhost/health
-# {"status":"ok","initialized":true}
-```
+Include your actual project/overlay/profile flags. Check successful init and the health response body; HTTP 200 alone does not establish readiness. On a fresh non-demo server, `initialized: false` is expected until the first administrator is created. Existing-data changes are upgrades, not this fresh-start recipe.
 
 ## Step 6: Survive reboots
 
-Docker's `restart: unless-stopped` policy (already set in `docker-compose.yml`) handles container restarts. To ensure Docker itself starts on boot:
+Review Docker service startup and the containers' declared restart policies. Those policies help recovery but do not prove healthy ordering or a successful reboot. Rehearse a reboot and inspect successful init state, dependency/API health, worker status, and the public route after reconnecting. Init is not expected to remain running.
+
+## Step 7: Set up verified backups
+
+Follow [backup and restore](/self-hosting/backup-and-restore) using the actual mounts and credentials. Preserve PostgreSQL, complete application artifacts/signing material, matching encryption configuration and mounted secrets, and the ClickHouse evidence your recovery objectives require. Plan Redis and custom monitoring state separately.
+
+Only automate a procedure after a separate restore rehearsal passes. Its non-interactive environment must have the intended project/files, restricted credentials, storage destination, failure reporting, and a tested retention/pruning policy. Off-host delivery is complete only after upload, integrity/access checks, and restoration are verified—not because an S3 command appears in a comment.
+
+A ClickHouse `Disk('backups', ...)` destination must be configured and tested before a native backup schedule is used. Do not add a cron entry that assumes that disk or a shell password environment exists. No complete backup automation is provisioned by this page.
+
+## Step 8: First login and opening access
+
+While the public route remains closed, [install a matching CLI](/getting-started/installation) using the [version guidance](/reference/documentation-version), then initialize on the VM or through an authorized tunnel to its restricted listener:
 
 ```bash
-sudo systemctl enable docker
-```
-
-Test it:
-
-```bash
-sudo reboot
-# After reconnecting:
-docker compose -f ~/AgenticResourceRegistry/docker/docker-compose.yml ps
-# All services should be running
-```
-
-## Step 7: Set up automated backups
-
-Create a backup script:
-
-```bash
-sudo mkdir -p /opt/observal-backups
-cat << 'SCRIPT' | sudo tee /opt/observal-backups/backup.sh
-#!/bin/bash
-set -euo pipefail
-
-BACKUP_DIR="/opt/observal-backups"
-DATE=$(date +%Y%m%d-%H%M)
-COMPOSE="docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml"
-
-# Postgres
-$COMPOSE exec -T observal-db pg_dump -U postgres observal | gzip > "$BACKUP_DIR/pg-$DATE.sql.gz"
-
-# JWT keys
-$COMPOSE exec -T observal-api tar czf - -C /data keys > "$BACKUP_DIR/keys-$DATE.tar.gz"
-
-# Prune backups older than 30 days
-find "$BACKUP_DIR" -name "pg-*.sql.gz" -mtime +30 -delete
-find "$BACKUP_DIR" -name "keys-*.tar.gz" -mtime +30 -delete
-
-# Upload to S3 (optional — install awscli first)
-# aws s3 sync "$BACKUP_DIR" s3://your-backup-bucket/observal/ --exclude "backup.sh"
-
-echo "Backup completed: $DATE"
-SCRIPT
-
-sudo chmod +x /opt/observal-backups/backup.sh
-```
-
-Schedule it:
-
-```bash
-echo "0 3 * * * root /opt/observal-backups/backup.sh >> /var/log/observal-backup.log 2>&1" | sudo tee /etc/cron.d/observal-backup
-```
-
-For ClickHouse (weekly, since it's larger):
-
-```bash
-echo "0 4 * * 0 root docker compose -f /home/ubuntu/AgenticResourceRegistry/docker/docker-compose.yml exec -T observal-clickhouse clickhouse-client --password \$CLICKHOUSE_PASSWORD --query \"BACKUP DATABASE observal TO Disk('backups', 'weekly-\$(date +\%Y\%m\%d).zip')\" >> /var/log/observal-backup.log 2>&1" | sudo tee /etc/cron.d/observal-ch-backup
-```
-
-See [Backup and restore](/self-hosting/backup-and-restore) for detailed restore procedures.
-
-## Step 8: First login
-
-Install the CLI on your local machine:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
-```
-
-Log in:
-
-```bash
-observal auth login
-# Server URL: https://observal.yourcompany.com
-# Email: (create your admin account or use demo creds if you kept them)
-```
-
-Verify:
-
-```bash
+observal auth login --server http://127.0.0.1:8080 --no-setup
 observal auth whoami
-observal auth status
 ```
+
+Follow [first-admin guidance](/self-hosting/authentication#the-first-administrator). Do not leave demo credentials as production access. Establish required operator authority, the runtime `deployment.frontend_url`, actual CORS, proxy trust, registration/public-registry policy, and usage-reporting decisions before opening the public route.
+
+Then enable the reviewed TLS proxy, verify through the real HTTPS origin, and test an ordinary-user [inspect/pull/activate workflow](/getting-started/quickstart). Signing in to the registry does not authenticate a coding tool's model account.
 
 ## Upgrades
 
-```bash
-cd ~/AgenticResourceRegistry
-git fetch --tags
-git checkout v1.5.0    # or whatever version
+Use the [canonical upgrade procedure](/self-hosting/upgrades) for your deployment artifact. Select the intended revision, preserve verified backups, and drain incompatible old API/workers **before** a new initializer migrates the database. A generic checkout plus `up --build` is not a safe universal upgrade.
 
-docker compose -f docker/docker-compose.yml up -d --build
-```
-
-The Compose init service applies migrations before API startup. See [Upgrades](/self-hosting/upgrades) for rollback procedures.
-
-Or use the CLI:
-
-```bash
-observal server upgrade --version 1.5.0 --force --output json
-```
+Do not copy a historical target or treat CLI-managed Docker upgrade commands as the workflow for every source deployment. Image rollback and data recovery are different operations.
 
 ## Monitoring
 
-Prometheus and Grafana are optional. Start the core stack with Prometheus only:
+Review the optional [source monitoring overlay](/self-hosting/docker-compose#start-the-stack). Keep its files/profiles consistent across operations. Access private dashboards through an authorized tunnel or protected route; do not expose a plaintext direct web/Grafana listener merely to inspect it.
 
-```bash
-docker compose -f docker/docker-compose.yml -f docker/docker-compose.observability.yml up -d
-```
-
-Start Prometheus and Grafana:
-
-```bash
-COMPOSE_PROFILES=grafana docker compose -f docker/docker-compose.yml -f docker/docker-compose.observability.yml up -d
-```
-
-Access Grafana at `http://your-server:3001` when the Grafana profile is enabled.
-
-For basic alerting without Grafana, add a health check cron:
-
-```bash
-echo "*/5 * * * * root curl -fsS http://localhost/health > /dev/null || echo 'Agentic Resource Registry health check failed' | mail -s 'ALERT: Agentic Resource Registry down' ops@yourcompany.com" | sudo tee /etc/cron.d/observal-health
-```
+Monitor the health body/dependencies, failed jobs, applied retention, backup completion, and restore results—not only a successful `curl` exit status. A configured 90-day retention value is not proof of effective TTL; use the [read-only retention checks](/self-hosting/data-retention#verify-storage-and-scheduled-retention).
 
 ## Security hardening
 
-The [security assurance case](/security/assurance-case) describes the deployment trust boundaries and residual risks.
-
-Before exposing to the internet:
-
-- [ ] Remove all `DEMO_*` env vars from `.env`
-- [ ] Set a strong `SECRET_KEY`
-- [ ] Restrict SSH access (key-only, no password auth)
-- [ ] Configure a firewall (`ufw allow 80,443/tcp && ufw enable`)
-- [ ] Set up [SSO](/self-hosting/authentication) if available
-- [ ] Enable automatic security updates (`sudo apt install unattended-upgrades`)
-- [ ] Bind database ports to localhost only (already done in `docker-compose.yml` via `127.0.0.1:` prefix)
+Before team access, verify coordinated credentials, cleared demo fallbacks and existing demo-account removal, restricted host bindings, TLS/proxy policy, authorized account/recovery access, applied retention, reporting consent, and restorable backups. The [assurance case](/security/assurance-case) describes limitations; a checklist or template alone is not security certification.
 
 ## Scaling up
 
-When you outgrow a single node:
-
-| Symptom | Fix |
-|---|---|
-| API response times increasing | Increase `API_WORKERS` in `.env` (default 2), or bump to a bigger VM |
-| ClickHouse queries slow | Increase `CLICKHOUSE_MEMORY_LIMIT` or move to a bigger VM |
-| Disk filling up | Reduce `DATA_RETENTION_DAYS`, add a bigger disk, or move ClickHouse data to a separate volume |
-| Need HA / zero downtime deploys | Migrate to the [Terraform module](/self-hosting/aws-terraform) |
+Measure latency, database growth, queues, and recovery time before changing capacity. More workers/tasks do not automatically fix database bottlenecks or make migrations compatible. For a different topology, review the [cloud deployment guide](/self-hosting/production-deploy) and its actual storage, identity, migration, and recovery requirements.
 
 ## Next
 
-- [Configuration](/self-hosting/configuration) — all environment variables
-- [Backup and restore](/self-hosting/backup-and-restore) — detailed restore procedures
-- [Upgrades](/self-hosting/upgrades) — safe upgrade and rollback flow
-- [Troubleshooting](/self-hosting/troubleshooting) — common issues
+[Configuration](/self-hosting/configuration) → [authentication](/self-hosting/authentication) → [backup/recovery](/self-hosting/backup-and-restore) → [upgrades](/self-hosting/upgrades).

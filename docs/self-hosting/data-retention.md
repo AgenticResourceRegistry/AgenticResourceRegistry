@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Data & Retention Settings"
 ---
@@ -53,14 +54,48 @@ Two legacy Insights tables that current versions no longer write are cleaned con
 
 ## ClickHouse TTL
 
-`data.retention_days` remains the separate ClickHouse TTL setting. It controls automatic expiry of raw session content and defaults to 90 days. Application retention values cannot exceed this ceiling when it is enabled.
+`data.retention_days` is the separate configured ClickHouse TTL policy and defaults to 90 days. Application retention controls validate against that configured ceiling when enabled. **The setting value does not establish the actual table TTL.**
 
-| Value | Effect |
+In the inspected source Compose path, `SKIP_DDL_ON_STARTUP=true` skips the runtime initializer that applies the policy. The fresh operator rehearsal's `session_events` table had no TTL clause despite the 90-day default. Other tables can have independent migration-defined TTLs. Verify the actual table definition with authorized database access before relying on automatic expiration or a privacy/storage guarantee.
+
+| Value | Requested policy—not proof of application |
 |-------|--------|
-| `90` (default) | Keep raw telemetry for 90 days |
-| `30` | Short TTL for privacy-sensitive deployments |
-| `365` | Long TTL for annual analysis |
-| `0` | Keep raw telemetry indefinitely, not recommended unless storage is actively managed |
+| `90` (default) | 90-day raw-session TTL when the policy is applied |
+| `30` | Shorter requested retention window |
+| `365` | Longer requested retention window |
+| `0` | No requested raw-session TTL; does not automatically remove an existing TTL when policy application is skipped |
+
+### Verify storage and scheduled retention
+
+Using an authorized ClickHouse client with the correct endpoint and authentication, run this **read-only** query (replace the database name if your deployment uses another one):
+
+```sql
+SHOW CREATE TABLE observal.session_events;
+```
+
+Read the actual returned definition, not only `data.retention_days` in the settings UI:
+
+- A **table-level TTL** describes expiration of rows according to its expression.
+- A **column-level TTL**, such as one attached to `raw_line`, can expire that column's content without deleting the entire session record. It is not the same as whole-row retention.
+- If the relevant TTL is absent, do not infer automatic 90-day expiration from a stored policy value. Other tables and derived records have their own policies.
+
+A TTL clause establishes configured storage behavior, not deletion at an exact wall-clock deadline. ClickHouse cleanup/merges are asynchronous; inspect representative authorized records and the applied policy over an appropriate window. Do not issue an improvised `ALTER`, purge, or forced production cleanup just to make the check pass.
+
+Separately inspect the scheduled policy through authorized settings reads:
+
+```bash
+observal admin settings --output json
+```
+
+Check `retention.enabled`, `retention.trace_days`, `retention.score_days`, and `retention.max_trace_count`. Then inspect the worker's configured schedule and its actual completion/failure/no-op evidence. For a source deployment, a bounded log read is:
+
+```bash
+docker compose -f docker/docker-compose.yml logs --since 24h --tail 200 observal-worker
+```
+
+Use your actual project/files/profile and protect the output. Look for `run_retention_purge`, completion statistics, failures, or messages explaining that a run was skipped. A successfully scheduled job can be a no-op when the policy is disabled or work is deferred; job success alone is not deletion evidence. The source worker schedules this task every six hours, but configured schedules are not proof it ran in your deployment.
+
+Rehearse execution with non-sensitive fixtures in an isolated environment if needed. These read-only checks do not enable retention, delete data, or certify that every derived record has been removed.
 
 **When to lower:** The deployment has strict data minimization rules, or ClickHouse storage is growing too quickly.
 
@@ -86,15 +121,7 @@ Cache duration, in seconds, for expensive dashboard aggregation queries.
 | `15` | Near-live dashboard updates, higher query load |
 | `300` | Lower query load for large deployments, charts can lag by several minutes |
 
-## OTEL Cache TTL
-
-Cache duration, in seconds, for trace and session list endpoints.
-
-| Value | Effect |
-|-------|--------|
-| `15` (default) | Keeps trace lists responsive while preserving near-live monitoring |
-| `5` | Useful during active debugging |
-| `60` | Better for large deployments where trace lists are expensive |
+The current documented cache settings are `data.cache_ttl_default` and `data.cache_ttl_dashboard`. Do not infer an additional configurable “OTEL Cache TTL” from a cache namespace or an older guide. Startup-bound cache decorators may require a restart; verify actual response behavior after changes.
 
 ## Deleting a user {#deleting-a-user}
 

@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal agent"
 ---
@@ -233,7 +234,7 @@ observal agent build --dir ./reviewer --output json
 observal agent build --dir ./reviewer --team platform --visibility team --output json
 ```
 
-Build verifies every component, checks that any pinned component `version` exists, and validates whether private components are visible to the target owner. A successful JSON result contains `valid`, `agent`, `components`, `issues`, and `supported_harnesses`. Build also checks the declared `supported_harnesses` against what the components need: a harness that cannot run them (for example Cursor for a skill folder) is a warning in `issues` and is left out of `supported_harnesses`, and if none can run them the build fails with exit code 7. Invalid composition exits with code 7 and leaves JSON stdout empty; the stderr error includes the same repairable data under `error.result`.
+Build verifies component references, selected component versions, and target access/composition scope. A successful v1.16.0 JSON result contains `valid`, `agent`, `components`, and `issues`; it does not return inferred `supported_harnesses` or automatically remove incompatible declared harnesses. Check the declaration and native component support independently. Invalid composition uses validation exit 7 with repairable data under `error.result`.
 
 ### Publish
 
@@ -248,7 +249,7 @@ observal agent publish --dir ./reviewer --update --bump minor --output json
 
 `--update` edits the latest version in place, so it only works while that version is a draft, pending, or rejected. An approved version is immutable: installs and locks depend on it. The server answers conflict exit code 6 and points to `observal agent release`, which publishes a new version for review.
 
-JSON returns the direct created, saved, submitted, or updated Agent object. Publish stores only the declared harnesses that can run the components and lists each dropped one in `warnings`. If none can, it fails with a 422 that names the harnesses to declare instead.
+JSON returns the direct created, saved, submitted, or updated Agent object. In v1.16.0 the server stores the declared `supported_harnesses`; it does not filter that declaration against component support or reject it merely because no declared harness can run the composition. Independently inspect pinned components and verify each declared target before publishing. Do not infer compatibility from publication success or apply later filtering/warning behavior to this release.
 
 ## Release and versions
 

@@ -1,12 +1,13 @@
 ---
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Production deployment"
 ---
 
-Deploy Agentic Resource Registry as a distributed, highly available stack on AWS or GCP using Terraform. Best for SLA-bound deployments, teams over 50 users, and any environment where uptime and horizontal scaling matter.
+Review the AWS or GCP Terraform topology when a single-host source deployment is not the intended operating model. Managed services and autoscaling options do not by themselves certify availability, capacity, or a safe rollout.
 
-**End state:** a fully managed Agentic Resource Registry install with autoscaling compute, managed databases with automated failover, encrypted secrets, centralized logging, automated backups, and HTTPS on your domain — provisioned with a single `terraform apply`.
+**Goal:** an explicitly configured cloud deployment with verified identity, networking, migration ordering, and full recovery. A successful `terraform apply` or managed database snapshot is not proof that every application artifact is backed up or that the complete registry works.
 
 ## When to use this vs. single-node
 
@@ -14,18 +15,16 @@ Deploy Agentic Resource Registry as a distributed, highly available stack on AWS
 |---|---|---|
 | **Best for** | Small/mid teams, internal use, POCs | Enterprise, SLA-bound, high-traffic |
 | **Infra** | 1 VM, any cloud or on-prem | ~100 managed cloud resources |
-| **Cost** | $20–150/mo | ~$255/mo (AWS) |
-| **HA** | No — single point of failure | Yes — Multi-AZ databases, autoscaling compute |
-| **Failover** | Manual (reboot / redeploy) | Automatic (managed services handle it) |
+| **HA** | Single-host failure boundary | Configured replication/topology; verify failover and application recovery |
+| **Failover** | Rehearsed host/data recovery | Provider behavior and application recovery require testing |
 | **Scaling** | Vertical (bigger VM) | Horizontal (add more containers) |
-| **Backups** | Cron + S3 | Automated (RDS snapshots, systemd timers, S3 lifecycle) |
+| **Backups** | Verified scheduled procedure required | Inspect snapshots/jobs and rehearse complete multi-store recovery |
 | **Secrets** | Server-package files, or direct `.env` values for source Compose | SSM Parameter Store / Secret Manager (encrypted, auditable) |
 | **Logging** | `docker compose logs` | CloudWatch / Cloud Logging (centralized, retained, searchable) |
-| **Time to deploy** | 10 minutes | 20–30 minutes |
 
 ## Choose your cloud
 
-Agentic Resource Registry ships Terraform modules for both AWS and GCP. They provision equivalent architectures using each cloud's native managed services.
+Agentic Resource Registry ships Terraform modules for both AWS and GCP. They use different provider services and lifecycle mechanisms. Review the actual plan and selected configuration rather than assuming equivalent behavior.
 
 ### AWS
 
@@ -75,17 +74,21 @@ flowchart TB
 
 **Quick start:**
 
+Do not apply the stock AWS template until the [v1.16.0 shared/durable signing-key prerequisite](/self-hosting/aws-terraform#quickstart) is satisfied. The default per-task temporary keys are not a safe authenticated multi-task deployment.
+
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry/infra/terraform/aws
 
 # Configure
 cp terraform.tfvars.example terraform.tfvars
-# Edit: region, environment, domain_name (optional), alb_ingress_cidrs
+# Edit: region, environment, domain_name (optional), alb_ingress_cidrs.
+# REQUIRED: image_tag = "1.16.0", not the copied latest default.
 
 # Deploy
 terraform init
 terraform plan -out tf.plan
+# Review effective application image references for :1.16.0 before applying.
 terraform apply tf.plan
 
 # Verify
@@ -147,6 +150,8 @@ flowchart TB
 
 **Quick start:**
 
+Resolve the [v1.16.0 GCP shared/durable signing-key prerequisite](/self-hosting/gcp-terraform#quickstart) before applying the stock Cloud Run template for authenticated team use.
+
 ```bash
 cd AgenticResourceRegistry/infra/terraform/gcp
 
@@ -159,11 +164,13 @@ gcloud services enable \
 
 # Configure
 cp terraform.tfvars.example terraform.tfvars
-# Edit: project_id, region, domain_name (optional)
+# Edit: project_id, region, domain_name (optional).
+# REQUIRED: image_tag = "1.16.0", with those exact images in the configured mirror.
 
 # Deploy
 terraform init
 terraform plan -out tf.plan
+# Review effective application image references for :1.16.0 before applying.
 terraform apply tf.plan
 
 # Run migrations
@@ -180,20 +187,16 @@ These apply to both AWS and GCP. Cloud-specific commands are in the respective g
 
 ### Upgrade to a new release
 
-```hcl
-# terraform.tfvars
-image_tag = "v1.5.0"
-```
+Use the [canonical upgrade gates](/self-hosting/upgrades) and the selected cloud's migration lifecycle. Choose an actual released image tag and review its schema compatibility before changing infrastructure. Drain incompatible old API/worker writers before migration; no template dependency proves they have stopped.
 
-```bash
-terraform apply
-```
+- **AWS:** the module's optional `run_init_on_apply` task trigger runs and waits for the initializer, checking its exit code. New service dependencies do not automatically stop existing running tasks before that migration.
+- **GCP:** creating/updating the init-job resource is not execution. The operator must run the intended job, wait for completion, inspect its result, and control traffic/writers during an incompatible migration.
 
-The init task re-runs migrations. Compute services roll over with zero downtime.
+Verify initialization, selected versions, policy, and the user-facing route before restoring traffic. Rolling compute behavior does not guarantee zero downtime or migration safety. The cloud guides provide source-specific details; they are not a production rollout rehearsal.
 
 ### Roll back
 
-Set `image_tag` to the previous version and `terraform apply`. Database data is not affected. If the failed version ran a destructive migration (rare, always called out in the CHANGELOG), restore from the pre-upgrade database backup.
+Changing an image tag and applying prior infrastructure does not undo schema or data mutations. Determine what migrations completed and whether prior application versions can read/write the resulting state. Use verified snapshots plus matching encryption/signing/application artifacts if data recovery is required. Follow [rollback and recovery](/self-hosting/upgrades#rolling-back); do not assume database data is unaffected by the failed upgrade.
 
 ### Scale up
 
@@ -266,15 +269,15 @@ GCP is typically cheaper due to Cloud Run's per-request billing and no NAT Gatew
 
 Applies to both clouds. See the cloud-specific guides for implementation details.
 
-- [ ] Enable remote Terraform state (S3 + DynamoDB on AWS, GCS on GCP)
-- [ ] Restrict load balancer ingress to known CIDRs
-- [ ] Enable cloud security services (GuardDuty + Config on AWS, Security Command Center on GCP)
-- [ ] Set up alerting on database CPU, memory, and 5xx error rates
-- [ ] Attach a WAF to the load balancer
-- [ ] Enable Redis transit encryption
-- [ ] Configure [SSO](/self-hosting/authentication) (SAML or OIDC)
-- [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
-- [ ] Replace the GitHub tarball pull in the data host bootstrap with an artifact you control
+- Enable remote Terraform state (S3 + DynamoDB on AWS, GCS on GCP)
+- Restrict load balancer ingress to known CIDRs
+- Enable cloud security services (GuardDuty + Config on AWS, Security Command Center on GCP)
+- Set up alerting on database CPU, memory, and 5xx error rates
+- Attach a WAF to the load balancer
+- Enable Redis transit encryption
+- Configure [SSO](/self-hosting/authentication) (SAML or OIDC)
+- Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
+- Replace the GitHub tarball pull in the data host bootstrap with an artifact you control
 
 ## Next
 

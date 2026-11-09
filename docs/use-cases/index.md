@@ -1,31 +1,49 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Use Cases"
+title: "Registry workflows"
+description: "Choose a workflow for finding, sharing, publishing, and improving agent resources."
 ---
 
-Agentic Resource Registry solves five concrete problems in the AI-agent lifecycle. Each page below is written as a playbook: what the problem is, how Agentic Resource Registry addresses it, and the exact commands to run.
+Start with the resource or task you need. Agentic Resource Registry gives you a shared, versioned source of agent configurations; you do not need to collect traces before using the registry.
 
-| If you need to... | Read |
+| If you need to... | Start here |
 | --- | --- |
-| See what your MCP servers are actually doing | [Observe MCP traffic](/use-cases/observe-mcp-traffic) |
-| Package an agent once and ship it to any harness | [Share agent configs across harnesses](/use-cases/share-agent-configs) |
-| Figure out why a session went wrong | [Debug agent failures](/use-cases/debug-agent-failures) |
-| Give your whole team a source of truth | [Run a team-wide agent registry](/use-cases/team-registry) |
-| Adapt an approved agent or component without changing the original | [Fork and customize](/use-cases/fork-and-customize) |
+| Find and run an available agent | [Pull your first agent](/getting-started/quickstart) |
+| Understand what an agent will install | [Inspect an agent](/guides/inspect-an-agent) |
+| Publish a reusable setup | [Create and publish an agent](/guides/create-an-agent) |
+| Approve a submitted release | [Review and publish](/guides/review-and-publish) |
+| Join a shared namespace | [Work in a teamspace](/use-cases/teamspaces) |
+| Follow reviews, decisions, and updates | [Work through Inbox](/guides/manage-inbox) |
+| Give teammates the same configuration | [Share agent configurations](/use-cases/share-agent-configs) |
+| Adapt an existing resource | [Fork and customize](/use-cases/fork-and-customize) |
+| Find resources for a particular task | [Discover resources with ARD](/guides/discover-resources) |
+| Hand part of a task to another agent | [Delegate work with A2A](/guides/delegate-work) |
+| Understand how an agent is being used | [Interpret insights](/guides/interpret-insights) |
 
-## How these relate
+## One setup, different coding tools
+
+An author publishes an agent's instructions and components. A teammate inspects a release, previews the configuration, and pulls it into a [supported coding tool](/integrations/index).
 
 ```mermaid
 flowchart LR
-    observe[Observe MCP traffic]
-    debug[Debug agent failures]
-    share[Share agent configs]
-    registry[Team registry]
-
-    observe -->|traces give you evidence| debug
-    observe --> share
-    share -->|governance + reuse| registry
+    author[Create and publish] --> inspect[Inspect a release]
+    inspect --> install[Preview and pull]
+    install --> activate[Activate and use]
+    activate --> share[Share or improve]
 ```
 
-You typically adopt Agentic Resource Registry in that order: **observe** first (low-risk, instant value), then **debug**, then **share**, and finally **run a team registry** once you have enough published agents to justify governance.
+Portability is capability-dependent. An agent does not work identically in every harness, and not every component type is available everywhere. Match the release's declarations to the tool you use.
+
+## Work with a team
+
+Use [teamspaces](/use-cases/teamspaces) to organize access and publishing identities. [Review and publication](/guides/review-and-publish) control which submitted releases become available; a review decision and a resource's visibility are separate concerns.
+
+For deployment and organization-wide operations, use [Run a team registry](/use-cases/team-registry) and [Self-hosting](/self-hosting/index).
+
+## Use session evidence when it helps
+
+After using agents, captured sessions can help you [debug a failure](/use-cases/debug-agent-failures), [examine MCP activity](/use-cases/observe-mcp-traffic), or [interpret insights](/guides/interpret-insights). Capture requires configuration and permission to handle the resulting data; it is not automatically low-risk or complete evidence.
+
+Choose that path when you have a question the evidence can answer—not as a mandatory first step toward sharing an agent.

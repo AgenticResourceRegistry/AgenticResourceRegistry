@@ -3,11 +3,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal registry"
 ---
 
-Publish and manage registry components. The registry has five component types: MCP servers, skills, hooks, prompts, and sandboxes.
+Publish and manage registry components. The registry has five component types: MCP servers, skills, hooks, prompts, and sandboxes. For the task-oriented owner/reviewer/consumer path, start with [Create and reuse components](/guides/components); this page is the command reference.
 
 ## Subcommand structure
 
@@ -59,8 +60,8 @@ The namespace is the publisher's username or a teamspace handle. Usernames canno
 Use the teamspace target and visibility options on submit commands:
 
 ```bash
-observal registry skill submit --skill-md ./SKILL.md --team platform-tools --visibility public
-observal registry skill submit --skill-md ./SKILL.md --team platform-tools --visibility team
+observal registry skill submit --skill-md ./SKILL.md --delivery-mode registry_direct --team platform-tools --visibility public
+observal registry skill submit --skill-md ./SKILL.md --delivery-mode registry_direct --team platform-tools --visibility team
 observal registry skill list --team platform-tools --search 'frontend design' --harness claude-code --output json
 observal registry skill list --namespace platform-tools --output json
 observal registry skill show platform-tools/internal-skill --output json
@@ -255,7 +256,7 @@ observal registry mcp show @fav --output json
 
 ### `observal registry mcp install`
 
-Generate a harness config snippet for an MCP server. This command does not write harness configuration or record an installation. Interactive mode prompts for required environment variables and headers. JSON mode requires `--no-prompt` and rejects missing required values before config generation with `error.result.needs_input: true`.
+Generate a harness config snippet for an MCP server. Without `--apply`, it does not write harness configuration or record a local installation. The opt-in `--apply` path configures and tracks a Claude Code MCP, with explicit directory/scope handling. Interactive mode prompts for required environment variables and headers. JSON mode requires `--no-prompt` and rejects missing required values before config generation with `error.result.needs_input: true`.
 
 ```bash
 observal registry mcp install <id-or-name> --harness <harness> [options]
@@ -270,14 +271,19 @@ observal registry mcp install <id-or-name> --harness <harness> [options]
 | `--env-file` | | Read environment values from a file |
 | `--no-prompt` | `-y` | Use supplied values without prompting; JSON fails if required values are missing |
 | `--raw` | | Output only a bare config template; missing values remain explicit placeholders |
+| `--apply` | | Opt in to Claude Code setup and local installation tracking |
+| `--dir` | `-d` | Explicit target directory for `--apply` |
+| `--scope` | | Explicit project/user scope for `--apply` |
 | `--output` | `-o` | Output the complete operation result as table or JSON |
 
 ```bash
 observal registry mcp install my-server --harness claude-code
-observal registry mcp install my-server --harness cursor --raw > .cursor/mcp.json
+observal registry mcp install my-server --harness cursor --raw
 observal registry mcp install 2 --harness copilot
 observal registry mcp install @db --harness kiro
 ```
+
+Do not redirect raw output over an existing config as a blind merge. Preview and verify the intended setup/ownership first. Credential flags are visible in process arguments/history; prefer interactive or protected file-based input for secrets. See [MCP authoring and reuse](/registry-mcp-helper).
 
 ---
 

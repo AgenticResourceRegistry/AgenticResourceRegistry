@@ -1,10 +1,11 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal registry version"
 ---
 
-Publish and inspect versioned releases for MCP servers, skills, hooks, prompts, and sandboxes.
+Publish and inspect versioned releases for MCP servers, skills, hooks, prompts, and sandboxes. [Version and reuse components](/guides/version-components) explains candidate review, unchanged agent pins, and consuming-project locks.
 
 ## Commands
 

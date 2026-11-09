@@ -3,122 +3,103 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Installation"
+title: "Install the CLI"
+description: "Install the observal command on your machine and verify it works."
 ---
 
-Agentic Resource Registry has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
+The `observal` CLI connects your machine to Agentic Resource Registry. Use it to browse resources, pull agents, and manage what you have installed.
 
-## Install the server
+Installing the CLI does **not** deploy a registry server. To evaluate a server locally, use [Try a registry locally](/getting-started/local-evaluation). For a team deployment, use [Self-hosting](/self-hosting/index).
 
-The server runs as a Docker Compose stack (API, web UI, PostgreSQL, ClickHouse, Redis, worker, load balancer). Prometheus and Grafana are optional deployment overlays.
+<Note>
+  These guides target v1.16.0. Use the pinned Python install below for the verified path; unpinned installers can select a different release later. [Check the version guidance](/reference/documentation-version) before choosing an installation.
+</Note>
 
-> [!NOTE]
-> Requires Docker Engine ≥ 24.0 with Compose v2 (`docker compose`, not `docker-compose`). Homebrew's Docker formula is outdated. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages. Verify with `docker version` and `docker compose version`.
+## Recommended: install the v1.16.0 Python CLI
 
-**One-line install:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
-```
-
-This downloads an Agentic Resource Registry release package, asks for the frontend URL and bind address, generates secret files, pulls the Agentic Resource Registry container images from GHCR, and starts the stack. With the default answers:
-
-- Open the dashboard at `http://localhost:3000`; set the **Frontend URL** prompt to the address you will actually open in your browser. This configures the frontend/CORS origin, **not** the published port.
-- Use `http://localhost:8000` as the CLI server URL. Check the API with `curl http://localhost:8000/health`. If you change the bind address or `API_HOST_PORT`, use the server URL printed by setup instead; the CLI command remains `observal`.
-- Log in as `super@demo.example` using the generated password printed by setup (also stored in `secrets/demo_super_admin_password` under the install directory: `~/.observal` on macOS, `/opt/observal` on Linux). Change it after logging in.
-
-Self-registration is off by default. To give someone a personal account after logging in as an administrator, run `observal admin create-user alice@example.com 'Alice Smith' --role user`. See [user management](/cli/admin) and [self-registration settings](/self-hosting/authentication) for other options. The [quickstart](/getting-started/quickstart) uses the **source Compose stack**, which instead serves the API at `http://localhost` and uses example passwords from `.env.example`.
-
-**From source** (for contributors):
+Requires Python 3.11 or newer and uv:
 
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
-cp .env.example .env
-make up
+uv tool install 'observal-cli==1.16.0'
+observal --version
 ```
 
-For deployment options, see [Self-Hosting](/self-hosting/docker-compose) and [Production deployment](/self-hosting/production-deploy).
+Expect `observal 1.16.0`. This is the published distribution used for the release workflow checks, not a source install. Each coding tool still needs its own authentication.
 
-## Install the CLI
+## Install a standalone binary
 
-The CLI is what you use to log in, instrument harness configs, pull agents, and query traces.
+The standalone format does not require Python, but the v1.16.0 macOS ARM64 artifact failed ordinary commands with missing bundled skill files in an isolated check; printing its version was not a complete install test. Prefer the pinned Python path on macOS. Other binary platforms remain unverified here. Choose your operating system only after checking the release limitation:
 
-## Install (standalone binary)
-
-The standalone binary is the simplest way to install. No Python required.
-
-macOS / Linux:
+<Tabs>
+  <Tab title="macOS / Linux">
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/v1.16.0/install.sh -o install-observal.sh
+# Review the downloaded script before executing it.
+bash install-observal.sh --version 1.16.0
 ```
 
-Windows (PowerShell):
+Without a version selector, the installer defaults to the latest release. The shown invocation explicitly selects **1.16.0**; `/usr/local/bin` is the default installation directory. Use `--bin-dir` for a reviewed writable location. The macOS artifact limitation above still applies.
+
+  </Tab>
+  <Tab title="Windows">
+
+Run in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
+$env:OBSERVAL_VERSION = '1.16.0'
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/v1.16.0/install.ps1 | iex
 ```
 
-This downloads the latest release binary for your platform and places it on your `PATH`. On Windows it installs to `%LOCALAPPDATA%\Programs\Observal` and updates your user `PATH` (open a new terminal afterwards). Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to pin a version or change the install directory.
+The installer uses `%LOCALAPPDATA%\Programs\Observal` by default and updates your user `PATH`. Open a new terminal after installation. Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to choose a version or directory.
 
-Connecting to a server your team already runs? See the [Setup guide](/getting-started/onboarding).
+  </Tab>
+</Tabs>
 
-Verify it worked:
+<Warning>
+  These commands download and execute an installer. Review the script first if your security policy requires it. The installers check release checksums when available, but warn and can proceed without verification if checksums cannot be downloaded. See [release verification](/security/release-verification) for stronger verification steps.
+</Warning>
+
+## Verify the installation
 
 ```bash
 observal --version
 ```
 
-## Alternative: install with Python
+You should see an `observal` version. If your registry requires a different CLI version, login prints the command to install it.
 
-If you prefer to install via Python, use one of these methods. Requires Python 3.11 or newer.
+<a id="alternative-install-with-python"></a>
 
-**uv (recommended):**
+## Other Python installation options
+
+If your environment uses pipx, install `pipx install 'observal-cli==1.16.0'`. The recommended uv path above is the same published CLI; do not repeat installation into multiple environments without reviewing conflicts. Prefer isolated tools over application dependencies.
+
+The optional `migrate` extra adds dependencies for the server data-migration commands; it is not needed to pull agents:
 
 ```bash
-uv tool install observal-cli
+uv tool install 'observal-cli[migrate]==1.16.0'
 ```
 
-**pipx:**
+### Install from a checkout
+
+For local source evaluation or contribution, run this from the repository root:
 
 ```bash
-pipx install observal-cli
-```
-
-**pip:**
-
-```bash
-pip install --user observal-cli
-```
-
-### Optional extras
-
-The Python package includes the Docker SDK. The `migrate` extra adds `pyarrow` for `observal server migrate`:
-
-```bash
-uv tool install 'observal-cli[migrate]'
-```
-
-## Install from source (for contributors)
-
-```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd AgenticResourceRegistry
 uv tool install --editable .
 ```
 
-## What gets installed
+Use a checkout matching your server. A development server may not match the latest published CLI release.
 
-The Python package provides three entry points:
+## Troubleshooting
 
-| Command                | Purpose                                              |
-| ---------------------- | ---------------------------------------------------- |
-| `observal`             | The main CLI                                         |
-| `observal-sandbox-run` | Sandbox runner invoked by Agentic Resource Registry sandboxes         |
-| `observal-sandbox-mcp` | MCP adapter used by sandbox execution               |
-
-You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.
+| Problem | Next step |
+| --- | --- |
+| Command not found after installation | Open a new terminal. Check that the install directory is on `PATH`. |
+| Cannot write to `/usr/local/bin` | Choose a writable directory with the Unix installer's `--bin-dir` option, then add it to `PATH`. |
+| No binary for your platform | Use the Python installation method rather than assuming every OS/architecture has a release binary. |
+| Login reports a version mismatch | Use the exact matching version requested by the server; a newer CLI is not necessarily compatible. |
 
 ## Upgrade
 
@@ -126,28 +107,22 @@ You will almost never call the sandbox helpers directly. The CLI wires them into
 observal self upgrade
 ```
 
+For a pinned team deployment, follow your administrator's version instructions rather than upgrading independently. See [CLI version management](/cli/self).
+
 ## Uninstall
 
-Standalone binary:
-
-```bash
-rm "$(which observal)"
-```
-
-Python install:
+For a Python tool install:
 
 ```bash
 uv tool uninstall observal-cli
-# or: pipx uninstall observal-cli
-# or: pip uninstall observal-cli
+# If installed with pipx instead:
+pipx uninstall observal-cli
 ```
 
-Uninstalling the CLI does **not** remove your config (`~/.observal/`). Delete that folder if you want a clean slate:
+For a standalone install, remove the `observal` executable from the directory where you installed it. On macOS/Linux, `command -v observal` shows the executable path. On Windows, use `Get-Command observal`.
 
-```bash
-rm -rf ~/.observal
-```
+Removing the CLI does not sign you out remotely or remove generated harness files. [Logout](/cli/auth#logout) and [harness cleanup](/cli/doctor) are separate operations. Keep the CLI installed until you have completed any cleanup you need.
 
 ## Next
 
--> [Quickstart](/getting-started/quickstart)
+[Join your team's registry](/getting-started/onboarding), or [try a registry locally](/getting-started/local-evaluation).

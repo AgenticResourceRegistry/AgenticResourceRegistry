@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "GCP deployment with Terraform"
 ---
@@ -48,10 +49,16 @@ gcloud services enable \
   iam.googleapis.com
 ```
 
+Use the selected application image tag `1.16.0`, not a moving `latest` alias, and verify any Artifact Registry mirror contains those exact images. The source checkout tag does not pin a separately configured image tag by itself.
+
 ## Quickstart
 
+<Warning>
+  **v1.16.0 GCP signing-key limitation:** the stock Cloud Run API sets `JWT_KEY_DIR=/tmp/keys`, with no shared durable signing-key mount. Workers within one instance can share its directory, but separate API instances can generate different keys, and replacement loses them. Before an authenticated team deployment, require a reviewed, tested shared-and-durable signing-key design for all API instances. Limiting instance count alone does not fix replacement/persistence. This guide does not supply or certify that infrastructure change.
+</Warning>
+
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry/infra/terraform/gcp
 
 # 1. Authenticate
@@ -60,11 +67,12 @@ gcloud auth application-default login
 # 2. Configure
 cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
-# At minimum, set project_id
+# REQUIRED: set project_id and change image_tag = "latest" to image_tag = "1.16.0".
 
-# 3. Apply
+# 3. Plan and review before applying
 terraform init
 terraform plan -out tf.plan
+# Review API/web/worker/init application image references for :1.16.0 before applying.
 terraform apply tf.plan
 
 # 4. Run migrations
@@ -84,6 +92,7 @@ All inputs live in `terraform.tfvars`.
 project_id  = "my-gcp-project"
 region      = "us-central1"
 environment = "prod"
+image_tag   = "1.16.0"
 ```
 
 The install comes up on the Cloud Run default URL (e.g. `https://observal-prod-api-xxxxx-uc.a.run.app`).
@@ -94,6 +103,7 @@ The install comes up on the Cloud Run default URL (e.g. `https://observal-prod-a
 project_id  = "my-gcp-project"
 region      = "us-central1"
 environment = "prod"
+image_tag   = "1.16.0"
 
 domain_name           = "observal.example.com"
 dns_managed_zone_name = "example-com"
@@ -155,30 +165,23 @@ Or use the Cloud Console: **Logging → Logs Explorer**, filter by `resource.typ
 
 ### Re-run migrations
 
+Only after the [canonical migration/recovery gates](/self-hosting/upgrades) are satisfied: preserve backups, drain incompatible writers, review the target and exported command, and control traffic. A launch response is not completion; wait for the intended task/job and inspect its exit/result before resuming access. Do not re-run migrations against a serving deployment as an improvised repair.
+
 ```bash
 $(terraform output -raw init_job_run_command)
 ```
 
-### Read a generated secret
+### Verify generated secret configuration
 
-```bash
-gcloud secrets versions access latest \
-  --secret="observal-prod-SECRET_KEY"
-```
+Review Secret Manager versions, service-account permissions, and the intended container injection without printing decrypted credentials in a shared transcript. Coordinated database URLs, native credentials, and application encryption configuration must be preserved for [recovery](/self-hosting/backup-and-restore).
 
 ### Upgrade to a new release
 
-```hcl
-# terraform.tfvars
-image_tag = "v1.5.0"
-```
+Use [the canonical upgrade gates](/self-hosting/upgrades), choose the actual target image/revision, and preserve full backups before a change. Cloud Run revision rollout is not a migration or zero-downtime guarantee.
 
-```bash
-terraform apply
-$(terraform output -raw init_job_run_command)
-```
+The Terraform init-job resource defines the job; it does not by itself prove the job executed successfully. The exported `init_job_run_command` launches it, but an operator must wait for completion and inspect its result. For a migration requiring a homogeneous fleet, drain incompatible old API/worker revisions before initialization and control traffic until the new schema and application are verified.
 
-Cloud Run handles the rolling deploy. Zero downtime.
+Do not apply a new image and then assume existing writers were safely stopped while the job ran. Review the planned dependency/execution graph and use the approved Cloud Run traffic/writer procedure for that release. If a change fails, determine schema/data state before selecting prior revisions; an image rollback does not restore Cloud SQL, ClickHouse evidence, or matching application/encryption artifacts.
 
 ### Resize the data disk
 
@@ -221,15 +224,15 @@ Cloud Run scales to zero when idle (if `min_instances = 0`), which can significa
 
 ## Production hardening checklist
 
-- [ ] Set `db_ha_enabled = true` for Cloud SQL high availability
-- [ ] Set `redis_tier = "STANDARD_HA"` for Redis failover
-- [ ] Restrict Cloud Run ingress (use `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"` if behind GCLB)
-- [ ] Enable Cloud Armor (WAF) on the Global HTTPS Load Balancer
-- [ ] Enable Security Command Center in the project
-- [ ] Set up alerting on Cloud SQL CPU, memory, and Cloud Run error rates
-- [ ] Configure [SSO](/self-hosting/authentication)
-- [ ] Test [backup and restore](/self-hosting/backup-and-restore) end-to-end
-- [ ] Set up Terraform remote state in GCS
+- Set `db_ha_enabled = true` for Cloud SQL high availability
+- Set `redis_tier = "STANDARD_HA"` for Redis failover
+- Restrict Cloud Run ingress (use `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"` if behind GCLB)
+- Enable Cloud Armor (WAF) on the Global HTTPS Load Balancer
+- Enable Security Command Center in the project
+- Set up alerting on Cloud SQL CPU, memory, and Cloud Run error rates
+- Configure [SSO](/self-hosting/authentication)
+- Test [backup and restore](/self-hosting/backup-and-restore) end-to-end
+- Set up Terraform remote state in GCS
 
 ## Troubleshooting
 

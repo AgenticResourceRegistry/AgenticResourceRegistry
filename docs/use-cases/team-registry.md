@@ -3,129 +3,75 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Run a team-wide agent registry"
+description: "Separate deployment access, team membership, publication policy, and optional evidence collection."
 ---
 
-Once two or more people are authoring agents, you need a single source of truth. Agentic Resource Registry becomes your team's internal Docker Hub for AI agents, with review, RBAC, and telemetry baked in.
+A shared registry gives a team one place to maintain approved agents and reusable components. The operational goal is a repeatable release and access workflow—not collecting every developer session by default.
 
 ## What changes at team scale
 
-* **Discovery**: everyone sees the same list of agents, MCPs, skills, hooks, prompts, and sandboxes.
-* **Review**: admins approve what appears in the public listing. Authors' own items are still immediately usable.
-* **Governance**: RBAC roles (`super_admin`, `admin`, `reviewer`, `user`) control who can publish and approve.
-* **Visibility**: centralized dashboards instead of "ask Sarah which version she's running."
+Decide four things explicitly:
+
+- **Connection:** registry URL, authentication, and account provisioning.
+- **Namespace/access:** personal versus team resources, membership, and visibility.
+- **Publication:** eligible reviewers, counted approvals, checks, and final release state.
+- **Evidence:** what sessions may be collected, who may view them, and effective retention.
+
+None of these substitutes for another. SSO authentication alone is not proof of team membership; a team role is not a server role; approval does not always publish; a valid agent share link does not grant access.
 
 ## Setup shape
 
-Deploy once, everyone points at it.
+Deploy one supported registry and direct teammates to it:
 
 ```mermaid
-flowchart TB
-    server["Agentic Resource Registry server - API + Web UI"]
-    db[(PostgreSQL)]
-    ch[(ClickHouse)]
-    redis[(Redis)]
-    a["Engineer A - Claude Code"]
-    b["Engineer B - Kiro"]
-    c["Engineer C - Cursor"]
-
-    server --> db
-    server --> ch
-    server --> redis
-    a --> server
-    b --> server
-    c --> server
+flowchart LR
+    owner[Registry operator] --> registry[Shared registry]
+    author[Author publishes a release] --> registry
+    reviewer[Eligible reviewer checks the candidate] --> registry
+    registry --> consumer[Teammate inspects and pulls]
 ```
 
-Install the server once ([Self-Hosting](/self-hosting)). Then every engineer installs the CLI and runs `observal auth login` pointed at your shared server URL.
+Use the [operator setup](/self-hosting/index), [authentication](/self-hosting/authentication), and [configuration](/self-hosting/configuration) guides. Do not copy a generic OIDC setting table or restart recipe from this use case: supported identity flows, boot-time/dynamic boundaries, and rollout validation belong in those canonical guides.
 
 ## Users and roles
 
-Four roles, RBAC-enforced on every endpoint.
+Provision accounts through the supported operator flow. Server roles (`user`, `reviewer`, `admin`, `super_admin`) govern deployment-level authority. Team roles (`member`, `reviewer`, `owner`) govern a namespace. Global reviewer authority alone does not make another team's private resources visible; deployment administrators have broader privileges.
 
-| Role | Can | Cannot |
-| --- | --- | --- |
-| `user` | Publish components (subject to review), install agents, view their own traces | Approve submissions, see other users' private traces, change server settings |
-| `reviewer` | Everything `user` can + approve/reject submissions | Change server settings, manage users |
-| `admin` | Everything `reviewer` can + manage users, change server settings | Only restriction: certain super-admin operations |
-| `super_admin` | Everything | - |
-
-Manage users:
-
-```bash
-observal admin users --output json
-observal admin reset-password <email> --generate --output json
-observal admin delete-user <email> --force --output json
-```
-
-Change a role via the web UI (`/settings/users`) or the API (`PUT /api/v1/admin/users/{id}/role`).
+Use [teamspaces](/use-cases/teamspaces) for member/owner responsibilities and [review policy](/guides/review-and-publish) for publication. Team owners can record self-approval, but the effective gate decides whether it counts. Do not promise separation of duties based solely on a role label.
 
 ## Onboarding a new engineer
 
-Two commands to get them productive:
+Send the approved registry URL and account/SSO instructions, then link [existing-registry onboarding](/getting-started/onboarding). If they need a private teamspace, complete its invitation/request/owner-approval path before sending team-private resources.
+
+The engineer checks visible teams and agents:
 
 ```bash
-# The new engineer runs:
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
-observal auth login --server https://observal.your-company.internal
+observal team list --output json
+observal agent list --output json
+observal scan --inventory --output json
 ```
 
-For managed deployments, users authenticate through SSO or are provisioned by an admin. See [Authentication and SSO](/self-hosting/authentication).
-
-After logging in, they can:
-
-```bash
-observal agent list                           # see every agent the team has published
-observal agent pull team-reviewer --harness claude-code # install one
-observal scan                                 # discover what they have installed
-observal doctor patch --all-harnesses        # instrument everything
-```
+Plain `scan` is not the read-only inventory contract. No hardcoded corporate URL, installation shell pipe, default shared password, or automatic instrumentation is required here. Follow [first-agent installation](/getting-started/quickstart) with the actual qualified name and exact release.
 
 ## Review workflow
 
-Authors submit. Reviewers approve. Approved items appear in the public listing.
+Choose a team-private candidate, assign eligible reviewers, inspect its instructions/components/source and exact version, then verify the gate and final publication state. Use [Review and publish](/guides/review-and-publish) rather than a competing abbreviated approval recipe.
 
-```bash
-observal review list --output json
-observal review show <number> --output json
-observal review approve <number> --output json
-observal review request-changes <number> --body "missing env var docs" --output json
-observal review publish <number> --output json
-```
-
-What reviewers look for:
-
-* Does the README/description make it clear what the component does?
-* Does the MCP analysis (from `submit`) look correct: tools, env vars, transport?
-* Are required env vars documented?
-* Is the repo URL trustworthy (pinned commit or tag)?
-
-Everything published is visible to the author immediately. Review controls what appears in the public listing.
+Reviewers should check required secrets/binaries, tool permissions, native compatibility, source/ref immutability, hooks/scripts, resource isolation limits, and collection behavior—not just the description. A source tag can be retargeted; publication and file generation do not prove native execution.
 
 ## Telemetry across the whole team
 
-Because every engineer's session telemetry flows into the same server, `observal ops` becomes a team dashboard:
+Session capture is optional and permission-sensitive. A shared server does not mean every teammate's sessions are captured, readable by everyone, or retained for a promised duration. Review the [capture contract](/core-concepts/session-tracking), the applicable access/collection policy, and [effective retention checks](/self-hosting/data-retention) before enabling it.
 
-```bash
-observal ops top --type agent           # most-used agents across the team
-observal ops top --type mcp             # hottest MCP servers
-```
-
-Filters in the web UI let you slice by user, agent, harness, and time range.
+Use [insights](/guides/interpret-insights) when coverage and authorized evidence answer a specific question. Unsupported or missing evidence is not zero use. Rankings are not a mandatory collaboration checkpoint.
 
 ## SSO and audit considerations
 
-For orgs that need SSO and audit logging, configure OIDC in **Admin → SSO**:
-
-| Setting | Value |
-| --- | --- |
-| `oauth.client_id` | Your IdP client ID |
-| `oauth.client_secret` | Your IdP client secret |
-| `oauth.server_metadata_url` | Your IdP discovery URL |
-
-Restart the API after OIDC changes. See [Authentication and SSO](/self-hosting/authentication).
+Verify the real login/provisioning and permission outcomes on your deployment. SSO, audit records, team membership, resource visibility, and session privacy are distinct controls. Follow [authentication and SSO](/self-hosting/authentication) for supported flows and [security assurance guidance](/security/assurance-case) for operator boundaries.
 
 ## Next
 
-→ [Self-Hosting](/self-hosting): the operator's playbook for actually running the server this use case depends on.
+[Create/join a teamspace](/use-cases/teamspaces) → [publish a reviewed release](/guides/review-and-publish) → [share its exact version](/use-cases/share-agent-configs) → [follow decisions in Inbox](/guides/manage-inbox).

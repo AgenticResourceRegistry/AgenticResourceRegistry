@@ -1,153 +1,83 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Resource Tuning"
 ---
 
-Connection pool sizes, query limits, and timeout configuration. These settings control how Agentic Resource Registry connects to its backing stores (PostgreSQL, Redis, ClickHouse). Most deployments work fine with defaults. Tune when you see connection timeouts, pool exhaustion, or slow queries under load.
+Connection pools, HTTP timeouts, and query settings have different configuration/application paths. Measure saturation and backing-store capacity before tuning; a larger pool can increase load rather than improve throughput.
+
+The defaults below are the constructor inputs in the v1.16.0 release, not capacity recommendations. Operators must verify their actual process/container environment and every process that owns a client.
 
 ## When to Tune
 
-- **Connection pool errors** in API logs ("pool exhausted", "connection timeout")
-- **Slow dashboard loads** under concurrent users (increase pool sizes)
-- **OOM kills** on the API container (decrease pool sizes, each connection uses memory)
-- **ClickHouse query timeouts** on large trace datasets (increase timeout)
+Inspect connection waits, pool exhaustion, request/query latency, memory, and database limits first. Do not infer a pool size from team size or a fixed per-connection memory estimate.
+
+Pool inputs (`DB_*`, `REDIS_*`, `CLICKHOUSE_*`) are boot-time settings. The similarly named stored `resource.*` fields can show older defaults, but these constructors consume `config.settings`, not those stored values. Saving them does not rebuild a live pool. Set the inputs through the deployment's process/container configuration and recreate affected consumers deliberately; a simple restart does not replace a container's environment.
 
 ## PostgreSQL
 
 ### DB Pool Size
 
-Number of persistent database connections maintained in the connection pool.
-
-| Value | Effect |
-|-------|--------|
-| `10` (default) | Suitable for small teams (< 20 concurrent users) |
-| `20` | Medium deployments (20-100 users) |
-| `50` | Large deployments (100+ concurrent users) |
-
-**Memory impact:** Each connection uses approximately 5MB of RAM on the API server.
-
-**When to increase:** You see "pool exhausted" errors or requests queuing during peak usage.
-
-**When to decrease:** Running on memory-constrained containers, or your PostgreSQL instance has a low `max_connections` limit.
+`DB_POOL_SIZE` defaults to **30**. Each SQLAlchemy engine can retain up to that many pooled connections; this does not mean all 30 are opened eagerly. The engine enables connection pre-ping. Verify observed utilization and database capacity before changing it.
 
 ### DB Max Overflow
 
-Temporary connections created when the pool is full. These are closed after use.
+`DB_MAX_OVERFLOW` defaults to **50**, allowing temporary burst connections beyond the retained pool. With the defaults, one engine can reach **80 connections** (`30 + 50`). An example override of zero disables overflow; it is a tuning choice, not the default or a universal safety setting.
 
-| Value | Effect |
-|-------|--------|
-| `20` (default) | Allows bursts of up to 30 total connections (pool + overflow) |
-| `0` | No overflow; requests wait for a pool connection (safest for DB) |
-| `50` | High burst tolerance; use when traffic is very spiky |
-
-**Total max connections** = pool_size + max_overflow. Ensure your PostgreSQL `max_connections` is at least this value plus a buffer for admin connections.
+Budget PostgreSQL connections across **all API/worker processes and engine instances**, plus migration jobs, maintenance tools, other applications, and administrative headroom. With N independent engines at these defaults, their combined configured ceiling alone is `N × 80`; actual simultaneous demand can be lower. A database limit of 80 is not adequate merely because one process can reach 80. Pool increases require a measured connection/memory budget and compatible database `max_connections`.
 
 ## Redis
 
 ### Redis Max Connections
 
-Maximum concurrent connections to Redis.
-
-| Value | Effect |
-|-------|--------|
-| `50` (default) | Handles most workloads |
-| `100` | High-traffic deployments with heavy pub/sub (GraphQL subscriptions) |
-| `20` | Constrained environments with limited Redis resources |
-
-**When to increase:** "Connection pool exhausted" errors in Redis client logs, or high latency on GraphQL subscriptions.
+The shared Redis client's `REDIS_MAX_CONNECTIONS` defaults to **200 per pool/process**. It is not a server-wide cap. Pub/sub subscription helpers create separate pools with a limit of 2, and ARQ/other clients have their own pools. Include those and process counts when budgeting Redis resources.
 
 ### Redis Timeout
 
-Socket timeout in seconds for Redis operations.
-
-| Value | Effect |
-|-------|--------|
-| `2.0` (default) | Balanced; detects failures quickly without false positives |
-| `5.0` | Use when Redis is on a high-latency network (cross-region) |
-| `1.0` | Aggressive; faster failure detection but may false-positive on slow queries |
-
-**When to increase:** Redis is in a different availability zone or region, causing occasional timeout errors on valid operations.
+`REDIS_SOCKET_TIMEOUT` defaults to **2.0 seconds** and is passed to the shared pool's connect and socket timeouts. Longer timeouts are optional responses to measured latency, not guaranteed fixes for exhaustion or backend overload. Auth can fail closed when Redis is unavailable; do not weaken that boundary to hide a timeout.
 
 ## ClickHouse
 
 ### ClickHouse Max Connections
 
-Maximum HTTP connections to ClickHouse for analytics queries.
-
-| Value | Effect |
-|-------|--------|
-| `20` (default) | Sufficient for most dashboard and trace query workloads |
-| `50` | Heavy analytics usage with many concurrent dashboard viewers |
-| `10` | Small deployments or shared ClickHouse clusters |
+`CLICKHOUSE_MAX_CONNECTIONS` defaults to **100**. The lazy shared `httpx.AsyncClient` consumes it as the HTTP connection cap per client/process, not the ClickHouse server's total connection budget. Account for API/worker clients and other query producers.
 
 ### ClickHouse Keepalive
 
-Persistent connections kept alive between requests.
+The client currently passes **`CLICKHOUSE_MAX_CONNECTIONS` to both** `httpx.Limits.max_connections` and `max_keepalive_connections`. Thus the effective default keepalive limit is **100**.
 
-| Value | Effect |
-|-------|--------|
-| `10` (default) | Reduces connection overhead for frequent queries |
-| `5` | Lower memory usage, slightly higher latency on first query per burst |
-| `20` | Faster response for sustained dashboard usage |
+A separate `CLICKHOUSE_MAX_KEEPALIVE` field is declared with default 100, but this constructor does not consume it. Changing that field alone does not change the live client or establish independently tunable keepalive behavior. Likewise the stored `resource.clickhouse_max_keepalive` value is not proof of the applied limit. This distinction needs a separate implementation change if independent tuning is required.
 
 ### ClickHouse Query Timeout
 
-Maximum seconds a single ClickHouse query can run before cancellation.
-
-| Value | Effect |
-|-------|--------|
-| `10.0` (default) | Prevents runaway queries; sufficient for most trace lookups |
-| `30.0` | Allow complex aggregation queries on large datasets |
-| `5.0` | Strict; kills slow queries fast but may break large time-range dashboards |
-
-**When to increase:** Dashboard "query timeout" errors on wide time ranges or high-cardinality group-by queries.
+`CLICKHOUSE_TIMEOUT` defaults to **10.0 seconds** for the HTTP client timeout, not a universal server-side query cancellation deadline. Some maintenance requests override the HTTP timeout. The shared query path separately sends a default `max_execution_time` of **300 seconds**; server/user limits and explicit query settings can also matter. An HTTP timeout does not prove the database query was cancelled.
 
 ### Skip DDL on Startup
 
-Skip ClickHouse schema migrations on server startup.
+Control the API runtime schema initializer, not the deployment's versioned migration jobs. `SKIP_DDL_ON_STARTUP` is a boot-time setting.
 
 | Value | Effect |
-|-------|--------|
-| `false` (default) | Schema migrations run automatically on every startup |
-| `true` | Skip DDL when a separate deployment migration job applies ClickHouse migrations |
+| --- | --- |
+| `false` (code default) | Run the API's runtime table/column and ClickHouse initialization path |
+| `true` (source Compose) | Skip that runtime initialization path; separate init/migration jobs still need to run |
 
-**When to enable:** Large ClickHouse clusters where DDL operations are slow or require coordination, or when running multiple API replicas (only one should run migrations).
+Do not toggle it as a generic performance fix or assume an API restart applies migrations/retention. Source Compose sets it true and uses a separate initializer; the inspected runtime ClickHouse TTL application is also skipped. Follow [coordinated upgrades](/self-hosting/upgrades) and [effective retention checks](/self-hosting/data-retention#verify-storage-and-scheduled-retention).
 
 ### Query Memory Limit
 
-Maximum memory a single ClickHouse query can use (in bytes).
-
-| Value | Effect |
-|-------|--------|
-| `10000000000` / 10GB (default) | Generous; allows complex aggregations |
-| `5000000000` / 5GB | Conservative; prevents a single query from consuming all memory |
-| `20000000000` / 20GB | For dedicated ClickHouse instances with abundant RAM |
+`resource.max_query_memory_mb` maps to ClickHouse `max_memory_usage` when a positive stored override is applied. The application converts MB to bytes with `value × 1,000,000`. There is no 10 GB application default in this mapping; absent an applied override, verify the ClickHouse user/server/query limits.
 
 ### GROUP BY Spill Threshold
 
-Row count at which GROUP BY operations spill to disk instead of keeping everything in memory.
-
-| Value | Effect |
-|-------|--------|
-| `1000000` (default) | Spill after 1M grouped rows; balances speed and memory |
-| `500000` | More aggressive spilling; lower memory usage but slower |
-| `5000000` | Keep more in memory; faster but higher peak memory usage |
+`resource.group_by_spill_mb` maps to `max_bytes_before_external_group_by`. This is a **memory threshold**, not a grouped-row count. An applied value of 250 MB, for example, becomes 250,000,000 bytes; it is an example, not a default or workload recommendation.
 
 ### ORDER BY Spill Threshold
 
-Row count at which ORDER BY operations spill to disk.
-
-| Value | Effect |
-|-------|--------|
-| `1000000` (default) | Same tradeoff as GROUP BY threshold |
+`resource.sort_spill_mb` maps to `max_bytes_before_external_sort`, also in decimal MB converted to bytes—not a row count.
 
 ### JOIN Memory Limit
 
-Maximum memory for JOIN operations (in bytes).
+`resource.join_memory_mb` maps to `max_bytes_in_join` using the same conversion. There is no fixed 5 GB application default supplied by this mapping.
 
-| Value | Effect |
-|-------|--------|
-| `5000000000` / 5GB (default) | Allows large JOINs for cross-referencing traces |
-| `2000000000` / 2GB | Conservative; may fail on very large trace correlations |
-| `10000000000` / 10GB | For heavy analytics workloads |
+These four query override keys are the fields consumed by `apply_resource_settings`; they are not pool constructors. Missing, nonpositive, or invalid values do not establish an applied limit. Inspect the stored values, application result, and actual queries under the relevant process/revision. Runtime initialization/application can be skipped; configured values alone are not proof of enforcement. Choose limits from measurements and verify them against the selected ClickHouse configuration before relying on them.

@@ -1,30 +1,53 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Configuration"
+title: "Configure your registry"
+description: "Separate boot configuration, runtime settings, and externally managed credentials."
 ---
 
-Boot-time infrastructure settings live in `.env`. Credentials can use dedicated files. Runtime settings, including SSO, normally live in the admin UI, while file-backed sensitive settings remain only in process memory.
+Configure infrastructure before starting the server, then configure access and product behavior through the registry's settings. This guide distinguishes those two mechanisms so a saved value is not mistaken for an applied change.
+
+## Before you change anything
+
+Identify the deployment artifact, image/source revision, Compose project, effective environment, and mounted credential files. Back up configuration and secrets before replacing them. A file visible on the host is not automatically visible inside a container.
+
+| Mechanism | Examples | How changes take effect |
+| --- | --- | --- |
+| Boot/process configuration | Database URLs, encryption secret, signing algorithm, CORS environment | Recreate or restart the affected processes with the new environment/mounts. |
+| Runtime settings | Registration, frontend URL, review policy, retention, provider configuration | Stored in the settings database/cache; some clients and policies are initialized at startup and require a restart. |
+| Externally managed files | Supported secret and SAML key inputs | Loaded into process memory from mounted files; replace safely and restart affected consumers. |
+
+The source Compose `.env` file supplies container environment values. A packaged installation also has generated service-specific credential files. Do not copy one artifact's mounts or bindings into another without checking them.
 
 ## Required for production
 
-Source deployments must override these before going live. Server-package setup generates the secret values and file references automatically:
+- Use a strong, unique `SECRET_KEY` or `SECRET_KEY_FILE`. It protects persisted encrypted values; it is not the JWT signing key. Preserve it with your backups.
+- Replace demo database credentials and ensure application connection URLs match the database's actual credentials.
+- Serve the intended public URL over TLS and set `deployment.frontend_url` to that exact origin for callbacks and user-facing links.
+- Configure the API's actual CORS environment and verify browser requests, not just the value displayed in an admin form.
+- Remove or explicitly disable demo credentials in the effective API environment before a fresh production boot. Deleting `.env` lines alone is insufficient when Compose supplies fallback values.
+- Review registration, public-registry visibility, trusted proxies, usage reporting, and retention before allowing team access.
 
-| Variable               | Default                        | Why change                                                                                                                         |
-| ---------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `SECRET_KEY` or `SECRET_KEY_FILE` | `change-me-to-a-random-string` | Application encryption secret. Use a random value of at least 32 characters. |
-| `POSTGRES_PASSWORD` or `POSTGRES_PASSWORD_FILE` | `postgres` | PostgreSQL bootstrap credential. |
-| `CLICKHOUSE_PASSWORD` or generated hashed user config | `clickhouse` | ClickHouse credential. |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000`        | Scope to your real frontend origin(s). Configure as `deployment.cors_origins` in Admin Settings.                                   |
-| `deployment.frontend_url` | `http://localhost:3000`     | Used for OAuth redirects and email links. Configure in Admin Settings.                                                             |
+Use [authentication and SSO](/self-hosting/authentication), [ports and volumes](/self-hosting/ports-and-volumes), and [usage reporting](/self-hosting/usage-reporting) for those decisions.
 
-The server-package installer generates these credentials in an operator-owned `secrets/` directory. Directories use mode `0750`, files use mode `0640`, and `OBSERVAL_SECRET_GID` grants the containers read access through the operator's group. Existing deployments can keep direct environment values.
+## Database connections
 
-With a terminal, setup prompts for the frontend URL, bind address, and observability profile. Without a terminal, the same installer selects `http://localhost:3000`, loopback binding, and no optional observability stack. It prints the initial super-admin email, generated password, and password-file path after the first successful startup. Existing headless installations preserve their configuration rather than replacing it.
+Source configuration starts with connection strings such as:
+
+```dotenv
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@observal-db:5432/observal
+CLICKHOUSE_URL=clickhouse://default:clickhouse@observal-clickhouse:8123/observal
+REDIS_URL=redis://observal-redis:6379
+```
+
+These are evaluation examples, not production credentials. `observal-db` and the other service names resolve inside the Compose network. Host clients connect through the intended published ports instead.
+
+Changing a URL or password requires coordinating the database, API, worker, health checks, and mounted files. A changed API connection string does not change the database password by itself.
 
 ## Secret files
 
-For any supported credential named `NAME`, set `NAME_FILE` to a UTF-8 file path instead of placing the value in `.env`:
+Supported secret inputs accept a `NAME_FILE` form:
 
 ```dotenv
 SECRET_KEY_FILE=/run/secrets/secret_key
@@ -35,125 +58,95 @@ OAUTH_CLIENT_SECRET_FILE=/run/secrets/oauth_client_secret
 INSIGHTS_API_KEY_FILE=/run/secrets/insights_api_key
 ```
 
-The reader accepts files up to 64 KiB and removes one trailing newline. Setting both `NAME` and `NAME_FILE` is an error, so precedence is never ambiguous. Replace a file atomically and restart the affected API or worker processes to rotate the value without rebuilding Agentic Resource Registry.
+Mount each file at the declared container path and grant read access only to the processes that need it. Do not supply both `NAME` and `NAME_FILE`; the reader rejects that ambiguity. Files must be UTF-8, at most 64 KiB, and may contain one trailing newline.
 
-File-backed dynamic settings are marked externally managed in the admin API. Their contents are not imported into PostgreSQL or Redis, and the admin API rejects attempts to overwrite, delete, or revoke them.
+File-backed SSO/provider values are externally managed: their contents remain in memory instead of being imported into PostgreSQL/Redis, and the admin API cannot replace them. Direct legacy SSO environment values can be imported when the corresponding stored setting is empty; a non-empty stored value wins. This is not a general environment fallback for every runtime setting.
 
-Supported file-backed boot credentials include `DATABASE_URL`, `CLICKHOUSE_URL`, `REDIS_URL`, `SECRET_KEY`, `OLD_SECRET_KEY`, `JWT_KEY_PASSWORD`, `GIT_CLONE_TOKEN`, and every `DEMO_*_PASSWORD`. SSO environment imports support the same form, including OAuth client secrets, Google and GitHub OAuth secrets, the insights provider key, SAML certificates, and the SAML key-encryption password. CLI tokens support `OBSERVAL_ACCESS_TOKEN_FILE`, `OBSERVAL_API_KEY_FILE`, and `OBSERVAL_TOKEN_FILE`.
+Replace mounted files atomically and restart all affected consumers. Changing `SECRET_KEY` needs a separately planned encrypted-value rotation/recovery procedure; do not regenerate it as routine maintenance.
 
-PostgreSQL containers use `POSTGRES_PASSWORD_FILE`. The server package generates a hashed ClickHouse user configuration instead of putting its database password in `.env`. Service-specific subdirectories expose only the PostgreSQL password to PostgreSQL, the ClickHouse health credential to ClickHouse, and the Grafana and ClickHouse datasource credentials to Grafana.
+## URLs and CORS
 
-## SSO-only mode
+`deployment.frontend_url` is a runtime setting used to build authentication callbacks and links. Set it through Admin Settings or, for a non-secret value:
 
-Set `deployment.sso_only=true` in **Admin → SSO** when you want IdP-only access. Leave it `false` to keep password login available.
+```bash
+observal admin set deployment.frontend_url https://registry.example.com
+```
 
+Replace the example URL. Test its actual browser/callback behavior after the required restart.
+
+The inspected API middleware reads **`CORS_ALLOWED_ORIGINS` from process environment**. It does not read `deployment.cors_origins` in that CORS builder. Do not assume changing the similarly named admin setting changes the live middleware:
+
+```dotenv
+CORS_ALLOWED_ORIGINS=https://registry.example.com
+```
+
+For Compose, recreate the API with the updated environment, then test the intended origin and an unwanted origin. Plain `docker compose restart` does not replace a container's environment from an edited `.env` file.
+
+Likewise, a packaged `FRONTEND_URL` environment entry is not a replacement for verifying the runtime `deployment.frontend_url` used by authentication.
+
+## Authentication and runtime policy
+
+Configure password/SSO access through `deployment.sso_only`, and self-registration separately through `auth.self_registration_enabled`. Both default to false; false SSO-only means password login is allowed, not that registration is enabled.
+
+[Review and publication](/guides/review-and-publish) use their own policy. Public listing visibility, author draft installs, and teamspace permissions are separate controls.
+
+### Rate limiting
+
+Use the runtime keys `security.rate_limit_auth` and `security.rate_limit_auth_strict`. They default to `10/minute` and `5/minute`; request decorators may bind values when the API starts. Restart and verify the relevant behavior after changing a startup-bound limit. Do not present `RATE_LIMIT_AUTH` as the authoritative settings mechanism.
+
+### ClickHouse retention
+
+Use `data.retention_days`, separate from the scheduled `retention.*` application policies. `DATA_RETENTION_DAYS` is not the current boot-setting source. A stored setting is not proof that a storage TTL was applied.
+
+In the inspected source Compose path, `SKIP_DDL_ON_STARTUP=true` skips the runtime ClickHouse initializer that applies this setting. The fresh operator rehearsal's `session_events` table had no TTL clause despite the configured default of 90 days. Do not rely on that default or promise that an API restart changes the table. Verify the actual table definition and use a reviewed policy-application/migration procedure before making retention guarantees. See [data retention](/self-hosting/data-retention).
 
 ## Demo accounts
 
-Seeded on first startup _only_ when no users exist:
+API startup can seed configured demo identities when there are no real users. Source Compose supplies `DEMO_*` fallback values in its service environment; merely removing entries from `.env` does not remove those fallbacks.
 
-```dotenv
-DEMO_SUPER_ADMIN_EMAIL=super@demo.example
-DEMO_SUPER_ADMIN_PASSWORD=super-changeme
-DEMO_ADMIN_EMAIL=admin@demo.example
-DEMO_ADMIN_PASSWORD=admin-changeme
-DEMO_REVIEWER_EMAIL=reviewer@demo.example
-DEMO_REVIEWER_PASSWORD=reviewer-changeme
-DEMO_USER_EMAIL=user@demo.example
-DEMO_USER_PASSWORD=user-changeme
+For a fresh non-demo source deployment, apply an explicit API environment override like this as part of your reviewed deployment configuration:
+
+```yaml
+services:
+  observal-api:
+    environment:
+      DEMO_SUPER_ADMIN_EMAIL: ""
+      DEMO_SUPER_ADMIN_PASSWORD: ""
+      DEMO_ADMIN_EMAIL: ""
+      DEMO_ADMIN_PASSWORD: ""
+      DEMO_REVIEWER_EMAIL: ""
+      DEMO_REVIEWER_PASSWORD: ""
+      DEMO_USER_EMAIL: ""
+      DEMO_USER_PASSWORD: ""
 ```
 
-**Remove demo account variables and their password files before a real deployment.** Existing demo users survive after removal. Delete them manually (`observal admin delete-user <email>`).
+Include the override when creating the API container. Verify the effective environment without printing passwords, then complete first-admin setup on a restricted network.
 
-> **Admin settings warning:** If demo accounts are still active or `SECRET_KEY` is insecure, the admin Settings page will display a warning banner at the top so operators can spot and fix the issue without digging through logs.
-
-## Database connections
-
-Source deployments may use direct values:
-
-```dotenv
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@observal-db:5432/observal
-CLICKHOUSE_URL=clickhouse://default:clickhouse@observal-clickhouse:8123/observal
-REDIS_URL=redis://observal-redis:6379
-```
-
-Server-package installs use file references instead:
-
-```dotenv
-DATABASE_URL_FILE=/run/secrets/database_url
-CLICKHOUSE_URL_FILE=/run/secrets/clickhouse_url
-REDIS_URL_FILE=/run/secrets/redis_url
-```
-
-Inside Docker Compose, hostnames resolve via the `observal-net` bridge (e.g. `observal-db`). Outside Docker (e.g. CLI running on host against dockerized DBs), use `localhost:<port>`.
-
-## OAuth / SSO
-
-Optional. Configure OIDC, SAML, and SSO-only mode in **Admin → SSO**. OIDC client changes are stored immediately, then take effect after the API restarts.
-
-Full setup in [Authentication and SSO](/self-hosting/authentication).
-
-## Rate limiting
-
-```
-RATE_LIMIT_AUTH=10/minute          # general auth endpoints
-RATE_LIMIT_AUTH_STRICT=5/minute    # user registration
-```
-
-Tighten for higher-traffic deployments.
-
-## ClickHouse retention
-
-```
-DATA_RETENTION_DAYS=90
-```
-
-Session events older than this are removed from ClickHouse. Set to `0` to disable retention. The minimum non-zero value enforced on startup is 7.
+The inspected seeding path does not consult `SEED_DEMO_ACCOUNTS`; do not rely on that flag alone. Clearing credentials prevents new seeding but does not delete existing demo accounts. Review existing accounts and remove them through the authorized user-management workflow before opening access.
 
 ## JWT keys
 
-```
-JWT_SIGNING_ALGORITHM=ES256        # ES256 (default) or RS256
-JWT_KEY_DIR=/data/keys             # persisted in the apidata volume
-```
+`JWT_SIGNING_ALGORITHM` accepts ES256 or RS256. `JWT_KEY_DIR` defaults to `~/.observal/keys` outside Docker; source Compose sets `/data/keys` for the API and persists it through `apidata`. Back up the complete application data and encryption configuration, not just a guessed key filename.
 
-The server generates asymmetric keys on first boot and stores them in `$JWT_KEY_DIR`. **Back up this directory**: losing the keys invalidates every session. Changing `JWT_SIGNING_ALGORITHM` and restarting retires the current public key, generates the selected key type, and keeps old tokens verifiable during their normal lifetime.
+Normal key rotation retains old public verification keys for a bounded retention period; it is not equivalent to immediate token revocation. See [JWT signing keys](/self-hosting/authentication#jwt-signing-keys).
 
-SAML service-provider material can be mounted independently:
+## Git operations
 
-```dotenv
-SAML_SP_PRIVATE_KEY_FILE=/run/secrets/saml_sp_private_key
-SAML_SP_X509_CERT_FILE=/run/secrets/saml_sp_x509_cert
-```
-
-Set both files together. They override database-generated SP material, are reported as externally managed, and cannot be regenerated or removed through the admin API. Replace both files and restart the API to rotate them.
-
-More: [Authentication and SSO](/self-hosting/authentication).
-
-## Git operations (submission analysis)
+`GIT_CLONE_TOKEN_FILE` supplies a token only to exact permitted HTTPS authorities in `GIT_CLONE_TOKEN_HOSTS`. Review provider-specific username, timeout, and private-host policy before enabling authenticated analysis. Validation and mirror services have distinct checks; a setting that permits an internal URL is not a blanket removal of SSRF protection.
 
 ```dotenv
-ALLOW_INTERNAL_GIT_URLS=false      # allow internal/private Git URLs (GitLab/GHE)
 GIT_CLONE_TOKEN_FILE=/run/secrets/git_clone_token
-GIT_CLONE_TOKEN_HOSTS=github.com   # exact HTTPS hosts permitted to receive the token
+GIT_CLONE_TOKEN_HOSTS=github.com
 GIT_CLONE_TOKEN_USER=x-access-token
-GIT_CLONE_TIMEOUT=120              # seconds
+GIT_CLONE_TIMEOUT=120
 ```
 
-`GIT_CLONE_TOKEN_HOSTS` is required for authenticated clones: without it the token is never sent. List exact hostnames separated by commas (for example `github.com,gitlab.example.com`, or `git.example.com:8443` for a nonstandard port); subdomains and lookalikes are not trusted automatically. Authorities match exactly: `github.com:443` requires its own entry and does not match `github.com`. Only HTTPS clones receive credentials, even if HTTP clones are enabled. `GIT_CLONE_TOKEN_USER` varies by provider: `x-access-token` for GitHub, `oauth2` or `private-token` for GitLab.
+## Client configuration is separate
 
-## Agentic Resource Registry CLI (client-side) env vars
+`OBSERVAL_SERVER_URL` and client JWT/token-file inputs belong on developer machines, not in server `.env` as authentication setup. Historical names such as `OBSERVAL_API_KEY` are CLI aliases for token input, not an `X-API-Key` server authentication scheme. See [environment reference](/reference/environment-variables) and [CLI authentication](/cli/auth).
 
-Not set in `.env` on the server. These live on the CLI user's machine.
+## Verify and continue
 
-| Variable                                     | Purpose                          |
-| -------------------------------------------- | -------------------------------- |
-| `OBSERVAL_SERVER_URL`                        | Default server URL               |
-| `OBSERVAL_ACCESS_TOKEN` / `OBSERVAL_API_KEY` | Pre-authenticate without `login` |
-| `OBSERVAL_TIMEOUT`                           | Request timeout (seconds)        |
+Check health through the user-facing load balancer, verify the applied settings using authorized read operations, and test an ordinary user's sign-in and agent access. A successful settings save or HTTP 200 alone does not establish a healthy, correctly configured deployment.
 
-Full list: [Environment variables](/reference/environment-variables).
-
-## Next
-
-→ [Ports and volumes](/self-hosting/ports-and-volumes)
+Next: [authentication and SSO](/self-hosting/authentication), [backup and restore](/self-hosting/backup-and-restore), then [planned upgrades](/self-hosting/upgrades).

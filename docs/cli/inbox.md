@@ -1,13 +1,14 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal inbox"
 ---
 
 View and update the signed-in user's work and event feed. Inbox items cover reviews, decisions, teamspace activity, update notices, completed insights, and system notices.
 
-The Inbox is self-only. There is no option for reading another user's items.
+The Inbox is self-only. There is no option for reading another user's items. For the task-oriented workflow, see [Work through Inbox](/guides/manage-inbox). Current subject visibility can hide a previously delivered item; possessing its UUID does not grant access.
 
 ## List items
 
@@ -32,7 +33,7 @@ observal inbox list --subject-type mcp --search postgres --sort oldest --output 
 | `--page-size` | Return 1 through 100 items |
 | `--output`, `-o` | Table or JSON output |
 
-Supported kinds are:
+Kinds accepted by the current CLI's `--kind` filter are:
 
 * `review_requested`
 * `review_approved`
@@ -46,6 +47,8 @@ Supported kinds are:
 * `update_available`
 * `insight_ready`
 * `system_notice`
+
+The server can also return `review_approval`, `review_dismissed`, and `review_ready`. This CLI revision does not accept those as `--kind` values. Use a broader list with `--subject-type` or `--search` and inspect the returned kind; a rejected filter is not evidence that the event was not delivered. This compatibility limit is separate from Inbox state changes.
 
 Submitting a component or Agent for review sends a `review_requested` item to every reviewer who can act on it. Requesting a specific reviewer sends one more `review_requested` item to that reviewer only. Requested reviewers are then told when another reviewer approves and when the review is published. The author is told about approvals, change requests, and publication. When a review is decided, the other reviewers' copies move to Done and stop counting toward `unread`.
 
@@ -77,7 +80,7 @@ The basic result includes `unread`, `action_required`, `open`, `done`, and `dism
 observal inbox show 11111111-1111-1111-1111-111111111111 --output json
 ```
 
-The detail result includes the item's body, related subject, exact action URL or command, and append-only history. The CLI displays an action command but never runs it automatically.
+The detail result includes the item's body, related subject, action URL or command, and append-only history. `show` does not mark the item read. The CLI displays an action command but never runs it automatically; confirm the current subject/version/project and supported action before executing any hint.
 
 ## Update one item
 
@@ -94,9 +97,9 @@ observal inbox reopen 11111111-1111-1111-1111-111111111111 --output json
 Read state and lifecycle state are separate:
 
 * `read` and `unread` change only whether the item has been seen.
-* `done` resolves completed work.
-* `dismiss` resolves the item without acting on it.
-* `reopen` returns a done or dismissed item to `open`.
+* `done` moves the item to Done; it does not approve/publish a review, grant membership, or install an update.
+* `dismiss` resolves the item without acting on it or rejecting/deleting its resource.
+* `reopen` returns a done or dismissed item to `open`; it does not reopen the underlying decided review.
 
 JSON returns the updated item directly.
 

@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal share"
 ---
@@ -7,6 +8,14 @@ title: "observal share"
 Create and consume expiring links for version-pinned Agents installed in a repository. Share links preserve Registry authorization: recipients must sign in to the same Agentic Resource Registry deployment and can only see and pull Agents available in their current public or teamspace scope.
 
 ## Create a share
+
+For the teammate-to-teammate journey, use [Share agent configurations](/use-cases/share-agent-configs). The explicit form is:
+
+```bash
+observal share create --dir ./service --agent platform-tools/team-reviewer --expires-days 7 --output json
+```
+
+Replace the identity with a candidate installed in that repository. JSON creation requires an explicit `--agent` selection or `--all`; it does not prompt. The result includes a secret token/URL, expiry, and item count. `--title` is optional user-supplied metadata; do not put private repository information in it.
 
 Run the command in a repository and select Agents interactively:
 
@@ -37,7 +46,7 @@ observal share candidates
 observal share candidates --dir ./service --output json
 ```
 
-Discovery checks every harness section in the lockfile and deduplicates identical Agent/version pairs.
+Discovery checks every harness section in the active registry's lockfile section and deduplicates identical Agent/version pairs. An identity selected with `--agent` can match multiple installed versions; the flag is not a version selector. Use interactive pair selection when necessary, and inspect the manifest before installing.
 
 ## Open and pull
 
@@ -53,7 +62,9 @@ Use `--no-pull` to inspect without installing:
 observal share open <token> --no-pull
 ```
 
-Only currently accessible, approved Agent versions are returned. Inaccessible entries are reported as a count without exposing their identity.
+Only currently accessible, approved Agent versions are returned. Inaccessible entries are reported as a count without exposing their identity. The creator and optional title remain manifest metadata, so the title must not reveal private resources.
+
+`--output json` returns the manifest and never pulls, regardless of `--yes` or `--no-pull`. Its response includes the token: treat JSON as sensitive. In human mode, `--yes` selects every accessible entry without confirmation. The open command delegates exact-version pulls but has no explicit scope, strict-mode, or dry-run passthrough. For a reviewed strict plan, inspect the manifest and use matching explicit-version `agent pull --strict --dry-run` and `agent pull --strict` commands in the target directory. Do not assume an automatic multi-agent pull is atomic.
 
 ## Revoke
 
@@ -64,7 +75,7 @@ observal share revoke <token>
 observal share revoke <token> --yes --output json
 ```
 
-Expired and revoked links cannot be opened.
+Expired and revoked links cannot be opened. The server returns HTTP 410; the current CLI maps that to validation exit code 7. Revocation stops future opens, not previously completed installs or disclosure of credentials.
 
 ## Security properties
 

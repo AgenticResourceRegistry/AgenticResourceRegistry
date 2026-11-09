@@ -1,0 +1,11 @@
+/* SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* Keep the platform attribution readable without hiding or replacing it. */
+a[href^="https://www.mintlify.com?utm_campaign=poweredBy"] {
+  color: rgb(var(--gray-600));
+}
+
+.dark a[href^="https://www.mintlify.com?utm_campaign=poweredBy"] {
+  color: rgb(var(--gray-400));
+}

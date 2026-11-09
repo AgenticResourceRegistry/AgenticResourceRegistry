@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Troubleshooting"
 ---
@@ -28,7 +29,7 @@ observal auth login
 
 ### `"System already initialized"` when logging in
 
-The server already has users, so bootstrap is disabled. Use `observal auth login` with an email + password or an API key, not a fresh bootstrap flow.
+The server already has users, so bootstrap is disabled. Use the supported credential or browser login for that deployment, not a fresh bootstrap flow. Authenticated automation uses JWT bearer tokens, not an API-key login; see [authentication](/self-hosting/authentication).
 
 ## Docker and networking
 
@@ -81,13 +82,15 @@ Hand the printed password to the user out-of-band; they must change it at their 
 
 ### OAuth login fails with `redirect_uri_mismatch`
 
-The IdP doesn't have the right redirect URI registered. Add:
+Register the callback for the provider you actually configured. The origin is runtime `deployment.frontend_url`, with trailing slashes removed before appending exactly one callback path:
 
-```
-{FRONTEND_URL}/api/v1/auth/oauth/callback
-```
+| Provider | Callback path |
+| --- | --- |
+| Generic OIDC | `/api/v1/auth/oauth/callback` |
+| Google | `/api/v1/auth/oauth/google/callback` |
+| GitHub | `/api/v1/auth/oauth/github/callback` |
 
-with `FRONTEND_URL` set to your real external URL (scheme and host must match exactly).
+For example, `https://registry.example.com/` becomes `https://registry.example.com/api/v1/auth/oauth/google/callback` for Google. Scheme, host, optional base path, and selected callback must match the IdP registration exactly. The package-template `FRONTEND_URL` input does not set this callback origin. See [authentication](/self-hosting/authentication).
 
 ### All users logged out after restart
 

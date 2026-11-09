@@ -2,138 +2,98 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Upgrades"
+title: "Plan and verify an upgrade"
+description: "Choose the deployment-specific upgrade path and separate image rollback from data recovery."
 ---
 
-Safe upgrade flow for the Agentic Resource Registry server stack.
+Upgrade the registry as a planned change, not a generic `git pull` or restart. Pick a target release/source revision, read its migration requirements, rehearse on representative restored data, and schedule any required maintenance.
 
-> [!IMPORTANT]
-> When upgrading into the release that introduces complete-folder skill delivery, follow the [skill-folder rollout procedure](/skill-folder-rollout) instead of using the quick, standard, or blue/green instructions below unchanged. Those paths do not guarantee that old API and worker processes have stopped before the new init container runs PostgreSQL migrations. Keep folder delivery off, back up and rehearse the historical upgrade, and schedule a maintenance window to drain old processes **before** migration; enable delivery only after a homogeneous rollout and separate approval.
+## Before a manual upgrade
 
-## Quick upgrade (recommended)
+1. Identify the deployment artifact, current version, Compose project/files/profiles, mounted secrets, public URL, and actual volume names.
+2. Back up PostgreSQL, application data/keys, encryption configuration, and the ClickHouse evidence your recovery objectives require. [Rehearse restoration](/self-hosting/backup-and-restore).
+3. Review release notes and schema compatibility. A successful image change does not undo a migration.
+4. Decide how to stop/drain every old API and worker before a migration that requires a homogeneous fleet.
+5. Keep a verified previous artifact and a recovery plan; do not use arbitrary historical versions such as `0.9.0` as copyable targets.
 
-If you installed Agentic Resource Registry via `observal server start` (the embedded stack), the CLI handles upgrades automatically:
+<Warning>
+  For complete-folder skill delivery, follow [the supervised rollout](/skill-folder-rollout). An off delivery gate does not serialize schema migration with old processes. Drain old API/workers before the new init runs, keep the gate off until the approved homogeneous rollout is verified, and do not enable it merely because a fresh instance works.
+</Warning>
+
+## Choose your deployment path
+
+| Deployment | Upgrade mechanism | Do not assume |
+| --- | --- | --- |
+| Source Compose | Selected source revision and supervised build/cutover | `up --build` alone provides zero downtime or safe concurrent migration. |
+| Downloaded server package | Stage the selected package, preserve/review configuration, then perform explicit cutover | Installer success necessarily means running containers were upgraded. |
+| CLI-managed Docker deployment | Supported `observal server upgrade` workflow | It is the upgrade command for every source, packaged, or embedded deployment. |
+| Kubernetes/cloud deployment | That release's reviewed infrastructure and migration procedure | Two stacks can share database volumes safely during an arbitrary blue/green upgrade. |
+
+## Standard source Compose upgrade
+
+Run from the intended checkout with your actual project name and any overlay/profile flags. Prepare the target source and build images first. During the planned maintenance window, stop/drain old writers **before** starting the new init:
 
 ```bash
-observal server upgrade --dry-run --output json
-observal server upgrade --version 0.9.0 --force --output json
+# Select the reviewed target source revision, then prepare its API/web images.
+docker compose -f docker/docker-compose.yml build observal-api observal-web
+# During the maintenance window, stop old writers before starting init.
+docker compose -f docker/docker-compose.yml stop observal-api observal-worker
+# Init migrates before the new API starts; failed init must remain a blocker.
+docker compose -f docker/docker-compose.yml up -d --no-build
 ```
 
-This pulls new Docker images, backs up PostgreSQL, recreates containers, and runs health checks. If the health check fails, it requests the previous image version again. Local shell and Docker access authorize the operation; the command does not require a reachable API or API role.
+Monitor `ps -a` and init logs. If init fails, do not start old writers against a partially changed schema or stamp it as current. Resolve the failure using the rehearsed migration/recovery procedure.
 
-See [`observal server upgrade`](/cli/server#observal-server-upgrade) for full details.
+After successful startup, restart the load balancer, inspect the response body through the configured public route, and test sign-in plus an ordinary-user agent workflow. Confirm the selected version and runtime policy, not just container uptime.
 
-### Server-package upgrades
+## Server-package upgrades
 
-If you installed with `install-server.sh`, back up `.env`, `secrets/`, and the `apidata` and `pgdata` volumes before rerunning the installer for the target release. Setup detects the existing `.env`. Choose the default **No** response to preserve custom values and existing direct credentials. **This only stages the new package and retains a backup: no containers restart and no migrations run.** An exit code of zero means staging succeeded, not that the server has been upgraded. The installer records the prior bind address when an older install has no `OBSERVAL_BIND_ADDRESS` setting.
+Back up the package configuration, mounted credential files, databases, and application data before staging. Preserve the same Compose files, observability overlay/profile, project, volume bindings, and target image tag.
 
-For the complete-folder release, follow the [supervised rollout](/skill-folder-rollout): keep the delivery gate off, stop *all* old API and worker processes before starting the new init container, then run Compose from the installed package with the same optional observability overlay/profile used by the old deployment. For a core-only package installation, after staging the package and verifying backups and the gate:
+Rerunning `install-server.sh` against existing configuration can **stage** new package files without changing containers or applying migrations. Exit zero in that path means staging succeeded. Choosing to regenerate configuration can instead start services, so old writer processes must be drained before an installer path that starts a new init.
+
+After reviewed staging, select the intended `OBSERVAL_VERSION`, stop old API/workers, pull the target init/API/worker/web images, and perform the cutover from the **installed package directory**:
 
 ```bash
-cd /opt/observal  # or the directory passed to --install-dir
-# Set OBSERVAL_VERSION in the preserved .env to the selected release's image tag.
-# For installer --version vX.Y.Z, the image tag is X.Y.Z (no leading v).
-# An old pinned tag keeps serving old images; latest also requires an explicit pull.
+# In the installed package directory; include your existing overlays/profile.
 docker compose -f docker-compose.yml --env-file .env stop observal-api observal-worker
 docker compose -f docker-compose.yml --env-file .env pull observal-init observal-api observal-worker observal-web
 docker compose -f docker-compose.yml --env-file .env up -d --wait --wait-timeout 300
 docker compose -f docker-compose.yml --env-file .env restart observal-lb
-curl -fsS http://127.0.0.1:8000/health  # adjust for the configured API_HOST_PORT
 ```
 
-Add `-f docker-compose.observability.yml` and `--profile grafana` if those were used previously; do not silently drop optional services. Verify the API externally through the load balancer, not only via its container health check. Choosing **Yes** at the configuration prompt instead intentionally rebuilds the general configuration from the new template and starts services; for this release, **stop old API and worker processes before running the installer**, because setup will start the new init container. Core application, PostgreSQL, ClickHouse, Grafana, and demo credentials are preserved or migrated into restricted files, but unrelated custom environment entries must be reapplied.
+Use the selected release's image-tag convention and inspect the effective image values before proceeding. An old pinned tag can keep serving old images. The [Bash 3.2 packaged-setup limitation](/self-hosting/requirements#packaged-setup-on-macos) also remains relevant; this guide does not repair it.
 
-## Before a manual upgrade
+## CLI-managed Docker upgrade
 
-1. **Back up `pgdata`** and **`apidata`**. See [Backup and restore](/self-hosting/backup-and-restore). Backing up `chdata` is nice-to-have; losing telemetry is painful but not catastrophic.
-2. **Read the [CHANGELOG](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/CHANGELOG.md)** for the releases you're jumping across. Note any breaking changes.
-3. **Pin the version you're upgrading to**: don't `git pull main` blindly. Check out a release tag or a known-good commit.
-
-## Standard upgrade
+If the local CLI recognizes and manages your Docker deployment, preview an explicit target:
 
 ```bash
-cd AgenticResourceRegistry
-
-# Fetch and check out the target version
-git fetch --tags
-git checkout v0.9.1
-
-# Rebuild images
-docker compose -f docker/docker-compose.yml pull
-docker compose -f docker/docker-compose.yml up --build -d
-# Nginx retains resolved upstream IPs across API/web container recreation.
-# Wait for the new API to be healthy, then refresh the load balancer.
-docker compose -f docker/docker-compose.yml exec observal-api python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
-docker compose -f docker/docker-compose.yml restart observal-lb
-
-# Verify through the public load balancer
-docker compose -f docker/docker-compose.yml ps
-curl http://localhost/health
+observal server upgrade --version TARGET_VERSION --dry-run --output json
 ```
 
-The init container applies pending Postgres Alembic migrations and ClickHouse SQL migrations before the API starts. Watch the init logs for migration output:
+Replace `TARGET_VERSION` with the selected released version. The command requires a recognized Compose directory and configured current version; it is not the embedded server lifecycle command.
 
-```bash
-docker logs -f observal-init
-# Running database migrations...
-# Running ClickHouse migrations...
-```
-
-## Zero-downtime upgrade (small teams)
-
-If you run a single instance and have a ~30-second maintenance window:
-
-1. Back up `pgdata`, `apidata`, `chdata`.
-2. Stop the API and worker: `docker compose stop observal-api observal-worker`.
-3. Apply migrations out of band with `alembic upgrade head` and `python -m services.clickhouse.migrations` from `observal-server`, or run the init container once.
-4. Pull/rebuild new images: `docker compose pull && docker compose build observal-api observal-worker`.
-5. Start: `docker compose up -d`; wait for the new API to become healthy, then `docker compose restart observal-lb` so nginx resolves the new container IPs.
-6. Smoke test through the public load balancer: `curl -fsS http://localhost/health`, then `observal auth status --output json && observal ops telemetry status --output json`.
-
-Web UI, Postgres, ClickHouse, Redis stay up throughout. Users see a brief API outage (~15–30 s).
-
-## Zero-downtime at scale
-
-For blue/green upgrades on large deployments:
-
-1. Run a second stack (`docker-compose.yml` with different project name and host ports) behind a reverse proxy.
-2. Apply migrations before traffic cutover. Alembic handles Postgres and `services.clickhouse.migrations` handles ClickHouse. Additive migrations should work with API N-1 and N during the rollout.
-3. Bring up the green stack pointing at the same `pgdata` / `chdata` / `apidata` volumes.
-4. Flip the reverse proxy to green.
-5. Decommission blue.
-
-If a migration is **not** additive (rare, but happens: column drops, type changes), it gets called out in the CHANGELOG and requires a brief outage. Plan the window.
+After reviewing its plan and any release-specific migration requirements, the apply path requires explicit confirmation. It backs up PostgreSQL, replaces images, and checks health; a failed health check can request prior images. **That is not automatic database rollback.** The backup helper's ClickHouse export is schema information, not a full evidence backup. See [server reference](/cli/server#docker-upgrade).
 
 ## Rolling back
 
-If the new version breaks:
+Before starting prior images, determine which migrations completed and whether the previous application can read/write the resulting schema. Do not assume additive compatibility, destructive migration reversal, or automatic downgrades.
 
-1. `docker compose -f docker/docker-compose.yml down`
-2. `git checkout <previous-version>`
-3. `docker compose -f docker/docker-compose.yml up --build -d`
+An image-only rollback leaves database changes in place. The managed rollback workflow can restore PostgreSQL from its selected backup but does not restore ClickHouse telemetry. Inspect reported state and independently validate health and data. A process requesting an old image is not proof recovery succeeded.
 
-**The catch:** if the failing version already applied a migration, downgrading to the previous API version may leave you running against a schema it doesn't know about. Options:
+If database recovery is required, stop all writers and use the rehearsed [restore procedure](/self-hosting/backup-and-restore) with matching secrets and key material. Never delete volumes to make a failed upgrade look like a fresh successful deployment.
 
-* **If the migration is additive** (most are): the previous version works fine against the newer schema.
-* **If the migration is destructive**: restore from the pre-upgrade `pgdata` backup. This is why the backup is step 1.
+## Availability and CLI versions
 
-## CLI upgrades
+Stopping API/workers creates a service interruption even if the web UI, databases, and proxy remain running. Do not call that “zero downtime,” or promise a fixed outage length without measuring your deployment.
 
-CLI upgrades are independent of server upgrades. Users:
+Blue/green or rolling upgrades require validated schema/application overlap, traffic routing, independent storage arrangements, and release-specific orchestration. Do not start two database containers on the same data volume as a shortcut.
 
-```bash
-observal self upgrade
-```
-
-The CLI speaks a stable contract with the server. A newer CLI works against an older server and vice versa, within a release or two.
-
-On the first command after upgrading from a release that generated `observal-shim` entries, the CLI restores the original MCP command in known home and current-project config files. It writes a `.pre-unshim.bak` copy before each change. A malformed wrapped entry stops the command with a visible migration error rather than guessing at the original executable.
-
-## Zero-downtime for the web UI
-
-The web UI is a static Vite build and restarts instantly. Users see a brief reload if they are on the page during the deploy. No special handling required.
+Developer CLI versions must satisfy the server's compatibility check; this implementation checks exact versions on guarded CLI paths. Do not promise that a newer CLI works with an older server “within a release or two.” Follow [version guidance](/reference/documentation-version) and the command's reported mismatch recovery.
 
 ## Next
 
-→ [Backup and restore](/self-hosting/backup-and-restore)
+[Verify backups](/self-hosting/backup-and-restore), [review configuration](/self-hosting/configuration), and retain migration/health evidence before opening traffic or changing rollout gates.
