@@ -21,6 +21,7 @@ OPERATION_LABELS = {
     "_emit": "List recommendations",
     "_emit_list": "List inbox items",
     "_exact_skill_review": "Review skill version",
+    "_export_trace_impl": "Export traces",
     "_feedback_impl": "Show registry feedback",
     "_fetch_registry_items": "Fetch registry components",
     "_fork_component": "Fork registry component",
