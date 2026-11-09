@@ -25,7 +25,7 @@ from api.deps import (
 )
 from api.routes._skill_lock import approved_skill_base_id, lock_skill_version, should_promote_skill_version
 from models.mcp import ListingStatus
-from models.review import Review, ReviewState
+from models.review import Review, ReviewRevision, ReviewState
 from models.skill import SkillListing, SkillVersion
 from models.user import User, UserRole
 from schemas.skill import SkillCandidateDraftRequest, SkillFolderImportDraftRequest, SkillUpdateRequest
@@ -827,7 +827,8 @@ async def submit_skill_version_draft(
     release_edit_lock(version, current_user.id, force=True)
     await db.flush()
     version.content_revision = skill_content_revision(listing, version)
-    await submit_for_review(db, "skill", listing, version, current_user.id, message=req.message)
+    review = await submit_for_review(db, "skill", listing, version, current_user.id, message=req.message)
+    review_revision = await db.scalar(select(ReviewRevision.number).where(ReviewRevision.id == review.head_revision_id))
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -836,6 +837,9 @@ async def submit_skill_version_draft(
         version_id=version.id,
         revision=version.content_revision,
         files=[file.declaration for file in files],
+        review_number=review.number,
+        review_url=f"/review/{review.number}",
+        review_revision=review_revision,
     )
 
 

@@ -36,6 +36,7 @@ from api.routes.skill_files import router as file_router
 from api.sanitize import escape_like
 from api.search import keyword_search
 from models.mcp import ListingStatus
+from models.review import Review, ReviewRevision, ReviewState
 from models.skill import SkillDownload, SkillListing, SkillVersion
 from models.user import User, UserRole
 from schemas.skill import (
@@ -482,6 +483,22 @@ async def get_skill(
         )
     resp = await attach_fork_info(resp, listing, "skill", current_user, db)
     resp.user_permission = get_effective_component_permission(listing, current_user)
+    # Authorization may have selected an approved fallback behind a pending
+    # pointer. Only expose the review belonging to the returned version.
+    review = await db.scalar(
+        select(Review).where(
+            Review.subject_type == "skill",
+            Review.subject_id == listing.id,
+            Review.version_id == selected.id,
+            Review.state.notin_((ReviewState.closed, ReviewState.published)),
+        )
+    )
+    if review is not None:
+        resp.review_number = review.number
+        resp.review_url = f"/review/{review.number}"
+        resp.review_revision = await db.scalar(
+            select(ReviewRevision.number).where(ReviewRevision.id == review.head_revision_id)
+        )
     return resp
 
 

@@ -56,6 +56,28 @@ def _skill_item(**overrides):
     return item
 
 
+@pytest.mark.parametrize("explicit_draft", [False, True])
+def test_folder_draft_json_reports_explicit_submit_command(monkeypatch, tmp_path, explicit_draft):
+    (tmp_path / "SKILL.md").write_text("---\nname: example\ndescription: Example skill\n---\n# Example\n")
+    manifest = {"listing_id": "listing-uuid", "version_id": "version-uuid", "revision": "a" * 64, "files": []}
+    post = Mock(return_value=manifest)
+    monkeypatch.setattr(skill.client, "post", post)
+    monkeypatch.setattr(skill.client, "add_publish_target", Mock())
+    monkeypatch.setattr(skill.config, "load", Mock(return_value={"username": "alice"}))
+    argv = ["registry", "skill", "submit", "--from-dir", str(tmp_path), "--output", "json"]
+    if explicit_draft:
+        argv.append("--draft")
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    saved = json.loads(result.output)
+    assert saved["next"] == (
+        "observal registry skill submit --submit listing-uuid --version-id version-uuid --output json"
+    )
+    assert {key: saved[key] for key in manifest} == manifest
+    post.assert_called_once()
+    assert post.call_args.args[0] == "/api/v1/skills/folder-drafts"
+
+
 def test_skill_fork_pins_observed_approved_base_and_reports_exact_draft(monkeypatch):
     monkeypatch.setattr(skill.client, "resolve_registry_reference", Mock(return_value="listing-uuid"))
     base = {

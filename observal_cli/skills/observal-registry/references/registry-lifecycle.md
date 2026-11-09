@@ -84,11 +84,13 @@ Skills with extra files (scripts, templates, assets) use folder-based authoring.
 observal registry skill submit --from-dir ./my-skill --name my-skill --description 'My skill' --output json
 ```
 
-The response contains `listing_id`, `version_id` and `revision`, not a reviewed or installable release. Hidden/excluded paths are reported; machine-readable submissions refuse omissions and likely-sensitive paths unless the human has inspected them and explicitly adds `--allow-excluded` and/or `--allow-sensitive`. Do not use the flag to bypass an uncertain directory. Resource-bearing review and delivery refuse while the rollout setting remains off. After review is separately enabled, submit that **exact** saved version:
+The response contains `listing_id`, `version_id` and `revision`, not a reviewed or installable release. JSON output also includes `next`, the explicit submit command for that exact draft; saving never submits automatically. Hidden/excluded paths are reported; machine-readable submissions refuse omissions and likely-sensitive paths unless the human has inspected them and explicitly adds `--allow-excluded` and/or `--allow-sensitive`. Do not use the flag to bypass an uncertain directory. Resource-bearing review and delivery refuse while the rollout setting remains off. After review is separately enabled, submit that **exact** saved version:
 
 ```bash
 observal registry skill submit --submit LISTING_ID --version-id VERSION_UUID --output json
 ```
+
+Submission returns `review_number`, `review_url` and the numeric `review_revision`. Follow up with `observal review show NUMBER`; `registry skill show LISTING_ID --output json` also reports the active review for the version it displays. The manifest's `revision` remains the content hash, not the numeric review revision.
 
 ### Fork the current approved direct release
 
