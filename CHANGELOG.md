@@ -8,6 +8,7 @@
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Sagar Kumar <sagar0206mahran@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -30,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - add an authenticated JSON API escape hatch and mixed Registry component bulk submission
 - standardize dedicated list JSON output with `items`, `total`, `page`, and `page_size`
 - make mutation retry behavior explicit and reserve automatic transient retries for reads
+- add one-click copy buttons for trace IDs in the trace list, the trace detail header, and Session Info (#2159)
 
 ### Breaking changes
 

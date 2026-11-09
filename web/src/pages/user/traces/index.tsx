@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shreem Seth <shreemseth26@gmail.com>
+// SPDX-FileCopyrightText: 2026 Sagar Kumar <sagar0206mahran@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 import { Link, useRouter, useSearch, useLocation } from "@tanstack/react-router";
@@ -63,6 +64,7 @@ import { TableSkeleton } from "@/components/shared/skeleton-layouts";
 import { ErrorState } from "@/components/shared/error-state";
 import { StatusBadge } from "@/components/registry/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
+import { CopyTraceIdButton } from "@/components/traces/copy-trace-id-button";
 import { cn } from "@/lib/utils";
 import type { Session } from "@/lib/types";
 
@@ -368,9 +370,12 @@ function TraceTitle({ row }: { row: Session }) {
 			>
 				{sessionLabel(row)}
 			</Link>
-			<span className="mt-[3px] block truncate font-mono text-4xs text-muted-foreground">
-				{sessionSubLabel(row)}
-			</span>
+			<div className="mt-[3px] flex min-w-0 items-center gap-1">
+				<span className="truncate font-mono text-4xs text-muted-foreground">
+					{sessionSubLabel(row)}
+				</span>
+				<CopyTraceIdButton traceId={row.session_id} />
+			</div>
 		</div>
 	);
 }
@@ -1077,12 +1082,15 @@ export default function TracesPage() {
 																	<h3 className="truncate text-xs font-medium text-foreground">
 																		{sessionLabel(s)}
 																	</h3>
-																	<p className="mt-[3px] truncate text-3xs text-muted-foreground">
-																		<span className="font-mono text-3xs">
+																	<p className="mt-[3px] flex min-w-0 items-center gap-1 text-3xs text-muted-foreground">
+																		<span className="truncate font-mono text-3xs">
 																			{s.session_id}
-																		</span>{" "}
-																		· {derivePlatform(s)} ·{" "}
-																		{s.agent_name || shortModel(s.model) || "—"}
+																		</span>
+																		<CopyTraceIdButton traceId={s.session_id} />
+																		<span className="truncate">
+																			· {derivePlatform(s)} ·{" "}
+																			{s.agent_name || shortModel(s.model) || "—"}
+																		</span>
 																	</p>
 																</div>
 																<span className="justify-self-start">
