@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+# SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Dynamic settings service: DB-backed runtime configuration with Redis cache.
@@ -402,6 +403,9 @@ DEFAULTS: dict[str, str] = {
     "observability.log_format": "json",  # 'json' or 'console' (colorized). Requires restart.
     "observability.enable_openapi": "false",
     "observability.enable_metrics": "false",
+    # OTLP forwarding: a JSON list of destinations that receive every stored
+    # session record (see services/otel/destinations.py for the shape).
+    "telemetry.otlp_forward_destinations": "[]",
     # Discovery (ARD). The publisher domain is the first segment of every
     # permanent identifier; it is pinned automatically the first time a real
     # deployment.public_url is seen and changing it renames every identifier.
@@ -428,6 +432,8 @@ SENSITIVE_KEYS: set[str] = {
     "saml.idp_x509_cert",
     "saml.sp_private_key",
     "saml.sp_key_encryption_password",
+    # Destination headers carry backend credentials.
+    "telemetry.otlp_forward_destinations",
 }
 
 SETTING_FEATURES: dict[str, str] = {}
@@ -445,6 +451,10 @@ SETTING_SUBTITLES: dict[str, str] = {
     "deployment.public_registry_enabled": (
         "Allow signed-out visitors to browse and install approved public registry content. "
         "Publishing, private data, telemetry, and administration still require authentication."
+    ),
+    "telemetry.otlp_forward_destinations": (
+        "JSON list of OTLP/HTTP destinations that receive every stored session record as OTLP logs. "
+        "Content is sent only to destinations with include_content set."
     ),
     "deployment.leaderboard_enabled": (
         "Show the deprecated Leaderboard. Off by default: the tab, home page link, page, and leaderboard "
@@ -627,9 +637,9 @@ SECTIONS: list[dict[str, Any]] = [
     {
         "id": "observability",
         "title": "Observability",
-        "description": "Logging and metrics configuration.",
+        "description": "Logging, metrics and OTLP forwarding configuration.",
         "icon": "activity",
-        "keys": [k for k in DEFAULTS if k.startswith("observability.")],
+        "keys": [k for k in DEFAULTS if k.startswith("observability.") or k.startswith("telemetry.")],
     },
     {
         "id": "misc",

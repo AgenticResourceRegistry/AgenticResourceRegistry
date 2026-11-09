@@ -26,6 +26,7 @@ from jobs.maintenance import (
 from jobs.mcp_sync import MAX_TRIES as MCP_SYNC_MAX_TRIES
 from jobs.mcp_sync import sync_mcp_webhook
 from jobs.migration import MAX_MIGRATION_JOB_TIMEOUT_SECONDS, purge_migration_artifacts, run_migration_job
+from jobs.otel_forward import forward_session, sweep_otlp_forwarding
 from jobs.review_checks import run_review_checks
 from jobs.usage_ping import submit_usage_ping
 from logging_config import setup_logging
@@ -77,6 +78,8 @@ class WorkerSettings:
         backfill_component_activity,
         replay_activity_revision,
         run_review_checks,
+        # keep_result=0: a kept result blocks re-queueing the same job ID until it expires.
+        func(forward_session, keep_result=0, timeout=120),
     ]
     cron_jobs = [
         cron(sync_component_sources, hour={0, 6, 12, 18}, minute={0}),  # Every 6 hours
@@ -100,6 +103,8 @@ class WorkerSettings:
         cron(backfill_component_activity, hour={2}, minute={40}, timeout=600, unique=True),
         # Durable, bounded full replay after a matcher/publication revision bump.
         cron(replay_activity_revision, minute=set(range(0, 60, 5)), timeout=600, unique=True),
+        # Safety net under ingest's per-push queueing of OTLP forward jobs.
+        cron(sweep_otlp_forwarding, second={30}, timeout=55, unique=True),  # Every minute
     ]
     on_startup = startup
     on_shutdown = shutdown
