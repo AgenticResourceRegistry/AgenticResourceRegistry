@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Per-harness JSONL line classifiers for the ingest pipeline.
@@ -982,15 +983,26 @@ def extract_tool_info(harness: str, parsed: dict) -> tuple[str | None, str | Non
 # ---------------------------------------------------------------------------
 
 
-def _ts_claude_code(parsed: dict) -> str | None:
-    """Return ClickHouse timestamp string from a Claude Code JSONL line, or None."""
-    raw = parsed.get("timestamp")
-    if not raw:
+def _validated_iso_timestamp(raw: object) -> str | None:
+    """Convert present source timestamps to UTC, rejecting malformed values."""
+    if raw is None or raw == "":
         return None
-    ts = str(raw).replace("T", " ").rstrip("Z")
-    if "." not in ts:
-        ts += ".000"
-    return ts
+    if not isinstance(raw, str):
+        raise ValueError("invalid source timestamp")
+    from datetime import UTC, datetime
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("invalid source timestamp") from exc
+
+
+def _ts_claude_code(parsed: dict) -> str | None:
+    """Return a validated UTC timestamp from a Claude Code JSONL line."""
+    return _validated_iso_timestamp(parsed.get("timestamp"))
 
 
 def _ts_kiro(parsed: dict) -> str | None:
@@ -1006,19 +1018,20 @@ def _ts_kiro(parsed: dict) -> str | None:
     """
     if isinstance(parsed.get("payload"), dict):
         raw = parsed.get("timestamp")
-        if not isinstance(raw, str) or not raw:
+        if raw is None or raw == "":
             return None
+        if not isinstance(raw, str):
+            raise ValueError("invalid Kiro IDE timestamp")
         # Parsed rather than string-trimmed: the value goes straight into a
         # DateTime64 column, and an offset that is not UTC, or any other
         # non-empty malformed string, would be sent verbatim and can reject the
-        # whole insert batch. Returning None lets ingestion fall back to a
-        # valid timestamp for that record instead.
+        # whole insert batch. Reject invalid present values as source errors.
         try:
             from datetime import UTC, datetime
 
             parsed_ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
-            return None
+            raise ValueError("invalid Kiro IDE timestamp") from None
         if parsed_ts.tzinfo is not None:
             parsed_ts = parsed_ts.astimezone(UTC)
         return parsed_ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -1030,15 +1043,15 @@ def _ts_kiro(parsed: dict) -> str | None:
     if not isinstance(meta, dict):
         return None
     epoch_s = meta.get("timestamp")
-    if not epoch_s:
+    if epoch_s is None or epoch_s == "":
         return None
     try:
         from datetime import UTC, datetime
 
         dt = datetime.fromtimestamp(float(epoch_s), tz=UTC)
         return dt.strftime("%Y-%m-%d %H:%M:%S.000")
-    except Exception:
-        return None
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("invalid Kiro CLI timestamp") from None
 
 
 def _ts_cursor(parsed: dict) -> str | None:
@@ -1051,43 +1064,23 @@ def _ts_cursor(parsed: dict) -> str | None:
 
 
 def _ts_pi(parsed: dict) -> str | None:
-    """Return ClickHouse timestamp string from a Pi JSONL line, or None.
-
-    Pi uses ISO timestamps at the entry level (``parsed["timestamp"]``).
-    """
-    raw = parsed.get("timestamp")
-    if not raw:
-        return None
-    ts = str(raw).replace("T", " ").rstrip("Z")
-    if "." not in ts:
-        ts += ".000"
-    return ts
+    """Return Pi's entry-level source timestamp for central UTC validation."""
+    return _validated_iso_timestamp(parsed.get("timestamp"))
 
 
 def _ts_copilot_cli(parsed: dict) -> str | None:
     """Return ClickHouse timestamp string from a Copilot CLI JSONL line, or None."""
     raw = parsed.get("ts")
-    if not raw:
+    if raw is None or raw == "":
         event = parsed.get("event")
         if isinstance(event, dict):
             raw = event.get("ts")
-    if not raw:
-        return None
-    ts = str(raw).replace("T", " ").rstrip("Z")
-    if "." not in ts:
-        ts += ".000"
-    return ts
+    return _validated_iso_timestamp(raw)
 
 
 def _ts_antigravity(parsed: dict) -> str | None:
     """Return ClickHouse timestamp string from an Antigravity transcript line."""
-    raw = parsed.get("created_at")
-    if not raw:
-        return None
-    ts = str(raw).replace("T", " ").rstrip("Z")
-    if "." not in ts:
-        ts += ".000"
-    return ts
+    return _validated_iso_timestamp(parsed.get("created_at"))
 
 
 _TS_EXTRACTORS: dict[str, object] = {

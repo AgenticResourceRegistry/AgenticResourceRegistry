@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Phase 2.4 best-effort ingestion, late-mapping retry and resumable replay."""
@@ -309,9 +310,10 @@ async def test_final_ingest_enqueues_only_integrity_checked_source_and_never_fai
     from starlette.requests import Request
 
     from api.routes.ingest import SessionIngestRequest, ingest_session
+    from services import clickhouse, session_ingest
     from services import redis as redis_service
-    from services import session_ingest
 
+    monkeypatch.setattr(clickhouse, "query_session_error_offsets", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         session_ingest,
         "ingest_session_lines",
@@ -326,6 +328,7 @@ async def test_final_ingest_enqueues_only_integrity_checked_source_and_never_fai
                 ok=integrity_ok,
                 server_hash="digest",
                 repair_from_line=None,
+                reconciled_offset=False,
             )
         ),
     )
