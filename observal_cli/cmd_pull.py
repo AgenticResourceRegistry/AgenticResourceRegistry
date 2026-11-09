@@ -1003,10 +1003,50 @@ def _hook_entry_key(entry: object) -> str:
     return json.dumps(normalised, sort_keys=True, default=str)
 
 
-def _is_observal_entry(entry: object) -> bool:
-    from observal_cli.shared.utils import is_observal_hook_entry
+_OBSERVAL_HOOK_MODULES = (
+    "observal_cli.hooks.session_push",
+    "observal_cli.hooks.kiro_session_push",
+    "observal_cli.hooks.cursor_session_push",
+    "observal_cli.hooks.antigravity_session_push",
+    "observal_cli.hooks.kiro_hook",
+    "observal_cli.hooks.kiro_stop_hook",
+    "observal_cli.hooks.copilot_cli_hook",
+    "observal_cli.hooks.copilot_cli_stop_hook",
+    "observal_cli.hooks.buffer_event",
+    "observal_cli.hooks.flush_buffer",
+)
+_OBSERVAL_HOOK_SCRIPTS = (
+    "observal-hook",
+    "observal-stop-hook",
+)
+_OBSERVAL_HOOK_ENDPOINTS = (
+    "/api/v1/telemetry/hooks",
+    "/api/v1/otel/hooks",
+)
 
-    return isinstance(entry, dict) and is_observal_hook_entry(entry)
+
+def _is_observal_entry(entry: object) -> bool:
+    """Whether *entry* is an Observal-managed hook handler (pull ownership test).
+
+    This is deliberately narrower than
+    :func:`observal_cli.shared.utils.is_observal_hook_entry`, whose last-resort
+    ``"observal_cli"`` marker matches any command containing that substring --
+    including a user's own ``python3 ~/src/observal_cli/guard.py --deny``.  A
+    pull must never delete such a hook, so ownership is decided by a positive
+    match on a known instrumented module, script name or telemetry endpoint.
+    """
+    if not isinstance(entry, dict):
+        return False
+    command = entry.get("command", "")
+    if isinstance(command, (list, tuple)):
+        command = " ".join(str(part) for part in command)
+    command = str(command)
+    url = str(entry.get("url", ""))
+    if any(mod in command or mod in url for mod in _OBSERVAL_HOOK_MODULES):
+        return True
+    if any(endpoint in command or endpoint in url for endpoint in _OBSERVAL_HOOK_ENDPOINTS):
+        return True
+    return any(script in command for script in _OBSERVAL_HOOK_SCRIPTS)
 
 
 def _reconcile_hook_event_lists(section: dict, incoming: dict) -> None:

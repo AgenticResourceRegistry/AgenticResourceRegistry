@@ -4458,4 +4458,45 @@ def test_pull_merge_matches_argv_and_string_commands(tmp_path: Path) -> None:
 
     entries = json.loads(path.read_text())["hooks"]["postToolUse"]
     assert entries == [as_list]
-    assert as_string is not None
+
+
+def test_pull_merge_matches_string_and_argv_commands(tmp_path: Path) -> None:
+    """The reverse spelling also collapses: an incoming argv list matches an existing string."""
+    path = tmp_path / "hooks.json"
+    as_list = {"command": ["python3", "guard.py", "--deny", "rm -rf"], "type": "command"}
+    as_string = {"command": "python3 guard.py --deny rm -rf", "type": "command"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"postToolUse": [as_string]}}))
+
+    cmd_pull._write_file(
+        path,
+        {"version": 1, "hooks": {"postToolUse": [as_list]}},
+        merge_mcp=True,
+    )
+
+    entries = json.loads(path.read_text())["hooks"]["postToolUse"]
+    assert entries == [as_string]
+
+
+def test_pull_keeps_user_hook_whose_path_contains_observal_cli(tmp_path: Path) -> None:
+    """A user's own guard script under an ``observal_cli`` directory is not Observal-owned."""
+    path = tmp_path / "hooks.json"
+    user_hook = {"type": "command", "command": "python3 ~/src/observal_cli/guard.py --deny"}
+    telemetry = {"type": "command", "command": "python3 -m observal_cli.hooks.cursor_session_push"}
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [user_hook, telemetry]}}))
+
+    cmd_pull._write_file(
+        path,
+        {
+            "version": 1,
+            "hooks": {
+                "preToolUse": [
+                    {"type": "command", "command": "python3 -m observal_cli.hooks.cursor_session_push"}
+                ]
+            },
+        },
+        merge_mcp=True,
+    )
+
+    entries = json.loads(path.read_text())["hooks"]["preToolUse"]
+    assert user_hook in entries
+    assert entries.count(telemetry) == 1
