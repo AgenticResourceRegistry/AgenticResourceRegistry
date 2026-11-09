@@ -2,11 +2,12 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Requirements"
 ---
 
-Minimum and recommended specs for running the Agentic Resource Registry stack.
+Sizing and software starting points for the registry stack. These are not load-test guarantees; measure your workload and account for the combined service limits, database growth, and backup headroom.
 
 ## Hardware
 
@@ -38,27 +39,34 @@ The heaviest user of disk is **ClickHouse**. Growth depends on:
 
 * Number and length of harness sessions
 * Raw transcript record size
-* `DATA_RETENTION_DAYS`
+* Runtime raw/session retention policy (`data.retention_days` and `retention.*`)
 
 Session transcripts vary significantly by harness and tool output size. Measure representative workloads and plan 2 to 3 times headroom over observed growth.
 
-Postgres stays under 500 MB for most deployments; it holds only registry metadata and user accounts.
+PostgreSQL growth depends on users, resource/version content, reviews, and settings. Measure it separately from ClickHouse rather than assuming a fixed metadata-only size.
 
 ## Software
 
 | Software | Version | Notes |
 | --- | --- | --- |
-| Docker | ≥ 24.0 | With Compose v2 (`docker compose`, not `docker-compose`) |
+| Docker Engine | ≥ 25.0 | Required by source `healthcheck.start_interval`; use a currently supported, patched release. |
+| Docker Compose | ≥ 2.20.2 | Use `docker compose`; the single-node `!override` example needs ≥ 2.24.4. |
 | Linux / macOS host | any modern | Windows via WSL2 works |
 | Bash / zsh | any | For the CLI install |
 
 > [!NOTE]
-> Homebrew's Docker formula is outdated and may ship an older Compose version. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages to get Docker Engine ≥ 24.0 with Compose v2.
+> Homebrew's Docker formula is outdated and may ship an older Compose version. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages to get Docker Engine ≥ 25.0 with Compose ≥ 2.20.2. The source healthcheck uses `start_interval`; [Engine 25 introduced it](https://docs.docker.com/engine/release-notes/25.0/#new) and [Compose supports it from 2.20.2](https://docs.docker.com/reference/compose-file/services/#healthcheck).
+
+### Packaged setup on macOS
+
+The server package's `setup.sh` currently fails with `profile_args[@]: unbound variable` when the default observability profile is run under macOS Bash 3.2. This was reproduced on both the docs branch and the pre-docs baseline. The corresponding headless setup tests pass with GNU Bash in a Linux container; that is not certification of all package workflows.
+
+This limitation concerns the **server package setup**, not proof that the standalone CLI installer is broken. Do not assume every shell accepted by a CLI install command can run packaged server setup. Until the implementation is corrected or your shell is verified, use the [source evaluation guide](/getting-started/local-evaluation) rather than claiming a successful packaged deployment.
 
 For the **CLI** (developer machines, not the server):
 
-* **Standalone binary** (recommended) -- no dependencies, just `curl | bash`
-* Or Python **3.11, 3.12, or 3.13** with `uv`, `pipx`, or `pip`
+* **Standalone binary** -- no Python required; installation and integrations still need their own binaries, permissions, and model access
+* Or Python **3.11 or newer** matching the CLI package requirements, preferably installed as an isolated tool with `uv` or `pipx`
 
 ## Network
 
@@ -70,9 +78,9 @@ For the **CLI** (developer machines, not the server):
 
 ## TLS / HTTPS
 
-Local loopback access can use HTTP. For every remote deployment, terminate TLS 1.2 or later with Caddy, nginx, an enterprise load balancer, or a cloud ingress. Point the proxy at the loopback nginx listener on `localhost:8000`.
+Local loopback access can use HTTP. For remote deployment, use an approved TLS-terminating reverse proxy or ingress. Point it at the intended restricted load-balancer binding, not an assumed universal port: the server package defaults to port 8000, while source Compose defaults to port 80 and needs an explicit restricted binding for this layout.
 
-Example Caddy configuration:
+Example Caddy configuration for a package listener on loopback port 8000:
 
 ```caddyfile
 observal.your-company.internal {

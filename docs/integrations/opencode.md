@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "OpenCode"
 ---
@@ -47,8 +48,8 @@ lines, and sends them to Agentic Resource Registry.
 ### 1. Install the Agentic Resource Registry CLI
 
 ```bash
-uv tool install observal-cli
-# or: pipx install observal-cli
+uv tool install 'observal-cli==1.16.0'
+# or: pipx install 'observal-cli==1.16.0'
 ```
 
 ### 2. Authenticate
@@ -186,9 +187,7 @@ You are an OpenCode agent with the following specialization...
 without running `observal agent pull`, the plugin may see the OpenCode agent
 name but have no Agentic Resource Registry id or version to send.
 
-**Every session is reported.** Sessions that use a built-in OpenCode agent, or
-no pulled agent, are delivered without an agent id so component insights still
-see them. Only sessions that use a pulled agent are attributed to it.
+**No-agent delivery is release-limited.** v1.16.0 predates the later fix that reports sessions without an agent. Do not promise delivery/insights coverage for built-in or unbound sessions, or silently copy the newer plugin into a stable installation. Even attributed delivery depends on valid authentication, source/API availability, outbox state, and acknowledged checkpoints.
 
 **MCP config is OpenCode-specific.** OpenCode uses `opencode.json` and the
 `mcp` key, not Kiro or Claude Code MCP paths.

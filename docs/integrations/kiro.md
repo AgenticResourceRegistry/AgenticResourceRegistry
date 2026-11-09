@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Rajat <rajattempest8736@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Kiro"
 ---
@@ -107,8 +108,8 @@ separately stored delegated sub-executions.
 ### 1. Install the Agentic Resource Registry CLI
 
 ```bash
-uv tool install observal-cli
-# or: pipx install observal-cli
+uv tool install 'observal-cli==1.16.0'
+# or: pipx install 'observal-cli==1.16.0'
 ```
 
 ### 2. Authenticate

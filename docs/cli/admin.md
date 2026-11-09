@@ -1,12 +1,13 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal admin"
 ---
 
-Manage server settings, users, security policy, SSO, audit data, and the submission review queue.
+Manage server settings, users, security policy, SSO, and audit data. Submission review uses the separate `observal review` command group; see [Review and publish](/guides/review-and-publish).
 
-All 24 workflows support `--output table|json`. JSON mode never prompts or emits progress banners. Destructive JSON commands require `--force` or `--yes`.
+The workflows below support `--output table|json`. JSON mode never prompts or emits progress banners. Destructive JSON commands require `--force` or `--yes`.
 
 Core administration requires the `admin` role. Review commands are also available to global reviewers and authorized teamspace owners or reviewers. Some role changes require `super_admin`.
 
@@ -34,16 +35,12 @@ Core administration requires the `admin` role. Review commands are also availabl
 | `security-events` | Query security events |
 | `audit-log` | Query compliance audit events |
 | `audit-log-export` | Export audit events as CSV or JSON |
-| `review list` | List pending submissions |
-| `review show` | Show one submission |
-| `review approve` | Approve a component, Agent, or bundle |
-| `review reject` | Reject a component, Agent, or bundle |
 
 ## Settings
 
 ```bash
 observal admin settings --output json
-observal admin set review.require_approval true --output json
+observal review policy show --output json
 ```
 
 `settings` returns the direct settings array. Sensitive values are redacted by the server. `set` returns the server setting object and never echoes the supplied value in human output.

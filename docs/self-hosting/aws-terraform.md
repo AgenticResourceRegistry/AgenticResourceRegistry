@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "AWS deployment with Terraform"
 ---
@@ -44,8 +45,13 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 
 ## Quickstart
 
+<Warning>
+  **v1.16.0 AWS signing-key limitation:** the stock module sets `JWT_KEY_DIR=/tmp/keys` inside each API task's private temporary filesystem, while the default API desired count is two. Tasks can generate different signing keys, causing cross-task token rejection, and replacement loses those keys. A file lock coordinates only processes sharing the same key directory. Do not apply the stock template for an authenticated team deployment until you have a reviewed, tested shared-and-durable signing-key configuration for all API instances. One API replica is not a persistence/replacement fix. This documentation does not supply or certify that infrastructure change; [review key recovery](/self-hosting/backup-and-restore).
+</Warning>
+
+
 ```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry/infra/terraform/aws
 
 # 1. Authenticate to AWS (any of these works)
@@ -55,15 +61,19 @@ export AWS_PROFILE=observal-prod
 
 # 2. Configure
 cp terraform.tfvars.example terraform.tfvars
+# REQUIRED: change the copied image_tag = "latest" to image_tag = "1.16.0".
+# Configure the intended region, capacity, access, and TLS settings too.
 $EDITOR terraform.tfvars
 
-# 3. Apply
+# 3. Plan and review before applying
 terraform init
 terraform plan -out tf.plan
+# Review tf.plan: API/web/worker/init application images must select :1.16.0.
+# Do not apply if the effective image references still select latest or another release.
 terraform apply tf.plan
 ```
 
-First-time apply takes 12–15 minutes. RDS provisioning dominates. When it finishes:
+The v1.16.0 template defaults to `image_tag = "latest"`; selecting the Git source tag alone does not pin the deployed images. Verify the configured tag and effective task image references in the saved plan before the first apply. Treat plan/state files as sensitive; do not share them unredacted. Monitor provisioning and init-task completion instead of assuming a fixed duration. When the apply finishes:
 
 ```bash
 terraform output app_url
@@ -71,7 +81,7 @@ terraform output app_url
 
 Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Agentic Resource Registry login page.
 
-A ready-to-apply call of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/minimal/README.md).
+Apply the same image-tag review to the example inputs; checking out a tagged example does not change a moving image default. A release-specific source example of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/v1.16.0/infra/terraform/aws/examples/minimal/README.md).
 
 ## Configuration
 
@@ -82,6 +92,7 @@ All inputs live in `terraform.tfvars`. The defaults are production-shaped; you c
 ```hcl
 region      = "us-east-1"
 environment = "prod"
+image_tag   = "1.16.0"
 ```
 
 The install comes up on the ALB's AWS-assigned hostname (e.g. `observal-prod-alb-1234.us-east-1.elb.amazonaws.com`) over plain HTTP. Useful for evaluation; not for production.
@@ -154,13 +165,14 @@ For high-throughput installs (>100 trace events/sec sustained), bump `data_insta
 ### Application options
 
 ```hcl
-deployment_mode     = "enterprise"   # SSO-only login
 data_retention_days = 90             # ClickHouse TTL; 0 to disable
 log_retention_days  = 30             # CloudWatch log group retention
-image_tag           = "v1.4.0"       # specific Agentic Resource Registry release; "latest" pulls main
+image_tag           = "1.16.0"       # exact published image version, not the moving latest alias
 ```
 
 See [Configuration](/self-hosting/configuration) for the meaning of each application setting.
+
+The v1.16.0 module has no `deployment_mode` input; an undeclared tfvars assignment does not enable SSO-only login. After testing SSO and an authorized recovery route, configure runtime `deployment.sso_only=true` in **Admin → SSO → Access policy** and verify password login is rejected. See [authentication and SSO](/self-hosting/authentication).
 
 ### Bring Your Own VPC
 
@@ -196,7 +208,7 @@ ecs_security_group_id = "sg-0abc1234def56789b"
 
 The ALB SG must allow inbound TCP 80/443 from your desired CIDRs. The ECS SG must allow inbound TCP 8000 and 3000 from the ALB SG, with outbound to all.
 
-A full working example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/main/infra/terraform/aws/examples/byovpc/README.md).
+A release-specific source example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/v1.16.0/infra/terraform/aws/examples/byovpc/README.md).
 
 ### Git webhooks on a private install
 
@@ -231,7 +243,7 @@ Things to know:
 
 ## Required IAM permissions
 
-The IAM principal running Terraform needs permission to manage resources across these services. The simplest path is to attach the AWS-managed policies below; for a tighter custom policy, see [Hardened IAM policy](/self-hosting/aws-terraform#hardened-iam-policy).
+The IAM principal running Terraform needs permission to manage resources across these services. The AWS-managed policies below are broad starting points, not least-privilege policies. Review and restrict permissions to the resources your deployment manages before applying Terraform.
 
 | Service                             | Managed policy                    |
 | ----------------------------------- | --------------------------------- |
@@ -273,6 +285,8 @@ aws ecs update-service \
 
 ### Re-run migrations / seeds
 
+Only after the [canonical migration/recovery gates](/self-hosting/upgrades) are satisfied: preserve backups, drain incompatible writers, review the target and exported command, and control traffic. A launch response is not completion; wait for the intended task/job and inspect its exit/result before resuming access. Do not re-run migrations against a serving deployment as an improvised repair.
+
 The init task runs automatically on every `image_tag` change. To run it manually:
 
 ```bash
@@ -289,28 +303,17 @@ sudo docker compose -f /opt/observal/docker-compose.data.yml ps          # CH/Gr
 sudo docker compose -f /opt/observal/docker-compose.data.yml logs -f clickhouse
 ```
 
-### Read a generated secret
+### Verify generated secret configuration
 
-```bash
-aws ssm get-parameter --with-decryption \
-  --name /observal-prod/SECRET_KEY \
-  --query Parameter.Value --output text
-```
-
-The Terraform run generates and stores `DB_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SECRET_KEY`, and `GRAFANA_ADMIN_PASSWORD`, plus pre-built `DATABASE_URL`, `REDIS_URL`, and `CLICKHOUSE_URL` connection strings. ECS injects these into tasks at start; you never paste them in.
+Check the intended parameter names/versions, task permissions, and injection configuration without printing decrypted values into shared logs. The Terraform run manages database/application secrets and connection strings; verify that the application URLs and native database credentials agree. If retrieval is necessary for an authorized recovery task, use a protected channel and preserve the matching encryption configuration—do not treat secret retrieval as a routine debug transcript.
 
 ### Upgrade to a new Agentic Resource Registry release
 
-```hcl
-# terraform.tfvars
-image_tag = "v1.5.0"
-```
+Follow the [canonical migration and recovery gates](/self-hosting/upgrades) before changing an image tag. Select an actual verified target; no historical example is a recommended release.
 
-```bash
-terraform apply
-```
+The module's `run_init_on_apply` controls its one-shot initializer. When enabled, its trigger launches an ECS task, waits for it to stop, and checks the container exit code. New API/worker service dependencies refer to this resource, but **existing running tasks are not automatically drained before the migration**. For an incompatible or homogeneous-fleet upgrade, stop/drain those writers through the approved ECS/traffic-control procedure before running initialization.
 
-The init task re-runs migrations against the live RDS, then ECS rolls each service over with zero downtime.
+Inspect the planned resource graph and actual task result, then verify the selected services and ordinary-user workflow before restoring traffic. An ECS rolling update is not a zero-downtime or schema-compatibility guarantee. Image rollback does not restore database/application state; preserve the full [recovery set](/self-hosting/backup-and-restore).
 
 ### Resize the data volume
 
@@ -332,7 +335,7 @@ sudo resize2fs /dev/nvme1n1
 terraform destroy
 ```
 
-In `prod`, RDS has `deletion_protection = true` and `skip_final_snapshot = false`. Disable both manually before destroy if that is really what you want. The S3 backups bucket also blocks destroy unless `backup_bucket_force_destroy = true`.
+In `prod`, RDS deletion protection and final-snapshot requirements are intentional safeguards. Plan a separately authorized teardown, preserve the complete recovery set, and retain the required final snapshot. Do not disable every protection merely to repair a failed deployment. The backup bucket's force-destroy behavior is also destructive and must be reviewed independently.
 
 ## Remote state
 
@@ -377,15 +380,15 @@ Set `environment = "staging"` to drop RDS to single-AZ, run a single Redis node,
 
 The defaults are safe but conservative. Before pointing real traffic at this:
 
-* [ ] Switch to remote state (S3 + DynamoDB)
-* [ ] Restrict `alb_ingress_cidrs` to known networks
-* [ ] Enable AWS GuardDuty + Config in the account
-* [ ] Add CloudWatch alarms on RDS `CPUUtilization`, `FreeableMemory`, ECS service CPU, ALB `HTTPCode_Target_5XX_Count`
-* [ ] Attach AWS WAF to the ALB
-* [ ] Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
-* [ ] Configure Agentic Resource Registry SSO. See [Authentication and SSO](/self-hosting/authentication)
-* [ ] Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
-* [ ] Replace the GitHub tarball download in `user-data.sh.tftpl` with an artifact URL you control
+* Switch to remote state (S3 + DynamoDB)
+* Restrict `alb_ingress_cidrs` to known networks
+* Enable AWS GuardDuty + Config in the account
+* Add CloudWatch alarms on RDS `CPUUtilization`, `FreeableMemory`, ECS service CPU, ALB `HTTPCode_Target_5XX_Count`
+* Attach AWS WAF to the ALB
+* Set `transit_encryption_enabled = true` on the ElastiCache replication group and switch `REDIS_URL` to `rediss://...`
+* Configure Agentic Resource Registry SSO. See [Authentication and SSO](/self-hosting/authentication)
+* Test the [backup and restore](/self-hosting/backup-and-restore) procedure end-to-end
+* Replace the GitHub tarball download in `user-data.sh.tftpl` with an artifact URL you control
 
 ## Troubleshooting
 

@@ -4,11 +4,13 @@
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
 # SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Config files"
+description: "Distinguish local tracking, native profiles, capture buffers, and safe file handling."
 ---
 
-Every file Agentic Resource Registry reads or writes on the client (`~/.observal/`) and in each harness's config directory.
+Important CLI state and selected native configuration paths for this documented revision—not a complete inventory of every harness file. The [integration guides](/integrations/index) describe activation and compatibility; inspect the actual pull/doctor plan before changing files.
 
 ## Client-side: `~/.observal/`
 
@@ -21,15 +23,16 @@ Every file Agentic Resource Registry reads or writes on the client (`~/.observal
 | `opencode_session_outbox/` | Per-session durable OpenCode plugin batches and acknowledged line state | `0600` files |
 | `pi_session_outbox/` | Durable pending Pi extension batches | `0600` files |
 | `sync_state.json` | Acknowledged byte/line cursors for file-backed exporters | owner read/write |
-| `keys/` | Server-side JWT keys (operators only; path controlled by `JWT_KEY_DIR`) | `0600` |
+| `lockfile.json` | Local installation tracking, partitioned by active registry and harness | owner-only writes |
+| `capability_lock.jsonl` | Recorded resource activation modes, versions, directories, and times | private metadata; not proof of native execution |
 
 ### `config.json` schema
 
 ```json
 {
-  "server_url": "https://observal.your-company.internal",
-  "access_token": "ey...",
-  "refresh_token": "ey...",
+  "server_url": "https://registry.example.com",
+  "access_token": "<redacted>",
+  "refresh_token": "<redacted>",
   "user_id": "f9f3...",
   "user_name": "Alice",
   "username": "alice",
@@ -40,7 +43,9 @@ Every file Agentic Resource Registry reads or writes on the client (`~/.observal
 }
 ```
 
-Authentication and identity fields are managed by `observal auth`. The `config set` command accepts only `server_url`, `timeout`, `update_check`, `update_check_interval`, and `update_check_repo`. Supported environment variables override persisted values for the current invocation; see [Environment variables](/reference/environment-variables).
+This is an illustrative redacted stored shape, not credentials to copy. Authentication and identity fields are managed by `observal auth`. The `config set` command accepts only `server_url`, `timeout`, `update_check`, `update_check_interval`, and `update_check_repo`. Supported environment variables override persisted values for the current invocation; see [Environment variables](/reference/environment-variables).
+
+A project's `observal.lock` separately selects the agent release; it is not a substitute for local installation tracking. Do not commit token-bearing config, generated credentials, raw session buffers, or private local metadata. Operator JWT keys live at the configured server `JWT_KEY_DIR` and belong in the [operator recovery plan](/self-hosting/backup-and-restore), not a portable client bundle.
 
 ### Durable session outbox
 
@@ -79,51 +84,72 @@ Each list invocation replaces this cache, including an empty result. Numeric row
 
 ### Claude Code
 
-| Path | Purpose |
+| Path/surface | Purpose |
 | --- | --- |
-| `~/.claude/settings.json` | Hooks, telemetry config |
-| `~/.claude.json` | User- and local-scoped MCP servers |
-| `.mcp.json` | Project-scoped MCP servers |
-| `~/.claude/agents/<name>.json` | User-scoped sub-agent definitions |
-| `.claude/agents/<name>.json` | Project-scoped sub-agent definitions |
-| `.claude/skills/<skill>/` | Installed skills (SKILL.md + assets) |
-| `AGENTS.md` / `CLAUDE.md` | Rules loaded into context |
+| `.claude/agents/<local-name>.md` / `~/.claude/agents/<local-name>.md` | Project/user agent Markdown with YAML frontmatter |
+| `.claude/skills/<skill>/` / `~/.claude/skills/<skill>/` | Skill instructions/resources where supported |
+| `~/.claude/settings.json` | Managed user session hooks; opt-in user agent gates |
+| `.claude/settings.local.json` | Opt-in project agent gates; not the default agent-frontmatter placement |
+| Native `claude mcp add` registration | MCP setup/reset commands returned by pull; inspect the native scope/result instead of assuming MCPs are stored in `settings.json` |
+| `CLAUDE.md` and supported guidance files | Native project guidance, not registry agent activation |
+
+See [Claude Code](/integrations/claude-code) and the [agent hook placement contract](/cli/pull#agent-hooks-in-headless-sessions). A generated profile or hook declaration is not proof it is selected or runs.
 
 ### Kiro
 
 | Path | Purpose |
 | --- | --- |
-| `.kiro/settings/mcp.json` | Project-level MCP servers with direct commands or URLs |
-| `~/.kiro/settings/mcp.json` | Global MCP servers |
-| `.kiro/agents/<name>.json` | Project-level agent config with telemetry hooks |
-| `~/.kiro/agents/<name>.json` | Global agent config |
-| `.kiro/steering/<name>.md` | Steering files (system instructions with YAML frontmatter for inclusion modes) |
-| `.kiro/skills/` | Kiro skills (SKILL.md) |
-| `.kiro/hooks/` | Standalone hook definitions |
-| `AGENTS.md` | Rules loaded into context (compat with Claude Code) |
+| `.kiro/settings/mcp.json` / `~/.kiro/settings/mcp.json` | Project/user MCP configuration |
+| `.kiro/agents/<local-name>.json` / `~/.kiro/agents/<local-name>.json` | Project/user agent profiles |
+| `.kiro/steering/` and `.kiro/skills/` | Supported native instructions/skills; not equivalent to profile selection |
+| `.kiro/hooks/` | Standalone hooks for the supported native format/version |
+
+Legacy inline hooks and standalone hooks differ. Check [Kiro](/integrations/kiro) for the chosen tool revision rather than copying an old event map.
 
 ### Cursor
 
 | Path | Purpose |
 | --- | --- |
-| `.cursor/mcp.json` | MCP servers with direct commands or URLs |
-| `.cursor/rules/` | Cursor rules |
-| `AGENTS.md` | Rules |
+| `.cursor/agents/<local-name>.md` / `~/.cursor/agents/<local-name>.md` | Custom subagent profiles |
+| `.cursor/mcp.json` / `~/.cursor/mcp.json` | Project/user MCP configuration |
+| `.cursor/rules/` | Native guidance |
+| `.cursor/hooks.json` / `~/.cursor/hooks.json` | Supported hook configuration |
+
+[Cursor](/integrations/cursor) needs explicit custom-subagent activation. Cursor lacks the registry skills capability; directory patterns in shared metadata do not override capability gating.
 
 ### VS Code
 
+The registry identifier is `copilot`, not `vscode`.
+
 | Path | Purpose |
 | --- | --- |
-| `.vscode/mcp.json` | MCP servers with direct commands or URLs |
-| `AGENTS.md` | Rules loaded into context |
+| `.github/agents/<local-name>.agent.md` | Project custom-agent profile |
+| `.vscode/mcp.json` | MCP configuration using the native `servers` key |
+
+Use [VS Code Copilot](/integrations/copilot), not the terminal adapter's assumptions.
 
 ### Codex CLI
 
 | Path | Purpose |
 | --- | --- |
-| `AGENTS.md` | Rules (rules-only integration) |
+| `.codex/agents/<local-name>.toml` / `~/.codex/agents/<local-name>.toml` | Custom-subagent definitions |
+| `.codex/config.toml` / `~/.codex/config.toml` | MCP configuration using `mcp_servers` |
+| `AGENTS.md` and native overrides | Guidance; not a substitute for selecting the custom subagent |
+
+[Codex](/integrations/codex) is not a rules-only integration. Its profile and `--profile` option are different concepts; generation does not prove native custom-role activation.
+
+### Copilot CLI
+
+| Path | Purpose |
+| --- | --- |
+| `.github/agents/<local-name>.agent.md` | Project agent profile |
+| `.mcp.json` | Project MCP configuration using `mcpServers` |
+
+The registry adapter uses fixed project scope and rejects explicit `--scope`, even `project`. Native personal MCP settings may also exist. Use [Copilot CLI](/integrations/copilot-cli) for activation and personal-profile precedence.
 
 ### Pi
+
+User agent pulls isolate their content under `~/.pi/agent/agents/<local-name>/`; project pulls use `.pi/agents/<local-name>/`. These can include `AGENTS.md`, `mcp.json`, skills, and `observal-hooks.json`. The [Pi integration](/integrations/pi) explains user-profile switching and project-profile limits; base registry paths alone are not the final isolated profile paths.
 
 | Path | Purpose |
 | --- | --- |
@@ -157,7 +183,7 @@ If `extensions/observal.ts` exists without a matching manifest, doesn't match th
 
 ## File permissions
 
-Client-side files under `~/.observal/` are created with mode `0600` (owner read/write only). This holds your access token, so don't loosen the permissions.
+The CLI's private JSON writers and session buffer apply owner-only permissions on supported POSIX filesystems. Do not infer one mode for every directory, native harness file, backup, or platform. Verify actual access permissions; generated native configuration and session buffers can contain credentials or sensitive content. Do not loosen access merely to make setup pass.
 
 ## Related
 

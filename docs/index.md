@@ -4,136 +4,62 @@
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-FileCopyrightText: 2026 Naraen Rammoorthi <naraen13@gmail.com>
 # SPDX-FileCopyrightText: 2026 Subramania Raja <dhanpraja231@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Installation"
+title: "Agentic Resource Registry"
+description: "Find, install, share, and improve the agents and resources your team uses."
 ---
 
-Agentic Resource Registry has two parts: a **server** you self-host and a **CLI** installed on each developer machine.
+Agentic Resource Registry is a self-hosted registry for sharing coding agents and the resources they use. Publish an agent once, then pull its configuration into a supported coding tool instead of rebuilding that setup by hand.
 
-## Install the server
+An **agent** combines instructions with the MCP servers, skills, hooks, prompts, and sandboxes it needs. The registry keeps these resources versioned, controls who can access them, and generates configuration for the coding tool you choose.
 
-The server runs as a Docker Compose stack (API, web UI, PostgreSQL, ClickHouse, Redis, worker, load balancer). Prometheus and Grafana are optional deployment overlays.
+<Note>
+  These guides target stable v1.16.0. Pin that release rather than assuming a moving latest version matches; [match the documentation, CLI, and registry versions](/reference/documentation-version).
+</Note>
 
-> \[!NOTE] Requires Docker Engine ≥ 24.0 with Compose v2 (`docker compose`, not `docker-compose`). Homebrew's Docker formula is outdated. Install [Docker Desktop](https://docs.docker.com/get-docker/) or use your distro's upstream packages. Verify with `docker version` and `docker compose version`.
+## Start with an agent
 
-**One-line install:**
+<CardGroup cols={2}>
+  <Card title="Join your team's registry" icon="users" href="/getting-started/onboarding">
+    Install the CLI, sign in to an existing registry, and find an agent you can use.
+  </Card>
+  <Card title="Try a registry locally" icon="laptop" href="/getting-started/local-evaluation">
+    Run an evaluation instance and try the same agent workflow before deploying for a team.
+  </Card>
+</CardGroup>
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install-server.sh | bash
+Already connected? [Pull your first agent](/getting-started/quickstart). Ready to publish your own? Follow the [agent authoring workflow](/guides/create-an-agent).
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    author[Author an agent] --> registry[Registry: review and version]
+    registry --> pull[Inspect and pull]
+    pull --> tool[Activate in your coding tool]
+    tool --> task[Use it on a task]
 ```
 
-This downloads a config package, runs guided setup (domain, secrets, ports), pulls container images from GHCR, and starts the full stack.
+The registry stores and distributes the setup. Your coding tool runs the agent. Pulling an agent does not give you a model-provider account or replace your coding tool's authentication.
 
-**From source** (for contributors):
+An agent's declared harness support and the tool's capabilities determine what can be installed. See [supported coding tools](/integrations/index) before choosing a target.
 
-```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git && cd AgenticResourceRegistry
-cp .env.example .env
-make up
-```
+## More than installing configuration
 
-For deployment options, see [Self-Hosting](/self-hosting/docker-compose) and [Production deployment](/self-hosting/production-deploy).
+**Share and maintain resources.** Compose agents from reusable components, publish reviewed versions, fork an existing setup, and share it with a team. [Share agent configurations](/use-cases/share-agent-configs).
 
-## Install the CLI
+**Discover what already exists.** Search for resources that fit a task. Agentic Resource Discovery (ARD) supplies a structured discovery format; relevance, approval, compatibility, and availability are separate signals. [Discover resources with ARD](/guides/discover-resources).
 
-The CLI is what you use to log in, instrument harness configs, pull agents, and query traces.
+**Delegate part of a task.** Agent-to-agent delegation uses A2A tasks for local registry agents and reviewed remote agent services. An installable agent and a remote service are different resources. [Delegate work with A2A](/guides/delegate-work).
 
-## Install (standalone binary)
+**Learn from insights.** Agent reports help you examine how an agent is used and where it encounters friction. Component reports distinguish verified configuration from evidence of actual use; coverage varies by coding tool. [Interpret agent and component insights](/guides/interpret-insights).
 
-The standalone binary is the simplest way to install. No Python required.
+Sessions and traces supply evidence for those reports and for debugging. They are useful after you start using an agent, not a prerequisite for finding and installing one. [Debug a failure using session evidence](/use-cases/debug-agent-failures).
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
-```
+## Choose the documentation you need
 
-This downloads the latest release binary for your platform and places it on your `PATH`.
-
-The installer downloads the release binary and checks its SHA-256 hash against the release checksums when available. If it cannot download the checksums, it warns and proceeds without verification; it does not create a key in `~/.observal/config.json`.
-
-Verify it worked:
-
-```bash
-observal --version
-```
-
-## Alternative: install with Python
-
-If you prefer to install via Python, use one of these methods. Requires Python 3.11 or newer.
-
-**uv (recommended):**
-
-```bash
-uv tool install observal-cli
-```
-
-**pipx:**
-
-```bash
-pipx install observal-cli
-```
-
-**pip:**
-
-```bash
-pip install --user observal-cli
-```
-
-### Optional extras
-
-The Python package includes the Docker SDK. The `migrate` extra adds `pyarrow` for `observal server migrate`:
-
-```bash
-uv tool install 'observal-cli[migrate]'
-```
-
-## Install from source (for contributors)
-
-```bash
-git clone https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
-cd AgenticResourceRegistry
-uv tool install --editable .
-```
-
-## What gets installed
-
-The Python package provides three entry points:
-
-| Command                | Purpose                                                  |
-| ---------------------- | -------------------------------------------------------- |
-| `observal`             | The main CLI                                             |
-| `observal-sandbox-run` | Sandbox runner invoked by Agentic Resource Registry sandboxes             |
-| `observal-sandbox-mcp` | MCP adapter used by sandbox execution                   |
-
-You will almost never call the sandbox helpers directly. The CLI wires them into your harness config for you.
-
-## Upgrade
-
-```bash
-observal self upgrade
-```
-
-## Uninstall
-
-Standalone binary:
-
-```bash
-rm "$(which observal)"
-```
-
-Python install:
-
-```bash
-uv tool uninstall observal-cli
-# or: pipx uninstall observal-cli
-# or: pip uninstall observal-cli
-```
-
-Uninstalling the CLI does **not** remove your config (`~/.observal/`). Delete that folder if you want a clean slate:
-
-```bash
-rm -rf ~/.observal
-```
-
-## Next
-
--> [Quickstart](/getting-started/quickstart)
+- **Use the registry:** start with [joining a registry](/getting-started/onboarding) and [pulling an agent](/getting-started/quickstart).
+- **Connect a coding tool:** find its support and setup instructions under [Integrations](/integrations/index).
+- **Operate a registry:** use the [self-hosting guides](/self-hosting/index) for deployment, authentication, backups, and upgrades.
+- **Look up exact behavior:** use the [CLI reference](/cli/index), [API reference](/reference/api-endpoints), and [core concepts](/core-concepts/index).

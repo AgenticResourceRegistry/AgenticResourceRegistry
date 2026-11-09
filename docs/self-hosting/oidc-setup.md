@@ -1,12 +1,12 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "OIDC / OAuth 2.0 SSO Setup Guide"
 ---
 
 This guide walks you through configuring OpenID Connect (OIDC) / OAuth 2.0
-Single Sign-On for Agentic Resource Registry. It covers environment variable
-configuration, per-IdP setup instructions, and troubleshooting common issues.
+Single Sign-On for Agentic Resource Registry. It covers runtime client settings, per-IdP setup instructions, and troubleshooting common issues. Supported environment imports are a separate compatibility/file-management mechanism; see [configuration](/self-hosting/configuration).
 
 ---
 
@@ -32,20 +32,20 @@ Configure OIDC SSO in **Admin → SSO → SSO settings**.
 | `oauth.client_id` | The client ID issued by your IdP when you register the Agentic Resource Registry application. |
 | `oauth.client_secret` | The client secret issued by your IdP. Treat this as a password and store it securely. |
 | `oauth.server_metadata_url` | The OIDC discovery URL for your IdP. This is the `.well-known/openid-configuration` endpoint. |
-| `deployment.sso_only` | When set to `true`, disables password-based authentication entirely. Only SSO login is allowed. See [SSO-Only Mode](#6-sso-only-mode). |
+| `deployment.sso_only` | When set to `true`, disables password-based authentication entirely. Only SSO login is allowed. See [SSO-Only Mode](#5-sso-only-mode). |
 | `deployment.frontend_url` | The public URL of your Agentic Resource Registry instance. Used to construct the OAuth callback URL registered with your IdP. |
 
-OIDC client changes require an API restart before normal user login uses them. Existing `OAUTH_*` env vars are imported once on startup when the dynamic setting is not already present.
+OIDC client changes require an API restart before normal user login uses them. Supported direct `OAUTH_*` inputs are imported when the corresponding stored setting is empty. Non-empty stored values take precedence; supported file-backed inputs remain externally managed.
 
 ### Callback URL
 
 When registering Agentic Resource Registry with your IdP, use the following redirect URI:
 
 ```
-{FRONTEND_URL}/api/v1/auth/oauth/callback
+{deployment.frontend_url}/api/v1/auth/oauth/callback
 ```
 
-For example, if `FRONTEND_URL=https://observal.example.com`, the callback URL is:
+For example, if `deployment.frontend_url=https://observal.example.com`, the callback URL is:
 
 ```
 https://observal.example.com/api/v1/auth/oauth/callback
@@ -56,7 +56,7 @@ This value must match exactly what is configured in your IdP. Any mismatch
 
 ### Minimal Example
 
-With these three settings saved and the API restarted, OIDC SSO is ready.
+After saving and restarting, test a real provider login, its claims, assignments, callback, and role. A settings save alone does not establish that OIDC SSO is ready.
 
 ---
 
@@ -225,7 +225,7 @@ with [SCIM provisioning](/self-hosting/scim-setup) for automated user lifecycle 
 **Common causes and fixes:**
 
 - **Callback URL mismatch.** The redirect URI registered in your IdP must
-  exactly match `{FRONTEND_URL}/api/v1/auth/oauth/callback`. Check for
+  exactly match `{deployment.frontend_url}/api/v1/auth/oauth/callback`. Check for
   trailing slashes, HTTP vs HTTPS differences, or typos.
 - **Incorrect client secret.** Re-copy the client secret from your IdP and
   update `oauth.client_secret`. Secrets often contain special characters that

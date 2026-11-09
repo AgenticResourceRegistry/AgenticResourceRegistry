@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Dheirav <dheirav2005@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Pi"
 ---
@@ -13,16 +14,11 @@ and collect Pi session telemetry.
 
 ## Overview
 
-Pi is harness-centric: the whole of Pi is one agent. There is no per-agent
-profile file the way Kiro or OpenCode have one. Instead, Agentic Resource Registry writes the
-agent's rules into `AGENTS.md`, which becomes Pi's system prompt, and writes
-MCP servers and skills next to it.
+Pi runs coding sessions; a registry profile is a generated instruction/resource bundle, not a separate native Pi agent executable. Agentic Resource Registry writes each profile's instructions as `AGENTS.md` inside an isolated directory, with its MCP configuration and skills alongside it.
 
-To let several registry agents coexist, a user-scope `observal agent pull`
-writes each agent into its own profile directory under
-`~/.pi/agent/agents/{agent}/`. The Agentic Resource Registry extension's `/agent` command swaps a
-profile into the live `~/.pi/agent/` location. A project-scope pull writes the
-rules straight to the project's `AGENTS.md`, which Pi reads directly.
+A user-scope pull writes `~/.pi/agent/agents/<local-name>/`. The registry extension's `/agent` command selects **user profiles** and swaps their content into the active user location. This is the recommended selection workflow below; use the exact generated local name.
+
+A project-scope pull instead writes `.pi/agents/<local-name>/AGENTS.md` and related resources. It does **not** write the project's root `AGENTS.md`, automatically load those instructions, or make the profile selectable through `/agent`. Do not copy over existing root guidance to make a project profile appear active. No verified project-profile loading procedure is provided here.
 
 Pi session telemetry uses an in-process TypeScript extension,
 `~/.pi/agent/extensions/observal.ts`. It is installed by `observal doctor patch`
@@ -34,7 +30,7 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 
 | Capability | Support |
 |---|---|
-| Agent profiles | Project and user scope, as `AGENTS.md` |
+| Agent profiles | Isolated project/user instruction bundles; `/agent` selects user profiles only |
 | Hook bridge | Pi extension (no shell hooks) |
 | Extension events | `session_start`, `agent_end`, `session_shutdown`, `tool_call`, `tool_result` |
 | MCP servers | Active `.pi/mcp-adapter.json` / `~/.pi/agent/mcp-adapter.json` for adapter 3.x to 6.x; `mcp.json` for adapter 2.x or Pi built-in MCP |
@@ -55,8 +51,8 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 ### 1. Install the Agentic Resource Registry CLI
 
 ```bash
-uv tool install observal-cli
-# or: pipx install observal-cli
+uv tool install 'observal-cli==1.16.0'
+# or: pipx install 'observal-cli==1.16.0'
 ```
 
 Pi 0.74.0 or newer is required by the telemetry extension.
@@ -75,34 +71,22 @@ stale. A healthy install prints no Pi warning.
 
 ### 3. Pull an agent into Pi
 
-```bash
-observal agent pull <agent-name> --harness pi
-```
-
-Pi's default scope is user scope. The agent is written to
-`~/.pi/agent/agents/{agent-name}/`.
-
-To install into the current project:
+Inspect the accessible exact release first, following [agent inspection](/guides/inspect-an-agent). Replace the identity/version placeholders, preview, then apply the same **user-scope** selection:
 
 ```bash
-observal agent pull <agent-name> --harness pi --scope project
+observal agent pull NAMESPACE/AGENT --harness pi --scope user --version AGENT_VERSION --strict --dry-run
+observal agent pull NAMESPACE/AGENT --harness pi --scope user --version AGENT_VERSION --strict
 ```
 
-Project pulls write the rules to `AGENTS.md` in the project root, which Pi
-reads directly, and the agent's MCP servers and skills to
-`.pi/agents/{agent-name}/`. `/agent` handles only user-scope profiles, so
-activate a project profile explicitly. With `pi-mcp-adapter` 3.x to 6.x, copy its
-MCP config to the path that adapter actually loads:
+Pi's default scope is user scope. Read the returned profile directory and local name; do not assume it equals the display name. Generation/installation is not native activation. Model/provider login and MCP runtime setup are separate prerequisites.
+
+**Project-scope boundary:** an advanced preview can inspect the isolated project profile:
 
 ```bash
-cp .pi/agents/<agent-name>/mcp.json .pi/mcp-adapter.json
-cp -r .pi/agents/<agent-name>/skills/. .pi/skills/
+observal agent pull NAMESPACE/AGENT --harness pi --scope project --version AGENT_VERSION --strict --dry-run
 ```
 
-With adapter 2.x, use `.pi/mcp.json` instead. Merge rather than overwrite if
-the active file already lists other servers. Pi releases with built-in MCP
-support can also read `mcp.json`, but adapter-specific result attribution
-requires a working adapter; do not assume the two MCP runtimes are equivalent.
+The planned instructions belong at `.pi/agents/<local-name>/AGENTS.md`, not root guidance. `/agent` only lists user profiles; copying MCP settings or skills does not load the agent's instructions. v1.16.0 can also persist a project pull's identity globally, as described in [Attribution](#attribution). This guide does not recommend applying project scope without a separately verified loading/attribution procedure. Use the user-profile workflow instead of silently merging or replacing root instructions/configuration.
 
 ### 4. Install or refresh the telemetry extension
 
@@ -121,13 +105,13 @@ URL, although it does not contact the server.
 
 ### 5. Activate the agent inside Pi
 
-Inside a Pi session, run `/agent` and pick the pulled agent. See
+Inside a Pi session with the registry extension loaded, run `/agent` and select the exact generated **user-profile** local name. This does not select a project profile. Start a new Pi session after switching, confirm the selected profile, and run a bounded task before claiming native activation; this release-documentation rehearsal did not execute an authenticated Pi model task. See
 [Agent profiles and swapping](#agent-profiles-and-swapping).
 
 ### 6. Check what is installed
 
 ```bash
-observal scan --harness pi
+observal scan --inventory --harness pi
 observal doctor
 ```
 
@@ -137,10 +121,10 @@ observal doctor
 
 | Purpose | Project scope | User scope |
 |---|---|---|
-| Agent rules | `AGENTS.md` (project root) | `~/.pi/agent/agents/{agent}/AGENTS.md` |
+| Agent rules | `.pi/agents/<local-name>/AGENTS.md` | `~/.pi/agent/agents/{agent}/AGENTS.md` |
 | MCP config | `.pi/agents/{agent}/mcp.json` | `~/.pi/agent/agents/{agent}/mcp.json` |
 | Skill definition | `.pi/agents/{agent}/skills/{name}/SKILL.md` | `~/.pi/agent/agents/{agent}/skills/{name}/SKILL.md` |
-| Active agent rules | `AGENTS.md` | `~/.pi/agent/AGENTS.md` |
+| Active agent rules | Existing root `AGENTS.md` is native guidance; the isolated profile is not auto-loaded | `~/.pi/agent/AGENTS.md` |
 | Active MCP config | `.pi/mcp-adapter.json` (adapter 3.x to 6.x), `.pi/mcp.json` (2.x) | `~/.pi/agent/mcp-adapter.json` (adapter 3.x to 6.x), `~/.pi/agent/mcp.json` (2.x) |
 | Active skills | `.pi/skills/{name}/SKILL.md` | `~/.pi/agent/skills/{name}/SKILL.md` |
 | Guidance files | `AGENTS.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` | `~/.pi/agent/AGENTS.md` |
@@ -160,7 +144,7 @@ for the adapter-specific result identities verified by component insights;
 its 2.x releases read active `mcp.json` and its 3.x to 6.x releases read active
 `mcp-adapter.json`. Pulling an agent records an MCP-entry
 fingerprint from the generated profile, but **does not activate that profile**:
-use `/agent` or activate the project config before starting the session. Refresh
+use `/agent` for a user profile. A copied project MCP config is not agent-instruction activation; this guide does not verify a project-profile loader. Refresh
 the Agentic Resource Registry extension with `observal doctor patch --harness pi` and restart Pi.
 
 The extension fingerprints the active MCP entries, checks for conflicting
@@ -299,9 +283,7 @@ eligible. A session without a verified layer (for example the one in which
 
 ## Agent profiles and swapping
 
-Because Pi reads one active `AGENTS.md` and `skills/` directory, and the MCP
-adapter reads one active profile config, only one Agentic Resource Registry agent can be active
-at a time. In user scope,
+The registry extension selects one user profile at a time, alongside any existing native project guidance. The MCP adapter reads the active runtime configuration. In user scope,
 `observal agent pull` does not touch the active files. It writes into the
 per-agent profile directory, and the extension's `/agent` command makes a
 profile active:
@@ -384,26 +366,12 @@ stale copies.
 Pi does not expose an Agentic Resource Registry agent id in its session file. The extension
 resolves attribution from Agentic Resource Registry's own state:
 
-1. `observal agent pull` records the agent name, id, version, scope, pull
-   time, and directory under the `pi` harness in `~/.observal/lockfile.json`.
-2. A user-scope pull also records that agent as `active_agent` in
-   `~/.observal/config.json`, and `/agent` updates the entry whenever you
-   swap profiles. A project-scope pull leaves `active_agent` alone, because
-   every Pi session on the machine reads it.
-3. On `session_start`, the extension first looks in the lockfile, for the
-   configured server URL, for a project-scope install whose directory contains
-   the session's working directory. The deepest such directory wins, so an
-   agent pulled into a subproject overrides one pulled into its parent.
-4. Outside every project install, the extension uses `active_agent`, looked up
-   in the same lockfile by id first and then by name. An `active_agent` that
-   the lockfile lists only as project-scope installs is ignored outside those
-   projects. Older CLIs wrote it on project-scope pulls too, and applying it
-   everywhere tagged unrelated sessions as that agent.
-5. The session payload is sent with the resolved `agent_id` and
-   `agent_version`.
-6. If neither step finds an agent, the session is sent with a null agent id.
-   If there is an `active_agent` but no lockfile match, the stored id is sent
-   as-is.
+1. A pull records name/id/version/scope/directory in the Pi installation lockfile and also records `active_agent` in local config.
+2. In v1.16.0 that persistence occurs for project pulls too. The extension reads `active_agent` and resolves it in the configured registry's lockfile by ID/name; it does not implement the later deepest-project-directory binding.
+3. The resolved identity/version is attached to delivered sessions. A project pull can therefore affect attribution outside that project; do not treat it as proof that the selected profile ran there.
+4. If no active ID exists, the session has no registry agent ID. If an active ID has no matching lock entry, the stored ID can still be sent.
+
+Later development fixes project binding and user-only global persistence. Those fixes are not present in this target tag. Use user profiles and `/agent` deliberately, and inspect actual session identity; do not use release attribution as an independent execution/security attestation.
 
 ---
 
@@ -436,8 +404,7 @@ exporters' outbox; it does not count this directory.
 
 ## Agent profile format
 
-Agentic Resource Registry writes the agent's rules as plain Markdown into `AGENTS.md`. Pi loads
-that file as the system prompt, so the whole file is the agent:
+Agentic Resource Registry writes plain Markdown instructions into the isolated profile's `AGENTS.md`. A user-profile selection through `/agent` puts them at `~/.pi/agent/AGENTS.md` for Pi's instruction context. Project profiles remain isolated and are not loaded automatically. This is an instruction bundle, not the entire native system prompt or proof of activation:
 
 ```markdown
 # Reviewer
@@ -479,10 +446,7 @@ read, instead of being duplicated under `~/.pi/agent/skills/`.
 
 ## Caveats
 
-**One active agent at a time.** A user-scope pull does not activate the
-agent. Run `/agent` inside Pi, or copy the profile into `~/.pi/agent/` by hand.
-`/agent` does not see project-scope profiles under `.pi/agents/`; copy their
-`mcp.json` and `skills/` into `.pi/` as shown in Setup step 3.
+**One selected user profile at a time.** A pull does not activate the instructions. Use `/agent` with a user-scope profile and inspect the selected local name. `/agent` does not see project profiles under `.pi/agents/`. Do not copy profile files into active locations or overwrite root guidance as a default workaround; manual loading needs its own ownership, configuration, and attribution verification.
 
 **`/agent` replaces the active files.** The first swap backs up your existing
 `AGENTS.md`, `SYSTEM.md`, both MCP configs if present, `skills/`, and
@@ -506,8 +470,7 @@ not by each agent pull, and lives only in user scope.
 **Guidance files are scanned, with two exceptions.** Agentic Resource Registry layers
 `AGENTS.md`, `.pi/SYSTEM.md`, and `.pi/APPEND_SYSTEM.md` as context. Scanning
 and `observal agent pull` never rewrite the project's `.pi/SYSTEM.md` or
-`.pi/APPEND_SYSTEM.md`. A project-scope pull does write the project's
-`AGENTS.md`, because that file is the agent's rules in Pi, and `/agent` swaps
+`.pi/APPEND_SYSTEM.md`. A project-scope pull places agent instructions inside its isolated `.pi/agents/<local-name>/` profile; it is not permission to overwrite the project's root guidance. `/agent` swaps
 do replace the user-scope `~/.pi/agent/SYSTEM.md` as described above.
 
 **Attribution depends on the lockfile and `/agent`.** A profile copied by hand

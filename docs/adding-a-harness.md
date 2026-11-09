@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Adding a New Harness to Agentic Resource Registry"
 ---
@@ -603,9 +604,7 @@ in `skill_format`). No harness-specific skill generation code is needed beyond
 setting those two registry fields correctly. The shared `generate_skill()`
 in `services/config/skill_builder.py` handles all harnesses.
 
-**Sandboxes are just MCP servers.** They use `observal-sandbox-run` as the
-command. If MCP install works for your harness, sandboxes work automatically.
-No additional sandbox-specific code is needed per harness.
+**Sandbox configuration is delivered through MCP.** The bundled `observal-sandbox-mcp` gateway dispatches through `observal-sandbox-run`. Reusing MCP configuration generation does not prove the gateway/runner is installed, a runtime is reachable, an image contains required tools, the project is mounted, or isolation is adequate. Validate those boundaries separately; see [sandbox contracts](/sandboxes).
 
 Other notes:
 
@@ -616,5 +615,5 @@ Other notes:
 - `ensure_loaded()` guarantees all adapters are registered before cross-adapter operations
 - MCP deduplication in scan uses first-discovered-wins
 - MCP commands and remote URLs are emitted directly in each harness's native format
-- Sandboxes are MCP servers backed by `observal-sandbox-run`, so if MCP install works, sandboxes work automatically
+- Sandbox MCP delivery reuses adapter configuration support; runtime execution/project access still require separate verification
 - Skills use the harness's native skill/rule file format, resolved from `skill` and `skill_format` in the registry
