@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -61,10 +62,58 @@ def test_public_reconcile_drains_outbox_then_all_detected_adapters(monkeypatch):
         }
 
     monkeypatch.setattr(cmd_reconcile_cli, "_reconcile_harness", reconcile_harness)
+    monkeypatch.setattr(
+        cmd_reconcile_cli,
+        "_discover_candidates",
+        lambda target, _since: calls.append(f"discover:{target}") or [],
+    )
 
     cmd_reconcile_cli.reconcile(harness="", since_hours=24, dry_run=False)
 
-    assert calls == ["outbox", "claude-code", "kiro"]
+    assert calls == ["discover:claude-code", "discover:kiro", "outbox", "claude-code", "kiro"]
+
+
+def test_manual_reconcile_snapshots_near_cutoff_before_backlog_drain(tmp_path: Path, monkeypatch):
+    from observal_cli import cmd_reconcile_cli
+
+    transcript = tmp_path / "near-cutoff.jsonl"
+    transcript.write_text("{}\n")
+    source = SessionSource("kiro", "near-cutoff", transcript)
+    clock = [24 * 3600 - 1]
+    calls = []
+
+    class Adapter:
+        def is_installed(self):
+            return True
+
+        def discover_session_sources(self, since_hours):
+            calls.append("discover")
+            return [source] if clock[0] < since_hours * 3600 else []
+
+        def related_session_sources(self, _source):
+            return []
+
+        def session_extra_records(self, *_args):
+            return ()
+
+    monkeypatch.setattr(cmd_reconcile_cli, "load_config", lambda: {"user_id": "user"})
+    monkeypatch.setattr(cmd_reconcile_cli, "ensure_loaded", lambda: None)
+    monkeypatch.setattr(cmd_reconcile_cli, "get_all_adapters", lambda: {"kiro": Adapter()})
+    monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _name: Adapter())
+    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (0, 0, False))
+    monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda *_args: (0, 0))
+    monkeypatch.setattr(
+        cmd_reconcile_cli, "drain_session_source", lambda *_args, **_kwargs: calls.append("source") or True
+    )
+
+    def drain(*_args, **_kwargs):
+        calls.append("outbox")
+        clock[0] += 120
+        return True
+
+    monkeypatch.setattr(cmd_reconcile_cli, "drain_outbox", drain)
+    cmd_reconcile_cli.reconcile(harness="kiro", since_hours=24, dry_run=False)
+    assert calls == ["discover", "outbox", "source"]
 
 
 def test_public_reconcile_discovers_claude_and_kiro_fixtures(tmp_path: Path, monkeypatch):
@@ -141,7 +190,7 @@ def test_background_recovery_uses_adapter_sources_and_shared_drain(tmp_path: Pat
 
     session_push._recover_sessions("claude-code", home=tmp_path)
 
-    assert calls == ["outbox", "unfinished"]
+    assert calls == ["outbox", "unfinished", "outbox"]
     assert finals == [True]
 
 
@@ -244,7 +293,7 @@ def test_reconcile_finalizes_fully_uploaded_unfinished_session(tmp_path, monkeyp
     monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda _source, _cfg: (3, 1))
     monkeypatch.setattr(cmd_reconcile_cli, "drain_session_source", drain)
 
-    result = cmd_reconcile_cli._reconcile_harness("kiro", {"user_id": "user"}, 24, False)
+    result = cmd_reconcile_cli._reconcile_harness("kiro", {"user_id": "user"}, False, [source])
 
     assert result["finalized"] == 1
     assert result["sessions"] == [{"session_id": "session-1", "status": "finalized", "bytes_new": 0}]
@@ -279,7 +328,7 @@ def test_reconcile_reports_permanent_rejection(tmp_path, monkeypatch):
     monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda _source, _cfg: (0, 0))
     monkeypatch.setattr(cmd_reconcile_cli, "drain_session_source", reject)
 
-    result = cmd_reconcile_cli._reconcile_harness("kiro", {"user_id": "user"}, 24, False, rejections)
+    result = cmd_reconcile_cli._reconcile_harness("kiro", {"user_id": "user"}, False, [source], rejections)
 
     assert result["pushed"] == 0
     assert result["rejected"] == 1

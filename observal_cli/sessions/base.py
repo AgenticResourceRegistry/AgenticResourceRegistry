@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared IO primitives for all harness session push scripts.
@@ -291,12 +292,145 @@ def _refresh_access_token(server_url: str, refresh_token: str, config_path: str)
         return None
 
 
+def _safe_ingest_validation_detail(response) -> str | None:
+    """Describe the first invalid field, never echo the submitted transcript."""
+    import re
+
+    # FastAPI includes the invalid `input` in its 422 body, potentially the entire
+    # transcript. Do not dump it to sync.log or the quarantine reason.
+    if len(getattr(response, "content", b"")) > 32 * 1024 * 1024:
+        return None
+    try:
+        errors = response.json().get("detail")
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(errors, list) or not errors or not isinstance(errors[0], dict):
+        return None
+    error = errors[0]
+    kind = error.get("type")
+    location = error.get("loc")
+    # Only known Pydantic/FastAPI codes may appear in diagnostics. A remote
+    # response is untrusted even if it claims to be a validation error.
+    known_kinds = {
+        "value_error",
+        "missing",
+        "string_too_long",
+        "list_too_long",
+        "less_than_equal",
+        "greater_than_equal",
+        "int_parsing",
+        "float_parsing",
+        "bool_parsing",
+        "string_type",
+        "list_type",
+        "int_type",
+        "float_type",
+        "bool_type",
+        "model_attributes_type",
+        "model_type",
+        "json_invalid",
+    }
+    if not isinstance(kind, str):
+        return None
+    kind = kind if kind in known_kinds else "validation_error"
+    if not isinstance(location, list) or not location or len(location) > 5:
+        return None
+    parts = []
+    for segment in location:
+        if isinstance(segment, str) and re.fullmatch(r"[a-z_]{1,64}", segment):
+            parts.append(segment)
+        elif isinstance(segment, int) and 0 <= segment <= 10_000_000:
+            parts.append(str(segment))
+        else:
+            return None
+    # Field names must come from the ingest schema, not arbitrary strings in a
+    # remote response. Numeric list indices above are bounded separately.
+    fields = {
+        "session_id",
+        "harness",
+        "agent_id",
+        "agent_version",
+        "layer_hash",
+        "lines",
+        "start_offset",
+        "end_byte_offsets",
+        "hook_event",
+        "final",
+        "total_line_count",
+        "total_offset",
+        "session_hash",
+        "hashed_line_count",
+        "total_credits",
+        "parent_session_id",
+        "capabilities_used",
+    }
+    capability_fields = {
+        "identifier",
+        "kind",
+        "component_id",
+        "native_ref",
+        "version",
+        "digest",
+        "mode",
+        "source",
+        "used_at",
+        "confidence",
+    }
+    if parts[0] != "body" or (len(parts) > 1 and parts[1] not in fields):
+        return None
+    if len(parts) > 2 and (
+        parts[1] not in {"lines", "end_byte_offsets", "capabilities_used"} or not parts[2].isdigit()
+    ):
+        return None
+    if len(parts) > 3 and (parts[1] != "capabilities_used" or parts[3] not in capability_fields or len(parts) > 4):
+        return None
+    detail = f"{'.'.join(parts)}: {kind}"
+    message = error.get("msg")
+    # Pydantic's model validators all report `body: value_error`; only
+    # recognized constant messages can safely distinguish their causes.
+    if kind == "value_error" and isinstance(message, str):
+        if parts == ["body", "lines"] and message == "Value error, session lines must be at most 1048576 characters":
+            detail += " (session lines must be at most 1048576 characters)"
+        elif parts == ["body"]:
+            model_errors = {
+                "Value error, end_byte_offsets must contain one value per source line": "end_byte_offsets mismatch",
+                "Value error, end_byte_offsets cannot contain negative values": "end_byte_offsets negative",
+                "Value error, end_byte_offsets must be ordered": "end_byte_offsets unordered",
+                "Value error, hashed_line_count is required with session_hash": "hashed_line_count required",
+                "Value error, hashed_line_count cannot exceed total_line_count": "hashed_line_count exceeds total_line_count",
+            }
+            if message in model_errors:
+                detail += f" ({model_errors[message]})"
+    return detail
+
+
 class PermanentIngestRejectionError(RuntimeError):
     """A payload rejection that retrying cannot resolve."""
 
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, detail: str | None = None):
         self.status_code = status_code
-        super().__init__(f"server permanently rejected the payload with status {status_code}")
+        super().__init__(
+            f"server permanently rejected the payload with status {status_code}" + (f": {detail}" if detail else "")
+        )
+
+
+def _ingest_retry_delay(value: str | None) -> float:
+    """Respect Retry-After when provided, or wait out the ingest window."""
+    import math
+    from datetime import UTC, datetime
+    from email.utils import parsedate_to_datetime
+
+    try:
+        if value is None:
+            return 60.0
+        try:
+            seconds = float(value)
+        except ValueError:
+            retry_at = parsedate_to_datetime(value)
+            seconds = (retry_at.astimezone(UTC) - datetime.now(UTC)).total_seconds()
+        return max(1.0, min(86_400.0, seconds)) if math.isfinite(seconds) else 60.0
+    except (TypeError, ValueError, OverflowError):
+        return 60.0
 
 
 def post_to_server_ack(
@@ -329,13 +463,17 @@ def post_to_server_ack(
                         headers["Authorization"] = f"Bearer {new_token}"
                         response = client.post(url, json=payload, headers=headers)
             if response.status_code >= 300:
+                detail = _safe_ingest_validation_detail(response) if response.status_code == 422 else None
+                if response.status_code == 429 and config is not None:
+                    config["_ingest_retry_after"] = _ingest_retry_delay(response.headers.get("Retry-After"))
                 optic.warning(
-                    "ingest POST returned {} for session {}: server rejected the payload",
+                    "ingest POST returned {} for session {}: {}",
                     response.status_code,
                     session_id,
+                    detail or "server rejected the payload",
                 )
                 if response.status_code in {400, 409, 413, 415, 422}:
-                    raise PermanentIngestRejectionError(response.status_code)
+                    raise PermanentIngestRejectionError(response.status_code, detail)
                 return None
             data = response.json()
             if not isinstance(data.get("acknowledged_line"), int):
@@ -492,7 +630,82 @@ def drain_outbox(
     repairs: list[tuple[str, str]] | None = None,
     rejections: list[tuple[str, str, int]] | None = None,
 ) -> bool:
-    """Drain durable batches for the configured server/user until blocked."""
+    """Drain queued batches, releasing the delivery lock between requests."""
+    from observal_cli import telemetry_buffer
+
+    destination = str(config.get("server_url") or "").rstrip("/")
+    user_id = str(config.get("user_id") or "")
+    if not destination or not user_id:
+        return False
+    hook = bool(config.get("_hook_delivery"))
+    pace = config.get("_pace_recovery_delivery")
+    paced = post is None or callable(pace)
+    prefer_live = True
+    while True:
+        # Only read the delay while waiting: claiming slots before acquiring the
+        # delivery lock would let contended recovery workers delay live hooks.
+        if (
+            not hook
+            and paced
+            and telemetry_buffer.pending(destination=destination, user_id=user_id, limit=1, db_path=db_path)
+        ):
+            if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+                return False
+            remaining = (
+                pace()
+                if callable(pace)
+                else telemetry_buffer.recovery_slot_remaining(destination, user_id, db_path=db_path)
+            )
+            if remaining > 0:
+                import time
+
+                time.sleep(remaining)
+        wait = 0.0
+        with telemetry_buffer.delivery_lock(destination=destination, user_id=user_id, db_path=db_path) as acquired:
+            if not acquired:
+                return False
+            # Another worker may have posted while we waited for the lock.
+            # Release it before sleeping so hooks can still post promptly.
+            if (
+                not hook
+                and paced
+                and telemetry_buffer.pending(destination=destination, user_id=user_id, limit=1, db_path=db_path)
+            ):
+                wait = telemetry_buffer.recovery_slot_remaining(destination, user_id, db_path=db_path)
+            if wait <= 0:
+                result = _drain_outbox_locked(
+                    config,
+                    home=home,
+                    db_path=db_path,
+                    post=post,
+                    repairs=repairs,
+                    rejections=rejections,
+                    prefer_live=prefer_live,
+                    paced=paced,
+                )
+        if wait > 0:
+            import time
+
+            time.sleep(wait)
+            continue
+        if result is not None:
+            return result
+        if hook:
+            return not telemetry_buffer.pending(destination=destination, user_id=user_id, limit=1, db_path=db_path)
+        prefer_live = not prefer_live
+
+
+def _drain_outbox_locked(
+    config: dict,
+    *,
+    home: Path | None,
+    db_path: Path | None,
+    post: Callable[[dict, dict], dict | None] | None,
+    repairs: list[tuple[str, str]] | None,
+    rejections: list[tuple[str, str, int]] | None,
+    prefer_live: bool,
+    paced: bool,
+) -> bool | None:
     from observal_cli import telemetry_buffer
 
     destination = str(config.get("server_url") or "").rstrip("/")
@@ -507,82 +720,97 @@ def drain_outbox(
             config=cfg,
         )
     )
+    if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+        return False
 
-    while items := telemetry_buffer.pending(
+    items = telemetry_buffer.pending(
         destination=destination,
         user_id=user_id,
         limit=1,
         db_path=db_path,
-    ):
-        item = items[0]
-        try:
-            acknowledgement = post_batch(item.payload, config)
-        except PermanentIngestRejectionError as exc:
-            quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
-            if rejections is not None:
-                rejections.append((item.harness, item.session_id, exc.status_code))
-            log_error(
-                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
-                home=home,
-            )
-            continue
-        if acknowledgement is None:
-            telemetry_buffer.record_attempt(item.id, db_path=db_path)
+        preferred_session=config.get("_preferred_session") if config.get("_hook_delivery") else None,
+        prefer_live=prefer_live,
+    )
+    if not items:
+        return True
+    item = items[0]
+    if telemetry_buffer.delivery_paused(destination, user_id, db_path=db_path):
+        return False
+    if paced or config.get("_hook_delivery"):
+        remaining = telemetry_buffer.reserve_recovery_slot(destination, user_id, db_path=db_path, allow_wait=False)
+        if remaining is None:
             return False
-        acknowledged_line = int(acknowledgement["acknowledged_line"])
-        acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
-        repair_from_line = acknowledgement.get("repair_from_line")
-        if isinstance(repair_from_line, int):
-            write_cursor(
-                item.checkpoint_key,
-                acknowledged_offset,
-                repair_from_line,
-                home=home,
-                preserve_finalized=False,
-            )
-            telemetry_buffer.accept_item(item.id, db_path=db_path)
-            if repairs is not None:
-                repairs.append((item.harness, item.session_id))
-            return False
-        if acknowledged_line < item.end_line:
-            if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
-                # The lines between the server checkpoint and this batch were quarantined
-                # or lost, so the checkpoint can never reach it. The server stored the
-                # batch; accept it instead of resending it forever ahead of every session.
-                write_cursor(
-                    item.checkpoint_key,
-                    item.end_offset,
-                    item.end_line + 1,
-                    finalized=item.final,
-                    home=home,
-                )
-                telemetry_buffer.accept_item(item.id, db_path=db_path)
-                log_error(
-                    f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
-                    f"past a checkpoint gap after line {acknowledged_line}",
-                    home=home,
-                )
-                continue
-            return False
-        if acknowledged_offset <= 0:
-            acknowledged_offset = item.end_offset
+    try:
+        acknowledgement = post_batch(item.payload, config)
+    except PermanentIngestRejectionError as exc:
+        quarantine_path = telemetry_buffer.quarantine(item, str(exc), db_path=db_path)
+        if rejections is not None:
+            rejections.append((item.harness, item.session_id, exc.status_code))
+        log_error(
+            f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
+            home=home,
+        )
+        return None
+    if acknowledgement is None:
+        telemetry_buffer.record_attempt(item.id, db_path=db_path)
+        delay = config.pop("_ingest_retry_after", None)
+        if isinstance(delay, (float, int)) and delay > 0:
+            telemetry_buffer.pause_delivery(destination, user_id, delay, db_path=db_path)
+        return False
+    acknowledged_line = int(acknowledgement["acknowledged_line"])
+    acknowledged_offset = int(acknowledgement.get("acknowledged_offset") or 0)
+    repair_from_line = acknowledgement.get("repair_from_line")
+    if isinstance(repair_from_line, int):
         write_cursor(
             item.checkpoint_key,
             acknowledged_offset,
-            acknowledged_line + 1,
-            finalized=item.final,
+            repair_from_line,
             home=home,
+            preserve_finalized=False,
         )
-        telemetry_buffer.acknowledge(
-            destination=destination,
-            user_id=user_id,
-            harness=item.harness,
-            session_id=item.session_id,
-            acknowledged_line=acknowledged_line,
-            include_metadata=item.end_line < item.start_line,
-            db_path=db_path,
-        )
-    return True
+        telemetry_buffer.accept_item(item.id, db_path=db_path)
+        if repairs is not None:
+            repairs.append((item.harness, item.session_id))
+        return False
+    if acknowledged_line < item.end_line:
+        if _checkpoint_gap_is_permanent(item, acknowledged_line, acknowledgement, db_path=db_path):
+            # The lines between the server checkpoint and this batch were quarantined
+            # or lost, so the checkpoint can never reach it. The server stored the
+            # batch; accept it instead of resending it forever ahead of every session.
+            write_cursor(
+                item.checkpoint_key,
+                item.end_offset,
+                item.end_line + 1,
+                finalized=item.final,
+                home=home,
+            )
+            telemetry_buffer.accept_item(item.id, db_path=db_path)
+            log_error(
+                f"accepted {item.harness} session {item.session_id} lines {item.start_line}-{item.end_line} "
+                f"past a checkpoint gap after line {acknowledged_line}",
+                home=home,
+            )
+            return None
+        return False
+    if acknowledged_offset <= 0:
+        acknowledged_offset = item.end_offset
+    write_cursor(
+        item.checkpoint_key,
+        acknowledged_offset,
+        acknowledged_line + 1,
+        finalized=item.final,
+        home=home,
+    )
+    telemetry_buffer.acknowledge(
+        destination=destination,
+        user_id=user_id,
+        harness=item.harness,
+        session_id=item.session_id,
+        acknowledged_line=acknowledged_line,
+        include_metadata=item.end_line < item.start_line,
+        db_path=db_path,
+    )
+    return None
 
 
 def _checkpoint_gap_is_permanent(
@@ -646,7 +874,7 @@ def drain_session_source(
         )
 
     # A transient pre-drain failure never prevents new local records from being spooled.
-    if not spool_only:
+    if not spool_only and not config.get("_hook_delivery"):
         drain_outbox(config, home=home, db_path=db_path, post=post, rejections=rejections)
         if source_was_rejected():
             return False
@@ -712,12 +940,13 @@ def drain_session_source(
                 user_id=user_id,
                 checkpoint_key=source.checkpoint_key,
                 db_path=db_path,
+                live=bool(config.get("_hook_delivery")),
             )
         if spool_only:
             return True
         repairs: list[tuple[str, str]] = []
         delivered = drain_outbox(
-            config,
+            config | {"_preferred_session": (source.harness, source.session_id)},
             home=home,
             db_path=db_path,
             post=post,
@@ -793,13 +1022,14 @@ def drain_session_source(
             user_id=user_id,
             checkpoint_key=source.checkpoint_key,
             db_path=db_path,
+            live=bool(config.get("_hook_delivery")),
         )
 
     if spool_only:
         return True
     repairs = []
     delivered = drain_outbox(
-        config,
+        config | {"_preferred_session": (source.harness, source.session_id)},
         home=home,
         db_path=db_path,
         post=post,
