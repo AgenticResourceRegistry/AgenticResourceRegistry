@@ -168,7 +168,7 @@ def test_resumed_session_skips_the_pulled_at_guard(tmp_path: Path, home: Path):
     # depends on when the file was created.
     session = tmp_path / "s1.jsonl"
     session.write_text('{"type":"user"}\n')
-    base.write_cursor("s1", 16, 1, home=home)
+    base.write_cursor("s1", 16, 1, home=home, destination="http://server")
     pulled_at = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     _write_marker(tmp_path, agent_id="agent-1", agent_version="1.2.0", pulled_at=pulled_at)
 

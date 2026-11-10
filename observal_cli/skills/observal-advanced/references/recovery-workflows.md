@@ -26,6 +26,8 @@ observal reconcile --harness claude-code --since 24 --output json
 observal reconcile --output json
 ```
 
+Delivery is tracked per server. After the user switches servers (a new login, or `OBSERVAL_SERVER_URL` and `OBSERVAL_ACCESS_TOKEN` in the environment), sessions already sent to the old server are backfilled to the new one only by reconcile, run with the new server configured.
+
 Dry run does not drain the outbox, contact ingestion, or change cursors. Report discovered, queued, skipped, failed, and cursor state. Reconciliation does not install hooks.
 
 ## Manage CLI versions

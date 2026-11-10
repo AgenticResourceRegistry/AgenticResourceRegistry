@@ -99,6 +99,8 @@ A network timeout, process exit, or server outage leaves the pending batch intac
 
 Pending data is bound to its destination server and authenticated user. It is not silently delivered to a different registry or account after a login change.
 
+Delivery cursors are kept per destination server too. Sessions sent to one server are not marked as delivered for another, and automatic recovery leaves them alone after a switch; `observal reconcile` backfills them to the server now configured.
+
 ## Checkpoints and idempotency
 
 The server identifies a source record by project, user, harness, session ID, and source index. Repeated or overlapping uploads therefore converge on the same record.

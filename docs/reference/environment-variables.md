@@ -138,6 +138,8 @@ Read from the environment at invocation time. Override values in `~/.observal/co
 | `OBSERVAL_NEW_PASSWORD` | unset                          | New password for non-interactive or mandatory password changes |
 | `OBSERVAL_TIMEOUT`      | `30`                           | HTTP timeout in seconds |
 
+Session push hooks and `observal reconcile` resolve the server and token the same way, so the sessions of a harness started with these variables go to the server they name. A token from the environment is never refreshed with the saved login's refresh token.
+
 The token and password variables support corresponding `_FILE` forms. Configuring both a direct variable and its file form is an error. When multiple token aliases are present, the legacy precedence remains `OBSERVAL_TOKEN`, then `OBSERVAL_API_KEY`, then `OBSERVAL_ACCESS_TOKEN`.
 
 Example CI usage:

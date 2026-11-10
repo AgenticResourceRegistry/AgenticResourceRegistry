@@ -131,7 +131,9 @@ def test_background_recovery_uses_adapter_sources_and_shared_drain(tmp_path: Pat
     monkeypatch.setattr(
         session_push,
         "read_cursor_state",
-        lambda key, home=None: (finished_source.stat().st_size, 1, True) if key == "finished" else (0, 0, False),
+        lambda key, home=None, **_kwargs: (
+            (finished_source.stat().st_size, 1, True) if key == "finished" else (0, 0, False)
+        ),
     )
     monkeypatch.setattr(
         session_push,
@@ -174,7 +176,7 @@ def test_reconcile_dry_run_json_has_no_network_or_human_output(tmp_path, monkeyp
     monkeypatch.setattr(cmd_reconcile_cli, "ensure_loaded", lambda: None)
     monkeypatch.setattr(cmd_reconcile_cli, "get_all_adapters", lambda: {"kiro": Adapter()})
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _name: Adapter())
-    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (0, 0, False))
+    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key, **_kwargs: (0, 0, False))
     drain = MagicMock(side_effect=AssertionError("dry run must not drain"))
     monkeypatch.setattr(cmd_reconcile_cli, "drain_outbox", drain)
 
@@ -240,7 +242,7 @@ def test_reconcile_finalizes_fully_uploaded_unfinished_session(tmp_path, monkeyp
 
     drain = MagicMock(return_value=True)
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _name: Adapter())
-    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (3, 1, False))
+    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key, **_kwargs: (3, 1, False))
     monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda _source, _cfg: (3, 1))
     monkeypatch.setattr(cmd_reconcile_cli, "drain_session_source", drain)
 
@@ -275,7 +277,7 @@ def test_reconcile_reports_permanent_rejection(tmp_path, monkeypatch):
 
     rejections = []
     monkeypatch.setattr(cmd_reconcile_cli, "get_adapter", lambda _name: Adapter())
-    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key: (0, 0, False))
+    monkeypatch.setattr(cmd_reconcile_cli, "read_cursor_state", lambda _key, **_kwargs: (0, 0, False))
     monkeypatch.setattr(cmd_reconcile_cli, "recover_cursor_from_server", lambda _source, _cfg: (0, 0))
     monkeypatch.setattr(cmd_reconcile_cli, "drain_session_source", reject)
 
