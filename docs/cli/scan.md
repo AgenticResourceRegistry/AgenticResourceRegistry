@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
+# SPDX-FileCopyrightText: 2026 Meghana Inti <YOUR-REAL-EMAIL>
+# SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal scan"
 ---
@@ -33,7 +35,7 @@ If you run `observal scan` with no flags, it auto-detects every installed harnes
 ## What it does
 
 1. Finds MCP config files:
-   * Claude Code: `~/.claude/settings.json`
+   * Claude Code: `~/.claude.json` (user and local scope) or `.mcp.json` (project)
    * Kiro: `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (home)
    * Cursor: `.cursor/mcp.json`
    * Copilot: `.vscode/mcp.json`
@@ -54,9 +56,9 @@ observal scan
 Output:
 
 ```
-Claude Code (~/.claude/settings.json)
+Claude Code (~/.claude.json)
   filesystem        npx @modelcontextprotocol/server-filesystem   not wrapped
-  github            npx @modelcontextprotocol/server-github       not wrapped
+  memory            npx @modelcontextprotocol/server-memory       not wrapped
 
 Kiro (.kiro/settings/mcp.json)
   mcp-obsidian      mcp-obsidian                                  not wrapped

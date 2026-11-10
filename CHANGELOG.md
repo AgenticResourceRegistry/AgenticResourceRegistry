@@ -7,6 +7,8 @@
 <!-- SPDX-FileCopyrightText: 2026 EuanTop <euan@mail.bnu.edu.cn> -->
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Meghana Inti <YOUR-REAL-EMAIL> -->
+<!-- SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -70,6 +72,7 @@ All notable changes to this project will be documented in this file.
 - correct stale Next.js references and the removed API URL env var after the Vite migration
 - clear the remaining Next.js references in the Terraform variables, CI job headers, and nginx config
 - align documented Postgres, ClickHouse, Redis, and Grafana versions with the pinned images
+- replace archived MCP reference server examples in the MCP helper and `scan` docs, and list Claude Code's MCP config as `~/.claude.json` and `.mcp.json`
 
 ### Maintenance
 

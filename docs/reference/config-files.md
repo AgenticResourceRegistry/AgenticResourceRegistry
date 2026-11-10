@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
 # SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com>
+# SPDX-FileCopyrightText: 2026 Meghana Inti <YOUR-REAL-EMAIL>
+# SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Config files"
 ---
@@ -80,7 +82,9 @@ Each list invocation replaces this cache, including an empty result. Numeric row
 
 | Path | Purpose |
 | --- | --- |
-| `~/.claude/settings.json` | Hooks, MCP servers, telemetry config |
+| `~/.claude/settings.json` | Hooks, telemetry config |
+| `~/.claude.json` | User- and local-scoped MCP servers |
+| `.mcp.json` | Project-scoped MCP servers |
 | `~/.claude/agents/<name>.json` | User-scoped sub-agent definitions |
 | `.claude/agents/<name>.json` | Project-scoped sub-agent definitions |
 | `.claude/skills/<skill>/` | Installed skills (SKILL.md + assets) |
