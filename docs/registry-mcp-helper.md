@@ -1,5 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Meghana Inti <YOUR-REAL-EMAIL>
+# SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "MCP helper"
 ---
@@ -48,14 +50,14 @@ Use either command plus args for stdio, or URL for remote MCP. Do not put secret
 }
 ```
 
-### Postgres server
+### Memory server
 
 ```json
 {
   "mcpServers": {
-    "postgres": {
+    "memory": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
     }
   }
 }
