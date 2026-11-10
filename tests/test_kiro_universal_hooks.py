@@ -52,7 +52,11 @@ def test_reader_preserves_commands_triggers_timeouts_and_input(profile: dict) ->
 
 
 def test_reader_accepts_pascal_case_standalone_triggers() -> None:
-    assert [hook.trigger for hook in iter_kiro_hooks(build_kiro_hooks_file()["hooks"])] == ["UserPromptSubmit", "Stop"]
+    assert [hook.trigger for hook in iter_kiro_hooks(build_kiro_hooks_file()["hooks"])] == [
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd",
+    ]
 
 
 @pytest.mark.parametrize("hooks", [None, 3, "stop", [None, 1, {"action": "echo"}], {"stop": [None, 1]}])
@@ -85,8 +89,8 @@ def test_inventory_accepts_both_shapes_and_standalone_files(tmp_path: Path, prof
     result = adapter.discover_home(tmp_path) if scope == "user" else adapter.discover_project(tmp_path)
     hooks = [item.component for item in result.evidence if isinstance(item.component, DiscoveredHook)]
 
-    assert len(hooks) == 5
-    assert {hook.event for hook in hooks} == {"stop", "userPromptSubmit", "UserPromptSubmit", "Stop"}
+    assert len(hooks) == 6
+    assert {hook.event for hook in hooks} == {"stop", "userPromptSubmit", "UserPromptSubmit", "Stop", "SessionEnd"}
     assert not any(d.code is DiagnosticCode.METADATA_MALFORMED for d in result.diagnostics)
     user_hook = next(hook for hook in hooks if hook.handler_config.get("command") == "echo user-stop")
     key = "timeout" if isinstance(profile["hooks"], list) else "timeout_ms"
@@ -139,7 +143,8 @@ def test_doctor_warns_instead_of_crashing_on_malformed_hooks(tmp_path: Path, hoo
 def test_rewrite_preserves_profile_shape_user_hooks_and_upgrade_state(
     profile: dict, inline: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("observal_cli.harness.kiro.use_inline_hooks", lambda: inline)
+    monkeypatch.setattr("observal_cli.harness.kiro.needs_inline_compatibility_hooks", lambda *_args, **_kwargs: inline)
+    monkeypatch.setattr(KiroAdapter, "profile_standalone_events", lambda *_args, **_kwargs: set())
     before = copy.deepcopy(profile)
 
     rewritten = cmd_pull._rewrite_kiro_agent_profile(profile, agent_id="agent-123")
@@ -158,7 +163,8 @@ def test_rewrite_preserves_profile_shape_user_hooks_and_upgrade_state(
 
 @pytest.mark.parametrize("inline", [True, False])
 def test_rewrite_keeps_unknown_array_entries(inline: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("observal_cli.harness.kiro.use_inline_hooks", lambda: inline)
+    monkeypatch.setattr("observal_cli.harness.kiro.needs_inline_compatibility_hooks", lambda *_args, **_kwargs: inline)
+    monkeypatch.setattr(KiroAdapter, "profile_standalone_events", lambda *_args, **_kwargs: set())
     unknown = [None, "unknown", {"name": [], "action": "unknown"}]
     profile = {"hooks": copy.deepcopy(unknown)}
     result = cmd_pull._rewrite_kiro_agent_profile(profile, agent_id="agent-123")

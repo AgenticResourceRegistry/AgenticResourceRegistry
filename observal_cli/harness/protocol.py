@@ -323,6 +323,38 @@ class HarnessAdapter(Protocol):
         """Resolve a harness hook payload to its local session source."""
         ...
 
+    def accepts_session_hook(self, source, event, placement="", home=None):
+        """Allow hooks by default; adapters can select a runtime-capable placement."""
+        ...
+
+    def session_delivery_guard(self, source, event, config, *, related=(), final=False, home=None):
+        """Coordinate lifecycle delivery and expose whether a duplicate should proceed."""
+        ...
+
+    def session_outbox_context(self, source, config, home=None):
+        """Return local authority for a final batch; it is not an API payload field."""
+        ...
+
+    def session_outbox_guard(self, item, config, *, home=None, db_path=None):
+        """Validate queued final authority under ownership through delivery and acknowledgement."""
+        ...
+
+    def reconcile_only_finalization(self, source):
+        """Whether this source must finish outside its hook owner's process tree."""
+        ...
+
+    def session_reconciliation_final(self, source, config, home=None):
+        """Whether explicit reconciliation may finalize this source group."""
+        ...
+
+    def session_finalization_pending(self, source, config, home=None):
+        """Whether recovery must finish an explicitly requested finalization."""
+        ...
+
+    def session_finalization_generation(self, source, config, home=None):
+        """Optional Stop identity to bind a waiting worker to its scheduled turn."""
+        ...
+
     def session_worker_environment(self) -> dict[str, str]:
         """Return environment overrides for detached session workers."""
         ...
@@ -391,7 +423,7 @@ class HarnessAdapter(Protocol):
         """Apply harness-specific CLI install options."""
         ...
 
-    def rewrite_hooks(self, content: dict, agent_id: str) -> dict:
+    def rewrite_hooks(self, content: dict, agent_id: str, *, path: Path | None = None) -> dict:
         """Rewrite downloaded hook configuration before writing it."""
         ...
 
@@ -399,7 +431,9 @@ class HarnessAdapter(Protocol):
         """Merge native local profile state into downloaded content, without writing."""
         ...
 
-    def rewrite_agent_profile(self, content: dict, agent_id: str) -> dict:
+    def rewrite_agent_profile(
+        self, content: dict, agent_id: str, *, path: Path | None = None, standalone_events: set[str] | None = None
+    ) -> dict:
         """Rewrite a downloaded structured agent profile before writing it."""
         ...
 

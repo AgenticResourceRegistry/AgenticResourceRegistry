@@ -166,7 +166,15 @@ def test_importability_is_checked_in_isolation_not_in_this_process():
     launcher.importable_in_isolation.cache_clear()
     isolated = (
         subprocess.run(
-            [sys.executable, "-I", "-c", "import observal_cli"], cwd="/", capture_output=True, check=False
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "import importlib.util; assert all(importlib.util.find_spec(m) is not None for m in ('observal_cli.hook_gate', 'observal_cli.hooks.session_push'))",
+            ],
+            cwd="/",
+            capture_output=True,
+            check=False,
         ).returncode
         == 0
     )
