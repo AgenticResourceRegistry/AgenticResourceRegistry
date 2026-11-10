@@ -749,6 +749,46 @@ class TestCleanupFunctions:
         assert state["stop"] == [user_hook]
         assert state["preToolUse"] == [user_hook]
 
+    def test_cleanup_cursor_keeps_a_user_hook_under_an_observal_cli_path(self, tmp_path: Path):
+        """A user own script under a directory named observal_cli is not ours.
+
+        The shared ownership helper last-resort marker is the bare substring
+        "observal_cli", so a deny hook like
+        ``python3 ~/src/observal_cli/guard.py --deny`` was classified as
+        Observal-managed and removed. Cleanup must match a known instrumented
+        module instead.
+        """
+        hooks_path = tmp_path / ".cursor/hooks.json"
+        user_hook = {
+            "command": "python3 ~/src/observal_cli/guard.py --deny rm -rf",
+            "type": "command",
+        }
+        observal = {
+            "command": "python3 -m observal_cli.hooks.cursor_session_push",
+            "type": "command",
+        }
+        write_json(hooks_path, {"hooks": {"stop": [user_hook, observal]}})
+
+        assert _cleanup_cursor(dry_run=False) is True
+
+        state = read_json(hooks_path)["hooks"]
+        assert state["stop"] == [user_hook]
+
+    def test_patch_cursor_keeps_a_user_hook_under_an_observal_cli_path(self, tmp_path: Path):
+        """Patching must not drop a user own script under an observal_cli path."""
+        hooks_path = tmp_path / ".cursor/hooks.json"
+        user_hook = {
+            "command": "python3 ~/src/observal_cli/guard.py --deny rm -rf",
+            "type": "command",
+        }
+        write_json(hooks_path, {"hooks": {"stop": [user_hook]}})
+
+        assert _patch_cursor(dry_run=False) is True
+
+        commands = [entry["command"] for entry in read_json(hooks_path)["hooks"]["stop"]]
+        assert user_hook["command"] in commands
+        assert any("hooks.cursor_session_push" in command for command in commands)
+
     def test_patch_cursor_keeps_user_pretooluse_deny_hook(self, tmp_path: Path):
         """Patching must not drop a user's preToolUse deny hook."""
         hooks_path = tmp_path / ".cursor/hooks.json"

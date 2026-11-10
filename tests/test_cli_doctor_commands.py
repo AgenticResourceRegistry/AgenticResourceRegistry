@@ -404,7 +404,10 @@ class TestHarnessDiagnosisState:
             (
                 ".cursor/hooks.json",
                 doctor_module._check_cursor,
-                {event: [{"command": "python -m hooks.cursor_session_push"}] for event in CURSOR_HOOK_EVENTS},
+                {
+                    event: [{"command": "python -m observal_cli.hooks.cursor_session_push"}]
+                    for event in CURSOR_HOOK_EVENTS
+                },
             ),
             (
                 ".copilot/hooks/observal.json",

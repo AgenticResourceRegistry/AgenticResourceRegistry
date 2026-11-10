@@ -1195,9 +1195,7 @@ def _cleanup_cursor(dry_run: bool) -> bool:
         if not isinstance(entries, list):
             continue
         cleaned = [
-            h
-            for h in entries
-            if not (isinstance(h, dict) and _is_observal_hook_entry(h))
+            h for h in entries if not (isinstance(h, dict) and _is_observal_hook_entry(h, include_generic_marker=False))
         ]
         if len(cleaned) < len(entries):
             removed_events.append(f"{event} ({len(entries) - len(cleaned)} removed)")
@@ -1628,9 +1626,7 @@ def _patch_cursor(dry_run: bool) -> bool:
         current = merged_hooks.get(event, [])
         # Remove old Observal hooks
         cleaned = [
-            h
-            for h in current
-            if not (isinstance(h, dict) and _is_observal_hook_entry(h))
+            h for h in current if not (isinstance(h, dict) and _is_observal_hook_entry(h, include_generic_marker=False))
         ]
         merged_hooks[event] = cleaned + desired_entries
 
