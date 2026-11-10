@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { HarnessEntry } from "@/lib/api";
 
 function formatHarnessSlug(harness: string): string {
   return harness
@@ -11,11 +13,18 @@ function formatHarnessSlug(harness: string): string {
     .join(" ");
 }
 
-function getHarnessDisplayName(
+function formatCapability(cap: string): string {
+  return cap
+    .split("_")
+    .map((part) => (part === "mcp" ? "MCP" : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(" ");
+}
+
+function getHarnessEntry(
   harness: string,
-  harnesses: { name: string; display_name: string }[] | undefined,
-): string {
-  return harnesses?.find((entry) => entry.name === harness)?.display_name ?? formatHarnessSlug(harness);
+  harnesses: HarnessEntry[] | undefined,
+): HarnessEntry | undefined {
+  return harnesses?.find((entry) => entry.name === harness);
 }
 
 interface HarnessBadgesProps {
@@ -40,16 +49,32 @@ export function HarnessBadges({
   const overflow = harnesses.length - max;
 
   return (
-    <div className={["flex flex-wrap items-center gap-[5px]", className ?? ""].join(" ")}>
-      {visible.map((harness) => (
-        <span
-          key={harness}
-          className="rounded-[5px] bg-surface-raised px-[7px] py-0.5 font-mono text-[10px] text-muted-foreground"
-        >
-          {getHarnessDisplayName(harness, harnessList)}
-        </span>
-      ))}
-      {overflow > 0 && <span className="text-[10px] text-muted-foreground">+{overflow} more</span>}
-    </div>
+    <TooltipProvider>
+      <div className={["flex flex-wrap items-center gap-[5px]", className ?? ""].join(" ")}>
+        {visible.map((harness) => {
+          const entry = getHarnessEntry(harness, harnessList);
+          const displayName = entry?.display_name ?? formatHarnessSlug(harness);
+          const capabilities = entry?.capabilities ?? [];
+          return (
+            <Tooltip key={harness}>
+              <TooltipTrigger asChild>
+                <span className="rounded-[5px] bg-surface-raised px-[7px] py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {displayName}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[240px]">
+                <p className="font-medium">{displayName}</p>
+                {capabilities.length > 0 ? (
+                  <p className="text-primary-foreground/80">{capabilities.map(formatCapability).join(" · ")}</p>
+                ) : (
+                  <p className="text-primary-foreground/70">No capability data available</p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
+        {overflow > 0 && <span className="text-[10px] text-muted-foreground">+{overflow} more</span>}
+      </div>
+    </TooltipProvider>
   );
 }
