@@ -19,6 +19,8 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+from loguru import logger as optic
+
 from observal_cli.config import load as load_config
 
 MAX_LOG_BYTES = 64 * 1024  # 64KB truncation limit for logs
@@ -67,6 +69,7 @@ def _docker_run(
 ):
     try:
         import docker
+        import docker.errors
     except ImportError:
         print(
             "local-runtime-missing: Docker SDK not found. Install: pip install 'observal-cli[sandbox]'", file=sys.stderr
@@ -151,8 +154,8 @@ def _docker_run(
         if container:
             try:
                 container.remove(force=True)
-            except Exception:
-                pass
+            except docker.errors.DockerException as exc:
+                optic.warning("Failed to remove container: error={}", exc)
 
 
 def _lxc_run(sandbox_id: str, image: str, command: str | None, timeout: int) -> None:
