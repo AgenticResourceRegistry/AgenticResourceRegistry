@@ -44,7 +44,12 @@ def importable_in_isolation() -> bool:
     """Whether ``sys.executable`` imports ``observal_cli`` with no PYTHONPATH and no working-directory help."""
     try:
         result = subprocess.run(
-            [sys.executable, "-I", "-c", "import observal_cli"],
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "import importlib.util; assert all(importlib.util.find_spec(m) is not None for m in ('observal_cli.hook_gate', 'observal_cli.hooks.session_push'))",
+            ],
             cwd=tempfile.gettempdir(),
             capture_output=True,
             timeout=30,

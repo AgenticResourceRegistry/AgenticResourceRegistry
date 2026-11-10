@@ -17,6 +17,7 @@ The lock file is:
 
 from __future__ import annotations
 
+import errno
 import functools
 import hashlib
 import json
@@ -60,7 +61,7 @@ _lock_state = threading.local()
 
 
 @contextmanager
-def _exclusive_lock(path: Path | None = None) -> Iterator[None]:
+def _exclusive_lock(path: Path | None = None, *, blocking: bool = True) -> Iterator[bool]:
     """Hold a cross-process lock, re-entrant for the same path in one thread.
 
     Different managed-folder locks must still be acquired independently; skipping
@@ -74,20 +75,26 @@ def _exclusive_lock(path: Path | None = None) -> Iterator[None]:
     if held.get(path):
         held[path] += 1
         try:
-            yield
+            yield True
         finally:
             held[path] -= 1
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as lock_fd:
-        if fcntl is not None:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        else:
-            lock_fd.seek(0)
-            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            else:
+                lock_fd.seek(0)
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+        except OSError as error:
+            if blocking or error.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            yield False
+            return
         held[path] = 1
         try:
-            yield
+            yield True
         finally:
             del held[path]
             if fcntl is not None:

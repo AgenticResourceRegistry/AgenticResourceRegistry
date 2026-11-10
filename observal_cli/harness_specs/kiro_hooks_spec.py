@@ -20,8 +20,8 @@ inline hooks when the machine has a legacy CLI 2.x and no IDE to read them.
 What *does* hide an agent from the IDE picker is unrelated to hooks: see
 :func:`observal_cli.harness.kiro.strip_ide_hostile_fields`.
 
-Only 2 events are needed either way: prompt submit and stop (the push reads the
-session JSONL incrementally).
+Prompt submit and Stop remain the two delivery events. Standalone V3 hooks also
+capture SessionEnd, when late metadata exists; this does not authorize finality.
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ KIRO_HOOK_EVENTS = ("userPromptSubmit", "stop")
 
 # Standalone v1 trigger names (IDE 1.0 / CLI 3.0).
 KIRO_V1_HOOK_TRIGGERS = ("UserPromptSubmit", "Stop")
+# V3 teardown exposes usage_summary after Stop; this captures metadata, not finality.
+KIRO_V1_METADATA_TRIGGERS = ("SessionEnd",)
 
 # Name prefix that identifies an Observal-owned entry inside a v1 hooks file.
 KIRO_V1_HOOK_NAME_PREFIX = "observal-session-push"
@@ -62,6 +64,7 @@ class KiroHook:
 
     @property
     def command(self) -> str:
+        """Return only a string command without coercing malformed handler values."""
         value = self.handler.get("command")
         return value if isinstance(value, str) else ""
 
@@ -93,10 +96,10 @@ def iter_kiro_hooks(hooks: object) -> Iterator[KiroHook]:
             yield KiroHook(trigger, name if isinstance(name, str) else "", handler)
 
 
-def build_kiro_push_command(agent_id: str = "") -> str:
+def build_kiro_push_command(agent_id: str = "", *, placement: str = "inline") -> str:
     """Return the session-push shell command, optionally agent-attributed."""
     env = {"OBSERVAL_AGENT_ID": agent_id} if agent_id else None
-    return f"{module_command('observal_cli.hooks.session_push', env)} --harness kiro"
+    return f"{module_command('observal_cli.hooks.session_push', env)} --harness kiro --placement {placement}"
 
 
 def build_kiro_hooks(*args, **kwargs) -> dict:
@@ -105,9 +108,8 @@ def build_kiro_hooks(*args, **kwargs) -> dict:
     Only 2 events: userPromptSubmit and stop.
     Accepts optional agent_id for per-agent attribution.
 
-    Kiro IDE 1.0 never fires inline hooks, so this must only be written when
-    :func:`observal_cli.harness.kiro.use_inline_hooks` says the machine is
-    legacy-CLI-only and has no other way to read them.
+    CLI 2.x can launch either engine. The writer keeps these for configured V2
+    or missing V3 standalone coverage; re-patch when changing engine selection.
     """
     agent_id = kwargs.get("agent_id", "") or (args[2] if len(args) > 2 else "")
     cmd = build_kiro_push_command(agent_id)
@@ -129,7 +131,7 @@ def build_kiro_hooks_file() -> dict:
     active agent from the session's companion metadata and never falls through
     to ``OBSERVAL_AGENT_ID``, so the variable was already dead for this harness.
     """
-    cmd = build_kiro_push_command()
+    cmd = build_kiro_push_command(placement="standalone")
     return {
         "version": "v1",
         "hooks": [
@@ -138,7 +140,7 @@ def build_kiro_hooks_file() -> dict:
                 "trigger": trigger,
                 "action": {"type": "command", "command": cmd},
             }
-            for trigger in KIRO_V1_HOOK_TRIGGERS
+            for trigger in (*KIRO_V1_HOOK_TRIGGERS, *KIRO_V1_METADATA_TRIGGERS)
         ],
     }
 

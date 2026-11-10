@@ -13,6 +13,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from observal_cli.harness import SessionSource
+from observal_cli.harness.base import BaseAdapter
 from observal_cli.main import app
 
 runner = CliRunner()
@@ -23,7 +24,7 @@ def test_public_reconcile_drains_outbox_then_all_detected_adapters(monkeypatch):
 
     calls: list[str] = []
 
-    class Adapter:
+    class Adapter(BaseAdapter):
         def __init__(self, installed: bool):
             self.installed = installed
 
@@ -105,7 +106,9 @@ def test_background_recovery_uses_adapter_sources_and_shared_drain(tmp_path: Pat
         SessionSource("claude-code", "finished", finished_source),
     ]
 
-    class Adapter:
+    from observal_cli.harness.base import BaseAdapter
+
+    class Adapter(BaseAdapter):
         def discover_session_sources(self, home=None):
             assert home == tmp_path
             return sources
@@ -159,7 +162,7 @@ def test_reconcile_dry_run_json_has_no_network_or_human_output(tmp_path, monkeyp
     transcript.write_text("{}\n")
     source = SessionSource("kiro", "session-1", transcript)
 
-    class Adapter:
+    class Adapter(BaseAdapter):
         def is_installed(self):
             return True
 
@@ -228,7 +231,7 @@ def test_reconcile_finalizes_fully_uploaded_unfinished_session(tmp_path, monkeyp
     transcript.write_text("{}\n")
     source = SessionSource("kiro", "session-1", transcript)
 
-    class Adapter:
+    class Adapter(BaseAdapter):
         def discover_session_sources(self, since_hours):
             return [source]
 
@@ -259,7 +262,7 @@ def test_reconcile_reports_permanent_rejection(tmp_path, monkeypatch):
     transcript.write_text("{}\n")
     source = SessionSource("kiro", "session-1", transcript)
 
-    class Adapter:
+    class Adapter(BaseAdapter):
         def discover_session_sources(self, since_hours):
             return [source]
 
