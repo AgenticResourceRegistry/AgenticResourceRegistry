@@ -1082,15 +1082,12 @@ export default function TracesPage() {
 																	<h3 className="truncate text-xs font-medium text-foreground">
 																		{sessionLabel(s)}
 																	</h3>
-																	<p className="mt-[3px] flex min-w-0 items-center gap-1 text-3xs text-muted-foreground">
-																		<span className="truncate font-mono text-3xs">
+																	<p className="mt-[3px] truncate text-3xs text-muted-foreground">
+																		<span className="font-mono text-3xs">
 																			{s.session_id}
-																		</span>
-																		<CopyTraceIdButton traceId={s.session_id} />
-																		<span className="truncate">
-																			· {derivePlatform(s)} ·{" "}
-																			{s.agent_name || shortModel(s.model) || "—"}
-																		</span>
+																		</span>{" "}
+																		· {derivePlatform(s)} ·{" "}
+																		{s.agent_name || shortModel(s.model) || "—"}
 																	</p>
 																</div>
 																<span className="justify-self-start">

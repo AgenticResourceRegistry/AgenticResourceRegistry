@@ -10,7 +10,8 @@ import { cn, copyToClipboard } from "@/lib/utils";
 /**
  * Icon button that copies a trace ID (the session ID) to the clipboard.
  * Trace list rows open the trace on click, so the click stops here instead of
- * reaching the row.
+ * reaching the row. The `after:` inset widens the hit area past the small icon
+ * without making the row taller, so a near miss still copies.
  */
 export function CopyTraceIdButton({ traceId, className }: { traceId: string; className?: string }) {
   async function handleCopy(e: MouseEvent<HTMLButtonElement>) {
@@ -31,7 +32,10 @@ export function CopyTraceIdButton({ traceId, className }: { traceId: string; cla
       onClick={handleCopy}
       aria-label="Copy trace ID"
       title="Copy trace ID"
-      className={cn("h-5 w-5 shrink-0 text-muted-foreground [&_svg]:size-3", className)}
+      className={cn(
+        "relative h-5 w-5 shrink-0 text-muted-foreground after:absolute after:-inset-1 [&_svg]:size-3",
+        className,
+      )}
     >
       <Copy />
     </Button>

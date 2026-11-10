@@ -72,12 +72,17 @@ test("trace list copies the trace ID without opening the trace", async ({ page }
   await expect.poll(() => readClipboard(page)).toBe(sessionId);
   await expect(page).toHaveURL(/\/traces$/);
 
-  // The narrow card list has its own copy button.
-  await page.setViewportSize({ width: 390, height: 844 });
+  // A click just outside the small icon still lands on the button, not the row.
   await clearClipboard(page);
-  await page.getByRole("button", { name: "Copy trace ID", exact: true }).filter({ visible: true }).click();
+  const box = await copy.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.click(box!.x - 3, box!.y + box!.height / 2);
   await expect.poll(() => readClipboard(page)).toBe(sessionId);
   await expect(page).toHaveURL(/\/traces$/);
+
+  // The narrow cards are role="button" themselves, so they carry no nested copy button.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "Copy trace ID", exact: true }).filter({ visible: true })).toHaveCount(0);
 });
 
 test("trace detail header and Session Info copy the trace ID", async ({ page }) => {
