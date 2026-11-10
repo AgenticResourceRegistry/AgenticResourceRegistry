@@ -4489,9 +4489,7 @@ def test_pull_keeps_user_hook_whose_path_contains_observal_cli(tmp_path: Path) -
         {
             "version": 1,
             "hooks": {
-                "preToolUse": [
-                    {"type": "command", "command": "python3 -m observal_cli.hooks.cursor_session_push"}
-                ]
+                "preToolUse": [{"type": "command", "command": "python3 -m observal_cli.hooks.cursor_session_push"}]
             },
         },
         merge_mcp=True,
