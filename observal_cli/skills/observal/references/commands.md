@@ -301,7 +301,7 @@ Every command available in the installed CLI. This block is generated from the T
 - `observal server install`: Download verified embedded database binaries.
 - `observal server reset`: Stop embedded services and wipe database data and generated secrets.
 - `observal server config`: Show embedded server paths and ports.
-- `observal server rollback`: Restore PostgreSQL and the Docker image version from backup.
+- `observal server rollback`: Restore PostgreSQL and Docker images from an explicitly selected managed backup.
 - `observal server upgrade`: Upgrade a local Docker deployment.
 - `observal server versions`: List Docker image versions and managed PostgreSQL backups.
 
