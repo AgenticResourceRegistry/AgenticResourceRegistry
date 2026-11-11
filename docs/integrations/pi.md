@@ -51,8 +51,8 @@ and is shared by every agent; agent pulls do not embed telemetry hooks.
 ### 1. Install the Agentic Resource Registry CLI
 
 ```bash
-uv tool install 'observal-cli==1.16.0'
-# or: pipx install 'observal-cli==1.16.0'
+uv tool install 'observal-cli==1.17.0' --with 'typer<0.29'
+# or: pipx install 'observal-cli==1.17.0' --pip-args='typer<0.29'
 ```
 
 Pi 0.74.0 or newer is required by the telemetry extension.
@@ -86,7 +86,7 @@ Pi's default scope is user scope. Read the returned profile directory and local 
 observal agent pull NAMESPACE/AGENT --harness pi --scope project --version AGENT_VERSION --strict --dry-run
 ```
 
-The planned instructions belong at `.pi/agents/<local-name>/AGENTS.md`, not root guidance. `/agent` only lists user profiles; copying MCP settings or skills does not load the agent's instructions. v1.16.0 can also persist a project pull's identity globally, as described in [Attribution](#attribution). This guide does not recommend applying project scope without a separately verified loading/attribution procedure. Use the user-profile workflow instead of silently merging or replacing root instructions/configuration.
+The planned instructions belong at `.pi/agents/<local-name>/AGENTS.md`, not root guidance. `/agent` only lists user profiles; copying MCP settings or skills does not load the agent's instructions. A project pull does not change the machine-wide active agent: the extension attributes sessions under that directory from the lockfile, as described in [Attribution](#attribution). This guide still does not recommend applying project scope without a separately verified loading/attribution procedure. Use the user-profile workflow instead of silently merging or replacing root instructions/configuration.
 
 ### 4. Install or refresh the telemetry extension
 
@@ -367,11 +367,11 @@ Pi does not expose an Agentic Resource Registry agent id in its session file. Th
 resolves attribution from Agentic Resource Registry's own state:
 
 1. A pull records name/id/version/scope/directory in the Pi installation lockfile and also records `active_agent` in local config.
-2. In v1.16.0 that persistence occurs for project pulls too. The extension reads `active_agent` and resolves it in the configured registry's lockfile by ID/name; it does not implement the later deepest-project-directory binding.
-3. The resolved identity/version is attached to delivered sessions. A project pull can therefore affect attribution outside that project; do not treat it as proof that the selected profile ran there.
+2. A user-scope pull records `active_agent`; a project-scope pull does not. On session start the extension looks in the lockfile for a project-scope Pi install whose directory contains the session's working directory (the deepest one wins) and uses that. Outside every project install it falls back to `active_agent`, and ignores one the lockfile lists only as project installs. Delegated sessions use the delegated agent first.
+3. The resolved identity/version is attached to delivered sessions. Do not treat it as proof that the selected profile ran there.
 4. If no active ID exists, the session has no registry agent ID. If an active ID has no matching lock entry, the stored ID can still be sent.
 
-Later development fixes project binding and user-only global persistence. Those fixes are not present in this target tag. Use user profiles and `/agent` deliberately, and inspect actual session identity; do not use release attribution as an independent execution/security attestation.
+Use user profiles and `/agent` deliberately, and inspect actual session identity; do not use attribution as an independent execution/security attestation.
 
 ---
 

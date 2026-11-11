@@ -33,7 +33,7 @@ See [server requirements](/self-hosting/requirements) for resource requirements 
 Use a new checkout and project-specific local image tags. Run setup in a dedicated shell; the `&&` chain stops before entering an existing directory or writing `.env` if cloning fails:
 
 ```bash
-git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git &&
+git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git &&
 cd AgenticResourceRegistry &&
 cp .env.example .env &&
 export EVAL_PROJECT="arr-eval-$(date -u +%Y%m%d%H%M%S)-$$" &&

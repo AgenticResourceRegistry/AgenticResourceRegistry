@@ -108,8 +108,8 @@ separately stored delegated sub-executions.
 ### 1. Install the Agentic Resource Registry CLI
 
 ```bash
-uv tool install 'observal-cli==1.16.0'
-# or: pipx install 'observal-cli==1.16.0'
+uv tool install 'observal-cli==1.17.0' --with 'typer<0.29'
+# or: pipx install 'observal-cli==1.17.0' --pip-args='typer<0.29'
 ```
 
 ### 2. Authenticate

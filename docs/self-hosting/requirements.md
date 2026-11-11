@@ -59,9 +59,7 @@ PostgreSQL growth depends on users, resource/version content, reviews, and setti
 
 ### Packaged setup on macOS
 
-The server package's `setup.sh` currently fails with `profile_args[@]: unbound variable` when the default observability profile is run under macOS Bash 3.2. This was reproduced on both the docs branch and the pre-docs baseline. The corresponding headless setup tests pass with GNU Bash in a Linux container; that is not certification of all package workflows.
-
-This limitation concerns the **server package setup**, not proof that the standalone CLI installer is broken. Do not assume every shell accepted by a CLI install command can run packaged server setup. Until the implementation is corrected or your shell is verified, use the [source evaluation guide](/getting-started/local-evaluation) rather than claiming a successful packaged deployment.
+The v1.17.0 server package's `setup.sh` runs under macOS's default Bash 3.2 (checked with the release archive). Earlier releases, including v1.16.0, stop there with `profile_args[@]: unbound variable`, so upgrade the package or use a newer Bash with them.
 
 For the **CLI** (developer machines, not the server):
 

@@ -19,13 +19,13 @@ Follow the review URL returned after submission, or find it in the web UI's revi
 
 Use **Files changed** to inspect the instructions and configuration. Check component pins, executable hooks, MCP commands/endpoints, and any requested credentials or permissions. A change summary is not a substitute for reading the content.
 
-After inspecting **Files changed**, return to **Conversation** to find the **Publication gate**. It shows required approvals and integrity checks. v1.16.0 has advisory edit-lock/thread/change-request conditions for human publication; later linked-request/withdrawal controls are not available in this release. Inspect the actual warnings and deliberately resolve conversations rather than assuming every displayed condition is an enforced block. Pinned components may need publication first. Resolve actual blockers rather than weakening policy to make a first install succeed.
+After inspecting **Files changed**, return to **Conversation** to find the **Publication gate**. It shows required approvals and integrity checks. Edit locks, unresolved conversations, and open change requests are advisory for human publication. A change request is shown in its conversation as **Changes requested**; resolving the conversation does not clear it, and only its reviewer can withdraw it, with a reason. Inspect the actual warnings and deliberately resolve conversations rather than assuming every displayed condition is an enforced block. Pinned components may need publication first. Resolve actual blockers rather than weakening policy to make a first install succeed.
 
 
 ## Approve in the web UI
 
 <Warning>
-  **The v1.16.0 web flow has the same inspected-revision race as the CLI.** An author update between inspection and approval can become the approved head, and policy can publish it automatically before a later check. Coordinate a pause on edits through publication and recheck the revision immediately before approving; this is not an atomic guard. Compare the recorded approval and current head with the inspected revision before manual publication. If this race is unacceptable, do not approve until the operator/reviewer provides an acceptable process. Use the [CLI detail checks](#cli-alternative) if the UI does not expose sufficient revision information. If a mismatch is already published, escalate rather than assuming approval dismissal or a post-check undoes it.
+  **The web flow has the same inspected-revision race as the CLI.** An author update between inspection and approval can become the approved head, and policy can publish it automatically before a later check. Coordinate a pause on edits through publication and recheck the revision immediately before approving; this is not an atomic guard. Compare the recorded approval and current head with the inspected revision before manual publication. If this race is unacceptable, do not approve until the operator/reviewer provides an acceptable process. Use the [CLI detail checks](#cli-alternative) if the UI does not expose sufficient revision information. If a mismatch is already published, escalate rather than assuming approval dismissal or a post-check undoes it.
 </Warning>
 
 1. Select **Review changes**.
@@ -37,7 +37,7 @@ An approval is recorded; whether it counts toward the gate depends on the effect
 
 ## Publish when the gate permits it
 
-If policy did not publish automatically, return to **Conversation**. In the publication gate, an authorized reviewer selects **Publish vVERSION** and confirms the action. The v1.16.0 UI should then show the **Published** review state. Confirm the selected release in the registry rather than expecting the newer UI's exact confirmation sentence.
+If policy did not publish automatically, return to **Conversation**. In the publication gate, an authorized reviewer selects **Publish vVERSION** and confirms the action. The UI should then show the **Published** review state. Confirm the selected release in the registry rather than relying on the exact wording of a confirmation message.
 
 
 | State | Meaning for this workflow |
@@ -68,7 +68,7 @@ observal review gate REVIEW_NUMBER --output json
 Stop and inspect the returned content, revision, and gate. `review files` is only a file list.
 
 <Warning>
-  **v1.16.0 approval is not bound to your inspected revision.** The server records the current review head when `approve` executes; it can differ from the revision you read if the author submits another update. Coordinate a pause on edits, re-read the current revision immediately before approval, and fetch review details again and compare the recorded approval revision with your inspected one afterward. This coordination is not an enforced atomic guard. Effective policy can publish automatically as approval is recorded, before a post-check; if that race is unacceptable, do not approve until the operator/reviewer provides an acceptable process. A later comparison cannot prevent an already published wrong revision. Do not weaken policy or assume advisory edit locks solve this.
+  **Approval is not bound to your inspected revision.** The server records the current review head when `approve` executes; it can differ from the revision you read if the author submits another update. Coordinate a pause on edits, re-read the current revision immediately before approval, and fetch review details again and compare the recorded approval revision with your inspected one afterward. This coordination is not an enforced atomic guard. Effective policy can publish automatically as approval is recorded, before a post-check; if that race is unacceptable, do not approve until the operator/reviewer provides an acceptable process. A later comparison cannot prevent an already published wrong revision. Do not weaken policy or assume advisory edit locks solve this.
 </Warning>
 
 After confirming the unchanged revision under that process and deciding it is acceptable, record approval separately:
@@ -77,7 +77,7 @@ After confirming the unchanged revision under that process and deciding it is ac
 observal review approve REVIEW_NUMBER --output json
 ```
 
-The v1.16.0 approval response contains only `id`, `state`, and `verdict`; it does not include a revision or gate. Fetch the details again:
+The approval response contains only `id`, `state`, and `verdict`; it does not include a revision or gate. Fetch the details again:
 
 ```bash
 observal review show REVIEW_NUMBER --output json

@@ -64,7 +64,7 @@ Docker administrative access is privileged. Do not add accounts to its administr
 Select the reviewed source revision:
 
 ```bash
-git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry
 cp .env.example .env
 ```

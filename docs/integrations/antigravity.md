@@ -40,7 +40,7 @@ The JSON profile carries `name`, `description`, `system_prompt`, tool/MCP config
 
 Compare the preview with your CLI's accepted schema and agent locations. If the CLI does not load the generated JSON format, stop and use a verified integration or have the Antigravity adapter updated and tested.
 
-Do not just rename `agent.json` to `agent.md`: changing an extension does not translate instructions, tool permissions, model settings, MCP connections, or lock/attribution records. v1.16.0 has no `--allow-unsupported-harness` flag; declarations or successful generation do not resolve this format mismatch.
+Do not just rename `agent.json` to `agent.md`: changing an extension does not translate instructions, tool permissions, model settings, MCP connections, or lock/attribution records. `--allow-unsupported-harness` lets a pull proceed for a harness the agent does not list, but it does not resolve this format mismatch, and neither do declarations or successful generation.
 
 If a compatible installed version is established, apply the same scoped release, restart the CLI, and confirm its Agent Manager actually lists the profile before running a task.
 

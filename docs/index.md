@@ -15,7 +15,7 @@ Agentic Resource Registry is a self-hosted registry for sharing coding agents an
 An **agent** combines instructions with the MCP servers, skills, hooks, prompts, and sandboxes it needs. The registry keeps these resources versioned, controls who can access them, and generates configuration for the coding tool you choose.
 
 <Note>
-  These guides target stable v1.16.0. Pin that release rather than assuming a moving latest version matches; [match the documentation, CLI, and registry versions](/reference/documentation-version).
+  These guides target stable v1.17.0. Pin that release rather than assuming a moving latest version matches; [match the documentation, CLI, and registry versions](/reference/documentation-version).
 </Note>
 
 ## Start with an agent

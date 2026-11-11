@@ -74,21 +74,21 @@ flowchart TB
 
 **Quick start:**
 
-Do not apply the stock AWS template until the [v1.16.0 shared/durable signing-key prerequisite](/self-hosting/aws-terraform#quickstart) is satisfied. The default per-task temporary keys are not a safe authenticated multi-task deployment.
+Do not apply the stock AWS template until the [v1.17.0 shared/durable signing-key prerequisite](/self-hosting/aws-terraform#quickstart) is satisfied. The default per-task temporary keys are not a safe authenticated multi-task deployment.
 
 ```bash
-git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry/infra/terraform/aws
 
 # Configure
 cp terraform.tfvars.example terraform.tfvars
 # Edit: region, environment, domain_name (optional), alb_ingress_cidrs.
-# REQUIRED: image_tag = "1.16.0", not the copied latest default.
+# REQUIRED: image_tag = "1.17.0", not the copied latest default.
 
 # Deploy
 terraform init
 terraform plan -out tf.plan
-# Review effective application image references for :1.16.0 before applying.
+# Review effective application image references for :1.17.0 before applying.
 terraform apply tf.plan
 
 # Verify
@@ -150,7 +150,7 @@ flowchart TB
 
 **Quick start:**
 
-Resolve the [v1.16.0 GCP shared/durable signing-key prerequisite](/self-hosting/gcp-terraform#quickstart) before applying the stock Cloud Run template for authenticated team use.
+Resolve the [v1.17.0 GCP shared/durable signing-key prerequisite](/self-hosting/gcp-terraform#quickstart) before applying the stock Cloud Run template for authenticated team use.
 
 ```bash
 cd AgenticResourceRegistry/infra/terraform/gcp
@@ -165,12 +165,12 @@ gcloud services enable \
 # Configure
 cp terraform.tfvars.example terraform.tfvars
 # Edit: project_id, region, domain_name (optional).
-# REQUIRED: image_tag = "1.16.0", with those exact images in the configured mirror.
+# REQUIRED: image_tag = "1.17.0", with those exact images in the configured mirror.
 
 # Deploy
 terraform init
 terraform plan -out tf.plan
-# Review effective application image references for :1.16.0 before applying.
+# Review effective application image references for :1.17.0 before applying.
 terraform apply tf.plan
 
 # Run migrations

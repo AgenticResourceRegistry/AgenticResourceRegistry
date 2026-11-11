@@ -64,7 +64,7 @@ docker compose -f docker-compose.yml --env-file .env up -d --wait --wait-timeout
 docker compose -f docker-compose.yml --env-file .env restart observal-lb
 ```
 
-Use the selected release's image-tag convention and inspect the effective image values before proceeding. An old pinned tag can keep serving old images. The [Bash 3.2 packaged-setup limitation](/self-hosting/requirements#packaged-setup-on-macos) also remains relevant; this guide does not repair it.
+Use the selected release's image-tag convention and inspect the effective image values before proceeding. An old pinned tag can keep serving old images.
 
 ## CLI-managed Docker upgrade
 

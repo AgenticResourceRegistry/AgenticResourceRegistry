@@ -46,12 +46,13 @@ observal agent pull alice/reviewer --harness claude-code --hooks=settings --dry-
 | `--version`, `-V` | Install this exact Agent version and lock it |
 | `--upgrade` | Install the latest approved Agent version instead of the locked one, and lock it |
 | `--strict` / `--no-strict` | Refuse an install that does not match its lock; defaults to `OBSERVAL_STRICT` |
+| `--allow-unsupported-harness` | Install even when the Agent version does not list `--harness` as supported; the install warns that components may be missing or not loaded |
 | `--hooks` | Claude Code only: `frontmatter` (default) or `settings`. See [Agent hooks in headless sessions](#agent-hooks-in-headless-sessions) |
 | `--on-unknown` | With `--hooks=settings`: `skip` (default) or `run` when Claude Code's hook input is unrecognized |
 | `--force-hooks` | Replace or remove Agentic Resource Registry-owned agent hooks in `settings.json` that were edited locally |
 | `--output`, `-o` | Table or JSON output |
 
-v1.16.0 does not automatically refuse an agent merely because the selected harness is absent from its declared support, and has no `--allow-unsupported-harness` option. Inspect the exact release and each component's capabilities before preview/apply. Later development adds compatibility inference/refusal; it is not a release guarantee here.
+A harness the Agent version does not list in `supported_harnesses` is refused (exit code 7 from the CLI, 409 from the server) before any prompt. An empty list allows every harness. Pass `--allow-unsupported-harness` to override.
 
 Unknown harnesses, unsupported scopes, malformed assignments, unused harness model overrides, unsupported model or tool options, invalid versions, and `--upgrade` combined with `--version` fail locally with validation exit code 7. A project-scope pull of an Agent with MCP servers also fails this way for Goose, which only reads a user-level MCP config: pull with `--scope user` instead.
 
@@ -137,7 +138,7 @@ observal agent pull alice/reviewer --harness claude-code --hooks=frontmatter    
 
 Pull discovers required MCP environment variables and headers from the Agent's components. Interactive mode prompts for missing values. Non-interactive mode uses matching `--env` and `--header` assignments and stops before installation when any required value is missing. Optional values may remain unset.
 
-Required values are used in the installation request and generated configuration. v1.16.0 predates later credential-reflection redaction fixes; do not assume JSON, errors, setup output, or logs are universally safe to share. Use benign synthetic values for reporting probes and inspect/redact artifacts before sharing them.
+Required values are used in the installation request and generated configuration. Values you supply with `--env` and `--header` are masked in the setup commands and in the JSON, errors, and logs that pull reports. A secret you paste anywhere else is not covered, so still inspect output before sharing it, and use benign synthetic values when you report a problem.
 
 Prefer environment expansion or secure shell input so secrets do not remain in shell history.
 
@@ -149,9 +150,9 @@ Pull behavior by file type:
 
 * JSON MCP and hook sections merge into existing objects.
 * YAML sections merge only when the existing top level and target section are mappings.
-* TOML merging in v1.16.0 predates the later structural/concurrent-write fixes. Inspect and back up the native config before apply; do not assume idempotent replacement preserves every mixed inline/dotted/table form.
+* TOML managed tables are replaced idempotently while unrelated tables remain.
 * Generated text, prompt, Agent, and hook config files use atomic replacement.
-* Many malformed/conflicting existing configurations are refused with conflict exit 6; do not extend this to the later TOML structural/concurrent-write guarantees absent in v1.16.0. Preserve a reviewed backup and inspect the plan/result.
+* Malformed or structurally incompatible existing config is never overwritten. The command exits with conflict code 6 and leaves it untouched.
 
 No `OTEL_*` or harness telemetry environment variables are generated. Session telemetry continues through Agentic Resource Registry-managed hooks and reconciliation.
 

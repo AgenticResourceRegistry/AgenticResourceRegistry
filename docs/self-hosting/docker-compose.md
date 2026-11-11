@@ -19,7 +19,7 @@ The source defaults include demo credentials and publish some ports on all inter
 ## Clone and configure
 
 ```bash
-git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry
 cp .env.example .env
 ```
@@ -99,6 +99,6 @@ Configure TLS, real credentials, intended public origins, trusted proxy boundari
 
 <a id="packaged-image-checkpoint"></a>
 
-## v1.16.0 packaged-image checkpoint
+## v1.17.0 packaged-server check
 
-The release server archive supplies configuration, not a source build. Pin `OBSERVAL_VERSION=1.16.0` and inspect its rendered Compose model. Its ClickHouse entrypoint can attempt to write into the read-only users directory unless user setup is skipped in favor of explicit configuration. In the isolated artifact check, startup used an operator-owned generated password-hash XML and `CLICKHOUSE_SKIP_USER_SETUP=1` in a separate override. This is not passwordless access or permission to weaken authentication; verify the approved credential configuration and health checks together. No unmodified installer or production deployment acceptance is claimed by that rehearsal.
+The release server archive supplies configuration, not a source build. Its generated `.env` sets `OBSERVAL_VERSION=latest`; pin `OBSERVAL_VERSION=1.17.0` and inspect the rendered Compose model before starting. In an isolated check of the unmodified archive, `setup.sh` ran under macOS Bash 3.2.57 with a stand-in `docker`, generated the file-backed credentials and the ClickHouse password XML, and printed the dashboard and API URLs. The packaged ClickHouse service then started healthy from that configuration alone, with no override. Starting the API, web, and worker images was not repeated, so this is not production deployment acceptance: verify credentials and health checks in your environment.

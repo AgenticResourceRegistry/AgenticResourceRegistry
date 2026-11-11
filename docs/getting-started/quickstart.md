@@ -201,7 +201,7 @@ Some deployments allow authors to install their own unapproved versions through 
 | Strict install refuses incomplete pins | Ask the author for a fully pinned, published release. Do not drop strict mode to complete this first-install guide. |
 | Agent not found or not approved | Check the qualified name, teamspace access, and publication state. Your own pending agent may still be blocked by policy. |
 | Ambiguous name | Use the complete `namespace/slug` returned by the registry. |
-| Harness declaration does not match your tool | In v1.16.0 this is a manual checkpoint, not an automatic refusal. Choose a compatible declared agent and inspect component support before installation. |
+| Harness is not in the agent's supported list | Pull refuses it with validation exit code 7 before any prompt. Choose an agent that lists your harness. `--allow-unsupported-harness` overrides the refusal, but components may then be missing or not loaded. |
 | Missing environment variables or headers | Retry interactively and enter the required values at the prompts. |
 | MCP setup fails | Check that `claude` is installed and inspect the printed setup failure. Files may be partially written; do not delete unrelated configuration. |
 | Claude Code says it is not logged in | Authenticate Claude Code separately. Registry login supplies no model credentials. |

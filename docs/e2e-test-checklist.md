@@ -29,7 +29,7 @@ title: "E2E Test Checklist"
 
 Follow [the pinned local-evaluation setup](/getting-started/local-evaluation#start-the-stack) before this checklist: its clone/cd/`.env` operations are failure-guarded, it records a unique project, isolates local API/web image tags, and runs startup only after the selected-port check passes. Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/) are required for the matching source CLI.
 
-Continue from that v1.16.0 checkout with its `EVAL_PROJECT`, `EVAL_URL`, image overlay, and `dc` function:
+Continue from that v1.17.0 checkout with its `EVAL_PROJECT`, `EVAL_URL`, image overlay, and `dc` function:
 
 ```bash
 observal --version

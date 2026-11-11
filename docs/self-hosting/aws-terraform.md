@@ -46,12 +46,12 @@ ClickHouse runs on EC2. The data volume keeps it durable across instance replace
 ## Quickstart
 
 <Warning>
-  **v1.16.0 AWS signing-key limitation:** the stock module sets `JWT_KEY_DIR=/tmp/keys` inside each API task's private temporary filesystem, while the default API desired count is two. Tasks can generate different signing keys, causing cross-task token rejection, and replacement loses those keys. A file lock coordinates only processes sharing the same key directory. Do not apply the stock template for an authenticated team deployment until you have a reviewed, tested shared-and-durable signing-key configuration for all API instances. One API replica is not a persistence/replacement fix. This documentation does not supply or certify that infrastructure change; [review key recovery](/self-hosting/backup-and-restore).
+  **v1.17.0 AWS signing-key limitation:** the stock module sets `JWT_KEY_DIR=/tmp/keys` inside each API task's private temporary filesystem, while the default API desired count is two. Tasks can generate different signing keys, causing cross-task token rejection, and replacement loses those keys. A file lock coordinates only processes sharing the same key directory. Do not apply the stock template for an authenticated team deployment until you have a reviewed, tested shared-and-durable signing-key configuration for all API instances. One API replica is not a persistence/replacement fix. This documentation does not supply or certify that infrastructure change; [review key recovery](/self-hosting/backup-and-restore).
 </Warning>
 
 
 ```bash
-git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry/infra/terraform/aws
 
 # 1. Authenticate to AWS (any of these works)
@@ -61,19 +61,19 @@ export AWS_PROFILE=observal-prod
 
 # 2. Configure
 cp terraform.tfvars.example terraform.tfvars
-# REQUIRED: change the copied image_tag = "latest" to image_tag = "1.16.0".
+# REQUIRED: change the copied image_tag = "latest" to image_tag = "1.17.0".
 # Configure the intended region, capacity, access, and TLS settings too.
 $EDITOR terraform.tfvars
 
 # 3. Plan and review before applying
 terraform init
 terraform plan -out tf.plan
-# Review tf.plan: API/web/worker/init application images must select :1.16.0.
+# Review tf.plan: API/web/worker/init application images must select :1.17.0.
 # Do not apply if the effective image references still select latest or another release.
 terraform apply tf.plan
 ```
 
-The v1.16.0 template defaults to `image_tag = "latest"`; selecting the Git source tag alone does not pin the deployed images. Verify the configured tag and effective task image references in the saved plan before the first apply. Treat plan/state files as sensitive; do not share them unredacted. Monitor provisioning and init-task completion instead of assuming a fixed duration. When the apply finishes:
+The v1.17.0 template defaults to `image_tag = "latest"`; selecting the Git source tag alone does not pin the deployed images. Verify the configured tag and effective task image references in the saved plan before the first apply. Treat plan/state files as sensitive; do not share them unredacted. Monitor provisioning and init-task completion instead of assuming a fixed duration. When the apply finishes:
 
 ```bash
 terraform output app_url
@@ -81,7 +81,7 @@ terraform output app_url
 
 Open that URL in your browser. The API and web tasks start a couple of minutes after the ALB targets register; refresh until you see the Agentic Resource Registry login page.
 
-Apply the same image-tag review to the example inputs; checking out a tagged example does not change a moving image default. A release-specific source example of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/v1.16.0/infra/terraform/aws/examples/minimal/README.md).
+Apply the same image-tag review to the example inputs; checking out a tagged example does not change a moving image default. A release-specific source example of the module lives at [`infra/terraform/aws/examples/minimal`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/v1.17.0/infra/terraform/aws/examples/minimal/README.md).
 
 ## Configuration
 
@@ -92,7 +92,7 @@ All inputs live in `terraform.tfvars`. The defaults are production-shaped; you c
 ```hcl
 region      = "us-east-1"
 environment = "prod"
-image_tag   = "1.16.0"
+image_tag   = "1.17.0"
 ```
 
 The install comes up on the ALB's AWS-assigned hostname (e.g. `observal-prod-alb-1234.us-east-1.elb.amazonaws.com`) over plain HTTP. Useful for evaluation; not for production.
@@ -167,12 +167,12 @@ For high-throughput installs (>100 trace events/sec sustained), bump `data_insta
 ```hcl
 data_retention_days = 90             # ClickHouse TTL; 0 to disable
 log_retention_days  = 30             # CloudWatch log group retention
-image_tag           = "1.16.0"       # exact published image version, not the moving latest alias
+image_tag           = "1.17.0"       # exact published image version, not the moving latest alias
 ```
 
 See [Configuration](/self-hosting/configuration) for the meaning of each application setting.
 
-The v1.16.0 module has no `deployment_mode` input; an undeclared tfvars assignment does not enable SSO-only login. After testing SSO and an authorized recovery route, configure runtime `deployment.sso_only=true` in **Admin → SSO → Access policy** and verify password login is rejected. See [authentication and SSO](/self-hosting/authentication).
+The v1.17.0 module has no `deployment_mode` input; an undeclared tfvars assignment does not enable SSO-only login. After testing SSO and an authorized recovery route, configure runtime `deployment.sso_only=true` in **Admin → SSO → Access policy** and verify password login is rejected. See [authentication and SSO](/self-hosting/authentication).
 
 ### Bring Your Own VPC
 
@@ -208,7 +208,7 @@ ecs_security_group_id = "sg-0abc1234def56789b"
 
 The ALB SG must allow inbound TCP 80/443 from your desired CIDRs. The ECS SG must allow inbound TCP 8000 and 3000 from the ALB SG, with outbound to all.
 
-A release-specific source example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/v1.16.0/infra/terraform/aws/examples/byovpc/README.md).
+A release-specific source example lives at [`infra/terraform/aws/examples/byovpc`](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/blob/v1.17.0/infra/terraform/aws/examples/byovpc/README.md).
 
 ### Git webhooks on a private install
 

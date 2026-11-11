@@ -14,34 +14,38 @@ The `observal` CLI connects your machine to Agentic Resource Registry. Use it to
 Installing the CLI does **not** deploy a registry server. To evaluate a server locally, use [Try a registry locally](/getting-started/local-evaluation). For a team deployment, use [Self-hosting](/self-hosting/index).
 
 <Note>
-  These guides target v1.16.0. Use the pinned Python install below for the verified path; unpinned installers can select a different release later. [Check the version guidance](/reference/documentation-version) before choosing an installation.
+  These guides target v1.17.0. Install that exact release below; unpinned installers install the latest release, which can differ from these guides. [Check the version guidance](/reference/documentation-version) before choosing an installation.
 </Note>
 
-## Recommended: install the v1.16.0 Python CLI
+## Recommended: install the v1.17.0 Python CLI
 
 Requires Python 3.11 or newer and uv:
 
 ```bash
-uv tool install 'observal-cli==1.16.0'
+uv tool install 'observal-cli==1.17.0' --with 'typer<0.29'
 observal --version
 ```
 
-Expect `observal 1.16.0`. This is the published distribution used for the release workflow checks, not a source install. Each coding tool still needs its own authentication.
+Expect `observal 1.17.0`. This is the published distribution, not a source install. Each coding tool still needs its own authentication.
+
+<Warning>
+  Typer 0.29.0 and later break the published v1.17.0 package: without the constraint every command fails with `AttributeError: 'TyperOption' object has no attribute 'type'`, because the package does not cap Typer. Keep `--with 'typer<0.29'` until a release that fixes the dependency range. The standalone binary below bundles its dependencies and is not affected.
+</Warning>
 
 ## Install a standalone binary
 
-The standalone format does not require Python, but the v1.16.0 macOS ARM64 artifact failed ordinary commands with missing bundled skill files in an isolated check; printing its version was not a complete install test. Prefer the pinned Python path on macOS. Other binary platforms remain unverified here. Choose your operating system only after checking the release limitation:
+The standalone binary does not require Python. The v1.17.0 macOS ARM64 binary and installer were checked in an isolated home: the installer verified the release checksum, and `observal --version` and `observal config path --output json` both succeeded. The Linux and Windows binaries were not exercised for these guides. Choose your operating system:
 
 <Tabs>
   <Tab title="macOS / Linux">
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/v1.16.0/install.sh -o install-observal.sh
+curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/v1.17.0/install.sh -o install-observal.sh
 # Review the downloaded script before executing it.
-bash install-observal.sh --version 1.16.0
+bash install-observal.sh --version 1.17.0
 ```
 
-Without a version selector, the installer defaults to the latest release. The shown invocation explicitly selects **1.16.0**; `/usr/local/bin` is the default installation directory. Use `--bin-dir` for a reviewed writable location. The macOS artifact limitation above still applies.
+Without a version selector, the installer defaults to the latest release. The shown invocation explicitly selects **1.17.0**; `/usr/local/bin` is the default installation directory. Use `--bin-dir` for a reviewed writable location.
 
   </Tab>
   <Tab title="Windows">
@@ -49,8 +53,8 @@ Without a version selector, the installer defaults to the latest release. The sh
 Run in PowerShell:
 
 ```powershell
-$env:OBSERVAL_VERSION = '1.16.0'
-irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/v1.16.0/install.ps1 | iex
+$env:OBSERVAL_VERSION = '1.17.0'
+irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/v1.17.0/install.ps1 | iex
 ```
 
 The installer uses `%LOCALAPPDATA%\Programs\Observal` by default and updates your user `PATH`. Open a new terminal after installation. Set `OBSERVAL_VERSION` or `OBSERVAL_BIN_DIR` before running to choose a version or directory.
@@ -74,12 +78,12 @@ You should see an `observal` version. If your registry requires a different CLI 
 
 ## Other Python installation options
 
-If your environment uses pipx, install `pipx install 'observal-cli==1.16.0'`. The recommended uv path above is the same published CLI; do not repeat installation into multiple environments without reviewing conflicts. Prefer isolated tools over application dependencies.
+If your environment uses pipx, install `pipx install 'observal-cli==1.17.0' --pip-args='typer<0.29'`. The recommended uv path above is the same published CLI; do not repeat installation into multiple environments without reviewing conflicts. Prefer isolated tools over application dependencies.
 
 The optional `migrate` extra adds dependencies for the server data-migration commands; it is not needed to pull agents:
 
 ```bash
-uv tool install 'observal-cli[migrate]==1.16.0'
+uv tool install 'observal-cli[migrate]==1.17.0' --with 'typer<0.29'
 ```
 
 ### Install from a checkout
