@@ -353,9 +353,51 @@ def discover_inspect(
 # ── use ──────────────────────────────────────────────────────────────────
 
 
+# Candidates considered when `discover use --query` picks the resource itself.
+_QUERY_CANDIDATES = 5
+
+
+def _pick_for_query(text: str, harness: str | None, operation: str) -> tuple[dict, dict]:
+    """Search for ``text`` and choose the resource to use, with the selection to report.
+
+    Takes the best-ranked approved result that loads into this session; when none does (an MCP server, a
+    hook), the best-ranked result, so the caller still gets its install command. Remote A2A agents are
+    called, never loaded, so they are skipped.
+    """
+    data = _search(text, kind=None, harness=harness, limit=_QUERY_CANDIDATES, unapproved=False)
+    usable = [r for r in data.get("results") or [] if r.get("obs:availability") != "delegate"]
+    if not usable:
+        fail(
+            ErrorCategory.NOT_FOUND,
+            "Nothing approved in Observal matches that query.",
+            operation=operation,
+            resource="discovery search",
+            remediation="Retry once with fewer or different words; if still nothing, continue without a registry resource.",
+        )
+    chosen = next((r for r in usable if r.get("obs:availability") == "now"), usable[0])
+    selection = {
+        "query": text,
+        "score": chosen.get("score"),
+        "alternatives": [
+            {"identifier": r.get("identifier"), "name": r.get("displayName"), "score": r.get("score")}
+            for r in usable
+            if r is not chosen
+        ],
+    }
+    return chosen, selection
+
+
 @discover_app.command("use")
 def discover_use(
-    identifier: str = typer.Argument(..., help="Resource identifier from `discover search` (urn:air:...)"),
+    identifier: str | None = typer.Argument(
+        None, help="Resource identifier from `discover search` (urn:air:...); omit when using --query"
+    ),
+    query: str | None = typer.Option(
+        None,
+        "--query",
+        "-q",
+        help="Search for this task and use the best approved match, in one step (instead of an identifier)",
+    ),
     harness: str | None = typer.Option(
         None, "--harness", "-i", help="Harness this session runs in (detected when omitted)"
     ),
@@ -372,11 +414,35 @@ def discover_use(
     install command; this prints `observal agent add sandbox <uuid>`, which
     only edits a local observal-agent.yaml.
 
+    With --query, searches for the task and uses the best approved match
+    that loads into this session, so finding and loading take one command.
+    The result names what was chosen and lists the other candidates.
+
     Examples:
       observal discover use urn:air:observal.acme.com:skill:5f2c...
       observal discover use urn:air:observal.acme.com:mcp:9a1b... --harness kiro
+      observal discover use --query "review a pull request for auth bugs" --output json
     """
     operation = "Use discoverable resource"
+    if bool(identifier) == bool(query and query.strip()):
+        fail(
+            ErrorCategory.USAGE,
+            "Give either a resource identifier or --query, not both and not neither.",
+            operation=operation,
+            resource="arguments",
+            remediation="Use `observal discover use <identifier>` or `observal discover use --query '<task>'`.",
+        )
+    selection = None
+    if query:
+        harness_for_search = _resolve_harness(harness, operation) if harness else None
+        with nullcontext() if output == "json" else spinner("Searching Observal..."):
+            chosen, selection = _pick_for_query(query.strip(), harness_for_search, operation)
+        identifier = chosen["identifier"]
+        if output != "json":
+            rprint(
+                f"[dim]Matched[/dim] [bold]{esc(chosen.get('displayName', ''))}[/bold] "
+                f"[dim](score {esc(chosen.get('score'))}) for “{esc(query.strip())}”[/dim]"
+            )
     urn, kind, entity_id = _parse_urn(identifier, operation)
     if kind == "a2a":
         fail(
@@ -440,6 +506,8 @@ def discover_use(
             "reason": reason,
             "next_step": step,
         }
+        if selection:
+            result["selection"] = selection
         if output == "json":
             output_json(result)
             return
@@ -478,21 +546,22 @@ def discover_use(
     )
 
     if output == "json":
-        output_json(
-            {
-                "identifier": urn,
-                "kind": kind,
-                "version": version,
-                "native_ref": native_ref,
-                "digest": use.digest,
-                "mode": use.mode,
-                "activated": True,
-                "harness": harness_value,
-                "truncated": truncated,
-                "artifact_url": entry.get("url"),
-                "content": shown,
-            }
-        )
+        payload = {
+            "identifier": urn,
+            "kind": kind,
+            "version": version,
+            "native_ref": native_ref,
+            "digest": use.digest,
+            "mode": use.mode,
+            "activated": True,
+            "harness": harness_value,
+            "truncated": truncated,
+            "artifact_url": entry.get("url"),
+            "content": shown,
+        }
+        if selection:
+            payload["selection"] = selection
+        output_json(payload)
         return
 
     rprint(
