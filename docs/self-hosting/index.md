@@ -12,9 +12,15 @@ Run the registry on infrastructure you control. Self-hosting determines where th
 
 The packaged single-node installer is designed to generate restricted credential files under `secrets/`, record their `NAME_FILE` paths in `.env`, and bind new host ports to loopback. The source Compose path remains available for development and accepts direct `.env` values.
 
-<Warning>
-  Packaged setup currently fails on macOS's Bash 3.2 with an empty-array error. That limitation was reproduced independently of this docs PR. Use the [source evaluation path](/getting-started/local-evaluation), or validate the packaged setup with a compatible shell before relying on it. See [software requirements](/self-hosting/requirements#packaged-setup-on-macos).
-</Warning>
+### First login after the packaged install
+
+When `install-server.sh` finishes (select the release with `--version 1.17.0`), setup prints the dashboard URL, the API URL for the CLI, and a generated administrator password:
+
+- Open the dashboard at the **Frontend URL** you entered (default `http://localhost:3000`). That prompt sets the frontend/CORS origin, **not** the published port.
+- Use the printed server URL (default `http://localhost:8000`) as the CLI server, and check it with `curl http://localhost:8000/health`. If you change the bind address or `API_HOST_PORT`, use the URL setup prints instead; the CLI command remains `observal`.
+- Log in as `super@demo.example` with the generated password. Setup also stores it in `secrets/demo_super_admin_password` under the install directory (`~/.observal` on macOS, `/opt/observal` on Linux). Change it after logging in.
+
+Self-registration is off by default. To give someone a personal account, log in as an administrator and run `observal admin create-user alice@example.com 'Alice Smith' --role user`; see [user management](/cli/admin).
 
 ## Architecture at a glance
 

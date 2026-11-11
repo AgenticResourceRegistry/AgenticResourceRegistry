@@ -22,7 +22,7 @@ The adapter and native harness determine what is actually representable. Not eve
 
 ## CLI Commands
 
-Existing command links remain available here; use the canonical registry reference for current v1.16.0 options rather than a duplicated recipe.
+Existing command links remain available here; use the canonical registry reference for the current options rather than a duplicated recipe.
 
 ### Submit a hook
 

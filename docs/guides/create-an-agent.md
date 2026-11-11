@@ -38,7 +38,7 @@ observal agent add skill COMPONENT_UUID --version COMPONENT_VERSION --dir ./my-a
 observal agent build --dir ./my-agent --output json
 ```
 
-Replace the UUID and version before running `add`. The init command is interactive unless you supply the complete flags. Review the YAML and build result. In v1.16.0, build validates declared harness names and component references, versions, and access/composition scope—not whether the components work in those harnesses. Inspect each pinned release and verify compatibility manually before publication. Build does not execute the agent or prove effectiveness.
+Replace the UUID and version before running `add`. The init command is interactive unless you supply the complete flags. Review the YAML and build result. Build validates declared harness names and component references, versions, and access/composition scope, and drops any declared harness that cannot run the components; it fails when none can. Build does not execute the agent or prove effectiveness.
 
 ```bash
 observal agent publish --dir ./my-agent --output json

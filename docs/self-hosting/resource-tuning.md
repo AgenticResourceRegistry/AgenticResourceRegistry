@@ -7,7 +7,7 @@ title: "Resource Tuning"
 
 Connection pools, HTTP timeouts, and query settings have different configuration/application paths. Measure saturation and backing-store capacity before tuning; a larger pool can increase load rather than improve throughput.
 
-The defaults below are the constructor inputs in the v1.16.0 release, not capacity recommendations. Operators must verify their actual process/container environment and every process that owns a client.
+The defaults below are the constructor inputs in the v1.17.0 release, not capacity recommendations. Operators must verify their actual process/container environment and every process that owns a client.
 
 ## When to Tune
 

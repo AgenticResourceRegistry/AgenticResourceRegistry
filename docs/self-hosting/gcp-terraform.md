@@ -49,16 +49,16 @@ gcloud services enable \
   iam.googleapis.com
 ```
 
-Use the selected application image tag `1.16.0`, not a moving `latest` alias, and verify any Artifact Registry mirror contains those exact images. The source checkout tag does not pin a separately configured image tag by itself.
+Use the selected application image tag `1.17.0`, not a moving `latest` alias, and verify any Artifact Registry mirror contains those exact images. The source checkout tag does not pin a separately configured image tag by itself.
 
 ## Quickstart
 
 <Warning>
-  **v1.16.0 GCP signing-key limitation:** the stock Cloud Run API sets `JWT_KEY_DIR=/tmp/keys`, with no shared durable signing-key mount. Workers within one instance can share its directory, but separate API instances can generate different keys, and replacement loses them. Before an authenticated team deployment, require a reviewed, tested shared-and-durable signing-key design for all API instances. Limiting instance count alone does not fix replacement/persistence. This guide does not supply or certify that infrastructure change.
+  **v1.17.0 GCP signing-key limitation:** the stock Cloud Run API sets `JWT_KEY_DIR=/tmp/keys`, with no shared durable signing-key mount. Workers within one instance can share its directory, but separate API instances can generate different keys, and replacement loses them. Before an authenticated team deployment, require a reviewed, tested shared-and-durable signing-key design for all API instances. Limiting instance count alone does not fix replacement/persistence. This guide does not supply or certify that infrastructure change.
 </Warning>
 
 ```bash
-git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
 cd AgenticResourceRegistry/infra/terraform/gcp
 
 # 1. Authenticate
@@ -67,12 +67,12 @@ gcloud auth application-default login
 # 2. Configure
 cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
-# REQUIRED: set project_id and change image_tag = "latest" to image_tag = "1.16.0".
+# REQUIRED: set project_id and change image_tag = "latest" to image_tag = "1.17.0".
 
 # 3. Plan and review before applying
 terraform init
 terraform plan -out tf.plan
-# Review API/web/worker/init application image references for :1.16.0 before applying.
+# Review API/web/worker/init application image references for :1.17.0 before applying.
 terraform apply tf.plan
 
 # 4. Run migrations
@@ -92,7 +92,7 @@ All inputs live in `terraform.tfvars`.
 project_id  = "my-gcp-project"
 region      = "us-central1"
 environment = "prod"
-image_tag   = "1.16.0"
+image_tag   = "1.17.0"
 ```
 
 The install comes up on the Cloud Run default URL (e.g. `https://observal-prod-api-xxxxx-uc.a.run.app`).
@@ -103,7 +103,7 @@ The install comes up on the Cloud Run default URL (e.g. `https://observal-prod-a
 project_id  = "my-gcp-project"
 region      = "us-central1"
 environment = "prod"
-image_tag   = "1.16.0"
+image_tag   = "1.17.0"
 
 domain_name           = "observal.example.com"
 dns_managed_zone_name = "example-com"

@@ -91,6 +91,8 @@ Each list invocation replaces this cache, including an empty result. Numeric row
 | `~/.claude/settings.json` | Managed user session hooks; opt-in user agent gates |
 | `.claude/settings.local.json` | Opt-in project agent gates; not the default agent-frontmatter placement |
 | Native `claude mcp add` registration | MCP setup/reset commands returned by pull; inspect the native scope/result instead of assuming MCPs are stored in `settings.json` |
+| `~/.claude.json` | User- and local-scoped MCP servers registered by `claude mcp add` |
+| `.mcp.json` | Project-scoped MCP servers |
 | `CLAUDE.md` and supported guidance files | Native project guidance, not registry agent activation |
 
 See [Claude Code](/integrations/claude-code) and the [agent hook placement contract](/cli/pull#agent-hooks-in-headless-sessions). A generated profile or hook declaration is not proof it is selected or runs.

@@ -9,7 +9,7 @@ Codex loads registry agents as **custom subagent definitions**. Pulling one does
 
 ## Before you start
 
-Install Codex and authenticate it separately from the registry. Check `codex --version` and `codex login status`. This guide follows the registry's [v1.16.0 documentation scope](/reference/documentation-version); the local CLI help checked for this batch was Codex `0.163.0`.
+Install Codex and authenticate it separately from the registry. Check `codex --version` and `codex login status`. This guide follows the registry's [v1.17.0 documentation scope](/reference/documentation-version); the local CLI help checked for this batch was Codex `0.163.0`.
 
 Choose an accessible approved agent release that supports `codex`, then [inspect its exact instructions and component pins](/guides/inspect-an-agent). Use a disposable project with a `README.md` for an unfamiliar setup.
 
@@ -76,6 +76,6 @@ Codex session delivery uses the user-level hooks installed by `observal doctor p
 
 The generated format and invocation workflow were checked against the registry implementation and [OpenAI's custom-subagent documentation](https://developers.openai.com/codex/agent-configuration/subagents). A successful model-authenticated Codex child task has not been completed in this docs batch; CLI configuration/context checks are not a substitute for it.
 
-## v1.16.0 attribution boundary
+## Attribution and recovery
 
-This release predates later Codex rollout-identity/recovery attribution fixes. A recovered session or an agent name in a prompt is not independent evidence of the original custom-role identity. Keep native activation/recovery checks bounded and do not claim the newer recovery provenance contract for this tag.
+Codex session recovery proves each rollout's identity before it delivers a recovered session, and quarantines held sessions it cannot prove instead of replaying them. A recovered session or an agent name in a prompt is still not independent evidence of the original custom-role identity. Keep native activation and recovery checks bounded.

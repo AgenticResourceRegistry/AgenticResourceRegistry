@@ -27,7 +27,7 @@ Use the hosted OCI chart after the first release that includes Helm chart publis
    ```bash
    kubectl create namespace observal
    helm install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
-     --version 1.16.0 \
+     --version 1.17.0 \
      --namespace observal
    ```
 
@@ -42,7 +42,7 @@ To test unreleased chart changes directly from a clone:
 
 1. Clone the repository:
    ```bash
-   git clone --branch v1.16.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
+   git clone --branch v1.17.0 --depth 1 https://github.com/AgenticResourceRegistry/AgenticResourceRegistry.git
    cd AgenticResourceRegistry
    ```
 
@@ -50,7 +50,7 @@ To test unreleased chart changes directly from a clone:
    ```bash
    kubectl create namespace observal
    helm install observal ./infra/helm/observal --namespace observal \
-     --set api.image.tag=1.16.0 --set worker.image.tag=1.16.0 --set web.image.tag=1.16.0
+     --set api.image.tag=1.17.0 --set worker.image.tag=1.17.0 --set web.image.tag=1.17.0
    ```
 
 3. Verify all workloads are running and completed:
@@ -64,7 +64,7 @@ You can customize the deployment by passing a custom values file (`-f values.yam
 
 ```bash
 helm install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
-  --version 1.16.0 \
+  --version 1.17.0 \
   --namespace observal \
   -f custom-values.yaml
 ```
@@ -121,7 +121,7 @@ Enable ingress and configure TLS termination using `cert-manager`:
 
 ```bash
 helm upgrade --install observal oci://ghcr.io/agenticresourceregistry/charts/observal \
-  --version 1.16.0 \
+  --version 1.17.0 \
   --namespace observal \
   --set ingress.enabled=true \
   --set ingress.host=observal.mycompany.com \
@@ -139,7 +139,7 @@ Before an update, read [the canonical migration/recovery gates](/self-hosting/up
 
 ```bash
 helm upgrade observal oci://ghcr.io/agenticresourceregistry/charts/observal \
-  --version 1.16.0 \
+  --version 1.17.0 \
   --namespace observal \
   -f custom-values.yaml
 ```

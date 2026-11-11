@@ -48,7 +48,7 @@ observal agent add skill COMPONENT_UUID --version COMPONENT_VERSION --dir ./my-a
 observal agent build --dir ./my-agent --output json
 ```
 
-The init command is interactive unless complete metadata flags are supplied. For other component types, replace `skill` with `mcp`, `hook`, `prompt`, or `sandbox`. In v1.16.0, build validates declared harness names and component references, versions, and access/composition scope. It does not check that each component supports every declared harness. Inspect the exact component releases and verify native compatibility manually before publishing; a valid build is not execution or effectiveness proof.
+The init command is interactive unless complete metadata flags are supplied. For other component types, replace `skill` with `mcp`, `hook`, `prompt`, or `sandbox`. Build validates declared harness names and component references, versions, and access/composition scope. It also leaves out any declared harness that cannot run the components and fails when none can. A valid build is not execution or effectiveness proof.
 
 Publish/review the agent definition, then [inspect and pull its exact release](/getting-started/quickstart). Compare all planned resources with the component versions you inspected. A compatibility warning or failed setup is not success just because a profile was written.
 
