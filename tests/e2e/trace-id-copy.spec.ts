@@ -79,10 +79,26 @@ test("trace list copies the trace ID without opening the trace", async ({ page }
   await page.mouse.click(box!.x - 3, box!.y + box!.height / 2);
   await expect.poll(() => readClipboard(page)).toBe(sessionId);
   await expect(page).toHaveURL(/\/traces$/);
+});
 
-  // The narrow cards are role="button" themselves, so they carry no nested copy button.
+test("narrow trace list copies the trace ID without opening the trace", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("button", { name: "Copy trace ID", exact: true }).filter({ visible: true })).toHaveCount(0);
+  await page.goto("/traces");
+  const card = page.getByRole("listitem").filter({ hasText: sessionId });
+  const copy = card.getByRole("button", { name: "Copy trace ID", exact: true });
+  await expect(copy).toBeVisible();
+  // The copy button sits next to the card's role="button" element, not inside it.
+  await expect(card.locator('[role="button"] button')).toHaveCount(0);
+
+  await clearClipboard(page);
+  await copy.click();
+  await expect(page.getByText("Trace ID copied").last()).toBeVisible();
+  expect(await readClipboard(page)).toBe(sessionId);
+  await expect(page).toHaveURL(/\/traces$/);
+
+  // The card itself still opens the trace.
+  await card.locator('[role="button"]').click();
+  await expect(page).toHaveURL(new RegExp(`/traces/${sessionId}$`));
 });
 
 test("trace detail header and Session Info copy the trace ID", async ({ page }) => {

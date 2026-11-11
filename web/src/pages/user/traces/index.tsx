@@ -1061,7 +1061,7 @@ export default function TracesPage() {
 												{rows.map((row) => {
 													const s = row.original;
 													return (
-														<li key={row.id}>
+														<li key={row.id} className="group relative">
 															<div
 																role="button"
 																tabIndex={0}
@@ -1074,7 +1074,7 @@ export default function TracesPage() {
 																	}
 																}}
 																className={cn(
-																	"grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-4 py-3.5 transition-colors duration-100 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring min-[560px]:grid-cols-[minmax(0,1fr)_92px_82px_74px] min-[560px]:gap-y-0 min-[560px]:px-[22px]",
+																	"grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border py-3.5 pl-4 pr-11 transition-colors duration-100 group-hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring min-[560px]:grid-cols-[minmax(0,1fr)_92px_82px_74px] min-[560px]:gap-y-0 min-[560px]:pl-[22px] min-[560px]:pr-[50px]",
 																	s.is_active && "bg-success/[0.06]",
 																)}
 															>
@@ -1105,6 +1105,11 @@ export default function TracesPage() {
 																	{relTime(s.first_event_time)}
 																</span>
 															</div>
+															{/* A sibling of the card, not a child, so it isn't nested in the card's role="button". */}
+															<CopyTraceIdButton
+																traceId={s.session_id}
+																className="absolute inset-y-0 right-4 my-auto min-[560px]:right-[22px]"
+															/>
 														</li>
 													);
 												})}
