@@ -56,11 +56,14 @@ Use either command plus args for stdio, or URL for remote MCP. Do not put secret
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"]
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": { "MEMORY_FILE_PATH": "/absolute/path/to/memory.jsonl" }
     }
   }
 }
 ```
+
+Set `MEMORY_FILE_PATH` to an absolute path in a directory you own. Without it the server keeps its graph inside the npm cache, where clearing the cache or updating the package deletes it.
 
 ## CLI example
 
