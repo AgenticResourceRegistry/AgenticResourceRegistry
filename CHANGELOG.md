@@ -261,6 +261,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- cap Typer below 0.29, which makes every `observal` command fail when the package is installed with a fresh dependency resolution (`uv tool install`, `pipx`)
 - accept Kiro universal array hooks across doctor, scan, inventory, and agent profile rewrites; preserve user hooks and skip unreadable profiles (#2015, #2024)
 - install and refresh array-based Kiro registry hook files without duplicating named entries or replacing unrelated hooks (#2020)
 - detect Kiro V3 reasoning models and durably upload companion model metadata as a fallback without changing source counts (#2023)
