@@ -858,8 +858,8 @@ def get_registered_agent_names() -> set[str]:
         )
         if r.status_code == 200:
             return {item.get("name", "") for item in r.json() if item.get("name")}
-    except Exception:
-        pass
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        optic.debug("registry lookup failed: error={}", exc)
     return set()
 
 
@@ -881,8 +881,8 @@ def get_registered_mcp_names() -> set[str]:
         )
         if r.status_code == 200:
             return {item.get("name", "") for item in r.json() if item.get("name")}
-    except Exception:
-        pass
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        optic.debug("registry lookup failed: error={}", exc)
     return set()
 
 
