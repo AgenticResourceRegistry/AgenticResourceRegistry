@@ -171,7 +171,7 @@ Or just tell your agent what you want and it figures out the right commands.
 ---
 
    <p align="center">
-     <img src="docs/img/Observal.png" alt="HITL and autonomous agentic stack" width="900">
+     <img src="docs/img/agentic-stack.png" alt="HITL and autonomous agentic stack" width="900">
    </p>
 
 The registry is where agents live. Admins review submissions, version diffs keep changes auditable, and one command installs an agent into any supported harness.

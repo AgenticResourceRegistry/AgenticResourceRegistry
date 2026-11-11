@@ -426,6 +426,6 @@ path = [
 SPDX-FileCopyrightText = "2026 Hari Srinivasan <harisrini21@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
-path = "docs/img/Observal.png"
+path = "docs/img/agentic-stack.png"
 SPDX-FileCopyrightText = "2026 Anupama Nakka <nakkaanupama8@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
