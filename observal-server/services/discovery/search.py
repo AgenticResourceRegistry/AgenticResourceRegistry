@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -239,6 +240,20 @@ class Ranked:
     matched_on: list[str]
 
 
+def _token_weights(matches: list[list[float]], tokens: int) -> list[float]:
+    """Inverse-document-frequency weight per query token over the candidate entries.
+
+    A token that matches few entries says more about which one is wanted than a token that
+    matches many, so a rare word outweighs a common one. ``ln(1 + n / df)`` is the standard
+    smoothed form; a token no entry matches gets the rarest weight, so it lowers every score
+    alike and never reorders them.
+    """
+    n = len(matches)
+    return [
+        math.log(1 + n / df) if (df := sum(1 for row in matches if row[j])) else math.log(1 + n) for j in range(tokens)
+    ]
+
+
 def rank_entries(text: str, entries: list[DiscoveryEntry]) -> list[Ranked]:
     """Score entries for ``text`` and return them best-first with stable tie-breaking."""
     tokens = query_tokens(text)
@@ -247,12 +262,12 @@ def rank_entries(text: str, entries: list[DiscoveryEntry]) -> list[Ranked]:
     display = _display_map(text, tokens)
     namespaces = _query_namespaces(text)
     phrase = _spaced(" ".join(tokens))
-    ranked: list[Ranked] = []
 
+    # Pass 1: how well each entry matches each token. Pass 2 weighs tokens by how rare they are.
+    matches: list[list[float]] = []
     for entry in entries:
         fields = _fields(entry, namespaces)
-        total = 0.0
-        matched: list[str] = []
+        row: list[float] = []
         for token in tokens:
             best = 0.0
             # The tokenizer stems plural endings; the word as typed must still match exactly.
@@ -261,13 +276,18 @@ def rank_entries(text: str, entries: list[DiscoveryEntry]) -> list[Ranked]:
                 quality = max(_match_quality(v, fields[name]) for v in variants)
                 if quality:
                     best = max(best, quality * weight)
-            if best:
-                total += best
-                matched.append(display[token])
+            row.append(best)
+        matches.append(row)
+
+    weights = _token_weights(matches, len(tokens))
+    total_weight = sum(weights)
+    ranked: list[Ranked] = []
+    for entry, row in zip(entries, matches, strict=True):
+        matched = [display[t] for t, best in zip(tokens, row, strict=True) if best]
         if not matched:
             continue
-        relevance = total / len(tokens)
-        coverage = len(matched) / len(tokens)
+        relevance = sum(w * best for w, best in zip(weights, row, strict=True)) / total_weight
+        coverage = sum(w for w, best in zip(weights, row, strict=True) if best) / total_weight
         haystack = _spaced(" ".join([entry.display_name or "", *(entry.representative_queries or [])]))
         namespace, slug = _qualified(entry)
         qualified = _spaced(f"{namespace} {slug}")
