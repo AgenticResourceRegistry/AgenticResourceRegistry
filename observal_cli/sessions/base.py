@@ -294,9 +294,67 @@ def _refresh_access_token(server_url: str, refresh_token: str, config_path: str)
 class PermanentIngestRejectionError(RuntimeError):
     """A payload rejection that retrying cannot resolve."""
 
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, reason: str | None = None):
         self.status_code = status_code
-        super().__init__(f"server permanently rejected the payload with status {status_code}")
+        self.reason = reason
+        message = f"server permanently rejected the payload with status {status_code}"
+        super().__init__(f"{message}: {reason}" if reason else message)
+
+
+def _safe_validation_reason(response: object) -> str | None:
+    """Summarize Pydantic error codes/paths without recording rejected session data.
+
+    Never use `msg`, `input`, or arbitrary detail strings: they can contain the
+    user's transcript or credentials. Unknown path segments are also redacted.
+    """
+    # The server supplies these *codes*, but it cannot choose which strings we
+    # echo into logs. Other codes (even syntactically valid ones) are untrusted.
+    safe_codes = {
+        "missing",
+        "string_type",
+        "string_too_long",
+        "list_type",
+        "too_long",
+        "int_type",
+        "int_parsing",
+        "greater_than_equal",
+        "less_than_equal",
+        "bool_type",
+        "bool_parsing",
+        "float_type",
+        "float_parsing",
+        "value_error",
+        "json_invalid",
+        "model_attributes_type",
+        "model_type",
+    }
+    try:
+        detail = response.json().get("detail")  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not isinstance(detail, list):
+        return None
+    safe_fields = {"body", "lines", "session_id", "harness", "start_offset", "end_byte_offsets", "hook_event", "final"}
+    reasons = []
+    for error in detail[:2]:
+        if not isinstance(error, dict):
+            continue
+        code = error.get("type")
+        if not isinstance(code, str) or code not in safe_codes:
+            continue
+        loc = error.get("loc")
+        path = []
+        if isinstance(loc, (list, tuple)):
+            for segment in loc[:5]:
+                if isinstance(segment, str):
+                    path.append(segment if segment in safe_fields else "field")
+                elif isinstance(segment, int) and 0 <= segment <= 1_000_000:
+                    path.append(f"[{segment}]")
+        location = ".".join(path).replace(".[", "[") if path else "payload"
+        limit = (error.get("ctx") or {}).get("max_length") if isinstance(error.get("ctx"), dict) else None
+        constraint = f" (max_length={limit})" if isinstance(limit, int) and 0 <= limit <= 10_000_000 else ""
+        reasons.append(f"{location}: {code}{constraint}")
+    return "; ".join(reasons)[:240] or None
 
 
 def post_to_server_ack(
@@ -329,13 +387,15 @@ def post_to_server_ack(
                         headers["Authorization"] = f"Bearer {new_token}"
                         response = client.post(url, json=payload, headers=headers)
             if response.status_code >= 300:
+                reason = _safe_validation_reason(response) if response.status_code == 422 else None
                 optic.warning(
-                    "ingest POST returned {} for session {}: server rejected the payload",
+                    "ingest POST returned {} for session {}: {}",
                     response.status_code,
                     session_id,
+                    reason or "server rejected the payload",
                 )
                 if response.status_code in {400, 409, 413, 415, 422}:
-                    raise PermanentIngestRejectionError(response.status_code)
+                    raise PermanentIngestRejectionError(response.status_code, reason)
                 return None
             data = response.json()
             if not isinstance(data.get("acknowledged_line"), int):
@@ -522,7 +582,7 @@ def drain_outbox(
             if rejections is not None:
                 rejections.append((item.harness, item.session_id, exc.status_code))
             log_error(
-                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}",
+                f"quarantined rejected {item.harness} session {item.session_id} batch at {quarantine_path}: {exc}",
                 home=home,
             )
             continue

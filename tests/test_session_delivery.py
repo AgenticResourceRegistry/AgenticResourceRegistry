@@ -173,6 +173,79 @@ def test_payload_rejection_status_is_permanent(monkeypatch, status_code: int):
         base.post_to_server_ack("http://server", "token", {"session_id": "bad", "lines": []})
 
 
+def test_422_validation_reason_is_bounded_and_safe_in_logs_and_quarantine(tmp_path: Path, monkeypatch):
+    import httpx
+
+    secret = "sensitive-session-content-and-token"
+    detail = {
+        "detail": [
+            {
+                "loc": ["body", "lines", 0, secret],
+                "type": "string_too_long",
+                "msg": f"Value error: {secret}",
+                "input": secret,
+                "ctx": {"max_length": 1_048_576, "error": secret},
+            }
+        ]
+    }
+    _install_http_transport(monkeypatch, lambda _request: httpx.Response(422, json=detail))
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "bad", "lines": ["bad"], "start_offset": 0, "end_byte_offsets": [3]},
+        destination="https://server.example",
+        user_id="user",
+        db_path=db,
+    )
+    cfg = {**config(), "server_url": "https://server.example"}
+    assert base.drain_outbox(cfg, home=tmp_path, db_path=db)
+
+    rejection = json.loads(db.with_suffix(".rejected.jsonl").read_text())
+    assert "body.lines[0].field: string_too_long (max_length=1048576)" in rejection["reason"]
+    log = (tmp_path / ".observal" / "sync.log").read_text()
+    assert "string_too_long" in log
+    assert secret not in rejection["reason"] + log
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "contains secret",
+        [{"loc": ["body"], "type": "bad secret"}],
+        [{"loc": ["body", "lines", 0], "type": "sk_live_supersecrettoken"}],
+    ],
+)
+def test_422_rejection_with_unstructured_or_untrusted_detail_stays_generic(monkeypatch, detail):
+    import httpx
+
+    _install_http_transport(monkeypatch, lambda _request: httpx.Response(422, json={"detail": detail}))
+    with pytest.raises(base.PermanentIngestRejectionError) as exc:
+        base.post_to_server_ack("https://server.example", "token", {"session_id": "bad", "lines": []})
+    assert exc.value.reason is None
+    assert "secret" not in str(exc.value)
+
+
+def test_untrusted_validation_code_never_reaches_quarantine_or_sync_log(tmp_path: Path, monkeypatch):
+    import httpx
+
+    secret = "sk_live_supersecrettoken"
+    _install_http_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(422, json={"detail": [{"loc": ["body", "lines", 0], "type": secret}]}),
+    )
+    db = tmp_path / "outbox.db"
+    telemetry_buffer.enqueue(
+        {"harness": "claude-code", "session_id": "bad", "lines": ["bad"], "start_offset": 0, "end_byte_offsets": [3]},
+        destination="https://server.example",
+        user_id="user",
+        db_path=db,
+    )
+    assert base.drain_outbox({**config(), "server_url": "https://server.example"}, home=tmp_path, db_path=db)
+    quarantine = db.with_suffix(".rejected.jsonl").read_text()
+    sync_log = (tmp_path / ".observal" / "sync.log").read_text()
+    assert "status 422" in quarantine
+    assert secret not in quarantine + sync_log
+
+
 def test_permanent_rejection_is_quarantined_without_blocking_later_sessions(tmp_path: Path):
     db = tmp_path / "outbox.db"
     for session_id, line in (("bad", "invalid"), ("good", "valid")):
