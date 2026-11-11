@@ -18,13 +18,15 @@
 from __future__ import annotations
 
 import json as _json
+import os
 import re
 import shutil
 import sys
 from contextlib import nullcontext
+from ipaddress import IPv6Address
 from pathlib import Path
 from typing import Annotated, NoReturn
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import httpx
 import typer
@@ -85,6 +87,85 @@ _SSO_PROVIDERS: dict[str, tuple[str, str]] = {
     "github": ("github_sso_enabled", "GitHub"),
     "saml": ("saml_enabled", "SAML SSO"),
 }
+
+
+def _login_server_url(value: str, *, source: str, require_scheme: bool = False) -> str:
+    """Validate a login destination without ever displaying untrusted URL contents."""
+
+    def invalid() -> NoReturn:
+        fail(
+            ErrorCategory.VALIDATION,
+            f"Invalid {source} server URL.",
+            operation="Authenticate with Agentic Resource Registry",
+            resource=source,
+            remediation="Use an HTTP or HTTPS URL with a host (or a bare host for --server or the prompt).",
+        )
+
+    # Check the original input before trimming: urlsplit silently drops C0 controls,
+    # while other nonprintable characters can survive into HTTPX error details.
+    if any(not char.isprintable() for char in value):
+        invalid()
+    raw = value.strip().rstrip("/")
+    if not raw or raw.startswith("//") or any(char.isspace() for char in raw):
+        invalid()
+    qualified = "://" in raw
+    if require_scheme and not qualified:
+        invalid()
+    if not qualified:
+        # A host:port is an authority, not a URI scheme; bare IPv6 is ambiguous.
+        if raw.startswith("[") or raw.count(":") > 1:
+            invalid()
+        raw = f"https://{raw}"
+    try:
+        parsed = urlsplit(raw)
+        host, port = parsed.hostname, parsed.port
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "?" in raw
+            or "#" in raw
+            or parsed.netloc.endswith(":")
+            or port == 0
+        ):
+            invalid()
+        if ":" in host:
+            IPv6Address(host)
+        else:
+            # HTTPX applies IDNA2008 on the wire, which differs from Python's
+            # built-in IDNA codec (e.g. faß.de is NOT fass.de). Keep ASCII host
+            # syntax strict and validate internationalized names with HTTPX.
+            if not all(char.isalnum() or char in "._-" for char in host):
+                invalid()
+            wire_host = httpx.URL(raw).raw_host.decode("ascii")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", wire_host):
+                invalid()
+    except (ValueError, UnicodeError, httpx.InvalidURL):
+        invalid()
+    return raw
+
+
+def _login_destination(url: str) -> tuple[str, str, int, str]:
+    parsed = urlsplit(url)
+    wire_host = httpx.URL(url).raw_host.decode("ascii").lower()
+    return parsed.scheme, wire_host, parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path
+
+
+def _guard_login_override(server_url: str, override: str | None) -> None:
+    if override and _login_destination(
+        _login_server_url(override, source="OBSERVAL_SERVER_URL", require_scheme=True)
+    ) != _login_destination(server_url):
+        fail(
+            ErrorCategory.VALIDATION,
+            "OBSERVAL_SERVER_URL conflicts with the login destination.",
+            operation="Authenticate with Agentic Resource Registry",
+            resource="OBSERVAL_SERVER_URL",
+            remediation="Unset OBSERVAL_SERVER_URL or set it to the login server URL before retrying.",
+        )
 
 
 def _choose_sso_provider(providers: list[str]) -> str:
@@ -282,7 +363,7 @@ def _ensure_cli_matches_server(server_url: str) -> None:
 
 @auth_app.command()
 def login(
-    server: str = typer.Option(None, "--server", "-s", help="Server URL"),
+    server: str = typer.Option(None, "--server", "-s", help="Server URL (bare hosts use HTTPS)"),
     email: str = typer.Option(None, "--email", "-e", help="Email or username"),
     password: str = typer.Option(None, "--password", "-p", help="Password"),
     name: str = typer.Option(None, "--name", "-n", help="Your name (used for admin setup)"),
@@ -299,9 +380,10 @@ def login(
         typer.Option("--provider", help="SSO provider: oidc, saml, google or github (implies --sso)"),
     ] = None,
 ):
-    """Connect to Observal.
+    """Connect to Agentic Resource Registry.
 
-    Human mode asks for the server URL; leave it blank for http://localhost.
+    Human mode asks for the server URL; blank uses OBSERVAL_SERVER_URL when
+    configured, otherwise http://localhost.
     On a fresh server, creates the first admin account. On an initialized
     server, authenticates with credentials or browser SSO. Set
     OBSERVAL_PASSWORD or OBSERVAL_PASSWORD_FILE to avoid exposing a password
@@ -310,7 +392,7 @@ def login(
 
     Examples:
         observal auth login
-        observal auth login --server https://observal.example.com --email alice --output json --no-setup
+        observal auth login --server dev.observal.io --email alice --output json --no-setup
         observal auth login --sso --provider google
     """
     json_mode = _is_json(output)
@@ -320,23 +402,31 @@ def login(
     from observal_cli.lockfile import migrate_lockfile_v1
 
     stored = config.load()
-    previous_server = stored.get("server_url")
+    override = os.environ.get("OBSERVAL_SERVER_URL")
+    if server is not None:
+        selected = server
+        source = "--server"
+    elif json_mode:
+        selected = str(stored.get("server_url") or "http://localhost:80")
+        source = "OBSERVAL_SERVER_URL" if override else "configured"
+    else:
+        if override:
+            selected = text_input("Server URL (leave blank to use OBSERVAL_SERVER_URL)", default="") or override
+            source = "OBSERVAL_SERVER_URL" if selected == override else "prompt"
+        else:
+            selected = text_input("Server URL (leave blank for http://localhost)", default="") or "http://localhost"
+            source = "prompt"
+
+    server_url = _login_server_url(selected, source=source, require_scheme=source == "OBSERVAL_SERVER_URL")
+    _guard_login_override(server_url, override)
+    previous_server = config.load_persisted().get("server_url")
     if previous_server:
         migrate_lockfile_v1(str(previous_server))
-
-    if server:
-        server_url = server.rstrip("/")
-    elif json_mode:
-        server_url = str(stored.get("server_url") or "http://localhost:80").rstrip("/")
-    else:
-        server_url = (
-            text_input("Server URL (leave blank for http://localhost)", default="") or "http://localhost"
-        ).rstrip("/")
 
     candidates = [server_url]
     parsed_server = urlparse(server_url)
     if (
-        not server
+        server is None
         and parsed_server.hostname in {"localhost", "127.0.0.1", "::1"}
         and parsed_server.port
         not in {
@@ -401,6 +491,7 @@ def login(
                 resource=f"server {candidates[-1]}",
             )
 
+    _guard_login_override(server_url, override)
     _ensure_cli_matches_server(server_url)
     initialized = health_data.get("initialized", True)
     run_setup = not no_setup and not json_mode
