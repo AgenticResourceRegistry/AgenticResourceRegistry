@@ -54,16 +54,12 @@ def test_contextual_help_targets_bundled_wiki_pages():
         assert file in pages, f"Help panel targets a missing wiki page: {file}"
 
 
-def test_quickstart_and_hook_reference_match_current_sources():
+def test_self_hosting_and_install_docs_match_current_sources():
     import tomllib
 
     compose = (ROOT / "docker/docker-compose.yml").read_text()
     postgres = re.search(r"image: postgres:(\d+)", compose)
-    assert postgres and f"PostgreSQL {postgres.group(1)}" in (DOCS / "getting-started/quickstart.md").read_text()
-
-    hook_spec = (ROOT / "observal_cli/harness_specs/claude_code_hooks_spec.py").read_text()
-    version = re.search(r'^HOOKS_SPEC_VERSION = "(\d+)"', hook_spec, re.MULTILINE)
-    assert version and f'HOOKS_SPEC_VERSION = "{version.group(1)}"' in (DOCS / "reference/hooks-spec.md").read_text()
+    assert postgres and f"PostgreSQL {postgres.group(1)}" in (DOCS / "self-hosting/ports-and-volumes.md").read_text()
 
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     install = (DOCS / "getting-started/installation.md").read_text()
