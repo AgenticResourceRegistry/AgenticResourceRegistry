@@ -14,6 +14,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.17.1] - 2026-11-11
+
+### Fixes
+
+- Fix the Typer 0.29 incompatibility that broke fresh pip, uv and pipx installs of 1.17.0 ([#2193](https://github.com/AgenticResourceRegistry/AgenticResourceRegistry/pull/2193))
+
 ## [1.17.0] - 2026-11-11
 
 ### Features
