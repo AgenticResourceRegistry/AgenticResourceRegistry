@@ -34,7 +34,7 @@ When a user runs `observal scan`, Agentic Resource Registry reads those same loc
 | 5 | `observal-server/services/harness/<harness_name>.py` | Server adapter: config generation for install |
 | 6 | `observal-server/services/harness/load_all.py` | Add import line for server adapter |
 | 7 | `observal_cli/harness_specs/<harness_name>_hooks_spec.py` | Hook spec: what hooks to install, event names |
-| 8 | observal-server/services/session-parsers/<harness_name>.py | Server session parser (if harness writes JSONL sessions) |
+| 8 | `observal-server/services/session_parsers/<harness_name>.py` | Server session parser (if harness writes JSONL sessions) |
 | 9 | `observal_cli/hooks/<harness_name>_session_push.py` | Session push hook script |
 | 10 | `observal_cli/cmd_doctor.py` | Doctor diagnose, patch, and cleanup implementations for the new harness |
 | 11 | `observal_cli/layer.py` | Layer scanning globs (`HARNESS_LAYER_CONFIGS`) and active harness detection |
