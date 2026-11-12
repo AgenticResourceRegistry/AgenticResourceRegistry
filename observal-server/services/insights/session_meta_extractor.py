@@ -419,7 +419,7 @@ async def fetch_session_stats(
                    max(credits) AS total_credits,
                    anyIf(layer_hash, layer_hash IS NOT NULL AND layer_hash != '') AS layer_hash,
                    anyIf(parent_session_id, parent_session_id IS NOT NULL AND parent_session_id != '') AS parent_session_id,
-                   anyIf(agent_version, agent_version IS NOT NULL AND agent_version != '') AS agent_version
+                   anyIf(agent_version, agent_version IS NOT NULL AND agent_version != '') AS reported_agent_version
             FROM session_events FINAL
             WHERE (agent_id = {agent_id:String} OR agent_id = {agent_name:String})
               AND timestamp >= {t_start:String} AND timestamp <= {t_end:String}
@@ -440,7 +440,7 @@ async def fetch_session_stats(
             "layer_hash": row.get("layer_hash", ""),
             "parent_session_id": str(row.get("parent_session_id") or ""),
             "parent_metadata_known": "parent_session_id" in row,
-            "reported_agent_version": row.get("agent_version", ""),
+            "reported_agent_version": row.get("reported_agent_version", row.get("agent_version", "")),
         }
         for row in rows
     }

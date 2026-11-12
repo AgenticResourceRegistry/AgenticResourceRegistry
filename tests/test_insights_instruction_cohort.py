@@ -311,3 +311,40 @@ def test_provider_metrics_drop_all_nested_rosters_without_mutating_records():
     assert "members" not in json.dumps(public) and "private-user" not in json.dumps(public)
     assert public["metrics"]["cohort"]["bound_sessions"] == 1
     assert public["metrics"]["rich"]["version_comparison_baseline"]["prior_cohort"]["verified_top_level_sessions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_version_alias_does_not_shadow_filter_column(monkeypatch):
+    """Preserve fallback credits/version without aggregate aliases resolving inside WHERE."""
+    from types import SimpleNamespace
+
+    from services.insights import session_meta_extractor as extractor
+
+    queries = []
+
+    async def query(sql, params):
+        queries.append(sql)
+        if len(queries) == 1:
+            raise RuntimeError("fixture primary projection unavailable")
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "data": [
+                    {
+                        "project_id": "p",
+                        "user_id": "u",
+                        "harness": "pi",
+                        "session_id": "s",
+                        "total_credits": 1.5,
+                        "parent_session_id": "parent",
+                        "reported_agent_version": "1.0.0",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(extractor, "get_query", lambda: query)
+    result = await extractor.fetch_session_stats("a", "2026-11-01", "2026-11-02", agent_version="1.0.0")
+    assert "AS reported_agent_version" in queries[1] and "AS agent_version\n" not in queries[1]
+    assert next(iter(result.values()))["reported_agent_version"] == "1.0.0"
+    assert next(iter(result.values()))["credits"] == 1.5
