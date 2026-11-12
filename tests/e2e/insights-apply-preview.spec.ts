@@ -23,12 +23,16 @@ test("owner previews explicit selections then submits a pending bundle", async (
   expect(report.ok()).toBeTruthy();
   const data = await report.json();
   await page.goto(`/agents/${data.agent_id}/insights/${reportId}`);
+  await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Show all", exact: true }).click();
   const preview = page.getByRole("button", { name: /Preview selected/ });
   await expect(preview).toBeVisible({ timeout: 15000 });
   await expect(preview).toBeDisabled();
   await expect(page.getByRole("checkbox", { name: "Select config addition 1" })).not.toBeChecked();
   await page.getByRole("checkbox", { name: "Select config addition 1" }).check();
   await page.getByRole("checkbox", { name: "Select prompt pattern 1" }).check();
+  // Selection lives at page scope: collapsing Suggestions cannot lose it or
+  // turn the sticky-header action back into a direct, unvalidated Apply.
+  await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Suggestions", exact: true }).click();
   await preview.click();
   await expect(page.getByText("Exact proposed bundle", { exact: true })).toBeVisible();
   const confirm = page.getByRole("button", { name: "Confirm", exact: true });
@@ -43,7 +47,12 @@ test("owner previews explicit selections then submits a pending bundle", async (
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.screenshot({ path: testInfo.outputPath(`apply-preview-${size.width}.png`), fullPage: true });
   }
-  await confirm.click();
+  const [submitted] = await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/apply") && response.request().method() === "POST"),
+    confirm.click(),
+  ]);
+  expect(submitted.status(), await submitted.text()).toBe(200);
+  await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Suggestions", exact: true }).click();
   await expect(page.getByText("Submitted reviews", { exact: true })).toBeVisible({ timeout: 30000 });
   await expect(page.getByRole("link", { name: /Review #/ })).toHaveCount(2);
   await page.screenshot({ path: testInfo.outputPath("apply-submitted-mobile.png"), fullPage: true });
