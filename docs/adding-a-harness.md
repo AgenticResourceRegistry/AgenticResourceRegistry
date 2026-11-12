@@ -6,9 +6,11 @@ title: "Adding a New Harness to Agentic Resource Registry"
 ---
 
 This guide covers everything needed to add full harness support. Agentic Resource Registry manages
-four component types per harness: **MCP servers**, **skills**, **hooks**, and
-**sandboxes**. Each harness needs scanning (discovery), config generation (install),
-hook instrumentation (telemetry), and session parsing (reconciliation).
+five component types: **MCP servers**, **skills**, **hooks**, **prompts**, and
+**sandboxes**. The registry selects installable types through each harness's capabilities;
+sandboxes use the MCP delivery capability. Each harness needs
+scanning (discovery), config generation (install), hook instrumentation (telemetry),
+and session parsing (reconciliation).
 
 ## Overview: What "Supporting a harness" Means
 
@@ -18,10 +20,54 @@ When a user runs `observal agent pull <agent>`, Agentic Resource Registry writes
 |-----------|------------------|---------|
 | MCP servers | Native JSON/TOML config with direct commands or URLs | `.cursor/mcp.json` |
 | Skills | Markdown skill files in harness's skill directory | `.claude/skills/my-skill/SKILL.md` |
-| Hooks | Telemetry hook config that fires on tool use, session start/stop | `settings.json` hooks section |
-| Sandboxes | MCP entry pointing to `observal-sandbox-run` | Added to MCP config |
+| Hooks | Native lifecycle hook config or extension-managed registry hooks | `settings.json` hooks section |
+| Prompts | Native prompt files where supported | `.github/prompts/my-prompt.prompt.md` |
+| Sandboxes | MCP gateway entry dispatching through `observal-sandbox-run` | `observal-sandbox` in MCP config |
 
-When a user runs `observal scan`, Agentic Resource Registry reads those same locations to discover what's installed.
+Installation capabilities and scan coverage describe separate operations.
+The legacy `scan_home()` and `scan_project()` methods report inventories by
+adapter and scope: Kiro's home scan covers MCPs, skills, hooks and agents, while
+its project scan covers MCPs. Codex, Cursor and Copilot legacy scans cover MCPs;
+Pi covers MCPs and skills. For read-only inventory discovery, use
+`observal scan --inventory`, powered by `discover_home()` / `discover_project()`.
+Plain `observal scan` also applies legacy migrations. Use the capability matrix
+below to determine install support independently of scan results.
+
+## Current registered capabilities
+
+The source of truth is `capabilities` in
+`packages/observal-shared/observal_shared/harness_registry.py`. Capability flags
+define supported operations; paths and adapter methods implement them. Keep this
+table and the
+[supported coding tools overview](/integrations) in sync when capabilities change.
+
+| Harness | Registry ID | MCP servers | Skills | Hooks | Native prompts |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | `claude-code` | Yes | Yes | Yes | No |
+| Kiro | `kiro` | Yes | Yes | Yes | No |
+| Cursor | `cursor` | Yes | No | Yes | No |
+| Codex CLI | `codex` | Yes | Yes | Yes | No |
+| Copilot | `copilot` | Yes | Yes | Yes | Yes |
+| Copilot CLI | `copilot-cli` | Yes | Yes | Yes | Yes |
+| OpenCode | `opencode` | Yes | Yes | Yes | No |
+| Antigravity | `antigravity` | Registered only | Registered only | Registered only | No |
+| Goose | `goose` | Yes | Yes | Yes | No |
+| Pi | `pi` | Yes | Yes | Yes | No |
+
+**Kiro supports skills** at `.kiro/skills/{name}/SKILL.md` and
+`~/.kiro/skills/{name}/SKILL.md`. Its generated agent profile includes both skill
+resource globs; see the [Kiro integration guide](/integrations/kiro).
+Cursor currently enables MCP servers and hooks; skill installation is outside
+its declared capabilities, even though the registry includes skill paths.
+
+The table describes the current registry. Individual integration guides document
+native activation, supported formats and tool-version requirements.
+[Antigravity's compatibility hold](/integrations/antigravity) tracks verification
+of its generated formats and native activation. Validate sandbox execution,
+headless delegation, session delivery and component evidence as separate parts
+of an integration. All ten entries resolve a server session parser; Copilot
+shares the Copilot CLI parser. Component insights distinguish **unsupported**
+evidence coverage from measured zero usage.
 
 ## File Checklist
 
@@ -33,9 +79,9 @@ When a user runs `observal scan`, Agentic Resource Registry reads those same loc
 | 4 | `observal_cli/harness/__init__.py` | Adapter registry and protocol validation |
 | 5 | `observal-server/services/harness/<harness_name>.py` | Server adapter: config generation for install |
 | 6 | `observal-server/services/harness/load_all.py` | Add import line for server adapter |
-| 7 | `observal_cli/harness_specs/<harness_name>_hooks_spec.py` | Hook spec: what hooks to install, event names |
-| 8 | `observal-server/services/session_parsers/<harness_name>.py` | Server session parser (if harness writes JSONL sessions) |
-| 9 | `observal_cli/hooks/<harness_name>_session_push.py` | Session push hook script |
+| 7 | `observal_cli/harness_specs/<harness_name>_hooks_spec.py` | Hook spec where needed; Cursor uses its adapter and Pi uses `packages/pi-extension/` |
+| 8 | `observal-server/services/session_parsers/<harness_name>.py` | Server session parser for the native source format (may reuse an existing parser) |
+| 9 | `observal_cli/hooks/<harness_name>_session_push.py` | Optional bridge for host-specific responses; otherwise use the shared session push hook |
 | 10 | `observal_cli/cmd_doctor.py` | Doctor diagnose, patch, and cleanup implementations for the new harness |
 | 11 | `observal_cli/layer.py` | Layer scanning globs (`HARNESS_LAYER_CONFIGS`) and active harness detection |
 | 12 | `tests/test_cli_harness_adapters.py` | Adapter unit tests |
@@ -48,13 +94,18 @@ Before writing code, document these for the target harness:
 **MCP configuration:**
 - Where does the harness look for MCP server config? (path, format: JSON/TOML/YAML)
 - What's the top-level key? (`mcpServers`, `servers`, `mcp`, etc.)
-- Does it support stdio, SSE, or both transports?
+- Which transports does it support: stdio, SSE, Streamable HTTP?
 - Home-level config path vs project-level config path?
 
 **Skills:**
 - Does the harness have a skill/rules/instruction file concept?
 - What format? (Markdown with YAML frontmatter, plain markdown, MDC, JSON)
 - Where do skill files live? (project path, user/global path)
+
+**Prompts:**
+- Does the harness load native prompt files? Where, and in what format?
+- Distinguish standalone prompts from instructions embedded in an agent profile.
+- Declare `prompts` only when the adapter implements the native delivery path.
 
 **Hooks:**
 - Does the harness fire lifecycle events? (tool use, session start/stop, errors)
@@ -69,7 +120,8 @@ Before writing code, document these for the target harness:
 - What's the schema? (messages, tool calls, thinking blocks)
 
 **Sandboxes:**
-- Sandboxes are delivered as MCP servers, so if MCP works, sandboxes work.
+- Sandboxes use MCP configuration delivery. Verify the gateway, runner, runtime,
+  project access and isolation using the [sandbox contracts](/sandboxes).
 
 ## Step 2: Add Harness Registry Entry
 
@@ -80,7 +132,7 @@ Both the CLI and server import this shared registry.
 "my-harness": {
     "display_name": "My harness",
     "capabilities": {"hooks", "mcp_servers", "skills"},
-    "session_parser": "my_harness",       # or None
+    "session_parser": "my-harness",       # must resolve to a registered server parser
     "scopes": ["project", "user"],
     "default_scope": "project",
     "scope_labels": ("project (.my-harness/)", "user (~/.my-harness/)"),
@@ -131,6 +183,7 @@ Both the CLI and server import this shared registry.
     "dynamic_tools": False,              # refreshes MCP tools mid-session (verify at runtime)
     "prompt_context_injection": False,   # a hook/extension can add context before the model answers
     "guidance_file_write": False,        # always False: the bundled skill is the instruction channel
+    "headless_run": False,               # enable only after proving non-interactive CLI execution
 }
 ```
 
@@ -138,6 +191,10 @@ The runtime facts are checked by `tests/test_harness_registry.py`, which holds a
 explicit table of verified values. Add your harness to that table in the same
 change, and make sure `mcp_install_mode` agrees with the `mcp_config` paths
 (`setup_command` means no paths, `user_only` means only a user path).
+Enable `headless_run` alongside tested `headless_command()` and
+`parse_headless_output()` implementations in the CLI adapter. Delegation selects
+harnesses with this verified execution path; Copilot (VS Code) and Goose currently
+support agent installation without headless delegation.
 
 ## Step 2.5: Update Doctor and Layer Scan (required)
 
@@ -154,11 +211,18 @@ Before moving on, always wire the new harness into these shared paths:
   - Add `managed_agent_profiles`, `managed_skills`, and `managed_mcp_files` patterns for layer source attribution
   - Override `get_observal_managed_files()` only if simple `{name}` patterns are not enough
 
-If these are skipped, the harness can appear supported in pull/scan while doctor and layer observability remain incomplete.
+These integrations complete the harness workflow: pull and scan, doctor diagnostics,
+hook installation and cleanup, and layer observability.
 
 ## Step 3: Create CLI Adapter (Scanning)
 
-Create `observal_cli/harness/my_harness.py`. This handles local discovery:
+Create `observal_cli/harness/my_harness.py`. The example below covers legacy
+scanning and hook detection; implement its hook/agent helpers for the native
+format. Also implement `discover_home()` and `discover_project()` for bounded,
+read-only inventory. Use `RichAdapterScanner` in
+`observal_cli/discovery/adapter_support.py` and existing adapters as references;
+the base discovery methods return empty results until the adapter implements
+them. Test both scan interfaces and their scope-specific coverage.
 
 ```python
 # SPDX-FileCopyrightText: 2026 Your Name <your@email.com>
@@ -230,7 +294,7 @@ class MyHarnessAdapter(BaseAdapter):
 
     def get_hook_spec(self) -> HookSpec:
         return HookSpec(
-            events=["PreToolUse", "PostToolUse", "Stop", "SessionStart"],
+            events=["PreToolUse", "PostToolUse", "Stop"],
             format="command",
             markers=["observal", "OBSERVAL"],
         )
@@ -331,7 +395,12 @@ register_adapter(MyHarnessAdapter())
 ## Step 4: Create Server-Side Config Generator (Install)
 
 Create `observal-server/services/harness/my_harness.py`. This generates files when
-users run `observal agent pull` or install an agent:
+users run `observal agent pull` or install an agent. The minimal example below
+shows profile and MCP output. Extend it with skill and hook files/configuration
+and verify native loading when enabling those capabilities. Use `ctx.options`
+to select scope-aware paths in the complete adapter.
+For native prompts, implement `emits_prompt_files()` and prompt-file generation;
+Copilot and Copilot CLI are the current reference adapters.
 
 ```python
 # SPDX-FileCopyrightText: 2026 Your Name <your@email.com>
@@ -350,7 +419,7 @@ class MyHarnessAdapter(BaseHarnessAdapter):
         return "my-harness"
 
     def format_config(self, ctx: ConfigContext) -> dict:
-        """Generate the complete install response for this harness."""
+        """Generate profile and MCP entries for this example."""
         return {
             "agent_profile": {
                 "path": f".my-harness/agents/{ctx.safe_name}.md",
@@ -368,7 +437,14 @@ register_adapter(MyHarnessAdapter())
 
 ## Step 5: Create Hook Spec
 
-Create `observal_cli/harness_specs/my_harness_hooks_spec.py`. This defines what
+Use the harness's native mechanism. Eight harnesses have modules under
+`observal_cli/harness_specs/`; Cursor installs hooks through its adapter/doctor
+implementation, and Pi runs registry hooks and telemetry through the bundled
+`packages/pi-extension/`. Both integrate directly with doctor without a separate
+hook spec module.
+
+For a command-hook harness that needs a spec, create
+`observal_cli/harness_specs/my_harness_hooks_spec.py`. This defines what
 hooks `observal doctor patch` installs:
 
 ```python
@@ -415,6 +491,9 @@ Transport and parsing are intentionally separate. The CLI adapter locates raw so
 For a JSONL harness, implement the session methods on the existing `HarnessAdapter` in `observal_cli/harness/my_harness.py`:
 
 ```python
+from observal_cli.harness import SessionSource
+
+
 def resolve_session_source(self, event: dict, home: Path | None = None) -> SessionSource | None:
     # Resolve the exact session ID, source path, cwd, and optional parent ID.
     ...
@@ -443,7 +522,9 @@ Point generated hook commands at:
 python -m observal_cli.hooks.session_push --harness my-harness
 ```
 
-A thin compatibility bridge is acceptable for required host responses, but all recovery and delivery still route through the shared engine.
+Command-hook bridges route recovery and delivery through the shared Python
+engine. Native extensions, such as Pi, implement the same durable outbox,
+acknowledgement, checkpoint and final-audit protocol in their host runtime.
 
 ## Step 8: Register Everything
 
@@ -466,7 +547,11 @@ A thin compatibility bridge is acceptable for required host responses, but all r
 
 ## Step 9: Tests
 
-Minimum test coverage required:
+The examples below cover legacy scan, hook detection and managed files.
+Complete coverage also includes bounded `discover_home()` / `discover_project()`
+inventory, capability gating, scope-aware server output, hook patch/cleanup,
+session source discovery, parsing and recovery. Add activation fixtures and
+headless/evidence tests for the capabilities you enable.
 
 ```python
 class TestMyHarnessAdapter:
@@ -540,41 +625,43 @@ class TestMyHarnessAdapter:
 
 ## Step 10: Verify
 
+Run from the repository root after installing the development dependencies:
+
 ```bash
-# Constants in sync
-cd observal-server && uv run pytest ../tests/test_constants_sync.py -q
+# Registry, constants, adapters and config generation
+(cd observal-server && uv run pytest ../tests/test_harness_registry.py ../tests/test_constants_sync.py ../tests/test_cli_harness_adapters.py ../tests/test_agent_config_generator.py -q)
 
-# Adapter registration works
-cd observal-server && uv run pytest ../tests/test_cli_harness_adapters.py -q
+# Read-only discovery for your registered harness
+observal scan --inventory --harness my-harness
 
-# Scan discovers your harness
-observal scan --harness my-harness
-
-# Config generation works
-cd observal-server && uv run pytest ../tests/test_agent_config_generator.py -q
-
-# Install produces correct files
-observal agent pull <some-agent> --harness my-harness --dry-run
-
-# Hooks install correctly
+# Preview installation and hook configuration
+observal agent pull YOUR_NAMESPACE/YOUR_AGENT --harness my-harness --dry-run
 observal doctor patch --harness my-harness --dry-run
 
-# Recovery discovers and drains an unfinished fixture through the shared engine
+# Preview recovery of an unfinished session fixture
 observal reconcile --harness my-harness --dry-run
 ```
+
+Replace the harness ID and agent reference with your registered integration and
+a test agent. Then apply the install and hook configuration in a disposable test
+workspace, activate the agent in its native harness, and run a small task.
+Reconcile the fixture without `--dry-run` against a test server and verify delivery
+and checkpoint advancement. Preview commands validate the plan; the live task
+and recovery checks validate execution.
 
 ## Component evidence (MCPs, skills and hooks)
 
 MCP, skill and hook projectors all publish through `EvidenceSpec` in `services/component_activity/evidence_projector.py`. An activity job shares one bounded initial source snapshot across supported extractors; each attempted complete publication still reloads the source and mapping to reject changes during processing. Identity-conflict zero-row publications also perform a fresh source and conflict-state check. Read-side generation and projection-state SQL builders live in `services/component_activity/queries.py`.
 
-Component Insights count skill and hook evidence only where it is proven for the harness. Setting `skill_evidence_extractor` or `hook_evidence_extractor` in the registry establishes nothing on its own: the id must resolve to an implementation in `services/session_parsers/`, and each (type × harness) cell needs all of the following, from recorded, sanitized sessions in `tests/fixtures/component_insights/<harness>/`:
+Component Insights count skill and hook evidence only where it is proven for the harness. Connect `skill_evidence_extractor` or `hook_evidence_extractor` in the registry to its implementation in `services/session_parsers/`. Validate each (type × harness) cell using the following requirements and recorded, sanitized sessions in `tests/fixtures/component_insights/<harness>/`:
 
 1. **A verified binding.** The CLI adapter verifies the installed component against the file the harness actually loads (`skill_manifest_path`, `skill_shadow_paths`, `skill_location` for skills; `verify_hook_binding` for hooks). Anything it cannot rule out, such as an unreadable config, a duplicate entry or a same-named copy elsewhere, must leave the component unverified. Add the harness to `SKILL_VERIFICATION_HARNESSES` or `HOOK_VERIFICATION_HARNESSES` in `observal_cli/layer.py` so the result is bound into the layer identity.
 2. **An observable identity.** The transcript must name the same identity the verifier recorded: the exact `SKILL.md` location for skills, the exact event and command for hooks. Typed or pasted text must not be able to produce it; rely on harness-written fields.
 3. **Declared limits.** The extractor declares which kinds it can observe (`observed_kinds`). For hooks it also declares whether silent successes are recorded (`records_silent_success`) and whether agent-scoped hooks run headless (`agent_hooks_run_headless`). Unknown is reported as not recorded or not eligible, never as zero.
 4. **When it could run.** For hooks, prove from recordings when an installed hook can run at all (settings versus agent placement, interactive versus headless) before counting a session in the denominator. The verifier reports each agent hook's placement (`hook_placement`, stored as `layer_components.binding_placement`): `frontmatter` hooks follow `agent_hooks_run_headless`, while Claude Code's opt-in `gated_settings` hooks (`agent pull --hooks=settings`) can run whenever their agent is active. If a subagent's own transcript doesn't name its agent, set `HookSession.subagent` and, when every record carries the same harness-written parent session and subagent ids, `parent_session_id` and `subagent_id`. The hook projector then names the agent from the parent session's record of the spawn, but only if the extractor also implements `subagent_results`, `agent_tool_calls` and `resolve_agent` (see `claude_code_hook_evidence.py`). Otherwise those sessions stay `agent_unknown`. Pi has no native command hooks: its registry hooks run inside the Agentic Resource Registry extension, whose run receipts are the identity (`pi_hook_evidence.py`). They carry no `hook_agent`, because the verifier only reports them verified while the active profile's hooks file names that agent, so every session that verifies one is eligible.
 
-Without all four the cell stays `unsupported`.
+Enable evidence coverage once all four requirements are verified; until then,
+the cell reports `unsupported` rather than a usage count.
 
 ### Changing an evidence rule on existing data
 
@@ -596,15 +683,19 @@ Say which case applies in the constant's comment either way. Sessions recorded w
 
 ## Architecture Notes
 
-**Skills are mostly universal.** All harnesses that support skills use the same
-pattern: a `SKILL.md` file with YAML frontmatter (or plain markdown) placed
-in the harness's skill directory. The only things that vary are the directory path
-(defined in `skill` in the registry) and the frontmatter format (defined
-in `skill_format`). No harness-specific skill generation code is needed beyond
-setting those two registry fields correctly. The shared `generate_skill()`
-in `services/config/skill_builder.py` handles all harnesses.
+**Skill file generation is shared; activation is harness-specific.** Supported
+harnesses use `SKILL.md` files, with scope-specific paths from `skills` and format
+from `skill_format` in the registry. The shared `generate_skill()` in
+`services/config/skill_builder.py` calls the server adapter's
+`skill_frontmatter_extra()` for native metadata. Each adapter connects these
+files to native loading, such as Kiro's `skill://` resources. Enable the `skills`
+capability alongside file generation and verified activation.
 
-**Sandbox configuration is delivered through MCP.** The bundled `observal-sandbox-mcp` gateway dispatches through `observal-sandbox-run`. Reusing MCP configuration generation does not prove the gateway/runner is installed, a runtime is reachable, an image contains required tools, the project is mounted, or isolation is adequate. Validate those boundaries separately; see [sandbox contracts](/sandboxes).
+**Sandbox configuration is delivered through MCP.** The bundled
+`observal-sandbox-mcp` gateway dispatches through `observal-sandbox-run`. Complete
+sandbox validation covers gateway/runner installation, runtime connectivity,
+required image tools, project mounts and isolation. Follow the
+[sandbox contracts](/sandboxes) to verify execution alongside configuration delivery.
 
 Other notes:
 
@@ -616,4 +707,4 @@ Other notes:
 - MCP deduplication in scan uses first-discovered-wins
 - MCP commands and remote URLs are emitted directly in each harness's native format
 - Sandbox MCP delivery reuses adapter configuration support; runtime execution/project access still require separate verification
-- Skills use the harness's native skill/rule file format, resolved from `skill` and `skill_format` in the registry
+- Skills use the harness's native skill/rule file format, resolved from `skills` and `skill_format` in the registry

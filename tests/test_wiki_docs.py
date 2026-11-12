@@ -65,3 +65,44 @@ def test_self_hosting_and_install_docs_match_current_sources():
     install = (DOCS / "getting-started/installation.md").read_text()
     for name in re.findall(r"observal-cli\[([^]]+)\]", install):
         assert name in pyproject["project"]["optional-dependencies"]
+
+
+def test_harness_capability_tables_match_registry():
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    capabilities = ("mcp_servers", "skills", "hooks", "prompts")
+    for name in ("adding-a-harness.md", "integrations/index.md"):
+        rows = {}
+        for line in (DOCS / name).read_text().splitlines():
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) == 6 and re.fullmatch(r"`[a-z][a-z-]*`", cells[1]):
+                harness = cells[1].strip("`")
+                assert harness not in rows, f"Duplicate harness in {name}: {harness}"
+                assert all(cell in {"Yes", "No", "Registered only"} for cell in cells[2:]), line
+                rows[harness] = {
+                    capability
+                    for capability, cell in zip(capabilities, cells[2:], strict=True)
+                    if cell in {"Yes", "Registered only"}
+                }
+        assert set(rows) == set(HARNESS_REGISTRY), f"Missing or extra harness rows in {name}"
+        for harness, spec in HARNESS_REGISTRY.items():
+            assert rows[harness] == spec["capabilities"], f"Stale capabilities in {name}: {harness}"
+
+
+def test_kiro_skill_paths_are_documented():
+    from observal_shared.harness_registry import HARNESS_REGISTRY
+
+    for name in ("adding-a-harness.md", "integrations/kiro.md"):
+        content = (DOCS / name).read_text()
+        for path in HARNESS_REGISTRY["kiro"]["skills"].values():
+            assert f"`{path}`" in content, f"Stale Kiro skill path in {name}: {path}"
+
+
+def test_harness_guide_repository_paths_exist():
+    content = (DOCS / "adding-a-harness.md").read_text()
+    paths = re.findall(r"`((?:observal_cli|observal-server|packages|tests)/[^`\s]+\.py)`", content)
+    assert paths
+    for path in paths:
+        if "<" in path or "my_harness" in path:
+            continue  # Template paths name files the contributor will create.
+        assert (ROOT / path).is_file(), f"Harness guide references a missing source file: {path}"
