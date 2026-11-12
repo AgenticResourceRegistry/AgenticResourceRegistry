@@ -18,9 +18,24 @@ from typing import NoReturn
 
 import click
 import httpx
+import typer
 from rich.console import Console
 from rich.markup import escape
 from typer.core import TyperGroup
+
+
+def _distinct(*classes: type[BaseException]) -> tuple[type[BaseException], ...]:
+    return tuple(dict.fromkeys(classes))
+
+
+# Typer 0.26+ raises its own copies of Click's exceptions rather than Click's.
+# Accept both, so the error contract holds on every supported Typer release.
+EXIT_ERRORS = _distinct(click.exceptions.Exit, typer.Exit)
+ABORT_ERRORS = _distinct(click.exceptions.Abort, typer.Abort)
+USAGE_ERRORS = _distinct(
+    click.exceptions.UsageError,
+    next(base for base in typer.BadParameter.__mro__ if base.__name__ == "UsageError"),
+)
 
 
 class ExitCode(IntEnum):
@@ -72,8 +87,12 @@ _console = Console(stderr=True)
 
 
 @dataclass(eq=False)
-class CliError(click.exceptions.Exit):
-    """A safe, actionable failure ready for human or JSON rendering."""
+class CliError(typer.Exit):
+    """A safe, actionable failure ready for human or JSON rendering.
+
+    Based on typer.Exit (Click's Exit on Typer 0.25 and earlier) so Typer exits
+    with the contract code even where the root error boundary is not in play.
+    """
 
     category: ErrorCategory
     message: str
@@ -284,13 +303,22 @@ def _command_path(command: click.Command, args: tuple[str, ...]) -> str:
     return _resolve_command(command, args)[1]
 
 
+def _param_choices(param: object) -> set[object]:
+    """Return a parameter's choice values on every supported Typer release.
+
+    Typer 0.28 and earlier expose a Click type with ``choices`` on ``param.type``.
+    Typer 0.29 removed ``param.type`` and keeps them on ``param.type_descriptor``.
+    """
+    for holder in (getattr(param, "type", None), getattr(param, "type_descriptor", None)):
+        choices = getattr(holder, "choices", None)
+        if choices:
+            return {getattr(choice, "value", choice) for choice in choices}
+    return set()
+
+
 def _uses_json_output(command: click.Command, args: tuple[str, ...]) -> bool:
     resolved, _path = _resolve_command(command, args)
-    has_format_option = any(
-        param.name == "output"
-        and "json" in {getattr(choice, "value", choice) for choice in getattr(param.type, "choices", ())}
-        for param in resolved.params
-    )
+    has_format_option = any(param.name == "output" and "json" in _param_choices(param) for param in resolved.params)
     return has_format_option and json_errors_requested(args)
 
 
@@ -300,7 +328,7 @@ def _uses_machine_output(command: click.Command, args: tuple[str, ...]) -> bool:
     return _uses_json_output(command, args) or (has_raw_option and "--raw" in args)
 
 
-class PartialResultExit(click.exceptions.Exit):
+class PartialResultExit(typer.Exit):
     """A nonzero batch outcome whose structured result must remain on stdout."""
 
     def __init__(self) -> None:
@@ -318,7 +346,7 @@ class _BoundaryError(Exception):
 
 
 class _BoundaryExitError(Exception):
-    def __init__(self, error: click.exceptions.Exit) -> None:
+    def __init__(self, error: BaseException) -> None:
         self.error = error
 
 
@@ -358,9 +386,9 @@ class ErrorHandlingGroup(TyperGroup):
             raise _BoundaryError(error) from error
         except PartialResultExit as error:
             raise _BoundaryPartialExitError(error) from error
-        except click.UsageError:
+        except USAGE_ERRORS:
             raise
-        except click.exceptions.Exit as error:
+        except EXIT_ERRORS as error:
             if error.exit_code:
                 raise _BoundaryExitError(error) from error
             raise
@@ -406,7 +434,7 @@ class ErrorHandlingGroup(TyperGroup):
         except CliError as error:
             emit_error(error)
             code = error.contract_exit_code
-        except click.UsageError as error:
+        except USAGE_ERRORS as error:
             failure = CliError(
                 ErrorCategory.USAGE,
                 error.format_message(),
@@ -416,7 +444,7 @@ class ErrorHandlingGroup(TyperGroup):
             )
             emit_error(failure)
             code = failure.contract_exit_code
-        except click.Abort:
+        except ABORT_ERRORS:
             if standalone_mode:
                 click.echo("Aborted!", file=sys.stderr)
                 raise SystemExit(1) from None
@@ -483,7 +511,7 @@ class ErrorHandlingGroup(TyperGroup):
             )
             emit_error(failure)
             code = failure.contract_exit_code
-        except click.exceptions.Exit as error:
+        except EXIT_ERRORS as error:
             code = int(error.exit_code)
             if code:
                 failure = CliError(

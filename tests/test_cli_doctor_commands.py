@@ -979,7 +979,6 @@ def test_doctor_patch_and_cleanup_json_results(runner, patch_dispatch, cleanup_d
 
 
 def test_doctor_command_inventory_and_json_cleanup_confirmation():
-    from click import Group
     from typer.main import get_command
 
     from observal_cli.main import app
@@ -987,9 +986,9 @@ def test_doctor_command_inventory_and_json_cleanup_confirmation():
     doctor = get_command(app).commands["doctor"]
 
     def leaves(command, path=()):
-        if not isinstance(command, Group) or command.invoke_without_command:
+        if not isinstance(getattr(command, "commands", None), dict) or command.invoke_without_command:
             yield " ".join(path) or "doctor", command
-        if isinstance(command, Group):
+        if isinstance(getattr(command, "commands", None), dict):
             for name, child in command.commands.items():
                 yield from leaves(child, (*path, name))
 

@@ -7,7 +7,6 @@ import shlex
 from unittest.mock import patch
 
 import pytest
-from click import Group
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -18,7 +17,7 @@ runner = CliRunner()
 
 def _command_tree(command, path="observal"):
     yield path, command
-    if isinstance(command, Group):
+    if isinstance(getattr(command, "commands", None), dict):
         for name, child in command.commands.items():
             yield from _command_tree(child, f"{path} {name}")
 
@@ -49,7 +48,7 @@ def _parse_without_invoking(command, args: list[str], parent=None) -> None:
     """Parse a command chain without invoking command callbacks."""
     ctx = command.make_context(command.name or "observal", args, parent=parent)
     try:
-        if isinstance(command, Group):
+        if isinstance(getattr(command, "commands", None), dict):
             protected = list(getattr(ctx, "_protected_args", ()))
             remaining = [*protected, *ctx.args]
             if remaining:

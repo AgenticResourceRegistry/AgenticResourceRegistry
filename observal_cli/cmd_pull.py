@@ -27,7 +27,6 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlsplit, urlunsplit
 
-import click
 import httpx
 import typer
 import yaml
@@ -38,7 +37,7 @@ from rich.markup import escape as escape_markup
 
 from observal_cli import client, config
 from observal_cli.constants import VALID_HARNESSES
-from observal_cli.errors import CliError, ErrorCategory, fail
+from observal_cli.errors import USAGE_ERRORS, CliError, ErrorCategory, fail
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.project_lock import PROJECT_LOCK_FILE
 from observal_cli.prompts import password_input, select_one
@@ -458,7 +457,7 @@ def _reporting_boundary(callback):
                     remediation="Check network connectivity and service health, then retry.",
                     detail=detail,
                 )
-            elif isinstance(error, click.UsageError):
+            elif isinstance(error, USAGE_ERRORS):
                 failure = CliError(
                     ErrorCategory.USAGE,
                     "Invalid pull arguments.",
