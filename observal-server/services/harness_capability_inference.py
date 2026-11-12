@@ -22,7 +22,7 @@ def infer_required_features(
             to inspect ``slash_command`` and ``delivery_mode`` on skill components.
 
     Returns:
-        Sorted list of required feature strings (e.g. ``["mcp_servers", "rules"]``).
+        Sorted list of required feature strings (e.g. ``["mcp_servers", "skills"]``).
     """
     optic.trace("agent={}, skill_listings={}", agent, skill_listings)
     features: set[str] = set()

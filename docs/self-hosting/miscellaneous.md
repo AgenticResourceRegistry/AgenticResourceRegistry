@@ -20,35 +20,52 @@ Controls the product name and images shown in the web UI.
 
 **When to set:** Self-hosted deployments that need company branding in the admin UI.
 
-## harness Allowlist
+## Harness Allowlist
 
-Restrict which harnesses are available in the platform. When set, only the listed harnesses appear in install dropdowns, agent compatibility tags, and `observal agent pull` target selection.
+Choose which harnesses the server returns to web installation controls through
+`/api/v1/config/harnesses`. Store the comma-separated IDs in
+`misc.harness_allowlist`.
 
-**Affects:** The harness dropdown on agent detail pages, component install commands, agent builder harness selection, and `observal agent pull --harness` validation. Harnesses outside the allowlist are hidden from all users.
-
-| Value | Effect |
-|-------|--------|
-| _(empty)_ (default) | All supported harnesses are available |
-| `cursor,claude_code,pi` | Only Cursor, Claude Code, and Pi appear in dropdowns |
-| `kiro,cursor` | Only Kiro and Cursor are available |
-
-**Format:** Comma-separated harness identifiers. Valid identifiers: `cursor`, `claude_code`, `kiro`, `pi`, `copilot`, `copilot_cli`, `codex`, `opencode`, `gemini_cli`, `antigravity`, `goose`
-
-**When to set:** Your deployment standardizes on specific harnesses and you don't want users confused by irrelevant options. Also useful for reducing noise in the registry when agents only need to support a subset of harnesses.
-
-**CLI behavior:** `observal agent pull` still requires `--harness`. The selected harness must be allowed by the server.
-
-## Default harness
-
-The harness pre-selected in web installation controls. The CLI still requires an explicit `--harness`.
+**Affects:** Harness choices in install dropdowns, component install controls and
+agent builder controls that consume this endpoint. Agent compatibility declarations
+and CLI/API installation validation are separate from this UI selection setting.
 
 | Value | Effect |
 |-------|--------|
-| _(empty)_ (default) | First harness in the allowlist, or `cursor` if no allowlist is set |
-| `claude_code` | Claude Code is pre-selected in all harness dropdowns |
-| `pi` | Pi is the default target |
+| _(empty)_ (default) | Return all registered harnesses |
+| `cursor,claude-code,pi` | Offer Cursor, Claude Code and Pi |
+| `kiro,cursor` | Offer Kiro and Cursor |
 
-**Affects:** UI dropdown default selection, CLI default when `--harness` is omitted, and the install command shown on agent detail pages.
+**Format:** Comma-separated canonical registry identifiers. Valid identifiers:
+`cursor`, `claude-code`, `kiro`, `pi`, `copilot`, `copilot-cli`, `codex`, `opencode`,
+`antigravity`, `goose`.
+
+Use exact IDs: this setting does not normalize underscores. Unknown IDs are
+ignored; when no valid IDs remain, the endpoint returns all registered harnesses.
+Registered capabilities and native compatibility are described in
+[supported coding tools](/integrations).
+
+**When to set:** Your deployment standardizes on specific harnesses and wants
+installation controls focused on those tools.
+
+**CLI behavior:** `observal agent pull` requires an explicit `--harness`.
+The allowlist controls the metadata endpoint, not an installation authorization
+boundary.
+
+## Default Harness
+
+Set `misc.default_harness` to pre-select a harness in web installation controls.
+The endpoint returns it only when it is a canonical ID in the available list.
+
+| Value | Effect |
+|-------|--------|
+| _(empty)_ (default) | No configured default; controls choose an available fallback |
+| `claude-code` | Pre-select Claude Code when it is available |
+| `pi` | Pre-select Pi when it is available |
+
+**Affects:** Web controls using the configured default and the install commands
+they display. The CLI still requires an explicit `--harness`. An unknown or
+excluded default is returned as unset, so use an ID included in the available list.
 
 ## Git Mirror Path
 

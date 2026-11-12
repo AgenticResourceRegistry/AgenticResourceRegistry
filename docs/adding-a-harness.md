@@ -86,6 +86,7 @@ evidence coverage from measured zero usage.
 | 11 | `observal_cli/layer.py` | Layer scanning globs (`HARNESS_LAYER_CONFIGS`) and active harness detection |
 | 12 | `tests/test_cli_harness_adapters.py` | Adapter unit tests |
 | 13 | `/api/v1/config/harnesses` consumers | Frontend uses server harness metadata through `useHarnesses()` |
+| 14 | `observal-server/services/session_parsers/<harness_name>_invocations.py` and `observal-server/services/session_parsers/invocations.py` | Optional MCP invocation extractor and dispatcher registration for component insights |
 
 ## Step 1: Research the harness
 
@@ -652,6 +653,45 @@ and recovery checks validate execution.
 ## Component evidence (MCPs, skills and hooks)
 
 MCP, skill and hook projectors all publish through `EvidenceSpec` in `services/component_activity/evidence_projector.py`. An activity job shares one bounded initial source snapshot across supported extractors; each attempted complete publication still reloads the source and mapping to reject changes during processing. Identity-conflict zero-row publications also perform a fresh source and conflict-state check. Read-side generation and projection-state SQL builders live in `services/component_activity/queries.py`.
+
+### MCP invocation evidence
+
+MCP usage coverage is an independent opt-in from session parsing and MCP install
+support. To enable it:
+
+1. Implement `InvocationExtractor.extract()` from
+   `services/session_parsers/invocation_types.py` in a harness-specific module,
+   such as `services/session_parsers/<harness_name>_invocations.py`.
+2. Register an extractor instance under its ID in `_EXTRACTORS` in
+   `services/session_parsers/invocations.py`, then set the harness registry's
+   `invocation_extractor` to that exact ID. `session_parser` selects trace parsing;
+   it does not select an invocation extractor.
+3. Extract `SourceInvocation` facts from canonical source records, preserving
+   source offsets, stable block/call IDs, event times and explicit result states.
+   Keep unknown results as `unknown`. Identify MCP candidates using the native
+   alias-bearing tool name or the harness-reported `mcp_server`; exclude
+   user-written identity claims and keep transcript text, arguments and result
+   content out of the extracted facts.
+4. Verify installed MCP bindings through `observal_cli/layer.py` and validate
+   attribution with `services/component_activity/matcher.py`. Match the call's
+   source layer to exactly one verified, resolved installed alias. Test collisions,
+   ambiguous/missing identities, malformed records and deterministic redelivery
+   using sanitized recordings and constructed negative cases.
+
+`ClaudeCodeInvocationExtractor` in `services/session_parsers/claude_code_invocations.py`
+and `PiInvocationExtractor` in `services/session_parsers/pi_invocations.py` are
+reference implementations. Their tests are
+`tests/test_component_activity_invocations.py` and
+`tests/test_component_activity_pi_invocations.py`; Pi's configured server identity
+comes from its MCP adapter's result metadata, not model-supplied arguments.
+
+A harness with no `invocation_extractor` reports `unsupported`; a supported
+extractor with no observed calls reports a supported empty result. Registering
+an unknown extractor ID raises `KeyError`, making registry/dispatcher mismatches
+explicit. Enable coverage after validating the extractor and installed-binding
+path together.
+
+### Skill and hook evidence
 
 Component Insights count skill and hook evidence only where it is proven for the harness. Connect `skill_evidence_extractor` or `hook_evidence_extractor` in the registry to its implementation in `services/session_parsers/`. Validate each (type × harness) cell using the following requirements and recorded, sanitized sessions in `tests/fixtures/component_insights/<harness>/`:
 
