@@ -22,6 +22,12 @@ test("owner previews explicit selections then submits a pending bundle", async (
   const report = await request.get(`/api/v1/insights/reports/${reportId}`, { headers: { Authorization: `Bearer ${auth.access_token}` } });
   expect(report.ok()).toBeTruthy();
   const data = await report.json();
+  await page.route("**/preview", async route => {
+    const response = await route.fetch();
+    const preview = await response.json();
+    if (preview.ready) preview.artifacts.at(-1).checks.push({ id: "fixture-permission-warning", name: "Permission delta", status: "warn", required: false, details: ["Fixture permission delta: inspect requested access before publication"] });
+    await route.fulfill({ response, json: preview });
+  });
   await page.goto(`/agents/${data.agent_id}/insights/${reportId}`);
   await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Show all", exact: true }).click();
   const preview = page.getByRole("button", { name: /Preview selected/ });
@@ -40,6 +46,7 @@ test("owner previews explicit selections then submits a pending bundle", async (
   await expect(page.getByText("Public installation requires required reviews to publish", { exact: false })).toBeVisible();
   const artifact = page.locator("summary").filter({ hasText: /^agent: Agent version/ });
   await artifact.click();
+  await expect(page.getByText("Fixture permission delta: inspect requested access before publication", { exact: true })).toBeVisible();
   await expect(page.locator("pre").filter({ hasText: "Be precise." }).first()).toBeVisible();
   for (const size of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(size);
@@ -52,7 +59,6 @@ test("owner previews explicit selections then submits a pending bundle", async (
     confirm.click(),
   ]);
   expect(submitted.status(), await submitted.text()).toBe(200);
-  await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Suggestions", exact: true }).click();
   await expect(page.getByText("Submitted reviews", { exact: true })).toBeVisible({ timeout: 30000 });
   await expect(page.getByRole("link", { name: /Review #/ })).toHaveCount(2);
   await page.screenshot({ path: testInfo.outputPath("apply-submitted-mobile.png"), fullPage: true });

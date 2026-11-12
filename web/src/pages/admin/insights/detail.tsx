@@ -905,6 +905,11 @@ function SuggestionPreview({ selection }: { selection: SuggestionSelection }) {
                         {selection.preview.data.artifacts.map((artifact, i) => <details key={i} className="rounded-md border border-border p-3">
                             <summary className="cursor-pointer text-sm font-medium">{artifact.type}: {artifact.name} v{artifact.version}</summary>
                             <p className="mt-2 text-xs text-muted-foreground">{artifact.checks.map(check => `${check.name}: ${check.status}`).join(" · ")}</p>
+                            {artifact.checks.filter(check => check.status === "warn" && check.details.length).map(check => (
+                                <ul key={check.id} className="mt-1 list-disc pl-5 text-xs text-muted-foreground">
+                                    {check.details.map((detail, j) => <li key={j}>{detail}</li>)}
+                                </ul>
+                            ))}
                             {Object.entries(artifact.files).map(([path, file]) => <div key={path} className="mt-3">
                                 <h5 className="text-xs font-semibold break-all">{path}</h5>
                                 {artifact.base_files[path] && <details className="mt-1"><summary className="cursor-pointer text-xs">Before</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{artifact.base_files[path].content}</pre></details>}
@@ -915,6 +920,20 @@ function SuggestionPreview({ selection }: { selection: SuggestionSelection }) {
                     </>}
                 </div>
             )}
+    </>;
+}
+
+/** Published review routes remain discoverable even when Suggestions is collapsed. */
+function SubmittedSuggestionReviews({ report }: { report: InsightReport }) {
+    return <>
+            {report?.applied_items?.reviews && <div className="border-b border-border p-5 text-sm">
+                <p className="font-medium">Submitted reviews</p>
+                <p className="mt-1 text-muted-foreground">Statuses are recorded at submission. Open a review for its current publication gate.</p>
+                <ul className="mt-2 space-y-1">{report.applied_items.reviews.map(review => <li key={review.id}>
+                    <a className="underline underline-offset-4" href={`/review/${review.number}`}>Review #{review.number}: {review.type} — {review.name}</a>
+                </li>)}</ul>
+            </div>}
+
     </>;
 }
 
@@ -992,13 +1011,6 @@ function SuggestionsSection({
 					</span>
 				)}
 			</div>
-            {report?.applied_items?.reviews && <div className="border-b border-border p-5 text-sm">
-                <p className="font-medium">Submitted reviews</p>
-                <p className="mt-1 text-muted-foreground">Statuses are recorded at submission. Open a review for its current publication gate.</p>
-                <ul className="mt-2 space-y-1">{report.applied_items.reviews.map(review => <li key={review.id}>
-                    <a className="underline underline-offset-4" href={`/review/${review.number}`}>Review #{review.number}: {review.type} — {review.name}</a>
-                </li>)}</ul>
-            </div>}
 
 			<div className="px-5 py-4 space-y-6">
 				{configAdditions && configAdditions.length > 0 && (
@@ -2144,7 +2156,8 @@ export default function InsightReportPage() {
 							</div>
 						</div>
 
-						<SuggestionPreview selection={selection} />
+						<SubmittedSuggestionReviews report={report} />
+                        <SuggestionPreview selection={selection} />
 
                         {/* Loading state */}
 						{(report.status === "pending" || report.status === "running") && (
