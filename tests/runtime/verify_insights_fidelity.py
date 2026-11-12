@@ -25,6 +25,7 @@ from services.session_ingest import ingest_session_lines
 
 
 async def main():
+    """Verify shared excerpts/cache; opt into Codex only with canonical #2035 present."""
     if os.environ.get("INSIGHTS_DISPOSABLE_VERIFY") != "1":
         raise RuntimeError("Set INSIGHTS_DISPOSABLE_VERIFY=1 only in a disposable stack")
     configure_insights()
@@ -102,6 +103,35 @@ async def main():
         {"payload": {"type": "tool_result", "toolCallId": "t", "success": False, "content": "No such file"}},
         {"payload": {"type": "assistant", "content": "Verification: file missing; Unverified: not run"}},
     ]
+    cases["pi"] = [
+        {"type": "message", "message": {"role": "user", "content": "Find the missing file"}},
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "toolCall", "name": "read", "id": "t", "arguments": {"path": "missing.py"}}],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "toolName": "read",
+                "toolCallId": "t",
+                "isError": True,
+                "content": [{"type": "text", "text": "No such file"}],
+            },
+        },
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Verification: file missing; Unverified: not run"}],
+            },
+        },
+    ]
+    if os.environ.get("INSIGHTS_WITH_CODEX") != "1":
+        cases.pop("codex")  # This shared PR intentionally contains no Codex converter.
     for case, entries in cases.items():
         harness = "kiro" if case == "kiro-ide" else case
         sid = "insights-fidelity-" + str(uuid.uuid4())
