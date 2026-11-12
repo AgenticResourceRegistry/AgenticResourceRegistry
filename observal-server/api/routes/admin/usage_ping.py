@@ -39,7 +39,8 @@ async def get_usage_ping_status(
 @router.get("/usage-ping/preview", response_model=UsagePingAdminResponse)
 async def preview_usage_ping(
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(require_role(UserRole.admin)),
+    # The payload carries the shared contact, which only super admins may read.
+    _current_user: User = Depends(require_super_admin),
 ):
     status = await usage_ping_status(db)
     return UsagePingAdminResponse(status=status, payload=await build_usage_ping(db))
