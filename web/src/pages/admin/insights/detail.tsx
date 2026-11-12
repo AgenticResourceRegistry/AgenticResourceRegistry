@@ -2078,6 +2078,8 @@ export default function InsightReportPage() {
 	const router = useRouter();
 	const { data: report, isLoading, isError } = useInsightReport(agentId, reportId);
 	const selection = useSuggestionSelection(report);
+	const suggestionsUnavailable = Array.isArray(report?.narrative?.section_errors)
+        && report.narrative.section_errors.some(error => error?.section === "suggestions");
 	const sections = useReportSections();
 
 	return (
@@ -2090,7 +2092,7 @@ export default function InsightReportPage() {
 				]}
 				actionButtonsRight={
 					<div className="flex shrink-0 items-center gap-2">
-						<ApplySuggestionsControl report={report} selection={selection} />
+						{!suggestionsUnavailable && <ApplySuggestionsControl report={report} selection={selection} />}
 						{/* icons only below sm, so Apply, Export, Back and search all fit on a phone */}
 						{report?.status === "completed" && (
 							<Button
