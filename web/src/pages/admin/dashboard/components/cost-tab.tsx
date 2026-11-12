@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -12,6 +13,7 @@ import { StatCard } from "./stat-card";
 import { Loader2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { DashboardRangeContext } from "../context";
+import { CardErrorBoundary } from "./card-error-boundary";
 
 const DEFAULT_CATEGORIES = [
   "Code Review",
@@ -328,7 +330,9 @@ export function CostTab() {
           </div>
         </div>
       )}
-      <ROIProjections />
+      <CardErrorBoundary>
+        <ROIProjections />
+      </CardErrorBoundary>
     </div>
   );
 }

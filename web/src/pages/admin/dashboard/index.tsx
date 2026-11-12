@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -16,6 +17,7 @@ import { InvestmentsTab } from "./components/investments-tab";
 import { InsightsTab } from "./components/insights-tab";
 import { DepartmentsTab } from "./components/departments-tab";
 import { VelocityTab } from "./components/velocity-tab";
+import { CardErrorBoundary } from "./components/card-error-boundary";
 import { useExecAdoption, useExecAgentCounts, useExecConfig } from "@/hooks/use-api";
 import { RefreshCw, Calendar, Rocket, Download } from "lucide-react";
 import { useState, useCallback } from "react";
@@ -266,27 +268,39 @@ function DashboardContent() {
             </div>
 
             <TabsContent value="adoption">
-            <AdoptionTab />
-          </TabsContent>
+              <CardErrorBoundary className="mt-4">
+                <AdoptionTab />
+              </CardErrorBoundary>
+            </TabsContent>
 
-          <TabsContent value="cost">
-            <CostTab />
-          </TabsContent>
+            <TabsContent value="cost">
+              <CardErrorBoundary className="mt-4">
+                <CostTab />
+              </CardErrorBoundary>
+            </TabsContent>
 
-          <TabsContent value="investments">
-            <InvestmentsTab />
-          </TabsContent>
+            <TabsContent value="investments">
+              <CardErrorBoundary className="mt-4">
+                <InvestmentsTab />
+              </CardErrorBoundary>
+            </TabsContent>
 
-          <TabsContent value="insights">
-            <InsightsTab />
-          </TabsContent>
+            <TabsContent value="insights">
+              <CardErrorBoundary className="mt-4">
+                <InsightsTab />
+              </CardErrorBoundary>
+            </TabsContent>
 
-          <TabsContent value="departments">
-            <DepartmentsTab />
-          </TabsContent>
+            <TabsContent value="departments">
+              <CardErrorBoundary className="mt-4">
+                <DepartmentsTab />
+              </CardErrorBoundary>
+            </TabsContent>
 
             <TabsContent value="velocity">
-              <VelocityTab />
+              <CardErrorBoundary className="mt-4">
+                <VelocityTab />
+              </CardErrorBoundary>
             </TabsContent>
           </Tabs>
         </div>

@@ -8,6 +8,7 @@
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -64,6 +65,7 @@ All notable changes to this project will be documented in this file.
 - say in `agent pull` output, and in JSON as `reports_sessions`, when the pulled agent sends its sessions to the server ([#1772](https://github.com/Observal/Observal/issues/1772))
 - correct docs still describing the removed password reset code flow and CLI commands that do not exist
 - point the rate-limit and token-expiry help links at sections that still exist
+- keep the admin dashboard usable when one tab or card fails to render: show an inline error with a Retry button instead of the full-page error screen (#2161)
 - attribute Pi sessions to a project-scope pulled agent only inside that project, instead of tagging every Pi session on the machine with it
 
 ### Documentation

@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
 import { Button } from "@/components/ui/button";
 import { useExecAIInsights, useExecDeveloperBreakdown, useGenerateExecAIInsights } from "@/hooks/use-api";
 import { Zap, AlertTriangle, TrendingUp, Users, Cpu, Crown, Loader2, RefreshCw } from "lucide-react";
+import { CardErrorBoundary } from "./card-error-boundary";
 
 const effortColors: Record<string, { bg: string; text: string; label: string }> = {
   low: { bg: "bg-success/10", text: "text-success", label: "Quick Win" },
@@ -246,7 +248,9 @@ export function InsightsTab() {
           <p className="text-sm text-muted-foreground leading-relaxed">{insights.usage_pattern.detail}</p>
         </div>
       )}
-      <DeveloperBreakdown />
+      <CardErrorBoundary>
+        <DeveloperBreakdown />
+      </CardErrorBoundary>
     </div>
   );
 }
