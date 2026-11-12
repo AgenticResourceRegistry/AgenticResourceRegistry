@@ -40,6 +40,10 @@ test("partial sections are visible and failed suggestions cannot be applied", as
   });
   await page.goto(`/agents/${report.agent_id}/insights/${reportId}`);
   await expect(page.getByText("This report is partially available", { exact: true })).toBeVisible({ timeout: 15000 });
+  const deferContact = page.getByRole("button", { name: "Not now", exact: true });
+  if (await deferContact.isVisible()) await deferContact.click();
+  // Preserve main's collapsed key-points UI and explicitly open its details.
+  await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Show all", exact: true }).click();
   for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await expect(page.getByText("This report is partially available", { exact: true })).toBeVisible();
