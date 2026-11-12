@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Read-time cohort decisions; source telemetry/bindings and old reports stay unchanged."""
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 
 
 def select_cohort(metas):
@@ -21,7 +21,7 @@ def select_cohort(metas):
         parent = meta.get("parent_session_id", "")
         parent_known = meta.get("parent_metadata_known", False)
         if not parent_known:
-            decision = "parent_metadata_unavailable"
+            decision = meta.get("parent_metadata_reason") or "parent_metadata_unavailable"
         elif parent:
             children.append(meta)
             parent_key = type(key)(key.project_id, key.user_id, key.harness, parent)

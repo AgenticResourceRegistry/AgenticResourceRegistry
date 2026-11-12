@@ -434,16 +434,25 @@ async def fetch_session_stats(
         except Exception as fallback_error:
             logger.warning("fetch_session_stats_fallback_failed", error=str(fallback_error))
             return {}
-    return {
+    stats = {
         SessionKey.from_row(row): {
             "credits": float(row.get("total_credits") or 0),
             "layer_hash": row.get("layer_hash", ""),
             "parent_session_id": str(row.get("parent_session_id") or ""),
-            "parent_metadata_known": "parent_session_id" in row,
             "reported_agent_version": row.get("reported_agent_version", row.get("agent_version", "")),
         }
         for row in rows
     }
+    from services.session_parent_evidence import load_parent_evidence, parent_decision
+
+    try:
+        declarations = await load_parent_evidence(list(stats), query)
+    except Exception as error:
+        logger.warning("parent_evidence_unavailable", error=type(error).__name__)
+        declarations = {}
+    for key, values in stats.items():
+        values.update(parent_decision(values["parent_session_id"], declarations.get(key, [])))
+    return stats
 
 
 async def fetch_all_session_transcripts(
@@ -580,8 +589,19 @@ async def extract_all_session_metas(
             reported_agent_version=stats.get(key, {}).get("reported_agent_version", ""),
             parent_session_id=stats.get(key, {}).get("parent_session_id", ""),
             parent_metadata_known=stats.get(key, {}).get("parent_metadata_known", False),
+            parent_metadata_reason=stats.get(key, {}).get("parent_metadata_reason", "parent_evidence_unavailable"),
             instruction_evidence=instruction_evidence(key.harness, lines, expected_instruction),
         )
+        # Parent evidence changes eligibility even when the transcript is unchanged.
+        original = meta["instruction_evidence"].get("cache_key")
+        if original:
+            import hashlib
+
+            parent_key = stats.get(key, {}).get("parent_evidence_key", "missing")
+            meta["instruction_evidence"] = {
+                **meta["instruction_evidence"],
+                "cache_key": hashlib.sha256(f"parent-policy-v2:{original}:{parent_key}".encode()).hexdigest(),
+            }
         metas.append(meta)
 
     logger.info(

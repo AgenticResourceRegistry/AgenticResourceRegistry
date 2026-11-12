@@ -8,7 +8,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger as optic
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 from api.deps import require_role
 from api.ratelimit import limiter
@@ -95,8 +95,20 @@ class SessionIngestRequest(BaseModel):
     session_model: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
     # Claude Code subagent attribution: set when this session is a subagent
     parent_session_id: str | None = Field(None, max_length=MAX_SHORT_STRING_LENGTH)
+    # A null parent alone is a legacy default, not a declared top-level session.
+    parent_metadata_known: StrictBool = False
     # Discovery resources the CLI's capability lock attributes to this session
     capabilities_used: list[CapabilityUsed] | None = Field(None, max_length=MAX_CAPABILITIES_PER_PUSH)
+
+    @model_validator(mode="after")
+    def explicit_parent_declaration(self):
+        """An explicit known-null claim means top-level; omission remains unknown."""
+        from services.session_parent_evidence import validate_parent_evidence
+
+        if self.parent_metadata_known and "parent_session_id" not in self.model_fields_set:
+            raise ValueError("Known parent evidence requires explicit parent_session_id (null for top-level)")
+        validate_parent_evidence(self.session_id, self.parent_session_id, self.parent_metadata_known)
+        return self
 
     @field_validator("lines")
     @classmethod
@@ -191,6 +203,7 @@ async def ingest_session(
             total_credits=req.total_credits,
             session_model=req.session_model,
             parent_session_id=req.parent_session_id,
+            parent_metadata_known=req.parent_metadata_known,
         )
     except SessionRecordConflictError as exc:
         raise HTTPException(

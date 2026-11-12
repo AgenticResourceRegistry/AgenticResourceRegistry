@@ -138,6 +138,7 @@ async def main():
                     "agent_id": agent_id,
                     "agent_version": "1.0.0",
                     "parent_session_id": parent or None,
+                    "parent_metadata_known": True,
                     "lines": [json.dumps(e) for e in records],
                 },
             )
@@ -219,6 +220,150 @@ async def main():
         response = await client.get("/api/v1/insights/reports/" + report_id, headers=headers)
         response.raise_for_status()
         assert response.json()["metrics"]["cohort"]["child_sessions"] == 1
+        # New identities with the same loaded instructions isolate parent evidence.
+        from services.clickhouse import _query
+        from services.insights.cohort import select_cohort
+        from services.insights.session_meta_extractor import fetch_session_stats
+
+        cases = [
+            ("declared", None, True),
+            ("legacy-null", None, False),
+            ("omitted", None, False),
+            ("child", "cohort-parent-" + suffix, False),
+            ("unresolved", "not-in-cohort", False),
+            ("conflict", None, True),
+            ("two-parents", "cohort-parent-" + suffix, False),
+        ]
+        ids = {}
+        for label, parent, known in cases:
+            sid = "parent-evidence-" + label + "-" + suffix
+            ids[label] = sid
+            rows = [
+                {"type": "message", "timestamp": now.isoformat(), "message": {"role": "system", "content": PROMPT}},
+                {
+                    "type": "message",
+                    "timestamp": now.isoformat(),
+                    "message": {"role": "user", "content": "Report a candidate test"},
+                },
+                {
+                    "type": "message",
+                    "timestamp": now.isoformat(),
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "Candidate reported"}]},
+                },
+            ]
+            body = {
+                "session_id": sid,
+                "harness": "pi",
+                "agent_id": agent_id,
+                "agent_version": "1.0.0",
+                "lines": [json.dumps(row) for row in rows],
+            }
+            if label != "omitted":
+                body["parent_session_id"] = parent
+            if known:
+                body["parent_metadata_known"] = True
+            response = await client.post("/api/v1/ingest/session", headers=headers, json=body)
+            response.raise_for_status()
+            if label == "declared":
+                # Exact source replay must be acknowledged without losing its marker.
+                replay = await client.post("/api/v1/ingest/session", headers=headers, json=body)
+                replay.raise_for_status()
+                assert replay.json()["ingested"] == 0
+        for label, parent in [("conflict", parent_id), ("two-parents", "other-parent")]:
+            response = await client.post(
+                "/api/v1/ingest/session",
+                headers=headers,
+                json={
+                    "session_id": ids[label],
+                    "harness": "pi",
+                    "agent_id": agent_id,
+                    "agent_version": "1.0.0",
+                    "lines": [],
+                    "parent_session_id": parent,
+                    "parent_metadata_known": True,
+                },
+            )
+            response.raise_for_status()
+        stats = await fetch_session_stats(agent_id, start, end, agent_version="1.0.0")
+        keyed = {key.session_id: value for key, value in stats.items()}
+        assert keyed[ids["declared"]]["parent_metadata_known"]
+        assert (
+            not keyed[ids["legacy-null"]]["parent_metadata_known"]
+            and not keyed[ids["omitted"]]["parent_metadata_known"]
+        )
+        assert (
+            not keyed[ids["conflict"]]["parent_metadata_known"]
+            and not keyed[ids["two-parents"]]["parent_metadata_known"]
+        )
+        assert keyed[ids["child"]]["parent_metadata_known"] and keyed[ids["unresolved"]]["parent_metadata_known"]
+        # Real raw-event fallback must agree with the materialized summary path.
+        import services.insights.session_meta_extractor as extractor
+
+        original_query = extractor.get_query
+
+        async def force_fallback(sql, params):
+            """Exercise actual ClickHouse SQL without changing any persisted source."""
+            if "FROM session_stats_agg" in sql:
+                raise RuntimeError("Fixture primary unavailable")
+            return await _query(sql, params)
+
+        extractor.get_query = lambda: force_fallback
+        try:
+            fallback = await extractor.fetch_session_stats(agent_id, start, end, agent_version="1.0.0")
+        finally:
+            extractor.get_query = original_query
+        assert {key: (v["parent_session_id"], v["parent_metadata_known"]) for key, v in fallback.items()} == {
+            key: (v["parent_session_id"], v["parent_metadata_known"]) for key, v in stats.items()
+        }
+        all_metas = await extract_all_session_metas(
+            agent_id, start, end, agent_version="1.0.0", expected_instruction=config["_instruction_contract"]
+        )
+        selected, matrix_coverage = select_cohort(all_metas)
+        assert {meta["session_key"].session_id for meta in selected} == {parent_id, ids["declared"]}
+        assert matrix_coverage["policy_version"] == 2
+        # A marker-only push may follow an old producer's acknowledged raw lines.
+        changed = await client.post(
+            "/api/v1/ingest/session",
+            headers=headers,
+            json={
+                "session_id": ids["legacy-null"],
+                "harness": "pi",
+                "agent_id": agent_id,
+                "agent_version": "1.0.0",
+                "lines": [],
+                "parent_session_id": None,
+                "parent_metadata_known": True,
+            },
+        )
+        changed.raise_for_status()
+        revised = await extract_all_session_metas(
+            agent_id, start, end, agent_version="1.0.0", expected_instruction=config["_instruction_contract"]
+        )
+        before = next(m for m in all_metas if m["session_key"].session_id == ids["legacy-null"])
+        after = next(m for m in revised if m["session_key"].session_id == ids["legacy-null"])
+        assert before["instruction_evidence"]["cache_key"] != after["instruction_evidence"]["cache_key"]
+        assert after["parent_metadata_known"]
+        response = await client.post(
+            "/api/v1/ingest/session",
+            headers=headers,
+            json={
+                "session_id": ids["declared"],
+                "harness": "pi",
+                "agent_id": agent_id,
+                "agent_version": "1.0.0",
+                "lines": [json.dumps({"changed": "acknowledged source"})],
+                "parent_session_id": "rejected-parent",
+                "parent_metadata_known": True,
+            },
+        )
+        assert response.status_code == 409
+        final_stats = await fetch_session_stats(agent_id, start, end, agent_version="1.0.0")
+        assert next(v for key, v in final_stats.items() if key.session_id == ids["declared"])["parent_metadata_known"]
+        # Old pre-v2 reports are not recomputed/relabelled in storage.
+        old = await client.get("/api/v1/insights/reports/" + report_id, headers=headers)
+        old.raise_for_status()
+        assert old.json()["metrics"]["cohort"]["bound_sessions"] == 4
+
     print(
         json.dumps(
             {
@@ -229,6 +374,11 @@ async def main():
                 "verified_top_level": 1,
                 "child": 1,
                 "classification": "passed",
+                "parent_declarations": "passed",
+                "unknown_and_conflicts": "passed",
+                "primary_fallback_parity": "passed",
+                "replay_and_metadata_only": "passed",
+                "rejected_source_no_declaration": "passed",
                 "pipeline": "passed",
                 "cache": "passed",
                 "authenticated_read": "passed",

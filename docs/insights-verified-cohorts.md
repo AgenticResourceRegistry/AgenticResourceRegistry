@@ -41,3 +41,11 @@ AI assistance: Pi under human direction; full human diff/screenshot review is re
 ## Provider and fixture boundaries
 
 Only aggregate cohort counts enter comparison/regression model prompts; stored/API per-session decision rosters stay intact and are removed from a provider-bound copy at every nesting level. Delegation envelopes use deterministic string parsing rather than a whitespace-backtracking regex. The runtime verifier requires an ephemeral `INSIGHTS_RUNTIME_PASSWORD` from its caller; it never writes that password to a temporary file. The browser runner uses the same environment value and the verifier's non-secret fixture email/report output.
+
+## Parent evidence policy v2
+
+A missing/null parent in aggregate telemetry is not proof of a top-level session. New ingest accepts strict `parent_metadata_known: true` only alongside an explicit `parent_session_id` (null for a declared top-level session). Positive parent IDs remain compatible child declarations. Omitted/false flags with null parents remain unknown, including legacy CLI defaults. Producers must establish session-level ancestry before asserting the flag; this change does not manufacture that knowledge or update every legacy producer.
+
+Accepted declarations are scoped in `session_parent_evidence`, installed by migration `012_session_parent_evidence.sql`. Identical replays agree, metadata-only pushes persist evidence, and contradictory declarations remain unknown rather than overwriting each other. Both aggregate and raw-event fallback reads use the same bounded scoped lookup. Parent evidence qualifies facet-cache identity and cohort policy v2; old reports are unchanged and carry a legacy-policy warning. Only matching v2 metrics may serve as a comparison baseline. Scoped retention cleans aged orphan parent evidence without removing fresh metadata preceding source.
+
+For a genuinely established top-level session send `{"parent_metadata_known": true, "parent_session_id": null}`. For a child, send its nonempty parent ID. For ancestry that cannot be established, omit the marker or keep it false; never derive it from a default null. This remains recorded producer evidence, not cryptographic attestation.

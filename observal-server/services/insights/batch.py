@@ -26,6 +26,7 @@ from services.redis import _get_arq_pool
 from services.secrets_redactor import redact_secrets
 
 from ._deps import recording_models
+from .cohort import POLICY_VERSION
 from .registry_match import RegistryScope
 
 logger = structlog.get_logger(__name__)
@@ -370,7 +371,7 @@ async def run_single_report(report_id: str) -> None:
                     prev_report
                     and prev_report.aggregated_data
                     and ((prev_report.aggregated_data.get("metrics") or {}).get("cohort") or {}).get("policy_version")
-                    == 1
+                    == POLICY_VERSION
                 ):
                     previous_metrics = prev_report.aggregated_data
 

@@ -94,6 +94,18 @@ async def _purge_session_orphans(project_id: str, cutoff_str: str) -> dict[str, 
         stats[table] = 1
 
     response = await _query(
+        "DELETE FROM session_parent_evidence WHERE project_id = {pid:String} "
+        "AND received_at < {cutoff:String} "
+        f"AND {_SESSION_KEYS} NOT IN ({_SOURCE_SESSIONS}) "
+        "SETTINGS lightweight_deletes_sync = 1",
+        {"param_pid": project_id, "param_pid2": project_id, "param_cutoff": cutoff_str},
+        timeout=RETENTION_QUERY_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Retention cleanup failed for session_parent_evidence (HTTP {response.status_code})")
+    stats["session_parent_evidence"] = 1
+
+    response = await _query(
         "DELETE FROM session_capabilities WHERE project_id = {pid:String} "
         "AND used_at < {cutoff:String} "
         f"AND {_SESSION_KEYS} NOT IN ({_SOURCE_SESSIONS}) "

@@ -1898,6 +1898,7 @@ function ReportContent({
 		<div className="space-y-6">
             <div role="status" className="rounded-lg border border-border bg-muted/20 p-4 text-sm">
                 <p className="font-semibold">Instruction evidence and session coverage</p>
+                {metrics?.cohort && metrics.cohort.policy_version < 2 && <p className="mt-1 text-warning">Legacy cohort policy: parent classification was not independently recorded. These saved counts have not been reverified.</p>}
                 {metrics?.cohort ? <>
                     <p className="mt-1">{metrics.cohort.verified_top_level_sessions} verified top-level sessions from {metrics.cohort.bound_sessions} bound records. {metrics.cohort.child_sessions} child sessions are reported separately, not independent tasks.</p>
                     <p className="mt-1 text-muted-foreground">Unknown or mismatched instructions are excluded from agent-effect analysis. This does not prove non-use. Recorded matches do not prove task relevance or compliance.</p>

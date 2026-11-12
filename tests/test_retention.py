@@ -75,6 +75,7 @@ async def test_scoped_session_orphan_cleanup():
         "component_activity",
         "component_activity_publications",
         "session_capabilities",
+        "session_parent_evidence",
     }
     for call in mock_query.call_args_list:
         sql, params = call.args
@@ -83,6 +84,8 @@ async def test_scoped_session_orphan_cleanup():
         assert params["param_pid"] == params["param_pid2"] == "test-pid"
         assert "lightweight_deletes_sync = 1" in sql
     assert "used_at < {cutoff:String}" in mock_query.call_args.args[0]
+    parent_cleanup = next(c for c in mock_query.call_args_list if "DELETE FROM session_parent_evidence" in c.args[0])
+    assert "received_at < {cutoff:String}" in parent_cleanup.args[0]
 
 
 @pytest.mark.asyncio
