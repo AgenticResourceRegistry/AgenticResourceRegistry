@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import MagicMock, call
 
 from typer.testing import CliRunner
@@ -96,24 +97,28 @@ def test_table_footer_and_missing_optional_fields(monkeypatch) -> None:
         "source": "test-source",
         "degraded": False,
     }
-    monkeypatch.setattr(cmd_models.model_catalog, "fetch_catalog", MagicMock(return_value=catalog))
+    fetch = MagicMock(return_value=catalog)
+    monkeypatch.setattr(cmd_models.model_catalog, "fetch_catalog", fetch)
 
     result = runner.invoke(app, ["registry", "models"])
 
     assert result.exit_code == 0
+    fetch.assert_called_once_with(harness=None)
     assert "source: test-source, count: 2" in result.output
     bare_line = next(line for line in result.output.splitlines() if "bare-row" in line)
+    cells = [cell.strip() for cell in re.split(r"[│┃|]", bare_line)[1:-1]]
     # kind falls back to "exact"; display_name falls back to an empty cell.
-    assert "exact" in bare_line
-    assert "Shown Name" not in bare_line
+    assert cells == ["pi", "bare-row", "exact", ""]
 
 
 def test_empty_table_renders_with_zero_count(monkeypatch) -> None:
-    monkeypatch.setattr(cmd_models.model_catalog, "fetch_catalog", MagicMock(return_value=_catalog([])))
+    fetch = MagicMock(return_value=_catalog([]))
+    monkeypatch.setattr(cmd_models.model_catalog, "fetch_catalog", fetch)
 
     result = runner.invoke(app, ["registry", "models", "list"])
 
     assert result.exit_code == 0
+    fetch.assert_called_once_with(harness=None)
     assert "model_id" in result.output
     assert "count: 0" in result.output
 
