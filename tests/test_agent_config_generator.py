@@ -420,6 +420,16 @@ class TestGenerateCursorVscode:
 
 
 class TestGenerateKiro:
+    @pytest.mark.parametrize("scope", ("project", "user"))
+    def test_generated_skill_resource_globs_match_registry_paths(self, scope):
+        """Verify emitted loading configuration; native activation is a live check."""
+        from observal_shared.harness_registry import HARNESS_REGISTRY
+
+        cfg = generate_agent_config(_make_agent(), "kiro", options={"scope": scope})
+        resources = cfg["agent_profile"]["content"]["resources"]
+        expected = {f"skill://{path.replace('{name}', '**')}" for path in HARNESS_REGISTRY["kiro"]["skills"].values()}
+        assert {resource for resource in resources if resource.startswith("skill://")} == expected
+
     def test_agent_profile_path(self):
         agent = _make_agent()
         cfg = generate_agent_config(agent, "kiro")

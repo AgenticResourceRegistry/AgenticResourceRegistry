@@ -5,7 +5,9 @@
 
 """Copilot (VS Code) harness adapter for agent config generation.
 
-Copilot in VS Code does not support hooks. This adapter generates:
+Generates native agent, MCP, direct-skill and prompt files, and provides
+hook component/install formatting. Telemetry installation is handled by the CLI
+adapter and doctor workflow. Agent config output includes:
 - .github/agents/{name}.agent.md (agent file with YAML frontmatter)
 - .vscode/mcp.json (MCP server config with "servers" key)
 """
