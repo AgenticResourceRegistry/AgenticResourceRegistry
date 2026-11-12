@@ -50,7 +50,7 @@ test("partial sections are visible and failed suggestions cannot be applied", as
     await expect(page.getByText("Suggestions unavailable", { exact: true })).toBeVisible();
     await expect(page.getByText(/unknown, unknown, unknown/)).toBeVisible();
     await expect(page.getByText("Synthetic answer delivered", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Apply Selected/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /(?:Apply(?: suggestions)? \(\d+\)|Preview selected)/ })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.getByText("This report is partially available", { exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`malformed-section-errors-${viewport.width}.png`), fullPage: true });
