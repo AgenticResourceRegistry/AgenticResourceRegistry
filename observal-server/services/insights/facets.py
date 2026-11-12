@@ -210,7 +210,6 @@ async def load_cached_facets_batch(
                         SessionKey(row.project_id, row.user_id, row.harness, row.session_id), "missing"
                     )
                 )
-
             }
         )
     return cached
