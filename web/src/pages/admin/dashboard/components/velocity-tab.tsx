@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 // SPDX-FileCopyrightText: 2026 Lokesh Selvam <lokeshselvam7025@gmail.com>
 // SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+// SPDX-FileCopyrightText: 2026 Deepesh Kumar <akadeepesh1710@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 
@@ -10,6 +11,7 @@ import {
 } from "recharts";
 import { useExecVelocity, useExecTopAgents, useExecTimeToValue } from "@/hooks/use-api";
 import { StatCard } from "./stat-card";
+import { CardErrorBoundary } from "./card-error-boundary";
 
 function Sparkline({ data }: { data: number[] }) {
   if (!data || data.length < 2) return null;
@@ -59,7 +61,9 @@ export function VelocityTab() {
         <StatCard label="Current Avg" value={Math.round(velocity?.current_weekly_avg ?? 0)} subtitle="traces/week" />
         <StatCard label="Baseline Avg" value={Math.round(velocity?.baseline_weekly_avg ?? 0)} subtitle="traces/week (first 4 weeks)" />
       </div>
-      <VelocityChart weekly={velocity?.weekly ?? []} />
+      <CardErrorBoundary>
+        <VelocityChart weekly={velocity?.weekly ?? []} />
+      </CardErrorBoundary>
       <div className="overflow-x-auto rounded-xl bg-card shadow-sm">
         <div className="p-4 border-b border-border">
           <h3 className="text-sm font-medium">Best Agent Files</h3>
@@ -113,7 +117,9 @@ export function VelocityTab() {
           </table>
         )}
       </div>
-      <TimeToValue />
+      <CardErrorBoundary>
+        <TimeToValue />
+      </CardErrorBoundary>
     </div>
   );
 }
