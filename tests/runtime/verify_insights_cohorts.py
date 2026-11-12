@@ -207,6 +207,24 @@ async def main():
             db.add(report)
             await db.commit()
             report_id = str(report.id)
+            legacy_metrics = json.loads(json.dumps(result["metrics"]))
+            legacy_metrics["cohort"]["policy_version"] = 1
+            legacy_report = InsightReport(
+                agent_id=uuid.UUID(agent_id),
+                agent_version_id=version_id,
+                triggered_by=uuid.UUID(owner_id),
+                agent_version="1.0.0",
+                status=InsightReportStatus.completed,
+                period_start=now - timedelta(minutes=1),
+                period_end=now,
+                metrics=legacy_metrics,
+                narrative={},
+                sessions_analyzed=1,
+                completed_at=now,
+            )
+            db.add(legacy_report)
+            await db.commit()
+            legacy_report_id = str(legacy_report.id)
             await generator.generate_report_content(
                 "cohort-agent-" + suffix,
                 agent_id,
@@ -360,9 +378,10 @@ async def main():
         final_stats = await fetch_session_stats(agent_id, start, end, agent_version="1.0.0")
         assert next(v for key, v in final_stats.items() if key.session_id == ids["declared"])["parent_metadata_known"]
         # Old pre-v2 reports are not recomputed/relabelled in storage.
-        old = await client.get("/api/v1/insights/reports/" + report_id, headers=headers)
+        old = await client.get("/api/v1/insights/reports/" + legacy_report_id, headers=headers)
         old.raise_for_status()
-        assert old.json()["metrics"]["cohort"]["bound_sessions"] == 4
+        assert old.json()["metrics"]["cohort"]["policy_version"] == 1
+        assert old.json()["metrics"] == legacy_metrics
 
     print(
         json.dumps(
