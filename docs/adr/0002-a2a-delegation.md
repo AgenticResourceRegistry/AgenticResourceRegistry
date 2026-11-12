@@ -180,6 +180,44 @@ session is attributed to the delegated agent and version even when it is
 delivered after the workspace is gone (`observal reconcile`, recovery after a
 crash). The user's lockfile is never touched. No OTLP, no new ingestion path.
 
+## Amendment: a progress sidecar for local runs
+
+A local delegation used to be opaque until it finished: the child's stdout went
+straight to `stdout.log` and the task file only changed when it reached a
+terminal state, so `delegate run`, `get_task`, and the MCP `delegate` tool had
+nothing to report for up to thirty minutes.
+
+Runs now publish `progress.jsonl` next to `stdout.log` and `stderr.log` in the
+task directory. A daemon thread in the worker tails both logs, splits complete
+lines, redacts them with the discovery redactor, caps each line at 2,000
+characters and the file at 2 MB, and appends
+`{seq, ts, stream, kind, text, truncated}` records, `stream` naming the log the
+line came from. Tailing stderr is not incidental: a harness that dies writes its
+reason there and nowhere else, so a viewer that showed only stdout would present
+a run with no output at all. A partial
+tail is held back until its newline arrives; when the run ends, the writer
+publishes that tail once, so a child killed by its timeout still reports what it
+was saying instead of losing its last line. The logs stay the only source of
+truth; the sidecar is a derived, disposable file, so a crash cannot corrupt a
+task and deleting it only loses the view.
+
+`kind` is one of four stable values — `line` for unparsed output, `tool_call`,
+`tool_result`, and `status` for lifecycle events — so a reader never needs to know
+which harness produced the line. The harness's own event name (Codex's
+`tool_execution_start`, Claude Code's `message_end`, …) is kept in an optional
+`event` field beside it. A fifth, control-only kind `truncated` marks the point
+where the sidecar hit its size cap and stopped writing; it is not a harness event,
+and a reader that only renders the four kinds can skip it.
+
+Readers consume it by byte offset and `seq`: `delegate run --follow` prints new
+records to stderr (stdout stays parseable for `--output json`), and the MCP
+server maps `params._meta.progressToken` onto `notifications/progress`, keeping
+one cursor per task so a client that polls receives each record once rather than
+the whole backlog on every call. Neither changes the A2A task shape;
+`SendStreamingMessage` and push notifications remain deferred, and a caller that
+sends no token sees exactly the previous responses. Terminal summaries are
+unchanged.
+
 ## Amendment to ADR 0001, Decision 7
 
 ADR 0001 said an Agentic Resource Registry Agent is never emitted as

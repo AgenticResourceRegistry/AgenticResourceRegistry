@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from loguru import logger as optic
 
 from observal_cli import client
-from observal_cli.delegation import tasks, workspace
+from observal_cli.delegation import progress, tasks, workspace
 from observal_cli.errors import CliError
 from observal_cli.harness import ensure_loaded, get_adapter
 from observal_cli.harness.base import ANSI_RE
@@ -201,6 +201,7 @@ def run(
     message = tasks.message_text((task.get("history") or [{}])[0])
 
     ws: workspace.Workspace | None = None
+    stream: progress.ProgressWriter | None = None
     try:
         ws = workspace.create(Path(m["cwd"]))
         tasks.record_workspace(task, ws.root)
@@ -226,6 +227,7 @@ def run(
         log_dir = tasks.task_dir(task["id"])
         stdout_path = log_dir / "stdout.log"
         stderr_path = log_dir / "stderr.log"
+        stream = progress.ProgressWriter(task["id"], stdout_path, stderr_path).start()
         m["workspace"] = "git-worktree" if ws.is_git else "empty"
         tasks.record_child_session(task, plan.session_id)
         tasks.set_status(task, tasks.STATE_WORKING, f"Running {m.get('agentName', name)} in {harness}.")
@@ -319,5 +321,7 @@ def run(
         optic.exception("local delegation failed task={}", task.get("id"))
         return tasks.set_status(task, tasks.STATE_FAILED, "The delegated run failed unexpectedly; see the task logs.")
     finally:
+        if stream is not None:
+            stream.stop()
         if ws is not None:
             workspace.destroy(ws)
