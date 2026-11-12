@@ -3,7 +3,7 @@
 import { test, expect } from "@playwright/test";
 const baseURL = process.env.INSIGHTS_RUNTIME_URL;
 const reportId = process.env.INSIGHTS_RUNTIME_REPORT;
-test.use({ baseURL, trace: "off", extraHTTPHeaders: { "X-Observal-CLI-Version": "1.17.0-dev.0" } });
+test.use({ baseURL, trace: "off", extraHTTPHeaders: { "X-Observal-CLI-Version": process.env.INSIGHTS_RUNTIME_VERSION ?? "1.18.0-dev.0" } });
 test.skip(!baseURL || !reportId, "Requires disposable integration report");
 test("only grounded changes are shown with auditable references", async ({ page, request }, info) => {
   expect(["localhost", "127.0.0.1"]).toContain(new URL(baseURL!).hostname);
@@ -17,6 +17,7 @@ test("only grounded changes are shown with auditable references", async ({ page,
   expect(response.ok()).toBeTruthy(); const report = await response.json();
   await page.goto(`/agents/${report.agent_id}/insights/${reportId}`);
   await expect(page.getByText("Recommendation evidence", { exact: true })).toBeVisible({ timeout: 15000 });
+  await page.getByRole("group", { name: "Report sections" }).getByRole("button", { name: "Show all", exact: true }).click();
   await expect(page.getByText(/1 in-scope sources eligible for changes/)).toBeVisible();
   await expect(page.getByText(/linear: 1/)).toBeVisible();
   await expect(page.getByText("Scoped candidate rule", { exact: true })).toBeVisible();
