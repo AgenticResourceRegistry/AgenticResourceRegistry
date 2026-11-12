@@ -147,4 +147,3 @@ def instruction_evidence(harness: str, raw_lines: list[str], expected: dict | No
         return extract(entries, expected)
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return {"state": "unknown", "reason": "unsupported_instruction_record_shape"}
-
