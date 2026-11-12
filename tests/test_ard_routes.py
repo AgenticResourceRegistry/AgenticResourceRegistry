@@ -915,22 +915,31 @@ def test_split_clauses_keeps_and_inside_quotes():
 def test_filter_parser_scales_linearly_on_adversarial_whitespace():
     """A tenfold input increase should stay within twice the expected linear growth."""
     import statistics
-    import time
+    import timeit
 
-    def median_runtime(size: int) -> float:
-        expression = "A=a" + " " * size
-        samples = []
-        for _ in range(7):
-            started = time.perf_counter()
-            for clause in ard._split_clauses(expression):
-                ard._parse_clause(clause)
-            samples.append(time.perf_counter() - started)
-        return statistics.median(samples)
+    def parse(expression: str) -> None:
+        for clause in ard._split_clauses(expression):
+            ard._parse_clause(clause)
 
     size_ratio = 10
-    small = median_runtime(20_000)
-    large = median_runtime(20_000 * size_ratio)
-    assert large <= small * size_ratio * 2, f"expected linear scaling, got {large / small:.1f}x"
+    expressions = ["A=a" + " " * size for size in (20_000, 20_000 * size_ratio)]
+    # CPU time excludes other xdist workers' scheduling delays. Autorange warms
+    # each workload and chooses batches lasting at least 0.2 CPU seconds, rather
+    # than comparing single calls lasting only a few milliseconds.
+    timers = [
+        timeit.Timer(lambda expression=expression: parse(expression), timer=time.process_time)
+        for expression in expressions
+    ]
+    counts = [timer.autorange()[0] for timer in timers]
+    ratios = []
+    for sample in range(7):
+        runtimes = {}
+        # Pair measurements and alternate order to limit warm-up/frequency bias.
+        for index in (0, 1) if sample % 2 == 0 else (1, 0):
+            runtimes[index] = timers[index].timeit(number=counts[index]) / counts[index]
+        ratios.append(runtimes[1] / runtimes[0])
+    ratio = statistics.median(ratios)
+    assert ratio <= size_ratio * 2, f"expected linear scaling, got {ratio:.1f}x"
 
 
 def test_filter_errors_never_echo_foreign_exception_text():
