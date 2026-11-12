@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run inside a DISPOSABLE API container; writes unique synthetic sessions/cache rows.
 
-    docker exec -i -e INSIGHTS_DISPOSABLE_VERIFY=1 insights-rebase-observal-api-1 /app/.venv/bin/python < tests/runtime/verify_insights_fidelity.py
+    docker exec -i -e INSIGHTS_DISPOSABLE_VERIFY=1 insights-rebase-observal-api-1 /app/.venv/bin/python < tests/runtime/verify_codex_insights_fidelity.py
 
 No model calls or historical repairs. Never run this against a production database.
 """

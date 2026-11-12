@@ -508,6 +508,8 @@ def transcript_rows(rows: list[dict]) -> list[dict]:
                         value = json.loads(text)
                     except (ValueError, RecursionError):
                         value = text
+                    if isinstance(value, dict) and "command" in value and not isinstance(value["command"], str):
+                        value = {**value, "command": _shell_command(json.dumps(value))}
                 normalized.append({"event_type": "tool_call", "tool_name": name, "raw_line": {"input": value}})
             elif kind in ("function_call_output", "custom_tool_call_output"):
                 text = _output_text(payload)

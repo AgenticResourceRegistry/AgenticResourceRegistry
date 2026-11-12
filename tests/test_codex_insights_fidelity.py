@@ -303,3 +303,19 @@ def test_token_metadata_does_not_break_echo_matching(echo_first):
     entries = [first, item({"type": "token_count", "info": {}}, "event_msg"), second]
     assert _format_rows([{"raw_line": json.dumps(e)} for e in entries], harness="codex") == "[User]: Run tests"
     assert extract_session_meta("session", [json.dumps(e) for e in entries], "codex")["user_message_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", [42, None, ["inspect", "file"], {"unexpected": True}])
+async def test_non_shell_commands_remain_format_safe(monkeypatch, command):
+    """Malformed generic command values cannot abort a whole session transcript."""
+    entry = item(
+        {
+            "type": "function_call",
+            "name": "custom_inspect",
+            "call_id": "c",
+            "arguments": json.dumps({"command": command}),
+        }
+    )
+    text = await build(monkeypatch, [entry])
+    assert "[Tool: custom_inspect]" in text
