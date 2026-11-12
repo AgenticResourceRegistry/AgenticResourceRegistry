@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 
 function formatHarnessSlug(harness: string): string {
   return harness
@@ -44,8 +45,9 @@ export function HarnessBadges({
       {visible.map((harness) => (
         <span
           key={harness}
-          className="rounded-[5px] bg-surface-raised px-[7px] py-0.5 font-mono text-[10px] text-muted-foreground"
+          className="inline-flex items-center gap-1 rounded-[5px] bg-surface-raised px-[7px] py-0.5 font-mono text-[10px] text-muted-foreground"
         >
+          <HarnessLogo harness={harness} className="h-3 w-3" />
           {getHarnessDisplayName(harness, harnessList)}
         </span>
       ))}

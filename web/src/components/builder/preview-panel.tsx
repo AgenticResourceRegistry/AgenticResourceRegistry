@@ -17,6 +17,7 @@ import {
 	DialogDescription,
 } from "@/components/ui/dialog";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 import { registry } from "@/lib/api";
 import type { ValidationResult } from "@/lib/types";
 
@@ -235,12 +236,13 @@ export function PreviewPanel({
 						key={opt.name}
 						type="button"
 						onClick={() => setHarness(opt.name)}
-						className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+						className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
 							harness === opt.name
 								? "bg-primary text-primary-foreground"
 								: "bg-muted/50 text-muted-foreground hover:bg-muted"
 						}`}
 					>
+						<HarnessLogo harness={opt.name} className="h-3.5 w-3.5" />
 						{opt.display_name}
 					</button>
 				))}
@@ -311,12 +313,13 @@ export function PreviewPanel({
 									setModalHarness(opt.name);
 									modalScrollRef.current?.scrollTo({ top: 0 });
 								}}
-								className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+								className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
 									modalHarness === opt.name
 										? "bg-primary text-primary-foreground"
 										: "bg-muted/50 text-muted-foreground hover:bg-muted"
 								}`}
 							>
+								<HarnessLogo harness={opt.name} className="h-3.5 w-3.5" />
 								{opt.display_name}
 							</button>
 						))}

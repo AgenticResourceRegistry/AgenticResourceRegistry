@@ -9,6 +9,7 @@ import { copyToClipboard } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 
 interface PullCommandProps {
   agentName: string;
@@ -55,7 +56,11 @@ export function PullCommand({ agentName, currentVersion, latestVersion }: PullCo
             onValueChange={setHarness}
             className="w-[130px]"
             inputClassName="h-7 border-border text-xs"
-            options={(harnesses ?? []).map((i) => ({ value: i.name, label: i.display_name }))}
+            options={(harnesses ?? []).map((i) => ({
+              value: i.name,
+              label: i.display_name,
+              icon: <HarnessLogo harness={i.name} className="h-3.5 w-3.5" />,
+            }))}
           />
         </div>
       </div>

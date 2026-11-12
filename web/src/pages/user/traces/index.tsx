@@ -63,6 +63,7 @@ import { TableSkeleton } from "@/components/shared/skeleton-layouts";
 import { ErrorState } from "@/components/shared/error-state";
 import { StatusBadge } from "@/components/registry/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
+import { HarnessLogo, resolveHarnessSlug } from "@/components/registry/harness-logo";
 import { cn } from "@/lib/utils";
 import type { Session } from "@/lib/types";
 
@@ -381,10 +382,13 @@ function TraceStatus({ row }: { row: Session }) {
 	);
 }
 
-function TraceSource({ row }: { row: Session }) {
+function TraceSource({ row, harnesses }: { row: Session; harnesses: { name: string; display_name: string }[] }) {
+	const platform = derivePlatform(row);
+	const slug = resolveHarnessSlug(platform, harnesses);
 	return (
-		<span className="block max-w-[140px] truncate text-2xs font-medium text-foreground">
-			{derivePlatform(row)}
+		<span className="flex max-w-[140px] items-center gap-1 truncate text-2xs font-medium text-foreground">
+			{slug && <HarnessLogo harness={slug} className="h-3 w-3 shrink-0" />}
+			{platform}
 		</span>
 	);
 }
@@ -597,7 +601,7 @@ export default function TracesPage() {
 				id: "source",
 				accessorFn: (row) => derivePlatform(row),
 				header: "Source",
-				cell: ({ row }) => <TraceSource row={row.original} />,
+				cell: ({ row }) => <TraceSource row={row.original} harnesses={availableHarnesses} />,
 			},
 			{
 				accessorKey: "agent_name",
@@ -897,7 +901,10 @@ export default function TracesPage() {
 									)}
 									{harnesses.map((h) => (
 										<SelectItem key={h.name} value={h.name}>
-											{h.display_name}
+											<span className="flex items-center gap-1.5">
+												<HarnessLogo harness={h.name} className="h-3.5 w-3.5" />
+												{h.display_name}
+											</span>
 										</SelectItem>
 									))}
 								</SelectContent>

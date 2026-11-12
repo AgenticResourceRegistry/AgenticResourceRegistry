@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 import { AUTO_MODEL } from "@/lib/agent-model";
 import { cn } from "@/lib/utils";
 
@@ -182,7 +183,11 @@ export function ModelPicker({
               value={selectedHarness}
               onValueChange={setSelectedHarness}
               placeholder="Select harness"
-              options={allHarnesses.map((harness) => ({ value: harness.name, label: harness.display_name }))}
+              options={allHarnesses.map((harness) => ({
+                value: harness.name,
+                label: harness.display_name,
+                icon: <HarnessLogo harness={harness.name} className="h-3.5 w-3.5" />,
+              }))}
             />
 
             <ModelCombobox
@@ -201,7 +206,8 @@ export function ModelPicker({
             <div className="flex flex-wrap gap-1.5 pt-1">
               {overrideEntries.map(([harness, model]) => (
                 <Badge key={harness} variant="secondary" className="gap-1.5 pr-1 font-normal">
-                  <button type="button" className="text-left" onClick={() => editOverride(harness, model)}>
+                  <button type="button" className="flex items-center gap-1.5 text-left" onClick={() => editOverride(harness, model)}>
+                    <HarnessLogo harness={harness} className="h-3 w-3" aria-hidden="true" />
                     <span className="font-medium">{harnessLabel(harness)}</span>: <span className="font-mono">{model}</span>
                   </button>
                   <button

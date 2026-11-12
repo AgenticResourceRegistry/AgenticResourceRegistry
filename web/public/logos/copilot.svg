@@ -1,0 +1,14 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- GitHub Copilot distinctive hexagon logo -->
+  <path d="M12 2L21 7V17L12 22L3 17V7L12 2Z" 
+        stroke="#7B68EE" 
+        stroke-width="2" 
+        fill="none" 
+        stroke-linejoin="round"/>
+  <circle cx="9" cy="11" r="1.5" fill="#7B68EE"/>
+  <circle cx="15" cy="11" r="1.5" fill="#7B68EE"/>
+  <path d="M8 15C8.5 16 10 17 12 17C14 17 15.5 16 16 15" 
+        stroke="#7B68EE" 
+        stroke-width="1.5" 
+        stroke-linecap="round"/>
+</svg>

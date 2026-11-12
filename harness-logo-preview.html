@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Harness Logo Color Preview</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+      background: #f5f5f5;
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    .theme-toggle {
+      text-align: center;
+      margin: 2rem 0;
+    }
+    .theme-toggle button {
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+      cursor: pointer;
+      border: 2px solid #333;
+      background: white;
+      border-radius: 4px;
+    }
+    .logo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+    .logo-card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: center;
+      transition: all 0.3s;
+    }
+    .logo-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    .logo-card img {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 1rem;
+    }
+    .logo-card h3 {
+      margin: 0.5rem 0;
+      color: #333;
+      font-size: 1.1rem;
+    }
+    .logo-card .color-info {
+      font-size: 0.75rem;
+      color: #666;
+      font-family: 'Courier New', monospace;
+      margin-top: 0.5rem;
+    }
+    body.dark {
+      background: #1a1a1a;
+    }
+    body.dark .logo-card {
+      background: #2a2a2a;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    body.dark .logo-card h3 {
+      color: #f5f5f5;
+    }
+    body.dark .logo-card .color-info {
+      color: #a0a0a0;
+    }
+    body.dark h1 {
+      color: #f5f5f5;
+    }
+    body.dark .theme-toggle button {
+      background: #2a2a2a;
+      color: #f5f5f5;
+      border-color: #f5f5f5;
+    }
+  </style>
+</head>
+<body>
+  <h1>Harness Logo Color Scheme</h1>
+  
+  <div class="theme-toggle">
+    <button onclick="toggleTheme()">Toggle Dark/Light Mode</button>
+  </div>
+
+  <div class="logo-grid">
+    <div class="logo-card">
+      <img src="web/public/logos/kiro.svg" alt="Kiro">
+      <h3>Kiro</h3>
+      <div class="color-info">#FFD700 / #FFA500<br>Gold Lightning</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/copilot.svg" alt="GitHub Copilot">
+      <h3>GitHub Copilot</h3>
+      <div class="color-info">#7B68EE<br>Medium Slate Blue</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/claude-code.svg" alt="Claude Code">
+      <h3>Claude Code</h3>
+      <div class="color-info">#D97706<br>Warm Amber</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/cursor.svg" alt="Cursor">
+      <h3>Cursor</h3>
+      <div class="color-info">#3B82F6 / #2563EB<br>Tech Blue</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/antigravity.svg" alt="Antigravity">
+      <h3>Antigravity</h3>
+      <div class="color-info">#EF4444 / #DC2626<br>Rocket Red</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/pi.svg" alt="Pi">
+      <h3>Pi</h3>
+      <div class="color-info">#10B981<br>Emerald Green</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/goose.svg" alt="Goose">
+      <h3>Goose</h3>
+      <div class="color-info">#F59E0B<br>Golden Amber</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/codex.svg" alt="Codex">
+      <h3>Codex</h3>
+      <div class="color-info">#06B6D4<br>Tech Cyan</div>
+    </div>
+
+    <div class="logo-card">
+      <img src="web/public/logos/opencode.svg" alt="OpenCode">
+      <h3>OpenCode</h3>
+      <div class="color-info">#8B5CF6<br>Vibrant Purple</div>
+    </div>
+  </div>
+
+  <script>
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+    }
+  </script>
+</body>
+</html>

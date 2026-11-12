@@ -1,0 +1,8 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Kiro lightning bolt logo -->
+  <path d="M13 2L4 12H11L10 22L19 12H12L13 2Z" 
+        fill="#FFD700" 
+        stroke="#FFA500" 
+        stroke-width="1.5" 
+        stroke-linejoin="round"/>
+</svg>

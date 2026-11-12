@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import type { RegistryType } from "@/lib/api";
 import { useTeams, useWhoami } from "@/hooks/use-api";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { parseMcpConfigJson, applyParsedConfig } from "@/lib/mcp-parser";
 import type { EnvVar } from "@/lib/mcp-parser";
@@ -1666,13 +1667,13 @@ export function SubmitComponentDialog({
 									key={harness.name}
 									type="button"
 									onClick={() => toggleHarness(harness.name)}
-									className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+									className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
 										supportedHarnesses.includes(harness.name)
 											? "bg-primary text-primary-foreground"
 											: "bg-muted/50 text-muted-foreground hover:bg-muted"
 									}`}
 								>
-									{harness.display_name}
+									<HarnessLogo harness={harness.name} className="h-3.5 w-3.5" />{harness.display_name}
 								</button>
 							))}
 						</div>

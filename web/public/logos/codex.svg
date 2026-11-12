@@ -1,0 +1,9 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- OpenAI Codex - code brackets in a square -->
+  <rect x="3" y="3" width="18" height="18" rx="3" stroke="#06B6D4" stroke-width="2" fill="none"/>
+  <path d="M9 9L7 12L9 15M15 9L17 12L15 15" 
+        stroke="#06B6D4" 
+        stroke-width="2" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+</svg>

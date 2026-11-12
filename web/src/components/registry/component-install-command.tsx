@@ -9,6 +9,7 @@ import { copyToClipboard } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { PickerSelect } from "@/components/ui/picker-select";
 import { useHarnesses } from "@/hooks/use-harnesses";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 import type { ComponentVersionSummary } from "@/lib/types";
 
 interface ComponentInstallCommandProps {
@@ -101,7 +102,11 @@ export function ComponentInstallCommand({
             ariaLabel="Harness"
             className="w-full min-w-0 sm:col-span-2"
             inputClassName="h-7 border-border text-xs"
-            options={supportedHarnesses.map((entry) => ({ value: entry.name, label: entry.display_name }))}
+            options={supportedHarnesses.map((entry) => ({
+              value: entry.name,
+              label: entry.display_name,
+              icon: <HarnessLogo harness={entry.name} className="h-3.5 w-3.5" />,
+            }))}
           />
         </div>
       </div>

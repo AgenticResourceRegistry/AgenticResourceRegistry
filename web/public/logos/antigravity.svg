@@ -1,0 +1,18 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Antigravity - rocket/upward motion -->
+  <path d="M12 2L8 10H16L12 2Z" 
+        fill="#EF4444" 
+        stroke="#DC2626" 
+        stroke-width="1.5" 
+        stroke-linejoin="round"/>
+  <path d="M8 10L6 14H10M16 10L18 14H14" 
+        stroke="#DC2626" 
+        stroke-width="1.5" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
+  <path d="M10 14V18M14 14V18" 
+        stroke="#DC2626" 
+        stroke-width="2" 
+        stroke-linecap="round"/>
+  <ellipse cx="12" cy="20" rx="4" ry="1.5" fill="#EF4444" opacity="0.3"/>
+</svg>

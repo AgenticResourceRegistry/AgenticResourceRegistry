@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useId, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,10 @@ export interface PickerSelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  /** Optional decorative icon shown before the label in options and in the
+   * closed trigger. Harness dropdowns pass a `HarnessLogo`; generic consumers
+   * omit it and render exactly as before. */
+  icon?: ReactNode;
 }
 
 interface PickerSelectProps {
@@ -94,6 +99,11 @@ export function PickerSelect({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
         <div className={cn("relative", className)}>
+          {selected?.icon && (
+            <span className="pointer-events-none absolute left-2 top-1/2 z-10 -translate-y-1/2 text-muted-foreground" aria-hidden="true">
+              {selected.icon}
+            </span>
+          )}
           <Input
             id={inputId}
             value={open ? query : selected?.label ?? ""}
@@ -131,7 +141,7 @@ export function PickerSelect({
             aria-activedescendant={open && activeIndex >= 0 ? `${listboxId}-${activeIndex}` : undefined}
             aria-label={ariaLabel ?? (id ? undefined : placeholder)}
             disabled={disabled}
-            className={cn("pr-9", inputClassName)}
+            className={cn("pr-9", selected?.icon && "pl-7", inputClassName)}
           />
           <button
             type="button"
@@ -175,6 +185,11 @@ export function PickerSelect({
               )}
             >
               <Check className={cn("h-3.5 w-3.5", value === option.value ? "opacity-100" : "opacity-0")} />
+              {option.icon && (
+                <span className="shrink-0 text-muted-foreground" aria-hidden="true">
+                  {option.icon}
+                </span>
+              )}
               <span className="truncate">{option.label}</span>
             </button>
           ))

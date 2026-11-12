@@ -1,0 +1,16 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Goose - simplified bird silhouette -->
+  <path d="M8 8C8 6 9 4 11 4C12 4 13 4.5 13 6L13 8" 
+        stroke="#F59E0B" 
+        stroke-width="2" 
+        stroke-linecap="round"/>
+  <ellipse cx="12" cy="13" rx="5" ry="6" 
+           stroke="#F59E0B" 
+           stroke-width="2" 
+           fill="none"/>
+  <circle cx="10" cy="11" r="1" fill="#F59E0B"/>
+  <path d="M12 19V22M9 22H15" 
+        stroke="#F59E0B" 
+        stroke-width="2" 
+        stroke-linecap="round"/>
+</svg>

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PickerSelect } from "@/components/ui/picker-select";
+import { HarnessLogo } from "@/components/registry/harness-logo";
 import { Switch } from "@/components/ui/switch";
 import { admin } from "@/lib/api";
 import type { AdminSetting, AdminSettingDef, AdminSettingSection } from "@/lib/types";
@@ -181,12 +182,13 @@ export function SchemaSection({
 										aria-pressed={on}
 										onClick={() => flip(harness.name)}
 										className={cn(
-											"inline-flex min-h-7 items-center rounded-full border px-2.5 text-xs transition-colors",
+											"inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors",
 											on
 												? "border-primary bg-primary text-primary-foreground"
 												: "border-input bg-background text-foreground/75 hover:border-foreground/30 hover:text-foreground",
 										)}
 									>
+										<HarnessLogo harness={harness.name} className="h-3.5 w-3.5" />
 										{harness.display_name}
 									</button>
 								);
@@ -218,7 +220,11 @@ export function SchemaSection({
 						className="flex-1"
 						options={[
 							{ value: "__none__", label: "Use first allowed harness" },
-							...harnesses.map((harness) => ({ value: harness.name, label: harness.display_name })),
+							...harnesses.map((harness) => ({
+								value: harness.name,
+								label: harness.display_name,
+								icon: <HarnessLogo harness={harness.name} className="h-3.5 w-3.5" />,
+							})),
 						]}
 					/>
 				</SettingRow>
