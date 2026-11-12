@@ -138,12 +138,13 @@ async def test_store_upgrades_existing_scoped_codex_facet(monkeypatch):
     assert row.facet_version == 2 and row.facets == {"new": True}
 
 
-def test_only_codex_facets_are_invalidated():
+def test_codex_upgrade_preserves_existing_kiro_facet_version():
     """A Codex transcript fix must not discard cached work for unchanged harnesses."""
     from services.insights.facets import facet_version
 
     assert facet_version("codex") == 2
-    assert facet_version("kiro") == facet_version("pi") == 1
+    assert facet_version("kiro") == 2  # Canonical #2032 is already on main.
+    assert facet_version("pi") == 1
 
 
 @pytest.mark.asyncio
