@@ -114,11 +114,11 @@ class UsagePingContact(BaseModel):
     team_size: TeamSize = ""
     consented_at: datetime
 
-    @field_validator("name", "role")
+    @field_validator("name", "role", mode="before")
     @classmethod
-    def strip_text(cls, value: str) -> str:
-        """Trim surrounding whitespace from free-text fields."""
-        return value.strip()
+    def strip_text(cls, value: object) -> object:
+        """Trim free-text fields before the length checks, so a blank name is rejected."""
+        return value.strip() if isinstance(value, str) else value
 
 
 class UsagePingPayload(BaseModel):
@@ -147,11 +147,11 @@ class UsagePingContactUpdate(BaseModel):
     team_size: TeamSize = ""
     consent: Literal[True]
 
-    @field_validator("name", "role")
+    @field_validator("name", "role", mode="before")
     @classmethod
-    def strip_text(cls, value: str) -> str:
-        """Trim surrounding whitespace from free-text fields."""
-        return value.strip()
+    def strip_text(cls, value: object) -> object:
+        """Trim free-text fields before the length checks, so a blank name is rejected."""
+        return value.strip() if isinstance(value, str) else value
 
 
 class UsagePingContactDefer(BaseModel):
