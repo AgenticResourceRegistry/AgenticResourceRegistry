@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Faeka Ansari <97490463+fykaa@users.noreply.github.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Self-update mechanism for the Observal standalone binary.
@@ -101,7 +102,7 @@ def check_for_update(*, quiet: bool = False) -> str | None:
         if not quiet:
             console.print(
                 f"[yellow]Update available:[/yellow] {current} → [bold]{latest}[/bold]. "
-                f"Run: [cyan]observal self update[/cyan]"
+                f"Run: [cyan]observal self upgrade[/cyan]"
             )
         return latest
 

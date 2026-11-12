@@ -8,6 +8,7 @@
 <!-- SPDX-FileCopyrightText: 2026 amogh-dongre <amoghdongre16@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Meghana Inti <meghanainti149@gmail.com> -->
+<!-- SPDX-FileCopyrightText: 2026 Faeka Ansari <97490463+fykaa@users.noreply.github.com> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -65,6 +66,7 @@ All notable changes to this project will be documented in this file.
 - correct docs still describing the removed password reset code flow and CLI commands that do not exist
 - point the rate-limit and token-expiry help links at sections that still exist
 - attribute Pi sessions to a project-scope pulled agent only inside that project, instead of tagging every Pi session on the machine with it
+- point the update notice from `observal server start --background` at `observal self upgrade` instead of the nonexistent `observal self update`
 
 ### Documentation
 
