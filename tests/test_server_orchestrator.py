@@ -1237,9 +1237,17 @@ class TestFullLifecycle:
         good_handle = MagicMock()
         bad_handle = MagicMock()
         bad_handle.close.side_effect = OSError("already closed")
-        orch._log_handles = [good_handle, bad_handle]
+        orch._log_handles = [bad_handle, good_handle]
+
+        logger = MagicMock()
+        monkeypatch.setattr(orchestrator_module, "optic", logger)
 
         orch.stop_all()
+
+        logger.debug.assert_called_once_with(
+            "Failed to close log handle: error={}",
+            bad_handle.close.side_effect,
+        )
 
         assert events == ["api", "redis", "clickhouse", "postgres"]
         good_handle.close.assert_called_once_with()
