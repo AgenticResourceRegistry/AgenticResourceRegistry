@@ -146,7 +146,11 @@ def _report_host(value: str | None) -> str | None:
     if not value:
         return None
     raw = value.split(",")[0].strip().lower()
-    host = urlparse(raw if "://" in raw else f"//{raw}").hostname or ""
+    try:
+        host = urlparse(raw if "://" in raw else f"//{raw}").hostname or ""
+    except ValueError:
+        # A malformed header (for example "http://[") must not fail the token refresh it rides on.
+        return None
     host = host.rstrip(".")
     if not host:
         return None

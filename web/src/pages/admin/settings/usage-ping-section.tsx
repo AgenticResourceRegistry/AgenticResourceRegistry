@@ -116,8 +116,9 @@ export function UsagePingSection({
       const trimmed = companyName.trim();
       await admin.updateSetting("usage_ping.company_name", { value: trimmed });
       await admin.updateSetting("usage_ping.frequency", { value: frequency });
-      await admin.updateSetting("usage_ping.enabled", { value: enabled ? "true" : "false" });
+      // Store the email choice before enabling reporting, so a failed save never sends with the old choice.
       await admin.updateSetting("usage_ping.include_admin_emails", { value: includeEmails ? "true" : "false" });
+      await admin.updateSetting("usage_ping.enabled", { value: enabled ? "true" : "false" });
       // Show what was stored, so the card isn't left looking unsaved after a trim.
       setCompanyName(trimmed);
       await refetch();
