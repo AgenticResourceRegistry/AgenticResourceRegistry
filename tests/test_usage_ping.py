@@ -294,6 +294,8 @@ async def test_unconfigured_installation_reports_fallback_identity(monkeypatch: 
         ("52.66.239.4", "public-ip"),
         ("[::1]:80", "localhost"),
         ("evil host<script>", None),
+        ("http://[", None),
+        ("[", None),
         ("", None),
         (None, None),
     ],
@@ -310,6 +312,20 @@ def test_request_access_host_prefers_browser_origin():
     assert usage_ping.request_access_host(request) == "registry.acme.com"
     request.headers = {"host": "localhost:8000"}
     assert usage_ping.request_access_host(request) == "localhost"
+
+
+@pytest.mark.asyncio
+async def test_malformed_origin_falls_through_and_never_fails_the_request(monkeypatch: pytest.MonkeyPatch):
+    request = MagicMock()
+    request.headers = {"origin": "http://[", "host": "registry.acme.com"}
+    assert usage_ping.request_access_host(request) == "registry.acme.com"
+
+    # Token refresh awaits this after the old refresh token is spent, so it must not raise.
+    redis = MagicMock()
+    monkeypatch.setattr("services.redis.get_redis", lambda: redis)
+    request.headers = {"origin": "http://["}
+    await usage_ping.record_access_host(request)
+    redis.pipeline.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -450,6 +466,61 @@ def test_contact_update_requires_explicit_consent():
         UsagePingContactUpdate(name="Ada", email="ada@acme.io", consent=False)
     with pytest.raises(ValueError):
         UsagePingContactUpdate(name="Ada", email="not-an-email", consent=True)
+
+
+@pytest.mark.asyncio
+async def test_payload_preview_is_limited_to_super_admins(monkeypatch: pytest.MonkeyPatch):
+    # The preview carries the shared contact, which GET /usage-ping/contact keeps to super admins.
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+
+    import api.deps as deps_module
+    from api.deps import get_current_user, get_db
+    from api.routes.admin import usage_ping as routes
+    from models.user import UserRole
+    from schemas.usage_ping import UsagePingStatus
+
+    status = UsagePingStatus(
+        enabled=True,
+        configured=True,
+        frequency="every_6_hours",
+        collector_url="https://usage.example.test",
+        installation_id=None,
+        last_attempt_at=None,
+        last_success_at=None,
+        last_error=None,
+        next_scheduled_at=datetime(2026, 11, 12, tzinfo=UTC),
+    )
+    monkeypatch.setattr(routes, "usage_ping_status", AsyncMock(return_value=status))
+    monkeypatch.setattr(routes, "build_usage_ping", AsyncMock(return_value=sample_payload()))
+    monkeypatch.setattr(deps_module, "emit_security_event", AsyncMock())
+
+    app = FastAPI()
+    app.include_router(routes.router)
+
+    async def db():
+        yield MagicMock()
+
+    app.dependency_overrides[get_db] = db
+    codes = {}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for role in (UserRole.admin, UserRole.super_admin):
+            app.dependency_overrides[get_current_user] = lambda role=role: SimpleNamespace(
+                id=uuid.uuid4(), email="admin@example.test", role=role
+            )
+            codes[role] = (await client.get("/api/v1/admin/usage-ping/preview")).status_code
+
+    assert codes == {UserRole.admin: 403, UserRole.super_admin: 200}
+
+
+@pytest.mark.parametrize("name", ["", " ", "\t\n"])
+def test_contact_update_rejects_a_blank_name(name):
+    # A whitespace-only name used to pass validation and then fail with a 500 in save_contact.
+    with pytest.raises(ValueError):
+        UsagePingContactUpdate(name=name, email="ada@acme.io", consent=True)
+    update = UsagePingContactUpdate(name="  Ada  ", role=" Lead ", email="ada@acme.io", consent=True)
+    assert (update.name, update.role) == ("Ada", "Lead")
 
 
 @pytest.mark.asyncio
