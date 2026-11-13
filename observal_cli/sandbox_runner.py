@@ -154,7 +154,7 @@ def _docker_run(
         if container:
             try:
                 container.remove(force=True)
-            except docker.errors.DockerException as exc:
+            except Exception as exc:
                 optic.warning("Failed to remove container: error={}", exc)
 
 

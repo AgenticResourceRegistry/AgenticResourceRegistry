@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Chirag Jangir <chiragjangir2404@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Test container cleanup error logging in sandbox runner."""
@@ -16,7 +16,6 @@ from observal_cli.sandbox_runner import _docker_run
 
 class MockDockerError(Exception):
     """Mock DockerException deriving from Exception for testing."""
-    pass
 
 
 @pytest.fixture
@@ -46,6 +45,31 @@ def test_docker_run_cleanup_failure_logged_and_exit_code_preserved(mock_docker_m
     """Assert failing container.remove logs a warning and preserves run exit code."""
     client, container = mock_docker_module
     remove_exc = MockDockerError("daemon connection lost")
+    container.remove.side_effect = remove_exc
+
+    monkeypatch.setattr("observal_cli.sandbox_runner._send_span", MagicMock())
+
+    with patch("observal_cli.sandbox_runner.optic.warning") as mock_warning:
+        with pytest.raises(SystemExit) as exit_info:
+            _docker_run(
+                sandbox_id="sb-test",
+                image="alpine:latest",
+                command="echo hello",
+                timeout=10,
+                env={},
+                network_policy="none",
+                resource_limits={},
+            )
+
+        assert exit_info.value.code == 0
+        container.remove.assert_called_once_with(force=True)
+        mock_warning.assert_called_once_with("Failed to remove container: error={}", remove_exc)
+
+
+def test_docker_run_cleanup_request_exception_logged_and_exit_code_preserved(mock_docker_module, monkeypatch):
+    """Assert non-Docker exceptions like connection drops during remove are logged and preserve exit code."""
+    client, container = mock_docker_module
+    remove_exc = ConnectionError("Connection dropped by docker daemon")
     container.remove.side_effect = remove_exc
 
     monkeypatch.setattr("observal_cli.sandbox_runner._send_span", MagicMock())
