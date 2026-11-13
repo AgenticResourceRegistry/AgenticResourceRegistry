@@ -990,6 +990,98 @@ def _merge_yaml_config(path: Path, content: dict, root_key: str, *, existed: boo
     return "merged" if existed else "created"
 
 
+# ``command`` may be a string or a list of argv-style strings. Normalise both so
+# two spellings of the same handler compare equal across pulls.
+def _hook_entry_key(entry: object) -> str:
+    if not isinstance(entry, dict):
+        return json.dumps(entry, sort_keys=True, default=str)
+    command = entry.get("command", "")
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    normalised = {key: value for key, value in entry.items() if key != "command"}
+    normalised["command"] = command
+    return json.dumps(normalised, sort_keys=True, default=str)
+
+
+_OBSERVAL_HOOK_MODULES = (
+    "observal_cli.hooks.session_push",
+    "observal_cli.hooks.kiro_session_push",
+    "observal_cli.hooks.cursor_session_push",
+    "observal_cli.hooks.antigravity_session_push",
+    "observal_cli.hooks.kiro_hook",
+    "observal_cli.hooks.kiro_stop_hook",
+    "observal_cli.hooks.copilot_cli_hook",
+    "observal_cli.hooks.copilot_cli_stop_hook",
+    "observal_cli.hooks.buffer_event",
+    "observal_cli.hooks.flush_buffer",
+)
+_OBSERVAL_HOOK_SCRIPTS = (
+    "observal-hook",
+    "observal-stop-hook",
+)
+_OBSERVAL_HOOK_ENDPOINTS = (
+    "/api/v1/telemetry/hooks",
+    "/api/v1/otel/hooks",
+)
+
+
+def _is_observal_entry(entry: object) -> bool:
+    """Whether *entry* is an Observal-managed hook handler (pull ownership test).
+
+    This is deliberately narrower than
+    :func:`observal_cli.shared.utils.is_observal_hook_entry`, whose last-resort
+    ``"observal_cli"`` marker matches any command containing that substring --
+    including a user's own ``python3 ~/src/observal_cli/guard.py --deny``.  A
+    pull must never delete such a hook, so ownership is decided by a positive
+    match on a known instrumented module, script name or telemetry endpoint.
+    """
+    if not isinstance(entry, dict):
+        return False
+    command = entry.get("command", "")
+    if isinstance(command, (list, tuple)):
+        command = " ".join(str(part) for part in command)
+    command = str(command)
+    url = str(entry.get("url", ""))
+    if any(mod in command or mod in url for mod in _OBSERVAL_HOOK_MODULES):
+        return True
+    if any(endpoint in command or endpoint in url for endpoint in _OBSERVAL_HOOK_ENDPOINTS):
+        return True
+    return any(script in command for script in _OBSERVAL_HOOK_SCRIPTS)
+
+
+def _reconcile_hook_event_lists(section: dict, incoming: dict) -> None:
+    """Merge incoming hook event lists into *section* without losing user hooks.
+
+    Cursor's ``hooks.json`` maps an event name to a list of handlers. A plain
+    ``dict.update`` replaces those lists wholesale, so a pull would drop a
+    user-owned ``preToolUse`` deny hook and re-add Observal entries every time.
+
+    For every event that is a list on both sides the result is:
+
+    * every existing entry that is not Observal-managed, in order;
+    * then one copy of each incoming entry, skipped when an equal entry is
+      already present -- so a repeated pull is idempotent instead of stacking
+      a second copy of every user-submitted hook component.
+
+    Incoming entries are compared by ``_hook_entry_key`` so a handler with the
+    same command but a different key order is not duplicated.
+    """
+    for event, incoming_entries in incoming.items():
+        current = section.get(event)
+        if not isinstance(incoming_entries, list) or not isinstance(current, list):
+            section[event] = incoming_entries
+            continue
+        merged = [entry for entry in current if not _is_observal_entry(entry)]
+        seen = {_hook_entry_key(entry) for entry in merged}
+        for entry in incoming_entries:
+            key = _hook_entry_key(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(entry)
+        section[event] = merged
+
+
 def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> str:
     """Write content to a file path, creating parent dirs as needed.
 
@@ -1037,7 +1129,12 @@ def _write_file(path: Path, content: str | dict, *, merge_mcp: bool = False) -> 
                 section = existing.setdefault(root_key, {})
                 if not isinstance(section, dict) or not isinstance(incoming_servers, dict):
                     raise ValueError(f"cannot merge non-object JSON section {root_key}: {path}")
-                section.update(incoming_servers)
+                if root_key == "hooks" and any(isinstance(v, list) for v in incoming_servers.values()):
+                    # Hook configs map event names to handler lists; a plain
+                    # update would drop user hooks and duplicate ours.
+                    _reconcile_hook_event_lists(section, incoming_servers)
+                else:
+                    section.update(incoming_servers)
                 for key, value in content.items():
                     if key != root_key and not isinstance(value, dict):
                         existing[key] = value
