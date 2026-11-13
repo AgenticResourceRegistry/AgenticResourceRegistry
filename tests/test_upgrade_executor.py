@@ -9,6 +9,7 @@ import hashlib
 import signal
 import stat
 import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from packaging.version import InvalidVersion
 
 from observal_cli import upgrade_executor as executor
 from observal_cli.install_detector import InstallInfo, InstallMethod
+from observal_cli.shared import launcher
 
 LONG_OPTION = "-" * 2
 VERSION_OPTION = f"{LONG_OPTION}version"
@@ -107,7 +109,9 @@ def test_execute_selects_installer_then_verifies(
         if method == InstallMethod.PIP
         else ("2.4.1", "upgrade", spinner)
     )
-    installer_kwargs = {"interactive": True} if method == InstallMethod.BINARY else {}
+    installer_kwargs = {"interactive": True} if method == InstallMethod.BINARY else {"commit": None, "ceiling": None}
+    if method == InstallMethod.UV_TOOL:
+        installer_kwargs["in_place"] = False
     assert events == [
         ("install", installer_args, installer_kwargs),
         ("verify", (info, "2.4.1", "upgrade")),
@@ -197,7 +201,7 @@ def test_package_installers_build_exact_commands_and_progress(
         (
             "run",
             expected_command,
-            {"capture_output": True, "text": True, "timeout": 120},
+            {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace", "timeout": 120},
         ),
         ("spinner exit", expected_progress),
     ]
@@ -244,7 +248,8 @@ def test_package_installer_failure_tries_release_tag_then_fails_loudly(
 @pytest.mark.parametrize(
     ("installer_name", "failure"),
     [
-        ("_install_via_uv", FileNotFoundError("uv is missing")),
+        # A missing installer is named instead (test_auto_sync.test_an_installer_missing_from_path_is_named).
+        ("_install_via_uv", PermissionError("uv is not executable")),
         ("_install_via_pipx", subprocess.TimeoutExpired(["pipx", "install"], 120)),
         ("_install_via_pip", KeyboardInterrupt()),
     ],
@@ -884,7 +889,10 @@ def test_verify_install_uses_target_executable_and_accepts_expected_version(
         [str(path), VERSION_OPTION],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
+        env=launcher.script_env(),
     )
     assert messages == [expected_message]
 
@@ -938,7 +946,15 @@ def test_verify_install_translates_execution_errors_and_chains_cause(
 
     assert error.value.exit_code == 1
     assert error.value.__cause__ is failure
-    run.assert_called_once_with([str(path), VERSION_OPTION], capture_output=True, text=True, timeout=10)
+    run.assert_called_once_with(
+        [str(path), VERSION_OPTION],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
+        env=launcher.script_env(),
+    )
     assert messages == [
         f"[red]Upgrade verification failed:[/red] {failure}",
         f"[dim]Executable: {path}[/dim]",
@@ -1008,4 +1024,190 @@ def test_verify_install_rejects_wrong_version_with_path_guidance(
     assert messages == [
         f"[red]Downgrade verification failed:[/red] expected v2.4.1, but {path} reports v2.5.0.",
         "[dim]Check for multiple Observal installations on PATH.[/dim]",
+    ]
+
+
+# ── Installers run to completion ────────────────────────────────────────────
+# conftest routes installer runs through subprocess.run; these use the real function.
+_real_run_installer = executor.run_installer
+
+
+def _fake_installer(tmp_path: Path, seconds: float) -> tuple[list[str], Path]:
+    """An installer as uv and pip behave: it removes the installed CLI, works for ``seconds`` while printing
+    progress to stdout and stderr, then writes the new CLI. Stopped part-way, there is no CLI."""
+    cli = tmp_path / "observal"
+    cli.write_text("old")
+    code = (
+        "import pathlib, sys, time\n"
+        f"cli = pathlib.Path({str(cli)!r})\n"
+        "cli.unlink()\n"
+        f"end = time.monotonic() + {seconds}\n"
+        "while time.monotonic() < end:\n"
+        "    print('Resolved 30 packages', flush=True)\n"
+        "    print('Installing...', file=sys.stderr, flush=True)\n"
+        "    time.sleep(0.05)\n"
+        "cli.write_text('new')\n"
+    )
+    return [sys.executable, "-c", code], cli
+
+
+def _installer_parent(tmp_path: Path, installer: list[str], *, lock: bool = False) -> subprocess.Popen:
+    """A CLI-like parent in its own process group (as a terminal or harness starts one) running ``installer``.
+
+    Python ignores Ctrl+C when its parent shell started it with SIGINT ignored (a background job); a
+    terminal's foreground command has the default handler, which the parent restores.
+    """
+    import os
+
+    from observal_cli.shared import launcher
+
+    code = (
+        "import signal\n"
+        "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+        "from pathlib import Path\n"
+        "from observal_cli import upgrade_executor, upgrade_lock\n"
+        f"upgrade_lock.CONFIG_DIR = Path({str(tmp_path)!r})\n"
+        + ("upgrade_lock.acquire_lock('cli')\n" if lock else "")
+        + f"result = upgrade_executor.run_installer({installer!r}, timeout=60)\n"
+        "print('installer exit', result.returncode, flush=True)\n"
+    )
+    env = {**os.environ, "PYTHONPATH": launcher.package_root()}
+    return subprocess.Popen(
+        [sys.executable, "-c", code], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+    )
+
+
+def _wait_until_removed(path: Path, seconds: float = 30) -> None:
+    """Block until the fake installer has removed the CLI: it is now mid-install."""
+    import time
+
+    deadline = time.monotonic() + seconds
+    while path.exists():
+        assert time.monotonic() < deadline, "the installer never started"
+        time.sleep(0.02)
+
+
+def _wait_for(path: Path, content: str, seconds: float = 15) -> bool:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text() == content:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups and signals as a POSIX terminal sends them")
+def test_ctrl_c_waits_for_the_installer_instead_of_leaving_no_cli(tmp_path: Path) -> None:
+    """Live finding: `uv tool install --force` or `pip install` stopped part-way left no `observal` at all."""
+    import os
+    import time
+
+    installer, cli = _fake_installer(tmp_path, seconds=2)
+    parent = _installer_parent(tmp_path, installer)
+    _wait_until_removed(cli)
+    time.sleep(0.3)
+    os.killpg(parent.pid, signal.SIGINT)  # Ctrl+C reaches the terminal's foreground process group
+    stdout, stderr = parent.communicate(timeout=30)
+
+    assert cli.read_text() == "new", "the installer was interrupted"
+    assert b"installer exit 0" in stdout
+    assert b"Finishing the CLI install first" in stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups and signals as a POSIX harness sends them")
+def test_a_killed_command_does_not_take_the_installer_with_it(tmp_path: Path) -> None:
+    """An agent's tool timeout kills the command's process group; the install still completes.
+
+    Second review: with pipes, the installer's next progress line after the kill failed (no reader left),
+    and it died between removing the old CLI and writing the new one. Its output now goes to files.
+    """
+    import os
+    import time
+
+    installer, cli = _fake_installer(tmp_path, seconds=2)
+    parent = _installer_parent(tmp_path, installer)
+    _wait_until_removed(cli)
+    time.sleep(0.3)
+    os.killpg(parent.pid, signal.SIGKILL)
+    parent.communicate(timeout=30)
+
+    assert _wait_for(cli, "new"), "the installer died with the command"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the lock outlives its process through fork on POSIX")
+def test_an_installer_keeps_the_lock_when_its_command_dies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A retried command must not start a second install over one still running."""
+    import os
+    import time
+
+    from observal_cli import upgrade_lock
+
+    installer, cli = _fake_installer(tmp_path, seconds=3)
+    parent = _installer_parent(tmp_path, installer, lock=True)
+    _wait_until_removed(cli)
+    time.sleep(0.3)
+    os.killpg(parent.pid, signal.SIGKILL)
+    parent.wait(timeout=30)
+
+    monkeypatch.setattr(upgrade_lock, "CONFIG_DIR", tmp_path)
+    with pytest.raises(upgrade_lock.UpgradeLockError):
+        upgrade_lock.acquire_lock("cli")  # the orphaned installer still holds it
+    assert _wait_for(cli, "new")
+    time.sleep(0.3)
+    upgrade_lock.release_lock(upgrade_lock.acquire_lock("cli"))  # released once it finished
+
+
+def test_installer_output_and_status_are_returned(tmp_path: Path) -> None:
+    result = _real_run_installer(
+        [sys.executable, "-c", "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"], timeout=30
+    )
+    assert (result.returncode, result.stdout.strip(), result.stderr.strip()) == (3, "out", "err")
+
+
+def test_an_installer_past_its_timeout_is_left_to_finish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Second review: the timeout killed the installer, which may already have removed the CLI."""
+    from observal_cli import upgrade_lock
+
+    monkeypatch.setattr(upgrade_lock, "CONFIG_DIR", tmp_path)
+    installer, cli = _fake_installer(tmp_path, seconds=2)
+    lock = upgrade_lock.acquire_lock("cli")
+    try:
+        with pytest.raises(executor.InstallerStillRunning) as running:
+            _real_run_installer(installer, timeout=0.5)
+    finally:
+        upgrade_lock.release_lock(lock)
+
+    assert running.value.pid > 0
+    if sys.platform != "win32":
+        # Releasing a handed-off lock only closed this process's handle; the installer still holds it.
+        with pytest.raises(upgrade_lock.UpgradeLockError):
+            upgrade_lock.acquire_lock("cli")
+    assert _wait_for(cli, "new"), "the installer was stopped"
+    import time
+
+    time.sleep(0.3)
+    upgrade_lock.release_lock(upgrade_lock.acquire_lock("cli"))
+
+
+def test_an_install_still_running_is_reported_and_not_retried(
+    messages: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second source must not be installed over one still being written."""
+    calls = []
+
+    def still_running(argv, **_kwargs):
+        calls.append(argv)
+        raise executor.InstallerStillRunning(argv, 4242, 120)
+
+    monkeypatch.setattr(executor, "run_installer", still_running)
+
+    with pytest.raises(typer.Exit):
+        executor._install_via_uv("2.4.1", "upgrade", RecordingSpinner())
+
+    assert len(calls) == 1
+    assert messages == [
+        "[red]The install of v2.4.1 is still running in the background (PID 4242) after 120 s. "
+        "Run the command again once it finishes.[/red]"
     ]

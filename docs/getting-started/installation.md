@@ -103,7 +103,7 @@ Use a checkout matching your server. A development server may not match the late
 | Command not found after installation | Open a new terminal. Check that the install directory is on `PATH`. |
 | Cannot write to `/usr/local/bin` | Choose a writable directory with the Unix installer's `--bin-dir` option, then add it to `PATH`. |
 | No binary for your platform | Use the Python installation method rather than assuming every OS/architecture has a release binary. |
-| Login reports a version mismatch | Use the exact matching version requested by the server; a newer CLI is not necessarily compatible. |
+| Login reports a version mismatch | The CLI normally [syncs itself to the server's version](/cli/self#automatic-sync-with-the-server) at login. If it still reports a mismatch, the error says why the sync did not complete; run the command it prints. A newer CLI is not necessarily compatible: the server needs its exact version. |
 
 ## Upgrade
 

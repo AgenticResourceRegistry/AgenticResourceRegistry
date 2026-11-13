@@ -208,7 +208,38 @@ observal self downgrade --version 2.5.0 --force --output json
 observal self rollback --force --output json
 ```
 
-`-dev` versions are not on PyPI; `self upgrade --version X.Y.Z-dev.N` builds them from `git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main`. Without `--version`, a CLI logged in to a server that runs a `-dev` build targets that build instead of the latest release, because no release would pass the version gate. If the server cannot be reached, upgrade falls back to GitHub releases and says so. The 426 error and `observal auth login` print the exact command. If it fails, as a last resort install from source: `uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main` (dev) or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
+### Automatic sync with the server
+
+The server accepts only a CLI on its own exact version. The CLI keeps itself there without being asked:
+
+- **When:** at `observal auth login` (before credentials), and on the first request of any later command that finds a mismatch, for example after the server was redeployed. `observal self ...` and `observal server ...` commands are exempt, so a manual version change or a local server upgrade is never fought.
+- **What:** it installs the server's version over the running installation with the tool that owns it (uv, pipx, pip, or the standalone binary), then re-runs the command, unless the command already sent a request to the server or read its piped input: then it fails with `version_mismatch` after syncing, and you check what the command already changed before running it again. An editable or source install is replaced like any other. There is no prompt and no setting to turn it off.
+- **Other copies:** every other `observal` on PATH is brought to the same version with its own installer. A copy no installer owns (a system package, an unknown binary) is named on stderr; remove it or update it with whatever installed it.
+- **Development servers:** `X.Y.Z-dev.N` is not on PyPI. The CLI builds the commit the server reports as `build_commit` in `GET /api/v1/config/version`. For a server that reports none, it finds the newest commit on `main` that still declares that version, because `main` itself may already be on the next version. Only commits on `main` or a `release/*` branch are ever built, never an open pull request or a fork; if none declares the version, nothing is installed and the error says so.
+- **Downgrades:** dependencies are capped at the versions the CLI already runs with, because older releases can break on newer dependency releases. After any install the CLI loads a command from the new installation and reports the sync as failed if it cannot start.
+- **Windows with uv:** the running `observal.exe` cannot be replaced, so the package is updated inside uv's tool environment and the launcher is kept. `observal --version` and `uv tool list` show the new version.
+- **Once per command:** if the CLI still does not match after one sync, the command fails with `version_mismatch` (exit code 10) instead of looping.
+- **Record:** `~/.observal/last_sync.json` holds the version that was replaced, the commit the server reported (`server_commit`), and what was actually installed (`installed_from`). They differ when the reported commit was unpublished and another published commit was built.
+
+When a `version_mismatch` error does appear, its message says why the sync did not complete. Typical causes and fixes:
+
+| Cause in the error | Fix |
+| --- | --- |
+| Managed by apt, dnf or brew | Update with that package manager, or install with `uv tool install observal-cli==<server version>` and remove the packaged copy |
+| Development build has no standalone binary | Install `<build_commit>` only if it is on `main` or a `release/*` branch and declares the server's version; otherwise ask the server's administrator. Then `uv tool install --force "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@<build_commit>"` |
+| Needs git (a development build is built from source) | Install git with the command the error names (`winget install --id Git.Git -e`, `xcode-select --install`, or the distribution's package manager), open a new terminal, and rerun the original command; the CLI syncs itself. Do not run `uv tool install git+...` instead: it needs git too |
+| The installer failed (network, permissions) | Fix the cause, then `observal self upgrade --version <server version> --force --output json` when the server is newer than the CLI, or `observal self downgrade --version <server version> --force --output json` when it is older |
+| Installed but does not start | A dependency is newer than that CLI version supports. Reinstall with the dependency capped, for example `uv tool install --force "<same source>" --with "typer<0.29"`, then retry |
+| No published commit declares the version | The server runs a build that was never merged, or `git` or github.com is unavailable. Do not install a pull-request or fork commit to match it; ask the server's administrator |
+| Still reports the old version after installing | Another copy is first on PATH: `which -a observal` (`where observal` on Windows), remove the stale one |
+| Synced, but the command was not re-run because it had already read its standard input or sent a request | Check what the command already did (a request may have reached the server), then run it again with the same input, for example the same `observal api ... < body.json` |
+| The install is still running in the background | Wait for that process to finish (the error names its PID), then run the command again. Do not start another install meanwhile |
+| The sync says the version predates automatic sync | Nothing now. After that server's next upgrade, run `observal self upgrade --version <server version> --force` once (`self downgrade` if the server moved to an older version) |
+| The sync was skipped in a hook, MCP server or background worker (a failed delegated task, an observal-agents tool error) | Run any `observal` command, such as `observal auth whoami`, to sync the CLI, then retry; restart the harness so its MCP servers start on the new version |
+| Ctrl+C during a sync says it is finishing the install | Let it finish. Stopping an install part-way would leave no working CLI |
+| Another version change did not finish in time | Another `observal` process is installing a version. Wait for it, then run the command again. The lock is released when that process exits, even if it crashes, so there is no lock file to delete |
+
+`self upgrade` and `self downgrade` accept `-dev` versions and locate the right commit the same way. Without `--version`, a CLI logged in to a server that runs a `-dev` build targets that build instead of the latest release. If the server cannot be reached, upgrade falls back to GitHub releases and says so. As a last resort install from source: `uv tool install --force git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@<build_commit>` for a development build, only if that commit is on `main` or a `release/*` branch (otherwise ask the server's administrator; `@main` only if the server reports no commit and `main` is still on that version), or `@v<version>` (release tag), then confirm `observal --version` equals the server version.
 
 Standalone binary changes require a published checksum because JSON mode does not accept unsigned downloads interactively. Verify installed version after mutation.
 

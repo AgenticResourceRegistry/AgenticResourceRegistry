@@ -267,6 +267,8 @@ def _should_require_cli_version_header(request: Request) -> bool:
 def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONResponse:
     from packaging.version import InvalidVersion, Version
 
+    from version import get_build_commit
+
     # Determine direction: if CLI is ahead, suggest downgrade; otherwise upgrade
     direction = "upgrade"
     if cli_ver_str:
@@ -281,9 +283,11 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
     except InvalidVersion:
         unpublished = False
     if unpublished:
-        # Development builds are not on PyPI; they are built from main.
+        # Development builds are not on PyPI; they are built from source. `main` moves on
+        # after a deploy, so name this server's own commit whenever the build recorded it.
         install_command = (
-            'uv tool install --force "git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@main"'
+            "uv tool install --force "
+            f'"git+https://github.com/AgenticResourceRegistry/AgenticResourceRegistry@{get_build_commit() or "main"}"'
         )
     else:
         install_command = f"observal self {direction} --version {server_ver}"
@@ -296,6 +300,7 @@ def _cli_version_response(server_ver: str, cli_ver_str: str | None) -> JSONRespo
             "detail": f"Observal CLI {shown_cli_version} cannot connect to server {server_ver}. {guidance}",
             "server_version": server_ver,
             "cli_version": cli_ver_str,
+            "build_commit": get_build_commit(),
             "install_command": install_command,
         },
         headers={

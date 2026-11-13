@@ -206,9 +206,12 @@ fi
 section "10. CONCURRENT LOCK TEST"
 # ═══════════════════════════════════════════════════════════
 
-echo "Creating fake lock to simulate concurrent upgrade..."
-mkdir -p ~/.observal
-echo '{"pid": '$$', "timestamp": '$(date +%s)'}' >~/.observal/.cli-upgrade.lock
+echo "Holding the CLI upgrade lock in another process to simulate a concurrent upgrade..."
+# The lock is an OS lock held by a live process; the file's contents do not lock anything.
+OBSERVAL_PY="$(dirname "$(readlink -f "$(command -v observal)")")/python"
+"$OBSERVAL_PY" -c "from observal_cli.upgrade_lock import acquire_lock; import time; acquire_lock('cli'); time.sleep(60)" &
+LOCK_HOLDER=$!
+sleep 2
 
 OUTPUT=$(observal self downgrade --version 0.6.0 --force 2>&1 || true)
 if echo "$OUTPUT" | grep -qi "another upgrade\|in progress"; then
@@ -218,8 +221,9 @@ else
     echo -e "${YELLOW}⚠ Lock test inconclusive${NC}"
 fi
 
-rm -f ~/.observal/.cli-upgrade.lock
-pass "Lock cleaned up"
+kill "$LOCK_HOLDER" 2>/dev/null || true
+wait "$LOCK_HOLDER" 2>/dev/null || true
+pass "Lock released (holder exited)"
 
 # ═══════════════════════════════════════════════════════════
 section "CLEANUP"

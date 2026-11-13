@@ -46,6 +46,11 @@ COPY --chown=appuser:appgroup docker/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && \
     /app/.venv/bin/python -m compileall -q -j0 -x '/\.venv/' /app
 
+# Reported by /api/v1/config/version so the CLI can build this exact source.
+# Declared last so a new commit does not invalidate the layers above.
+ARG OBSERVAL_BUILD_COMMIT=""
+ENV OBSERVAL_BUILD_COMMIT=$OBSERVAL_BUILD_COMMIT
+
 USER 1001:1001
 
 EXPOSE 8000

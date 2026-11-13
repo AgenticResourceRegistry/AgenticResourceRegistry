@@ -33,6 +33,45 @@ def _isolated_capability_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(capability_lock, "LOCK_PATH", tmp_path / "capability_lock.jsonl")
 
 
+AUTO_SYNC_DISABLED = "Automatic sync is disabled in tests."
+
+
+@pytest.fixture(autouse=True)
+def _no_cli_auto_sync(monkeypatch):
+    """Stop any test from reinstalling the CLI.
+
+    A CLI/server version mismatch makes the CLI install the server's version
+    over itself and re-run the command. Tests that reach a mismatch get the
+    "could not sync" outcome instead. tests/test_auto_sync.py exercises the real
+    functions, which it captures at import time, with the installer mocked.
+    """
+    from observal_cli import auto_sync
+
+    monkeypatch.setattr(auto_sync, "sync_to_server", lambda *_args, **_kwargs: AUTO_SYNC_DISABLED)
+    monkeypatch.setattr(auto_sync, "sync_other_installs", lambda *_args, **_kwargs: None)
+
+
+@pytest.fixture(autouse=True)
+def _installers_through_subprocess_run(monkeypatch):
+    """Tests fake package installers by patching ``subprocess.run``; route installer runs through it.
+
+    The real ``upgrade_executor.run_installer`` detaches the installer from this
+    process's signals with ``Popen``. tests/test_upgrade_executor.py exercises it
+    with real processes, through the reference it captures at import time.
+    """
+    import subprocess
+
+    from observal_cli import upgrade_executor
+
+    def run_installer(argv, *, timeout, env=None):
+        extra = {} if env is None else {"env": env}
+        return subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, **extra
+        )
+
+    monkeypatch.setattr(upgrade_executor, "run_installer", run_installer)
+
+
 @pytest.fixture
 def no_open_review(monkeypatch):
     """For route tests that mock the database: no review is open for a draft save to update.
