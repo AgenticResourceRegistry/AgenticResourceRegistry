@@ -423,6 +423,9 @@ def test_build_payload_attaches_matching_capabilities(monkeypatch, tmp_path):
         identifier="urn:air:x:skill:no",
     )
 
+    with capability_lock.default_lock_path().open("a", encoding="utf-8") as handle:
+        handle.write('{"ts":"invalid","kind":"skill"}\n')
+
     payload = sessions_base.build_payload(
         session_id="s-1",
         lines=["{}"],
@@ -556,6 +559,9 @@ def test_agent_init_from_capabilities_prefills_components(monkeypatch, tmp_path,
         component_id="bbbbbbbb-0000-4000-8000-000000000000",
         now=now - timedelta(days=3),
     )
+
+    with capability_lock.default_lock_path().open("a", encoding="utf-8") as handle:
+        handle.write('{"ts":"2026-01-01T00:00:00Z","kind":"skill","extra":[1]}\n')
 
     result = runner.invoke(
         agent.agent_app,
