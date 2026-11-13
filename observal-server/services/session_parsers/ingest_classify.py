@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 RAWx18 <rawx18.dev@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Per-harness JSONL line classifiers for the ingest pipeline.
@@ -1157,6 +1158,7 @@ def get_extra_rows(
     agent_id: str | None,
     agent_version: str | None,
     total_credits: float | None,
+    session_model: str | None = None,
 ) -> list[dict]:
     """Return any extra ClickHouse rows to insert after the main ingest loop.
 
@@ -1167,4 +1169,4 @@ def get_extra_rows(
 
     parser_id = HARNESS_REGISTRY.get(harness, {}).get("session_parser", "claude-code")
     handler = _EXTRA_ROWS_HANDLERS.get(parser_id, _no_extra_rows)
-    return handler(session_id, project_id, user_id, agent_id, agent_version, harness, total_credits)
+    return handler(session_id, project_id, user_id, agent_id, agent_version, harness, total_credits, session_model)

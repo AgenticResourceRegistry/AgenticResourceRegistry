@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """Kiro session file helpers.
@@ -22,6 +23,7 @@ so callers never need to know which surface produced the session.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 # Basename of the transcript the Kiro IDE writes inside each session directory.
@@ -31,18 +33,26 @@ _IDE_TRANSCRIPT_NAME = "messages.jsonl"
 _IDE_SESSION_NAME = "session.json"
 
 
+def kiro_home(home: Path | None = None) -> Path:
+    """Resolve CLI runtime storage; an explicit home keeps callers/tests isolated.
+
+    Observal auth and outbox still use the user's normal home. KIRO_HOME only
+    relocates Kiro resources, settings and transcripts for ambient CLI calls.
+    """
+    if home is not None:
+        return home / ".kiro"
+    override = os.environ.get("KIRO_HOME", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".kiro"
+
+
 def find_sessions_dir(home: Path | None = None) -> Path:
     """Return ~/.kiro/sessions/cli/ (the root of all Kiro CLI session JSONL files)."""
-    if home is None:
-        home = Path.home()
-    return home / ".kiro" / "sessions" / "cli"
+    return kiro_home(home) / "sessions" / "cli"
 
 
 def sessions_root(home: Path | None = None) -> Path:
     """Return ~/.kiro/sessions/, the parent of both the CLI and IDE layouts."""
-    if home is None:
-        home = Path.home()
-    return home / ".kiro" / "sessions"
+    return kiro_home(home) / "sessions"
 
 
 def is_ide_transcript(path: Path | None) -> bool:
@@ -79,9 +89,7 @@ def find_kiro_jsonl(session_id: str, home: Path | None = None) -> Path | None:
     """
     if not session_id:
         return None
-    if home is None:
-        home = Path.home()
-    path = home / ".kiro" / "sessions" / "cli" / f"{session_id}.jsonl"
+    path = find_sessions_dir(home) / f"{session_id}.jsonl"
     if path.exists():
         return path
     return find_kiro_ide_jsonl(session_id, home=home)
@@ -100,9 +108,18 @@ def _read_kiro_session(session_jsonl: Path | None) -> dict | None:
         return None
     try:
         session = json.loads(_companion_path(session_jsonl).read_text())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return None
     return session if isinstance(session, dict) else None
+
+
+def read_kiro_session_model(session_jsonl: Path | None) -> str | None:
+    """Read only the companion model identifier, never upload the session object."""
+    session = _read_kiro_session(session_jsonl)
+    value = session.get("modelId") if session else None
+    if not isinstance(value, str) or not value.strip() or len(value) > 512:
+        return None
+    return value.strip()
 
 
 def _iter_ide_records(transcript: Path) -> list[dict]:
@@ -167,10 +184,24 @@ def read_kiro_ide_session_agent(transcript: Path) -> str | None:
     - the agent profile's own hooks fire, and their ``hookId`` is prefixed with
       the agent name rather than a path to a standalone hooks file
 
-    Both are checked because ``session_start`` is not always present - a
-    transcript can begin mid-session - while the hooks fire on every turn. A
-    "vibe" session is ordinary Kiro and returns None.
+    CLI V3 also names the selected agent in ``session.json.agentMode`` before
+    these transcript records exist. Read only a matching, bounded companion.
+    Builtin/vibe chats and conflicting identity evidence remain unattributed.
     """
+    # CLI V3 uses the IDE layout but exposes its selected agent before the first
+    # transcript session_start (which may only be persisted at teardown).
+    companion_name: str | None = None
+    try:
+        if _companion_path(transcript).stat().st_size <= 1024 * 1024:
+            companion = _read_kiro_session(transcript)
+            if companion and companion.get("id") == transcript.parent.name:
+                value = companion.get("agentMode")
+                if isinstance(value, str) and value.strip():
+                    companion_name = value.strip()
+    except (OSError, RecursionError):
+        pass
+    if companion_name in {"vibe", "kiro_default", "kiro", "spec"}:
+        return None
     declared: str | None = None
     hook_name: str | None = None
     delegated = False
@@ -192,7 +223,9 @@ def read_kiro_ide_session_agent(transcript: Path) -> str | None:
                 name = hook_id.split("#", 1)[0].strip()
                 if name:
                     hook_name = name
-    return declared or (None if delegated else hook_name)
+    if companion_name and declared and companion_name != declared:
+        return None  # Conflicting native evidence cannot identify a registry agent safely.
+    return companion_name or declared or (None if delegated else hook_name)
 
 
 def is_ide_subexecution(path: Path) -> bool:
@@ -343,9 +376,7 @@ def read_kiro_credits(session_id: str, home: Path | None = None) -> float | None
     """
     if not session_id:
         return None
-    if home is None:
-        home = Path.home()
-    json_path = home / ".kiro" / "sessions" / "cli" / f"{session_id}.json"
+    json_path = find_sessions_dir(home) / f"{session_id}.json"
     if not json_path.exists():
         ide_transcript = find_kiro_ide_jsonl(session_id, home=home)
         return _read_ide_credits(ide_transcript) if ide_transcript else None

@@ -1,7 +1,9 @@
-<!-- SPDX-FileCopyrightText: 2026 Observal Contributors -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
-# Component Insights: #1779 acceptance and historical-evidence decision
+---
+# SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
+title: "Component insights acceptance record"
+---
 
 Local acceptance on #1779 head `2264248e` (17 October 2026), with the follow-up on commit `2d3d26d89`. **Automatic delivery was exercised for Claude Code only, not every harness.** The prior real Pi skill result in the PR handoff (two verified-present sessions, one confirmed load, 60 *project-wide* legacy-hash sessions excluded from presence) remains separate from this run.
 

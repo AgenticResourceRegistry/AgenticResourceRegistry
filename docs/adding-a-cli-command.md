@@ -1,5 +1,6 @@
 ---
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "Adding a CLI Command"
 ---
@@ -201,16 +202,16 @@ Mock external services and subprocesses. Do not require Docker for CLI unit test
 
 Before declaring the command complete:
 
-- [ ] Canonical path is registered in the correct group.
-- [ ] Root, group, and command help remain covered.
-- [ ] The command has one to three current examples.
-- [ ] Structured output supports shared `table` and `json` modes.
-- [ ] JSON output and JSON errors contain no Rich or progress noise.
-- [ ] Paginated JSON has `items`, `total`, `page`, and `page_size`.
-- [ ] Errors use shared categories, context, remediation, and request IDs.
-- [ ] Non-interactive execution has no hidden prompts.
-- [ ] Side effects are confirmation-safe and dry-run-safe where applicable.
-- [ ] CLI docs and bundled skills are updated.
-- [ ] Generated skill command references are synchronized.
-- [ ] Focused tests, `make lint`, and `make test` pass.
-- [ ] `observal_cli/tests` is run explicitly because `make test` does not include it.
+- Canonical path is registered in the correct group.
+- Root, group, and command help remain covered.
+- The command has one to three current examples.
+- Structured output supports shared `table` and `json` modes.
+- JSON output and JSON errors contain no Rich or progress noise.
+- Paginated JSON has `items`, `total`, `page`, and `page_size`.
+- Errors use shared categories, context, remediation, and request IDs.
+- Non-interactive execution has no hidden prompts.
+- Side effects are confirmation-safe and dry-run-safe where applicable.
+- CLI docs and bundled skills are updated.
+- Generated skill command references are synchronized.
+- Focused tests, `make lint`, and `make test` pass.
+- `observal_cli/tests` is run explicitly because `make test` does not include it.

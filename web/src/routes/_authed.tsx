@@ -8,6 +8,7 @@ import { RegistrySidebar } from "@/components/nav/registry-sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthGuard, OptionalAuthGuard } from "@/components/layouts/auth-guard";
 import { HelpProvider } from "@/components/wiki/help-context";
+import { StayInTouchPrompt } from "@/components/usage/stay-in-touch";
 import { useDeploymentConfig } from "@/hooks/use-deployment-config";
 import { isPublicRegistryPath } from "@/lib/public-registry";
 
@@ -17,6 +18,7 @@ function AppShell() {
       <SidebarProvider>
         <RegistrySidebar />
         <SidebarInset>
+          <StayInTouchPrompt />
           <Suspense fallback={<div className="flex h-screen w-full items-center justify-center" />}>
             <Outlet />
           </Suspense>

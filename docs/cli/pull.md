@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 tsitu0 <tomsitu0102@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal agent pull"
 ---
@@ -104,9 +105,15 @@ Without strict mode, pull installs and warns when:
 * a pinned component version is not approved;
 * the Agent version no longer matches the lock digest recorded in `observal.lock`.
 
-`--strict`, or `OBSERVAL_STRICT=1` for CI, turns each of these into a conflict (exit code 6) before any file is written. The flag wins over the environment variable, so `--no-strict` is the escape hatch in a strict pipeline. A server that predates component locks cannot check any of this, so a strict pull against it fails with version-mismatch exit code 10 instead of installing unchecked.
+`--strict`, or `OBSERVAL_STRICT=1` for CI, turns each of these into a conflict (exit code 6) before any file is written. The flag wins over the environment variable, so `--no-strict` changes those strict-only checks. It does not disable the always-on response-consistency check below. A server that predates component locks cannot check any of this, so a strict pull against it fails with version-mismatch exit code 10 instead of installing unchecked.
 
 JSON mode cannot prompt and requires `--no-prompt`. Missing required component values fail before config generation with `error.result.needs_input: true` and a list of names and component labels.
+
+### Component pin response conflicts
+
+If pull reports `Server component pin disagrees with the install lock.`, the selected component version in the response metadata differs from the version in the install lock. The CLI refuses this disagreement before writing generated files. The check runs outside the `--strict` condition: removing `--strict` or passing `--no-strict` will not bypass it.
+
+An older-prompt case is confirmed in the [known install-response limitation](/guides/version-components#known-install-response-limitation). Stop and report the selected agent release and conflicting version metadata to the operator for investigation. Do not share credentials or raw secret-bearing configuration. Do not erase the lock or silently adopt the listing's current component version to make installation succeed; a deliberately reviewed new consuming release does not repair the old response. Retry the intended release after a server correction is independently verified.
 
 ## Agent hooks in headless sessions
 
@@ -131,7 +138,7 @@ observal agent pull alice/reviewer --harness claude-code --hooks=frontmatter    
 
 Pull discovers required MCP environment variables and headers from the Agent's components. Interactive mode prompts for missing values. Non-interactive mode uses matching `--env` and `--header` assignments and stops before installation when any required value is missing. Optional values may remain unset.
 
-Values are sent only in the installation request and generated config. They are not included in JSON results, success messages, traces, or error details.
+Required values are used in the installation request and generated configuration. Values you supply with `--env` and `--header` are masked in the setup commands and in the JSON, errors, and logs that pull reports. A secret you paste anywhere else is not covered, so still inspect output before sharing it, and use benign synthetic values when you report a problem.
 
 Prefer environment expansion or secure shell input so secrets do not remain in shell history.
 
@@ -219,7 +226,7 @@ File statuses include `created`, `updated`, `merged`, `installed`, `cloned`, `wo
 
 When agent hooks are placed in, or removed from, `settings.json`, the result also carries `agent_hooks`: `placement`, `on_unknown`, `settings_file`, the `added`, `removed`, `kept` and `conflicts` groups, `changed`, each gated hook (`name`, `event`, `component_id`, `command`, `timeout`, `can_block`), and `gate_startup_ms` (measured in dry runs only).
 
-`agent.version` is the version that was installed and `agent.resolved_from` says why: `requested`, `upgrade`, `project-lock`, `installed`, or `latest`. `lock.status` is `locked`, `partial`, or `unlocked`; each component's `source` is `lock`, `version` (matched by its recorded version string), or `fallback-latest`. `lock.problems` lists what strict mode would refuse. `project_lock` is null for user-scope installs and dry runs. `reports_sessions` is true when written hook files contain Agentic Resource Registry session push commands, including hooks retained during a merge. These hooks can report prompts, tool calls, and tool output to the configured server when they run, whether or not `observal doctor patch` was run. It does not guarantee successful delivery. For Pi, it is also true when the Agentic Resource Registry Pi extension is installed, because the extension reports every Pi session. On a failed pull, check `error.result.reports_sessions` when available: a hook file may already be on disk and active even when this pull wrote no files and the Agent was not recorded as installed.
+`agent.version` is the version that was installed and `agent.resolved_from` says why: `requested`, `upgrade`, `project-lock`, `installed`, or `latest`. `lock.status` is `locked`, `partial`, or `unlocked`; each component's `source` is `lock`, `version` (matched by its recorded version string), or `fallback-latest`. `lock.problems` lists what strict mode would refuse. `project_lock` is null for user-scope installs and dry runs. `reports_sessions` is true when written hook files contain Agentic Resource Registry session push commands, including hooks retained during a merge. These hooks can report prompts, tool calls, and tool output to the configured server when they run, whether or not `observal doctor patch` was run. It does not guarantee successful delivery. For Pi, it is also true when the Agentic Resource Registry Pi extension is installed, because the extension can attempt session delivery. On a failed pull, check `error.result.reports_sessions` when available: a hook file may already be on disk and active even when this pull wrote no files and the Agent was not recorded as installed.
 
 Dry-run returns the same shape with `dry_run: true`, planned statuses, and `would_run` setup actions. In dry-run, `reports_sessions` predicts whether session hooks **would** be present after applying the plan; it does not mean the preview installed them. Dry-run does not write files, execute setup commands, update the lockfile or `observal.lock`, persist an active Agent, or emit a pull audit event.
 

@@ -1,6 +1,7 @@
 ---
 # SPDX-FileCopyrightText: 2026 Nithin-Bhargav-07 <gaddamnithinbhargav@gmail.com>
 # SPDX-FileCopyrightText: 2026 Kaushik <kaushikrjpm10@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "observal registry skill"
 ---
@@ -37,12 +38,15 @@ Git-backed skills require a Git URL. Registry-direct skills can store `SKILL.md`
 
 ```bash
 observal registry skill submit \
-  --skill-md ./SKILL.md \
-  --git-url https://github.com/acme/review-skill \
-  --name review-skill \
+  --git-url https://github.com/YOUR_ORG/your-skills.git \
+  --git-ref REVIEWED_REF \
+  --skill-path skills/review-checklist \
+  --delivery-mode git_fetch \
+  --name review-checklist \
+  --version 1.0.0 \
   --description "Review code" \
   --task-type code-review \
-  --output json
+  --draft --output json
 
 observal registry skill submit \
   --skill-md ./SKILL.md \
@@ -52,6 +56,8 @@ observal registry skill submit \
   --task-type code-review \
   --output json
 ```
+
+For Git delivery, replace the source placeholders with an authorized repository and the reviewed ref/directory. `--git-url` selects the repository, `--git-ref` the branch/tag/ref (default `main`), and `--skill-path` the directory containing `SKILL.md`. Server validation reads that file; it does not audit or snapshot the entire repository. Review the actual source and consumer Git access. A branch or retargetable tag is not immutable. See [the Git authoring checkpoint](/registry-skill-helper#save-a-git-backed-draft) before submitting the saved draft.
 
 For a new complete folder, use `observal registry skill submit --from-dir ./my-skill --name my-skill --description "My skill"`. To advance an approved listing, use `fork` (reviewed direct base) or `import-folder` (reviewed Git/historical direct base), then `observal registry skill replace-files my-skill --version-id UUID --from-dir ./my-skill --revision OBSERVED_REVISION` as needed. The [folder workflow](/skill-folder-workflow) covers exact-base selection, sensitive/excluded file acknowledgments, review, and immutable releases. JSON mode never prompts; supply all required inputs explicitly.
 

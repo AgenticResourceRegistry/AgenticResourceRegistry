@@ -3,11 +3,12 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-FileCopyrightText: 2026 Lokesh <lokeshselvam7025@gmail.com>
+# SPDX-FileCopyrightText: 2026 VishnuM049 <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 title: "API endpoints"
 ---
 
-REST and GraphQL surface of the Agentic Resource Registry server. Unless noted, endpoints require authentication via Bearer token or API key (`Authorization: Bearer <token>` or `X-API-Key: <key>`).
+REST and GraphQL surface of the Agentic Resource Registry server. Unless noted, endpoints require a JWT access token in `Authorization: Bearer <token>`. There is no `X-API-Key` authentication path. Sign in through the supported credential or browser flow to obtain tokens; see [Authentication](/cli/auth).
 
 Base path: `/api/v1`.
 
@@ -16,8 +17,8 @@ Base path: `/api/v1`.
 | Method | Path | Description |
 | --- | --- | --- |
 | `POST` | `/auth/bootstrap` | Auto-create admin on fresh server (localhost only) |
-| `POST` | `/auth/register` | Self-registration (email + password; `deployment.sso_only=false` only) |
-| `POST` | `/auth/login` | Login with API key or email + password |
+| `POST` | `/auth/register` | Self-registration with email and password, only when `auth.self_registration_enabled` is on and password authentication is allowed |
+| `POST` | `/auth/login` | Login with email/username and password when password authentication is allowed |
 | `POST` | `/auth/exchange` | Exchange one-time OAuth code for credentials |
 | `GET` | `/auth/whoami` | Current user info |
 | `POST` | `/auth/token` | Exchange credentials for JWT access + refresh tokens |
@@ -100,6 +101,29 @@ A component reference's `version` must name an approved (or archived) release. D
 | `GET` | `/review/{id}` | Submission details |
 | `POST` | `/review/{id}/approve` | Approve |
 | `POST` | `/review/{id}/reject` | Reject |
+
+## Optional discovery optimization in Insights
+
+When generating an Agent or MCP/skill/hook Insights report, send
+`"include_discovery_optimization": true` in the JSON body to request an
+additional ARD authoring section. The report response includes
+`discovery_optimization_requested`. The result is `narrative.discovery`
+(`version: 1`), absent for unrequested or older reports. Its `state` is
+`assessed` (description suggestions, possibly none), `unknown` (every model
+reply failed the accuracy checks) or `unavailable` (the model returned
+nothing, or the listing could not be read). The regular usage report still
+completes if this optional step fails. Web report generation offers the same
+opt-in. Component reports serve only reviewed section versions, so a future
+`discovery` version stays hidden until it is added to the allowlist.
+
+The model receives the selected listing/version and a small allowlist of
+aggregated, already-authorized session counts. It does **not** receive
+consumer prompts, transcripts, tool arguments or an Agent system prompt.
+Suggestions are not applied automatically; their example queries are invented
+for illustration, not recorded searches. Before/after figures come from ARD's
+current relevance algorithm, not from search traffic or an overall rank.
+A regular report still requires sessions; metadata-only reports without usage
+are not part of this option.
 
 ## Discovery (ARD)
 

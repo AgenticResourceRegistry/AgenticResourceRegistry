@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Hari Srinivasan <harisrini21@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """ClickHouse insert functions for live tables."""
 
@@ -164,7 +165,10 @@ async def refresh_session_summary(session_id: str, project_id: str, user_id: str
         "sumIf(input_tokens, rendered = 1) AS input_tokens, sumIf(output_tokens, rendered = 1) AS output_tokens, "
         "sumIf(cache_read_tokens, rendered = 1) AS cache_read_tokens, "
         "sumIf(cache_write_tokens, rendered = 1) AS cache_write_tokens, max(credits) AS total_credits, "
-        "anyLastIf(model, rendered = 1 AND model != '') AS model, "
+        # Observed source models always outrank companion metadata.
+        "if(countIf(rendered = 1 AND model != '') > 0, "
+        "anyLastIf(model, rendered = 1 AND model != ''), "
+        "anyLastIf(model, event_type = 'kiro_session_model')) AS model, "
         # The legacy MV also writes to this ReplacingMergeTree with millisecond
         # versions. Our canonical refresh must always win, even in the same ms.
         "toUInt64(toUnixTimestamp64Micro(now64(6))) AS summary_version, now64(3) AS updated_at, "

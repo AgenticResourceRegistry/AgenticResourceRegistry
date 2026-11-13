@@ -1,306 +1,167 @@
 ---
 # SPDX-FileCopyrightText: 2026 Apoorv Garg <apoorvgarg.work@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Authentication and SSO"
+title: "Set up authentication and SSO"
+description: "Establish the first administrator, configure identity, and verify access without locking users out."
 ---
 
-How Agentic Resource Registry authenticates users and signs tokens, and how to wire up SSO.
+Choose how people sign in, establish a real administrator, and test access before enabling a restrictive policy. Registry authentication is separate from each developer's coding-tool/model account.
 
 ## Authentication modes
 
-Agentic Resource Registry supports password auth, API keys, OAuth / OIDC, and SAML. The public login page shows only the methods enabled for the deployment.
+Authenticated API requests use **JWT bearer access tokens**. The server does not provide an `X-API-Key` authentication path or user-generated API-key login.
 
-| Method | How it is enabled | Notes |
+| Method | Configuration | Important distinction |
 | --- | --- | --- |
-| Email + password | Default password auth | Used by bootstrap admins and locally managed users |
-| Self registration | `auth.self_registration_enabled=true` | Creates standard `user` accounts only |
-| OAuth / OIDC | SSO tab settings: `oauth.client_id`, `oauth.client_secret`, `oauth.server_metadata_url` | Uses IdP discovery metadata. API restart required after changes. |
-| SAML | SSO tab settings: `saml.*` | SAML setup with JIT provisioning |
-| API keys | User generated after login | Inherits the user's role |
+| Email/username and password | Allowed when `deployment.sso_only=false` | Does not automatically enable public registration. |
+| Public self-registration | `auth.self_registration_enabled=true`, with password auth allowed | Creates ordinary user accounts, not administrators. |
+| Generic OIDC | `oauth.client_id`, `oauth.client_secret`, `oauth.server_metadata_url` | Client is initialized at API startup; restart after changes. |
+| Google sign-in | `google.*` settings | Separate provider with its own callback and domain policy. |
+| GitHub sign-in | `github.*` settings | OAuth application credentials, not a personal access token. |
+| SAML | Reviewed `saml.*`/SP configuration | Provider setup, key material, provisioning, and policy must agree. |
 
-Use `deployment.sso_only=true` when password login should be hidden and only SSO should be available.
+The login page should expose only the enabled methods. Test the actual method with an ordinary account rather than treating a saved configuration as acceptance.
 
-## SSO-only mode
 
-`deployment.sso_only` controls whether password-based authentication is available.
+## The first administrator
 
-| Value | Effect |
-| --- | --- |
-| `false` (default) | Email and password login stays available alongside SSO. |
-| `true` | Password login, password reset, and local user bootstrap are blocked. Users must sign in with OIDC or SAML. |
+Restrict network access **before** starting an uninitialized server. The CLI's empty-server login flow collects administrator details and submits them to `/api/v1/auth/init`; this is different from the separate localhost-only `/api/v1/auth/bootstrap` endpoint. Do not infer that every initialization path is restricted to localhost.
 
-Set it in **Admin → SSO → Access policy**. Confirm OIDC or SAML works with a real test user before enabling it.
+```bash
+observal auth login --server http://localhost --no-setup
+observal auth whoami
+```
+
+Use your actual restricted evaluation URL. A fresh CLI initialization creates an `admin`, not an automatic `super_admin`. If demo accounts already exist, this is not an empty server: sign in using the intended authorized account and replace evaluation access deliberately.
+
+Confirm the real account's role and recovery path before removing demo access. Some policies, including usage-reporting consent, require super-admin authority; do not assume first-admin initialization grants every administrative operation. [Configuration](/self-hosting/configuration#demo-accounts) explains why removing `.env` demo lines alone may not prevent source Compose seeding.
 
 ## Self registration
 
-Controls whether visitors can create their own Agentic Resource Registry account from the login page.
-
-| Value | Effect |
-|-------|--------|
-| `true` | Shows a **Register** button on the login page and allows public account creation |
-| `false` (default) | Hides registration and blocks `POST /api/v1/auth/register` |
-
-You can set this in the web UI at **Admin → Settings → Authentication → Self Registration Enabled**. If you prefer the CLI, set the same dynamic setting directly:
+Registration defaults to off. An authorized administrator can enable it through Admin Settings or the corresponding runtime setting:
 
 ```bash
 observal admin set auth.self_registration_enabled true
 ```
 
-New accounts are created with the built-in `user` role. They cannot review submissions, manage users, or change server settings unless an admin promotes them later.
+New accounts have the `user` role. Test registration and role restrictions with a disposable ordinary account before enabling it for a team. Setting `deployment.sso_only=true` also blocks the password-registration path.
 
-Disable it again with:
+## SSO-only mode
 
-```bash
-observal admin set auth.self_registration_enabled false
+Set `deployment.sso_only=true` under **Admin → SSO → Access policy** only after a real user has successfully signed in through your intended provider and an administrator has a tested recovery route.
+
+The guarded password login, registration, and CLI initialization paths are disabled by SSO-only policy. The separate bootstrap route has its own local/empty-server checks; SSO-only is not a substitute for securing first initialization.
+
+Do not disable working access first and then discover that the IdP callback or user assignment is wrong.
+
+## OAuth / OIDC SSO
+
+In **Admin → SSO**, configure the three `oauth.*` client settings and the runtime `deployment.frontend_url`. Restart the API to rebuild its OAuth client. Register the exact callback at the IdP:
+
+```text
+https://YOUR_REGISTRY/api/v1/auth/oauth/callback
 ```
 
-## The bootstrap flow
+The origin must match `deployment.frontend_url`, not an unrelated environment entry. Generic OIDC requests `openid email profile groups`; the provider must return the identity claims your access/provisioning policy requires. An OAuth login does not automatically promote the first provider user to admin.
 
-On a fresh server with no users, the `/api/v1/auth/bootstrap` endpoint is available **to localhost only**. When you run `observal auth login`, the CLI detects the empty user table and bootstraps an admin account interactively.
+<a id="oauth-client-id" />
 
-This is how you create the first admin without any pre-existing credential.
+### OIDC Client ID
 
-Once the first admin exists, bootstrap is disabled.
+The identifier issued for this registry's IdP application.
 
-## JWT signing keys
+<a id="oauth-client-secret" />
 
-Tokens are signed with asymmetric keys (ES256 by default, RS256 also supported). Keys are generated on first startup and stored in the `apidata` volume at `$JWT_KEY_DIR` (default `/data/keys`).
+### OIDC Client Secret
 
+A credential for that application. Enter it through the protected settings UI or a supported mounted secret file. Do not put it in a command argument, screenshot, or issue.
+
+<a id="oauth-server-metadata-url" />
+
+### OIDC Discovery URL
+
+The provider's discovery endpoint for the intended tenant. Check application type, assignment, issuer, callback, and claims against that provider's current setup instructions. Use [the OIDC setup guide](/self-hosting/oidc-setup) for the workflow; saving values is not proof the login exchange succeeds.
+
+<a id="google-oauth" />
+
+## Google sign-in
+
+Google is separate from the generic OIDC slot. Configure `google.client_id`, `google.client_secret`, and the policy below, then restart the API. Its callback is:
+
+```text
+https://YOUR_REGISTRY/api/v1/auth/oauth/google/callback
 ```
-JWT_SIGNING_ALGORITHM=ES256          # ES256 (default) or RS256
-JWT_KEY_DIR=/data/keys
+
+Use a Google OAuth web application for that callback. The server checks verified email; provisioned users are not automatically administrators.
+
+<a id="google-allowed-domains" />
+
+### Allowed Google domains
+
+`google.allowed_domains` restricts eligible email domains. An empty policy allows a broader set of Google identities, including personal accounts. Verify both an allowed and a refused account before opening access.
+
+<a id="github-oauth" />
+
+## GitHub sign-in
+
+Configure `github.client_id` and **the OAuth App's client secret**, not a `ghp_`/`github_pat_` personal access token. Restart the API after changes. The callback is:
+
+```text
+https://YOUR_REGISTRY/api/v1/auth/oauth/github/callback
 ```
 
-### Critical: back up `$JWT_KEY_DIR`
+The server exchanges the authorization code and checks verified email returned by GitHub. Model/CLI access and membership policy are separate from successful OAuth consent.
 
-Losing these keys invalidates **every** access and refresh token. All users must log in again. Tokens rotate, but only the private key can issue new ones, and there is no recovery path without the keys.
+<a id="github-allowed-orgs" />
 
-Back up the `apidata` volume every time you back up Postgres. See [Backup and restore](/self-hosting/backup-and-restore).
+### Allowed GitHub organizations
 
-### Key rotation and algorithm changes
+`github.allowed_orgs` lists eligible organizations. When set, the requested OAuth scopes include `read:org` and active membership is checked. Confirm application authorization and a real allowed/denied identity; an empty allowlist permits broader sign-in.
 
-For a same-algorithm emergency rotation, stop the API, back up and remove `signing.pem`, then restart. New keys are generated and existing sessions must authenticate again.
+## SAML and externally managed material
 
-To move between ES256 and RS256, change `JWT_SIGNING_ALGORITHM` and restart. Agentic Resource Registry archives the old public key, generates the selected key type, publishes both in JWKS, and continues verifying old tokens until they expire. New tokens use only the configured algorithm. Unsupported algorithms and token headers that do not match the resolved key type are rejected.
+Follow the [SAML setup guide](/self-hosting/saml-setup) and configure the SP/IdP identifiers, endpoints, certificates, provisioning, and default role together. A metadata download alone does not verify a browser assertion exchange.
 
-If the signing key is encrypted, use `JWT_KEY_PASSWORD_FILE` and rotate the password and key together during a planned restart.
-
-### File-backed SAML keys
-
-SAML service-provider keys can remain outside the settings database:
+Mounted SP material uses this pair:
 
 ```dotenv
 SAML_SP_PRIVATE_KEY_FILE=/run/secrets/saml_sp_private_key
 SAML_SP_X509_CERT_FILE=/run/secrets/saml_sp_x509_cert
 ```
 
-Both files are required together. File-backed material overrides the generated database key, appears as externally managed in admin responses, and cannot be replaced through the admin API. Replace both files atomically and restart the API to rotate them.
+Both files must be configured and readable by the consuming API. Externally managed material overrides generated database keys and cannot be replaced through the admin API. Rotation needs a coordinated provider change and process restart. See [secret files](/self-hosting/configuration#secret-files).
 
-OAuth, Google, GitHub, and SAML secret environment imports also accept the `NAME_FILE` form. File-backed values stay in memory rather than being copied into PostgreSQL or Redis. See [Configuration](/self-hosting/configuration#secret-files).
+## JWT signing keys
 
-## OAuth / OIDC SSO
+ES256 is the default; RS256 is also accepted. In source Compose, JWT signing files live at `/data/keys` in `apidata`. Preserve the encryption configuration and key directory with [consistent backups](/self-hosting/backup-and-restore).
 
-Set these three in **Admin → SSO → SSO settings**, then restart the API so the OIDC client is rebuilt:
+Key initialization is synchronized across API processes. Normal rotation or an algorithm change retains old public verification keys for a bounded period while new tokens use the current key. That is **not immediate revocation**. Token expiry, account/session revocation, and retired-key retention still apply.
 
-| Setting | Value |
-| --- | --- |
-| `oauth.client_id` | Client ID from your IdP |
-| `oauth.client_secret` | Client secret from your IdP |
-| `oauth.server_metadata_url` | OIDC discovery URL, for example `https://accounts.example.com/.well-known/openid-configuration` |
+Do not delete signing files as routine maintenance or assume key rotation revokes every prior token. A compromised key requires a separately reviewed incident/recovery procedure. Losing key material can force affected users to sign in again; preserving only PostgreSQL is insufficient recovery.
 
-Agentic Resource Registry uses [Authlib](https://docs.authlib.org/) and reads the IdP discovery document, so any OIDC-compliant provider works (Auth0, Okta, Azure AD, Google Workspace, Keycloak, Authentik, Dex, etc.).
+## JWT bearer authentication for scripts
 
-<a id="oauth-client-id"></a>
+Use a supported credential or browser/device flow to obtain access/refresh tokens. The CLI stores them in its sensitive local configuration and handles supported refresh behavior. Avoid copying tokens into source files or shared shell history.
 
-### OIDC Client ID
+For CLI-style JSON requests, [use `observal api`](/cli/api) where appropriate; it also supplies the client-version metadata expected on guarded paths. A valid JWT alone does not satisfy every deployment/version check.
 
-The public client identifier from your IdP application registration.
+`POST /api/v1/auth/token/revoke` revokes the supplied refresh token; already-issued access tokens can remain valid until expiry. Logout uses the account/session revocation mechanism and can sign out CLI, browser, and hooks. See [CLI authentication](/cli/auth).
 
-<a id="oauth-client-secret"></a>
+## Role-based access control
 
-### OIDC Client Secret
+Server roles and teamspace permissions both matter. Ordinary users submit/install within their scope; eligible reviewers inspect and publish; administrators manage permitted users/settings; some operations require super-admin authority. None of those labels proves access to every private record or exempts a resource from its policy.
 
-The private client secret from your IdP application registration. It is stored encrypted and is never shown again after saving.
+Use [review/publication](/guides/review-and-publish), [teamspaces](/use-cases/teamspaces), and the [admin reference](/cli/admin) rather than treating a role table as the full authorization contract.
 
-<a id="oauth-server-metadata-url"></a>
+## Recovery and verification
 
-### OIDC Discovery URL
-
-The `.well-known/openid-configuration` URL for your IdP tenant or authorization server.
-
-### Redirect URI
-
-Configure your IdP to allow:
-
-```
-{FRONTEND_URL}/api/v1/auth/oauth/callback
-```
-
-With `FRONTEND_URL=https://observal.your-company.internal`, that's:
-
-```
-https://observal.your-company.internal/api/v1/auth/oauth/callback
-```
-
-### First OAuth login
-
-The first user who logs in via OAuth is **not** automatically an admin. Bootstrap a local admin first (via `observal auth login` before enabling OAuth, or via the demo super admin), then use that admin to promote the OAuth user.
-
-### Scope / claims
-
-Agentic Resource Registry requests standard `openid profile email` scope. The IdP's `email` claim is the canonical user identifier.
-
-<a id="google-oauth"></a>
-
-## Google OAuth (first-class provider)
-
-Google sign-in runs as its own provider, separate from the generic OIDC slot above. Both can be enabled at the same time, so a deployment can offer Okta *and* Google on the login screen.
-
-Set these in the SSO settings page, or set them as container env vars for one-time import at startup. The **Sign in with Google** button appears after the API restarts:
-
-```
-GOOGLE_OAUTH_CLIENT_ID=1234567890-abc...apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=GOCSPX-...
-```
-
-The Google OIDC discovery URL is hardcoded server-side, so you don't need to set it.
-
-### Creating the Google OAuth client
-
-1. Open the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) in the project you want to use.
-2. Click **Create Credentials → OAuth client ID**.
-3. **Application type:** Web application.
-4. **Authorized JavaScript origins:** `{FRONTEND_URL}` (e.g. `https://observal.your-company.internal`).
-5. **Authorized redirect URI:** `{FRONTEND_URL}/api/v1/auth/oauth/google/callback`.
-6. Copy the generated **Client ID** and **Client secret** into SSO settings or your container env.
-7. Restart the API container so the Authlib client is rebuilt.
-
-<a id="google-allowed-domains"></a>
-
-### Restricting to specific email domains
-
-Set `GOOGLE_OAUTH_ALLOWED_DOMAINS` to a comma-separated list of domains. Anyone outside the list is rejected with a 403, even if they have a valid Google account.
-
-```
-GOOGLE_OAUTH_ALLOWED_DOMAINS=acme.com,acme.io
-```
-
-Leave it unset to allow any Google account (including personal `@gmail.com` addresses) to provision themselves as `role=user`.
-
-### Notes
-
-- Agentic Resource Registry additionally requires Google's `email_verified` claim to be `true`. Unverified accounts (rare on Google but possible) are rejected with a 400.
-- The first Google user is **not** automatically an admin (matches the generic OIDC behavior). Bootstrap a local admin first, then use that account to promote the Google user.
-- The auth provider and Google subject ID are recorded on the user row (`auth_provider="google"`, `sso_subject_id=<google-sub>`) for audit purposes.
-
-<a id="github-oauth"></a>
-
-## GitHub OAuth (first-class provider)
-
-GitHub sign-in runs as its own provider, alongside generic OIDC and Google. Unlike those two, GitHub is plain OAuth 2.0 (not OIDC): there is no discovery URL and no ID token. Agentic Resource Registry fetches the profile and email list from the GitHub REST API after the code exchange.
-
-Set these in the SSO settings page, or as container env vars for one-time import at startup. The **Sign in with GitHub** button appears after the API restarts:
-
-```
-GITHUB_OAUTH_CLIENT_ID=Iv1.abc123...
-GITHUB_OAUTH_CLIENT_SECRET=ghp_... / github_pat_... style secret
-```
-
-### Creating the GitHub OAuth app
-
-1. Open **Settings → Developer settings → OAuth Apps** (on your personal account or, preferably, your GitHub organization) and click **New OAuth App**.
-2. **Homepage URL:** `{FRONTEND_URL}` (e.g. `https://observal.your-company.internal`).
-3. **Authorization callback URL:** `{FRONTEND_URL}/api/v1/auth/oauth/github/callback`.
-4. Copy the generated **Client ID** and generate a **Client secret**; put both into SSO settings or your container env.
-5. Restart the API container so the Authlib client is rebuilt.
-
-<a id="github-allowed-orgs"></a>
-
-### Restricting to GitHub organizations
-
-Set `GITHUB_OAUTH_ALLOWED_ORGS` to a comma-separated list of GitHub organization slugs. Only *active* members of at least one listed org can sign in; everyone else is rejected with a 403. Pending invitations don't count.
-
-```
-GITHUB_OAUTH_ALLOWED_ORGS=acme-inc,acme-labs
-```
-
-When an org allowlist is configured, Agentic Resource Registry requests the `read:org` scope (in addition to `read:user user:email`) so it can see private org memberships. Members may need to grant/request org approval for the OAuth app if the org restricts third-party access.
-
-Leave it unset to allow any GitHub account to provision itself as `role=user`.
-
-### Notes
-
-- Agentic Resource Registry only accepts **verified** email addresses from `GET /user/emails` (preferring the primary). The profile-level `email` field is never trusted, and accounts with no verified email are rejected with a 400.
-- Departments are not populated automatically from GitHub (there is no groups claim). Assign them in **Admin → Users**, individually or via bulk upload — same as Google users.
-- The auth provider and the *numeric* GitHub user ID are recorded on the user row (`auth_provider="github"`, `sso_subject_id=<github-id>`). The numeric ID is used instead of the login handle because handles can be renamed and re-registered.
-
-## Role-based access control (RBAC)
-
-Four built-in roles enforced on every endpoint:
-
-| Role | Typical abilities |
-| --- | --- |
-| `user` | Publish components, install agents, view their own data |
-| `reviewer` | + approve/reject registry submissions |
-| `admin` | + manage users, change server settings |
-| `super_admin` | + sensitive super-admin-only operations |
-
-Change a user's role:
-
-```bash
-observal admin users
-# GET /api/v1/admin/users/{id}/role   to inspect
-# PUT /api/v1/admin/users/{id}/role   to change
-```
-
-Or in the web UI at `/settings/users`.
-
-## API keys
-
-Users can generate API keys for scripts and CI. The key inherits the user's role.
-
-```bash
-# Get a key - flow depends on your setup (web UI usually)
-# Then in CI:
-export OBSERVAL_API_KEY='replace-with-your-key'
-export OBSERVAL_SERVER_URL=https://observal.your-company.internal
-
-observal ops traces --limit 100 --output json | jq
-```
-
-Keys can be revoked via `POST /api/v1/auth/token/revoke`.
-
-## Rate limits
-
-Auth endpoints are rate-limited to slow brute-force attempts:
-
-| Setting | Default | Scope |
-| --- | --- | --- |
-| `RATE_LIMIT_AUTH` | `10/minute` | General auth endpoints |
-| `RATE_LIMIT_AUTH_STRICT` | `5/minute` | User registration |
-
-Tighten for public-facing deployments.
-
-## Password reset
-
-There is no self-service reset flow. The login page says **Forgot password? Contact your admin.** — an admin resets the account from **Admin > Users** in the web UI or with the CLI:
-
-```bash
-observal admin reset-password <email>
-observal admin reset-password <email> --generate
-```
-
-`--generate` has the server mint a random password and the CLI prints it once. Hand it to the user out-of-band (Slack, phone); they must change it at their next sign-in.
-
-## Operational controls
-
-Agentic Resource Registry includes:
-
-* **Audit logging**: every privileged action lands in ClickHouse's `audit_log`
-* **SSO-only mode** (`deployment.sso_only=true`)
-
-See `docs/self-hosting/sso-cli.md` for SSO CLI commands.
+- Test browser login and CLI device login through the actual public origin.
+- Verify an ordinary user's registry access and a refused access case.
+- Check callback URI, issuer, assignment, verified-email/organization/domain policy, and expected role on failure.
+- Redis is part of authentication/revocation; a healthy UI alone is not proof authentication works when that dependency is unavailable.
+- For a forgotten local password, use the authorized admin reset workflow. Deliver a generated password securely and require the user's change; do not publish it in logs or screenshots.
 
 ## Next
 
-→ [Session tracking and reconciliation](/core-concepts/session-tracking)
+[Configure the registry](/self-hosting/configuration), [review its network exposure](/self-hosting/ports-and-volumes), and [rehearse backup/recovery](/self-hosting/backup-and-restore) before restricting access or upgrading.

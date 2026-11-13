@@ -85,12 +85,13 @@ def test_hook_spools_before_detached_delivery(tmp_path: Path, monkeypatch):
 def test_public_reconcile_uses_shared_drain(tmp_path: Path, monkeypatch):
     from observal_cli import cmd_reconcile_cli
     from observal_cli.harness import SessionSource
+    from observal_cli.harness.base import BaseAdapter
 
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text("{}\n")
     source = SessionSource("antigravity", "session", transcript)
 
-    class Adapter:
+    class Adapter(BaseAdapter):
         def discover_session_sources(self, since_hours):
             assert since_hours == 24
             return [source]

@@ -161,8 +161,12 @@ async def _in_flight_report(
     version_scope: str,
     period_days: int,
     now: datetime,
+    include_discovery: bool = False,
 ) -> InsightReport | None:
     """Return a pending or running report for the same inputs, if there is one.
+
+    A request for discovery suggestions never joins a run that was queued without them: that run would
+    finish with no suggestions and nothing to say why. The reverse is fine, a run with them is a superset.
 
     Every report makes several model calls, so a repeated request joins the run
     already in progress instead of paying for an identical one. The per-agent
@@ -185,6 +189,8 @@ async def _in_flight_report(
         )
         .order_by(InsightReport.created_at.desc())
     )
+    if include_discovery:
+        stmt = stmt.where(InsightReport.discovery_optimization_requested.is_(True))
     result = await db.execute(stmt)
     period = timedelta(days=period_days)
     for report in result.scalars().all():
@@ -201,14 +207,16 @@ async def _in_flight_component_report(
     component_version_id: UUID | None,
     period_days: int,
     now: datetime,
+    include_discovery: bool = False,
 ) -> InsightReport | None:
     """Return a pending or running report for the same component, version and period, if there is one.
 
     Same contract as ``_in_flight_report``: a repeated request joins the run in progress instead of
     paying for an identical set of model calls, and the lock covers the insert that follows a miss.
+    A request for discovery suggestions does not join a run queued without them.
     """
     await lock_agent_reports(db, listing_id)
-    result = await db.execute(
+    stmt = (
         select(InsightReport)
         .where(
             InsightReport.subject_type == "component",
@@ -220,6 +228,9 @@ async def _in_flight_component_report(
         )
         .order_by(InsightReport.created_at.desc())
     )
+    if include_discovery:
+        stmt = stmt.where(InsightReport.discovery_optimization_requested.is_(True))
+    result = await db.execute(stmt)
     period = timedelta(days=period_days)
     for report in result.scalars().all():
         if report.period_end - report.period_start == period:
@@ -434,6 +445,7 @@ async def generate_insight(
         version_scope=version_scope,
         period_days=period_days,
         now=now,
+        include_discovery=bool(req and req.include_discovery_optimization),
     )
     if in_flight:
         return InsightReportListItem.model_validate(in_flight)
@@ -450,6 +462,7 @@ async def generate_insight(
         subject_type="agent",
         agent_id=agent.id,
         triggered_by=current_user.id,
+        discovery_optimization_requested=bool(req and req.include_discovery_optimization),
         status=InsightReportStatus.pending,
         period_start=period_start,
         period_end=now,
@@ -499,8 +512,9 @@ async def list_reports(
 
 # Explicit allowlist per section: a future prompt or section version needs its own privacy review.
 # component_analysis v3/v4 is call-only evidence; outcomes v1 holds counts; analysis v1 is checked model text
-# written from counts and redacted friction notes (never prompts, arguments or transcripts).
-_SAFE_SECTION_VERSIONS = {"component_analysis": (3, 4), "outcomes": (1,), "analysis": (1,)}
+# written from counts and redacted friction notes (never prompts, arguments or transcripts); discovery v1 is
+# checked listing-description advice written from the listing's own metadata and a few aggregate counters.
+_SAFE_SECTION_VERSIONS = {"component_analysis": (3, 4), "outcomes": (1,), "analysis": (1,), "discovery": (1,)}
 
 
 def _safe_component_narrative(report: InsightReport) -> dict | None:
@@ -575,6 +589,7 @@ async def generate_component_insight(
         component_version_id=request.component_version_id,
         period_days=request.period_days,
         now=now,
+        include_discovery=request.include_discovery_optimization,
     )
     if in_flight:
         return InsightReportListItem.model_validate(in_flight)
@@ -588,6 +603,7 @@ async def generate_component_insight(
         component_version=version_label,
         component_name=ref.qualified_name,
         coverage=coverage,
+        discovery_optimization_requested=request.include_discovery_optimization,
         triggered_by=current_user.id,
         status=InsightReportStatus.pending,
         period_start=start,

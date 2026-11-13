@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -11,6 +11,7 @@ import pytest
 from models.usage_ping import UsagePingState
 from schemas.usage_ping import (
     UsagePingActivity,
+    UsagePingContactUpdate,
     UsagePingCounts,
     UsagePingIdentity,
     UsagePingInstance,
@@ -125,10 +126,13 @@ async def test_build_payload_contains_only_aggregate_fields(monkeypatch: pytest.
         return {
             "usage_ping.company_name": "Acme",
             "deployment.public_url": "https://agents.acme.test/path",
-            "oauth.client_id": "",
+            "oauth.client_id": "client",
+            "oauth.server_metadata_url": "https://login.acme.test/.well-known/openid-configuration",
             "saml.idp_entity_id": "",
             "google.client_id": "",
+            "google.allowed_domains": "acme.test, @acme.dev, not a domain",
             "github.client_id": "",
+            "github.allowed_orgs": "Acme-Inc",
         }.get(key, default or "")
 
     async def fake_bool(key, default=False):
@@ -164,16 +168,28 @@ async def test_build_payload_contains_only_aggregate_fields(monkeypatch: pytest.
             )
         ),
     )
+    monkeypatch.setattr(usage_ping, "_access_hosts", AsyncMock(return_value=["agents.acme.test", "localhost"]))
+    monkeypatch.setattr(usage_ping, "_email_domains", AsyncMock(return_value={"acme.test": 2}))
 
     result = await usage_ping.build_usage_ping(db, now=datetime(2026, 3, 16, tzinfo=UTC))
     body = result.model_dump(mode="json")
-    assert body["identity"] == {"company_name": "Acme", "hostname": "agents.acme.test"}
-    assert body["schema_version"] == 2
+    assert body["identity"] == {
+        "company_name": "Acme",
+        "hostname": "agents.acme.test",
+        "access_hosts": ["agents.acme.test", "localhost"],
+        "email_domains": {"acme.test": 2},
+        "admin_emails": [],
+        "sso_hosts": ["login.acme.test"],
+        "sso_allowed_domains": ["acme.test", "acme.dev"],
+        "github_orgs": ["acme-inc"],
+    }
+    assert body["schema_version"] == 3
+    assert body["contact"] is None
     assert body["counts"]["sessions_30d"] == 7
     assert body["activity"]["active_users_30d"] == 1
     assert body["harnesses"] == {"pi": 7}
     serialized = str(body).lower()
-    assert "email" not in serialized
+    assert "@" not in serialized
     assert "prompt_content" not in serialized
     assert "raw_line" not in serialized
 
@@ -257,11 +273,254 @@ async def test_unconfigured_installation_reports_fallback_identity(monkeypatch: 
             )
         ),
     )
+    monkeypatch.setattr(usage_ping, "_access_hosts", AsyncMock(return_value=[]))
 
     result = await usage_ping.build_usage_ping(db)
 
     assert result.identity.company_name == usage_ping.fallback_company_name(db.state.installation_id)
     assert result.identity.hostname == "unknown"
+    assert result.identity.email_domains == {}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("https://Registry.Acme.com:8443/login", "registry.acme.com"),
+        ("registry.acme.com:443", "registry.acme.com"),
+        ("http://localhost:3000", "localhost"),
+        ("app.localhost", "localhost"),
+        ("127.0.0.1:8000", "localhost"),
+        ("10.2.3.4", "private-ip"),
+        ("52.66.239.4", "public-ip"),
+        ("[::1]:80", "localhost"),
+        ("evil host<script>", None),
+        ("http://[", None),
+        ("[", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_report_host_normalizes_and_hides_ip_literals(value, expected):
+    assert usage_ping._report_host(value) == expected
+
+
+def test_request_access_host_prefers_browser_origin():
+    request = MagicMock()
+    request.headers = {"origin": "https://registry.acme.com", "host": "observal-api:8000"}
+    assert usage_ping.request_access_host(request) == "registry.acme.com"
+    request.headers = {"x-forwarded-host": "registry.acme.com, lb", "host": "observal-api:8000"}
+    assert usage_ping.request_access_host(request) == "registry.acme.com"
+    request.headers = {"host": "localhost:8000"}
+    assert usage_ping.request_access_host(request) == "localhost"
+
+
+@pytest.mark.asyncio
+async def test_malformed_origin_falls_through_and_never_fails_the_request(monkeypatch: pytest.MonkeyPatch):
+    request = MagicMock()
+    request.headers = {"origin": "http://[", "host": "registry.acme.com"}
+    assert usage_ping.request_access_host(request) == "registry.acme.com"
+
+    # Token refresh awaits this after the old refresh token is spent, so it must not raise.
+    redis = MagicMock()
+    monkeypatch.setattr("services.redis.get_redis", lambda: redis)
+    request.headers = {"origin": "http://["}
+    await usage_ping.record_access_host(request)
+    redis.pipeline.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_contact_prompt_dialog_then_banner_once_installation_grows(monkeypatch: pytest.MonkeyPatch):
+    db = FakeDb()
+    now = datetime(2026, 11, 6, tzinfo=UTC)
+    monkeypatch.setattr(usage_ping.ds, "get_bool", AsyncMock(return_value=True))
+    users = AsyncMock(return_value=1)
+    age = AsyncMock(return_value=timedelta(days=2))
+    monkeypatch.setattr(usage_ping, "_safe_count", users)
+    monkeypatch.setattr(usage_ping, "_installation_age", age)
+
+    assert (await usage_ping.contact_state(db, now=now)).prompt == "dialog"
+
+    await usage_ping.defer_contact(db, never=False)
+    db.state.contact_prompted_at = now - timedelta(days=31)
+    assert (await usage_ping.contact_state(db, now=now)).prompt is None
+
+    users.return_value = 5
+    assert (await usage_ping.contact_state(db, now=now)).prompt == "banner"
+
+    users.return_value = 1
+    age.return_value = timedelta(days=14)
+    assert (await usage_ping.contact_state(db, now=now)).prompt == "banner"
+
+    db.state.contact_prompted_at = now - timedelta(days=3)
+    assert (await usage_ping.contact_state(db, now=now)).prompt is None
+
+
+@pytest.mark.asyncio
+async def test_contact_prompt_stops_after_never_or_submit_and_when_reporting_is_off(monkeypatch: pytest.MonkeyPatch):
+    db = FakeDb()
+    enabled = AsyncMock(return_value=False)
+    monkeypatch.setattr(usage_ping.ds, "get_bool", enabled)
+    assert (await usage_ping.contact_state(db)).prompt is None
+
+    enabled.return_value = True
+    await usage_ping.defer_contact(db, never=True)
+    assert (await usage_ping.contact_state(db)).prompt is None
+
+    db.state.contact_prompt = ""
+    await usage_ping.save_contact(
+        db, UsagePingContactUpdate(name=" Ada ", email="ada@acme.io", role="CTO", team_size="11-50", consent=True)
+    )
+    state = await usage_ping.contact_state(db)
+    assert state.prompt is None
+    assert state.contact is not None and state.contact.name == "Ada"
+    await usage_ping.defer_contact(db, never=False)
+    assert db.state.contact_prompt == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_contact_is_sent_only_after_opt_in_and_removed_on_withdraw(monkeypatch: pytest.MonkeyPatch):
+    db = FakeDb()
+    monkeypatch.setattr(usage_ping.ds, "get", AsyncMock(return_value=""))
+    monkeypatch.setattr(usage_ping.ds, "get_bool", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        usage_ping,
+        "_postgres_counts",
+        AsyncMock(
+            return_value=sample_payload().counts.model_dump(exclude={"sessions_total", "sessions_7d", "sessions_30d"})
+        ),
+    )
+    monkeypatch.setattr(
+        usage_ping,
+        "_session_metrics",
+        AsyncMock(
+            return_value=(
+                {"sessions_total": 0, "sessions_7d": 0, "sessions_30d": 0},
+                sample_activity().model_dump(),
+                {},
+            )
+        ),
+    )
+    monkeypatch.setattr(usage_ping, "_access_hosts", AsyncMock(return_value=[]))
+
+    assert (await usage_ping.build_usage_ping(db)).contact is None
+
+    await usage_ping.save_contact(
+        db, UsagePingContactUpdate(name="Ada", email="ada@acme.io", role="", team_size="", consent=True)
+    )
+    contact = (await usage_ping.build_usage_ping(db)).contact
+    assert contact is not None and contact.email == "ada@acme.io" and contact.consented_at is not None
+
+    await usage_ping.withdraw_contact(db)
+    assert (await usage_ping.build_usage_ping(db)).contact is None
+    assert db.state.contact_prompt == "never"
+
+
+class EmailDb(FakeDb):
+    def __init__(self, emails):
+        super().__init__()
+        self.emails = emails
+
+    def begin_nested(self):
+        db = self
+
+        class _Nested:
+            async def __aenter__(self):
+                return db
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Nested()
+
+    async def scalars(self, statement):
+        self.statement = statement
+        result = MagicMock()
+        result.all.return_value = self.emails
+        return result
+
+
+@pytest.mark.asyncio
+async def test_admin_emails_are_reported_by_default_and_respect_the_switch(monkeypatch: pytest.MonkeyPatch):
+    from services.dynamic_settings import DEFAULTS
+
+    assert DEFAULTS["usage_ping.include_admin_emails"] == "true"
+    db = EmailDb(["Ada@Acme.io", "ada@acme.io", "bob@acme.io", "no-at-sign", "eve@bad domain"])
+    include = AsyncMock(return_value=True)
+    monkeypatch.setattr(usage_ping.ds, "get_bool", include)
+
+    assert await usage_ping.admin_emails(db) == ["ada@acme.io", "bob@acme.io"]
+    include.assert_awaited_with("usage_ping.include_admin_emails")
+    query = str(db.statement.compile(compile_kwargs={"literal_binds": True}))
+    assert "users.role = 'super_admin'" in query
+    assert "users.deleted_at IS NULL" in query
+    assert "LIMIT 5" in query
+
+    include.return_value = False
+    assert await usage_ping.admin_emails(db) == []
+    # The settings page still lists who would be shared, so admins can decide.
+    assert await usage_ping.admin_emails(db, respect_setting=False) == ["ada@acme.io", "bob@acme.io"]
+
+
+def test_contact_update_requires_explicit_consent():
+    with pytest.raises(ValueError):
+        UsagePingContactUpdate(name="Ada", email="ada@acme.io", consent=False)
+    with pytest.raises(ValueError):
+        UsagePingContactUpdate(name="Ada", email="not-an-email", consent=True)
+
+
+@pytest.mark.asyncio
+async def test_payload_preview_is_limited_to_super_admins(monkeypatch: pytest.MonkeyPatch):
+    # The preview carries the shared contact, which GET /usage-ping/contact keeps to super admins.
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+
+    import api.deps as deps_module
+    from api.deps import get_current_user, get_db
+    from api.routes.admin import usage_ping as routes
+    from models.user import UserRole
+    from schemas.usage_ping import UsagePingStatus
+
+    status = UsagePingStatus(
+        enabled=True,
+        configured=True,
+        frequency="every_6_hours",
+        collector_url="https://usage.example.test",
+        installation_id=None,
+        last_attempt_at=None,
+        last_success_at=None,
+        last_error=None,
+        next_scheduled_at=datetime(2026, 11, 12, tzinfo=UTC),
+    )
+    monkeypatch.setattr(routes, "usage_ping_status", AsyncMock(return_value=status))
+    monkeypatch.setattr(routes, "build_usage_ping", AsyncMock(return_value=sample_payload()))
+    monkeypatch.setattr(deps_module, "emit_security_event", AsyncMock())
+
+    app = FastAPI()
+    app.include_router(routes.router)
+
+    async def db():
+        yield MagicMock()
+
+    app.dependency_overrides[get_db] = db
+    codes = {}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for role in (UserRole.admin, UserRole.super_admin):
+            app.dependency_overrides[get_current_user] = lambda role=role: SimpleNamespace(
+                id=uuid.uuid4(), email="admin@example.test", role=role
+            )
+            codes[role] = (await client.get("/api/v1/admin/usage-ping/preview")).status_code
+
+    assert codes == {UserRole.admin: 403, UserRole.super_admin: 200}
+
+
+@pytest.mark.parametrize("name", ["", " ", "\t\n"])
+def test_contact_update_rejects_a_blank_name(name):
+    # A whitespace-only name used to pass validation and then fail with a 500 in save_contact.
+    with pytest.raises(ValueError):
+        UsagePingContactUpdate(name=name, email="ada@acme.io", consent=True)
+    update = UsagePingContactUpdate(name="  Ada  ", role=" Lead ", email="ada@acme.io", consent=True)
+    assert (update.name, update.role) == ("Ada", "Lead")
 
 
 @pytest.mark.asyncio

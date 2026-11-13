@@ -554,8 +554,9 @@ def _build_skill_configs(
 def _generate_skill(skill: dict, harness: str, scope: str = "project") -> dict:
     """Generate an harness-specific skill file entry.
 
-    Returns a dict with 'path' and 'content' keys, or None for
-    monolithic harnesses (Gemini, Codex, Copilot) that inline skills into rules.
+    Returns a dict with 'path' and 'content' keys, or None when the registry
+    has no skill paths for the requested harness. Install callers enforce
+    capability support separately.
     """
     from services.config.skill_builder import generate_skill
 

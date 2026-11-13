@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 UsagePingFrequency = Literal["every_6_hours", "daily", "weekly"]
 
@@ -17,6 +17,18 @@ class UsagePingIdentity(BaseModel):
 
     company_name: str = Field(min_length=1, max_length=160)
     hostname: str = Field(min_length=1, max_length=253)
+    # Domains users reach this server on, most used first. IP literals are reported only
+    # as "localhost", "private-ip", or "public-ip".
+    access_hosts: list[str] = Field(default_factory=list, max_length=5)
+    # User counts per email domain.
+    email_domains: dict[str, int] = Field(default_factory=dict, max_length=10)
+    # Super administrators' email addresses. Empty when usage_ping.include_admin_emails is off.
+    admin_emails: list[str] = Field(default_factory=list, max_length=5)
+    # Hostnames of the configured OIDC or SAML identity provider.
+    sso_hosts: list[str] = Field(default_factory=list, max_length=5)
+    # Sign-in allowlists configured by the administrator.
+    sso_allowed_domains: list[str] = Field(default_factory=list, max_length=10)
+    github_orgs: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("company_name", "hostname")
     @classmethod
@@ -88,10 +100,31 @@ class UsagePingActivity(BaseModel):
     truncated_events_30d: int = Field(ge=0)
 
 
+TeamSize = Literal["", "1-10", "11-50", "51-200", "201-1000", "1000+"]
+
+
+class UsagePingContact(BaseModel):
+    """A contact person a super administrator chose to share with the collector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    role: str = Field(default="", max_length=80)
+    team_size: TeamSize = ""
+    consented_at: datetime
+
+    @field_validator("name", "role", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        """Trim free-text fields before the length checks, so a blank name is rejected."""
+        return value.strip() if isinstance(value, str) else value
+
+
 class UsagePingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     ping_id: UUID
     installation_id: UUID
     sent_at: datetime
@@ -101,6 +134,36 @@ class UsagePingPayload(BaseModel):
     activity: UsagePingActivity
     features: dict[str, bool] = Field(default_factory=dict, max_length=32)
     harnesses: dict[str, int] = Field(default_factory=dict, max_length=32)
+    # Present only after a super administrator opts in to being contacted.
+    contact: UsagePingContact | None = None
+
+
+class UsagePingContactUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    role: str = Field(default="", max_length=80)
+    team_size: TeamSize = ""
+    consent: Literal[True]
+
+    @field_validator("name", "role", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        """Trim free-text fields before the length checks, so a blank name is rejected."""
+        return value.strip() if isinstance(value, str) else value
+
+
+class UsagePingContactDefer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    never: bool = False
+
+
+class UsagePingContactState(BaseModel):
+    # "dialog" on a fresh installation, "banner" once a deferred installation has grown.
+    prompt: Literal["dialog", "banner"] | None
+    contact: UsagePingContact | None
 
 
 class UsagePingStatus(BaseModel):
@@ -113,6 +176,8 @@ class UsagePingStatus(BaseModel):
     last_success_at: datetime | None
     last_error: str | None
     next_scheduled_at: datetime
+    # Super administrator addresses that reports carry while include_admin_emails is on.
+    admin_emails: list[str] = Field(default_factory=list)
 
 
 class UsagePingAdminResponse(BaseModel):

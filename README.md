@@ -109,7 +109,8 @@ This downloads a Docker Compose package, generates operator-owned secret files w
 
 Deployment docs are linked directly from this README:
 
-- [Setup guide](SETUP.md): fastest path from zero to a working stack
+- [One-line installation guide](docs/getting-started/installation.md): packaged URLs, generated credentials, and first login
+- [Setup guide](SETUP.md): source Compose setup for development (`http://localhost`, not the one-line install's `:8000`)
 - [Self-hosting overview](docs/self-hosting/index.md): deployment models and operator docs
 - [Production deployment](docs/self-hosting/production-deploy.md): hardened production topology
 - [Databases](docs/self-hosting/databases.md): Postgres, ClickHouse, migrations, retention
@@ -152,7 +153,7 @@ uv tool install observal-cli
 
 ```bash
 observal auth login
-observal doctor --patch
+observal doctor patch
 ```
 
 This authenticates with your server, detects your harness, installs telemetry hooks, starts capturing sessions automatically, and prepares it for agent installs and registry commands.
@@ -169,9 +170,9 @@ Or just tell your agent what you want and it figures out the right commands.
 
 ---
 
-## How Agentic Resource Registry works
-
-### The registry is the distribution layer
+   <p align="center">
+     <img src="docs/img/agentic-stack.png" alt="HITL and autonomous agentic stack" width="900">
+   </p>
 
 The registry is where agents live. Admins review submissions, version diffs keep changes auditable, and one command installs an agent into any supported harness.
 
@@ -316,7 +317,7 @@ Start here for deployment and operations:
 |-------|-----------|
 | Frontend | Vite 8, React 19, TanStack Router, Tailwind CSS 4, shadcn/ui |
 | Backend | Python 3.11+, FastAPI, Strawberry GraphQL |
-| Databases | PostgreSQL 16 (registry), ClickHouse (telemetry) |
+| Databases | PostgreSQL 18 (registry), ClickHouse (telemetry) |
 | Queue | Redis + arq |
 | CLI | Python, Typer, Rich |
 | Telemetry | Session hooks, local transcript reconciliation, push-based ingest |

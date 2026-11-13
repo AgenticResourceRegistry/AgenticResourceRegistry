@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Observal Contributors
+# SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
 """``llm_model_used`` names the models that produced a report's output.
@@ -101,6 +102,7 @@ def _component_report():
         progress_phase="queued",
         error_message=None,
         llm_model_used="stale",
+        discovery_optimization_requested=False,
     )
 
 
@@ -152,3 +154,21 @@ async def test_component_report_without_a_model_answer_records_none(monkeypatch)
     await _run_component_job(monkeypatch, report, AsyncMock(return_value=CONTENT))
     assert report.status == InsightReportStatus.completed
     assert report.llm_model_used is None, "a deterministic or abstained report names no model"
+
+
+@pytest.mark.asyncio
+async def test_discovery_advice_model_is_recorded_and_stored_in_the_narrative(monkeypatch):
+    from models.insight_report import InsightReportStatus
+    from services.insights import _deps, discovery_optimization
+
+    async def advice(_db, _report, _content):
+        _deps.note_model_used("bedrock/us.anthropic.claude-discovery-v1")
+        return {"version": 1, "state": "assessed", "suggestions": []}
+
+    monkeypatch.setattr(discovery_optimization, "generate_discovery_optimization", advice)
+    report = _component_report()
+    report.discovery_optimization_requested = True
+    await _run_component_job(monkeypatch, report, AsyncMock(return_value={**CONTENT, "narrative": {}}))
+    assert report.status == InsightReportStatus.completed
+    assert report.narrative["discovery"]["state"] == "assessed"
+    assert report.llm_model_used == "bedrock/us.anthropic.claude-discovery-v1"

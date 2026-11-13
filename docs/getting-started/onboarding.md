@@ -1,54 +1,66 @@
 ---
 # SPDX-FileCopyrightText: 2026 Shaan Narendran <shaannaren06@gmail.com>
+# SPDX-FileCopyrightText: 2026 Vishnu Muthiah <vishnu.muthiah04@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-title: "Setup guide"
+title: "Join your team's registry"
+description: "Connect your machine to an existing registry without deploying a server."
 ---
 
-Connect your machine to Agentic Resource Registry with two commands. It takes about two minutes and does not need Python or Docker.
+Use this guide when your team already runs Agentic Resource Registry. You will install the CLI, sign in, and check that you can browse agents.
 
-## 1. Run the two commands for your OS
+## Before you start
 
-**macOS / Linux**
+Ask your administrator for the registry URL and the sign-in method your team uses. You also need an account or an invitation. A registry may require your team's network or VPN; that is deployment-specific.
+
+You do not need Docker to join an existing registry. You do need a supported coding tool and its own model access to run an agent later.
+
+## Install the CLI
+
+Follow [Install the CLI](/getting-started/installation), then check:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.sh | bash
-observal auth login --server https://internal.observal.io
+observal --version
 ```
 
-**Windows** (in PowerShell, not Command Prompt)
+The command should print an `observal` version. The public product name is Agentic Resource Registry; its CLI command remains `observal`.
 
-```powershell
-irm https://raw.githubusercontent.com/AgenticResourceRegistry/AgenticResourceRegistry/main/install.ps1 | iex
-observal auth login --server https://internal.observal.io
+## Sign in
+
+Replace the example URL with the URL your administrator provided:
+
+```bash
+observal auth login --server https://registry.example.com --no-setup
 ```
 
-The first command installs the `observal` CLI. The second connects it to the server.
+Choose **Web sign-in** if you normally sign in through your browser. Approve the device code using your account. If your team uses direct credentials, choose the CLI email/username and password option instead.
 
-## 2. Answer the login prompts
+`--no-setup` skips post-login harness setup so you can choose what to install next. Without it, human-mode login can install bundled skills and session instrumentation in detected coding tools and run setup checks. See the [authentication reference](/cli/auth#login) for those side effects.
 
-1. **Login method**: pick the one your team uses. If unsure, choose **Web sign-in** and approve the code in your browser.
-2. **`Fix all warnings? (configures telemetry and installs AI skills for detected harnesses) [Y/n]`**: answer **Y** (or press Enter).
+<Note>
+  Registry sign-in and coding-tool sign-in are separate. Authenticating the CLI does not log you in to Claude Code or another model provider.
+</Note>
 
-   Login installs the bundled Agentic Resource Registry skills, and the Pi extension when Pi is detected, before this prompt. Answering **Y** also applies the supported telemetry hooks for your detected coding tools. If you answer **n**, other harnesses may still need instrumentation before sessions appear. Run `observal doctor` to check, then `observal doctor patch --all-harnesses` to install missing hooks.
-
-3. Restart any coding tool that was open during setup so it picks up the changes.
-
-## 3. Check it worked
+## Verify access
 
 ```bash
 observal auth whoami
+observal agent list
 ```
 
-Then open [internal.observal.io](https://internal.observal.io). Your sessions appear under Traces after your next coding session.
+`whoami` should show your account. `agent list` shows approved agents visible to you. An empty list can be valid: the registry may be new, your team may not have published an agent yet, or you may need access to a teamspace.
 
-## Troubleshooting
+The CLI saves its registry connection and credentials in `~/.observal/config.json`. Treat this file as sensitive; do not commit or share it.
 
-| Problem | Fix |
+## If sign-in fails
+
+| What you see | What to do |
 | --- | --- |
-| `observal: command not found` | Open a new terminal window. On macOS/Linux, also check that `/usr/local/bin` is on your `PATH`. |
-| Intel Mac: download fails | There is no standalone binary for Intel Macs yet. Run `uv tool install observal-cli` instead of the first command. |
-| PowerShell refuses to run `irm ... \| iex` | Run `Set-ExecutionPolicy -Scope Process Bypass` in the same window, then retry. |
-| Login can't reach the server | Check that you're on the VPN, then run `curl https://internal.observal.io/health`. |
-| Answered **n** to the prompt, or added a new coding tool later | Run `observal doctor patch --all-harnesses`. |
+| `observal: command not found` | Open a new terminal and check the [installation guide](/getting-started/installation#troubleshooting). |
+| Connection failure | Confirm the registry URL and any required VPN. Check `https://YOUR-REGISTRY/health`; replace the hostname first. |
+| CLI/server version mismatch | Follow the exact upgrade or downgrade command printed by the CLI, then check `observal --version` again. |
+| No account or registration disabled | Ask your administrator for an invitation or access. Do not deploy another server just to join this one. |
+| No agents in the list | Ask for a published agent and the correct teamspace membership, or follow the [empty-registry path](/getting-started/quickstart#no-agents-yet). |
 
-To upgrade later, run `observal self upgrade`.
+## Next
+
+[Find, pull, and activate your first agent](/getting-started/quickstart).

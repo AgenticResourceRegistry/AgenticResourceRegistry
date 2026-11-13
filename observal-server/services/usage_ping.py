@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -27,9 +29,12 @@ from models.sandbox import SandboxListing
 from models.skill import SkillListing
 from models.team import Team
 from models.usage_ping import UsagePingState
-from models.user import User
+from models.user import User, UserRole
 from schemas.usage_ping import (
     UsagePingActivity,
+    UsagePingContact,
+    UsagePingContactState,
+    UsagePingContactUpdate,
     UsagePingCounts,
     UsagePingFrequency,
     UsagePingIdentity,
@@ -41,9 +46,10 @@ from services.ssrf_guard import is_private_url
 from version import get_server_version
 
 if TYPE_CHECKING:
+    from fastapi import Request
     from sqlalchemy.ext.asyncio import AsyncSession
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _STATE_ID = 1
 _PRODUCTION_COLLECTOR_URL = "https://usage.observal.io/api/v1/usage-pings"
 _LOCAL_COLLECTOR_HOSTS = {"localhost", "127.0.0.1", "telemetry-api"}
@@ -123,6 +129,159 @@ def _hostname(public_url: str) -> str:
         return "unknown"
     parsed = urlparse(value if "://" in value else f"//{value}")
     return (parsed.hostname or "unknown").lower()
+
+
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9_](?:[a-z0-9_-]{0,62}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,62}[a-z0-9_])?)*$"
+)
+_GITHUB_ORG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38})$")
+_ACCESS_HOSTS_KEY = "usage_ping:access_hosts"
+_ACCESS_HOSTS_TTL_SECONDS = 30 * 24 * 3600
+_ACCESS_HOSTS_TRACKED = 50
+_ACCESS_HOSTS_REPORTED = 5
+
+
+def _report_host(value: str | None) -> str | None:
+    """Normalize a request or configuration host. IP literals are reported only by kind."""
+    if not value:
+        return None
+    raw = value.split(",")[0].strip().lower()
+    try:
+        host = urlparse(raw if "://" in raw else f"//{raw}").hostname or ""
+    except ValueError:
+        # A malformed header (for example "http://[") must not fail the token refresh it rides on.
+        return None
+    host = host.rstrip(".")
+    if not host:
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if host == "localhost" or host.endswith(".localhost"):
+            return "localhost"
+        return host if _DOMAIN_RE.match(host) else None
+    if address.is_loopback:
+        return "localhost"
+    return "private-ip" if address.is_private else "public-ip"
+
+
+def request_access_host(request: Request) -> str | None:
+    """The host a user reached this server on. Origin survives proxies that rewrite Host."""
+    for value in (
+        request.headers.get("origin"),
+        request.headers.get("x-forwarded-host"),
+        request.headers.get("host"),
+    ):
+        host = _report_host(value)
+        if host:
+            return host
+    return None
+
+
+async def record_access_host(request: Request) -> None:
+    """Count the host behind an authenticated request. Never fails the request."""
+    host = request_access_host(request)
+    if not host:
+        return
+    try:
+        from services.redis import get_redis
+
+        async with get_redis().pipeline(transaction=False) as pipe:
+            pipe.zincrby(_ACCESS_HOSTS_KEY, 1, host)
+            pipe.zremrangebyrank(_ACCESS_HOSTS_KEY, 0, -(_ACCESS_HOSTS_TRACKED + 1))
+            pipe.expire(_ACCESS_HOSTS_KEY, _ACCESS_HOSTS_TTL_SECONDS)
+            await pipe.execute()
+    except Exception as exc:
+        optic.debug("usage ping access host not recorded: {}", exc)
+
+
+async def _access_hosts() -> list[str]:
+    """Most used hosts users reach this server on, from the Redis tally."""
+    try:
+        from services.redis import get_redis
+
+        hosts = await get_redis().zrevrange(_ACCESS_HOSTS_KEY, 0, _ACCESS_HOSTS_REPORTED - 1)
+    except Exception as exc:
+        optic.debug("usage ping access hosts unavailable: {}", exc)
+        return []
+    return [host for host in (_report_host(str(value)) for value in hosts) if host]
+
+
+async def _email_domains(db: AsyncSession) -> dict[str, int]:
+    """User counts per email domain. Individual addresses never leave the server."""
+    domain = func.lower(func.split_part(User.email, "@", 2))
+    statement = (
+        select(domain, func.count())
+        .where(User.is_demo.is_(False), User.email.contains("@"))
+        .group_by(domain)
+        .order_by(func.count().desc(), domain)
+        .limit(10)
+    )
+    try:
+        async with db.begin_nested():
+            rows = (await db.execute(statement)).all()
+    except Exception as exc:
+        optic.warning("usage ping email domains unavailable: {}", exc)
+        return {}
+    return {str(name): int(count) for name, count in rows if _DOMAIN_RE.match(str(name or ""))}
+
+
+_ADMIN_EMAILS_REPORTED = 5
+
+
+async def admin_emails(db: AsyncSession, *, respect_setting: bool = True) -> list[str]:
+    """Active super administrators' addresses, oldest accounts first.
+
+    Reports include them unless a super admin turns off usage_ping.include_admin_emails;
+    the settings page lists them either way so admins see exactly who would be shared.
+    """
+    if respect_setting and not await ds.get_bool("usage_ping.include_admin_emails"):
+        return []
+    statement = (
+        select(User.email)
+        .where(
+            User.role == UserRole.super_admin,
+            User.is_demo.is_(False),
+            User.deleted_at.is_(None),
+            User.auth_provider != "deactivated",
+            User.email.contains("@"),
+        )
+        .order_by(User.created_at, User.email)
+        .limit(_ADMIN_EMAILS_REPORTED)
+    )
+    try:
+        async with db.begin_nested():
+            rows = (await db.scalars(statement)).all()
+    except Exception as exc:
+        optic.warning("usage ping admin emails unavailable: {}", exc)
+        return []
+    emails: list[str] = []
+    for value in rows:
+        email = str(value or "").strip().lower()
+        local, _, domain = email.partition("@")
+        if local and _DOMAIN_RE.match(domain) and len(email) <= 254 and email not in emails:
+            emails.append(email)
+    return emails
+
+
+async def _sso_identity() -> tuple[list[str], list[str], list[str]]:
+    """Identity provider hosts, Google allowed domains and GitHub allowed orgs."""
+    hosts: list[str] = []
+    for key in ("oauth.server_metadata_url", "saml.idp_entity_id", "saml.idp_sso_url", "saml.idp_metadata_url"):
+        host = _report_host(await ds.get(key, ""))
+        if host and host not in hosts:
+            hosts.append(host)
+    allowed = [
+        value.strip().lower().lstrip("@")
+        for value in (await ds.get("google.allowed_domains", "")).split(",")
+        if _DOMAIN_RE.match(value.strip().lower().lstrip("@"))
+    ]
+    orgs = [
+        value.strip().lower()
+        for value in (await ds.get("github.allowed_orgs", "")).split(",")
+        if _GITHUB_ORG_RE.match(value.strip().lower())
+    ]
+    return hosts[:5], allowed[:10], orgs[:10]
 
 
 def _deployment_type() -> str:
@@ -328,6 +487,8 @@ async def build_usage_ping(db: AsyncSession, *, now: datetime | None = None) -> 
     public_url = await ds.get("deployment.public_url")
     postgres_counts = await _postgres_counts(db)
     session_counts, activity, harnesses = await _session_metrics()
+    email_domains = await _email_domains(db)
+    sso_hosts, sso_allowed_domains, github_orgs = await _sso_identity()
     features = {
         "insights": await ds.get_bool("insights.batch_enabled"),
         "retention": await ds.get_bool("retention.enabled"),
@@ -349,15 +510,111 @@ async def build_usage_ping(db: AsyncSession, *, now: datetime | None = None) -> 
         identity=UsagePingIdentity(
             company_name=company_name or fallback_company_name(state.installation_id),
             hostname=_hostname(public_url),
+            access_hosts=await _access_hosts(),
+            email_domains=email_domains,
+            admin_emails=await admin_emails(db),
+            sso_hosts=sso_hosts,
+            sso_allowed_domains=sso_allowed_domains,
+            github_orgs=github_orgs,
         ),
         instance=UsagePingInstance(version=get_server_version(), deployment_type=_deployment_type()),
         counts=UsagePingCounts(**postgres_counts, **session_counts),
         activity=UsagePingActivity(**activity),
         features=features,
         harnesses=harnesses,
+        contact=_stored_contact(state),
     )
     await db.commit()
     return payload
+
+
+_CONTACT_REPROMPT_AFTER = timedelta(days=30)
+_CONTACT_BANNER_USERS = 5
+_CONTACT_BANNER_AGE = timedelta(days=14)
+
+
+def _stored_contact(state: UsagePingState) -> UsagePingContact | None:
+    """The stored contact, or None when absent or no longer valid."""
+    if not state.contact:
+        return None
+    try:
+        return UsagePingContact.model_validate(state.contact)
+    except ValueError:
+        optic.warning("usage ping stored contact is invalid and was skipped")
+        return None
+
+
+async def _installation_age(db: AsyncSession, now: datetime) -> timedelta:
+    """Time since the first non-demo user was created."""
+    try:
+        async with db.begin_nested():
+            first_user = await db.scalar(select(func.min(User.created_at)).where(User.is_demo.is_(False)))
+    except Exception as exc:
+        optic.warning("usage ping installation age unavailable: {}", exc)
+        return timedelta(0)
+    return now - _as_utc(first_user) if first_user else timedelta(0)
+
+
+async def contact_state(db: AsyncSession, *, now: datetime | None = None) -> UsagePingContactState:
+    """Decide whether to ask a super administrator to stay in touch.
+
+    A fresh installation gets a one-time dialog. "Not now" returns as a banner once the
+    installation has grown (5+ users or 14+ days old), at most once every 30 days.
+    "Don't ask again" and a submitted contact end the prompts.
+    """
+    current = _as_utc(now or datetime.now(UTC))
+    state = await _state(db)
+    prompt: Literal["dialog", "banner"] | None = None
+    asked = state.contact_prompt or ""
+    if await ds.get_bool("usage_ping.enabled"):
+        if asked == "":
+            prompt = "dialog"
+        elif asked == "later":
+            asked_at = _as_utc(state.contact_prompted_at) if state.contact_prompted_at else None
+            if asked_at is None or current - asked_at >= _CONTACT_REPROMPT_AFTER:
+                users = await _safe_count(db, User, User.is_demo.is_(False))
+                if users >= _CONTACT_BANNER_USERS or await _installation_age(db, current) >= _CONTACT_BANNER_AGE:
+                    prompt = "banner"
+    result = UsagePingContactState(prompt=prompt, contact=_stored_contact(state))
+    await db.commit()
+    return result
+
+
+async def save_contact(db: AsyncSession, update: UsagePingContactUpdate) -> UsagePingContactState:
+    """Store a consented contact and end the prompts."""
+    state = await _state(db)
+    contact = UsagePingContact(
+        name=update.name,
+        email=update.email,
+        role=update.role,
+        team_size=update.team_size,
+        consented_at=datetime.now(UTC),
+    )
+    state.contact = contact.model_dump(mode="json")
+    state.contact_prompt = "submitted"
+    state.contact_prompted_at = datetime.now(UTC)
+    await db.commit()
+    return UsagePingContactState(prompt=None, contact=contact)
+
+
+async def withdraw_contact(db: AsyncSession) -> UsagePingContactState:
+    """Stop sharing the contact. Later reports carry no contact block."""
+    state = await _state(db)
+    state.contact = None
+    state.contact_prompt = "never"
+    state.contact_prompted_at = datetime.now(UTC)
+    await db.commit()
+    return UsagePingContactState(prompt=None, contact=None)
+
+
+async def defer_contact(db: AsyncSession, *, never: bool) -> UsagePingContactState:
+    """Record "Not now" (ask again later) or "Don't ask again"."""
+    state = await _state(db)
+    if state.contact_prompt != "submitted":
+        state.contact_prompt = "never" if never else "later"
+    state.contact_prompted_at = datetime.now(UTC)
+    await db.commit()
+    return UsagePingContactState(prompt=None, contact=_stored_contact(state))
 
 
 async def usage_ping_status(db: AsyncSession) -> UsagePingStatus:
@@ -367,8 +624,10 @@ async def usage_ping_status(db: AsyncSession) -> UsagePingStatus:
     public_url = (await ds.get("deployment.public_url")).strip()
     frequency = await _usage_ping_frequency()
     configured = bool(company_name and public_url)
+    shared_admin_emails = await admin_emails(db, respect_setting=False)
     await db.commit()
     return UsagePingStatus(
+        admin_emails=shared_admin_emails,
         enabled=enabled,
         configured=configured,
         frequency=frequency,

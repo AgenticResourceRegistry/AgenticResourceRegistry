@@ -100,17 +100,52 @@ export interface RestartStatus {
 	keys: string[];
 }
 
+export interface UsagePingIdentity {
+	company_name: string;
+	hostname: string;
+	access_hosts: string[];
+	email_domains: Record<string, number>;
+	admin_emails: string[];
+	sso_hosts: string[];
+	sso_allowed_domains: string[];
+	github_orgs: string[];
+}
+
+export type UsagePingTeamSize = "" | "1-10" | "11-50" | "51-200" | "201-1000" | "1000+";
+
+export interface UsagePingContact {
+	name: string;
+	email: string;
+	role: string;
+	team_size: UsagePingTeamSize;
+	consented_at: string;
+}
+
+export interface UsagePingContactUpdate {
+	name: string;
+	email: string;
+	role: string;
+	team_size: UsagePingTeamSize;
+	consent: true;
+}
+
+export interface UsagePingContactState {
+	prompt: "dialog" | "banner" | null;
+	contact: UsagePingContact | null;
+}
+
 export interface UsagePingPayload {
-	schema_version: 1;
+	schema_version: number;
 	ping_id: string;
 	installation_id: string;
 	sent_at: string;
-	identity: { company_name: string; hostname: string };
+	identity: UsagePingIdentity;
 	instance: { version: string; deployment_type: string };
 	counts: Record<string, number>;
 	activity: Record<string, number>;
 	features: Record<string, boolean>;
 	harnesses: Record<string, number>;
+	contact: UsagePingContact | null;
 }
 
 export type UsagePingFrequency = "every_6_hours" | "daily" | "weekly";
@@ -125,6 +160,7 @@ export interface UsagePingStatus {
 	last_success_at: string | null;
 	last_error: string | null;
 	next_scheduled_at: string;
+	admin_emails: string[];
 }
 
 export interface UsagePingAdminResponse {
@@ -218,6 +254,7 @@ export interface ComponentInterpretation {
 	outcomes?: ComponentOutcomes;
 	attention?: ComponentAttentionItem[];
 	analysis?: ComponentAnalysis;
+	discovery?: DiscoveryOptimization;
 }
 
 export interface ComponentInsightNarrative extends ComponentInterpretation {
@@ -331,6 +368,28 @@ export interface HookInsightCoverage {
 	limitations: string[];
 }
 
+/** Advice on a listing's own description, stored as `narrative.discovery`. Only `assessed` carries content. */
+export interface DiscoveryOptimization {
+	version: number;
+	state: "assessed" | "unknown" | "unavailable";
+	reason?: string;
+	kind?: string;
+	listing_version?: string;
+	metadata_version_scope?: "selected" | "current_listing";
+	session_signals?: Record<string, number>;
+	score_note?: string;
+	suggestions?: {
+		field: "description";
+		illustrative_query: string;
+		suggested_description: string;
+		rationale: string;
+		evidence_keys: string[];
+		listing_evidence_keys: string[];
+		relevance_before: number;
+		relevance_after: number;
+	}[];
+}
+
 export interface InsightReportListItem {
 	id: string;
 	agent_id: string | null;
@@ -439,6 +498,7 @@ export interface InsightMetrics {
 }
 
 export interface InsightNarrative {
+	discovery?: DiscoveryOptimization;
 	// V3 structured format: each section is a structured object
 	// V1 fallback: each section is string[] or string
 	// The frontend handles both formats gracefully
@@ -531,6 +591,7 @@ export interface InsightReport {
 	period_end: string;
 	metrics: InsightMetrics | null;
 	narrative: InsightNarrative | null;
+	discovery_optimization_requested?: boolean;
 	facets_summary: Record<string, unknown> | null;
 	sessions_analyzed: number;
 	llm_model_used: string | null;
